@@ -602,6 +602,28 @@ fn test_enqueue_unique_rejects_missing_dependency() {
 }
 
 #[test]
+fn test_enqueue_batch_dedup_is_atomic() {
+    // A mixed keyed/keyless batch runs as one transaction on the Diesel
+    // backends, so a row that cannot insert must not leave its batch-mates
+    // behind. Rejection is forced with an unknown dependency.
+    let storage = test_storage();
+    let mut keyed = make_job("ebd_atomic");
+    keyed.unique_key = Some("uk-ebd-atomic".to_string());
+    let mut doomed = make_job("ebd_atomic");
+    doomed.depends_on = vec!["nonexistent-id".to_string()];
+
+    assert!(matches!(
+        crate::storage::enqueue_batch_dedup(&storage, vec![keyed, doomed]),
+        Err(QueueError::DependencyNotFound(_))
+    ));
+    assert_eq!(
+        storage.stats().unwrap().pending,
+        0,
+        "the keyed row must roll back with the batch, not persist alone"
+    );
+}
+
+#[test]
 fn test_enqueue_unique_rejects_dead_dependency() {
     let storage = test_storage();
     // A cancelled (archived, non-Complete) dependency must be rejected.

@@ -256,7 +256,7 @@ const ids = queue.enqueueMany("chargeCustomer", [
 
 A batch carrying no `uniqueKey` at all keeps the plain bulk insert, so it costs
 exactly what it did before; a single keyed entry switches the whole batch to the
-check-then-insert path — still one transaction, so a mixed batch is all-or-nothing.
+check-then-insert path — still one storage call either way.
 
 </SdkOnly>
 
