@@ -475,8 +475,9 @@ queue.shutdown()
   <Tab sdk="node">
 
 ```ts
-worker.stop(); // in-flight results drain before background tasks exit
-await worker.stop(); // …and wait for worker-scoped resource teardown
+// in-flight results drain before background tasks exit; awaiting also waits
+// for worker-scoped resource teardown
+await worker.stop();
 ```
 
   </Tab>
