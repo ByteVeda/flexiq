@@ -71,6 +71,42 @@ it("applies per-job options across the batch", () => {
   expect(queue.getJob(ids[1] as string)?.queue).toBe("b");
 });
 
+it("dedups batch entries carrying a uniqueKey", async () => {
+  const queue = newQueue();
+  queue.task("noop", () => undefined);
+
+  const active = queue.enqueue("noop", [], { uniqueKey: "k1" });
+
+  // A key colliding with an active job, a fresh key repeated inside the batch,
+  // and two keyless rows that always insert.
+  const ids = queue.enqueueMany("noop", [
+    { options: { uniqueKey: "k1" } },
+    {},
+    { options: { uniqueKey: "k2" } },
+    { options: { uniqueKey: "k2" } },
+    {},
+  ]);
+
+  expect(ids).toHaveLength(5); // one id per input row, in input order
+  expect(ids[0]).toBe(active);
+  expect(ids[2]).toBe(ids[3]);
+  expect(new Set(ids).size).toBe(4); // only the two keyless rows are new
+  expect((await queue.stats()).pending).toBe(4);
+});
+
+it("emits job.enqueued for deduped batch entries too", () => {
+  const queue = newQueue();
+  queue.task("noop", () => undefined);
+  const enqueued: string[] = [];
+  queue.on("job.enqueued", (event) => enqueued.push(event.jobId));
+
+  const ids = queue.enqueueMany("noop", [
+    { options: { uniqueKey: "dup" } },
+    { options: { uniqueKey: "dup" } },
+  ]);
+  expect(enqueued).toEqual(ids); // one event per entry, matching enqueue()
+});
+
 it("runs onEnqueue interception for each batched job", () => {
   const queue = newQueue();
   let calls = 0;

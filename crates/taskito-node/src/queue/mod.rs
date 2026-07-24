@@ -69,8 +69,8 @@ impl JsQueue {
 
     /// Enqueue a batch of jobs for one `task_name` in a single storage call.
     /// Each entry carries its own payload and options. Returns the new job ids
-    /// in input order. Unlike `enqueue`, the batch path does not apply
-    /// `uniqueKey` dedup — it is a plain bulk insert for throughput.
+    /// in input order. Entries with a `uniqueKey` get the same dedup as
+    /// `enqueue` — a duplicate yields the active job's id instead of a new row.
     #[napi]
     pub fn enqueue_many(&self, task_name: String, jobs: Vec<EnqueueJob>) -> Result<Vec<String>> {
         let namespace = self.namespace.as_deref();
@@ -81,7 +81,8 @@ impl JsQueue {
                 build_new_job(task_name.clone(), job.payload.to_vec(), opts, namespace)
             })
             .collect::<Result<Vec<_>>>()?;
-        let created = self.storage.enqueue_batch(new_jobs).map_err(to_napi_err)?;
+        let created = taskito_core::storage::enqueue_batch_dedup(&self.storage, new_jobs)
+            .map_err(to_napi_err)?;
         Ok(created.into_iter().map(|job| job.id).collect())
     }
 
