@@ -369,8 +369,16 @@ export class Worker {
     return new Worker(native, queue, resources, heartbeat, consumerStops, emitter, lifecycle);
   }
 
-  /** Stop the worker; in-flight results drain before background tasks exit. */
-  stop(): void {
+  /**
+   * Stop the worker; in-flight results drain before background tasks exit.
+   *
+   * Dispatch, the heartbeat and the log consumers halt synchronously, so
+   * ignoring the return value behaves exactly as a void `stop()` would. The
+   * returned promise resolves once worker-scoped resources have been disposed
+   * — await it when that matters (test teardown, graceful shutdown). It never
+   * rejects: teardown failures are logged, not thrown.
+   */
+  stop(): Promise<void> {
     this.lifecycle.stopped = true;
     // One last sweep for orphaned ephemeral subscriptions before this worker's
     // reap cadence goes away. Best effort — stopping must never throw.
@@ -386,7 +394,7 @@ export class Worker {
     // Dispose worker-scoped resources after the native worker quiesces (the
     // teardown drains the runtime's health checker before touching caches).
     // Best effort: lazy resources mean this is a no-op when none were built.
-    void this.resources.teardownWorker().catch((error) => {
+    return this.resources.teardownWorker().catch((error) => {
       log.debug(() => "worker-scope resource teardown failed", error);
     });
   }

@@ -54,6 +54,12 @@ underlying Rust crates are released together, in lock-step.
 
 ### Fixed
 
+- **Node `worker.stop()` is awaitable.** It now returns a promise that resolves once
+  worker-scoped resources have been disposed, instead of firing that teardown and returning.
+  Dispatch, the heartbeat and log consumers still halt synchronously, so callers that ignore
+  the result behave exactly as before.
+- Node event listeners that throw or reject are logged at debug rather than silently swallowed;
+  sibling listeners stay isolated from the failure as before.
 - **Postgres segfault on process exit.** The connection pool opens connections on background
   threads that can still be running libpq/OpenSSL when the process exits, racing OpenSSL's
   default `atexit` teardown. Taskito now initializes OpenSSL itself with that teardown
