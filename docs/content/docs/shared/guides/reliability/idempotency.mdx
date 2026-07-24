@@ -241,15 +241,21 @@ calls instead — each one goes through the coalescing check-then-insert path.
 
 <SdkOnly sdk="node">
 
-<Callout type="warn" title="enqueueMany does not apply uniqueKey dedup">
-  `enqueueMany` is a plain bulk insert for throughput — it does not check
-  `uniqueKey` before inserting. A duplicate key in the batch, or one that
-  collides with an already-active job, is unsupported: don't pass `uniqueKey`
-  to a batch entry expecting it to dedupe.
-</Callout>
+`enqueueMany` routes any entry carrying a `uniqueKey` through the same
+check-then-insert path as a single `enqueue` — a duplicate inside the batch, or
+one that collides with an already-active job, resolves to the existing job's id
+instead of failing the batch:
 
-When collision resilience matters more than throughput, loop `enqueue()`
-calls instead — each one goes through the coalescing check-then-insert path.
+```ts
+const ids = queue.enqueueMany("chargeCustomer", [
+  { args: [42, 1000], options: { uniqueKey: "charge:42" } },
+  { args: [42, 1000], options: { uniqueKey: "charge:42" } },
+]);
+// ids[0] === ids[1] — one job, the duplicate maps to it, in input order
+```
+
+Entries with no `uniqueKey` keep the plain one-transaction bulk insert, so a
+batch that doesn't dedupe costs the same as before.
 
 </SdkOnly>
 

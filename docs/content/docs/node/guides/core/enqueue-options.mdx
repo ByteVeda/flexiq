@@ -69,5 +69,6 @@ const ids = queue.enqueueMany("resize", [
 ]);
 ```
 
-Unlike `enqueue`, the batch path does not apply `uniqueKey` dedup — it is a plain
-bulk insert for throughput.
+Entries carrying a `uniqueKey` dedup exactly like `enqueue` — a key with a
+pending or running job yields that job's id rather than a new row. Entries
+without one take the plain bulk-insert fast path.

@@ -44,7 +44,7 @@ const queue = new Queue(options);
 | `task(name, fn, config?)` | Register a task. See [Task](/node/api-reference/task). |
 | `configureQueue(name, config)` | Set per-queue rate limit / concurrency. |
 | `enqueue(task, args?, options?)` | Enqueue a job → job id. |
-| `enqueueMany(task, jobs[])` | Batch-enqueue `{ args?, options? }[]` → job ids (no dedup). |
+| `enqueueMany(task, jobs[])` | Batch-enqueue `{ args?, options? }[]` → job ids in input order, `uniqueKey` entries deduped. |
 
 ## Related
 
