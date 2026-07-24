@@ -1,6 +1,6 @@
 //! Construct a [`QueueHandle`] from caller options (mirrors the Node shell).
 
-use taskito_core::{NewJob, SqliteStorage, Storage, StorageBackend};
+use taskito_core::{NewJob, SqliteStorage, StorageBackend};
 
 use crate::convert::OpenOptions;
 use crate::error::BindingError;
@@ -74,37 +74,14 @@ fn build_workflow_storage(
 }
 
 /// Enqueue a batch, routing any job with a `unique_key` through the dedup path
-/// (matching single `enqueue`) instead of the raw batch insert. The raw insert
-/// would hit the partial unique index on an active duplicate and roll back the
-/// whole batch; here a duplicate resolves to the existing job's id, and only
-/// keyless jobs share the one-transaction fast path. Ids come back in input order.
+/// (matching single `enqueue`) instead of the raw batch insert. Ids come back in
+/// input order, a duplicate key resolving to the existing job's id.
 pub fn enqueue_batch_dedup(
     storage: &StorageBackend,
     jobs: Vec<NewJob>,
 ) -> Result<Vec<String>, BindingError> {
-    let mut ids: Vec<Option<String>> = std::iter::repeat_with(|| None).take(jobs.len()).collect();
-    let mut plain_jobs = Vec::new();
-    let mut plain_slots = Vec::new();
-    for (index, job) in jobs.into_iter().enumerate() {
-        if job.unique_key.is_some() {
-            ids[index] = Some(storage.enqueue_unique(job)?.id);
-        } else {
-            plain_jobs.push(job);
-            plain_slots.push(index);
-        }
-    }
-    if !plain_jobs.is_empty() {
-        let created = storage.enqueue_batch(plain_jobs)?;
-        if created.len() != plain_slots.len() {
-            return Err(BindingError::new(
-                "storage returned a different number of jobs than were batch-enqueued",
-            ));
-        }
-        for (slot, job) in plain_slots.into_iter().zip(created) {
-            ids[slot] = Some(job.id);
-        }
-    }
-    Ok(ids.into_iter().flatten().collect())
+    let created = taskito_core::storage::enqueue_batch_dedup(storage, jobs)?;
+    Ok(created.into_iter().map(|job| job.id).collect())
 }
 
 /// Drop ephemeral topic subscriptions whose owning worker is no longer in the
@@ -175,6 +152,7 @@ pub fn open(options: OpenOptions) -> Result<QueueHandle, BindingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use taskito_core::Storage;
 
     fn new_job(unique_key: Option<&str>) -> NewJob {
         NewJob {

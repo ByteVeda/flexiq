@@ -1657,6 +1657,52 @@ fn test_enqueue_unique_batch(s: &impl Storage) {
     );
 }
 
+fn test_enqueue_batch_dedup(s: &impl Storage) {
+    use taskito_core::storage::enqueue_batch_dedup;
+    let q = "q-ebd";
+    let keyed = |uk: &str| {
+        let mut j = make_job(q, "ebd_task");
+        j.unique_key = Some(uk.to_string());
+        j
+    };
+
+    let active = s.enqueue_unique(keyed("ebd-a")).unwrap();
+
+    // Mixed batch: a key colliding with `active`, a fresh key repeated twice,
+    // and two keyless rows. Keyed rows dedup, keyless rows always insert.
+    let created = enqueue_batch_dedup(
+        s,
+        vec![
+            keyed("ebd-a"),
+            make_job(q, "ebd_task"),
+            keyed("ebd-b"),
+            keyed("ebd-b"),
+            make_job(q, "ebd_task"),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(created.len(), 5, "one id per input row, in input order");
+    assert_eq!(created[0].id, active.id, "collision returns the active job");
+    assert_eq!(
+        created[2].id, created[3].id,
+        "a key repeated inside the batch dedups against its own insert"
+    );
+    let distinct: std::collections::HashSet<&str> =
+        created.iter().map(|job| job.id.as_str()).collect();
+    assert_eq!(distinct.len(), 4, "only the two keyless rows are new jobs");
+    assert_eq!(
+        s.stats_by_queue(q).unwrap().pending,
+        4,
+        "duplicates create no rows: active + ebd-b + two keyless"
+    );
+
+    // A batch with no unique keys still round-trips through the plain path.
+    let plain = enqueue_batch_dedup(s, vec![make_job(q, "ebd_task")]).unwrap();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(s.stats_by_queue(q).unwrap().pending, 5);
+}
+
 /// A `Lifo` orders map plumbs through `dequeue_batch_from` on every backend and
 /// claims exactly the eligible jobs. Order is asserted per-backend in the
 /// SQLite unit tests; Redis is a documented FIFO fallback, so this shared test
@@ -1697,6 +1743,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_unique_validates_deps(s);
     test_enqueue_batch(s);
     test_enqueue_unique_batch(s);
+    test_enqueue_batch_dedup(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
     test_purge_retention_covers_every_status(s);
