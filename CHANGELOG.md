@@ -54,6 +54,8 @@ underlying Rust crates are released together, in lock-step.
 
 ### Fixed
 
+- Node event listeners that throw or reject are logged at debug rather than silently swallowed;
+  sibling listeners stay isolated from the failure as before.
 - **Postgres segfault on process exit.** The connection pool opens connections on background
   threads that can still be running libpq/OpenSSL when the process exits, racing OpenSSL's
   default `atexit` teardown. Taskito now initializes OpenSSL itself with that teardown

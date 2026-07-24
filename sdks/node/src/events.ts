@@ -1,3 +1,7 @@
+import { createLogger } from "./utils";
+
+const log = createLogger("events");
+
 /** Every event name the queue can emit — the single source of truth. */
 export const EVENT_NAMES = [
   "job.enqueued",
@@ -145,7 +149,11 @@ export const OUTCOME_KIND_EVENTS = {
 /** Handler for one event. Defaults to `job.completed` for back-compat. */
 export type EventHandler<E extends EventName = "job.completed"> = (event: EventMap[E]) => void;
 
-/** A minimal typed event emitter. Listener errors are isolated. */
+/**
+ * A minimal typed event emitter. Listener errors are isolated — they never
+ * break sibling listeners or the worker — but each one is logged at debug so a
+ * misbehaving listener isn't invisible.
+ */
 export class Emitter {
   private readonly handlers = new Map<EventName, Set<(event: EventPayload) => void>>();
 
@@ -168,11 +176,13 @@ export class Emitter {
       try {
         // Promise.resolve captures async listeners' rejections (else they
         // crash the process as unhandled rejections).
-        void Promise.resolve(handler(payload)).catch(() => {
+        void Promise.resolve(handler(payload)).catch((error) => {
           // A listener rejecting must not break other listeners or the worker.
+          log.debug(() => `listener for "${event}" rejected`, error);
         });
-      } catch {
+      } catch (error) {
         // A listener throwing must not break other listeners or the worker.
+        log.debug(() => `listener for "${event}" threw`, error);
       }
     }
   }
