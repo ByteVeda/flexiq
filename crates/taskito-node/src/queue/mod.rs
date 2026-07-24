@@ -68,7 +68,7 @@ impl JsQueue {
     }
 
     /// Enqueue a batch of jobs for one `task_name` in a single storage call.
-    /// Each entry carries its own payload and options. Returns the new job ids
+    /// Each entry carries its own payload and options. Returns the job ids
     /// in input order. Entries with a `uniqueKey` get the same dedup as
     /// `enqueue` — a duplicate yields the active job's id instead of a new row.
     #[napi]

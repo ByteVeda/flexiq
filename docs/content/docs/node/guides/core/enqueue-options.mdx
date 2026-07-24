@@ -60,7 +60,7 @@ queue.enqueue("import", [fileId], { notes: { rows: 1200, source: "s3" } });
 ## Batch enqueue
 
 `enqueueMany` inserts many jobs of one task in a single storage round-trip. Each
-entry has its own `args` and `options`; it returns the new ids in order.
+entry has its own `args` and `options`; it returns the ids in input order.
 
 ```ts
 const ids = queue.enqueueMany("resize", [
@@ -70,5 +70,5 @@ const ids = queue.enqueueMany("resize", [
 ```
 
 Entries carrying a `uniqueKey` dedup exactly like `enqueue` — a key with a
-pending or running job yields that job's id rather than a new row. Entries
-without one take the plain bulk-insert fast path.
+pending or running job yields that job's id rather than a new row. A batch with
+no keys at all takes the plain bulk-insert fast path.

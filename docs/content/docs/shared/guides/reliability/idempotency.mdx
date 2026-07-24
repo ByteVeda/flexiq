@@ -254,8 +254,9 @@ const ids = queue.enqueueMany("chargeCustomer", [
 // ids[0] === ids[1] — one job, the duplicate maps to it, in input order
 ```
 
-Entries with no `uniqueKey` keep the plain one-transaction bulk insert, so a
-batch that doesn't dedupe costs the same as before.
+A batch carrying no `uniqueKey` at all keeps the plain bulk insert, so it costs
+exactly what it did before; a single keyed entry switches the whole batch to the
+check-then-insert path — still one transaction, so a mixed batch is all-or-nothing.
 
 </SdkOnly>
 
