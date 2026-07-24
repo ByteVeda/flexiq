@@ -1703,6 +1703,26 @@ fn test_enqueue_batch_dedup(s: &impl Storage) {
     assert_eq!(s.stats_by_queue(q).unwrap().pending, 5);
 }
 
+/// A mixed batch is one all-or-nothing unit: a keyless row that cannot insert
+/// must not leave the batch's keyed rows behind. Rejection is forced with an
+/// unknown dependency, the one per-row failure both backends surface.
+fn test_enqueue_batch_dedup_is_atomic(s: &impl Storage) {
+    use taskito_core::storage::enqueue_batch_dedup;
+    let q = "q-ebd-atomic";
+    let mut keyed = make_job(q, "ebd_atomic_task");
+    keyed.unique_key = Some("ebd-atomic".to_string());
+    let mut doomed = make_job(q, "ebd_atomic_task");
+    doomed.depends_on = vec!["no-such-job".to_string()];
+
+    let failed = enqueue_batch_dedup(s, vec![keyed, doomed]);
+    assert!(failed.is_err(), "unknown dependency must reject the batch");
+    assert_eq!(
+        s.stats_by_queue(q).unwrap().pending,
+        0,
+        "the keyed row must roll back with the batch, not persist alone"
+    );
+}
+
 /// A `Lifo` orders map plumbs through `dequeue_batch_from` on every backend and
 /// claims exactly the eligible jobs. Order is asserted per-backend in the
 /// SQLite unit tests; Redis is a documented FIFO fallback, so this shared test
@@ -1744,6 +1764,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_batch(s);
     test_enqueue_unique_batch(s);
     test_enqueue_batch_dedup(s);
+    test_enqueue_batch_dedup_is_atomic(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
     test_purge_retention_covers_every_status(s);

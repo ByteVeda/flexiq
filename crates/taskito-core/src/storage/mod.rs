@@ -23,7 +23,7 @@ pub mod traits;
 
 pub use traits::Storage;
 
-use crate::error::{QueueError, Result};
+use crate::error::Result;
 use crate::job::{Job, NewJob};
 
 // ── Shared constants ───────────────────────────────────────────────────
@@ -136,57 +136,22 @@ pub fn sweep_ephemeral_subscriptions(
 /// Batch-enqueue `new_jobs`, applying `unique_key` dedup to whichever entries
 /// carry one — the batch equivalent of choosing [`Storage::enqueue_unique`] over
 /// [`Storage::enqueue`] per job. Returns the created (or already-active) jobs in
-/// input order.
+/// input order, in one storage call either way. The Java and Node batch enqueues
+/// route through here; Python still batch-inserts without dedup.
 ///
-/// Keyed entries go through [`Storage::enqueue_unique_batch`], which returns the
-/// existing active job for a duplicate key; unkeyed entries take the plain
-/// [`Storage::enqueue_batch`] path, so a batch with no unique keys costs exactly
-/// what it did before. Handing keyed jobs straight to `enqueue_batch` instead
-/// would hit the partial unique index and fail the whole batch with a raw
-/// storage error, so every SDK's batch enqueue routes through here.
+/// One keyed entry sends the whole batch through
+/// [`Storage::enqueue_unique_batch`], which check-then-inserts per row (returning
+/// the existing active job for a duplicate key) and passes keyless rows straight
+/// through — so a mixed batch stays a single all-or-nothing transaction. A batch
+/// with no keys at all keeps the chunked multi-row [`Storage::enqueue_batch`]
+/// insert, which is the throughput path but would hit the partial unique index
+/// and fail the whole batch the moment a key duplicates an active job.
 pub fn enqueue_batch_dedup(storage: &impl Storage, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
-    let mut keyed = Vec::new();
-    let mut keyed_slots = Vec::new();
-    let mut plain = Vec::new();
-    let mut plain_slots = Vec::new();
-    for (index, job) in new_jobs.into_iter().enumerate() {
-        if job.unique_key.is_some() {
-            keyed.push(job);
-            keyed_slots.push(index);
-        } else {
-            plain.push(job);
-            plain_slots.push(index);
-        }
+    if new_jobs.iter().any(|job| job.unique_key.is_some()) {
+        storage.enqueue_unique_batch(new_jobs)
+    } else {
+        storage.enqueue_batch(new_jobs)
     }
-
-    let mut created: Vec<Option<Job>> = vec![None; keyed_slots.len() + plain_slots.len()];
-    if !keyed.is_empty() {
-        scatter(
-            &mut created,
-            keyed_slots,
-            storage.enqueue_unique_batch(keyed)?,
-        )?;
-    }
-    if !plain.is_empty() {
-        scatter(&mut created, plain_slots, storage.enqueue_batch(plain)?)?;
-    }
-    Ok(created.into_iter().flatten().collect())
-}
-
-/// Write `jobs` back into their original `slots`, restoring input order after
-/// [`enqueue_batch_dedup`] split the batch by keyed-ness.
-fn scatter(created: &mut [Option<Job>], slots: Vec<usize>, jobs: Vec<Job>) -> Result<()> {
-    if jobs.len() != slots.len() {
-        return Err(QueueError::Other(format!(
-            "batch enqueue returned {} jobs for {} submitted",
-            jobs.len(),
-            slots.len()
-        )));
-    }
-    for (slot, job) in slots.into_iter().zip(jobs) {
-        created[slot] = Some(job);
-    }
-    Ok(())
 }
 
 // ── Shared helper types ────────────────────────────────────────────────
