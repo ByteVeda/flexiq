@@ -30,12 +30,17 @@ Starts a background worker over the Rust core and returns a handle.
 
 | Method | Description |
 |---|---|
-| `stop()` | Drain and shut down the scheduler + heartbeat. |
+| `stop()` | Drain and shut down the scheduler + heartbeat. Returns a `Promise<void>` that resolves once worker-scoped resources are disposed. |
 
 ```ts
 const worker = queue.runWorker({ queues: ["default", "emails"] });
 process.on("SIGTERM", () => worker.stop());
 ```
+
+Dispatch, the heartbeat and log consumers halt synchronously, so ignoring the
+returned promise is safe. `await worker.stop()` when you need worker-scoped
+resource teardown to have finished — test teardown, or a graceful shutdown that
+exits right after. It never rejects: teardown failures are logged.
 
 The worker registers + heartbeats (5 s) so it appears on the dashboard Workers
 panel; `stop()` unregisters it.

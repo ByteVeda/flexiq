@@ -476,6 +476,7 @@ queue.shutdown()
 
 ```ts
 worker.stop(); // in-flight results drain before background tasks exit
+await worker.stop(); // …and wait for worker-scoped resource teardown
 ```
 
   </Tab>

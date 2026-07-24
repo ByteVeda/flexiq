@@ -172,7 +172,9 @@ queue.resource("db", () => openPool(), { dispose: (p) => p.end() });
 ```
 
 Disposal errors are logged, never thrown — they cannot fail an already-settled
-job.
+job. `worker.stop()` returns a promise that resolves once worker-scoped
+disposal has finished, so `await worker.stop()` when the next step depends on
+released resources (closed pools, flushed clients).
 
 ## Metrics
 

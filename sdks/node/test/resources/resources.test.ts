@@ -496,6 +496,30 @@ describe("resource injection in a worker", () => {
     expect(await waitFor(() => disposed)).toBe(true);
   });
 
+  it("awaiting stop() resolves only once worker-scoped disposal finished", async () => {
+    const queue = newQueue();
+    let disposed = false;
+    queue.resource("config", () => ({ token: "secret" }), {
+      dispose: async () => {
+        await new Promise((done) => setTimeout(done, 50));
+        disposed = true;
+      },
+    });
+    const seen: string[] = [];
+    queue.task("read", async () => {
+      const cfg = await useResource<{ token: string }>("config");
+      seen.push(cfg.token);
+    });
+
+    queue.enqueue("read");
+    worker = queue.runWorker();
+    expect(await waitFor(() => seen.length === 1)).toBe(true);
+
+    await worker.stop(); // no polling needed — teardown is done when this resolves
+    worker = undefined;
+    expect(disposed).toBe(true);
+  });
+
   it("injects declared resources as a trailing deps argument", async () => {
     const queue = newQueue();
     queue.resource("db", () => ({ query: () => 7 }));

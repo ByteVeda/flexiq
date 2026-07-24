@@ -37,10 +37,12 @@ export function registerRun(program: Command): void {
         `taskito worker running (queues: ${queues?.join(",") ?? "default"}) — Ctrl-C to stop\n`,
       );
       // `stop()` only signals shutdown; give in-flight results a moment to drain
-      // before exiting so completed work isn't lost.
+      // before exiting so completed work isn't lost, then wait for worker-scoped
+      // resources to finish disposing.
       const stop = async () => {
-        worker.stop();
+        const teardown = worker.stop();
         await new Promise((done) => setTimeout(done, SHUTDOWN_GRACE_MS));
+        await teardown;
         process.exit(0);
       };
       process.once("SIGINT", stop);
