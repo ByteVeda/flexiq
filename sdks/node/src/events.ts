@@ -30,6 +30,8 @@ export const EVENT_NAMES = [
   "workflow.node_compensated",
   "workflow.node_compensation_failed",
   "predicate.rejected",
+  "predicate.skipped",
+  "predicate.deferred",
 ] as const;
 
 /** A queue event name. */
@@ -96,9 +98,13 @@ export interface NodeCompensationEvent {
   error?: string;
 }
 
-/** Payload for `predicate.rejected`. */
+/** Payload for the `predicate.*` events. */
 export interface PredicateEvent {
   taskName: string;
+  /** The gate's reason, when it gave one (`predicate.rejected` / `.skipped`). */
+  reason?: string;
+  /** How long the enqueue was held back (`predicate.deferred` only). */
+  delayMs?: number;
 }
 
 /** Event name → payload type, for every {@link EventName}. */
@@ -129,6 +135,8 @@ export interface EventMap {
   "workflow.node_compensated": NodeCompensationEvent;
   "workflow.node_compensation_failed": NodeCompensationEvent;
   "predicate.rejected": PredicateEvent;
+  "predicate.skipped": PredicateEvent;
+  "predicate.deferred": PredicateEvent;
 }
 
 /**

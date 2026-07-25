@@ -31,6 +31,15 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **Node predicate recipes, decisions, and registry.** A gate could only allow or reject; it can
+  now return a `Decision` that also skips (no job — `queue.tryEnqueue()` reports `null`, `enqueue`
+  throws the new `EnqueueSkippedError`) or defers (job created with the gate's delay). Nine
+  ready-made gates ship as `Recipes`: `businessHours`, `timeWindow`, `dayOfWeek`, `isWeekend`,
+  `after`, `before`, `payloadMatches`, `featureFlag`, `envVarTruthy` — time zones resolved through
+  `Intl`, so no new dependency, and DST-correct. Gates can be registered by name
+  (`registerPredicate`) and referenced as `gate(task, "name")` for config-driven gating,
+  `queue.predicateStats()` reports what they decided, and `predicate.skipped` /
+  `predicate.deferred` join `predicate.rejected` on the event bus.
 - **Node bare-metal autoscaler.** `serveAutoscaler(queue, { app })` and `taskito autoscale <app>`
   spawn and drain worker processes to track queue depth on hosts without Kubernetes, closing the
   last scaling gap against Python's `AutoscaleController`. Same HPA-shaped formula — depth and
@@ -53,8 +62,8 @@ underlying Rust crates are released together, in lock-step.
   rejection. Node types `queue.on()` per event name (`EventMap`); Java adds queue-level
   `taskito.onEvent(EventName, Consumer<TaskitoEvent>)` with typed event records alongside the
   unchanged worker-scoped `Worker.Builder.on(...)`. Webhooks can subscribe to every event name.
-  `predicate.deferred` / `predicate.cancelled` stay Python-only (no defer verdict elsewhere), and
-  Python now emits the previously dormant `workflow.submitted`.
+  `predicate.cancelled` stays Python-only, and Python now emits the previously dormant
+  `workflow.submitted`.
 - **Java webhook deliveries use the dotted wire names.** Bodies that previously said
   `"event": "success"` now say `"event": "job.completed"`; stored subscriptions with the legacy
   four names keep matching, and job-outcome bodies gain `duration_ms`.

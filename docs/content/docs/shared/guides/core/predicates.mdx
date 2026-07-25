@@ -8,7 +8,7 @@ is allowed to proceed — a declarative way to say "only do this under
 condition X." What a denial does depends on the configured outcome: a reject
 or cancel outcome means no work runs, while a defer outcome schedules the job
 to try again later.
-<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>.</>} java={<>Register one with <code>taskito.predicate()</code>, or the richer <code>taskito.gate()</code>.</>} />
+<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>, returning a boolean or a richer <code>Decision</code>.</>} java={<>Register one with <code>taskito.predicate()</code>, or the richer <code>taskito.gate()</code>.</>} />
 
 ## Quick start
 
@@ -57,9 +57,11 @@ taskito.enqueue(charge, -1);  // throws PredicateRejectedException
 
 <SdkOnly sdk="node">
 
-The predicate receives the task name and the (already
+The predicate receives the task name, the (already
 <SdkLink to="guides/resources/interception">onEnqueue</SdkLink>-rewritten)
-`args`, typed to the task's signature.
+`args` typed to the task's signature, and `now` — the wall clock read once for
+this evaluation, so a time-based gate can be unit-tested against a pinned
+instant instead of the real clock.
 
 </SdkOnly>
 
@@ -110,17 +112,18 @@ allow_or_urgent = allow | feature_flag("urgent_bypass")
   <Tab sdk="node">
 
 ```ts
-import { allOf, anyOf, not } from "@byteveda/taskito";
+import { allOf, anyOf, businessHours, isWeekend, not } from "@byteveda/taskito";
 
-const businessHours = () => {
-  const h = new Date().getHours();
-  return h >= 9 && h < 17;
-};
 const highPriority = ({ args }) => args[0].priority === "high";
 
-queue.gate("dispatch", anyOf(businessHours, highPriority));
-queue.gate("dispatch", not(isHoliday));
+queue.gate("dispatch", anyOf(businessHours({ timeZone: "UTC" }), highPriority));
+queue.gate("dispatch", not(isWeekend()));
 ```
+
+`allOf` / `anyOf` accept decision-returning gates too: a blocking decision
+survives the composition, so the `anyOf` above still *defers* out-of-hours
+work rather than rejecting it (`not` is boolean-only — inverting a `defer`
+has no meaning).
 
   </Tab>
   <Tab sdk="java">
@@ -229,13 +232,38 @@ be awaited transparently.
 
 <SdkOnly sdk="node">
 
-<Callout type="info">
-  Node predicates are plain booleans — there's no built-in defer/skip
-  outcome. To react once a job is already running, use
-  <SdkLink to="guides/extensibility/middleware">middleware</SdkLink> or
-  <SdkLink to="guides/workflows/conditions">conditions</SdkLink> inside a
-  workflow.
-</Callout>
+A gate may return a `Decision` instead of a boolean:
+
+| Outcome | Meaning |
+|---|---|
+| `true` / `Decision.allow()` | Enqueue unchanged. |
+| `false` / `Decision.reject(reason)` | Block it: `enqueue` throws `PredicateRejectedError`, and so does `tryEnqueue`. |
+| `Decision.skip(reason)` | Quietly don't enqueue: `enqueue` throws `EnqueueSkippedError`, `tryEnqueue` returns `null`. |
+| `Decision.defer(ms)` | Enqueue delayed by `ms`, replacing any `delayMs` the caller passed. |
+| `Decision.deferUntil(date)` | The same, expressed as an instant (a past instant means no delay). |
+
+```ts
+import { Decision } from "@byteveda/taskito";
+
+queue.gate("digest", ({ args }) => {
+  if (!tenants.has(args[0] as string)) return Decision.reject("unknown tenant");
+  if (!quota.available(args[0] as string)) return Decision.defer(5 * 60_000);
+  return Decision.allow();
+});
+
+queue.enqueue("digest", ["acme"]); // throws if the gate rejects or skips
+queue.tryEnqueue("digest", ["acme"]); // null instead of throwing on a skip
+```
+
+Gates run in registration order and the **first non-`allow` decision wins**, so
+a gate that defers short-circuits the ones after it. A gate that throws is a
+bug rather than a denial: the error propagates to the caller (and increments
+`errors` on [`predicateStats()`](#metrics--events)).
+
+Gates are evaluated only at enqueue time. To react once a job is already
+running, use <SdkLink to="guides/extensibility/middleware">middleware</SdkLink>
+or <SdkLink to="guides/workflows/conditions">conditions</SdkLink> inside a
+workflow.
 
 </SdkOnly>
 
@@ -351,8 +379,89 @@ taskito.gate("charge", Recipes.payloadMatches(p -> ((Order) p).amount() > 0));
 
 <SdkOnly sdk="node">
 
-There's no built-in recipe library yet — compose predicate functions
-directly, as in [Composition](#composition) above.
+Import the recipes individually, or as the `Recipes` bundle. Each one's outcome is
+listed below and they are not uniform — the window recipes (`businessHours`,
+`timeWindow`, `dayOfWeek`) **defer** to the next open moment, `payloadMatches`
+and `featureFlag` **skip** silently, and `isWeekend` / `before` / `envVarTruthy`
+are plain booleans, so on their own a `false` **rejects** like any other boolean
+gate. Compose those three with `not` / `allOf` / `anyOf` rather than registering
+them bare if a rejection isn't what you want.
+
+Every argument is validated when the recipe is built, so a bad zone or window
+throws `PredicateValidationError` at wiring time rather than on the first
+enqueue.
+
+### Time
+
+Zones are IANA names resolved through `Intl` (no extra dependency) and default
+to `"UTC"`. A target across a DST boundary resolves to the correct instant.
+
+| Recipe | Description |
+|---|---|
+| `businessHours({ timeZone?, startHour = 9, endHour = 17, weekdaysOnly = true })` | Allow inside the window; defer to the next opening otherwise. |
+| `timeWindow({ start: "22:00", end: "06:00", timeZone? })` | Allow within `[start, end)`; defer to the next `start`. An `end` before `start` wraps midnight. |
+| `dayOfWeek({ days: ["mon", "thu"], timeZone? })` | Allow on those days; defer to the start of the next allowed day. No days means every enqueue skips. |
+| `isWeekend({ timeZone? })` | Boolean: true on Sat/Sun. Usually used as `not(isWeekend())`. |
+| `after(target)` | Defer until `target` (a `Date` or ISO string). |
+| `before(target)` | Boolean: true only strictly before `target`. |
+
+### Payload
+
+| Recipe | Description |
+|---|---|
+| `payloadMatches("args.0.tenantId", "acme")` | Dotted-path lookup rooted at `{ args }`, compared with `Object.is`. Skips on a mismatch or a missing path. |
+
+### External config
+
+| Recipe | Description |
+|---|---|
+| `envVarTruthy("MY_FLAG")` | Boolean. Truthy values: `1`, `true`, `t`, `yes`, `y`, `on` (case-insensitive). |
+| `featureFlag("beta-export", provider?)` | Skips while the flag is off. Defaults to `envFeatureFlagProvider()`, reading `FF_BETA_EXPORT`. |
+
+```ts
+import { Recipes } from "@byteveda/taskito";
+
+const zone = "America/New_York";
+queue.gate("dispatch", Recipes.businessHours({ timeZone: zone }));
+queue.gate("digest", Recipes.dayOfWeek({ days: ["mon", "thu"], timeZone: zone }));
+queue.gate("sync", Recipes.timeWindow({ start: "22:00", end: "06:00", timeZone: zone }));
+queue.gate("beta", Recipes.featureFlag("beta-export"));
+queue.gate("charge", Recipes.payloadMatches("args.0.currency", "USD"));
+```
+
+#### Pluggable feature-flag provider
+
+`featureFlag` takes either a `FeatureFlagProvider` or a plain lookup function:
+
+```ts
+import { featureFlag, type FeatureFlagProvider } from "@byteveda/taskito";
+
+const launchDarkly: FeatureFlagProvider = {
+  isEnabled(flag, ctx) {
+    return client.variation(flag, { key: String(ctx.args[0] ?? "anon") }, false);
+  },
+};
+
+queue.gate("billing", featureFlag("billing", launchDarkly));
+queue.gate("beta", featureFlag("beta", (flag) => myFlags[flag] === true));
+```
+
+### Naming a gate
+
+Register a gate by name to drive gating from configuration — the name is the
+portable part, since a Node gate is a closure with no serializable form:
+
+```ts
+import { defaultRegistry, registerPredicate, Recipes } from "@byteveda/taskito";
+
+registerPredicate("business-hours", Recipes.businessHours({ timeZone: zone }));
+
+queue.gate("dispatch", process.env.DISPATCH_GATE ?? "business-hours");
+defaultRegistry().names(); // ["business-hours"]
+```
+
+The name is resolved when `gate()` is called, so an unknown one throws
+`PredicateValidationError` at startup rather than on the first enqueue.
 
 </SdkOnly>
 
@@ -451,10 +560,11 @@ skipped for the current job — job dispatch is unaffected.
 
 <SdkOnly sdk="node">
 
-Gates run once, on the **producer** side, at enqueue time — there's
-no worker-dispatch phase. Gates are in-process functions only: there's no
-serializable predicate DSL (no JSON/string form, no config-file or dashboard
-round-trip).
+Gates run once, on the **producer** side, at enqueue time — there's no
+worker-dispatch phase. Keep them fast and side-effect-free. Gates are in-process
+functions: there's no serializable predicate DSL (no JSON/string form, no
+dashboard round-trip). Configuration can select *which* registered gate to
+apply, by name, but not describe a new one.
 
 </SdkOnly>
 
@@ -494,6 +604,12 @@ payloads that need skip/defer semantics.
 </SdkOnly>
 
 <SdkOnly sdk="node">
+
+Each entry is gated independently and a `defer` only adjusts that entry's own
+delay, since every entry carries its own options. A `skip` aborts the batch with
+`EnqueueSkippedError`: the returned job ids line up with the input, so a single
+dropped entry isn't expressible. Use `tryEnqueue` per payload when entries need
+skip semantics.
 
 <Callout type="info">
   Gates run on the **producer** side, so they decide whether work is
@@ -540,9 +656,10 @@ restored = Predicate.from_dict(blob)
 
 <SdkOnly sdk="node">
 
-Node has no predicate inspection API — gates are opaque closures held on the
-queue; there's no `listPredicates()` equivalent and the dashboard shows no
-"gated by" schema for Node.
+Node gates are closures, not a serializable AST, so there's no `listPredicates()`
+equivalent and the dashboard shows no "gated by" schema for Node. The one thing
+that *is* introspectable is the registry: `defaultRegistry().names()` lists every
+named gate, and `has(name)` tests one.
 
 </SdkOnly>
 
@@ -588,9 +705,25 @@ for event in (
 
 <SdkOnly sdk="node">
 
-Node emits no predicate metrics or events. The event bus covers job lifecycle
-only (`job.completed`, `job.retrying`, `job.dead`, `job.cancelled`) — there is
-no `predicateStats()` and no deferred/rejected event.
+```ts
+queue.predicateStats();
+// { allowed: 412, skipped: 1, deferred: 8, rejected: 3, errors: 0 }
+```
+
+One count per gated enqueue — the decision that won, not one per gate
+evaluated. Enqueues of ungated tasks aren't counted. The keys follow Node's
+decision kinds; Python calls `rejected` `denied` and `skipped` `cancelled`.
+
+Three events fire on the queue's event bus, all carrying `taskName` plus the
+gate's `reason` (`rejected` / `skipped`) or `delayMs` (`deferred`):
+
+```ts
+for (const event of ["predicate.rejected", "predicate.skipped", "predicate.deferred"] as const) {
+  queue.on(event, (payload) => console.log(event, payload));
+}
+```
+
+They're also <SdkLink to="guides/observability/webhooks">webhook</SdkLink>-subscribable.
 
 </SdkOnly>
 
@@ -692,25 +825,29 @@ queue.enqueue("reindexSearch", ["acme"]); // ok
 queue.enqueue("reindexSearch", ["evilcorp"]); // throws PredicateRejectedError
 ```
 
-### Business-hours + urgent override (booleans, no defer)
+### Business-hours + urgent override (recipe defers, urgent allows now)
 
 ```ts
-import { anyOf } from "@byteveda/taskito";
+import { anyOf, businessHours } from "@byteveda/taskito";
 
-const businessHours = () => {
-  const h = new Date().getHours();
-  return h >= 9 && h < 17;
-};
 const urgent = ({ args }: { args: readonly unknown[] }) => args[1] === true;
 
-queue.gate("sendDailyReport", anyOf(businessHours, urgent));
+queue.gate("sendDailyReport", anyOf(urgent, businessHours({ timeZone: "America/Los_Angeles" })));
 
-queue.enqueue("sendDailyReport", ["alpha"]); // outside 09–17: throws (rejected, not deferred)
-queue.enqueue("sendDailyReport", ["alpha", true]); // urgent bypass: always enqueues
+queue.enqueue("sendDailyReport", ["alpha"]); // out of hours: deferred to the next 09:00 PT
+queue.enqueue("sendDailyReport", ["alpha", true]); // urgent bypass: runs now
 ```
 
-Unlike Python's `is_business_hours` (which *defers* to opening time), a Node
-gate that returns `false` **rejects** the enqueue — Node has no defer outcome.
+### Quietly dropping work a flag has turned off
+
+```ts
+import { Recipes } from "@byteveda/taskito";
+
+queue.gate("exportLedger", Recipes.featureFlag("beta-export"));
+
+queue.tryEnqueue("exportLedger", ["acme"]); // flag off: null, no job created
+queue.enqueue("exportLedger", ["acme"]); // flag off: throws EnqueueSkippedError
+```
 
 </SdkOnly>
 

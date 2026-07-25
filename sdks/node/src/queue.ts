@@ -8,6 +8,7 @@ import {
   type TaskOverride,
 } from "./dashboard/stores";
 import {
+  EnqueueSkippedError,
   InterceptionError,
   JobCancelledError,
   JobFailedError,
@@ -21,7 +22,7 @@ import {
   SerializationError,
   TaskitoError,
 } from "./errors";
-import { Emitter, type EventMap, type EventName } from "./events";
+import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
 import { type Interception, InterceptionMetrics, type Interceptor } from "./interception";
 import { Lock, type LockOptions } from "./locks";
 import type { EnqueueContext, Middleware } from "./middleware";
@@ -33,7 +34,15 @@ import {
   type OpenOptions,
 } from "./native";
 import { encodeNotes } from "./notes";
-import type { Predicate } from "./predicates";
+import {
+  Decision,
+  defaultRegistry,
+  type EnqueueDecision,
+  type EnqueueGate,
+  PredicateMetrics,
+  type PredicateStats,
+  toDecision,
+} from "./predicates";
 import { type ProxyHandlerStats, proxyMetrics } from "./proxies";
 import {
   type PoolOptions,
@@ -160,7 +169,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly middleware: Middleware[] = [];
   private readonly interceptors: Interceptor[] = [];
   private readonly interceptionMetrics = new InterceptionMetrics();
-  private readonly gates = new Map<string, Predicate[]>();
+  private readonly gates = new Map<string, EnqueueGate[]>();
+  private readonly predicateMetrics = new PredicateMetrics();
   private readonly emitter = new Emitter();
   private readonly resources = new ResourceRuntime();
   private readonly webhookManager: WebhookManager;
@@ -479,11 +489,6 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   }
 
   /**
-   * Gate enqueues of `name` with a predicate evaluated at enqueue time (after
-   * `onEnqueue`). If it returns `false`, the enqueue throws
-   * {@link PredicateRejectedError}. Multiple gates on a task all must pass.
-   */
-  /**
    * Register an enqueue interceptor. Interceptors run at the start of every
    * enqueue — before defaults, middleware, and gates — chained in
    * registration order, each seeing the previous one's task name and args.
@@ -496,12 +501,31 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this;
   }
 
+  /**
+   * Gate enqueues of `name` with a predicate evaluated at enqueue time (after
+   * `onEnqueue`). Returning `false` throws {@link PredicateRejectedError};
+   * returning a {@link Decision} can also `skip` (no job — `tryEnqueue` reports
+   * `null`) or `defer` (job created with the decision's delay). Gates run in
+   * registration order and the first non-`allow` decision wins.
+   *
+   * Pass a string to use a gate registered with `registerPredicate` — resolved
+   * here, so an unknown name throws {@link PredicateValidationError} at wiring
+   * time rather than on the first enqueue.
+   */
   gate<Name extends keyof TTasks & string>(
     name: Name,
-    predicate: (ctx: { taskName: Name; args: Parameters<TTasks[Name]> }) => boolean,
+    gate:
+      | ((ctx: {
+          taskName: Name;
+          args: Parameters<TTasks[Name]>;
+          now: Date;
+        }) => boolean | EnqueueDecision)
+      | string,
   ): this {
+    const resolved =
+      typeof gate === "string" ? defaultRegistry().lookup(gate) : (gate as EnqueueGate);
     const list = this.gates.get(name) ?? [];
-    list.push(predicate as Predicate);
+    list.push(resolved);
     this.gates.set(name, list);
     return this;
   }
@@ -524,8 +548,38 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     args?: Parameters<TTasks[Name]>,
     options?: EnqueueOptions,
   ): string {
+    const jobId = this.submit(name, args, options);
+    if (jobId === null) {
+      throw new EnqueueSkippedError(name);
+    }
+    return jobId;
+  }
+
+  /**
+   * {@link Queue.enqueue}, but a gate's `skip` decision yields `null` instead of
+   * throwing {@link EnqueueSkippedError}. A `reject` still throws — a skip means
+   * "deliberately not now", a reject means "not allowed".
+   */
+  tryEnqueue<Name extends keyof TTasks & string>(
+    name: Name,
+    args?: Parameters<TTasks[Name]>,
+    options?: EnqueueOptions,
+  ): string | null {
+    return this.submit(name, args, options);
+  }
+
+  /** The shared enqueue path: `null` when a gate skipped the submission. */
+  private submit<Name extends keyof TTasks & string>(
+    name: Name,
+    args: Parameters<TTasks[Name]> | undefined,
+    options: EnqueueOptions | undefined,
+  ): string | null {
     this.rejectIfQueueFull(options?.queue ?? "default");
-    const { taskName, payload, options: nativeOpts } = this.prepareEnqueue(name, args, options);
+    const prepared = this.prepareEnqueue(name, args, options);
+    if (prepared === null) {
+      return null;
+    }
+    const { taskName, payload, options: nativeOpts } = prepared;
     const jobId = this.native.enqueue(taskName, payload, nativeOpts);
     this.emitter.emit("job.enqueued", { jobId, taskName, queue: nativeOpts.queue ?? "default" });
     return jobId;
@@ -570,10 +624,14 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       this.rejectIfQueueFull(queue, incoming);
     }
     const prepared = jobs.map((job) => {
-      const { payload, options } = this.prepareEnqueue(name, job.args, job.options, {
-        batch: true,
-      });
-      return { payload, options };
+      const entry = this.prepareEnqueue(name, job.args, job.options, { batch: true });
+      // A batch is one all-or-nothing native call whose returned ids line up with
+      // the input, so dropping a single entry isn't expressible. `defer` is fine
+      // (each entry carries its own options), `skip` is not.
+      if (entry === null) {
+        throw new EnqueueSkippedError(name, "batch enqueue cannot skip a single entry");
+      }
+      return { payload: entry.payload, options: entry.options };
     });
     const jobIds = this.native.enqueueMany(name, prepared);
     // One event per created job, in input order. The batch path rejects
@@ -847,14 +905,14 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * `onEnqueue` hooks, then serialize the args and encode the options — the
    * shared path for {@link Queue.enqueue} and {@link Queue.enqueueMany}.
    * Everything downstream of the interceptors keys off the (possibly
-   * redirected) final task name.
+   * redirected) final task name. Returns `null` when a gate skipped the job.
    */
   private prepareEnqueue<Name extends keyof TTasks & string>(
     name: Name,
     args: Parameters<TTasks[Name]> | undefined,
     options: EnqueueOptions | undefined,
     mode?: { batch: boolean },
-  ): { taskName: string; payload: Buffer; options: NativeEnqueueOptions } {
+  ): { taskName: string; payload: Buffer; options: NativeEnqueueOptions } | null {
     const { taskName, args: finalArgs } = this.runInterceptors(name, [...(args ?? [])], mode);
     const defaults = this.tasks.get(taskName)?.options;
     const merged: EnqueueOptions = {
@@ -867,18 +925,65 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     for (const mw of this.middleware) {
       mw.onEnqueue?.(ctx);
     }
-    // Gate: predicates see the (possibly rewritten) args and may reject the enqueue.
-    for (const gate of this.gates.get(taskName) ?? []) {
-      if (!gate({ taskName, args: ctx.args })) {
-        this.emitter.emit("predicate.rejected", { taskName });
-        throw new PredicateRejectedError(taskName);
-      }
+    // Gate: predicates see the (possibly rewritten) args and decide the enqueue's fate.
+    const decision = this.evaluateGates(taskName, ctx.args);
+    switch (decision.kind) {
+      case "reject":
+        this.emitter.emit("predicate.rejected", predicateEvent(taskName, decision.reason));
+        throw new PredicateRejectedError(taskName, decision.reason || undefined);
+      case "skip":
+        this.emitter.emit("predicate.skipped", predicateEvent(taskName, decision.reason));
+        return null;
+      case "defer":
+        // Replaces the caller's delay rather than adding to it: the gate is
+        // stating when the job may run, which is the stronger constraint.
+        ctx.options = { ...ctx.options, delayMs: decision.delayMs };
+        this.emitter.emit("predicate.deferred", { taskName, delayMs: decision.delayMs });
+        break;
+      default:
+        break;
     }
     return {
       taskName,
       payload: this.encodeTaskPayload(taskName, ctx.args),
       options: toNativeEnqueueOptions(ctx.options),
     };
+  }
+
+  /**
+   * Run every gate registered for `taskName` in order; the first non-`allow`
+   * decision wins. A gate that throws is a bug, not a rejection — the error
+   * propagates to the caller unchanged.
+   */
+  private evaluateGates(taskName: string, args: readonly unknown[]): EnqueueDecision {
+    const gates = this.gates.get(taskName);
+    if (gates === undefined || gates.length === 0) {
+      return Decision.allow();
+    }
+    const ctx = { taskName, args, now: new Date() };
+    const decision = this.firstBlockingDecision(gates, ctx, taskName);
+    this.predicateMetrics.record(decision.kind);
+    return decision;
+  }
+
+  private firstBlockingDecision(
+    gates: readonly EnqueueGate[],
+    ctx: { taskName: string; args: readonly unknown[]; now: Date },
+    taskName: string,
+  ): EnqueueDecision {
+    for (const gate of gates) {
+      let decision: EnqueueDecision;
+      try {
+        decision = toDecision(gate(ctx), taskName);
+      } catch (error) {
+        this.predicateMetrics.recordError();
+        throw error;
+      }
+      if (decision.kind !== "allow") {
+        return decision;
+      }
+    }
+    return Decision.allow();
   }
 
   /**
@@ -1430,6 +1535,14 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.interceptionMetrics.toDict();
   }
 
+  /**
+   * What this process's gates decided: one count per gated enqueue, keyed by
+   * decision. Enqueues of ungated tasks are not counted.
+   */
+  predicateStats(): PredicateStats {
+    return this.predicateMetrics.snapshot();
+  }
+
   /** Registered workers (heartbeat + identity). */
   listWorkers(): Promise<WorkerInfo[]> {
     return this.native.listWorkers();
@@ -1483,6 +1596,11 @@ function decodePartial(extra: string | null | undefined): unknown {
  * Convert public enqueue options to the native shape: structured `notes` is
  * validated and encoded to canonical JSON; all other fields pass through.
  */
+/** A `predicate.*` payload that omits `reason` entirely when the gate gave none. */
+function predicateEvent(taskName: string, reason: string): PredicateEvent {
+  return reason ? { taskName, reason } : { taskName };
+}
+
 function toNativeEnqueueOptions(options: EnqueueOptions): NativeEnqueueOptions {
   const { notes, ...rest } = options;
   return notes === undefined ? rest : { ...rest, notes: encodeNotes(notes) };
