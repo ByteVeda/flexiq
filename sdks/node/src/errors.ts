@@ -200,6 +200,36 @@ export class PredicateRejectedError extends TaskitoError {
   }
 }
 
+/**
+ * Thrown when a gate decided to skip the enqueue. A skip is deliberate, not a
+ * failure — callers that expect it should use `Queue.tryEnqueue`, which returns
+ * `null` instead of throwing.
+ */
+export class EnqueueSkippedError extends TaskitoError {
+  constructor(
+    readonly taskName: string,
+    readonly reason?: string,
+  ) {
+    super(
+      reason
+        ? `a gate skipped the enqueue of "${taskName}": ${reason} (use tryEnqueue)`
+        : `a gate skipped the enqueue of "${taskName}" (use tryEnqueue)`,
+    );
+    this.name = "EnqueueSkippedError";
+  }
+}
+
+/**
+ * Thrown when a predicate is misconfigured: an unknown registry name, a bad
+ * recipe argument, or a gate returning an unrecognized decision.
+ */
+export class PredicateValidationError extends TaskitoError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PredicateValidationError";
+  }
+}
+
 // ── Proxies ─────────────────────────────────────────────────────────────────
 
 /** Thrown on proxy handler, signature, expiry, purpose, or allowlist failures. */

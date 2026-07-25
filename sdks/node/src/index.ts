@@ -30,6 +30,7 @@ export {
 } from "./dashboard";
 export {
   CryptoError,
+  EnqueueSkippedError,
   InterceptionError,
   JobCancelledError,
   JobFailedError,
@@ -37,6 +38,7 @@ export {
   LockNotAcquiredError,
   NotesValidationError,
   PredicateRejectedError,
+  PredicateValidationError,
   ProxyError,
   QueueError,
   QueueFullError,
@@ -72,6 +74,11 @@ export type { EnqueueContext, Middleware, TaskContext } from "./middleware";
 export {
   allOf,
   anyOf,
+  DECISION_KINDS,
+  Decision,
+  type DecisionKind,
+  type EnqueueDecision,
+  type EnqueueGate,
   not,
   type Predicate,
   type PredicateContext,
