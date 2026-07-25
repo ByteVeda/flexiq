@@ -35,6 +35,9 @@ JSON body parsing is mounted internally on the router.
 | `POST` | `/jobs/:id/cancel` | Request cancellation. |
 | `GET` | `/dead-letters?limit=&offset=` | List dead-lettered jobs. |
 | `POST` | `/dead-letters/:id/retry` | Retry a dead-lettered job. |
+| `GET` | `/health` | Liveness probe — always `{ status: "ok" }`. |
+| `GET` | `/readiness` | Readiness probe: storage, workers, resources. `503` when degraded. |
+| `GET` | `/resources` | Worker-resource health aggregated across live workers. |
 
 ## `taskitoRouter` options
 
@@ -45,7 +48,14 @@ JSON body parsing is mounted internally on the router.
 | `resultTimeoutMs` | `number` | `5000` | Ceiling for `/jobs/:id/result`; a client `timeoutMs` above this is clamped down to it. |
 
 Route names: `enqueue`, `stats`, `queue-stats`, `job`, `job-errors`,
-`job-result`, `cancel`, `dead-letters`, `retry-dead`.
+`job-result`, `cancel`, `dead-letters`, `retry-dead`, `health`, `readiness`,
+`resources`.
+
+<Callout type="info">
+  The probe routes are the standalone `checkHealth()` / `checkReadiness(queue)`
+  helpers — call them directly if you'd rather serve probes on your own paths.
+  See [Monitoring](/node/guides/observability/monitoring).
+</Callout>
 
 ## Dashboard
 

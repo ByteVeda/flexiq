@@ -65,6 +65,50 @@ A worker appears on the dashboard Workers panel while it heartbeats; `stop()`
 unregisters it. See [Workers](/node/guides/core/workers) for the worker
 lifecycle.
 
+## Health & readiness
+
+`checkHealth()` and `checkReadiness(queue)` are standalone — no dashboard, no
+HTTP server. Wire them into whatever already serves your probes, or call them
+from a script:
+
+```ts
+import { checkHealth, checkReadiness } from "@byteveda/taskito";
+
+checkHealth(); // { status: "ok" } — liveness, never touches storage
+const report = await checkReadiness(queue);
+// {
+//   status: "ready" | "degraded",
+//   checks: {
+//     storage: "ok",
+//     workers: { count: 2, status: "ok" },
+//     resources: { count: 1, unhealthy: [], status: "ok" },
+//   },
+// }
+```
+
+`checkReadiness` never throws: a dependency that fails is reported as
+`"error: <message>"` in `checks` and degrades the overall status, so a probe
+endpoint can always answer. The `resources` check is omitted when no worker
+advertises a [worker resource](/node/guides/resources); when one does, it is
+built from `resourceStatus(queue)`, which aggregates per-resource health across
+every live worker's heartbeat.
+
+Serve them behind your own routes — return `503` on `degraded` so orchestrators
+drain the instance:
+
+```ts
+app.get("/healthz", (_req, res) => res.json(checkHealth()));
+app.get("/readyz", async (_req, res) => {
+  const report = await checkReadiness(queue);
+  res.status(report.status === "ready" ? 200 : 503).json(report);
+});
+```
+
+The [dashboard](/node/guides/operations/dashboard), the
+[KEDA scaler](/node/guides/operations/keda) server, and the
+[Express](/node/guides/integrations/express) / [Fastify](/node/guides/integrations/fastify)
+helpers all serve these same helpers on `/health` and `/readiness`.
+
 ## Prometheus & tracing
 
 For metric scraping and distributed traces, the contrib integrations wrap the
