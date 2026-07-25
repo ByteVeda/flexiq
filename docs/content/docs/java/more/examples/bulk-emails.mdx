@@ -68,10 +68,10 @@ try (Batcher<Tasks.Email> batcher =
 } // close() flushes what remains
 ```
 
-<Callout type="warn">
-  `enqueueMany` does not apply `uniqueKey` dedup — the batch path trades
-  idempotency for throughput. If you must not double-send, dedup the recipient
-  list before enqueueing, or use single `enqueue` calls with a `uniqueKey`.
+<Callout>
+  Give each entry a `uniqueKey` (say `"email:" + to + ":" + campaignId`) if a
+  retried send loop must not double-send: batch entries dedup exactly like a
+  single `enqueue`, resolving to the already-enqueued job's id.
 </Callout>
 
 ## WorkerMain.java

@@ -550,8 +550,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /**
    * Enqueue many jobs of `name` in one storage round-trip. Each entry is its own
-   * typed `args` + `options`. Returns the new job ids in input order. Unlike
-   * {@link Queue.enqueue}, the batch path does not apply `uniqueKey` dedup.
+   * typed `args` + `options`. Returns the job ids in input order. Entries
+   * carrying a `uniqueKey` dedup exactly like {@link Queue.enqueue}: a key that
+   * already has a pending/running job yields that job's id instead of a new row.
    */
   enqueueMany<Name extends keyof TTasks & string>(
     name: Name,

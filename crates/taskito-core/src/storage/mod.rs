@@ -133,6 +133,31 @@ pub fn sweep_ephemeral_subscriptions(
     storage.reap_ephemeral_subscriptions(&live)
 }
 
+/// Batch-enqueue `new_jobs`, applying `unique_key` dedup to whichever entries
+/// carry one — the batch equivalent of choosing [`Storage::enqueue_unique`] over
+/// [`Storage::enqueue`] per job. Returns the created (or already-active) jobs in
+/// input order, in one storage call either way. The Java and Node batch enqueues
+/// route through here; Python still batch-inserts without dedup.
+///
+/// One keyed entry sends the whole batch through
+/// [`Storage::enqueue_unique_batch`], which check-then-inserts per row (returning
+/// the existing active job for a duplicate key) and passes keyless rows straight
+/// through. On the Diesel backends that is one transaction, so a mixed batch is
+/// all-or-nothing; Redis loops the single-job path per row there as it does for
+/// every batch, so a mid-batch failure leaves earlier rows enqueued.
+///
+/// A batch with no keys at all keeps the chunked multi-row
+/// [`Storage::enqueue_batch`] insert, which is the throughput path but would hit
+/// the partial unique index and fail the whole batch the moment a key duplicates
+/// an active job.
+pub fn enqueue_batch_dedup(storage: &impl Storage, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
+    if new_jobs.iter().any(|job| job.unique_key.is_some()) {
+        storage.enqueue_unique_batch(new_jobs)
+    } else {
+        storage.enqueue_batch(new_jobs)
+    }
+}
+
 // ── Shared helper types ────────────────────────────────────────────────
 
 /// Per-status job counts for a queue (or the whole cluster).

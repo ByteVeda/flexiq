@@ -50,5 +50,5 @@ try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
 | `enqueue(Task<T>, T)` / `enqueue(Task<T>, T, EnqueueOptions)` | Enqueue a typed payload → job id. |
 | `enqueue(String taskName, Object payload)` | Enqueue by task name. |
 | `tryEnqueue(...)` | Gate-aware `enqueue`: `Optional.empty()` when a gate skips; a `Reject` still throws. |
-| `enqueueMany(Task<T>, List<T>)` / `(..., EnqueueOptions)` | Batch-enqueue in one storage call → ids in input order (no dedup). |
+| `enqueueMany(Task<T>, List<T>)` / `(..., EnqueueOptions)` | Batch-enqueue in one storage call → ids in input order, `uniqueKey` entries deduped. |
 | `enqueueAll(Task<T>, List<T>)` | Alias of `enqueueMany`. |

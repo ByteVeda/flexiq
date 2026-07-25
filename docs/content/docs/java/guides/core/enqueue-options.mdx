@@ -48,7 +48,7 @@ when due. For recurring schedules use
 ## Batch enqueue
 
 `enqueueMany` inserts many jobs of one task in a single storage call. Payloads
-share one `EnqueueOptions`; it returns the new ids in input order.
+share one `EnqueueOptions`; it returns the ids in input order.
 
 ```java
 List<String> ids = taskito.enqueueMany(resize, List.of(a, b, c),
