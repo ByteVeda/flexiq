@@ -72,16 +72,35 @@ export { Interception, type Interceptor } from "./interception";
 export { Lock, type LockInfo, type LockOptions } from "./locks";
 export type { EnqueueContext, Middleware, TaskContext } from "./middleware";
 export {
+  after,
   allOf,
   anyOf,
+  type BusinessHoursOptions,
+  before,
+  businessHours,
+  DAYS_OF_WEEK,
+  type DayOfWeek,
+  type DayOfWeekOptions,
   DECISION_KINDS,
   Decision,
   type DecisionKind,
+  dayOfWeek,
   type EnqueueDecision,
   type EnqueueGate,
+  envFeatureFlagProvider,
+  envVarTruthy,
+  type FeatureFlagProvider,
+  type FlagLookup,
+  featureFlag,
+  isWeekend,
   not,
   type Predicate,
   type PredicateContext,
+  payloadMatches,
+  Recipes,
+  type TimeWindowOptions,
+  timeWindow,
+  type ZoneOptions,
 } from "./predicates";
 export type { ProxyHandler, ProxyRef } from "./proxies";
 export { canonicalJson, FileProxyHandler, FileReference, Proxies, ProxySession } from "./proxies";
