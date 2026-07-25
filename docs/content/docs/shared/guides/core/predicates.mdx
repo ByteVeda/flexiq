@@ -237,7 +237,7 @@ A gate may return a `Decision` instead of a boolean:
 | Outcome | Meaning |
 |---|---|
 | `true` / `Decision.allow()` | Enqueue unchanged. |
-| `false` / `Decision.reject(reason)` | Block it: `enqueue` throws `PredicateRejectedError`. |
+| `false` / `Decision.reject(reason)` | Block it: `enqueue` throws `PredicateRejectedError`, and so does `tryEnqueue`. |
 | `Decision.skip(reason)` | Quietly don't enqueue: `enqueue` throws `EnqueueSkippedError`, `tryEnqueue` returns `null`. |
 | `Decision.defer(ms)` | Enqueue delayed by `ms`, replacing any `delayMs` the caller passed. |
 | `Decision.deferUntil(date)` | The same, expressed as an instant (a past instant means no delay). |
@@ -379,8 +379,14 @@ taskito.gate("charge", Recipes.payloadMatches(p -> ((Order) p).amount() > 0));
 
 <SdkOnly sdk="node">
 
-Import the recipes individually, or as the `Recipes` bundle. Time-based recipes
-defer an out-of-window enqueue to the next open moment; filters skip silently.
+Import the recipes individually, or as the `Recipes` bundle. Each one's outcome is
+listed below and they are not uniform — the window recipes (`businessHours`,
+`timeWindow`, `dayOfWeek`) **defer** to the next open moment, `payloadMatches`
+and `featureFlag` **skip** silently, and `isWeekend` / `before` / `envVarTruthy`
+are plain booleans, so on their own a `false` **rejects** like any other boolean
+gate. Compose those three with `not` / `allOf` / `anyOf` rather than registering
+them bare if a rejection isn't what you want.
+
 Every argument is validated when the recipe is built, so a bad zone or window
 throws `PredicateValidationError` at wiring time rather than on the first
 enqueue.
