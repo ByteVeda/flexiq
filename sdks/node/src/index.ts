@@ -69,6 +69,17 @@ export {
   type WorkerUnhealthyEvent,
   type WorkflowEvent,
 } from "./events";
+export {
+  checkHealth,
+  checkReadiness,
+  type HealthReport,
+  type ReadinessChecks,
+  type ReadinessReport,
+  type ResourceStatusEntry,
+  type ResourcesCheck,
+  resourceStatus,
+  type WorkersCheck,
+} from "./health";
 export { Interception, type Interceptor } from "./interception";
 export { Lock, type LockInfo, type LockOptions } from "./locks";
 export type { EnqueueContext, Middleware, TaskContext } from "./middleware";

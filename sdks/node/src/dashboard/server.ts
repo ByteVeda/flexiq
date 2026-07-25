@@ -31,7 +31,7 @@ import {
   tokenMatches,
 } from "./auth";
 import { DashboardError, ValidationError } from "./errors";
-import { health, openAuthStatus, openWhoami, readiness } from "./handlers";
+import { checkHealth, checkReadiness, openAuthStatus, openWhoami } from "./handlers";
 import { isCsrfExempt, isPublicPath, isStateChangingMethod, requiresAdmin } from "./policy";
 import { routes } from "./routes";
 import { StaticAssets } from "./static";
@@ -493,7 +493,7 @@ async function serveProbe(
   options: DashboardHandlerOptions,
 ): Promise<void> {
   if (path === "/health") {
-    sendJson(res, 200, health());
+    sendJson(res, 200, checkHealth());
     return;
   }
   if (!probeAuthorized(queue, req, options)) {
@@ -501,7 +501,7 @@ async function serveProbe(
     return;
   }
   if (path === "/readiness") {
-    const payload = await readiness(queue);
+    const payload = await checkReadiness(queue);
     // Non-2xx on degraded so orchestrators stop routing to this instance.
     sendJson(res, payload.status === "ready" ? 200 : 503, payload);
     return;
