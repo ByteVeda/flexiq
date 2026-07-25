@@ -114,10 +114,21 @@ export function shiftDays(day: CalendarDay, days: number): CalendarDay {
  * The instant at which `wall` reads on the clock in `timeZone`.
  *
  * The zone's UTC offset is only knowable at a given instant, so this guesses
- * using the offset at `reference`, then re-reads the offset at the guess and
- * corrects once — that second pass is what makes a target on the far side of a
- * DST transition land on the right instant. A target inside a spring-forward
- * gap (a wall clock that never occurs) resolves to just after the gap.
+ * using the offset at `reference`, re-reads the offset at that guess, and takes
+ * the candidate that reproduces itself — a self-consistent offset means the
+ * wall clock genuinely occurs at that instant. That is what makes a target on
+ * the far side of a DST transition land correctly.
+ *
+ * Two edge cases have no single right answer, and these are the choices
+ * `java.time` makes, so all three SDKs agree:
+ *
+ * - **Spring-forward gap** (a wall clock that never occurs, e.g. 02:30 in New
+ *   York on 2026-03-08): neither candidate is self-consistent, so the later one
+ *   wins — the target is pushed forward by the gap's length, to just after it.
+ *   Correcting to the earlier candidate would schedule an hour *before* the
+ *   requested time.
+ * - **Fall-back overlap** (a wall clock that occurs twice): the first
+ *   occurrence wins, since the pre-transition offset is tried first.
  */
 export function zonedInstant(wall: WallClock, timeZone: string, reference: Date): Date {
   const wanted = Date.UTC(
@@ -129,7 +140,19 @@ export function zonedInstant(wall: WallClock, timeZone: string, reference: Date)
     wall.second ?? 0,
   );
   const guess = wanted - offsetMsAt(reference, timeZone);
-  return new Date(wanted - offsetMsAt(new Date(guess), timeZone));
+  const firstOffset = offsetMsAt(new Date(guess), timeZone);
+  const firstCandidate = wanted - firstOffset;
+  const secondOffset = offsetMsAt(new Date(firstCandidate), timeZone);
+  if (secondOffset === firstOffset) {
+    return new Date(firstCandidate);
+  }
+  // A transition sits between the guess and the candidate. Whichever candidate
+  // the zone agrees with is the real instant; if neither, `wanted` is in a gap.
+  const secondCandidate = wanted - secondOffset;
+  if (offsetMsAt(new Date(secondCandidate), timeZone) === secondOffset) {
+    return new Date(secondCandidate);
+  }
+  return new Date(Math.max(firstCandidate, secondCandidate));
 }
 
 /** How far `timeZone`'s wall clock runs ahead of UTC at `instant`. */

@@ -58,6 +58,18 @@ describe("businessHours", () => {
     expect(gate(at("2026-07-22T14:00:00Z"))).toEqual({ kind: "allow" });
   });
 
+  it("pushes a target inside a spring-forward gap past the gap", () => {
+    // New York skips 02:00–03:00 on 2026-03-08, so a window opening at 02:30
+    // has no instant. It must resolve forward to 03:30 EDT (07:30Z), never back
+    // to 01:30 EST — that would enqueue an hour before the requested time.
+    const gate = timeWindow({ start: "02:30", end: "04:00", timeZone: "America/New_York" });
+    const now = "2026-03-08T06:00:00Z"; // 01:00 EST, an hour before the gap
+    const decision = gate(at(now));
+    expect(decision).toMatchObject({ kind: "defer" });
+    const runAt = new Date(new Date(now).getTime() + (decision as { delayMs: number }).delayMs);
+    expect(runAt.toISOString()).toBe("2026-03-08T07:30:00.000Z");
+  });
+
   it("lands on the right instant across a DST transition", () => {
     // Sat 18:00 EST; New York springs forward on 2026-03-08, so the next
     // opening (Mon 09:00 EDT = 13:00Z) is 38 hours out, not 39.
