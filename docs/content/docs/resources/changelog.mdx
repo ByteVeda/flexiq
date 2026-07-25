@@ -47,6 +47,12 @@ underlying Rust crates are released together, in lock-step.
   (`registerPredicate`) and referenced as `gate(task, "name")` for config-driven gating,
   `queue.predicateStats()` reports what they decided, and `predicate.skipped` /
   `predicate.deferred` join `predicate.rejected` on the event bus.
+- **Node producer-side batch accumulator.** `queue.batcher(task, { maxSize, maxWaitMs })` buffers
+  one-at-a-time enqueues and flushes them as a single `enqueueMany` call on a size or time
+  trigger — the counterpart of Python's `BatchAccumulator` and Java's `Batcher<T>`. Entries keep
+  their own `args` and `EnqueueOptions`, a failed flush keeps them buffered (and a timed one
+  retries, reporting to `onError`), and `Symbol.dispose` means `using` flushes the tail at block
+  exit.
 - **Node bare-metal autoscaler.** `serveAutoscaler(queue, { app })` and `taskito autoscale <app>`
   spawn and drain worker processes to track queue depth on hosts without Kubernetes, closing the
   last scaling gap against Python's `AutoscaleController`. Same HPA-shaped formula — depth and

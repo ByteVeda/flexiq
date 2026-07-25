@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { Batcher, type BatcherOptions } from "./batching";
 import {
   MiddlewareDisableStore,
   middlewareKey,
@@ -644,6 +645,18 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       });
     });
     return jobIds;
+  }
+
+  /**
+   * A producer-side accumulator for `name`: buffers enqueues and flushes them
+   * through {@link Queue.enqueueMany} on a size or time trigger. Close it (or
+   * declare it with `using`) so the remainder isn't lost at shutdown.
+   */
+  batcher<Name extends keyof TTasks & string>(
+    name: Name,
+    options?: BatcherOptions,
+  ): Batcher<TTasks, Name> {
+    return new Batcher(this, name, options);
   }
 
   // ── Topic pub/sub ─────────────────────────────────────────────────

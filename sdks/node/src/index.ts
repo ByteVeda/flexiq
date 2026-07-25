@@ -10,6 +10,7 @@ export {
   serveAutoscaler,
   WorkerProcessManager,
 } from "./autoscale";
+export { Batcher, type BatcherOptions } from "./batching";
 export { currentJob, type JobContext } from "./context";
 export {
   AuthStore,
