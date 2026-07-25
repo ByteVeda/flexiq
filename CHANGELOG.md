@@ -31,6 +31,15 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **Node predicate recipes, decisions, and registry.** A gate could only allow or reject; it can
+  now return a `Decision` that also skips (no job — `queue.tryEnqueue()` reports `null`, `enqueue`
+  throws the new `EnqueueSkippedError`) or defers (job created with the gate's delay). Nine
+  ready-made gates ship as `Recipes`: `businessHours`, `timeWindow`, `dayOfWeek`, `isWeekend`,
+  `after`, `before`, `payloadMatches`, `featureFlag`, `envVarTruthy` — time zones resolved through
+  `Intl`, so no new dependency, and DST-correct. Gates can be registered by name
+  (`registerPredicate`) and referenced as `gate(task, "name")` for config-driven gating,
+  `queue.predicateStats()` reports what they decided, and `predicate.skipped` /
+  `predicate.deferred` join `predicate.rejected` on the event bus.
 - **Node bare-metal autoscaler.** `serveAutoscaler(queue, { app })` and `taskito autoscale <app>`
   spawn and drain worker processes to track queue depth on hosts without Kubernetes, closing the
   last scaling gap against Python's `AutoscaleController`. Same HPA-shaped formula — depth and
