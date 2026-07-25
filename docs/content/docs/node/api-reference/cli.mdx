@@ -24,6 +24,7 @@ on read commands prints machine-readable output.
 | `run <module> [--queues a,b]` | Load a module exporting a `Queue` and run its worker. |
 | `dashboard [--port <n>]` | Serve the [dashboard](/node/guides/operations/dashboard). |
 | `scaler [--port <n>] [--target-queue-depth <n>]` | Serve the [KEDA](/node/guides/operations/keda) scaler metric endpoint. |
+| `autoscale <module> [--min-workers <n>] [--max-workers <n>]` | Scale worker processes to queue depth — see [Autoscaling](/node/guides/operations/autoscaling). |
 
 ```bash
 taskito --db taskito.db enqueue add '[2,3]'

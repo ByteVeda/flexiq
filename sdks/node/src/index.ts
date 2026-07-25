@@ -1,3 +1,15 @@
+export {
+  type AutoscaleConfig,
+  type AutoscaleMetricsSource,
+  type AutoscaleOptions,
+  Autoscaler,
+  computeDesiredWorkers,
+  resolveAutoscaleConfig,
+  type ScaleDecision,
+  type ScaleInputs,
+  serveAutoscaler,
+  WorkerProcessManager,
+} from "./autoscale";
 export { currentJob, type JobContext } from "./context";
 export {
   AuthStore,

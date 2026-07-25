@@ -1,3 +1,4 @@
+export { registerAutoscale } from "./autoscale";
 export { registerCancel } from "./cancel";
 export { registerDashboard } from "./dashboard";
 export { registerDlq } from "./dlq";

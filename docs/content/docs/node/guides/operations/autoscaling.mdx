@@ -1,0 +1,201 @@
+---
+title: Autoscaling
+description: "Scale worker processes to match queue depth on bare metal, Docker, or systemd — no Kubernetes required."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Two layers scale with load. The **bare-metal autoscaler** spawns and drains
+worker processes on one machine; the **scaler endpoint** (`serveScaler`)
+exposes queue depth over HTTP so KEDA can size a Kubernetes deployment.
+
+Reach for the autoscaler when you run on bare metal, Docker, or systemd. Its
+formula mirrors the Kubernetes HPA, so the behaviour is predictable if you
+already know KEDA.
+
+## Quick start
+
+```ts
+import { Queue, serveAutoscaler } from "@byteveda/taskito";
+
+const queue = new Queue({ dbPath: "taskito.db" });
+
+await serveAutoscaler(queue, {
+  app: "./app.js",
+  minWorkers: 1,
+  maxWorkers: 10,
+});
+```
+
+`app` is the same module `taskito run` loads — one that exports a configured
+`Queue` as its default export or as `queue`. Each spawned worker imports it and
+starts a worker over its registered tasks.
+
+`serveAutoscaler` resolves once SIGTERM or SIGINT arrives and every worker has
+drained.
+
+## CLI
+
+```bash
+taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+```
+
+Every option below has a matching flag (`--target-queue-depth`,
+`--target-utilisation`, `--scale-up-window`, `--scale-down-window`,
+`--tolerance`, `--poll-interval`, `--drain-timeout`, `--concurrency`,
+`--queues`, `--batch-size`, `--node-arg`). Windows and timeouts are in
+milliseconds.
+
+A systemd unit for the pool:
+
+```ini
+[Unit]
+Description=taskito autoscaler
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/myapp
+ExecStart=/usr/bin/npx taskito --db /var/lib/taskito/taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+Restart=always
+KillMode=process
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`KillMode=process` sends systemd's SIGTERM to the autoscaler alone — it then
+drains its own pool, rather than having workers killed mid-job.
+
+## How it works
+
+Every `pollIntervalMs` (default 5 s) the controller:
+
+1. Reads `pending` and `running` — from all queues, or from `queues` when set.
+2. Replaces crashed workers up to `minWorkers`.
+3. Computes a desired count from two signals:
+
+```text
+depthDesired = ceil(pending / targetQueueDepthPerWorker)
+utilDesired  = ceil(workers × (utilisation / targetUtilisation))
+desired      = clamp(max(depthDesired, utilDesired), minWorkers, maxWorkers)
+```
+
+4. Smooths that through the stabilisation windows.
+5. Spawns or drains workers to reach the smoothed target.
+
+### Stabilisation windows
+
+Every tick's raw recommendation is recorded, including the ticks that asked for
+no change. The least aggressive one in the window then wins:
+
+- **Scale-up** takes the *minimum*, so the pool grows only once every tick in
+  the window agrees the demand is real. `scaleUpWindowMs` defaults to `0`,
+  which means the current tick alone decides — an extra worker for a few
+  seconds costs far less than a backlog.
+- **Scale-down** takes the *maximum*, so a lull shorter than the window can't
+  tear the pool down — including a tick whose metrics read failed.
+  `scaleDownWindowMs` defaults to 5 minutes, matching the Kubernetes HPA's
+  downscale stabilisation.
+
+### Tolerance band
+
+A desired count within `tolerance` (default 10%, as in HPA) of the current one
+is treated as no change, so small fluctuations don't churn processes.
+
+### Overload override
+
+When `running` exceeds `workers × concurrencyPerWorker`, the controller bypasses
+the tolerance band and adds one worker — a genuine overload shouldn't sit inside
+a noise filter.
+
+## Options
+
+| Option | Default | Description |
+|---|---|---|
+| `app` | — | Module exporting the `Queue` each worker loads |
+| `minWorkers` | `1` | Floor. `0` allows idle scale-to-zero |
+| `maxWorkers` | `10` | Ceiling |
+| `targetQueueDepthPerWorker` | `15` | Pending jobs per worker (depth signal) |
+| `targetUtilisation` | `0.75` | Target `running / capacity` ratio |
+| `scaleUpWindowMs` | `0` | Scale-up stabilisation window |
+| `scaleDownWindowMs` | `300000` | Scale-down stabilisation window |
+| `tolerance` | `0.1` | Skip scaling within this fraction of current |
+| `pollIntervalMs` | `5000` | Milliseconds between decision ticks |
+| `drainTimeoutMs` | `30000` | SIGTERM grace per worker before SIGKILL |
+| `concurrencyPerWorker` | `4` | Jobs each worker runs at once |
+| `queues` | all | Queues the workers consume, and the ones metrics read |
+| `batchSize` | worker default | Jobs claimed per scheduler poll |
+| `nodeExecutable` | `process.execPath` | Node binary used to spawn workers |
+| `nodeArgs` | `[]` | Extra flags for that binary |
+
+Invalid values throw `RangeError` up front rather than misbehaving at runtime.
+
+<Callout type="info" title="TypeScript app modules">
+  Spawned workers run plain Node, so a `.ts` entry needs a loader:
+  `nodeArgs: ["--import", "tsx"]`, or `--node-arg --import --node-arg tsx` on
+  the CLI. Pointing `app` at compiled JavaScript avoids the question entirely.
+</Callout>
+
+## Programmatic API
+
+`Autoscaler` is the loop behind `serveAutoscaler`, for embedding in a larger
+process:
+
+```ts
+import { Autoscaler } from "@byteveda/taskito";
+
+const autoscaler = new Autoscaler(queue, { app: "./app.js", maxWorkers: 20 });
+autoscaler.start();
+
+// One decision cycle by hand — useful in tests or a custom loop.
+const decision = await autoscaler.tick();
+console.log(decision.rationale); // "scale-up: depth=4 util=2 overload=false"
+
+await autoscaler.stop(); // drains every worker
+```
+
+`tick()` returns a `ScaleDecision`: `pending`, `running`, `currentWorkers`,
+`desiredWorkers`, and a human-readable `rationale`. `computeDesiredWorkers` is
+the same decision as a pure function, if you want the number without the
+processes.
+
+`autoscaler.processManager` exposes the pool itself — `spawnWorker()`,
+`terminateWorker(pid)`, `reapDead()`, `countLive()`, `livePids()`, `shutdown()`,
+and `killAll()`.
+
+<Callout type="info">
+  Each tick logs one line at `info`:
+  `pending=N running=M workers=X -> Y (rationale)`. Set
+  `TASKITO_LOG_LEVEL=info` (or `setLogLevel("info")`) to see the scaling
+  history.
+</Callout>
+
+## Process model
+
+Workers are independent OS processes, each in its own process group, so a
+Ctrl-C in the autoscaler's terminal doesn't cut jobs short — the autoscaler
+drains them itself, SIGTERM first and SIGKILL only after `drainTimeoutMs`. A
+worker that dies on its own is noticed on the next tick and replaced up to
+`minWorkers`.
+
+<Callout type="warn">
+  Because workers are detached, SIGKILLing the autoscaler orphans them rather
+  than taking them down with it. Stop it with SIGTERM/SIGINT (what systemd and
+  `docker stop` send) so the pool drains.
+</Callout>
+
+## Against KEDA
+
+| | Bare-metal autoscaler | KEDA + `serveScaler` |
+|---|---|---|
+| Infrastructure | Bare metal, Docker, systemd | Kubernetes |
+| Unit of scale | OS processes on one host | Pods across the cluster |
+| Signal | Queue depth **and** utilisation | Queue depth |
+| Stabilisation | Built in, per direction | KEDA's `cooldownPeriod` |
+| Crash recovery | Replaces crashed workers | Kubernetes restarts pods |
+| Setup | None | KEDA operator + `ScaledObject` |
+
+On Kubernetes, run `serveScaler` (or `taskito scaler`) and let KEDA size the
+deployment. The two compose: KEDA sizes the fleet, and each pod can still run
+its own autoscaler over that machine's cores.
