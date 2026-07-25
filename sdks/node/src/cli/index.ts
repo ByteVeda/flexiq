@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
+  registerAutoscale,
   registerCancel,
   registerDashboard,
   registerDlq,
@@ -36,6 +37,7 @@ registerDlq(program);
 registerRun(program);
 registerDashboard(program);
 registerScaler(program);
+registerAutoscale(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
