@@ -95,23 +95,27 @@ export class WorkerProcessManager {
       ],
       { stdio: "inherit", detached: true },
     );
+    // `error` fires instead of `exit` when the spawn itself failed (bad
+    // executable, EAGAIN), asynchronously and with no pid. It has to be
+    // attached before the pid check below: an `error` with no listener is
+    // rethrown globally, so a failed spawn would take the autoscaler down.
+    child.once("error", (error) => {
+      log.error(() => `worker pid=${child.pid ?? "?"} failed to start`, error);
+      if (child.pid !== undefined) {
+        this.forget(child.pid);
+      }
+    });
     const pid = child.pid;
     if (pid === undefined) {
       throw new Error(`failed to spawn worker with ${this.config.nodeExecutable}`);
     }
     const record: WorkerProcess = { child, stopping: false };
     this.processes.set(pid, record);
-    // `error` fires instead of `exit` when the spawn itself failed (bad
-    // executable, EAGAIN); without a listener Node would throw it globally.
-    child.once("error", (error) => {
-      log.error(() => `worker pid=${pid} failed to start`, error);
-      this.forget(pid, record);
-    });
     child.once("exit", (code, signal) => {
       if (!record.stopping) {
         log.warn(() => `worker pid=${pid} exited unexpectedly (code=${code} signal=${signal})`);
       }
-      this.forget(pid, record);
+      this.forget(pid);
     });
     log.info(() => `spawned worker pid=${pid}`);
     return pid;
@@ -186,10 +190,12 @@ export class WorkerProcessManager {
   }
 
   /** Drop a process from tracking, recording an unasked-for exit as a crash. */
-  private forget(pid: number, record: WorkerProcess): void {
-    if (!this.processes.delete(pid)) {
+  private forget(pid: number): void {
+    const record = this.processes.get(pid);
+    if (!record) {
       return; // already handled — `error` and `exit` can both fire
     }
+    this.processes.delete(pid);
     if (!record.stopping) {
       this.crashed.push(pid);
     }
