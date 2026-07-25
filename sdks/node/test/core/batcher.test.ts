@@ -156,6 +156,30 @@ it("rejects invalid tunables", () => {
   expect(() => queue.batcher("collect", { maxWaitMs: 2_147_483_647 })).not.toThrow();
 });
 
+it("contains a throwing onError and still retries the flush", async () => {
+  const queue = newQueue();
+  let calls = 0;
+  const batcher = queue.batcher("collect", {
+    maxSize: 100,
+    maxWaitMs: 30,
+    onError: () => {
+      calls += 1;
+      throw new Error("reporting blew up");
+    },
+  });
+  const enqueueMany = vi.spyOn(queue, "enqueueMany").mockImplementationOnce(() => {
+    throw new Error("storage down");
+  });
+
+  batcher.add([1]);
+  expect(await waitFor(async () => calls > 0)).toBe(true);
+  // The handler throwing must not skip the re-arm, so the entry still lands.
+  expect(await waitFor(async () => (await queue.stats()).pending === 1)).toBe(true);
+  expect(batcher.size).toBe(0);
+  enqueueMany.mockRestore();
+  batcher.close();
+});
+
 it("types add() from the registered task", () => {
   const queue = newQueue();
   const batcher = queue.batcher("collect", { maxSize: 100 });

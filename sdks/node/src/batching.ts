@@ -181,15 +181,22 @@ export class Batcher<
     try {
       this.flush();
     } catch (error) {
-      if (this.onError) {
-        this.onError(error);
-      } else {
-        log.warn(() => `batched flush for task "${this.name}" failed`, error);
-      }
-      // The entries are still buffered — re-arm so a transient failure doesn't
-      // strand them until the next `add` or an explicit flush.
-      if (!this.isClosed && this.buffer.length > 0) {
-        this.arm();
+      try {
+        if (this.onError) {
+          this.onError(error);
+        } else {
+          log.warn(() => `batched flush for task "${this.name}" failed`, error);
+        }
+      } catch (reportingError) {
+        // A throwing handler must not escape the timer callback — that would be
+        // an uncaught exception and would skip the re-arm below.
+        log.warn(() => `batcher onError for task "${this.name}" threw`, reportingError);
+      } finally {
+        // The entries are still buffered — re-arm so a transient failure doesn't
+        // strand them until the next `add` or an explicit flush.
+        if (!this.isClosed && this.buffer.length > 0) {
+          this.arm();
+        }
       }
     }
   }
