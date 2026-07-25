@@ -10,6 +10,7 @@ import {
   not,
   type PredicateEvent,
   PredicateRejectedError,
+  PredicateValidationError,
   Queue,
 } from "../../src/index";
 
@@ -158,6 +159,52 @@ describe("decisions", () => {
     // A JavaScript caller can return nothing by accident; fail closed.
     queue.gate("t", (() => undefined) as unknown as () => boolean);
     expect(() => queue.enqueue("t", [1])).toThrow(PredicateRejectedError);
+  });
+
+  it("fails closed on a null-ish gate inside allOf / anyOf", () => {
+    const nothing = (() => undefined) as unknown as () => boolean;
+    const queue = newQueue().task("t", (n: number) => n);
+    queue.gate(
+      "t",
+      allOf(() => true, nothing),
+    );
+    expect(() => queue.enqueue("t", [1])).toThrow(PredicateRejectedError);
+
+    const q2 = newQueue().task("t", (n: number) => n);
+    q2.gate(
+      "t",
+      anyOf(nothing, () => false),
+    );
+    expect(() => q2.enqueue("t", [1])).toThrow(PredicateRejectedError);
+  });
+
+  it("re-validates a hand-built decision's payload", () => {
+    const queue = newQueue().task("t", (n: number) => n);
+    // `{ kind: "defer", delayMs: -1 }` type-checks, so the factory's invariant
+    // has to be enforced again where the decision is consumed.
+    queue.gate("t", () => ({ kind: "defer", delayMs: -1 }) as never);
+    expect(() => queue.enqueue("t", [1])).toThrow(RangeError);
+
+    const q2 = newQueue().task("t", (n: number) => n);
+    q2.gate("t", () => ({ kind: "defer", delayMs: Number.NaN }) as never);
+    expect(() => q2.enqueue("t", [1])).toThrow(RangeError);
+
+    const q3 = newQueue().task("t", (n: number) => n);
+    q3.gate("t", () => ({ kind: "flatten" }) as never);
+    expect(() => q3.enqueue("t", [1])).toThrow(PredicateValidationError);
+  });
+
+  it("tolerates a decision with a missing or non-string reason", () => {
+    const queue = newQueue().task("t", (n: number) => n);
+    const skipped: PredicateEvent[] = [];
+    queue.on("predicate.skipped", (event) => skipped.push(event));
+    queue.gate("t", () => ({ kind: "skip" }) as never);
+    expect(queue.tryEnqueue("t", [1])).toBeNull();
+    expect(skipped).toEqual([{ taskName: "t" }]);
+
+    const q2 = newQueue().task("t", (n: number) => n);
+    q2.gate("t", () => ({ kind: "reject", reason: 42 }) as never);
+    expect(() => q2.enqueue("t", [1])).toThrow(/rejected enqueue of "t": 42/);
   });
 
   it("defers a batch entry but refuses to skip one", () => {

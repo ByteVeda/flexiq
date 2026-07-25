@@ -1,4 +1,9 @@
-import type { EnqueueDecision, EnqueueGate, Predicate } from "./decisions";
+import {
+  type EnqueueDecision,
+  type EnqueueGate,
+  normalizeOutcome,
+  type Predicate,
+} from "./decisions";
 
 /**
  * A predicate that passes only when every `predicates` member passes.
@@ -12,7 +17,9 @@ export function allOf(...gates: EnqueueGate[]): EnqueueGate;
 export function allOf(...gates: EnqueueGate[]): EnqueueGate {
   return (ctx) => {
     for (const gate of gates) {
-      const outcome = gate(ctx);
+      // `normalizeOutcome` keeps a member gate that returned nothing fail-closed
+      // here too, rather than throwing on `.kind` of `undefined`.
+      const outcome = normalizeOutcome(gate(ctx));
       if (typeof outcome === "boolean") {
         if (!outcome) {
           return false;
@@ -38,7 +45,7 @@ export function anyOf(...gates: EnqueueGate[]): EnqueueGate {
   return (ctx) => {
     let firstBlock: EnqueueDecision | undefined;
     for (const gate of gates) {
-      const outcome = gate(ctx);
+      const outcome = normalizeOutcome(gate(ctx));
       if (outcome === true) {
         return true;
       }

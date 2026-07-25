@@ -73,25 +73,53 @@ export const Decision = {
 };
 
 /**
+ * A null-ish return is a gate bug (a JavaScript caller falling off the end of a
+ * function), so treat it as `false` and let the enqueue fail closed.
+ */
+export function normalizeOutcome(
+  outcome: boolean | EnqueueDecision | null | undefined,
+): boolean | EnqueueDecision {
+  return outcome === null || outcome === undefined ? false : outcome;
+}
+
+/**
  * Normalize whatever a gate returned into a decision: `true` allows, `false`
- * (and any null-ish return, which is a gate bug) rejects fail-closed, and a
- * decision passes through after its `kind` is validated.
+ * (and any null-ish return) rejects fail-closed, and a decision is re-run
+ * through its factory so a hand-written object literal can't carry a payload
+ * the factory would have refused — `{ kind: "defer", delayMs: -1 }` type-checks
+ * but must not reach storage.
  */
 export function toDecision(
   outcome: boolean | EnqueueDecision | null | undefined,
   taskName: string,
 ): EnqueueDecision {
-  if (outcome === true) {
-    return ALLOW;
+  const normalized = normalizeOutcome(outcome);
+  if (typeof normalized === "boolean") {
+    return normalized ? ALLOW : BARE_REJECT;
   }
-  if (typeof outcome === "boolean" || outcome === null || outcome === undefined) {
-    return BARE_REJECT;
+  switch (normalized.kind) {
+    case "allow":
+      return ALLOW;
+    case "defer":
+      return Decision.defer(normalized.delayMs);
+    case "skip":
+      return Decision.skip(asReason(normalized.reason));
+    case "reject":
+      return Decision.reject(asReason(normalized.reason));
+    default: {
+      const kind = (normalized as { kind?: unknown }).kind;
+      throw new PredicateValidationError(
+        `gate for task "${taskName}" returned an unknown decision kind: ${JSON.stringify(kind)} ` +
+          `(expected one of ${DECISION_KINDS.join(", ")})`,
+      );
+    }
   }
-  if (!DECISION_KINDS.includes(outcome.kind)) {
-    throw new PredicateValidationError(
-      `gate for task "${taskName}" returned an unknown decision kind: ${JSON.stringify(outcome.kind)} ` +
-        `(expected one of ${DECISION_KINDS.join(", ")})`,
-    );
+}
+
+/** Coerce a decision's `reason` — a JavaScript caller may omit it or pass a non-string. */
+function asReason(reason: unknown): string {
+  if (typeof reason === "string") {
+    return reason;
   }
-  return outcome;
+  return reason === undefined || reason === null ? "" : String(reason);
 }
