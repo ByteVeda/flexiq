@@ -86,13 +86,17 @@ desired      = clamp(max(depthDesired, utilDesired), minWorkers, maxWorkers)
 
 ### Stabilisation windows
 
-- **Scale-up** takes the *minimum* recent recommendation, so the pool grows as
-  soon as any recent tick asked for capacity. `scaleUpWindowMs` defaults to `0`
-  — immediate, because an extra worker for a few seconds costs far less than a
-  backlog.
-- **Scale-down** takes the *maximum* recent recommendation, so a brief lull
-  can't tear the pool down. `scaleDownWindowMs` defaults to 5 minutes, matching
-  the Kubernetes HPA's downscale stabilisation.
+Every tick's raw recommendation is recorded, including the ticks that asked for
+no change. The least aggressive one in the window then wins:
+
+- **Scale-up** takes the *minimum*, so the pool grows only once every tick in
+  the window agrees the demand is real. `scaleUpWindowMs` defaults to `0`,
+  which means the current tick alone decides — an extra worker for a few
+  seconds costs far less than a backlog.
+- **Scale-down** takes the *maximum*, so a lull shorter than the window can't
+  tear the pool down — including a tick whose metrics read failed.
+  `scaleDownWindowMs` defaults to 5 minutes, matching the Kubernetes HPA's
+  downscale stabilisation.
 
 ### Tolerance band
 

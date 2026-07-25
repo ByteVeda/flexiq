@@ -36,8 +36,8 @@ export interface AutoscaleOptions {
   targetUtilisation?: number;
   /**
    * Aggregation window for scale-up decisions (default 0 — immediate). Within
-   * the window the *minimum* recent recommendation wins, so the pool grows as
-   * soon as any recent tick asked for it.
+   * the window the *minimum* recent recommendation wins, so the pool grows
+   * only once every tick in the window agrees the demand is real.
    */
   scaleUpWindowMs?: number;
   /**

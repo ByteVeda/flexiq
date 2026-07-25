@@ -109,16 +109,16 @@ export function computeDesiredWorkers({
 /**
  * Poll metrics, decide, scale, repeat.
  *
- * Stabilisation windows are honoured in both directions by buffering recent
- * recommendations and taking the least aggressive one — the minimum for
- * scale-up, the maximum for scale-down.
+ * Stabilisation windows are honoured in both directions by buffering every
+ * recent recommendation and taking the least aggressive one — the minimum for
+ * scale-up, the maximum for scale-down. A window of 0 acts on the current
+ * tick alone.
  */
 export class Autoscaler {
   private readonly config: AutoscaleConfig;
   private readonly manager: WorkerProcessManager;
-  /** Recent scale-up / scale-down recommendations as `[timestamp, desired]`. */
-  private upHistory: [number, number][] = [];
-  private downHistory: [number, number][] = [];
+  /** Every recent tick's raw recommendation as `[timestamp, desired]`. */
+  private history: [number, number][] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
   /** The tick currently mid-flight, so {@link Autoscaler.stop} can wait it out. */
@@ -235,9 +235,10 @@ export class Autoscaler {
   }
 
   /**
-   * Read pending / running for the queues the workers consume. A storage blip
-   * must not tear the pool down, so a failed read reports zero load and the
-   * `minWorkers` floor holds the pool where it is.
+   * Read pending / running for the queues the workers consume. A failed read
+   * reports no load rather than throwing; the scale-down window is what keeps
+   * one bad sample from draining a pool that's legitimately above
+   * `minWorkers`.
    */
   private async gatherMetrics(): Promise<{ pending: number; running: number }> {
     try {
@@ -253,22 +254,28 @@ export class Autoscaler {
   }
 
   /**
-   * Smooth `desired` through the scale-up / scale-down windows: the minimum
-   * recent recommendation when growing (any recent tick asking for capacity
-   * gets it), the maximum when shrinking (a brief lull can't tear down).
+   * Smooth `desired` through the scale-up / scale-down windows: the least
+   * aggressive recommendation in the window wins — the minimum when growing,
+   * the maximum when shrinking.
+   *
+   * Every tick is recorded, including the ones that asked for no change.
+   * Recording only direction changes would mean the first dip after a stable
+   * stretch had nothing to be compared against, and would take effect
+   * immediately — exactly the flap the window exists to absorb.
    */
   private applyWindows(current: number, desired: number): number {
     const now = performance.now();
-    this.upHistory = this.upHistory.filter(([at]) => at >= now - this.config.scaleUpWindowMs);
-    this.downHistory = this.downHistory.filter(([at]) => at >= now - this.config.scaleDownWindowMs);
+    const longestWindow = Math.max(this.config.scaleUpWindowMs, this.config.scaleDownWindowMs);
+    this.history.push([now, desired]);
+    this.history = this.history.filter(([at]) => at >= now - longestWindow);
 
+    // The entry just pushed always survives its own cutoff, so neither
+    // reduction below can see an empty window.
     if (desired > current) {
-      this.upHistory.push([now, desired]);
-      return Math.min(...this.upHistory.map(([, value]) => value));
+      return reduceWindow(this.history, now - this.config.scaleUpWindowMs, Math.min);
     }
     if (desired < current) {
-      this.downHistory.push([now, desired]);
-      return Math.max(...this.downHistory.map(([, value]) => value));
+      return reduceWindow(this.history, now - this.config.scaleDownWindowMs, Math.max);
     }
     return current;
   }
@@ -316,6 +323,15 @@ export async function serveAutoscaler(
     removeHandlers();
     await autoscaler.stop();
   }
+}
+
+/** Fold the recommendations at or after `cutoff` with `pick` (`Math.min`/`Math.max`). */
+function reduceWindow(
+  history: readonly [number, number][],
+  cutoff: number,
+  pick: (...values: number[]) => number,
+): number {
+  return pick(...history.filter(([at]) => at >= cutoff).map(([, value]) => value));
 }
 
 function summarise(all: Stats[]): { pending: number; running: number } {

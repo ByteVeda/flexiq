@@ -14,9 +14,10 @@
  * desired      = clamp(max(depthDesired, utilDesired), minWorkers, maxWorkers)
  * ```
  *
- * Stabilisation windows keep it from flapping: scale-up is immediate by
- * default, scale-down waits 5 minutes (the HPA default), and a 10% tolerance
- * band absorbs single-tick noise.
+ * Stabilisation windows keep it from flapping: every tick's recommendation is
+ * buffered and the least aggressive one in the window wins. Scale-up is
+ * immediate by default, scale-down waits 5 minutes (the HPA default), and a
+ * 10% tolerance band absorbs single-tick noise.
  */
 
 export type { AutoscaleConfig, AutoscaleOptions } from "./config";
