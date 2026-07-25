@@ -1,0 +1,147 @@
+---
+title: Batching
+description: "Two unrelated batching mechanisms: producer-side Batcher/enqueueMany and worker-side batchSize."
+---
+
+"Batch" means two different things in the Node SDK, and they don't compose with
+each other:
+
+- **Producer batching** — `Batcher` and `enqueueMany` group many enqueues into
+  fewer storage writes, before any job exists.
+- **Dequeue batching** — `batchSize` on `runWorker` controls how many
+  already-enqueued jobs the scheduler claims per poll.
+
+This guide covers both and where each one applies.
+
+## Bulk enqueue with `enqueueMany`
+
+`enqueueMany` inserts many jobs for one task in a single storage call and
+returns their ids in input order. Every entry carries its own `args` and its own
+[enqueue options](/node/guides/core/enqueue-options), so one batch can mix
+queues, priorities, and delays:
+
+```ts
+const ids = queue.enqueueMany("resize", [
+  { args: [imageA] },
+  { args: [imageB], options: { priority: 5 } },
+  { args: [imageC], options: { queue: "bulk", delayMs: 30_000 } },
+]);
+```
+
+An entry with a `uniqueKey` dedups exactly like `enqueue`: a key that already
+has a pending or running job resolves to that job's id instead of inserting a
+row, so the returned array always has one id per input entry.
+
+The batch is admitted or rejected as a whole — if a target queue's `maxPending`
+cap would be exceeded, the call throws `QueueFullError` and nothing is inserted.
+
+## Producer batching with `Batcher`
+
+Use `enqueueMany` when you already hold the list. When work arrives one item at
+a time — a request handler, a stream, a log tail — `Batcher` buffers the
+enqueues for you and flushes them as one `enqueueMany` call when either
+threshold fires, whichever comes first:
+
+```ts
+const batcher = queue.batcher("ingestLog", { maxSize: 100, maxWaitMs: 500 });
+
+for await (const line of incoming) {
+  const ids = batcher.add([line]);
+  // ids is empty unless this call crossed maxSize (100 lines) —
+  // in that case it holds the new jobs' ids, in input order.
+}
+
+batcher.close(); // flushes whatever remains in the buffer
+```
+
+`add(args, options?)` is typed exactly like `enqueue` and takes the same
+per-entry options, so a `Batcher` is no less expressive than calling
+`enqueueMany` yourself. It returns flushed job ids only when *that call*
+triggered a flush; otherwise the entry just joined the buffer and an empty array
+comes back. Call `flush()` to force one on demand:
+
+```ts
+const ids = batcher.flush(); // whatever's buffered right now, or []
+```
+
+`Batcher` implements `Symbol.dispose`, so a `using` declaration closes it at
+block exit:
+
+```ts
+using batcher = queue.batcher("ingestLog", { maxSize: 100, maxWaitMs: 500 });
+for (const line of lines) {
+  batcher.add([line]);
+}
+// close() runs here — the remainder is flushed
+```
+
+### Don't lose the tail
+
+The delay timer is `unref`'d, so a partially filled buffer never keeps the
+process alive — and is dropped if the process exits without closing the batcher.
+Close it on your shutdown path:
+
+```ts
+process.once("SIGTERM", () => {
+  batcher.close();
+});
+```
+
+### When a flush fails
+
+Nothing is dropped when a flush fails — the entries go back at the head of the
+buffer, ahead of anything added meanwhile:
+
+- A flush triggered by `add` or `flush` throws to the caller; the entries stay
+  buffered and `batcher.size` still counts them.
+- A timed flush has no caller to throw to, so it reports to the `onError` option
+  (or logs a warning) and re-arms the timer to retry on the next window.
+
+```ts
+const batcher = queue.batcher("ingestLog", {
+  maxWaitMs: 500,
+  onError: (error) => metrics.increment("batch_flush_failed", { error: String(error) }),
+});
+```
+
+## Worker dequeue batching (`batchSize`)
+
+`batchSize` on `runWorker` controls how many **already-enqueued** jobs the
+scheduler claims from storage in one poll — a throughput knob for the claim
+query, not a payload grouping mechanism:
+
+```ts
+const worker = queue.runWorker({
+  concurrency: 8,
+  batchSize: 16, // claim up to 16 due jobs per poll (default 1)
+});
+```
+
+Each claimed job is still dispatched to the handler individually, one job in,
+one result out — raising `batchSize` amortizes the polling round-trip under high
+throughput, it does not turn several jobs into one handler call.
+
+<Callout type="warn">
+  `Batcher`/`enqueueMany` batching and `batchSize` are unrelated despite the
+  shared name: one is a producer-side accumulator that runs *before* jobs are
+  created, the other is a scheduler-side claim size that applies *after* jobs
+  already exist in storage. Using one has no effect on the other.
+</Callout>
+
+<Cards>
+  <Card
+    title="Enqueue options"
+    href="/node/guides/core/enqueue-options"
+    description="Priority, delay, idempotency, metadata, and routing."
+  />
+  <Card
+    title="Workers"
+    href="/node/guides/core/workers"
+    description="runWorker options, events, and graceful shutdown."
+  />
+  <Card
+    title="Batching API reference"
+    href="/node/api-reference/batching"
+    description="Full enqueueMany and Batcher signatures."
+  />
+</Cards>

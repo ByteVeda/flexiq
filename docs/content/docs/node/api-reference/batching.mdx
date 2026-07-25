@@ -1,0 +1,126 @@
+---
+title: Batching
+description: "enqueueMany and Batcher — send many enqueues in one storage round-trip."
+---
+
+Two levels of producer-side batching: `enqueueMany` sends a list you already
+have, and `Batcher` accumulates one-at-a-time enqueues and sends them for you.
+
+<Callout type="info">
+  This is producer-side batching. It is unrelated to the worker's `batchSize`,
+  which controls how many jobs one scheduler poll claims — see
+  [Worker](/node/api-reference/worker).
+</Callout>
+
+## `enqueueMany`
+
+```ts
+queue.enqueueMany(
+  name: string,
+  jobs: ReadonlyArray<{ args?: unknown[]; options?: EnqueueOptions }>,
+): string[];
+```
+
+Inserts every job in one storage call and returns the ids in input order. Each
+entry carries its own typed `args` and its own
+[`EnqueueOptions`](/node/guides/core/enqueue-options), so a batch can mix
+queues, priorities, and delays.
+
+```ts
+const ids = queue.enqueueMany("sendEmail", [
+  { args: [{ to: "a@example.com" }] },
+  { args: [{ to: "b@example.com" }], options: { priority: 5 } },
+]);
+```
+
+An entry with a `uniqueKey` dedups exactly like `enqueue`: a key that already
+has a pending or running job yields that job's id instead of a new row, so the
+returned array always has one id per input entry. `job.enqueued` fires once per
+entry, deduped ones included.
+
+The batch is admitted or rejected as a whole: if a target queue has a
+`maxPending` cap and the batch would exceed it, the call throws `QueueFullError`
+and nothing is inserted. An enqueue gate that `skip`s a single entry throws
+`EnqueueSkippedError` — a batch is one all-or-nothing native call, so dropping
+one row isn't expressible. `defer` is fine, since each entry carries its own
+options.
+
+## `Batcher`
+
+```ts
+queue.batcher(name: string, options?: BatcherOptions): Batcher;
+new Batcher(queue, name: string, options?: BatcherOptions);
+```
+
+Buffers enqueues for one task and flushes them through `enqueueMany` once the
+buffer reaches `maxSize` or `maxWaitMs` elapses since the first buffered entry.
+Use it when work arrives one item at a time — a request handler, a stream — and
+you want one round-trip per batch instead of per item. The Node counterpart of
+Python's `BatchAccumulator` and Java's `Batcher<T>`.
+
+| Option | Default | Description |
+|---|---|---|
+| `maxSize` | `100` | Flush as soon as this many entries have accumulated. Must be a positive integer. |
+| `maxWaitMs` | `500` | Flush this long after the first buffered entry, even if `maxSize` isn't reached — the worst-case latency of any one entry. Must be positive. |
+| `onError` | — | Called when a *timed* flush throws. Without it the failure is only logged. |
+
+```ts
+using batcher = queue.batcher("sendEmail", { maxSize: 100, maxWaitMs: 500 });
+
+for await (const email of stream) {
+  batcher.add([email]);
+}
+// block exit flushes whatever is left
+```
+
+### `add`
+
+```ts
+add(args?: unknown[], options?: EnqueueOptions): string[];
+```
+
+Buffers one enqueue, typed exactly like `enqueue`. Returns the job ids if this
+call filled the buffer to `maxSize` (flushing immediately), otherwise an empty
+array — the timed flush is still pending. Throws `QueueError` once the batcher
+is closed.
+
+### `flush`
+
+```ts
+flush(): string[];
+```
+
+Enqueues whatever is buffered right now, cancelling the pending timed flush.
+Returns the new job ids, or an empty array if the buffer was empty.
+
+### `close`
+
+```ts
+close(): string[];
+```
+
+Flushes the remainder and stops the timer. Idempotent, and also exposed as
+`Symbol.dispose` so `using` closes it at block exit.
+
+### `size` / `closed`
+
+`size` is how many entries are buffered right now; `closed` reports whether
+`close` has run.
+
+### Failure handling
+
+A failed flush keeps its entries — they go back at the head of the buffer, ahead
+of anything added meanwhile — rather than dropping them:
+
+- A flush triggered by `add` (or an explicit `flush`) throws to the caller, and
+  the entries stay buffered for a retry.
+- A timed flush has no caller, so it reports to `onError` (or logs) and re-arms
+  the timer, retrying on the next window.
+- `close` rethrows a failed final flush; the entries remain in `size` and
+  `flush` still works, so the shutdown path can retry.
+
+<Callout type="warning">
+  The flush timer is `unref`'d — a partially filled buffer never keeps the
+  process alive, and is lost if the process exits without `close` (or `using`).
+  Close your batchers on shutdown.
+</Callout>
