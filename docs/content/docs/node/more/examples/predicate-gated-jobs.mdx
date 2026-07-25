@@ -1,66 +1,75 @@
 ---
 title: Predicate-Gated Jobs
-description: "Reject enqueues that don't meet a policy at submit time, composing business-hours, feature-flag, and quota predicates."
+description: "Reject, skip, or defer enqueues that don't meet a policy at submit time, composing business-hours, feature-flag, and quota gates."
 ---
 
-A predicate is a function evaluated when a job is enqueued. If it returns `false`,
-the enqueue is rejected with a `PredicateRejectedError` and no job is created —
-backpressure at the front door, before any work is staged.
+A predicate is a function evaluated when a job is enqueued. It can reject the
+enqueue (`PredicateRejectedError`, no job created), quietly skip it, or defer it
+to a later moment — backpressure at the front door, before any work is staged.
 
 ## What this gates
 
-- promotional sends only during business hours,
-- an expensive re-index only when its feature flag is on,
-- a tenant's exports only while under quota.
+- promotional sends held until business hours rather than refused,
+- an expensive re-index dropped while its feature flag is off,
+- a tenant's exports refused while over quota.
 
 ## predicates.ts
 
-A predicate receives `{ taskName, args }` — the positional args after any
-`onEnqueue` rewrites. Compose them with `allOf` / `anyOf` / `not`.
+A predicate receives `{ taskName, args, now }` — the positional args after any
+`onEnqueue` rewrites, plus the wall clock for this evaluation. Return a boolean,
+or a `Decision` when you need more than allow/reject. Compose with
+`allOf` / `anyOf` / `not`.
 
 ```ts
-import type { Predicate } from "@byteveda/taskito";
+import { Decision, type EnqueueGate, type Predicate, Recipes } from "@byteveda/taskito";
 
-export const duringBusinessHours: Predicate = () => {
-  const hour = new Date().getUTCHours();
-  return hour >= 13 && hour < 22; // 9–6 ET
-};
+// A recipe: out-of-hours sends defer to the next 09:00 ET instead of failing.
+export const duringBusinessHours = Recipes.businessHours({ timeZone: "America/New_York" });
 
-export const featureEnabled = (flag: string): Predicate => () => flags.isOn(flag);
+// A recipe: while the flag is off, the enqueue is skipped, not rejected.
+export const reindexEnabled = Recipes.featureFlag("expensive-reindex");
 
-export const underQuota: Predicate = ({ args }) => {
+// A custom gate: over quota is a real error, so reject with a reason.
+export const underQuota: EnqueueGate = ({ args }) => {
   const [tenantId] = args as [string];
-  return usage.exports(tenantId) < usage.limit(tenantId);
+  return usage.exports(tenantId) < usage.limit(tenantId)
+    ? Decision.allow()
+    : Decision.reject(`tenant ${tenantId} is over its export quota`);
 };
+
+export const urgent: Predicate = ({ args }) => args[1] === true;
 ```
 
 ## app.ts
 
-`queue.gate` attaches one or more predicates to a task; every gate must pass.
+`queue.gate` attaches one or more gates to a task. They run in registration
+order and the first non-allow decision wins.
 
 ```ts
-import { Queue, allOf, not } from "@byteveda/taskito";
-import { duringBusinessHours, featureEnabled, underQuota } from "./predicates";
+import { anyOf, Queue } from "@byteveda/taskito";
+import { duringBusinessHours, reindexEnabled, underQuota, urgent } from "./predicates";
 
 export const queue = new Queue({ dbPath: "gated.db" });
 
-queue.task("sendPromo", (audience: string) => mailer.blast(audience));
+queue.task("sendPromo", (audience: string, isUrgent?: boolean) => mailer.blast(audience));
 queue.task("reindex", () => search.rebuild());
 queue.task("exportData", (tenantId: string) => exporter.run(tenantId));
 
-queue.gate("sendPromo", duringBusinessHours);
-queue.gate("reindex", featureEnabled("expensive-reindex"));
-queue.gate("exportData", allOf(underQuota, not(duringBusinessHours))); // off-peak only
+queue.gate("sendPromo", anyOf(urgent, duringBusinessHours)); // urgent sends bypass the window
+queue.gate("reindex", reindexEnabled);
+queue.gate("exportData", underQuota);
 ```
 
 ## Enqueuing against a gate
 
-A rejected enqueue throws synchronously — handle it where you submit.
+A rejection throws synchronously. A skip also throws from `enqueue` — use
+`tryEnqueue` when "not now" is an expected answer rather than an error.
 
 ```ts
 import { PredicateRejectedError } from "@byteveda/taskito";
 
 try {
+  // Out of hours this returns a job id scheduled for the next opening.
   queue.enqueue("sendPromo", ["newsletter-subscribers"]);
 } catch (err) {
   if (err instanceof PredicateRejectedError) {
@@ -69,22 +78,28 @@ try {
     throw err;
   }
 }
+
+// Flag off → null, no job, no exception.
+const jobId = queue.tryEnqueue("reindex");
 ```
 
 ## Observing outcomes
 
-Gates run before a job exists, so there is no job event for a rejection — the
-thrown error is your signal. Subscribe to the lifecycle events to observe jobs
-that *did* pass the gate.
+Every non-allow decision emits an event and increments a counter, so blocked
+work is visible without catching errors at each call site.
 
 ```ts
-queue.on("job.completed", (e) => console.log(`${e.taskName} ${e.jobId} ok`));
-queue.on("job.dead", (e) => console.warn(`${e.taskName} ${e.jobId} dead: ${e.error}`));
+queue.on("predicate.rejected", (e) => console.warn(`${e.taskName} rejected: ${e.reason}`));
+queue.on("predicate.skipped", (e) => console.log(`${e.taskName} skipped: ${e.reason}`));
+queue.on("predicate.deferred", (e) => console.log(`${e.taskName} held ${e.delayMs}ms`));
+
+queue.predicateStats();
+// { allowed: 412, skipped: 1, deferred: 8, rejected: 3, errors: 0 }
 ```
 
 <Callout type="info">
-  Predicates run at **enqueue time** in the producer process, synchronously.
-  Keep them cheap and side-effect-free — a slow predicate slows every enqueue.
+  Gates run at **enqueue time** in the producer process, synchronously.
+  Keep them cheap and side-effect-free — a slow gate slows every enqueue.
   For checks that need the worker (resource state, external I/O), gate inside the
   task and fail it instead.
 </Callout>
@@ -93,8 +108,10 @@ queue.on("job.dead", (e) => console.warn(`${e.taskName} ${e.jobId} dead: ${e.err
 
 | Pattern | Where |
 | --- | --- |
-| Attach a gate | `queue.gate(task, predicate)` |
+| Attach a gate | `queue.gate(task, gate)` |
+| Ready-made policies | `Recipes.businessHours` / `timeWindow` / `dayOfWeek` / `featureFlag` / `payloadMatches` |
+| Allow / reject / skip / defer | `Decision.allow()` / `.reject(r)` / `.skip(r)` / `.defer(ms)` |
 | Compose policies | `allOf` / `anyOf` / `not` |
-| Args-aware gate | `({ args }) => …` |
+| Tolerate a skip | `queue.tryEnqueue(...)` → `null` |
 | Handle rejection | `catch (PredicateRejectedError)` |
-| Observe passers | `queue.on("job.completed" \| "job.dead")` |
+| Observe outcomes | `queue.on("predicate.*")`, `queue.predicateStats()` |

@@ -14,7 +14,8 @@ description: "Injectable resources, enqueue gates, distributed locks, and period
 | Member | Description |
 |---|---|
 | `intercept(interceptor)` | Register an [enqueue interceptor](/node/guides/resources/interception) — runs before defaults, middleware, and gates. |
-| `gate(name, predicate)` | Reject an enqueue when the [predicate](/node/guides/core/predicates) returns `false`. |
+| `gate(name, gate)` | Gate an enqueue with a [predicate](/node/guides/core/predicates): `false` rejects, a `Decision` can also skip or defer. Accepts a registered predicate's name. |
+| `predicateStats()` | Gate outcome counters: `{ allowed, skipped, deferred, rejected, errors }`. |
 
 ## Distributed locks
 
