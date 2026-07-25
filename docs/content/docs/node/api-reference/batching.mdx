@@ -61,7 +61,7 @@ Python's `BatchAccumulator` and Java's `Batcher<T>`.
 | Option | Default | Description |
 |---|---|---|
 | `maxSize` | `100` | Flush as soon as this many entries have accumulated. Must be a positive integer. |
-| `maxWaitMs` | `500` | Flush this long after the first buffered entry, even if `maxSize` isn't reached — the worst-case latency of any one entry. Must be positive. |
+| `maxWaitMs` | `500` | Flush this long after the first buffered entry, even if `maxSize` isn't reached — the worst-case latency of any one entry. Must be between 1 and 2147483647 (Node clamps longer timer delays to 1ms). |
 | `onError` | — | Called when a *timed* flush throws. Without it the failure is only logged. |
 
 ```ts

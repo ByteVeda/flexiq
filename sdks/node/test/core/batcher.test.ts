@@ -150,6 +150,10 @@ it("rejects invalid tunables", () => {
   expect(() => queue.batcher("collect", { maxSize: 1.5 })).toThrow(RangeError);
   expect(() => queue.batcher("collect", { maxWaitMs: 0 })).toThrow(RangeError);
   expect(() => queue.batcher("collect", { maxWaitMs: Number.NaN })).toThrow(RangeError);
+  // Node clamps a delay past the 32-bit timer range to 1ms — an immediate flush
+  // instead of the ~25-day wait that was asked for.
+  expect(() => queue.batcher("collect", { maxWaitMs: 2_147_483_648 })).toThrow(RangeError);
+  expect(() => queue.batcher("collect", { maxWaitMs: 2_147_483_647 })).not.toThrow();
 });
 
 it("types add() from the registered task", () => {

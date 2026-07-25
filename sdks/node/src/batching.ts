@@ -9,6 +9,9 @@ import { createLogger } from "./utils";
 
 const DEFAULT_MAX_SIZE = 100;
 const DEFAULT_MAX_WAIT_MS = 500;
+// Node clamps any `setTimeout` delay above this to 1ms, which would turn a long
+// wait into an immediate flush — reject it at construction instead.
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const log = createLogger("batching");
 
 /** Construction options for a {@link Batcher}. */
@@ -77,8 +80,10 @@ export class Batcher<
       throw new RangeError(`Batcher maxSize must be a positive integer, got ${maxSize}`);
     }
     const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-    if (!Number.isFinite(maxWaitMs) || maxWaitMs <= 0) {
-      throw new RangeError(`Batcher maxWaitMs must be a positive finite number, got ${maxWaitMs}`);
+    if (!Number.isFinite(maxWaitMs) || maxWaitMs <= 0 || maxWaitMs > MAX_TIMER_DELAY_MS) {
+      throw new RangeError(
+        `Batcher maxWaitMs must be between 1 and ${MAX_TIMER_DELAY_MS}, got ${maxWaitMs}`,
+      );
     }
     this.maxSize = maxSize;
     this.maxWaitMs = maxWaitMs;
