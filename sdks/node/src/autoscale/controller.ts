@@ -121,6 +121,8 @@ export class Autoscaler {
   private downHistory: [number, number][] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
+  /** The tick currently mid-flight, so {@link Autoscaler.stop} can wait it out. */
+  private inFlightTick: Promise<ScaleDecision> | undefined;
 
   constructor(
     private readonly queue: AutoscaleMetricsSource,
@@ -163,12 +165,27 @@ export class Autoscaler {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    // A tick already past its metrics await would otherwise spawn into a pool
+    // that shutdown() has finished draining, leaking a detached process.
+    await this.inFlightTick?.catch(() => undefined);
     log.info(() => `draining ${this.manager.countLive()} workers`);
     await this.manager.shutdown();
   }
 
   /** Run one decision cycle. Returns the decision for logging or tests. */
   async tick(): Promise<ScaleDecision> {
+    const inFlight = this.runTick();
+    this.inFlightTick = inFlight;
+    try {
+      return await inFlight;
+    } finally {
+      if (this.inFlightTick === inFlight) {
+        this.inFlightTick = undefined;
+      }
+    }
+  }
+
+  private async runTick(): Promise<ScaleDecision> {
     const { pending, running } = await this.gatherMetrics();
     // Replace crashed workers first so the decision sees the real pool size.
     const crashed = this.manager.reapDead().length;
