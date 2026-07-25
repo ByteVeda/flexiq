@@ -142,6 +142,12 @@ function stubPool() {
   });
   vi.spyOn(WorkerProcessManager.prototype, "livePids").mockImplementation(() => [...live]);
   vi.spyOn(WorkerProcessManager.prototype, "countLive").mockImplementation(() => live.size);
+  vi.spyOn(WorkerProcessManager.prototype, "shutdown").mockImplementation(async () => {
+    for (const pid of [...live]) {
+      live.delete(pid);
+      pool.terminated.push(pid);
+    }
+  });
   return pool;
 }
 
@@ -213,6 +219,34 @@ describe("Autoscaler.tick", () => {
     expect(pool.terminated).toHaveLength(0);
   });
 
+  it("keeps a pool above minWorkers through one failed metrics read", async () => {
+    pool.seed(5);
+    // A failed read reports no load, which on its own asks for minWorkers.
+    let counts: Partial<Stats> | Error = { pending: 50 };
+    const scaler = autoscaler(
+      {
+        stats: async () => {
+          if (counts instanceof Error) throw counts;
+          return stats(counts);
+        },
+        statsByQueue: async () => stats({}),
+      },
+      { minWorkers: 1, scaleDownWindowMs: 300_000 },
+    );
+
+    // A steady tick at the pool's current size — recorded even though it asked
+    // for no change, which is what the failed read below gets compared against.
+    expect((await scaler.tick()).desiredWorkers).toBe(5);
+
+    counts = new Error("storage offline");
+    const decision = await scaler.tick();
+
+    expect(decision.desiredWorkers).toBe(5);
+    expect(pool.live.size).toBe(5);
+    expect(pool.terminated).toHaveLength(0);
+    expect(pool.spawned).toHaveLength(0);
+  });
+
   it("replaces a crashed worker to keep minWorkers", async () => {
     pool.seed(2);
     pool.crashed = [[...pool.live][0] as number];
@@ -241,6 +275,36 @@ describe("Autoscaler.tick", () => {
     expect(decision.desiredWorkers).toBe(3);
     expect(decision.rationale).toContain("windowed -> 3");
     expect(pool.terminated).toHaveLength(1);
+  });
+
+  it("drains workers a tick spawns while it is being stopped", async () => {
+    pool.seed(1);
+    let releaseMetrics = (): void => {};
+    const blocked = new Promise<void>((resolve) => {
+      releaseMetrics = resolve;
+    });
+    const scaler = autoscaler(
+      {
+        stats: async () => {
+          await blocked;
+          return stats({ pending: 100 });
+        },
+        statsByQueue: async () => stats({}),
+      },
+      { maxWorkers: 20 },
+    );
+
+    // A tick parked on its metrics read, then a stop while it's in flight.
+    const ticking = scaler.tick();
+    const stopping = scaler.stop();
+    releaseMetrics();
+    await ticking;
+    await stopping;
+
+    // Workers the tick spawned after stop() was called are still drained —
+    // otherwise they outlive the autoscaler as detached processes.
+    expect(pool.spawned.length).toBeGreaterThan(0);
+    expect(pool.live.size).toBe(0);
   });
 
   it("sums metrics across only the queues its workers consume", async () => {
