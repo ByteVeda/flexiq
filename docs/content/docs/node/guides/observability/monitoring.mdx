@@ -104,10 +104,11 @@ app.get("/readyz", async (_req, res) => {
 });
 ```
 
-The [dashboard](/node/guides/operations/dashboard), the
-[KEDA scaler](/node/guides/operations/keda) server, and the
+The [dashboard](/node/guides/operations/dashboard) and the
 [Express](/node/guides/integrations/express) / [Fastify](/node/guides/integrations/fastify)
-helpers all serve these same helpers on `/health` and `/readiness`.
+helpers serve these same helpers on `/health` and `/readiness`. The
+[KEDA scaler](/node/guides/operations/keda) server carries liveness only —
+`/health`, alongside its `/api/scaler` metric.
 
 ## Prometheus & tracing
 
