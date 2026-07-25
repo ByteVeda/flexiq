@@ -168,6 +168,21 @@ describe("payloadMatches", () => {
     expect(payloadMatches("args.9", "x")(at(WED_NOON_UTC, ["x"]))).toMatchObject({ kind: "skip" });
   });
 
+  it("reads own properties only, not inherited ones", () => {
+    // `constructor` and `toString` live on the prototype — not "in the payload".
+    expect(payloadMatches("args.0.constructor", Object)(at(WED_NOON_UTC, [{}]))).toMatchObject({
+      kind: "skip",
+    });
+    const polluted = Object.create({ tenant: "inherited" }) as Record<string, unknown>;
+    expect(
+      payloadMatches("args.0.tenant", "inherited")(at(WED_NOON_UTC, [polluted])),
+    ).toMatchObject({ kind: "skip" });
+    polluted.tenant = "own";
+    expect(payloadMatches("args.0.tenant", "own")(at(WED_NOON_UTC, [polluted]))).toEqual({
+      kind: "allow",
+    });
+  });
+
   it("rejects an empty or malformed path at build time", () => {
     expect(() => payloadMatches("", 1)).toThrow(PredicateValidationError);
     expect(() => payloadMatches("args..0", 1)).toThrow(PredicateValidationError);

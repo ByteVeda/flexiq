@@ -344,7 +344,9 @@ function step(node: unknown, segment: string): unknown {
   }
   if (typeof node === "object" && node !== null) {
     const record = node as Record<string, unknown>;
-    return segment in record ? record[segment] : MISSING;
+    // Own properties only: `in` would let a path resolve to `constructor` or any
+    // other inherited member, which is not "present in the payload".
+    return Object.hasOwn(record, segment) ? record[segment] : MISSING;
   }
   return MISSING;
 }
