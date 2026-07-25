@@ -31,6 +31,13 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **Node bare-metal autoscaler.** `serveAutoscaler(queue, { app })` and `taskito autoscale <app>`
+  spawn and drain worker processes to track queue depth on hosts without Kubernetes, closing the
+  last scaling gap against Python's `AutoscaleController`. Same HPA-shaped formula — depth and
+  utilisation signals, per-direction stabilisation windows, a tolerance band — plus crash
+  replacement, and `concurrencyPerWorker` is applied to the workers it spawns rather than merely
+  declared. `Autoscaler`, `computeDesiredWorkers`, and `WorkerProcessManager` are exported for
+  embedding.
 - **Node `request` resource scope.** A fresh instance on every `useResource()` call, each
   disposed when the task ends — matching the Java scope of the same name.
 - **Pub/sub backlog stats in the Node and Java SDKs.** `queue.topicStats(topic?)` (Node) and

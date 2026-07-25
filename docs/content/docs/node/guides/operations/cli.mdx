@@ -49,6 +49,15 @@ taskito --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
 
 Serves the queue-depth metric for [KEDA](/node/guides/operations/keda).
 
+## Autoscaling worker processes
+
+```bash
+taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+```
+
+Spawns and drains `run`-style workers to track queue depth, for hosts without
+Kubernetes — see [Autoscaling](/node/guides/operations/autoscaling).
+
 <Callout type="info">
   The CLI ships in the package `bin`. Commands operate over `--db`/`--backend`/
   `--dsn`, except `run` and `dashboard`, which load your app module and serve
