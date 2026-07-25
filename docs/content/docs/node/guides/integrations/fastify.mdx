@@ -23,9 +23,9 @@ await app.register(taskitoDashboardPlugin, { queue, prefix: "/admin" });
 await app.listen({ port: 3000 });
 ```
 
-`taskitoFastify` is a `FastifyPluginAsync`. It exposes the same nine routes as
-the [Express router](/node/guides/integrations/express#rest-routes), mounted
-under `prefix`.
+`taskitoFastify` is a `FastifyPluginAsync`. It exposes the same twelve routes as
+the [Express router](/node/guides/integrations/express#rest-routes) — including
+the `/health` and `/readiness` probes — mounted under `prefix`.
 
 ## Options
 

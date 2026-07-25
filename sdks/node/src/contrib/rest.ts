@@ -2,6 +2,7 @@
 // Each route maps a plain request (params/query/body) to a status + JSON body, so the
 // adapters only translate framework request/response objects — no logic duplicated.
 
+import { checkHealth, checkReadiness, resourceStatus } from "../health";
 import type { Queue } from "../queue";
 import type { EnqueueOptions } from "../types";
 
@@ -180,6 +181,28 @@ function defineRoutes(resultTimeoutMs: number): RestRoute[] {
         status: 200,
         body: { jobId: queue.retryDead(params.id ?? "") },
       }),
+    },
+    {
+      name: "health",
+      method: "GET",
+      path: "/health",
+      handle: () => ({ status: 200, body: checkHealth() }),
+    },
+    {
+      name: "readiness",
+      method: "GET",
+      path: "/readiness",
+      // 503 when degraded, so orchestrators stop routing to this instance.
+      handle: async (queue) => {
+        const body = await checkReadiness(queue);
+        return { status: body.status === "ready" ? 200 : 503, body };
+      },
+    },
+    {
+      name: "resources",
+      method: "GET",
+      path: "/resources",
+      handle: async (queue) => ({ status: 200, body: await resourceStatus(queue) }),
     },
   ];
 }

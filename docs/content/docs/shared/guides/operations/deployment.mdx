@@ -1006,11 +1006,24 @@ const app = express();
 app.use("/tasks", taskitoRouter(queue));
 
 // GET /tasks/stats returns queue health
-// Use this as a health check endpoint in your load balancer
+// GET /tasks/health, GET /tasks/readiness are the probes
 ```
 
 `taskitoRouter` has no auth of its own — mount it behind your app's existing
 auth, or stick to the dashboard's public `/health`/`/readiness` probes above.
+
+Without any router, `checkHealth()` and `checkReadiness(queue)` give you the
+same probe payloads to serve from your own routes:
+
+```ts
+import { checkHealth, checkReadiness } from "@byteveda/taskito";
+
+app.get("/healthz", (_req, res) => res.json(checkHealth()));
+app.get("/readyz", async (_req, res) => {
+  const report = await checkReadiness(queue);
+  res.status(report.status === "ready" ? 200 : 503).json(report);
+});
+```
 
 </SdkOnly>
 

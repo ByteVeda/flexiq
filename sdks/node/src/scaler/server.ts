@@ -1,4 +1,5 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
+import { checkHealth } from "../health";
 import type { Queue } from "../queue";
 import { createLogger } from "../utils";
 
@@ -39,7 +40,7 @@ export function serveScaler(queue: Queue, options: ScalerOptions = {}): Server {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/health") {
-      sendJson(res, 200, { status: "ok" });
+      sendJson(res, 200, checkHealth());
       return;
     }
     if (url.pathname === "/api/scaler" && req.method === "GET") {
