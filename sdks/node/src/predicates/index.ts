@@ -9,6 +9,7 @@ export {
   type Predicate,
   toDecision,
 } from "./decisions";
+export { PredicateMetrics, type PredicateStats } from "./metrics";
 export {
   envFeatureFlagProvider,
   type FeatureFlagProvider,
@@ -32,3 +33,4 @@ export {
   timeWindow,
   type ZoneOptions,
 } from "./recipes";
+export { defaultRegistry, PredicateRegistry, registerPredicate } from "./registry";

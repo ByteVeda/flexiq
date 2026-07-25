@@ -34,7 +34,15 @@ import {
   type OpenOptions,
 } from "./native";
 import { encodeNotes } from "./notes";
-import { Decision, type EnqueueDecision, type EnqueueGate, toDecision } from "./predicates";
+import {
+  Decision,
+  defaultRegistry,
+  type EnqueueDecision,
+  type EnqueueGate,
+  PredicateMetrics,
+  type PredicateStats,
+  toDecision,
+} from "./predicates";
 import { type ProxyHandlerStats, proxyMetrics } from "./proxies";
 import {
   type PoolOptions,
@@ -162,6 +170,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly interceptors: Interceptor[] = [];
   private readonly interceptionMetrics = new InterceptionMetrics();
   private readonly gates = new Map<string, EnqueueGate[]>();
+  private readonly predicateMetrics = new PredicateMetrics();
   private readonly emitter = new Emitter();
   private readonly resources = new ResourceRuntime();
   private readonly webhookManager: WebhookManager;
@@ -498,17 +507,25 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * returning a {@link Decision} can also `skip` (no job — `tryEnqueue` reports
    * `null`) or `defer` (job created with the decision's delay). Gates run in
    * registration order and the first non-`allow` decision wins.
+   *
+   * Pass a string to use a gate registered with `registerPredicate` — resolved
+   * here, so an unknown name throws {@link PredicateValidationError} at wiring
+   * time rather than on the first enqueue.
    */
   gate<Name extends keyof TTasks & string>(
     name: Name,
-    gate: (ctx: {
-      taskName: Name;
-      args: Parameters<TTasks[Name]>;
-      now: Date;
-    }) => boolean | EnqueueDecision,
+    gate:
+      | ((ctx: {
+          taskName: Name;
+          args: Parameters<TTasks[Name]>;
+          now: Date;
+        }) => boolean | EnqueueDecision)
+      | string,
   ): this {
+    const resolved =
+      typeof gate === "string" ? defaultRegistry().lookup(gate) : (gate as EnqueueGate);
     const list = this.gates.get(name) ?? [];
-    list.push(gate as EnqueueGate);
+    list.push(resolved);
     this.gates.set(name, list);
     return this;
   }
@@ -944,8 +961,24 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       return Decision.allow();
     }
     const ctx = { taskName, args, now: new Date() };
+    const decision = this.firstBlockingDecision(gates, ctx, taskName);
+    this.predicateMetrics.record(decision.kind);
+    return decision;
+  }
+
+  private firstBlockingDecision(
+    gates: readonly EnqueueGate[],
+    ctx: { taskName: string; args: readonly unknown[]; now: Date },
+    taskName: string,
+  ): EnqueueDecision {
     for (const gate of gates) {
-      const decision = toDecision(gate(ctx), taskName);
+      let decision: EnqueueDecision;
+      try {
+        decision = toDecision(gate(ctx), taskName);
+      } catch (error) {
+        this.predicateMetrics.recordError();
+        throw error;
+      }
       if (decision.kind !== "allow") {
         return decision;
       }
@@ -1500,6 +1533,14 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   /** Enqueue-interception metrics for this process. */
   interceptionStats() {
     return this.interceptionMetrics.toDict();
+  }
+
+  /**
+   * What this process's gates decided: one count per gated enqueue, keyed by
+   * decision. Enqueues of ungated tasks are not counted.
+   */
+  predicateStats(): PredicateStats {
+    return this.predicateMetrics.snapshot();
   }
 
   /** Registered workers (heartbeat + identity). */
