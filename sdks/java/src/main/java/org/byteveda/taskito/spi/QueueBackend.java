@@ -103,6 +103,14 @@ public interface QueueBackend extends AutoCloseable {
 
     boolean deleteDead(String deadId);
 
+    /**
+     * Force a stuck running job back to pending, releasing its execution claim.
+     * Returns false when the job is missing or is not running.
+     */
+    default boolean requeueJob(String jobId) {
+        throw new UnsupportedOperationException("requeue is not supported by this backend");
+    }
+
     long purgeDead(long olderThanMs);
 
     /** A JSON array of dead-letter entries for one task. */

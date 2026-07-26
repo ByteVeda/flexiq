@@ -146,6 +146,24 @@ public final class InMemoryQueueBackend implements QueueBackend {
         return false;
     }
 
+    // synchronized like cancel(): the running→pending transition must not race
+    // claimNext's pending→running.
+    @Override
+    public synchronized boolean requeueJob(String jobId) {
+        JobRec job = jobs.get(jobId);
+        if (job == null || !"running".equals(job.status)) {
+            return false;
+        }
+        job.status = "pending";
+        job.scheduledAt = now();
+        job.startedAt = null;
+        job.completedAt = null;
+        job.error = null;
+        // A stale cancel request must not kill the fresh attempt.
+        job.cancelRequested = false;
+        return true;
+    }
+
     @Override
     public boolean requestCancel(String jobId) {
         JobRec job = jobs.get(jobId);

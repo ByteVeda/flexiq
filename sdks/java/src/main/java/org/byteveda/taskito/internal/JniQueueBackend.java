@@ -173,6 +173,11 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public boolean requeueJob(String jobId) {
+        return withOpenHandle(() -> NativeQueue.requeueJob(handle, jobId));
+    }
+
+    @Override
     public long purgeDead(long olderThanMs) {
         return withOpenHandle(() -> NativeQueue.purgeDead(handle, olderThanMs));
     }

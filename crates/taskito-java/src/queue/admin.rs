@@ -58,6 +58,25 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_deleteDead
     })
 }
 
+/// `boolean requeueJob(long handle, String jobId)` — force a stuck Running job
+/// back to Pending, releasing its execution claim. False when the job is missing
+/// or is not Running.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_requeueJob<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    job_id: JString<'local>,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let id = read_string(env, &job_id)?;
+        Ok(super::to_jboolean(
+            queue.storage.requeue_stuck(&id, now_millis())?,
+        ))
+    })
+}
+
 /// `long purgeDead(long handle, long olderThanMs)` — returns rows removed.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_purgeDead<'local>(
