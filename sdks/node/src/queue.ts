@@ -1597,7 +1597,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   analyzeArguments(taskName: string, args: unknown[] = []): InterceptionAnalysis {
     const outcomes: Interception[] = [];
     try {
-      const applied = this.applyInterceptors(taskName, args, undefined, outcomes);
+      // Copy like a real enqueue does, so a mutating interceptor can't make
+      // this dry run rewrite the caller's array.
+      const applied = this.applyInterceptors(taskName, [...args], undefined, outcomes);
       return { taskName: applied.taskName, args: applied.args, outcomes, rejected: false };
     } catch (error) {
       if (error instanceof InterceptionError) {
