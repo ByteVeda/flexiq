@@ -24,7 +24,12 @@ import {
   TaskitoError,
 } from "./errors";
 import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
-import { type Interception, InterceptionMetrics, type Interceptor } from "./interception";
+import {
+  type Interception,
+  type InterceptionAnalysis,
+  InterceptionMetrics,
+  type Interceptor,
+} from "./interception";
 import { Lock, type LockOptions } from "./locks";
 import type { EnqueueContext, Middleware } from "./middleware";
 import {
@@ -174,6 +179,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly predicateMetrics = new PredicateMetrics();
   private readonly emitter = new Emitter();
   private readonly resources = new ResourceRuntime();
+  /** Workers started from this queue and not yet stopped — the shutdown set. */
+  private readonly liveWorkers = new Set<Worker>();
   private readonly webhookManager: WebhookManager;
   /** Built lazily — its constructor throws on addons lacking the `workflows` feature. */
   private workflowManager?: WorkflowManager;
@@ -428,6 +435,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       /** Failed checks tolerated (while recreation also fails) before the
        * resource is marked permanently unhealthy. Default 3. */
       maxRecreationAttempts?: number;
+      /** Include in a no-argument {@link Queue.reloadResources} sweep. Default false. */
+      reloadable?: boolean;
     },
   ): this {
     const scope = options?.scope ?? "worker";
@@ -450,6 +459,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       healthCheck: options?.healthCheck,
       healthCheckIntervalMs: options?.healthCheckIntervalMs,
       maxRecreationAttempts: options?.maxRecreationAttempts,
+      reloadable: options?.reloadable,
     });
     return this;
   }
@@ -457,6 +467,20 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   /** Per-resource lifecycle metrics (created / disposed / active), keyed by name. */
   resourceMetrics(): ResourceMetrics {
     return this.resources.metrics();
+  }
+
+  /**
+   * Hot-reload worker resources: dispose what is cached and rebuild on next
+   * use. Returns `{name: success}` — an unregistered name reports `false`
+   * rather than throwing.
+   *
+   * `names` reloads exactly those; omitting it sweeps every resource
+   * registered with `reloadable: true`. Reloading a resource a running task
+   * already holds does not disturb that task — it keeps the old instance until
+   * it finishes.
+   */
+  reloadResources(names?: readonly string[]): Promise<Record<string, boolean>> {
+    return this.resources.reload(names);
   }
 
   /** Set per-queue concurrency / rate-limit applied when a worker runs. */
@@ -1326,6 +1350,20 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.deleteDead(deadId);
   }
 
+  /**
+   * Force a stuck Running job back to Pending so a healthy worker re-runs it.
+   *
+   * Releases the job's execution claim atomically and preserves its retry
+   * budget. Returns false when the job doesn't exist or isn't Running.
+   *
+   * Only use it when the owning worker is confirmed dead or hung: if the old
+   * attempt is actually still running, it may finish later and the job runs
+   * twice.
+   */
+  requeueJob(jobId: string): boolean {
+    return this.native.requeueJob(jobId);
+  }
+
   /** Purge dead-letter entries older than `olderThanMs`. Returns the count removed. */
   purgeDead(olderThanMs: number): Promise<number> {
     return this.native.purgeDead(olderThanMs);
@@ -1549,6 +1587,29 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   }
 
   /**
+   * Dry-run the registered interceptors over `(taskName, args)`: report what
+   * they would do without enqueuing anything. A chain that would reject comes
+   * back as `rejected` instead of throwing.
+   *
+   * The run is invisible to {@link Queue.interceptionStats} — analysing does
+   * not move the counters a real enqueue would.
+   */
+  analyzeArguments(taskName: string, args: unknown[] = []): InterceptionAnalysis {
+    const outcomes: Interception[] = [];
+    try {
+      // Copy like a real enqueue does, so a mutating interceptor can't make
+      // this dry run rewrite the caller's array.
+      const applied = this.applyInterceptors(taskName, [...args], undefined, outcomes);
+      return { taskName: applied.taskName, args: applied.args, outcomes, rejected: false };
+    } catch (error) {
+      if (error instanceof InterceptionError) {
+        return { taskName, args, outcomes, rejected: true, rejectionReason: error.message };
+      }
+      throw error;
+    }
+  }
+
+  /**
    * What this process's gates decided: one count per gated enqueue, keyed by
    * decision. Enqueues of ungated tasks are not counted.
    */
@@ -1563,7 +1624,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** Start a worker that runs the registered tasks. Hold the returned {@link Worker}. */
   runWorker(options?: WorkerRunOptions): Worker {
-    return Worker.start(this.native, {
+    const worker: Worker = Worker.start(this.native, {
+      onStopped: () => this.liveWorkers.delete(worker),
       tasks: this.tasks,
       queueLimits: this.queueLimits,
       serializer: this.serializer,
@@ -1576,6 +1638,22 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       logConsumers: this.pendingLogConsumers,
       run: options,
     });
+    this.liveWorkers.add(worker);
+    return worker;
+  }
+
+  /**
+   * Stop every worker started from this queue — the programmatic equivalent of
+   * SIGINT/SIGTERM. Dispatch halts at once and the promise resolves once
+   * worker-scoped resources are disposed. Handlers already mid-flight are not
+   * awaited: like {@link Worker.stop}, this stops dispatch rather than draining
+   * the invocations in progress.
+   *
+   * A no-op when no worker is running, and safe alongside a direct
+   * {@link Worker.stop} — stopping twice does nothing the second time.
+   */
+  async shutdown(): Promise<void> {
+    await Promise.all([...this.liveWorkers].map((worker) => worker.stop()));
   }
 }
 

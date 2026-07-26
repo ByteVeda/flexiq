@@ -38,6 +38,16 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **Node operator admin surface.** `queue.requeueJob(id)` forces a stuck `running` job back to
+  `pending` and releases its execution claim, preserving the retry budget — the only recovery path
+  for a job that neither the timeout reaper nor orphan recovery will touch (use it only once the
+  owning worker is confirmed dead or hung, or the job can run twice). Alongside it:
+  `queue.reloadResources(names?)` hot-reloads resources marked `reloadable`, rebuilding
+  dependencies before the resources that used them; `queue.analyzeArguments(taskName, args)`
+  dry-runs the interceptor chain without enqueuing or moving `interceptionStats()`; and
+  `queue.shutdown()` stops every worker started from the queue, so a SIGTERM handler no longer has
+  to hold each `Worker`.
+
 - **Node predicate recipes, decisions, and registry.** A gate could only allow or reject; it can
   now return a `Decision` that also skips (no job — `queue.tryEnqueue()` reports `null`, `enqueue`
   throws the new `EnqueueSkippedError`) or defers (job created with the gate's delay). Nine

@@ -80,7 +80,11 @@ export {
   resourceStatus,
   type WorkersCheck,
 } from "./health";
-export { Interception, type Interceptor } from "./interception";
+export {
+  Interception,
+  type InterceptionAnalysis,
+  type Interceptor,
+} from "./interception";
 export { Lock, type LockInfo, type LockOptions } from "./locks";
 export type { EnqueueContext, Middleware, TaskContext } from "./middleware";
 export {

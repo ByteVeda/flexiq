@@ -8,6 +8,7 @@ description: "Run workers, list registered workers, event hooks, and middleware.
 | Method | Description |
 |---|---|
 | `runWorker(options?)` | Start a [worker](/node/api-reference/worker). |
+| `shutdown()` → `Promise<void>` | Stop every worker started from this queue — the programmatic SIGINT/SIGTERM. Dispatch halts at once; the promise resolves once worker-scoped resources are disposed. Like `worker.stop()`, it stops dispatch rather than awaiting handlers already mid-flight. A no-op when no worker runs, and safe alongside a direct `worker.stop()`. |
 | `listWorkers()` → `Promise<WorkerInfo[]>` | Registered workers. |
 
 ## Hooks & middleware
