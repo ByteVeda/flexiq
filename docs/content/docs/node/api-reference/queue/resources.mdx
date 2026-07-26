@@ -7,13 +7,15 @@ description: "Injectable resources, enqueue gates, distributed locks, and period
 
 | Member | Description |
 |---|---|
-| `resource(name, factory, opts?)` | Register an injectable [resource](/node/guides/resources/dependency-injection) (`scope`, `dispose`). |
+| `resource(name, factory, opts?)` | Register an injectable [resource](/node/guides/resources/dependency-injection) (`scope`, `dispose`, `reloadable`). |
+| `reloadResources(names?)` → `Promise<Record<string, boolean>>` | Hot-reload resources: dispose what is cached, rebuild on next use. No argument sweeps every `reloadable: true` resource; an unknown name reports `false` rather than throwing. |
 
 ## Enqueue gates
 
 | Member | Description |
 |---|---|
 | `intercept(interceptor)` | Register an [enqueue interceptor](/node/guides/resources/interception) — runs before defaults, middleware, and gates. |
+| `analyzeArguments(taskName, args?)` → `InterceptionAnalysis` | Dry-run the interceptor chain: what it would do, without enqueuing. A chain that would reject comes back as `rejected` instead of throwing, and the run leaves `interceptionStats()` untouched. |
 | `gate(name, gate)` | Gate an enqueue with a [predicate](/node/guides/core/predicates): `false` rejects, a `Decision` can also skip or defer. Accepts a registered predicate's name. |
 | `predicateStats()` | Gate outcome counters: `{ allowed, skipped, deferred, rejected, errors }`. |
 

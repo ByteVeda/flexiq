@@ -208,6 +208,22 @@ running, it may finish later and the job executes twice.
 
 </SdkOnly>
 
+<SdkOnly sdk="node">
+
+For that last case — a job neither recovery mechanism will touch — force it
+back to `pending` manually:
+
+```ts
+queue.requeueJob(jobId); // true if it was running and is now pending
+```
+
+`requeueJob()` releases the job's execution claim so a healthy worker can
+pick it up, and preserves the retry budget. Only use it when the owning
+worker is confirmed dead or hung: if the old attempt is actually still
+running, it may finish later and the job executes twice.
+
+</SdkOnly>
+
 ## Worker is unresponsive
 
 **Symptom**: the worker process is alive but not processing jobs; its

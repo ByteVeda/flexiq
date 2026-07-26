@@ -19,6 +19,19 @@ background thread pool.
 |---|---|
 | `deadLetters()` → `Promise<DeadJob[]>` / `retryDead(id)` / `deleteDead(id)` / `purgeDead(ms)` → `Promise<number>` | DLQ (dead-letter queue) ops. |
 
+## Recovery
+
+| Method | Description |
+|---|---|
+| `requeueJob(id)` → `boolean` | Force a stuck `running` job back to `pending`, releasing its execution claim. `false` when the job is missing or isn't running. |
+
+<Callout type="warn">
+  `requeueJob()` preserves the job's retry budget, but only use it when the
+  owning worker is confirmed dead or hung: if the old attempt is still running,
+  it may finish later and the job executes twice. See
+  [troubleshooting](/node/guides/operations/troubleshooting).
+</Callout>
+
 ## Queue control
 
 | Method | Description |
