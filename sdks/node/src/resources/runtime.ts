@@ -54,6 +54,8 @@ export interface TaskScope {
 export class ResourceRuntime {
   private readonly defs = new Map<string, ResourceDefinition>();
   private readonly workerCache = new Map<string, Promise<unknown>>();
+  /** Worker resources each worker resource used, recorded at build time for reload ordering. */
+  private readonly workerDeps = new Map<string, Set<string>>();
   private readonly workerTeardown: Teardown[] = [];
   private readonly counters = new Map<string, { created: number; disposed: number }>();
   /** Checkout pools behind pooled-scope resources, built lazily per resource. */
@@ -78,6 +80,7 @@ export class ResourceRuntime {
     // Drop any built worker instance so "replace" takes effect; the old
     // instance is still disposed by its queued teardown.
     this.workerCache.delete(name);
+    this.workerDeps.delete(name);
     // Likewise retire the old pool; its idle instances are disposed best-effort.
     const stalePool = this.pools.get(name);
     if (stalePool) {
@@ -128,9 +131,16 @@ export class ResourceRuntime {
     if (def.scope !== "worker") {
       return Promise.reject(new ResourceScopeError(name, def.scope));
     }
+    // Rebuilt from scratch on every build so a changed factory can't leave a
+    // dependency it no longer uses in the reload ordering.
+    const deps = new Set<string>();
+    this.workerDeps.set(name, deps);
     const ctx: ResourceContext = {
       scope: "worker",
-      use: <T>(dep: string) => this.resolveWorker(dep) as Promise<T>,
+      use: <T>(dep: string) => {
+        deps.add(dep);
+        return this.resolveWorker(dep) as Promise<T>;
+      },
     };
     const counter = this.counter(name);
     counter.created += 1;
@@ -331,6 +341,7 @@ export class ResourceRuntime {
     await checker?.stop();
     const pending = this.workerTeardown.splice(0);
     this.workerCache.clear();
+    this.workerDeps.clear();
     // "Permanently unhealthy" is scoped to a worker run — the next worker
     // starts from scratch and may succeed where this one gave up.
     this.unhealthy.clear();
@@ -399,6 +410,76 @@ export class ResourceRuntime {
       log.warn(() => `recreating resource "${name}" failed`, error);
       return false;
     }
+  }
+
+  /**
+   * Hot-reload resources: dispose what is cached and rebuild on next use.
+   * Returns `{name: success}`.
+   *
+   * `names` reloads exactly those (whatever their `reloadable` flag says);
+   * omitting it sweeps every definition registered with `reloadable: true`.
+   * Targets are ordered dependency-first — see {@link dependencyOrder}.
+   */
+  async reload(names?: readonly string[]): Promise<Record<string, boolean>> {
+    const targets = new Set(
+      names ?? [...this.defs].filter(([, def]) => def.reloadable).map(([name]) => name),
+    );
+    const results: Record<string, boolean> = {};
+    for (const name of this.dependencyOrder(targets)) {
+      if (targets.has(name)) {
+        results[name] = await this.reloadOne(name);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * `targets` plus the resources they were built from, ordered so a resource
+   * follows everything it used — rebuilding a dependency first means the
+   * dependent resolves the fresh instance rather than the retired one.
+   */
+  private dependencyOrder(targets: Iterable<string>): string[] {
+    const ordered: string[] = [];
+    const done = new Set<string>();
+    const visit = (name: string, chain: Set<string>): void => {
+      // `chain` breaks dependency cycles; a self-referencing factory is legal.
+      if (done.has(name) || chain.has(name)) {
+        return;
+      }
+      chain.add(name);
+      for (const dep of this.workerDeps.get(name) ?? []) {
+        visit(dep, chain);
+      }
+      chain.delete(name);
+      done.add(name);
+      ordered.push(name);
+    };
+    for (const name of targets) {
+      visit(name, new Set());
+    }
+    return ordered;
+  }
+
+  /** Reload one resource according to its scope. Unknown names report false. */
+  private async reloadOne(name: string): Promise<boolean> {
+    const def = this.defs.get(name);
+    if (!def) {
+      return false;
+    }
+    if (def.scope === "worker") {
+      return this.recreate(name);
+    }
+    if (def.scope === "pooled") {
+      // Drop the pool so the next checkout builds a fresh one; idle instances
+      // are disposed now and checked-out ones on release.
+      const pool = this.pools.get(name);
+      this.pools.delete(name);
+      await pool?.shutdown();
+      return true;
+    }
+    // Task- and request-scoped resources are built per invocation — nothing is
+    // cached to replace, so a reload is a successful no-op.
+    return true;
   }
 
   /**

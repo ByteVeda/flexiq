@@ -30,6 +30,8 @@ export interface ResourceDefinition<T = unknown> {
   scope: ResourceScope;
   /** Tear-down hook, run LIFO when the scope ends (worker stop / job finish). */
   dispose?: (value: T) => void | Promise<void>;
+  /** Include in a no-argument `Queue.reloadResources()` sweep. Default false. */
+  reloadable?: boolean;
   /** Pool tuning; only meaningful for `"pooled"` scope. */
   pool?: PoolOptions;
   /**

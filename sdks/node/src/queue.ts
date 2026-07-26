@@ -428,6 +428,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       /** Failed checks tolerated (while recreation also fails) before the
        * resource is marked permanently unhealthy. Default 3. */
       maxRecreationAttempts?: number;
+      /** Include in a no-argument {@link Queue.reloadResources} sweep. Default false. */
+      reloadable?: boolean;
     },
   ): this {
     const scope = options?.scope ?? "worker";
@@ -450,6 +452,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       healthCheck: options?.healthCheck,
       healthCheckIntervalMs: options?.healthCheckIntervalMs,
       maxRecreationAttempts: options?.maxRecreationAttempts,
+      reloadable: options?.reloadable,
     });
     return this;
   }
@@ -457,6 +460,20 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   /** Per-resource lifecycle metrics (created / disposed / active), keyed by name. */
   resourceMetrics(): ResourceMetrics {
     return this.resources.metrics();
+  }
+
+  /**
+   * Hot-reload worker resources: dispose what is cached and rebuild on next
+   * use. Returns `{name: success}` — an unregistered name reports `false`
+   * rather than throwing.
+   *
+   * `names` reloads exactly those; omitting it sweeps every resource
+   * registered with `reloadable: true`. Reloading a resource a running task
+   * already holds does not disturb that task — it keeps the old instance until
+   * it finishes.
+   */
+  reloadResources(names?: readonly string[]): Promise<Record<string, boolean>> {
+    return this.resources.reload(names);
   }
 
   /** Set per-queue concurrency / rate-limit applied when a worker runs. */
