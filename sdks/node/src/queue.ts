@@ -24,7 +24,12 @@ import {
   TaskitoError,
 } from "./errors";
 import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
-import { type Interception, InterceptionMetrics, type Interceptor } from "./interception";
+import {
+  type Interception,
+  type InterceptionAnalysis,
+  InterceptionMetrics,
+  type Interceptor,
+} from "./interception";
 import { Lock, type LockOptions } from "./locks";
 import type { EnqueueContext, Middleware } from "./middleware";
 import {
@@ -1577,6 +1582,27 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   /** Enqueue-interception metrics for this process. */
   interceptionStats() {
     return this.interceptionMetrics.toDict();
+  }
+
+  /**
+   * Dry-run the registered interceptors over `(taskName, args)`: report what
+   * they would do without enqueuing anything. A chain that would reject comes
+   * back as `rejected` instead of throwing.
+   *
+   * The run is invisible to {@link Queue.interceptionStats} — analysing does
+   * not move the counters a real enqueue would.
+   */
+  analyzeArguments(taskName: string, args: unknown[] = []): InterceptionAnalysis {
+    const outcomes: Interception[] = [];
+    try {
+      const applied = this.applyInterceptors(taskName, args, undefined, outcomes);
+      return { taskName: applied.taskName, args: applied.args, outcomes, rejected: false };
+    } catch (error) {
+      if (error instanceof InterceptionError) {
+        return { taskName, args, outcomes, rejected: true, rejectionReason: error.message };
+      }
+      throw error;
+    }
   }
 
   /**

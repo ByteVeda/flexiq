@@ -145,3 +145,58 @@ describe("enqueue interceptors", () => {
     await expect(waitFor(() => queue.getResult(id))).resolves.toBe(5);
   });
 });
+
+describe("analyzeArguments", () => {
+  it("reports the args unchanged when nothing is registered", () => {
+    const queue = new Queue({ dbPath: tempDb() }).task("ic.echo", (x: number) => x);
+
+    expect(queue.analyzeArguments("ic.echo", [1])).toEqual({
+      taskName: "ic.echo",
+      args: [1],
+      outcomes: [],
+      rejected: false,
+    });
+  });
+
+  it("reports the converted args and the chain that produced them", () => {
+    const queue = new Queue({ dbPath: tempDb() })
+      .task("ic.echo", (x: number) => x)
+      .intercept((_name, args) => Interception.convert([(args[0] as number) * 10]))
+      .intercept(() => Interception.pass());
+
+    const analysis = queue.analyzeArguments("ic.echo", [5]);
+    expect(analysis.args).toEqual([50]);
+    expect(analysis.rejected).toBe(false);
+    expect(analysis.outcomes.map((outcome) => outcome.type)).toEqual(["convert", "pass"]);
+  });
+
+  it("reports the redirect target", () => {
+    const queue = new Queue({ dbPath: tempDb() })
+      .task("ic.a", (x: number) => x)
+      .task("ic.b", (x: number) => x)
+      .intercept((_name, args) => Interception.redirect("ic.b", args));
+
+    expect(queue.analyzeArguments("ic.a", [1]).taskName).toBe("ic.b");
+  });
+
+  it("reports a rejection instead of throwing", () => {
+    const queue = new Queue({ dbPath: tempDb() })
+      .task("ic.echo", (x: number) => x)
+      .intercept(() => Interception.reject("no negatives"));
+
+    const analysis = queue.analyzeArguments("ic.echo", [-1]);
+    expect(analysis.rejected).toBe(true);
+    expect(analysis.rejectionReason).toMatch(/no negatives/);
+    expect(analysis.outcomes.map((outcome) => outcome.type)).toEqual(["reject"]);
+  });
+
+  it("enqueues nothing and leaves the interception counters alone", async () => {
+    const queue = new Queue({ dbPath: tempDb() })
+      .task("ic.echo", (x: number) => x)
+      .intercept((_name, args) => Interception.convert(args));
+
+    queue.analyzeArguments("ic.echo", [1]);
+    expect((await queue.stats()).pending).toBe(0);
+    expect(queue.interceptionStats().total_intercepts).toBe(0);
+  });
+});

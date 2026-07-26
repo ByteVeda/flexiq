@@ -42,6 +42,27 @@ export const Interception = {
   },
 };
 
+/**
+ * What the registered interceptors would do with one enqueue, without
+ * enqueuing anything. Returned by `Queue.analyzeArguments`.
+ */
+export interface InterceptionAnalysis {
+  /** Task that would be enqueued — differs from the input after a `redirect`. */
+  taskName: string;
+  /** Args that would be serialized, after every `convert`/`redirect`. */
+  args: unknown[];
+  /** One entry per interceptor that ran, in registration order. */
+  outcomes: Interception[];
+  /**
+   * True when a real enqueue would throw `InterceptionError`. `taskName` and
+   * `args` then hold the original input — the chain stopped part-way, and
+   * `outcomes` shows how far it got.
+   */
+  rejected: boolean;
+  /** Message the real enqueue would throw; absent unless `rejected`. */
+  rejectionReason?: string;
+}
+
 /** Dashboard wire shape for enqueue-interception stats. */
 export interface InterceptionStatsSnapshot {
   total_intercepts: number;
