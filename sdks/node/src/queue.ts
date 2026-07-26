@@ -1644,8 +1644,10 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /**
    * Stop every worker started from this queue — the programmatic equivalent of
-   * SIGINT/SIGTERM. Dispatch halts at once; the promise resolves when running
-   * tasks have drained and worker-scoped resources are disposed.
+   * SIGINT/SIGTERM. Dispatch halts at once and the promise resolves once
+   * worker-scoped resources are disposed. Handlers already mid-flight are not
+   * awaited: like {@link Worker.stop}, this stops dispatch rather than draining
+   * the invocations in progress.
    *
    * A no-op when no worker is running, and safe alongside a direct
    * {@link Worker.stop} — stopping twice does nothing the second time.
