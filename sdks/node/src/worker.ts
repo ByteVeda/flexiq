@@ -397,7 +397,22 @@ export class Worker {
    * release a second resource lease and tear down another worker's resources.
    */
   stop(): Promise<void> {
-    this.stopped ??= this.runStop();
+    if (!this.stopped) {
+      let settle!: () => void;
+      // Install the shared promise BEFORE teardown runs: `onStopped` and the
+      // `worker.stopped` listeners fire synchronously inside runStop(), and
+      // either may call stop() again — a reentrant call has to see this
+      // promise rather than start a second teardown.
+      this.stopped = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      try {
+        void this.runStop().then(settle, settle);
+      } catch (error) {
+        log.debug(() => "worker stop failed", error);
+        settle();
+      }
+    }
     return this.stopped;
   }
 

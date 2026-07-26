@@ -91,4 +91,33 @@ describe("Queue.shutdown", () => {
     await queue.shutdown();
     expect(disposals).toBe(1);
   });
+
+  it("a stop reentered from a worker.stopped listener tears down once", async () => {
+    const queue = newQueue();
+    let disposals = 0;
+    queue.resource("conn", () => ({}), {
+      dispose: () => {
+        disposals += 1;
+      },
+    });
+    queue.task("touch", async () => {
+      await useResource("conn");
+    });
+
+    const first = queue.runWorker();
+    queue.runWorker();
+    queue.enqueue("touch");
+    expect(await waitFor(() => queue.resourceMetrics().conn?.active === 1)).toBe(true);
+
+    // The listener runs synchronously inside stop(); a reentrant call must find
+    // the in-flight teardown rather than start a second one.
+    queue.on("worker.stopped", () => {
+      void first.stop();
+    });
+    await first.stop();
+    expect(disposals).toBe(0);
+
+    await queue.shutdown();
+    expect(disposals).toBe(1);
+  });
 });
