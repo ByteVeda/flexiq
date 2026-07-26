@@ -179,6 +179,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly predicateMetrics = new PredicateMetrics();
   private readonly emitter = new Emitter();
   private readonly resources = new ResourceRuntime();
+  /** Workers started from this queue and not yet stopped — the shutdown set. */
+  private readonly liveWorkers = new Set<Worker>();
   private readonly webhookManager: WebhookManager;
   /** Built lazily — its constructor throws on addons lacking the `workflows` feature. */
   private workflowManager?: WorkflowManager;
@@ -1620,7 +1622,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** Start a worker that runs the registered tasks. Hold the returned {@link Worker}. */
   runWorker(options?: WorkerRunOptions): Worker {
-    return Worker.start(this.native, {
+    const worker: Worker = Worker.start(this.native, {
+      onStopped: () => this.liveWorkers.delete(worker),
       tasks: this.tasks,
       queueLimits: this.queueLimits,
       serializer: this.serializer,
@@ -1633,6 +1636,20 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       logConsumers: this.pendingLogConsumers,
       run: options,
     });
+    this.liveWorkers.add(worker);
+    return worker;
+  }
+
+  /**
+   * Stop every worker started from this queue — the programmatic equivalent of
+   * SIGINT/SIGTERM. Dispatch halts at once; the promise resolves when running
+   * tasks have drained and worker-scoped resources are disposed.
+   *
+   * A no-op when no worker is running, and safe alongside a direct
+   * {@link Worker.stop} — stopping twice does nothing the second time.
+   */
+  async shutdown(): Promise<void> {
+    await Promise.all([...this.liveWorkers].map((worker) => worker.stop()));
   }
 }
 

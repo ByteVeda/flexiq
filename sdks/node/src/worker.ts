@@ -66,6 +66,8 @@ export interface WorkerStartParams {
   declareSubscriptions?: (workerId: string) => Promise<void>;
   /** Managed log-topic consumers to drive with a poll loop for the worker's life. */
   logConsumers?: readonly PendingLogConsumer[];
+  /** Fired once on stop so the queue can drop this worker from its live set. @internal */
+  onStopped?: () => void;
   run?: WorkerRunOptions;
 }
 
@@ -81,6 +83,9 @@ export interface PendingLogConsumer {
 
 /** A running worker. Hold it for the worker's lifetime; call {@link Worker.stop}. */
 export class Worker {
+  /** Memoized teardown, set by the first `stop()` — keeps it idempotent. */
+  private stopped?: Promise<void>;
+
   private constructor(
     private readonly native: NativeWorker,
     private readonly queue: NativeQueue,
@@ -90,6 +95,7 @@ export class Worker {
     private readonly emitter: Emitter,
     /** Shared with the heartbeat closure so a beat resolving after stop() stays silent. */
     private readonly lifecycle: { stopped: boolean },
+    private readonly onStopped?: () => void,
   ) {}
 
   /**
@@ -366,7 +372,16 @@ export class Worker {
     // Managed log-topic consumers: one poll loop each, beside the heartbeat.
     const consumerStops = startLogConsumers(queue, serializer, params.logConsumers ?? []);
 
-    return new Worker(native, queue, resources, heartbeat, consumerStops, emitter, lifecycle);
+    return new Worker(
+      native,
+      queue,
+      resources,
+      heartbeat,
+      consumerStops,
+      emitter,
+      lifecycle,
+      params.onStopped,
+    );
   }
 
   /**
@@ -377,9 +392,18 @@ export class Worker {
    * returned promise resolves once worker-scoped resources have been disposed
    * — await it when that matters (test teardown, graceful shutdown). It never
    * rejects: teardown failures are logged, not thrown.
+   *
+   * Idempotent: later calls return the first teardown. Re-running it would
+   * release a second resource lease and tear down another worker's resources.
    */
   stop(): Promise<void> {
+    this.stopped ??= this.runStop();
+    return this.stopped;
+  }
+
+  private runStop(): Promise<void> {
     this.lifecycle.stopped = true;
+    this.onStopped?.();
     // One last sweep for orphaned ephemeral subscriptions before this worker's
     // reap cadence goes away. Best effort — stopping must never throw.
     void this.queue.reapEphemeralSubscriptions().catch((error) => {
