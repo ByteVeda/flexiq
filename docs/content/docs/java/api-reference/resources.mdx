@@ -27,6 +27,7 @@ taskito.resource("db", PoolConfig.of(10).withMaxLifetime(Duration.ofMinutes(30))
 | `resource(name, scope, factory)` | Explicit `ResourceScope`. |
 | `resource(name, scope, factory, dispose)` | With a disposer run when the scope ends. |
 | `resource(name, PoolConfig, factory, dispose)` | A `POOLED` resource: a bounded pool checked out per task. |
+| `resource(name, ResourceDefinition)` | A pre-built definition — the escape hatch for knobs the overloads above don't cover. |
 
 The factory receives a `ResourceContext` — `scope()` plus `use(name)` to depend
 on other resources. A factory may only depend on same-or-longer-lived
@@ -53,6 +54,28 @@ down before their dependencies.
 start), `withAcquireTimeout(Duration)` (checkout wait limit, default 10s), and
 `withMaxLifetime(Duration)` (idle instances older than this are disposed
 instead of reused). Part of the cross-SDK contract for pooled resources.
+
+## Hot reload
+
+`taskito.reloadResources(names)` disposes what is cached and rebuilds it, so the
+next use sees a fresh instance — a programmatic SIGHUP for rotating credentials
+or picking up new config without a restart. Resources rebuild dependency-first,
+so a dependent resolves the fresh dependency rather than the retired one.
+
+```java
+taskito.resource("db", ResourceDefinition
+        .worker(context -> Database.connect(dsn))
+        .withReloadable(true));
+
+taskito.reloadResources();                    // every reloadable resource
+taskito.reloadResources(List.of("db"));       // exactly these, flag or not
+```
+
+The result is `Map<String, Boolean>` — a name maps to `false` when it isn't
+registered or its factory failed. Instances live in the running workers, so the
+map is empty when none is running, and with several workers a name counts as
+reloaded only when it reloaded on all of them. `TASK`/`REQUEST` resources are
+built per invocation, so reloading one is a successful no-op.
 
 ## Metrics
 

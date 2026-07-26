@@ -8,6 +8,7 @@ description: "Worker builder, middleware, and workflow control."
 | Method | Description |
 |---|---|
 | `worker()` → `Worker.Builder` | Begin building a [worker](/java/api-reference/worker). |
+| `shutdown()` | Close every worker started from this client — the programmatic SIGINT/SIGTERM. Each stops dispatching, drains its in-flight handlers, and disposes its worker-scoped resources, exactly as `Worker.close()` does. A no-op when no worker runs, and safe alongside a direct `close()`. The client itself stays usable. |
 | `listWorkers()` → `List<WorkerInfo>` | Registered workers (heartbeat + identity). |
 
 ## Middleware
