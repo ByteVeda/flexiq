@@ -6,8 +6,8 @@ import { Queue, type Worker } from "../../src/index";
 
 let worker: Worker | undefined;
 
-afterEach(() => {
-  worker?.stop();
+afterEach(async () => {
+  await worker?.stop();
   worker = undefined;
 });
 
