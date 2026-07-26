@@ -424,6 +424,12 @@ export class ResourceRuntime {
     const targets = new Set(
       names ?? [...this.defs].filter(([, def]) => def.reloadable).map(([name]) => name),
     );
+    // A build in flight has not finished recording its `ctx.use` calls yet, so
+    // ordering off `workerDeps` now could schedule a dependency after its
+    // dependent. Let those builds settle first (a failed one just reloads).
+    await Promise.allSettled(
+      [...targets].map((name) => this.workerCache.get(name)).filter(Boolean),
+    );
     const results: Record<string, boolean> = {};
     for (const name of this.dependencyOrder(targets)) {
       if (targets.has(name)) {
