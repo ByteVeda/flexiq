@@ -151,6 +151,15 @@ impl JsQueue {
         self.storage.retry_dead(&dead_id).map_err(to_napi_err)
     }
 
+    /// Force a stuck Running job back to Pending, releasing its execution claim.
+    /// Returns false when the job is missing or is not Running.
+    #[napi]
+    pub fn requeue_job(&self, job_id: String) -> Result<bool> {
+        self.storage
+            .requeue_stuck(&job_id, now_millis())
+            .map_err(to_napi_err)
+    }
+
     /// Delete a dead-letter entry. Returns false if it didn't exist.
     #[napi]
     pub fn delete_dead(&self, dead_id: String) -> Result<bool> {

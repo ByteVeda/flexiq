@@ -1326,6 +1326,20 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.deleteDead(deadId);
   }
 
+  /**
+   * Force a stuck Running job back to Pending so a healthy worker re-runs it.
+   *
+   * Releases the job's execution claim atomically and preserves its retry
+   * budget. Returns false when the job doesn't exist or isn't Running.
+   *
+   * Only use it when the owning worker is confirmed dead or hung: if the old
+   * attempt is actually still running, it may finish later and the job runs
+   * twice.
+   */
+  requeueJob(jobId: string): boolean {
+    return this.native.requeueJob(jobId);
+  }
+
   /** Purge dead-letter entries older than `olderThanMs`. Returns the count removed. */
   purgeDead(olderThanMs: number): Promise<number> {
     return this.native.purgeDead(olderThanMs);
