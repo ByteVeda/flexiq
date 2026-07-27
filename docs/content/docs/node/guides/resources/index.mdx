@@ -28,15 +28,35 @@ queue.task("sync", async (id: string) => {
     description="queue.resource(), worker/task/pooled scopes, useResource, declarative inject, teardown"
   />
   <Card
+    title="Configuration"
+    href="/node/guides/resources/configuration"
+    description="Every registration option — scopes, pool tuning, health checks, hot reload"
+  />
+  <Card
     title="Enqueue interception"
     href="/node/guides/resources/interception"
     description="The onEnqueue hook — validate, redact, and rewrite jobs before serialization"
   />
+  <Card
+    title="Proxies"
+    href="/node/guides/resources/proxies"
+    description="Send a non-serializable resource as a signed reference and rebuild it on the worker"
+  />
+  <Card
+    title="Observability"
+    href="/node/guides/resources/observability"
+    description="Lifecycle metrics, cluster-wide health, readiness probes, proxy stats"
+  />
+  <Card
+    title="Testing"
+    href="/node/guides/resources/testing"
+    description="mockResource, teardown assertions, deterministic pool tests"
+  />
 </Cards>
 
 <Callout type="info">
-  Coming from Python? Node's resource system is intentionally lighter — no
-  argument-interception *strategies* and no object *proxies*, because JavaScript
-  has no pickling problem. Worker-side dependency injection plus a producer-side
-  `onEnqueue` hook cover the same ground.
+  Coming from Python? Node's resource system is intentionally lighter — enqueue
+  interception is a single `onEnqueue` hook rather than a set of *strategies*,
+  and resources are registered in code with no TOML loader. Scopes, pooling,
+  health checks, hot reload, and signed proxies all have direct equivalents.
 </Callout>

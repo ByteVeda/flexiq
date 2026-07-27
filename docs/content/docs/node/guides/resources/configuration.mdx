@@ -1,0 +1,136 @@
+---
+title: Configuration
+description: "Every queue.resource() option — scopes, pool tuning, health checks and recreation, hot reload."
+---
+
+[Dependency injection](/node/guides/resources/dependency-injection) covers the
+shape of a resource and how handlers reach it. This page is the option
+reference: what `queue.resource()` accepts, which options belong to which
+scope, and how reload works.
+
+```ts
+queue.resource(name, factory, options?);
+```
+
+## Options
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `scope` | `"worker" \| "task" \| "pooled" \| "request"` | `"worker"` | When the value is built and disposed. |
+| `dispose` | `(value) => void \| Promise<void>` | — | Tear-down hook, run LIFO when the scope ends. |
+| `pool` | `PoolOptions` | — | Checkout-pool tuning. **`"pooled"` scope only.** |
+| `healthCheck` | `(value) => boolean \| Promise<boolean>` | — | Truthy while healthy; a failure triggers recreation. **`"worker"` scope only.** |
+| `healthCheckIntervalMs` | `number` | `0` (off) | Milliseconds between health checks. |
+| `maxRecreationAttempts` | `number` | `3` | Failed checks tolerated — while recreation also fails — before the resource is marked permanently unhealthy. |
+| `reloadable` | `boolean` | `false` | Include in a no-argument `reloadResources()` sweep. |
+
+Both scope restrictions are enforced at registration, not at first use —
+passing `pool` on a non-pooled resource, or `healthCheck` on anything but a
+worker-scoped one, throws `ResourceError` right there:
+
+```ts
+queue.resource("db", () => openPool(), { pool: { poolSize: 8 } });
+// ResourceError: Resource "db": pool options require scope "pooled" (got "worker")
+```
+
+Task- and pooled-scope instances are rebuilt or recycled per job already, which
+is why health checking only applies to the long-lived worker scope.
+
+<Callout type="info" title="No file-based resource config">
+  Unlike the Python SDK, the Node SDK has no TOML resource loader — resources
+  are always registered in code. Keep them in one module and import it from both
+  your producer and your worker entry point so the two agree.
+</Callout>
+
+## Pool tuning
+
+`PoolOptions` configures the bounded checkout pool behind a `"pooled"` resource.
+Each job checks an instance out for its duration and returns it on completion:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `poolSize` | `4` | Max instances checked out concurrently. |
+| `poolMin` | `0` | Instances built eagerly at worker start. `0` is fully lazy. |
+| `acquireTimeoutMs` | `10000` | How long a checkout waits for a free slot before failing. |
+| `maxLifetimeMs` | unlimited | Max age of an idle instance before it is disposed and rebuilt. |
+
+```ts
+queue.resource("session", async (ctx) => (await ctx.use<Pool>("db")).connect(), {
+  scope: "pooled",
+  dispose: (session) => session.release(),
+  pool: {
+    poolSize: 20,
+    poolMin: 5,          // pre-warm — no cold start on the first burst
+    acquireTimeoutMs: 5_000,
+    maxLifetimeMs: 1_800_000,
+  },
+});
+```
+
+Size the pool to your worker's concurrency: a `poolSize` below the worker's
+concurrency makes jobs queue on checkout, and one far above it just holds
+connections open. A checkout that exceeds `acquireTimeoutMs` rejects with
+`ResourceUnavailableError`, which fails the job and lets it retry normally.
+
+## Health checks and recreation
+
+A worker-scoped resource can be probed on an interval. When the check returns
+falsy or throws, the instance is disposed and rebuilt on next use:
+
+```ts
+queue.resource("db", () => createPool(), {
+  dispose: (pool) => pool.end(),
+  healthCheck: async (pool) => {
+    await pool.query("SELECT 1");
+    return true;
+  },
+  healthCheckIntervalMs: 30_000,
+  maxRecreationAttempts: 3,
+});
+```
+
+`healthCheckIntervalMs` of `0` (or omitting it) disables probing entirely — the
+resource is then built once and kept for the worker's lifetime.
+`maxRecreationAttempts` bounds the retry loop: after that many consecutive
+failures where recreation *also* fails, the resource is marked permanently
+unhealthy and reported as such through
+[`resourceStatus`](/node/guides/resources/observability).
+
+## Hot reload
+
+`reloadable: true` opts a resource into the no-argument sweep. Reloading
+disposes what is cached and rebuilds on next use:
+
+```ts
+queue.resource("featureFlags", () => loadFlags(), { reloadable: true });
+
+await queue.reloadResources();               // every reloadable resource
+await queue.reloadResources(["featureFlags"]); // exactly these, reloadable or not
+```
+
+`reloadResources()` resolves to `{ name: success }`. An unregistered name
+reports `false` rather than throwing, so a reload driven by operator input
+can't crash the process.
+
+A task already holding an instance keeps it until it finishes — reload never
+swaps a value out from under running work. Naming resources explicitly reloads
+them whether or not they were registered as `reloadable`; the flag only governs
+the sweep.
+
+<Cards>
+  <Card
+    title="Dependency injection"
+    href="/node/guides/resources/dependency-injection"
+    description="Scopes, useResource, declarative inject, dependencies, teardown."
+  />
+  <Card
+    title="Observability"
+    href="/node/guides/resources/observability"
+    description="Lifecycle metrics, health aggregation, readiness probes."
+  />
+  <Card
+    title="Testing"
+    href="/node/guides/resources/testing"
+    description="mockResource and the patterns for asserting on resource lifecycle."
+  />
+</Cards>
