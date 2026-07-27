@@ -4,7 +4,8 @@ description: "Dashboard-managed HMAC-signed HTTP delivery of lifecycle events, w
 ---
 
 Webhooks deliver [lifecycle events](/python/guides/extensibility/events) to
-external endpoints as HMAC-signed HTTP POSTs. Unlike in-process listeners,
+external endpoints as HTTP POSTs, HMAC-signed when the subscription sets a
+`secret`. Unlike in-process listeners,
 subscriptions are first-class **persisted** resources — they survive restarts,
 propagate across every worker pointed at the same backend, and are fully
 manageable from the dashboard.
@@ -81,7 +82,7 @@ queue.remove_webhook(sub.id)
 | `task_filter` | `list[str] \| None` | `None` | Restrict to specific task names. `None` means all tasks |
 | `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers (e.g. `Authorization`) |
 | `secret` | `str \| None` | `None` | HMAC-SHA256 signing key |
-| `max_retries` | `int` | `3` | Maximum delivery attempts |
+| `max_retries` | `int` | `3` | Total delivery attempts, initial included — `3` means one attempt plus two retries |
 | `timeout` | `float` | `10.0` | HTTP request timeout in seconds |
 | `retry_backoff` | `float` | `2.0` | Base for exponential backoff between retries |
 | `description` | `str \| None` | `None` | Free-form label shown in the dashboard |
@@ -126,20 +127,21 @@ either. The guard rejects:
 - Any address that resolves to a loopback, link-local, RFC1918, multicast, or
   unspecified range (including the AWS metadata service at `169.254.169.254`)
 
-Set `TASKITO_WEBHOOKS_ALLOW_PRIVATE=1` to lift the guard for local development.
-Keep it on in production.
+`TASKITO_WEBHOOKS_ALLOW_PRIVATE=1` lifts the guard, for local development only.
+Leave it unset in production so the guard stays active.
 
 ## Retry behaviour
 
 Failed webhook deliveries are retried with exponential backoff, configurable per
-subscription via `max_retries`, `timeout`, and `retry_backoff`. With the
-defaults (`max_retries=3`, `retry_backoff=2.0`):
+subscription via `max_retries`, `timeout`, and `retry_backoff`. `max_retries`
+counts **total attempts**, so the defaults (`max_retries=3`,
+`retry_backoff=2.0`) give one initial delivery and two retries:
 
-| Attempt | Delay before next retry |
+| Attempt | Delay before the next one |
 |---|---|
-| 1st retry | 1 second (`2.0 ** 0`) |
-| 2nd retry | 2 seconds (`2.0 ** 1`) |
-| 3rd retry | — (final) |
+| 1st (initial) | 1 second (`2.0 ** 0`) |
+| 2nd | 2 seconds (`2.0 ** 1`) |
+| 3rd | — final; the delivery is given up on |
 
 4xx responses are NOT retried — they're treated as client errors and the
 delivery is marked `failed`. 5xx responses retry until exhausted, at which point
