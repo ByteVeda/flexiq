@@ -230,41 +230,44 @@ class InMemoryPubSubTest {
 
     @Test
     void reapRemovesDeadOwnedSubscriptionsOnlyAfterTheRegistrationGrace() {
-        InMemoryQueueBackend backend = new InMemoryQueueBackend();
-        backend.registerSubscription("orders", "ghost", EMAIL.name(), "default", false, "gone-worker");
-        backend.registerSubscription("orders", "durable", EMAIL.name(), "default", true, null);
+        try (InMemoryQueueBackend backend = new InMemoryQueueBackend()) {
+            backend.registerSubscription("orders", "ghost", EMAIL.name(), "default", false, "gone-worker");
+            backend.registerSubscription("orders", "durable", EMAIL.name(), "default", true, null);
 
-        // A just-registered dead-owned row is inside the grace window: the
-        // owner's liveness may simply not be visible yet, so nothing is reaped.
-        assertEquals(0, backend.reapEphemeralSubscriptions());
-        assertTrue(backend.listSubscriptionsJson("orders").contains("ghost"));
+            // A just-registered dead-owned row is inside the grace window: the
+            // owner's liveness may simply not be visible yet, so nothing is reaped.
+            assertEquals(0, backend.reapEphemeralSubscriptions());
+            assertTrue(backend.listSubscriptionsJson("orders").contains("ghost"));
 
-        backend.backdateSubscription("orders", "ghost", 61_000);
-        assertEquals(1, backend.reapEphemeralSubscriptions());
-        assertEquals(0, backend.reapEphemeralSubscriptions());
-        assertTrue(backend.listSubscriptionsJson("orders").contains("durable"));
-        assertFalse(backend.listSubscriptionsJson("orders").contains("ghost"));
+            backend.backdateSubscription("orders", "ghost", 61_000);
+            assertEquals(1, backend.reapEphemeralSubscriptions());
+            assertEquals(0, backend.reapEphemeralSubscriptions());
+            assertTrue(backend.listSubscriptionsJson("orders").contains("durable"));
+            assertFalse(backend.listSubscriptionsJson("orders").contains("ghost"));
+        }
     }
 
     @Test
     void redeclareDoesNotRefreshTheReapGraceWindow() {
-        InMemoryQueueBackend backend = new InMemoryQueueBackend();
-        backend.registerSubscription("orders", "ghost", EMAIL.name(), "default", false, "gone-worker");
-        backend.backdateSubscription("orders", "ghost", 61_000);
+        try (InMemoryQueueBackend backend = new InMemoryQueueBackend()) {
+            backend.registerSubscription("orders", "ghost", EMAIL.name(), "default", false, "gone-worker");
+            backend.backdateSubscription("orders", "ghost", 61_000);
 
-        // The upsert preserves creation time, so re-declaring an aged
-        // dead-owned row leaves it eligible for the very next reap.
-        backend.registerSubscription("orders", "ghost", AUDIT.name(), "default", false, "gone-worker");
-        assertEquals(1, backend.reapEphemeralSubscriptions());
+            // The upsert preserves creation time, so re-declaring an aged
+            // dead-owned row leaves it eligible for the very next reap.
+            backend.registerSubscription("orders", "ghost", AUDIT.name(), "default", false, "gone-worker");
+            assertEquals(1, backend.reapEphemeralSubscriptions());
+        }
     }
 
     @Test
     void ephemeralRegistrationWithoutAnOwnerIsRejected() {
-        InMemoryQueueBackend backend = new InMemoryQueueBackend();
-        TaskitoException rejected = assertThrows(
-                TaskitoException.class,
-                () -> backend.registerSubscription("orders", "sink", EMAIL.name(), "default", false, null));
-        assertTrue(rejected.getMessage().contains("requires ownerWorkerId"));
+        try (InMemoryQueueBackend backend = new InMemoryQueueBackend()) {
+            TaskitoException rejected = assertThrows(
+                    TaskitoException.class,
+                    () -> backend.registerSubscription("orders", "sink", EMAIL.name(), "default", false, null));
+            assertTrue(rejected.getMessage().contains("requires ownerWorkerId"));
+        }
     }
 
     @Test
