@@ -8,6 +8,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.errors.TaskError;
 import org.byteveda.taskito.errors.TaskErrors;
@@ -57,6 +59,36 @@ class InMemoryQueueBackendTest {
                 // Production dequeues FIFO within a priority tier; the in-memory
                 // backend must match, not follow hash-map iteration order.
                 assertEquals(List.of(0, 1, 2, 3, 4), seen);
+            }
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void requeuedJobIgnoresTheStaleAttemptsOutcome() throws Exception {
+        Task<Integer> stuck = Task.of("im.stuck", Integer.class);
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try (Taskito queue = InMemoryTaskito.open()) {
+            String id = queue.enqueue(stuck, 1);
+            try (Worker worker = queue.worker()
+                    .handle(stuck, p -> {
+                        running.countDown();
+                        release.await();
+                        return p;
+                    })
+                    .start()) {
+                assertTrue(running.await(10, TimeUnit.SECONDS), "handler did not start");
+                queue.queue("default").pause(); // don't let the worker re-claim it
+                assertTrue(queue.requeueJob(id));
+
+                release.countDown();
+                // The old attempt finishes against a job it no longer owns. Like the
+                // core — whose complete() filters on Running — its result is dropped.
+                Thread.sleep(200);
+                Job job = queue.getJob(id).orElseThrow();
+                assertEquals(JobStatus.PENDING, job.status);
+                assertTrue(queue.getResult(id).isEmpty(), "a stale attempt must not publish a result");
             }
         }
     }

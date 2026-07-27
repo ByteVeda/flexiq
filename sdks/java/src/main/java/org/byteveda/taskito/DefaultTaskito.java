@@ -1466,10 +1466,16 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
 
     @Override
     public void shutdown() {
-        // Weakly consistent iteration: each close() removes its own worker from the
-        // set as it goes, and closing an already-closed worker is a no-op.
-        for (Worker worker : liveWorkers) {
-            worker.close();
+        // Drain rather than sweep once: iteration over the set is weakly consistent,
+        // so a worker that registers while the sweep is in flight could otherwise
+        // outlive its own client's shutdown. close() deregisters synchronously, so a
+        // quiet client empties the set in the first pass. Deliberately not a sticky
+        // "shut down" flag — the client stays usable, and a worker started later is
+        // the caller's, not a straggler of this call.
+        while (!liveWorkers.isEmpty()) {
+            for (Worker worker : liveWorkers) {
+                worker.close();
+            }
         }
     }
 

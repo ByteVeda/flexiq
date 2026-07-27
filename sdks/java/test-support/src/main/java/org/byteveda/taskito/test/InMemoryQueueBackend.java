@@ -1234,22 +1234,37 @@ public final class InMemoryQueueBackend implements QueueBackend {
             }
         }
 
+        /**
+         * The job this token may still settle, or null when the outcome is stale.
+         * The core fences on status — its {@code complete} filters {@code Running}
+         * and reports the job as missing otherwise — so an attempt whose claim was
+         * released (by {@code requeueJob}, a reaper, or a cancel) must not settle the
+         * job it no longer owns.
+         */
+        private JobRec settleable(long token) {
+            String jobId = inFlight.remove(token);
+            JobRec job = jobId == null ? null : jobs.get(jobId);
+            if (job != null && "running".equals(job.status)) {
+                return job;
+            }
+            dispatchedAt.remove(token); // no outcome will report this token's duration
+            return null;
+        }
+
         @Override
         public void completeJob(long token, byte[] result) {
-            String jobId = inFlight.remove(token);
-            JobRec job = jobs.get(jobId);
+            JobRec job = settleable(token);
             if (job == null) {
                 return;
             }
             long wallTimeNs = wallTimeOf(token);
             onComplete(job, result);
-            bridge.onOutcome("success", jobId, job.taskName, null, job.retryCount, false, wallTimeNs);
+            bridge.onOutcome("success", job.id, job.taskName, null, job.retryCount, false, wallTimeNs);
         }
 
         @Override
         public void failJob(long token, String error, boolean retryable) {
-            String jobId = inFlight.remove(token);
-            JobRec job = jobs.get(jobId);
+            JobRec job = settleable(token);
             if (job == null) {
                 return;
             }
@@ -1257,19 +1272,18 @@ public final class InMemoryQueueBackend implements QueueBackend {
             long wallTimeNs = wallTimeOf(token);
             onFail(job, error, retryable);
             bridge.onOutcome(
-                    willRetry ? "retry" : "dead", jobId, job.taskName, error, job.retryCount, false, wallTimeNs);
+                    willRetry ? "retry" : "dead", job.id, job.taskName, error, job.retryCount, false, wallTimeNs);
         }
 
         @Override
         public void cancelJob(long token) {
-            String jobId = inFlight.remove(token);
-            JobRec job = jobs.get(jobId);
+            JobRec job = settleable(token);
             if (job == null) {
                 return;
             }
             long wallTimeNs = wallTimeOf(token);
             onCancel(job);
-            bridge.onOutcome("cancelled", jobId, job.taskName, null, job.retryCount, false, wallTimeNs);
+            bridge.onOutcome("cancelled", job.id, job.taskName, null, job.retryCount, false, wallTimeNs);
         }
 
         /** Elapsed nanos since this token was dispatched; 0 when it wasn't (unmeasured). */

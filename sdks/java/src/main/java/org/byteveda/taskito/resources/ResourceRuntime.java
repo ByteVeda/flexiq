@@ -67,6 +67,8 @@ public final class ResourceRuntime {
     private final Set<ResourceRuntime> workerRuntimes = ConcurrentHashMap.newKeySet();
 
     private int leases; // guarded by this
+    /** Set once this runtime's last lease dropped and its instances were swept; guarded by this. */
+    private boolean disposed; // guarded by this
 
     /** One instance's disposal, tagged with its resource name so a reload can retire just that resource. */
     private record Teardown(String name, Runnable action) {}
@@ -202,8 +204,18 @@ public final class ResourceRuntime {
         return merged;
     }
 
-    /** Reload this runtime's own instances, dependencies before their dependents. */
-    private Map<String, Boolean> reloadHere(Collection<String> names) {
+    /**
+     * Reload this runtime's own instances, dependencies before their dependents.
+     *
+     * <p>Runs under the runtime monitor — the one {@link #teardownWorker} takes — so a
+     * worker closing concurrently waits the reload out instead of sweeping the caches
+     * from under it and stranding a freshly built instance whose disposer would then
+     * never run. A runtime already torn down reloads nothing.
+     */
+    private synchronized Map<String, Boolean> reloadHere(Collection<String> names) {
+        if (disposed) {
+            return Map.of();
+        }
         Set<String> targets = new LinkedHashSet<>();
         if (names != null) {
             targets.addAll(names);
@@ -572,6 +584,10 @@ public final class ResourceRuntime {
     }
 
     private void disposeWorker() {
+        // Set under the monitor reloadHere() also holds, so a reload either finishes
+        // before this sweep or sees the runtime as gone — it can never cache an
+        // instance (and queue its disposer) behind the sweep that already ran.
+        disposed = true;
         if (parent != null) {
             parent.workerRuntimes.remove(this);
         }
