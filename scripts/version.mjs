@@ -42,6 +42,28 @@ const MIRRORS = [
   },
 ];
 
+// Install snippets a reader copies verbatim. The version repeats within a file,
+// so every occurrence is checked and rewritten — and each pattern is anchored on
+// a taskito coordinate, never a bare `<version>`, so a neighbouring plugin or
+// Micrometer pin in the same snippet is left alone.
+const SNIPPET_PATTERNS = [
+  // Gradle: implementation("org.byteveda:taskito-test:0.21.0") — the optional
+  // trailing `:classifier` is outside the capture and survives untouched.
+  /(org\.byteveda:taskito[\w-]*:)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // Maven: <artifactId>taskito</artifactId> followed by its <version> tag.
+  /(<artifactId>taskito[\w-]*<\/artifactId>\s*<version>)(\d+\.\d+\.\d+[\w.-]*)(<\/version>)/g,
+];
+
+const SNIPPETS = [
+  "sdks/java/README.md",
+  "docs/content/docs/java/getting-started/installation.mdx",
+  "docs/content/docs/java/api-reference/testing.mdx",
+  "docs/content/docs/java/guides/integrations/index.mdx",
+  "docs/content/docs/java/guides/integrations/spring.mdx",
+  "docs/content/docs/java/guides/resources/testing.mdx",
+  "docs/content/docs/shared/guides/operations/testing.mdx",
+];
+
 // Checked, never written: release notes are authored by hand, but shipping a
 // version with no section of its own is a mistake worth failing CI over.
 const CHANGELOG = {
@@ -60,6 +82,11 @@ function guards() {
   }));
   return [
     ...crates,
+    {
+      file: "sdks/node/src/cli/index.ts",
+      pattern: /\.version\("/m,
+      hint: "read it from package.json — see the manifest import at the top",
+    },
     {
       file: "sdks/python/pyproject.toml",
       pattern: /^version = "/m,
@@ -85,6 +112,27 @@ function extract({ file, pattern, label }, group = 1) {
   return found[group];
 }
 
+// Every coordinate in a snippet file, so a page with one stale literal among
+// several fresh ones still fails instead of passing on the first match.
+function snippetVersions(file) {
+  const contents = read(file);
+  const versions = SNIPPET_PATTERNS.flatMap((pattern) =>
+    [...contents.matchAll(pattern)].map((match) => match[2]),
+  );
+  if (versions.length === 0) {
+    throw new Error(`${file}: no taskito coordinate found (pattern drifted?)`);
+  }
+  return versions;
+}
+
+function rewriteSnippet(contents, next) {
+  return SNIPPET_PATTERNS.reduce(
+    (text, pattern) =>
+      text.replace(pattern, (_, before, __, after) => `${before}${next}${after}`),
+    contents,
+  );
+}
+
 function sourceVersion() {
   const version = extract(SOURCE);
   if (!SEMVER.test(version)) {
@@ -103,6 +151,15 @@ function check() {
     console.log(`  ${actual === expected ? "✓" : "✗"} ${mirror.file} — ${status}`);
     if (actual !== expected) {
       problems.push(`${mirror.file} declares ${actual}, expected ${expected}`);
+    }
+  }
+
+  for (const file of SNIPPETS) {
+    const stale = [...new Set(snippetVersions(file))].filter((v) => v !== expected);
+    const status = stale.length === 0 ? "ok" : `MISMATCH (${stale.join(", ")})`;
+    console.log(`  ${stale.length === 0 ? "✓" : "✗"} ${file} — ${status}`);
+    if (stale.length > 0) {
+      problems.push(`${file} pins ${stale.join(", ")} in install snippets, expected ${expected}`);
     }
   }
 
@@ -138,8 +195,13 @@ function set(next) {
     );
   }
 
+  for (const file of SNIPPETS) {
+    snippetVersions(file); // fail loudly rather than write a file nothing matched
+    writeFileSync(abs(file), rewriteSnippet(read(file), next));
+  }
+
   console.log(`${previous} -> ${next}`);
-  console.log(`  ${[SOURCE.file, ...MIRRORS.map((m) => m.file)].join("\n  ")}`);
+  console.log(`  ${[SOURCE.file, ...MIRRORS.map((m) => m.file), ...SNIPPETS].join("\n  ")}`);
   console.log(`\nAdd a \`## ${next}\` section to CHANGELOG.md to complete the bump.`);
 }
 
@@ -154,6 +216,9 @@ usage: node scripts/version.mjs <command>
 
 Mirrors rewritten by --set:
   ${MIRRORS.map((mirror) => `${mirror.file} (${mirror.label})`).join("\n  ")}
+
+Install snippets rewritten by --set (every taskito coordinate in the file):
+  ${SNIPPETS.join("\n  ")}
 
 ${CHANGELOG.file} is checked but never written — add its \`## <version>\` section by hand.`;
 
