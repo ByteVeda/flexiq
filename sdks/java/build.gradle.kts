@@ -164,7 +164,11 @@ val crateDir = layout.projectDirectory.dir("../../crates/taskito-java")
 val cargoTargetDir = layout.projectDirectory.dir("../../target")
 val nativeStaging = layout.buildDirectory.dir("native")
 
-/** Every platform published as a native classifier artifact. */
+/**
+ * Every platform published as a native classifier artifact. Mirrored by
+ * `NativeLoader.PUBLISHED_PLATFORMS`, which fails with a clear message on anything
+ * else (Windows on ARM included) instead of reaching for a binary that isn't there.
+ */
 val nativePlatforms = listOf("linux-x86_64", "linux-aarch64", "osx-x86_64", "osx-aarch64", "windows-x86_64")
 
 // Build the native library for the local platform.
