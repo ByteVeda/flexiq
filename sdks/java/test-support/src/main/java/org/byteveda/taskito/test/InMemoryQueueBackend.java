@@ -113,14 +113,18 @@ public final class InMemoryQueueBackend implements QueueBackend {
         return job.id;
     }
 
+    // This monitor guards a JobRec's fields — the map is concurrent, its records
+    // are not. Every method that mutates one, or snapshots more than one, takes it.
+    // Without it a poller sees claimNext's half-applied expiry: already cancelled,
+    // error not yet assigned.
     @Override
-    public Optional<String> getJobJson(String jobId) {
+    public synchronized Optional<String> getJobJson(String jobId) {
         JobRec job = jobs.get(jobId);
         return job == null ? Optional.empty() : Optional.of(toJson(jobView(job)));
     }
 
     @Override
-    public Optional<byte[]> getResult(String jobId) {
+    public synchronized Optional<byte[]> getResult(String jobId) {
         JobRec job = jobs.get(jobId);
         if (job == null || resultExpired(job)) {
             return Optional.empty();
@@ -165,7 +169,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public boolean requestCancel(String jobId) {
+    public synchronized boolean requestCancel(String jobId) {
         JobRec job = jobs.get(jobId);
         if (job != null && "running".equals(job.status)) {
             job.cancelRequested = true;
@@ -175,13 +179,13 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public boolean isCancelRequested(String jobId) {
+    public synchronized boolean isCancelRequested(String jobId) {
         JobRec job = jobs.get(jobId);
         return job != null && job.cancelRequested;
     }
 
     @Override
-    public void setProgress(String jobId, int progress) {
+    public synchronized void setProgress(String jobId, int progress) {
         JobRec job = jobs.get(jobId);
         if (job != null) {
             job.progress = Math.max(0, Math.min(100, progress));
@@ -213,7 +217,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listJobsJson(String filterJson) {
+    public synchronized String listJobsJson(String filterJson) {
         JsonNode filter = readNode(filterJson);
         String status = text(filter, "status");
         String queue = text(filter, "queue");
@@ -239,7 +243,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listJobsAfterJson(String filterJson, String afterOrNull) {
+    public synchronized String listJobsAfterJson(String filterJson, String afterOrNull) {
         JsonNode filter = readNode(filterJson);
         String status = text(filter, "status");
         String queue = text(filter, "queue");
@@ -263,7 +267,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listArchivedAfterJson(long limit, String afterOrNull) {
+    public synchronized String listArchivedAfterJson(long limit, String afterOrNull) {
         List<JobRec> archived = new ArrayList<>();
         for (JobRec job : jobs.values()) {
             if (job.completedAt != null) {
@@ -414,7 +418,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
-    public long purgeCompleted(long olderThanMs) {
+    public synchronized long purgeCompleted(long olderThanMs) {
         List<String> remove = new ArrayList<>();
         for (JobRec job : jobs.values()) {
             if ("complete".equals(job.status) && job.completedAt != null && job.completedAt < olderThanMs) {
