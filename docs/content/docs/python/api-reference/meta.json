@@ -6,6 +6,7 @@
     "overview",
     "queue",
     "task",
+    "worker",
     "result",
     "context",
     "serializers",

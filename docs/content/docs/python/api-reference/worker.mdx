@@ -1,0 +1,153 @@
+---
+title: Worker
+description: "run_worker, the thread and prefork pools, graceful shutdown, and worker introspection."
+---
+
+A worker is the process that claims jobs and executes their handlers. Producers
+and workers share the same `Queue` object — you enqueue from one process and run
+`run_worker()` in another, both pointed at the same storage.
+
+```python
+queue.run_worker(queues=["default", "emails"])   # blocks until interrupted
+```
+
+## `queue.run_worker()`
+
+```python
+queue.run_worker(
+    queues: Sequence[str] | None = None,
+    tags: list[str] | None = None,
+    pool: str = "thread",
+    app: str | None = None,
+    mesh: MeshWorker | None = None,
+) -> None
+```
+
+**Blocks** until interrupted. Before dispatching it registers periodic tasks,
+initializes [worker resources](/python/guides/resources/dependency-injection),
+starts the resource health checker, and installs signal handlers.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `queues` | `Sequence[str] \| None` | `None` | Queue names to consume. `None` consumes the `default` queue. |
+| `tags` | `list[str] \| None` | `None` | Tags for worker specialization / routing. |
+| `pool` | `str` | `"thread"` | `"thread"` or `"prefork"`. |
+| `app` | `str \| None` | `None` | Import path to the `Queue` (e.g. `"myapp:queue"`). **Required** when `pool="prefork"`. |
+| `mesh` | `MeshWorker \| None` | `None` | Gossip-based discovery, affinity, and work stealing. Requires the `mesh` cargo feature. |
+
+`arun_worker()` is the async twin — it runs the same blocking loop in a thread
+executor so it does not block the event loop, and takes the same arguments.
+
+## Pools
+
+| Pool | How it runs tasks | Use for |
+|---|---|---|
+| `"thread"` (default) | Worker threads in one process, sharing a GIL. | I/O-bound work — HTTP calls, database queries, file transfer. |
+| `"prefork"` | Child processes with independent GILs. | CPU-bound work that needs real parallelism. |
+
+```python
+queue.run_worker(pool="prefork", app="myapp:queue")
+```
+
+`app` is how a prefork child re-imports your queue and its task registry, which
+is why it is mandatory there. Prefork is **not supported on Windows** —
+`run_worker` raises `NotImplementedError` rather than silently degrading.
+
+Async tasks are driven concurrently within the pool, bounded by the queue's
+`async_concurrency` (default 100) rather than by `workers`.
+
+## Sizing
+
+Concurrency per process comes from the `Queue` constructor, not from
+`run_worker`:
+
+```python
+queue = Queue(workers=8)          # 0 (default) auto-detects the CPU count
+```
+
+See [Concurrency](/python/guides/reliability/concurrency) for how this interacts
+with cluster-wide task caps and per-queue limits.
+
+## Shutdown
+
+`SIGINT` and `SIGTERM` start a graceful drain: the scheduler stops dispatching
+new work and `run_worker()` returns once running jobs finish, bounded by the
+queue's `drain_timeout` (default 30 seconds).
+
+```python
+queue = Queue(drain_timeout=60)
+```
+
+To trigger the same drain from code:
+
+```python
+queue.shutdown()
+```
+
+`shutdown()` is non-blocking, safe from any thread, and a no-op when no worker
+is running — it is the programmatic equivalent of the signal, useful from a
+health endpoint or a supervisor thread.
+
+<Callout type="warning">
+  Set `drain_timeout` above your longest task's `timeout`, or shutdown will cut
+  off jobs that would have finished. A job interrupted by the drain deadline is
+  retried according to its budget, so the work is not lost — but it is repeated.
+</Callout>
+
+## From the CLI
+
+```bash
+taskito worker --app myapp:queue
+taskito worker --app myapp:queue --queues emails,default --pool prefork
+taskito worker --app myapp:queue --drain-timeout 60
+```
+
+The CLI resolves `--app`, applies `--drain-timeout` if given, and calls
+`run_worker()` — identical behaviour to running it yourself. See the
+[CLI reference](/python/api-reference/cli).
+
+## Introspection
+
+```python
+for worker in queue.workers():
+    print(worker["worker_id"], worker["status"], worker["queues"])
+```
+
+Each entry describes a registered worker:
+
+| Key | Type | Description |
+|---|---|---|
+| `worker_id` | `str` | Unique worker id. |
+| `hostname` | `str` | OS hostname. |
+| `pid` | `int` | Process id. |
+| `status` | `str` | `"active"` or `"draining"`. |
+| `pool_type` | `str` | `"thread"`, `"prefork"`, or `"native-async"`. |
+| `started_at` | `int` | Registration time (ms since epoch). |
+| `last_heartbeat` | `int` | Last heartbeat (ms since epoch). |
+| `queues` | `str` | Comma-separated queue names. |
+| `threads` | `int` | Worker thread / process count. |
+| `tags` | `str \| None` | Specialization tags. |
+| `resources` | `str \| None` | Registered resource names (JSON). |
+| `resource_health` | `str \| None` | Per-resource health (JSON). |
+
+`aworkers()` is the async variant. A worker whose `last_heartbeat` has gone
+stale has died without unregistering — that is the signal to look for when jobs
+appear stuck in `running`.
+
+<Cards>
+  <Card
+    title="Concurrency"
+    href="/python/guides/reliability/concurrency"
+    description="Pool size, cluster-wide caps, per-worker fairness, admission control."
+  />
+  <Card
+    title="Prefork pool"
+    href="/python/guides/advanced-execution/prefork"
+    description="True parallelism for CPU-bound tasks, and its constraints."
+  />
+  <Card
+    title="Queue — workers"
+    href="/python/api-reference/queue/workers"
+    description="The full worker-related Queue surface, including hooks and breakers."
+  />
+</Cards>

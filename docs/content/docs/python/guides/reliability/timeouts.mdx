@@ -1,0 +1,110 @@
+---
+title: Timeouts
+description: "Bound each execution attempt with a hard timeout, and give the task a soft deadline to finish cleanly."
+---
+
+`timeout` bounds a **single execution attempt**, in seconds. It defaults to 300
+for every task, and the queue-wide default is configurable:
+
+```python
+queue = Queue(default_timeout=120)          # queue-wide default
+
+@queue.task(timeout=30)                     # per task
+def scrape(url: str) -> str: ...
+
+scrape.apply_async(args=(url,), timeout=10) # per job
+```
+
+The narrowest setting wins: per-job over per-task over queue default.
+
+## What a timeout does
+
+A timed-out attempt is a **failure**, not a cancellation. It consumes one retry;
+if the budget still has room the job is re-enqueued with the usual backoff, and
+when the budget is exhausted the job moves to the
+[dead-letter queue](/python/guides/reliability/dead-letter).
+
+That means a task with `max_retries=3` and `timeout=30` can occupy a worker for
+roughly two minutes across attempts before it dead-letters. Size the two
+together rather than each on its own.
+
+## Soft timeouts
+
+A hard timeout stops the attempt wherever it happens to be. `soft_timeout` gives
+the task a chance to wind down first — it is a deadline the task polls:
+
+```python
+from taskito import current_job
+
+@queue.task(soft_timeout=25, timeout=30)
+def export(dataset: str) -> str:
+    rows = []
+    for chunk in chunks(dataset):
+        current_job.check_timeout()     # raises SoftTimeoutError past 25s
+        rows.extend(process(chunk))
+    return write(rows)
+```
+
+`check_timeout()` raises `SoftTimeoutError` once the soft deadline has elapsed.
+Because it is an ordinary exception, `try`/`finally` still runs and the task can
+flush partial work, release a lock, or record where it got to.
+
+Set `soft_timeout` a few seconds below `timeout`, so the polled deadline is
+reached before the hard one:
+
+| Setting | Behaviour |
+|---|---|
+| `soft_timeout` only | Raises `SoftTimeoutError` at the deadline — but only where the task checks. |
+| `timeout` only | The attempt is killed at the deadline, wherever it is. |
+| Both (recommended) | The task gets a window to exit cleanly; the hard timeout is the backstop if it does not. |
+
+<Callout type="warning">
+  A task that never calls `check_timeout()` gets no benefit from
+  `soft_timeout` — nothing polls the deadline for it. Call it at natural
+  boundaries: between chunks, between pages, between rows.
+</Callout>
+
+## Choosing a value
+
+Set a timeout on every production task. Without one a wedged task holds a worker
+slot until the process is restarted, and no amount of retry configuration
+recovers that slot.
+
+- Time the task's realistic worst case, then add headroom — a timeout that trips
+  on ordinary slow days turns into a retry storm.
+- Give tasks with an external dependency a timeout **shorter** than the
+  dependency's own, so you fail on your terms rather than waiting on theirs.
+- Split work that cannot fit a sane bound. A job that legitimately needs an hour
+  is usually several jobs, or a [workflow](/python/guides/workflows).
+
+## Related deadlines
+
+| Setting | Scope | What it bounds |
+|---|---|---|
+| `timeout` | One attempt | Execution time before the attempt is killed. |
+| `soft_timeout` | One attempt | Polled deadline the task observes itself. |
+| `expires` | One job | How long a job may sit *unstarted* before it is skipped. |
+| `drain_timeout` | Worker | How long shutdown waits for running jobs to finish. |
+| `result_ttl` | One result | How long a finished job's result is retained. |
+
+`expires` is the one most often confused with `timeout`: it bounds staleness in
+the queue, not runtime. See
+[Enqueue options](/python/guides/core/enqueue-options#expiry).
+
+<Cards>
+  <Card
+    title="Retries"
+    href="/python/guides/reliability/retries"
+    description="Backoff, retry budgets, and which exceptions retry at all."
+  />
+  <Card
+    title="Dead-letter queue"
+    href="/python/guides/reliability/dead-letter"
+    description="Where jobs land when the retry budget runs out."
+  />
+  <Card
+    title="Cancellation"
+    href="/python/guides/core/cancellation"
+    description="The same cooperative pattern, driven by an operator instead of a clock."
+  />
+</Cards>
