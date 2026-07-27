@@ -5,6 +5,7 @@
 A Rust-powered task queue with native SDKs. One engine — no broker required, just SQLite, Postgres, or Redis.
 
 [![PyPI version](https://img.shields.io/pypi/v/taskito.svg)](https://pypi.org/project/taskito/)
+[![PyPI Downloads](https://img.shields.io/pepy/dt/taskito?label=downloads&color=ea7233)](https://pepy.tech/projects/taskito)
 [![npm version](https://img.shields.io/npm/v/@byteveda/taskito.svg)](https://www.npmjs.com/package/@byteveda/taskito)
 [![Maven Central](https://img.shields.io/maven-central/v/org.byteveda/taskito.svg)](https://central.sonatype.com/artifact/org.byteveda/taskito)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ByteVeda/taskito/blob/master/LICENSE)
