@@ -37,8 +37,8 @@ public final class FfmTransport implements NativeTransport {
     private static final ValueLayout.OfInt FRAME_INT =
             ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
+    // Wire status codes from the Rust C ABI; anything but these two carries an error payload.
     private static final int STATUS_OK = 0;
-    private static final int STATUS_ERR = 1;
     private static final int STATUS_ABSENT = 2;
 
     private static final Linker LINKER = Linker.nativeLinker();
