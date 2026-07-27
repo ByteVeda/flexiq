@@ -1240,6 +1240,11 @@ public final class InMemoryQueueBackend implements QueueBackend {
          * and reports the job as missing otherwise — so an attempt whose claim was
          * released (by {@code requeueJob}, a reaper, or a cancel) must not settle the
          * job it no longer owns.
+         *
+         * <p>Callers must hold the backend monitor across both this check and the
+         * state transition that follows: {@code requeueJob} and {@code claimNext} take
+         * the same monitor, so checking outside it would let a concurrent requeue turn
+         * the job pending between the check and the settlement.
          */
         private JobRec settleable(long token) {
             String jobId = inFlight.remove(token);
@@ -1253,36 +1258,51 @@ public final class InMemoryQueueBackend implements QueueBackend {
 
         @Override
         public void completeJob(long token, byte[] result) {
-            JobRec job = settleable(token);
-            if (job == null) {
-                return;
+            JobRec job;
+            long wallTimeNs;
+            synchronized (InMemoryQueueBackend.this) {
+                job = settleable(token);
+                if (job == null) {
+                    return;
+                }
+                wallTimeNs = wallTimeOf(token);
+                onComplete(job, result);
             }
-            long wallTimeNs = wallTimeOf(token);
-            onComplete(job, result);
+            // Outside the monitor: onOutcome runs user listeners, which may enqueue,
+            // block, or call back into the backend.
             bridge.onOutcome("success", job.id, job.taskName, null, job.retryCount, false, wallTimeNs);
         }
 
         @Override
         public void failJob(long token, String error, boolean retryable) {
-            JobRec job = settleable(token);
-            if (job == null) {
-                return;
+            JobRec job;
+            long wallTimeNs;
+            boolean willRetry;
+            synchronized (InMemoryQueueBackend.this) {
+                job = settleable(token);
+                if (job == null) {
+                    return;
+                }
+                willRetry = retryable && job.retryCount < job.maxRetries;
+                wallTimeNs = wallTimeOf(token);
+                onFail(job, error, retryable);
             }
-            boolean willRetry = retryable && job.retryCount < job.maxRetries;
-            long wallTimeNs = wallTimeOf(token);
-            onFail(job, error, retryable);
             bridge.onOutcome(
                     willRetry ? "retry" : "dead", job.id, job.taskName, error, job.retryCount, false, wallTimeNs);
         }
 
         @Override
         public void cancelJob(long token) {
-            JobRec job = settleable(token);
-            if (job == null) {
-                return;
+            JobRec job;
+            long wallTimeNs;
+            synchronized (InMemoryQueueBackend.this) {
+                job = settleable(token);
+                if (job == null) {
+                    return;
+                }
+                wallTimeNs = wallTimeOf(token);
+                onCancel(job);
             }
-            long wallTimeNs = wallTimeOf(token);
-            onCancel(job);
             bridge.onOutcome("cancelled", job.id, job.taskName, null, job.retryCount, false, wallTimeNs);
         }
 
