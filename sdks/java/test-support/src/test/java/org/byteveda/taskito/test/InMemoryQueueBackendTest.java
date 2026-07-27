@@ -29,7 +29,8 @@ class InMemoryQueueBackendTest {
         Task<Integer> dbl = Task.of("im.double", Integer.class);
         try (Taskito queue = InMemoryTaskito.open()) { // no JNI, no disk
             String id = queue.enqueue(dbl, 21);
-            try (Worker worker = queue.worker().handle(dbl, p -> p * 2).start()) {
+            Worker worker = queue.worker().handle(dbl, p -> p * 2).start();
+            try (worker) {
                 Job job = queue.awaitJob(id, Duration.ofSeconds(10)).orElseThrow();
                 assertEquals(JobStatus.COMPLETE, job.status);
                 assertEquals(42, queue.getResult(id, Integer.class).orElseThrow());
@@ -48,13 +49,14 @@ class InMemoryQueueBackendTest {
                 last = queue.enqueue(order, i);
             }
             // Single-threaded worker so claim order is observable as run order.
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(1)
                     .handle(order, p -> {
                         seen.add(p);
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.awaitJob(last, Duration.ofSeconds(10)).orElseThrow();
                 // Production dequeues FIFO within a priority tier; the in-memory
                 // backend must match, not follow hash-map iteration order.
@@ -71,13 +73,14 @@ class InMemoryQueueBackendTest {
         CountDownLatch release = new CountDownLatch(1);
         try (Taskito queue = InMemoryTaskito.open()) {
             String id = queue.enqueue(stuck, 1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(stuck, p -> {
                         running.countDown();
                         release.await();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(running.await(10, TimeUnit.SECONDS), "handler did not start");
                 queue.queue("default").pause(); // don't let the worker re-claim it
                 assertTrue(queue.requeueJob(id));
@@ -99,11 +102,12 @@ class InMemoryQueueBackendTest {
         Task<Integer> boom = Task.of("im.boom", Integer.class).retries(2);
         try (Taskito queue = InMemoryTaskito.open()) {
             String id = queue.enqueue(boom, 1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(boom, p -> {
                         throw new IllegalStateException("boom");
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 Job job = queue.awaitJob(id, Duration.ofSeconds(10)).orElseThrow();
                 assertEquals(JobStatus.DEAD, job.status);
                 assertEquals(2, job.retryCount);
