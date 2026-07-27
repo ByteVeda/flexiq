@@ -1,0 +1,124 @@
+---
+title: Canvas
+description: "chain, group, and chord — builder shorthands for sequential, parallel, and joined DAG shapes."
+---
+
+Three shorthands on the [workflow builder](/node/api-reference/workflows). Each
+adds ordinary `.step()` nodes with the `after` wiring filled in for you, returns
+the same builder, and composes freely with hand-written steps. For worked
+examples, see the [Canvas guide](/node/guides/workflows/canvas).
+
+```ts
+const handle = queue.workflows
+  .define("etl")
+  .chain([
+    { name: "extract", task: "extractTask", args: ["s3://bucket/in"] },
+    { name: "transform", task: "transformTask" },
+    { name: "load", task: "loadTask" },
+  ])
+  .submit();
+```
+
+## `CanvasStep`
+
+Every canvas helper takes `CanvasStep` objects — a node name, its task, and any
+[step option](/node/guides/workflows/building#step-options) except `after`,
+which the helper manages:
+
+```ts
+interface CanvasStep {
+  name: string;
+  task: string;
+  args?: unknown[];
+  queue?: string;
+  maxRetries?: number;
+  timeoutMs?: number;
+  priority?: number;
+  condition?: "on_success" | "on_failure" | "always";
+  compensate?: string;
+  cache?: boolean | { ttlMs?: number };
+}
+```
+
+## `chain`
+
+```ts
+chain(steps: CanvasStep[], options?: { after?: string | string[] }): this
+```
+
+Wires `steps` sequentially — each depends on the one before it. The first step
+runs after `options.after`, or as a root when omitted.
+
+```ts
+queue.workflows
+  .define("etl")
+  .chain([
+    { name: "extract", task: "extractTask" },
+    { name: "transform", task: "transformTask" },
+    { name: "load", task: "loadTask", maxRetries: 5 },
+  ])
+  .submit();
+```
+
+## `group`
+
+```ts
+group(steps: CanvasStep[], options?: { after?: string | string[] }): this
+```
+
+Adds `steps` in parallel — no dependencies between them. Every member runs
+after `options.after`, or as roots when omitted.
+
+```ts
+queue.workflows
+  .define("notify")
+  .step("render", "renderMessage")
+  .group(
+    [
+      { name: "email", task: "sendEmail" },
+      { name: "sms", task: "sendSms" },
+    ],
+    { after: "render" },
+  )
+  .submit();
+```
+
+## `chord`
+
+```ts
+chord(
+  steps: CanvasStep[],
+  callback: CanvasStep,
+  options?: { after?: string | string[] },
+): this
+```
+
+A parallel `steps` group joined by `callback`, which depends on every group
+member and runs once they all complete. With an empty group the callback falls
+back to `options.after`, so it still chains after its declared prerequisites.
+
+```ts
+queue.workflows
+  .define("report")
+  .chord(
+    [
+      { name: "q1", task: "queryRegion", args: ["east"] },
+      { name: "q2", task: "queryRegion", args: ["west"] },
+    ],
+    { name: "merge", task: "mergeTask" },
+  )
+  .submit();
+```
+
+<Callout type="info" title="The callback does not receive the group's results">
+  `callback` runs with its own `args`, not the group members' return values. To
+  aggregate results, use [`fanOut`/`fanIn`](/node/guides/workflows/fan-out)
+  instead — `fanIn`'s task receives `[childResult, …]` as its single argument.
+</Callout>
+
+## Submitting
+
+Canvas helpers build a normal DAG, so there is no canvas-specific submit path —
+finish with `.submit()` (or `.build()` to reuse the spec as a
+[sub-workflow](/node/guides/workflows/sub-workflows)) and run a worker to
+execute it.

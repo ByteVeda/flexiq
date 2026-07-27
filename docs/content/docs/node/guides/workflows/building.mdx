@@ -1,0 +1,173 @@
+---
+title: Building Workflows
+description: "Every step option, the rules build() enforces, and the node status lifecycle."
+---
+
+[Workflows](/node/guides/workflows) is the narrative walkthrough. This page is
+the reference: every knob on a step, the combinations `build()` rejects, and the
+full node status lifecycle.
+
+## Build and submit
+
+A workflow is always built imperatively — there is no decorator or registry that
+declares one for you. Start with `queue.workflows.define(name)`, optionally
+bump the version, then add steps:
+
+```ts
+const handle = queue.workflows
+  .define("etl", 2)                                  // name + version (default 1)
+  .step("extract", "extractTask", { args: ["s3://bucket/in"] })
+  .step("transform", "transformTask", { after: "extract" })
+  .step("load", "loadTask", { after: "transform", maxRetries: 5 })
+  .submit();
+```
+
+`.submit()` validates the DAG, pre-enqueues the static steps, and returns a
+[`WorkflowHandle`](/node/api-reference/workflows#workflowhandle). Two variants:
+
+```ts
+// Build without submitting — for reuse as a sub-workflow.
+const child = queue.workflows.define("child").step("a", "taskA").build();
+
+// Submit-time options: a default queue for steps that set none, plus run params.
+const builder = queue.workflows.define("etl").step("extract", "extractTask");
+const run = queue.workflows.submit(builder, { queueDefault: "io", params: { batchId } });
+```
+
+<Callout type="warning" title="Steps only run while a worker is consuming">
+  Submitting enqueues jobs; it does not execute them. Start a worker
+  (`queue.runWorker()`) or `handle.wait()` will block until it times out.
+</Callout>
+
+## Step options
+
+Every `.step(name, task, options)` accepts:
+
+| Option | Type | Meaning |
+|---|---|---|
+| `after` | `string \| string[]` | Predecessor step name(s) this step waits on. Omit for a root. |
+| `args` | `unknown[]` | Positional arguments passed to the step's task handler. |
+| `queue` | `string` | Queue to run this step on (overrides the submit-time `queueDefault`). |
+| `maxRetries` | `number` | Retry budget for this step's job. |
+| `timeoutMs` | `number` | Per-attempt timeout, in milliseconds. |
+| `priority` | `number` | Queue priority for this step's job. |
+| `condition` | `"on_success" \| "on_failure" \| "always"` | When the step runs once its predecessors settle. Default `on_success` — see [Conditions](/node/guides/workflows/conditions). |
+| `compensate` | `string` | Rollback task run with this step's result if the run later fails — see [Sagas](/node/guides/workflows/saga). |
+| `cache` | `boolean \| { ttlMs?: number }` | Reuse this step's result across runs while its task, args, and upstream results are unchanged — see [Incremental runs](/node/guides/workflows/caching). |
+
+The specialised step kinds take their own option shapes, each covering the
+common `queue` / `maxRetries` / `timeoutMs` / `priority` set:
+
+| Method | Options | Covered in |
+|---|---|---|
+| `fanOut(name, opts)` | `after`, `task`, `itemsFrom?` | [Fan-out / Fan-in](/node/guides/workflows/fan-out) |
+| `fanIn(name, opts)` | `after`, `task` | [Fan-out / Fan-in](/node/guides/workflows/fan-out) |
+| `gate(name, opts)` | `after`, `timeoutMs?`, `onTimeout?`, `message?` | [Approval gates](/node/guides/workflows/gates) |
+| `subWorkflow(name, opts)` | `after`, `workflow` | [Sub-workflows](/node/guides/workflows/sub-workflows) |
+| `chain` / `group` / `chord` | `CanvasStep[]` + `after?` | [Canvas](/node/api-reference/canvas) |
+
+<Callout type="info">
+  `compensate` and `cache` live on `WorkflowStepOptions` only. The fan-out,
+  fan-in, gate, and sub-workflow option types omit them, so TypeScript rejects
+  the combination at compile time rather than at submit.
+</Callout>
+
+## Validation
+
+Adding a duplicate step name throws `WorkflowError` immediately. The rest is
+checked by `build()` (and therefore by `.submit()`), also as `WorkflowError`:
+
+- **Unknown predecessor** — an `after` naming a step that was never added.
+- **Fan-in must target a fan-out** — a `fanIn` whose `after` is an ordinary
+  step would never be triggered, so the run would hang.
+- **A cacheable step needs a predecessor** — cached steps are enqueued by the
+  tracker once upstream settles, so a cacheable root has nothing to trigger it.
+
+Steps may reference predecessors added *later* — the DAG is resolved and
+topologically ordered at build time, not as you chain.
+
+## Static vs deferred steps
+
+Most steps are pre-enqueued at submit and sequenced by the core scheduler.
+Steps the core cannot schedule up front are **deferred**: the worker-side
+tracker enqueues them once their predecessors settle. A step is deferred when it
+sets `condition` or `cache`, or when it is a fan-out, fan-in, gate, or
+sub-workflow — and deferral propagates transitively to everything downstream of
+one.
+
+This is why workflows need a running worker even for parts of the DAG that look
+purely static.
+
+## Node status lifecycle
+
+<Mermaid
+  chart={`stateDiagram-v2
+    [*] --> pending
+    pending --> ready: predecessors settle
+    pending --> skipped: condition unmet / predecessor skipped
+    ready --> running: worker claims the job
+    ready --> waiting_approval: gate node parks
+    ready --> cache_hit: cache hit (task not re-run)
+    running --> completed: handler succeeds
+    running --> failed: retries exhausted
+    waiting_approval --> completed: approveGate
+    waiting_approval --> failed: rejectGate / timeout
+    completed --> compensating: run fails elsewhere (saga)
+    compensating --> compensated: rollback succeeds
+    compensating --> compensation_failed: rollback fails
+    completed --> [*]
+    failed --> [*]
+    skipped --> [*]
+    cache_hit --> [*]
+    compensated --> [*]
+    compensation_failed --> [*]`}
+/>
+
+| Status | Terminal | Meaning |
+|---|:---:|---|
+| `pending` | No | Waiting on predecessors. |
+| `ready` | No | Predecessors settled; the job exists but no worker has claimed it. |
+| `running` | No | A worker claimed the job and is executing the handler. |
+| `completed` | Yes | The task succeeded. |
+| `failed` | Yes | Retries were exhausted, a gate was rejected, or a child run failed. |
+| `skipped` | Yes | The step's condition was not met, or it cascaded from a skipped/failed predecessor. |
+| `waiting_approval` | No | A gate is parked, awaiting `approveGate`/`rejectGate` or its timeout. |
+| `cache_hit` | Yes | A prior run's result was reused within the `cache` TTL; the task did not re-execute. |
+| `compensating` | No | The step's rollback job is in flight (saga only). |
+| `compensated` | Yes | The step's rollback completed successfully. |
+| `compensation_failed` | Yes | The rollback itself failed — this node needs operator attention. |
+
+Read statuses from the handle or the manager:
+
+```ts
+handle.nodes();                        // WorkflowNode[] for this run
+queue.workflows.nodes(runId);          // the same, by run id
+queue.workflows.analyze(runId)?.node("transform")?.status;
+```
+
+The run-level state (`running`, `completed`, `completed_with_failures`,
+`failed`, `cancelled`, `paused`, and the three saga states) is a separate set —
+see [the Workflows API reference](/node/api-reference/workflows).
+
+<Cards>
+  <Card
+    title="Fan-out / Fan-in"
+    href="/node/guides/workflows/fan-out"
+    description="Split a step's result into parallel children and collect results."
+  />
+  <Card
+    title="Conditions"
+    href="/node/guides/workflows/conditions"
+    description="Run a step only on success, on failure, or always."
+  />
+  <Card
+    title="Approval Gates"
+    href="/node/guides/workflows/gates"
+    description="Pause a run until a human or external system approves or rejects."
+  />
+  <Card
+    title="Saga Compensation"
+    href="/node/guides/workflows/saga"
+    description="Roll back completed steps in reverse order when a run fails."
+  />
+</Cards>
