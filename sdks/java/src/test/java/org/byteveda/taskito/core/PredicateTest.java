@@ -1,18 +1,22 @@
 package org.byteveda.taskito.core;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.errors.PredicateRejectedException;
 import org.byteveda.taskito.middleware.EnqueueContext;
 import org.byteveda.taskito.middleware.Middleware;
+import org.byteveda.taskito.predicates.EnqueueDecision;
 import org.byteveda.taskito.predicates.Predicate;
 import org.byteveda.taskito.predicates.PredicateContext;
+import org.byteveda.taskito.predicates.PredicateStats;
 import org.byteveda.taskito.predicates.Predicates;
 import org.byteveda.taskito.task.Task;
 import org.junit.jupiter.api.Test;
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
 class PredicateTest {
 
     private static final Task<Integer> TASK = Task.of("p.task", Integer.class);
+    private static final Task<Integer> UNGATED = Task.of("p.ungated", Integer.class);
 
     @Test
     void allowsWhenPredicatePasses(@TempDir Path dir) {
@@ -63,6 +68,52 @@ class PredicateTest {
             });
             // Gate runs after middleware, so it sees the rewritten 5 and allows the enqueue.
             assertNotNull(queue.enqueue(TASK, -1));
+        }
+    }
+
+    @Test
+    void predicateStatsCountOneDecisionPerGatedEnqueue(@TempDir Path dir) {
+        try (Taskito queue =
+                Taskito.builder().url(dir.resolve("ps.db").toString()).open()) {
+            queue.gate("p.task", ctx -> {
+                int value = (Integer) ctx.payload();
+                if (value < 0) {
+                    return EnqueueDecision.reject("negative");
+                }
+                if (value == 0) {
+                    return EnqueueDecision.skip("zero");
+                }
+                if (value == 1) {
+                    return EnqueueDecision.defer(Duration.ofSeconds(1));
+                }
+                return EnqueueDecision.allow();
+            });
+
+            queue.enqueue(TASK, 5);
+            queue.tryEnqueue(TASK, 0);
+            queue.enqueue(TASK, 1);
+            assertThrows(PredicateRejectedException.class, () -> queue.enqueue(TASK, -1));
+            queue.enqueue(UNGATED, 5); // ungated: not a decision, so not counted
+
+            PredicateStats stats = queue.predicateStats();
+            assertEquals(1, stats.allowed());
+            assertEquals(1, stats.skipped());
+            assertEquals(1, stats.deferred());
+            assertEquals(1, stats.rejected());
+            assertEquals(0, stats.errors());
+        }
+    }
+
+    @Test
+    void predicateStatsCountAThrowingGate(@TempDir Path dir) {
+        try (Taskito queue =
+                Taskito.builder().url(dir.resolve("pe.db").toString()).open()) {
+            queue.gate("p.task", ctx -> {
+                throw new IllegalStateException("gate blew up");
+            });
+            // The error still reaches the caller; it is counted on the way out.
+            assertThrows(IllegalStateException.class, () -> queue.enqueue(TASK, 1));
+            assertEquals(1, queue.predicateStats().errors());
         }
     }
 

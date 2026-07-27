@@ -64,6 +64,8 @@ public final class Worker implements AutoCloseable {
     private final List<LogConsumerThread> logConsumers;
     private final Emitter emitter;
     private final List<String> servedQueues;
+    /** The owning client's live-worker tracker, or null for a manually built worker. */
+    private final WorkerLifecycle lifecycle;
     /** Guards the one-shot {@code worker.stopped} emission shared by {@link #stop()} and {@link #close()}. */
     private final AtomicBoolean stoppedEmitted = new AtomicBoolean();
 
@@ -78,7 +80,8 @@ public final class Worker implements AutoCloseable {
             Autoscaler autoscaler,
             List<LogConsumerThread> logConsumers,
             Emitter emitter,
-            List<String> servedQueues) {
+            List<String> servedQueues,
+            WorkerLifecycle lifecycle) {
         this.control = control;
         this.executor = executor;
         this.tracker = tracker;
@@ -87,6 +90,7 @@ public final class Worker implements AutoCloseable {
         this.logConsumers = logConsumers;
         this.emitter = emitter;
         this.servedQueues = servedQueues;
+        this.lifecycle = lifecycle;
     }
 
     public static Builder builder(QueueBackend backend, Serializer serializer, List<Middleware> middleware) {
@@ -167,6 +171,11 @@ public final class Worker implements AutoCloseable {
             return;
         }
         closed = true;
+        // Drop out of the owning client's live set first: a concurrent
+        // Taskito.shutdown() should not queue behind this teardown to learn it.
+        if (lifecycle != null) {
+            lifecycle.closed(this);
+        }
         if (autoscaler != null) {
             autoscaler.close(); // stop resizing before we tear the pool down
         }
@@ -251,6 +260,7 @@ public final class Worker implements AutoCloseable {
         private Retention retention;
         private boolean pushDispatch;
         private Emitter hub;
+        private WorkerLifecycle lifecycle;
 
         Builder(
                 QueueBackend backend,
@@ -438,6 +448,16 @@ public final class Worker implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Report this worker's start and close to its owning client (wired by
+         * {@code Taskito.worker()}), so {@code Taskito.shutdown()} can close every
+         * worker started from that client. A manually built worker declares none.
+         */
+        public Builder lifecycle(WorkerLifecycle lifecycle) {
+            this.lifecycle = lifecycle;
+            return this;
+        }
+
         /** Drive workflow node and run state from this worker's job outcomes. */
         public Builder trackWorkflows() {
             ensureTracker();
@@ -504,7 +524,12 @@ public final class Worker implements AutoCloseable {
             }
             // Managed log-topic consumers: one poll loop each, beside the worker.
             List<LogConsumerThread> consumerThreads = startLogConsumers();
-            return new Worker(control, executor, tracker, resources, scaler, consumerThreads, emitter, servedQueues);
+            Worker worker = new Worker(
+                    control, executor, tracker, resources, scaler, consumerThreads, emitter, servedQueues, lifecycle);
+            if (lifecycle != null) {
+                lifecycle.started(worker);
+            }
+            return worker;
         }
 
         /** Spawn one daemon poll loop per declared log consumer; empty when none. */

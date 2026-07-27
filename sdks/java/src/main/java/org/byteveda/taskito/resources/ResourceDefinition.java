@@ -11,9 +11,15 @@ import java.util.function.Function;
  * @param dispose optional cleanup run when the scope ends ({@code null} for none)
  * @param pool bounded-pool sizing, required for {@link ResourceScope#POOLED} and
  *     {@code null} for every other scope
+ * @param reloadable whether a no-argument {@code Taskito.reloadResources()} sweep
+ *     includes this resource; naming it explicitly reloads it either way
  */
 public record ResourceDefinition(
-        Function<ResourceContext, Object> factory, ResourceScope scope, Consumer<Object> dispose, PoolConfig pool) {
+        Function<ResourceContext, Object> factory,
+        ResourceScope scope,
+        Consumer<Object> dispose,
+        PoolConfig pool,
+        boolean reloadable) {
 
     public ResourceDefinition {
         if (factory == null) {
@@ -30,10 +36,21 @@ public record ResourceDefinition(
         }
     }
 
+    /** A definition that a no-argument reload sweep skips. */
+    public ResourceDefinition(
+            Function<ResourceContext, Object> factory, ResourceScope scope, Consumer<Object> dispose, PoolConfig pool) {
+        this(factory, scope, dispose, pool, false);
+    }
+
     /** A definition for any non-pooled scope. */
     public ResourceDefinition(
             Function<ResourceContext, Object> factory, ResourceScope scope, Consumer<Object> dispose) {
         this(factory, scope, dispose, null);
+    }
+
+    /** A copy included in a no-argument {@code Taskito.reloadResources()} sweep. */
+    public ResourceDefinition withReloadable(boolean reloadable) {
+        return new ResourceDefinition(factory, scope, dispose, pool, reloadable);
     }
 
     /** A worker-scoped resource with no disposer. */

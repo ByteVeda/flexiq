@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,6 +34,7 @@ import org.byteveda.taskito.events.QueueEvent;
 import org.byteveda.taskito.events.TaskitoEvent;
 import org.byteveda.taskito.events.WorkflowEvent;
 import org.byteveda.taskito.interception.Interception;
+import org.byteveda.taskito.interception.InterceptionAnalysis;
 import org.byteveda.taskito.interception.Interceptor;
 import org.byteveda.taskito.internal.IdempotencyKeys;
 import org.byteveda.taskito.internal.MiddlewareDisables;
@@ -67,6 +69,8 @@ import org.byteveda.taskito.predicates.EnqueueDecision;
 import org.byteveda.taskito.predicates.EnqueueGate;
 import org.byteveda.taskito.predicates.Predicate;
 import org.byteveda.taskito.predicates.PredicateContext;
+import org.byteveda.taskito.predicates.PredicateMetrics;
+import org.byteveda.taskito.predicates.PredicateStats;
 import org.byteveda.taskito.pubsub.LogConsumerConfig;
 import org.byteveda.taskito.pubsub.LogConsumerOptions;
 import org.byteveda.taskito.pubsub.PublishOptions;
@@ -87,6 +91,7 @@ import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.worker.LogTopicReader;
 import org.byteveda.taskito.worker.Retention;
 import org.byteveda.taskito.worker.Worker;
+import org.byteveda.taskito.worker.WorkerLifecycle;
 import org.byteveda.taskito.workflows.GateConfig;
 import org.byteveda.taskito.workflows.Step;
 import org.byteveda.taskito.workflows.Workflow;
@@ -110,6 +115,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     private final List<Middleware> middleware = new CopyOnWriteArrayList<>();
     private final ResourceRuntime resources = new ResourceRuntime();
     private final Map<String, List<EnqueueGate>> gates = new ConcurrentHashMap<>();
+    private final PredicateMetrics predicateMetrics = new PredicateMetrics();
     private final List<Interceptor> interceptors = new CopyOnWriteArrayList<>();
     private final List<SubscriptionConfig> subscriptions = new CopyOnWriteArrayList<>();
     // Managed log consumers registered before start; worker spawns one poll loop each.
@@ -123,6 +129,8 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     // Queue-level event hub: local emissions land here, and every worker built
     // via worker() forwards its events here through its emitter's parent link.
     private final Emitter events = new Emitter();
+    /** Workers started from this client and not yet closed — the shutdown set. */
+    private final Set<Worker> liveWorkers = ConcurrentHashMap.newKeySet();
 
     DefaultTaskito(QueueBackend backend, Serializer serializer, Map<String, PayloadCodec> codecs) {
         this.backend = backend;
@@ -179,8 +187,24 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
+    public Taskito resource(String name, ResourceDefinition definition) {
+        resources.register(name, definition);
+        return this;
+    }
+
+    @Override
     public Map<String, ResourceStat> resourceMetrics() {
         return resources.metrics();
+    }
+
+    @Override
+    public Map<String, Boolean> reloadResources() {
+        return resources.reload(null);
+    }
+
+    @Override
+    public Map<String, Boolean> reloadResources(Collection<String> names) {
+        return resources.reload(names);
     }
 
     @Override
@@ -345,21 +369,9 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
             List<String> codecNames,
             boolean taskIdempotentDefault) {
         String originalTaskName = taskName;
-        for (Interceptor interceptor : interceptors) {
-            Interception outcome = interceptor.intercept(taskName, payload);
-            if (outcome == null) {
-                throw new InterceptionException("interceptor returned null for task '" + taskName + "'");
-            }
-            if (outcome instanceof Interception.Reject reject) {
-                throw new InterceptionException("enqueue of '" + taskName + "' rejected: " + reject.reason());
-            } else if (outcome instanceof Interception.Redirect redirect) {
-                taskName = redirect.taskName();
-                payload = redirect.payload();
-            } else if (outcome instanceof Interception.Convert convert) {
-                payload = convert.payload();
-            }
-            // Pass: leave taskName/payload unchanged.
-        }
+        Intercepted intercepted = applyInterceptors(taskName, payload, null);
+        taskName = intercepted.taskName();
+        payload = intercepted.payload();
         // A redirect to a different task invalidates the source task's codec chain:
         // codecNames is the ORIGINAL task's, and the target's codecs can't be resolved
         // from a bare name — encoding with the wrong chain would corrupt the payload or
@@ -452,20 +464,81 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
         return bytes;
     }
 
-    /** Evaluate registered gates in order; the first non-{@code Allow} decision wins. */
+    /** Task and payload as the interceptor chain left them. */
+    private record Intercepted(String taskName, Object payload) {}
+
+    /**
+     * Run the interceptor chain in registration order, applying each outcome to the
+     * task/payload carried forward. {@code outcomes}, when non-null, collects what
+     * every interceptor returned so a dry run can report the chain without repeating
+     * it — {@link #analyzeArguments} is then the same code path as a real enqueue.
+     */
+    private Intercepted applyInterceptors(String taskName, Object payload, List<Interception> outcomes) {
+        for (Interceptor interceptor : interceptors) {
+            Interception outcome = interceptor.intercept(taskName, payload);
+            if (outcome == null) {
+                throw new InterceptionException("interceptor returned null for task '" + taskName + "'");
+            }
+            if (outcomes != null) {
+                outcomes.add(outcome);
+            }
+            if (outcome instanceof Interception.Reject reject) {
+                throw new InterceptionException("enqueue of '" + taskName + "' rejected: " + reject.reason());
+            } else if (outcome instanceof Interception.Redirect redirect) {
+                taskName = redirect.taskName();
+                payload = redirect.payload();
+            } else if (outcome instanceof Interception.Convert convert) {
+                payload = convert.payload();
+            }
+            // Pass: leave taskName/payload unchanged.
+        }
+        return new Intercepted(taskName, payload);
+    }
+
+    @Override
+    public InterceptionAnalysis analyzeArguments(String taskName, Object payload) {
+        List<Interception> outcomes = new ArrayList<>();
+        try {
+            Intercepted applied = applyInterceptors(taskName, payload, outcomes);
+            return new InterceptionAnalysis(applied.taskName(), applied.payload(), outcomes, false, null);
+        } catch (InterceptionException e) {
+            // The chain stopped part-way, so report the original input alongside
+            // the outcomes it did produce rather than a half-rewritten payload.
+            return new InterceptionAnalysis(taskName, payload, outcomes, true, e.getMessage());
+        }
+    }
+
+    @Override
+    public PredicateStats predicateStats() {
+        return predicateMetrics.snapshot();
+    }
+
+    /**
+     * Evaluate registered gates in order; the first non-{@code Allow} decision wins.
+     * Only gated tasks touch the counters — an ungated enqueue is not a decision.
+     */
     private EnqueueDecision evaluate(String taskName, Object payload) {
         List<EnqueueGate> taskGates = gates.get(taskName);
         if (taskGates == null || taskGates.isEmpty()) {
             return EnqueueDecision.allow();
         }
         PredicateContext context = new PredicateContext(taskName, payload);
-        for (EnqueueGate gate : taskGates) {
-            EnqueueDecision decision = gate.decide(context);
-            if (!(decision instanceof EnqueueDecision.Allow)) {
-                return decision;
+        EnqueueDecision outcome = EnqueueDecision.allow();
+        try {
+            for (EnqueueGate gate : taskGates) {
+                EnqueueDecision decision = gate.decide(context);
+                if (!(decision instanceof EnqueueDecision.Allow)) {
+                    outcome = decision;
+                    break;
+                }
             }
+        } catch (RuntimeException e) {
+            // A throwing gate is its own outcome: count it, then let the enqueue fail.
+            predicateMetrics.recordError();
+            throw e;
         }
-        return EnqueueDecision.allow();
+        predicateMetrics.record(outcome);
+        return outcome;
     }
 
     @Override
@@ -687,6 +760,11 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     @Override
     public boolean deleteDead(String deadId) {
         return backend.deleteDead(deadId);
+    }
+
+    @Override
+    public boolean requeueJob(String jobId) {
+        return backend.requeueJob(jobId);
     }
 
     @Override
@@ -1372,7 +1450,33 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
                 .subscriptions(subscriptions)
                 .logConsumers(logConsumers, this)
                 .queueConfigs(this::encodeQueueConfigs)
+                .lifecycle(new WorkerLifecycle() {
+                    @Override
+                    public void started(Worker worker) {
+                        liveWorkers.add(worker);
+                    }
+
+                    @Override
+                    public void closed(Worker worker) {
+                        liveWorkers.remove(worker);
+                    }
+                })
                 .eventHub(events);
+    }
+
+    @Override
+    public void shutdown() {
+        // Drain rather than sweep once: iteration over the set is weakly consistent,
+        // so a worker that registers while the sweep is in flight could otherwise
+        // outlive its own client's shutdown. close() deregisters synchronously, so a
+        // quiet client empties the set in the first pass. Deliberately not a sticky
+        // "shut down" flag — the client stays usable, and a worker started later is
+        // the caller's, not a straggler of this call.
+        while (!liveWorkers.isEmpty()) {
+            for (Worker worker : liveWorkers) {
+                worker.close();
+            }
+        }
     }
 
     @Override

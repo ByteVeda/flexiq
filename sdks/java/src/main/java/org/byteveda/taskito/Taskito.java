@@ -8,6 +8,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -19,6 +20,7 @@ import org.byteveda.taskito.dashboard.DashboardServer;
 import org.byteveda.taskito.errors.ConfigurationException;
 import org.byteveda.taskito.events.EventName;
 import org.byteveda.taskito.events.TaskitoEvent;
+import org.byteveda.taskito.interception.InterceptionAnalysis;
 import org.byteveda.taskito.interception.Interceptor;
 import org.byteveda.taskito.internal.JniQueueBackend;
 import org.byteveda.taskito.locks.Lock;
@@ -50,11 +52,13 @@ import org.byteveda.taskito.model.WorkerInfo;
 import org.byteveda.taskito.model.WorkflowRunInfo;
 import org.byteveda.taskito.predicates.EnqueueGate;
 import org.byteveda.taskito.predicates.Predicate;
+import org.byteveda.taskito.predicates.PredicateStats;
 import org.byteveda.taskito.pubsub.LogConsumerOptions;
 import org.byteveda.taskito.pubsub.PublishOptions;
 import org.byteveda.taskito.pubsub.SubscriptionOptions;
 import org.byteveda.taskito.resources.PoolConfig;
 import org.byteveda.taskito.resources.ResourceContext;
+import org.byteveda.taskito.resources.ResourceDefinition;
 import org.byteveda.taskito.resources.ResourceScope;
 import org.byteveda.taskito.resources.ResourceStat;
 import org.byteveda.taskito.scheduling.PeriodicTask;
@@ -124,8 +128,43 @@ public interface Taskito extends AutoCloseable {
      */
     <T> Taskito resource(String name, PoolConfig pool, Function<ResourceContext, T> factory, Consumer<T> dispose);
 
+    /**
+     * Register a pre-built {@link ResourceDefinition} — the escape hatch for knobs
+     * the typed overloads above don't cover, such as
+     * {@link ResourceDefinition#withReloadable(boolean)}.
+     *
+     * @param name resource name resolved in handlers via {@code Resources.use(name)}
+     * @param definition how to build, scope, and dispose it
+     * @return this instance, for chaining
+     */
+    Taskito resource(String name, ResourceDefinition definition);
+
     /** Per-resource counters (created / disposed / active). */
     Map<String, ResourceStat> resourceMetrics();
+
+    /**
+     * Hot-reload every resource registered with
+     * {@link ResourceDefinition#withReloadable(boolean)} — the programmatic SIGHUP.
+     * See {@link #reloadResources(Collection)}.
+     *
+     * @return per-resource reload success
+     */
+    Map<String, Boolean> reloadResources();
+
+    /**
+     * Hot-reload worker resources: dispose what is cached and rebuild, so the next
+     * use sees a fresh instance. Returns {@code name -> success} — an unregistered
+     * name reports {@code false} rather than throwing.
+     *
+     * <p>Resources are reloaded dependency-first, so a dependent rebuilds against the
+     * fresh dependency. Only running workers hold instances, so the result is empty
+     * when none is running; with several workers a name counts as reloaded only when
+     * it reloaded on all of them.
+     *
+     * @param names the resources to reload, or {@code null} for the reloadable sweep
+     * @return per-resource reload success
+     */
+    Map<String, Boolean> reloadResources(Collection<String> names);
 
     /**
      * Gate enqueues of {@code taskName} with {@code predicate}: when it rejects,
@@ -143,10 +182,29 @@ public interface Taskito extends AutoCloseable {
     Taskito gate(String taskName, EnqueueGate gate);
 
     /**
+     * What this process's gates decided: one count per gated enqueue, keyed by
+     * decision. Enqueues of ungated tasks are not counted.
+     *
+     * @return a point-in-time snapshot of the counters
+     */
+    PredicateStats predicateStats();
+
+    /**
      * Register an interceptor that may convert, redirect, or reject each enqueue
      * before it is serialized (see {@link Interceptor}). Returns {@code this}.
      */
     Taskito intercept(Interceptor interceptor);
+
+    /**
+     * Dry-run the registered interceptors over {@code (taskName, payload)}: report
+     * what they would do without enqueuing anything. A chain that would reject comes
+     * back as {@link InterceptionAnalysis#rejected()} instead of throwing.
+     *
+     * @param taskName the task the enqueue would target
+     * @param payload the payload the enqueue would carry
+     * @return what the chain would produce, and how far it got
+     */
+    InterceptionAnalysis analyzeArguments(String taskName, Object payload);
 
     /**
      * Set an opt-in admission cap on {@code queue}'s pending backlog. Once the
@@ -306,6 +364,19 @@ public interface Taskito extends AutoCloseable {
     JobDag jobDag(String jobId);
 
     boolean deleteDead(String deadId);
+
+    /**
+     * Force a stuck running job back to pending so a healthy worker re-runs it.
+     *
+     * <p>Releases the job's execution claim atomically and preserves its retry
+     * budget. Only use it when the owning worker is confirmed dead or hung: if the
+     * old attempt is actually still running, it may finish later and the job runs
+     * twice.
+     *
+     * @param jobId the stuck job's id
+     * @return false when the job does not exist or is not running
+     */
+    boolean requeueJob(String jobId);
 
     long purgeDead(long olderThanMs);
 
@@ -656,6 +727,17 @@ public interface Taskito extends AutoCloseable {
 
     /** Begin building a worker over this client. */
     Worker.Builder worker();
+
+    /**
+     * Stop every worker started from this client — the programmatic equivalent of
+     * SIGINT/SIGTERM. Each one stops dispatching, drains its in-flight handlers, and
+     * disposes its worker-scoped resources, exactly as {@link Worker#close()} does.
+     * A no-op when no worker is running, and safe alongside a direct
+     * {@link Worker#close()} — closing twice does nothing the second time.
+     *
+     * <p>The client itself stays usable; {@link #close()} releases the storage handle.
+     */
+    void shutdown();
 
     // ── Dashboard ───────────────────────────────────────────────────
 

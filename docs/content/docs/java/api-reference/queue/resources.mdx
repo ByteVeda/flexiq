@@ -8,14 +8,18 @@ description: "Resources, enqueue gates, and distributed locks."
 | Method | Description |
 |---|---|
 | `resource(...)` | Register an injectable [resource](/java/api-reference/resources). |
+| `resource(name, ResourceDefinition)` | Register a pre-built definition — the escape hatch for knobs the typed overloads don't cover, such as `withReloadable(true)`. |
 | `resourceMetrics()` | Per-resource created/disposed/active counters. |
+| `reloadResources()` / `reloadResources(names)` → `Map<String, Boolean>` | Hot-reload resources: dispose what is cached, rebuild dependency-first. No argument sweeps every `withReloadable(true)` resource; an unknown name reports `false` rather than throwing. Empty when no worker is running — that is where the instances live. |
 
 ## Enqueue gates
 
 | Method | Description |
 |---|---|
 | `predicate(taskName, Predicate)` / `gate(taskName, EnqueueGate)` | Enqueue-time gates: reject, skip, or defer submissions. |
+| `predicateStats()` → `PredicateStats` | Gate outcome counters: `allowed`, `skipped`, `deferred`, `rejected`, `errors`. One count per gated enqueue. |
 | `intercept(Interceptor)` | Pass / convert / redirect / reject each enqueue before serialization. |
+| `analyzeArguments(taskName, payload)` → `InterceptionAnalysis` | Dry-run the interceptor chain: what it would do, without enqueuing. A chain that would reject comes back as `rejected` instead of throwing. |
 
 ## Distributed locks
 

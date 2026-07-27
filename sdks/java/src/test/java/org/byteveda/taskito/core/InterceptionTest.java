@@ -1,6 +1,8 @@
 package org.byteveda.taskito.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.errors.InterceptionException;
 import org.byteveda.taskito.interception.Interception;
+import org.byteveda.taskito.interception.InterceptionAnalysis;
 import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.worker.Worker;
 import org.junit.jupiter.api.Test;
@@ -125,6 +128,56 @@ class InterceptionTest {
             queue.intercept((task, payload) -> Interception.redirect("ic.b", payload));
             // Redirect can't move an item out of a single-task batch — fail fast.
             assertThrows(InterceptionException.class, () -> queue.enqueueMany(A, List.of(1, 2)));
+        }
+    }
+
+    @Test
+    void analyzeArgumentsReportsTheChainWithoutEnqueuing(@TempDir Path dir) {
+        try (Taskito queue =
+                Taskito.builder().url(dir.resolve("ia.db").toString()).open()) {
+            queue.intercept((task, payload) -> Interception.convert((Integer) payload * 10));
+            queue.intercept((task, payload) -> Interception.pass());
+
+            InterceptionAnalysis analysis = queue.analyzeArguments(A.name(), 3);
+
+            assertFalse(analysis.rejected());
+            assertEquals(A.name(), analysis.taskName());
+            assertEquals(30, analysis.payload());
+            assertEquals(2, analysis.outcomes().size(), "one outcome per interceptor that ran");
+            assertNull(analysis.rejectionReason());
+            assertEquals(0, queue.stats().pending, "analysing must not enqueue");
+        }
+    }
+
+    @Test
+    void analyzeArgumentsReportsARedirect(@TempDir Path dir) {
+        try (Taskito queue =
+                Taskito.builder().url(dir.resolve("iar.db").toString()).open()) {
+            queue.intercept((task, payload) -> Interception.redirect(B.name(), (Integer) payload + 1));
+
+            InterceptionAnalysis analysis = queue.analyzeArguments(A.name(), 1);
+
+            assertEquals(B.name(), analysis.taskName());
+            assertEquals(2, analysis.payload());
+        }
+    }
+
+    @Test
+    void analyzeArgumentsReportsARejectionInsteadOfThrowing(@TempDir Path dir) {
+        try (Taskito queue =
+                Taskito.builder().url(dir.resolve("iaj.db").toString()).open()) {
+            queue.intercept((task, payload) -> Interception.convert((Integer) payload * 10));
+            queue.intercept((task, payload) -> Interception.reject("no thanks"));
+            queue.intercept((task, payload) -> Interception.convert(0)); // never reached
+
+            InterceptionAnalysis analysis = queue.analyzeArguments(A.name(), 3);
+
+            assertTrue(analysis.rejected());
+            assertTrue(analysis.rejectionReason().contains("no thanks"));
+            // The chain stopped part-way, so the original input is reported back.
+            assertEquals(A.name(), analysis.taskName());
+            assertEquals(3, analysis.payload());
+            assertEquals(2, analysis.outcomes().size(), "outcomes show how far the chain got");
         }
     }
 }

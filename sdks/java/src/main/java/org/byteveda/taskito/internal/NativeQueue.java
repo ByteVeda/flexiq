@@ -74,6 +74,9 @@ public final class NativeQueue {
 
     public static native boolean deleteDead(long handle, String deadId);
 
+    /** Force a stuck Running job back to Pending; false when missing or not Running. */
+    public static native boolean requeueJob(long handle, String jobId);
+
     public static native long purgeDead(long handle, long olderThanMs);
 
     /** Dead-letter entries for one task, as a JSON array. */

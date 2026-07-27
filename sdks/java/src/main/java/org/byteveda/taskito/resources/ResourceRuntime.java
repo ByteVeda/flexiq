@@ -3,9 +3,13 @@ package org.byteveda.taskito.resources;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -47,25 +51,27 @@ public final class ResourceRuntime {
      * its own pools — capacity is per worker, never shared across workers.
      */
     private final ConcurrentMap<String, ResourcePool> pools = new ConcurrentHashMap<>();
+    /**
+     * Worker resources each worker resource used, recorded at build time so
+     * {@link #reload} can rebuild a dependency before the resources that used it.
+     */
+    private final ConcurrentMap<String, Set<String>> workerDeps = new ConcurrentHashMap<>();
 
-    private final Deque<Runnable> workerTeardown = new ArrayDeque<>();
+    private final Deque<Teardown> workerTeardown = new ArrayDeque<>();
     /** Names being resolved on the current thread, so a dependency cycle fails fast instead of recursing. */
     private final ThreadLocal<Set<String>> resolving = ThreadLocal.withInitial(LinkedHashSet::new);
 
+    /** The client runtime this one was forked from, or {@code null} on a client runtime itself. */
+    private final ResourceRuntime parent;
+    /** Leased per-worker runtimes, so a client-level {@link #reload} reaches the live caches. */
+    private final Set<ResourceRuntime> workerRuntimes = ConcurrentHashMap.newKeySet();
+
     private int leases; // guarded by this
+    /** Set once this runtime's last lease dropped and its instances were swept; guarded by this. */
+    private boolean disposed; // guarded by this
 
-    /** Context handed to a worker factory: it may only use other worker resources. */
-    private final ResourceContext workerContext = new ResourceContext() {
-        @Override
-        public ResourceScope scope() {
-            return ResourceScope.WORKER;
-        }
-
-        @Override
-        public <T> T use(String name) {
-            return cast(resolveWorker(name));
-        }
-    };
+    /** One instance's disposal, tagged with its resource name so a reload can retire just that resource. */
+    private record Teardown(String name, Runnable action) {}
 
     /** Context handed to a thread factory: it may use worker or thread resources. */
     private final ResourceContext threadContext = new ResourceContext() {
@@ -101,12 +107,16 @@ public final class ResourceRuntime {
     public ResourceRuntime() {
         this.definitions = new ConcurrentHashMap<>();
         this.counters = new ConcurrentHashMap<>();
+        this.parent = null;
     }
 
     private ResourceRuntime(
-            ConcurrentMap<String, ResourceDefinition> definitions, ConcurrentMap<String, Counter> counters) {
+            ConcurrentMap<String, ResourceDefinition> definitions,
+            ConcurrentMap<String, Counter> counters,
+            ResourceRuntime parent) {
         this.definitions = definitions;
         this.counters = counters;
+        this.parent = parent;
     }
 
     /**
@@ -115,7 +125,7 @@ public final class ResourceRuntime {
      * builds and disposes its own {@code WORKER}-scoped instances.
      */
     public ResourceRuntime forWorker() {
-        return new ResourceRuntime(definitions, counters);
+        return new ResourceRuntime(definitions, counters, this);
     }
 
     /** Register a resource under {@code name}. A name may be registered only once. */
@@ -147,6 +157,11 @@ public final class ResourceRuntime {
         // holding the lock would stall every concurrent lease/teardown. A racing
         // shutdown is safe: the pool disposes prewarmed instances once closed.
         if (firstLease) {
+            // Publish to the client runtime only once live, so a builder that is
+            // never started can't leave a reload target behind.
+            if (parent != null) {
+                parent.workerRuntimes.add(this);
+            }
             prewarmPools();
         }
     }
@@ -158,6 +173,166 @@ public final class ResourceRuntime {
         }
         if (leases == 0) {
             disposeWorker();
+        }
+    }
+
+    /**
+     * Hot-reload resources: dispose what is cached and rebuild, so the next use sees
+     * a fresh instance. Returns {@code name -> success}; an unregistered name reports
+     * {@code false} rather than throwing.
+     *
+     * <p>{@code names} reloads exactly those, whatever their {@code reloadable} flag
+     * says; a {@code null} {@code names} sweeps every definition registered with
+     * {@code reloadable}. Targets are ordered dependency-first, so a dependent
+     * resolves the fresh dependency rather than the retired one.
+     *
+     * <p>On a client-level runtime the instances live in the per-worker runtimes, so
+     * this fans out to every live worker and reports a name as reloaded only when it
+     * reloaded everywhere. The result is empty when no worker is running.
+     *
+     * @param names the resources to reload, or {@code null} for the reloadable sweep
+     * @return per-resource reload success
+     */
+    public Map<String, Boolean> reload(Collection<String> names) {
+        if (parent != null) {
+            return reloadHere(names);
+        }
+        Map<String, Boolean> merged = new LinkedHashMap<>();
+        for (ResourceRuntime runtime : workerRuntimes) {
+            runtime.reloadHere(names).forEach((name, ok) -> merged.merge(name, ok, Boolean::logicalAnd));
+        }
+        return merged;
+    }
+
+    /**
+     * Reload this runtime's own instances, dependencies before their dependents.
+     *
+     * <p>Runs under the runtime monitor — the one {@link #teardownWorker} takes — so a
+     * worker closing concurrently waits the reload out instead of sweeping the caches
+     * from under it and stranding a freshly built instance whose disposer would then
+     * never run. A runtime already torn down reloads nothing.
+     */
+    private synchronized Map<String, Boolean> reloadHere(Collection<String> names) {
+        if (disposed) {
+            return Map.of();
+        }
+        Set<String> targets = new LinkedHashSet<>();
+        if (names != null) {
+            targets.addAll(names);
+        } else {
+            definitions.forEach((name, definition) -> {
+                if (definition.reloadable()) {
+                    targets.add(name);
+                }
+            });
+        }
+        Map<String, Boolean> results = new LinkedHashMap<>();
+        for (String name : dependencyOrder(targets)) {
+            if (targets.contains(name)) {
+                results.put(name, reloadOne(name));
+            }
+        }
+        return results;
+    }
+
+    /**
+     * {@code targets} plus the resources they were built from, ordered so a resource
+     * follows everything it used. Only the targets are reloaded; the extra names are
+     * there to place them.
+     */
+    private List<String> dependencyOrder(Set<String> targets) {
+        List<String> ordered = new ArrayList<>();
+        Set<String> done = new LinkedHashSet<>();
+        for (String name : targets) {
+            visitDependencies(name, new LinkedHashSet<>(), done, ordered);
+        }
+        return ordered;
+    }
+
+    private void visitDependencies(String name, Set<String> chain, Set<String> done, List<String> ordered) {
+        // `chain` breaks dependency cycles; a self-referencing factory is legal.
+        if (done.contains(name) || !chain.add(name)) {
+            return;
+        }
+        for (String dependency : workerDeps.getOrDefault(name, Set.of())) {
+            visitDependencies(dependency, chain, done, ordered);
+        }
+        chain.remove(name);
+        done.add(name);
+        ordered.add(name);
+    }
+
+    /** Reload one resource according to its scope. An unknown name reports false. */
+    private boolean reloadOne(String name) {
+        ResourceDefinition definition = definitions.get(name);
+        if (definition == null) {
+            return false;
+        }
+        switch (definition.scope()) {
+            case WORKER:
+                return recreateWorker(name);
+            case THREAD:
+                // Each worker thread rebuilds its own instance on next use; there is
+                // no thread to build them on from here.
+                retireCached(name);
+                return true;
+            case POOLED:
+                // Drop the pool so the next checkout builds a fresh one; idle instances
+                // are disposed now and checked-out ones when they are released.
+                ResourcePool pool = pools.remove(name);
+                if (pool != null) {
+                    pool.shutdown();
+                }
+                return true;
+            default:
+                // Task- and request-scoped resources are built per invocation —
+                // nothing is cached to replace, so a reload is a successful no-op.
+                return true;
+        }
+    }
+
+    /**
+     * Dispose the cached worker instance and build a fresh one eagerly, so a factory
+     * that now fails is reported rather than surfacing on some later task. Holds the
+     * resource's build lock so a concurrent first resolve cannot interleave.
+     */
+    private boolean recreateWorker(String name) {
+        ReentrantLock lock = workerLocks.computeIfAbsent(name, key -> new ReentrantLock());
+        lock.lock();
+        try {
+            retireCached(name);
+            resolveWorker(name);
+            return true;
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "reloading resource '" + name + "' failed", e);
+            return false;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Dispose and forget every cached instance of {@code name}, worker- and thread-scoped. */
+    private void retireCached(String name) {
+        workerCache.remove(name);
+        workerDeps.remove(name);
+        threadCache.remove(name);
+        List<Teardown> retired = new ArrayList<>();
+        synchronized (workerTeardown) {
+            // ArrayDeque iterates head→tail and push() adds at the head, so the
+            // collected entries stay in LIFO order.
+            Iterator<Teardown> entries = workerTeardown.iterator();
+            while (entries.hasNext()) {
+                Teardown entry = entries.next();
+                if (entry.name().equals(name)) {
+                    retired.add(entry);
+                    entries.remove();
+                }
+            }
+        }
+        // Outside the monitor: a user disposer may be slow, and holding it would
+        // stall every concurrent build's teardown registration.
+        for (Teardown entry : retired) {
+            entry.action().run();
         }
     }
 
@@ -191,17 +366,45 @@ public final class ResourceRuntime {
             if (cached != null) {
                 return unwrap(cached);
             }
-            Object value = build(name, definition, workerContext);
+            Object value = build(name, definition, workerContext(name));
             workerCache.put(name, value == null ? NULL : value);
             counter(name).created.incrementAndGet();
             if (definition.dispose() != null) {
-                synchronized (workerTeardown) {
-                    workerTeardown.push(() -> dispose(name, value, definition.dispose()));
-                }
+                pushTeardown(name, () -> dispose(name, value, definition.dispose()));
             }
             return value;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /**
+     * Context handed to a worker factory: it may only use other worker resources.
+     * Each build gets its own, recording the dependencies it resolves — rebuilt from
+     * scratch every time so a changed factory can't leave a dependency it no longer
+     * uses in the reload ordering.
+     */
+    private ResourceContext workerContext(String name) {
+        Set<String> deps = ConcurrentHashMap.newKeySet();
+        workerDeps.put(name, deps);
+        return new ResourceContext() {
+            @Override
+            public ResourceScope scope() {
+                return ResourceScope.WORKER;
+            }
+
+            @Override
+            public <T> T use(String dependency) {
+                deps.add(dependency);
+                return cast(resolveWorker(dependency));
+            }
+        };
+    }
+
+    /** Queue one instance's disposal on the shared LIFO teardown stack. */
+    private void pushTeardown(String name, Runnable action) {
+        synchronized (workerTeardown) {
+            workerTeardown.push(new Teardown(name, action));
         }
     }
 
@@ -265,9 +468,7 @@ public final class ResourceRuntime {
         perThread.put(Thread.currentThread(), value == null ? NULL : value);
         counter(name).created.incrementAndGet();
         if (definition.dispose() != null) {
-            synchronized (workerTeardown) {
-                workerTeardown.push(() -> dispose(name, value, definition.dispose()));
-            }
+            pushTeardown(name, () -> dispose(name, value, definition.dispose()));
         }
         return value;
     }
@@ -383,6 +584,13 @@ public final class ResourceRuntime {
     }
 
     private void disposeWorker() {
+        // Set under the monitor reloadHere() also holds, so a reload either finishes
+        // before this sweep or sees the runtime as gone — it can never cache an
+        // instance (and queue its disposer) behind the sweep that already ran.
+        disposed = true;
+        if (parent != null) {
+            parent.workerRuntimes.remove(this);
+        }
         // Pools first: pooled instances may depend on worker resources, which the
         // teardown stack below disposes.
         for (ResourcePool pool : pools.values()) {
@@ -391,10 +599,11 @@ public final class ResourceRuntime {
         pools.clear();
         synchronized (workerTeardown) {
             while (!workerTeardown.isEmpty()) {
-                workerTeardown.pop().run();
+                workerTeardown.pop().action().run();
             }
         }
         workerCache.clear();
+        workerDeps.clear();
         threadCache.clear();
     }
 
