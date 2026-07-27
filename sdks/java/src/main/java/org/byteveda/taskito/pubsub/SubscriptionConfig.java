@@ -1,5 +1,7 @@
 package org.byteveda.taskito.pubsub;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * A resolved subscription declaration recorded by {@code Taskito.subscribe(...)}.
  * Workers register these at start (ephemeral entries bind to the started
@@ -12,9 +14,9 @@ public final class SubscriptionConfig {
     private final String taskName;
     private final String queue;
     private final boolean durable;
-    private final Integer taskPriority;
-    private final Integer taskMaxRetries;
-    private final Long taskTimeoutMs;
+    private final @Nullable Integer taskPriority;
+    private final @Nullable Integer taskMaxRetries;
+    private final @Nullable Long taskTimeoutMs;
 
     public SubscriptionConfig(
             String topic,
@@ -22,9 +24,9 @@ public final class SubscriptionConfig {
             String taskName,
             String queue,
             boolean durable,
-            Integer taskPriority,
-            Integer taskMaxRetries,
-            Long taskTimeoutMs) {
+            @Nullable Integer taskPriority,
+            @Nullable Integer taskMaxRetries,
+            @Nullable Long taskTimeoutMs) {
         this.topic = topic;
         this.name = name;
         this.taskName = taskName;
@@ -56,17 +58,17 @@ public final class SubscriptionConfig {
     }
 
     /** The subscriber task's default priority, or {@code null} for the core default. */
-    public Integer taskPriority() {
+    public @Nullable Integer taskPriority() {
         return taskPriority;
     }
 
     /** The subscriber task's default retry budget, or {@code null} for the core default. */
-    public Integer taskMaxRetries() {
+    public @Nullable Integer taskMaxRetries() {
         return taskMaxRetries;
     }
 
     /** The subscriber task's default timeout, or {@code null} for the core default. */
-    public Long taskTimeoutMs() {
+    public @Nullable Long taskTimeoutMs() {
         return taskTimeoutMs;
     }
 }

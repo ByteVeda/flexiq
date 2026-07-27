@@ -1,7 +1,9 @@
 package org.byteveda.taskito.resources;
 
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import org.jspecify.annotations.Nullable;
 
 /**
  * How to build (and optionally dispose) a resource.
@@ -17,8 +19,8 @@ import java.util.function.Function;
 public record ResourceDefinition(
         Function<ResourceContext, Object> factory,
         ResourceScope scope,
-        Consumer<Object> dispose,
-        PoolConfig pool,
+        @Nullable Consumer<Object> dispose,
+        @Nullable PoolConfig pool,
         boolean reloadable) {
 
     public ResourceDefinition {
@@ -38,14 +40,22 @@ public record ResourceDefinition(
 
     /** A definition that a no-argument reload sweep skips. */
     public ResourceDefinition(
-            Function<ResourceContext, Object> factory, ResourceScope scope, Consumer<Object> dispose, PoolConfig pool) {
+            Function<ResourceContext, Object> factory,
+            ResourceScope scope,
+            @Nullable Consumer<Object> dispose,
+            @Nullable PoolConfig pool) {
         this(factory, scope, dispose, pool, false);
     }
 
     /** A definition for any non-pooled scope. */
     public ResourceDefinition(
-            Function<ResourceContext, Object> factory, ResourceScope scope, Consumer<Object> dispose) {
+            Function<ResourceContext, Object> factory, ResourceScope scope, @Nullable Consumer<Object> dispose) {
         this(factory, scope, dispose, null);
+    }
+
+    /** The pool sizing of a {@link ResourceScope#POOLED} definition, which always has one. */
+    public PoolConfig requirePool() {
+        return Objects.requireNonNull(pool, "a pooled resource requires a PoolConfig");
     }
 
     /** A copy included in a no-argument {@code Taskito.reloadResources()} sweep. */

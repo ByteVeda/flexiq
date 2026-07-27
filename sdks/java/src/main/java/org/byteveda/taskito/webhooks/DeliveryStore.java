@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.errors.WebhookException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Per-subscription webhook delivery log, persisted in the queue's settings KV.
@@ -39,7 +40,8 @@ final class DeliveryStore {
     }
 
     /** Newest-first, optionally filtered by status/event, then paged. */
-    List<Delivery> listFor(String subscriptionId, String statusFilter, String eventFilter, int limit, int offset) {
+    List<Delivery> listFor(
+            String subscriptionId, @Nullable String statusFilter, @Nullable String eventFilter, int limit, int offset) {
         List<Delivery> rows = load(subscriptionId);
         List<Delivery> out = new ArrayList<>();
         for (int i = rows.size() - 1; i >= 0; i--) {

@@ -4,6 +4,7 @@ import java.util.function.Predicate;
 import org.byteveda.taskito.errors.NonRetryableException;
 import org.byteveda.taskito.errors.RetryableException;
 import org.byteveda.taskito.logging.TaskitoLogger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Classifies a failed attempt as retryable or permanent. A typed signal thrown
@@ -19,7 +20,7 @@ final class RetryDecision {
     private RetryDecision() {}
 
     /** Whether {@code error} should be retried under {@code retryOn} ({@code null} = no predicate). */
-    static boolean isRetryable(Predicate<Throwable> retryOn, Throwable error) {
+    static boolean isRetryable(@Nullable Predicate<Throwable> retryOn, Throwable error) {
         Boolean signalled = signalledIntent(error);
         if (signalled != null) {
             return signalled;
@@ -41,7 +42,7 @@ final class RetryDecision {
      * typed exception. Walks the cause chain so a signal wrapped by framework
      * code still counts; the outermost signal wins.
      */
-    private static Boolean signalledIntent(Throwable error) {
+    private static @Nullable Boolean signalledIntent(Throwable error) {
         Throwable cause = error;
         for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
             if (cause instanceof NonRetryableException) {

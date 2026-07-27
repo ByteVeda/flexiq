@@ -13,6 +13,7 @@ import org.byteveda.taskito.dashboard.auth.oauth.error.IdentityFetchError;
 import org.byteveda.taskito.dashboard.auth.oauth.model.OAuthState;
 import org.byteveda.taskito.dashboard.auth.oauth.model.ProviderIdentity;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Shared OIDC machinery for Google and generic OIDC providers: discovery-doc
@@ -32,7 +33,7 @@ abstract class AbstractOidcProvider implements OAuthProvider {
 
     private final HttpClient http;
     private final IdTokenValidator validator;
-    private volatile Map<String, Object> discovery;
+    private volatile @Nullable Map<String, Object> discovery;
 
     AbstractOidcProvider(HttpClient http) {
         this.http = http;
@@ -76,7 +77,7 @@ abstract class AbstractOidcProvider implements OAuthProvider {
         Map<String, Object> claims = validator.validate(
                 rawIdToken,
                 endpoint("jwks_uri"),
-                stringField(discovery(), "issuer"),
+                requiredField(discovery(), "issuer"),
                 clientId(),
                 expectedNonce,
                 System.currentTimeMillis() / 1000);
@@ -131,7 +132,7 @@ abstract class AbstractOidcProvider implements OAuthProvider {
 
     /** Read a discovered endpoint URL and force https on it (localhost may use http). */
     private String endpoint(String key) {
-        return enforceHttps(stringField(discovery(), key));
+        return enforceHttps(requiredField(discovery(), key));
     }
 
     /**
@@ -153,7 +154,7 @@ abstract class AbstractOidcProvider implements OAuthProvider {
         }
     }
 
-    private static String emailDomain(String email) {
+    private static @Nullable String emailDomain(String email) {
         int at = email.lastIndexOf('@');
         if (at < 0 || at == email.length() - 1) {
             return null;
@@ -192,12 +193,21 @@ abstract class AbstractOidcProvider implements OAuthProvider {
         return host.toLowerCase(Locale.ROOT);
     }
 
-    private static String stringField(Map<String, Object> map, String key) {
+    /** A discovery-document field the flow cannot proceed without. */
+    private static String requiredField(Map<String, Object> map, String key) {
+        String value = stringField(map, key);
+        if (value == null) {
+            throw new IdentityFetchError("OIDC discovery document has no '" + key + "'");
+        }
+        return value;
+    }
+
+    private static @Nullable String stringField(Map<String, Object> map, String key) {
         Object value = map.get(key);
         return value instanceof String s ? s : null;
     }
 
-    private static String stringClaim(Map<String, Object> claims, String key) {
+    private static @Nullable String stringClaim(Map<String, Object> claims, String key) {
         Object value = claims.get(key);
         return value instanceof String s ? s : null;
     }

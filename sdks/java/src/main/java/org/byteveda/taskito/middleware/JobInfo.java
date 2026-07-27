@@ -2,6 +2,7 @@ package org.byteveda.taskito.middleware;
 
 import java.util.Map;
 import java.util.function.Supplier;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The executing job, exposed to {@link Middleware} hooks. {@link #metadata()} is
@@ -12,7 +13,7 @@ public final class JobInfo {
     private final String id;
     private final String taskName;
     private final Supplier<Map<String, Object>> metadataLoader;
-    private Map<String, Object> metadata;
+    private @Nullable Map<String, Object> metadata;
 
     public JobInfo(String id, String taskName, Supplier<Map<String, Object>> metadataLoader) {
         this.id = id;

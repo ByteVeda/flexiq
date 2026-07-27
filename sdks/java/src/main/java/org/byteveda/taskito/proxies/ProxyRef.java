@@ -2,6 +2,7 @@ package org.byteveda.taskito.proxies;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A serializable, signed reference to a non-serializable resource. Carry it in a
@@ -17,7 +18,11 @@ import java.util.Map;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ProxyRef(
-        String handler, Map<String, Object> reference, String signature, Long expiresAtMs, String purpose) {
+        String handler,
+        Map<String, Object> reference,
+        String signature,
+        @Nullable Long expiresAtMs,
+        @Nullable String purpose) {
 
     /** A ref with neither expiry nor purpose binding. */
     public ProxyRef(String handler, Map<String, Object> reference, String signature) {

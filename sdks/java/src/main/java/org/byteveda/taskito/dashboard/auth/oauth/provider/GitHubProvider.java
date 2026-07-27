@@ -10,6 +10,7 @@ import org.byteveda.taskito.dashboard.auth.oauth.error.IdentityFetchError;
 import org.byteveda.taskito.dashboard.auth.oauth.model.OAuthState;
 import org.byteveda.taskito.dashboard.auth.oauth.model.ProviderIdentity;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * GitHub login over plain OAuth2 (GitHub does not implement OIDC, so there is no
@@ -116,7 +117,7 @@ final class GitHubProvider implements OAuthProvider {
     }
 
     /** The primary verified email, or {@code null} — an unverified email is never trusted. */
-    private String primaryVerifiedEmail(String accessToken) {
+    private @Nullable String primaryVerifiedEmail(String accessToken) {
         OAuthHttp.HttpResult result = OAuthHttp.get(http, API_BASE + "/user/emails", apiHeaders(accessToken));
         if (result.status() != 200) {
             return null;
@@ -162,12 +163,12 @@ final class GitHubProvider implements OAuthProvider {
         return headers;
     }
 
-    private static String stringValue(Object value, String fallback) {
+    private static String stringValue(@Nullable Object value, String fallback) {
         String text = asString(value);
         return text != null && !text.isEmpty() ? text : fallback;
     }
 
-    private static String asString(Object value) {
+    private static @Nullable String asString(@Nullable Object value) {
         return value instanceof String s ? s : null;
     }
 }

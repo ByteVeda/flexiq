@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import org.byteveda.taskito.errors.ResourceException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Registry and lifecycle for worker resources. The client-level instance holds
@@ -62,7 +63,7 @@ public final class ResourceRuntime {
     private final ThreadLocal<Set<String>> resolving = ThreadLocal.withInitial(LinkedHashSet::new);
 
     /** The client runtime this one was forked from, or {@code null} on a client runtime itself. */
-    private final ResourceRuntime parent;
+    private final @Nullable ResourceRuntime parent;
     /** Leased per-worker runtimes, so a client-level {@link #reload} reaches the live caches. */
     private final Set<ResourceRuntime> workerRuntimes = ConcurrentHashMap.newKeySet();
 
@@ -81,7 +82,7 @@ public final class ResourceRuntime {
         }
 
         @Override
-        public <T> T use(String name) {
+        public <T> @Nullable T use(String name) {
             return cast(resolveThread(name));
         }
     };
@@ -98,7 +99,7 @@ public final class ResourceRuntime {
         }
 
         @Override
-        public <T> T use(String name) {
+        public <T> @Nullable T use(String name) {
             return cast(resolvePooledDependency(name));
         }
     };
@@ -113,7 +114,7 @@ public final class ResourceRuntime {
     private ResourceRuntime(
             ConcurrentMap<String, ResourceDefinition> definitions,
             ConcurrentMap<String, Counter> counters,
-            ResourceRuntime parent) {
+            @Nullable ResourceRuntime parent) {
         this.definitions = definitions;
         this.counters = counters;
         this.parent = parent;
@@ -193,7 +194,7 @@ public final class ResourceRuntime {
      * @param names the resources to reload, or {@code null} for the reloadable sweep
      * @return per-resource reload success
      */
-    public Map<String, Boolean> reload(Collection<String> names) {
+    public Map<String, Boolean> reload(@Nullable Collection<String> names) {
         if (parent != null) {
             return reloadHere(names);
         }
@@ -212,7 +213,7 @@ public final class ResourceRuntime {
      * from under it and stranding a freshly built instance whose disposer would then
      * never run. A runtime already torn down reloads nothing.
      */
-    private synchronized Map<String, Boolean> reloadHere(Collection<String> names) {
+    private synchronized Map<String, Boolean> reloadHere(@Nullable Collection<String> names) {
         if (disposed) {
             return Map.of();
         }
@@ -348,6 +349,7 @@ public final class ResourceRuntime {
     }
 
     /** Resolve a worker-scoped resource, building it once under a per-name lock. */
+    @Nullable
     Object resolveWorker(String name) {
         ResourceDefinition definition = definition(name);
         if (definition.scope() != ResourceScope.WORKER) {
@@ -369,8 +371,9 @@ public final class ResourceRuntime {
             Object value = build(name, definition, workerContext(name));
             workerCache.put(name, value == null ? NULL : value);
             counter(name).created.incrementAndGet();
-            if (definition.dispose() != null) {
-                pushTeardown(name, () -> dispose(name, value, definition.dispose()));
+            Consumer<Object> disposer = definition.dispose();
+            if (disposer != null) {
+                pushTeardown(name, () -> dispose(name, value, disposer));
             }
             return value;
         } finally {
@@ -394,7 +397,7 @@ public final class ResourceRuntime {
             }
 
             @Override
-            public <T> T use(String dependency) {
+            public <T> @Nullable T use(String dependency) {
                 deps.add(dependency);
                 return cast(resolveWorker(dependency));
             }
@@ -414,6 +417,7 @@ public final class ResourceRuntime {
      * on every use, pooled checks an instance out for the invocation, task builds
      * once per invocation.
      */
+    @Nullable
     Object resolveForTask(TaskScope scope, String name) {
         ResourceDefinition definition = definition(name);
         switch (definition.scope()) {
@@ -437,8 +441,9 @@ public final class ResourceRuntime {
         Object value = build(name, definition, scope);
         cache.put(name, value == null ? NULL : value);
         counter(name).created.incrementAndGet();
-        if (definition.dispose() != null) {
-            scope.pushTeardown(() -> dispose(name, value, definition.dispose()));
+        Consumer<Object> disposer = definition.dispose();
+        if (disposer != null) {
+            scope.pushTeardown(() -> dispose(name, value, disposer));
         }
         return value;
     }
@@ -449,6 +454,7 @@ public final class ResourceRuntime {
      * get-build-put is race-free; the shared {@code workerTeardown} deque keeps
      * disposal globally LIFO across worker and thread instances.
      */
+    @Nullable
     Object resolveThread(String name) {
         ResourceDefinition definition = definition(name);
         if (definition.scope() == ResourceScope.WORKER) {
@@ -467,8 +473,9 @@ public final class ResourceRuntime {
         Object value = build(name, definition, threadContext);
         perThread.put(Thread.currentThread(), value == null ? NULL : value);
         counter(name).created.incrementAndGet();
-        if (definition.dispose() != null) {
-            pushTeardown(name, () -> dispose(name, value, definition.dispose()));
+        Consumer<Object> disposer = definition.dispose();
+        if (disposer != null) {
+            pushTeardown(name, () -> dispose(name, value, disposer));
         }
         return value;
     }
@@ -477,8 +484,9 @@ public final class ResourceRuntime {
     private Object buildRequest(TaskScope scope, String name, ResourceDefinition definition) {
         Object value = build(name, definition, requestContext(scope));
         counter(name).created.incrementAndGet();
-        if (definition.dispose() != null) {
-            scope.pushTeardown(() -> dispose(name, value, definition.dispose()));
+        Consumer<Object> disposer = definition.dispose();
+        if (disposer != null) {
+            scope.pushTeardown(() -> dispose(name, value, disposer));
         }
         return value;
     }
@@ -488,7 +496,7 @@ public final class ResourceRuntime {
      * task scope like a task-scoped instance and returned to the pool (not
      * disposed) when the task ends.
      */
-    private Object resolvePooled(TaskScope scope, String name, ResourceDefinition definition) {
+    private @Nullable Object resolvePooled(TaskScope scope, String name, ResourceDefinition definition) {
         Map<String, Object> cache = scope.cache();
         Object cached = cache.get(name);
         if (cached != null) {
@@ -502,7 +510,7 @@ public final class ResourceRuntime {
     }
 
     /** Resolve a pooled factory's dependency, enforcing the worker-only guard. */
-    private Object resolvePooledDependency(String name) {
+    private @Nullable Object resolvePooledDependency(String name) {
         ResourceDefinition definition = definition(name);
         if (definition.scope() != ResourceScope.WORKER) {
             throw new ResourceException("resource '" + name + "' is "
@@ -525,7 +533,7 @@ public final class ResourceRuntime {
     private ResourcePool createPool(String name, ResourceDefinition definition) {
         return new ResourcePool(
                 name,
-                definition.pool(),
+                definition.requirePool(),
                 () -> {
                     Object value = build(name, definition, pooledContext);
                     counter(name).created.incrementAndGet();
@@ -535,7 +543,7 @@ public final class ResourceRuntime {
     }
 
     /** Dispose one pooled instance; without a disposer the drop still counts as disposed. */
-    private void disposePooled(String name, Object value, Consumer<Object> disposer) {
+    private void disposePooled(String name, Object value, @Nullable Consumer<Object> disposer) {
         if (disposer == null) {
             counter(name).disposed.incrementAndGet();
             return;
@@ -546,7 +554,8 @@ public final class ResourceRuntime {
     /** Eagerly build {@code poolMin} instances for every pooled resource that asks for prewarm. */
     private void prewarmPools() {
         definitions.forEach((name, definition) -> {
-            if (definition.scope() == ResourceScope.POOLED && definition.pool().poolMin() > 0) {
+            if (definition.scope() == ResourceScope.POOLED
+                    && definition.requirePool().poolMin() > 0) {
                 pool(name, definition).prewarm();
             }
         });
@@ -561,7 +570,7 @@ public final class ResourceRuntime {
             }
 
             @Override
-            public <T> T use(String name) {
+            public <T> @Nullable T use(String name) {
                 return scope.use(name);
             }
         };
@@ -633,12 +642,12 @@ public final class ResourceRuntime {
         return counters.computeIfAbsent(name, key -> new Counter());
     }
 
-    private static Object unwrap(Object value) {
+    private static @Nullable Object unwrap(Object value) {
         return value == NULL ? null : value;
     }
 
     @SuppressWarnings("unchecked")
-    private static <T> T cast(Object value) {
+    private static <T> @Nullable T cast(@Nullable Object value) {
         return (T) value;
     }
 

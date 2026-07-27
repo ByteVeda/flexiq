@@ -1,6 +1,7 @@
 package org.byteveda.taskito.dashboard.routing;
 
 import java.io.IOException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A route handler. Returns the JSON response body (serialised with status 200),
@@ -9,5 +10,6 @@ import java.io.IOException;
  */
 @FunctionalInterface
 public interface Handler {
+    @Nullable
     Object handle(Req req) throws IOException;
 }

@@ -3,6 +3,7 @@ package org.byteveda.taskito.workflows;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 /** A node's state within a workflow run. Timestamps are Unix milliseconds; nullable when unset. */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -56,7 +57,7 @@ public final class NodeSnapshot {
      * @return {@code completedAt - startedAt}, or null while either timestamp is unset
      *     (the node hasn't started, or hasn't finished).
      */
-    public Long durationMs() {
+    public @Nullable Long durationMs() {
         return elapsed(startedAt, completedAt);
     }
 
@@ -65,11 +66,11 @@ public final class NodeSnapshot {
      *
      * @return the rollback's elapsed time, or null outside a completed compensation flow.
      */
-    public Long compensationDurationMs() {
+    public @Nullable Long compensationDurationMs() {
         return elapsed(compensationStartedAt, compensationCompletedAt);
     }
 
-    private static Long elapsed(Long from, Long to) {
+    private static @Nullable Long elapsed(@Nullable Long from, @Nullable Long to) {
         return from == null || to == null ? null : to - from;
     }
 }

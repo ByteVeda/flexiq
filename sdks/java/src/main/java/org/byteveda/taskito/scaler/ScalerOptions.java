@@ -1,5 +1,7 @@
 package org.byteveda.taskito.scaler;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Configures the {@link Scaler} HTTP endpoint.
  *
@@ -8,7 +10,7 @@ package org.byteveda.taskito.scaler;
  * @param targetQueueDepth the depth the autoscaler targets per replica (must be &gt; 0)
  * @param queue the queue to report on, or {@code null} for all queues
  */
-public record ScalerOptions(int port, String host, int targetQueueDepth, String queue) {
+public record ScalerOptions(int port, String host, int targetQueueDepth, @Nullable String queue) {
     public ScalerOptions {
         if (targetQueueDepth <= 0) {
             throw new IllegalArgumentException("targetQueueDepth must be > 0");

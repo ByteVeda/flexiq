@@ -5,6 +5,7 @@ import java.io.Writer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
@@ -20,6 +21,7 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Generates, for each class with {@code @TaskHandler} methods, a {@code <Class>Tasks}
@@ -219,7 +221,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
     }
 
     /** Emit a {@code .circuitBreaker(...)} call when the annotation configures a threshold. */
-    private void appendCircuitBreaker(StringBuilder chain, AnnotationMirror mirror) {
+    private void appendCircuitBreaker(StringBuilder chain, @Nullable AnnotationMirror mirror) {
         long threshold = longValue(mirror, "circuitBreakerThreshold", 0);
         if (threshold <= 0) {
             return;
@@ -250,7 +252,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
         StringBuilder args = new StringBuilder("payload");
         for (int i = 1; i < params.size(); i++) {
             args.append(", Resources.use(\"")
-                    .append(escape(resourceName(params.get(i))))
+                    .append(escape(requireResourceName(params.get(i))))
                     .append("\")");
         }
         if (isVoid(method)) {
@@ -283,8 +285,9 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
 
     /** Whether the method or its enclosing class carries the annotation {@code fqn}. */
     private boolean hasAnnotation(ExecutableElement method, String fqn) {
+        Element enclosing = Objects.requireNonNull(method.getEnclosingElement(), "a method has an enclosing type");
         return hasAnnotation(method.getAnnotationMirrors(), fqn)
-                || hasAnnotation(method.getEnclosingElement().getAnnotationMirrors(), fqn);
+                || hasAnnotation(enclosing.getAnnotationMirrors(), fqn);
     }
 
     private boolean hasAnnotation(List<? extends AnnotationMirror> mirrors, String fqn) {
@@ -297,7 +300,12 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
     }
 
     /** The {@code @Resource} value on a parameter, or null if it is not annotated. */
-    private String resourceName(VariableElement param) {
+    /** The injected resource name of a non-payload parameter, which validation has already required. */
+    private String requireResourceName(VariableElement param) {
+        return Objects.requireNonNull(resourceName(param), "a non-payload parameter must carry a resource name");
+    }
+
+    private @Nullable String resourceName(VariableElement param) {
         for (AnnotationMirror annotation : param.getAnnotationMirrors()) {
             if (annotation.getAnnotationType().toString().equals(RESOURCE)) {
                 Object value = rawValue(annotation, "value");
@@ -312,7 +320,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
         return value.isEmpty() ? method.getSimpleName().toString() : value;
     }
 
-    private AnnotationMirror mirror(ExecutableElement method) {
+    private @Nullable AnnotationMirror mirror(ExecutableElement method) {
         for (AnnotationMirror mirror : method.getAnnotationMirrors()) {
             if (mirror.getAnnotationType().toString().equals(ANNOTATION)) {
                 return mirror;
@@ -321,27 +329,27 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
         return null;
     }
 
-    private String stringValue(AnnotationMirror mirror, String key, String fallback) {
+    private String stringValue(@Nullable AnnotationMirror mirror, String key, String fallback) {
         Object value = rawValue(mirror, key);
         return value == null ? fallback : value.toString();
     }
 
-    private long longValue(AnnotationMirror mirror, String key, long fallback) {
+    private long longValue(@Nullable AnnotationMirror mirror, String key, long fallback) {
         Object value = rawValue(mirror, key);
         return value instanceof Number ? ((Number) value).longValue() : fallback;
     }
 
-    private boolean boolValue(AnnotationMirror mirror, String key, boolean fallback) {
+    private boolean boolValue(@Nullable AnnotationMirror mirror, String key, boolean fallback) {
         Object value = rawValue(mirror, key);
         return value instanceof Boolean ? (Boolean) value : fallback;
     }
 
-    private double doubleValue(AnnotationMirror mirror, String key, double fallback) {
+    private double doubleValue(@Nullable AnnotationMirror mirror, String key, double fallback) {
         Object value = rawValue(mirror, key);
         return value instanceof Number ? ((Number) value).doubleValue() : fallback;
     }
 
-    private Object rawValue(AnnotationMirror mirror, String key) {
+    private @Nullable Object rawValue(@Nullable AnnotationMirror mirror, String key) {
         if (mirror == null) {
             return null;
         }

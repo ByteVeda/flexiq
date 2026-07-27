@@ -2,6 +2,7 @@ package org.byteveda.taskito.webhooks;
 
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A partial webhook edit. Every field is nullable: {@code null} leaves the
@@ -10,15 +11,15 @@ import java.util.Map;
  * swapped, not merged). Consumed by {@link WebhookManager#update}.
  */
 public record WebhookUpdate(
-        String url,
-        List<String> events,
-        String taskFilter,
-        Map<String, String> headers,
-        String secret,
-        Integer maxRetries,
-        Long timeoutMs,
-        Boolean enabled,
-        String description) {
+        @Nullable String url,
+        @Nullable List<String> events,
+        @Nullable String taskFilter,
+        @Nullable Map<String, String> headers,
+        @Nullable String secret,
+        @Nullable Integer maxRetries,
+        @Nullable Long timeoutMs,
+        @Nullable Boolean enabled,
+        @Nullable String description) {
 
     public static Builder builder() {
         return new Builder();
@@ -26,15 +27,15 @@ public record WebhookUpdate(
 
     /** Fluent builder so callers set only the fields they intend to change. */
     public static final class Builder {
-        private String url;
-        private List<String> events;
-        private String taskFilter;
-        private Map<String, String> headers;
-        private String secret;
-        private Integer maxRetries;
-        private Long timeoutMs;
-        private Boolean enabled;
-        private String description;
+        private @Nullable String url;
+        private @Nullable List<String> events;
+        private @Nullable String taskFilter;
+        private @Nullable Map<String, String> headers;
+        private @Nullable String secret;
+        private @Nullable Integer maxRetries;
+        private @Nullable Long timeoutMs;
+        private @Nullable Boolean enabled;
+        private @Nullable String description;
 
         private Builder() {}
 
@@ -48,7 +49,7 @@ public record WebhookUpdate(
             return this;
         }
 
-        public Builder taskFilter(String taskFilter) {
+        public Builder taskFilter(@Nullable String taskFilter) {
             this.taskFilter = taskFilter;
             return this;
         }
@@ -58,7 +59,7 @@ public record WebhookUpdate(
             return this;
         }
 
-        public Builder secret(String secret) {
+        public Builder secret(@Nullable String secret) {
             this.secret = secret;
             return this;
         }
@@ -78,7 +79,7 @@ public record WebhookUpdate(
             return this;
         }
 
-        public Builder description(String description) {
+        public Builder description(@Nullable String description) {
             this.description = description;
             return this;
         }

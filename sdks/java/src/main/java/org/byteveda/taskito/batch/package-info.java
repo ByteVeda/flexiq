@@ -4,4 +4,7 @@
  * delay elapses. The worker side already batches via the worker's
  * {@code batchSize} option (which drives the core batch dequeue).
  */
+@NullMarked
 package org.byteveda.taskito.batch;
+
+import org.jspecify.annotations.NullMarked;

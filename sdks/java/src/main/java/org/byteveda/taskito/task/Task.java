@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Typed task descriptor: a name, its payload type, and default enqueue options.
@@ -19,29 +20,29 @@ public final class Task<T> {
     private final String name;
     private final Type payloadType;
     private final EnqueueOptions options;
-    private final RetryPolicy retryPolicy;
+    private final @Nullable RetryPolicy retryPolicy;
     private final List<String> codecs;
     private final boolean idempotent;
-    private final CircuitBreakerConfig circuitBreaker;
-    private final String rateLimit;
-    private final String retryBudget;
-    private final Integer maxConcurrent;
-    private final Integer maxInFlightPerTask;
-    private final Predicate<Throwable> retryOn;
+    private final @Nullable CircuitBreakerConfig circuitBreaker;
+    private final @Nullable String rateLimit;
+    private final @Nullable String retryBudget;
+    private final @Nullable Integer maxConcurrent;
+    private final @Nullable Integer maxInFlightPerTask;
+    private final @Nullable Predicate<Throwable> retryOn;
 
     private Task(
             String name,
             Type payloadType,
             EnqueueOptions options,
-            RetryPolicy retryPolicy,
+            @Nullable RetryPolicy retryPolicy,
             List<String> codecs,
             boolean idempotent,
-            CircuitBreakerConfig circuitBreaker,
-            String rateLimit,
-            String retryBudget,
-            Integer maxConcurrent,
-            Integer maxInFlightPerTask,
-            Predicate<Throwable> retryOn) {
+            @Nullable CircuitBreakerConfig circuitBreaker,
+            @Nullable String rateLimit,
+            @Nullable String retryBudget,
+            @Nullable Integer maxConcurrent,
+            @Nullable Integer maxInFlightPerTask,
+            @Nullable Predicate<Throwable> retryOn) {
         this.name = Objects.requireNonNull(name, "task name must not be null");
         if (name.trim().isEmpty()) {
             throw new IllegalArgumentException("task name must not be blank");
@@ -246,7 +247,7 @@ public final class Task<T> {
      * annotation's sentinel, and because a literal cap of zero would stop the task
      * from ever dispatching.
      */
-    public Task<T> maxConcurrent(Integer maxConcurrent) {
+    public Task<T> maxConcurrent(@Nullable Integer maxConcurrent) {
         maxConcurrent = uncappedIfZero(maxConcurrent);
         return new Task<>(
                 name,
@@ -293,7 +294,7 @@ public final class Task<T> {
      * cluster-wide and costs a database read. {@code null} or {@code 0} lets it use
      * the whole pool, matching the annotation's sentinel.
      */
-    public Task<T> maxInFlightPerTask(Integer maxInFlightPerTask) {
+    public Task<T> maxInFlightPerTask(@Nullable Integer maxInFlightPerTask) {
         maxInFlightPerTask = uncappedIfZero(maxInFlightPerTask);
         return new Task<>(
                 name,
@@ -311,7 +312,7 @@ public final class Task<T> {
     }
 
     /** A cap of zero is the annotation's "unset" sentinel, never a literal zero. */
-    private static Integer uncappedIfZero(Integer cap) {
+    private static @Nullable Integer uncappedIfZero(@Nullable Integer cap) {
         return cap != null && cap == 0 ? null : cap;
     }
 
@@ -362,7 +363,7 @@ public final class Task<T> {
     }
 
     /** The retry-backoff curve for this task, or {@code null} for the core defaults. */
-    public RetryPolicy retryPolicy() {
+    public @Nullable RetryPolicy retryPolicy() {
         return retryPolicy;
     }
 
@@ -377,32 +378,32 @@ public final class Task<T> {
     }
 
     /** This task's circuit-breaker configuration, or {@code null} when none is set. */
-    public CircuitBreakerConfig circuitBreaker() {
+    public @Nullable CircuitBreakerConfig circuitBreaker() {
         return circuitBreaker;
     }
 
     /** This task's rate-limit spec (e.g. {@code "100/m"}), or {@code null} when unthrottled. */
-    public String rateLimit() {
+    public @Nullable String rateLimit() {
         return rateLimit;
     }
 
     /** This task's retry-rate cap (e.g. {@code "100/m"}), or {@code null} when uncapped. */
-    public String retryBudget() {
+    public @Nullable String retryBudget() {
         return retryBudget;
     }
 
     /** Cap on this task's concurrently-running jobs, or {@code null} when uncapped. */
-    public Integer maxConcurrent() {
+    public @Nullable Integer maxConcurrent() {
         return maxConcurrent;
     }
 
     /** Cap on this task's share of one worker's dispatch slots, or {@code null} when uncapped. */
-    public Integer maxInFlightPerTask() {
+    public @Nullable Integer maxInFlightPerTask() {
         return maxInFlightPerTask;
     }
 
     /** Predicate deciding whether a thrown exception is retryable, or {@code null} to retry all. */
-    public Predicate<Throwable> retryOn() {
+    public @Nullable Predicate<Throwable> retryOn() {
         return retryOn;
     }
 }

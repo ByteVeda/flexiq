@@ -10,6 +10,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.dashboard.support.Http;
 import org.byteveda.taskito.dashboard.support.Json;
 import org.byteveda.taskito.workflows.NodeSnapshot;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Workflow read endpoints: run listing, run detail (run + nodes), children, and
@@ -39,7 +40,7 @@ public final class WorkflowsHandlers {
         return out;
     }
 
-    public Object run(String id) {
+    public @Nullable Object run(String id) {
         var run = queue.getWorkflowRun(id).orElse(null);
         if (run == null) {
             return null;
@@ -61,7 +62,7 @@ public final class WorkflowsHandlers {
         return out;
     }
 
-    public Object dag(String id) {
+    public @Nullable Object dag(String id) {
         String dag = queue.getWorkflowDag(id).orElse(null);
         if (dag == null) {
             return null;
@@ -115,7 +116,7 @@ public final class WorkflowsHandlers {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> asMapList(Object value) {
+    private static List<Map<String, Object>> asMapList(@Nullable Object value) {
         if (!(value instanceof List)) {
             return List.of();
         }

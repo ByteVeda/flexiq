@@ -2,6 +2,7 @@ package org.byteveda.taskito.worker;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Per-table retention windows for auto-cleanup, in seconds. An unset field
@@ -10,11 +11,11 @@ import java.util.Map;
  */
 public final class Retention {
 
-    private final Integer archivedJobs;
-    private final Integer deadLetter;
-    private final Integer taskLogs;
-    private final Integer taskMetrics;
-    private final Integer jobErrors;
+    private final @Nullable Integer archivedJobs;
+    private final @Nullable Integer deadLetter;
+    private final @Nullable Integer taskLogs;
+    private final @Nullable Integer taskMetrics;
+    private final @Nullable Integer jobErrors;
 
     private Retention(Builder builder) {
         this.archivedJobs = builder.archivedJobs;
@@ -52,11 +53,11 @@ public final class Retention {
 
     /** Fluent builder; every window is optional. */
     public static final class Builder {
-        private Integer archivedJobs;
-        private Integer deadLetter;
-        private Integer taskLogs;
-        private Integer taskMetrics;
-        private Integer jobErrors;
+        private @Nullable Integer archivedJobs;
+        private @Nullable Integer deadLetter;
+        private @Nullable Integer taskLogs;
+        private @Nullable Integer taskMetrics;
+        private @Nullable Integer jobErrors;
 
         // A negative window would invert the cleanup cutoff into the future and
         // match every row, so reject it at the boundary. Zero is valid.

@@ -7,6 +7,7 @@ import org.byteveda.taskito.logging.TaskitoLogger;
 import org.byteveda.taskito.model.TopicMessage;
 import org.byteveda.taskito.pubsub.LogConsumerConfig;
 import org.byteveda.taskito.serialization.Serializer;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Daemon thread driving one managed log consumer. Each loop reads a batch after the
@@ -68,7 +69,7 @@ final class LogConsumerThread extends Thread {
 
     /** What a batch drain achieved: the id to ack up to, and whether a retry-mode
      *  handler failure blocked the cursor (so the caller backs off). */
-    private record DrainResult(String lastAcked, boolean retryFailure) {}
+    private record DrainResult(@Nullable String lastAcked, boolean retryFailure) {}
 
     /**
      * Invoke the handler per message. {@code retry} stops at the first failure and
@@ -77,7 +78,7 @@ final class LogConsumerThread extends Thread {
      * continues. {@code lastAcked} is null when nothing succeeded.
      */
     private DrainResult drainBatch(List<TopicMessage> messages) {
-        String lastAcked = null;
+        @Nullable String lastAcked = null;
         for (TopicMessage message : messages) {
             if (stop.getCount() == 0) {
                 break;
@@ -96,7 +97,7 @@ final class LogConsumerThread extends Thread {
     }
 
     /** Advance the cursor to {@code lastAcked}; a null id (nothing handled) is a no-op. */
-    private void ackDrained(String lastAcked) {
+    private void ackDrained(@Nullable String lastAcked) {
         if (lastAcked == null) {
             return;
         }

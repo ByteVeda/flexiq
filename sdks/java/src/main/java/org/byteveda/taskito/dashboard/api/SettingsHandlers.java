@@ -6,6 +6,7 @@ import java.util.Map;
 import org.byteveda.taskito.dashboard.store.SettingsAccess;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Generic settings KV API. Keys under the core's reserved prefixes ({@code auth:},
@@ -39,7 +40,7 @@ public final class SettingsHandlers {
         return out;
     }
 
-    public Object get(String key) {
+    public @Nullable Object get(String key) {
         if (isProtected(key)) {
             return null; // read as absent → 404
         }
@@ -48,7 +49,7 @@ public final class SettingsHandlers {
 
     public Object put(String key, Map<String, Object> body) {
         validateKey(key);
-        Object raw = body.get("value");
+        @Nullable Object raw = body.get("value");
         String value = raw instanceof String s ? s : Json.toString(raw);
         if (value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_VALUE_LENGTH) {
             throw DashboardError.badRequest("value too large");

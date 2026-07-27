@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A task's retry-backoff curve: how long to wait between attempts.
@@ -17,11 +18,11 @@ import java.util.Objects;
  * <p>Instances are immutable.
  */
 public final class RetryPolicy {
-    private final Duration baseDelay;
-    private final Duration maxDelay;
+    private final @Nullable Duration baseDelay;
+    private final @Nullable Duration maxDelay;
     private final List<Duration> customDelays;
 
-    private RetryPolicy(Duration baseDelay, Duration maxDelay, List<Duration> customDelays) {
+    private RetryPolicy(@Nullable Duration baseDelay, @Nullable Duration maxDelay, List<Duration> customDelays) {
         this.baseDelay = baseDelay;
         this.maxDelay = maxDelay;
         this.customDelays = customDelays;
@@ -54,12 +55,12 @@ public final class RetryPolicy {
     }
 
     /** Exponential base delay, or {@code null} when using {@link #delays}. */
-    public Duration baseDelay() {
+    public @Nullable Duration baseDelay() {
         return baseDelay;
     }
 
     /** Backoff cap, or {@code null} when using {@link #delays}. */
-    public Duration maxDelay() {
+    public @Nullable Duration maxDelay() {
         return maxDelay;
     }
 

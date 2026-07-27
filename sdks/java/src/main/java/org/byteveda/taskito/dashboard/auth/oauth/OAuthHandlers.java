@@ -13,6 +13,7 @@ import org.byteveda.taskito.dashboard.auth.oauth.error.IdentityFetchError;
 import org.byteveda.taskito.dashboard.auth.oauth.error.ProviderNotConfigured;
 import org.byteveda.taskito.dashboard.auth.oauth.error.StateValidationError;
 import org.byteveda.taskito.dashboard.support.Http;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The three public OAuth HTTP routes. Unlike the JSON API routes these emit 302
@@ -28,10 +29,10 @@ public final class OAuthHandlers {
     static final String START_PREFIX = "/api/auth/oauth/start/";
     static final String CALLBACK_PREFIX = "/api/auth/oauth/callback/";
 
-    private final OAuthFlow flow;
+    private final @Nullable OAuthFlow flow;
     private final boolean secureCookies;
 
-    public OAuthHandlers(OAuthFlow flow, boolean secureCookies) {
+    public OAuthHandlers(@Nullable OAuthFlow flow, boolean secureCookies) {
         this.flow = flow;
         this.secureCookies = secureCookies;
     }
@@ -90,7 +91,8 @@ public final class OAuthHandlers {
             List<String> cookies = List.of(
                     Cookies.sessionCookie(result.session().token(), secureCookies, ttl),
                     Cookies.csrfCookie(result.session().csrfToken(), secureCookies, ttl));
-            redirect(exchange, result.nextUrl(), cookies);
+            String nextUrl = result.nextUrl();
+            redirect(exchange, nextUrl == null ? "/" : nextUrl, cookies);
         } catch (ProviderNotConfigured e) {
             Http.respondError(exchange, 404, "oauth_not_configured");
         } catch (StateValidationError e) {

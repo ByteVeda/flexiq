@@ -1,6 +1,7 @@
 package org.byteveda.taskito.model;
 
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * One message pulled from a log topic. {@link #id} is the cursor token to pass to
@@ -15,16 +16,20 @@ public final class TopicMessage {
     public final byte[] payload;
 
     /** Caller metadata, or {@code null} when none was set. */
-    public final Map<String, Object> metadata;
+    public final @Nullable Map<String, Object> metadata;
 
     /** Structured notes, or {@code null} when none were set. */
-    public final Map<String, Object> notes;
+    public final @Nullable Map<String, Object> notes;
 
     /** Unix-millisecond publish time. */
     public final long createdAt;
 
     public TopicMessage(
-            String id, byte[] payload, Map<String, Object> metadata, Map<String, Object> notes, long createdAt) {
+            String id,
+            byte[] payload,
+            @Nullable Map<String, Object> metadata,
+            @Nullable Map<String, Object> notes,
+            long createdAt) {
         this.id = id;
         this.payload = payload;
         this.metadata = metadata;

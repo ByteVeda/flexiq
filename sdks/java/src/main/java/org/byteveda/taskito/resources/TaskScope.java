@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Per-invocation resource scope. Caches task-scoped resources for one task and
@@ -27,7 +28,7 @@ public final class TaskScope implements ResourceContext {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T use(String name) {
+    public <T> @Nullable T use(String name) {
         return (T) runtime.resolveForTask(this, name);
     }
 

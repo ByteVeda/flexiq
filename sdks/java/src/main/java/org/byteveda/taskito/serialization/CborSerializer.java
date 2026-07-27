@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.byteveda.taskito.errors.SerializationException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * CBOR serializer for cross-SDK payloads (RFC 8949), writing the {@code 0x02}
@@ -34,7 +35,7 @@ public final class CborSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serialize(Object value) {
+    public byte[] serialize(@Nullable Object value) {
         try {
             return tagged(mapper.writeValueAsBytes(value));
         } catch (Exception e) {
@@ -65,7 +66,7 @@ public final class CborSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serializeCall(Object payload) {
+    public byte[] serializeCall(@Nullable Object payload) {
         List<Object> call = Arrays.asList(Arrays.asList(payload), Collections.emptyMap());
         try {
             return tagged(mapper.writeValueAsBytes(call));

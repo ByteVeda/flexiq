@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.dashboard.auth.RequestContext;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Everything a route handler needs: the exchange, matched path parameters
@@ -17,7 +18,7 @@ public record Req(
         String path,
         List<String> params,
         Map<String, String> query,
-        byte[] body,
+        byte @Nullable [] body,
         RequestContext ctx) {
 
     public String param(int index) {

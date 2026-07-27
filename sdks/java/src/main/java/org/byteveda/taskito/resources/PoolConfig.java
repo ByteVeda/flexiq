@@ -1,6 +1,7 @@
 package org.byteveda.taskito.resources;
 
 import java.time.Duration;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Sizing and timing for a {@link ResourceScope#POOLED} resource (part of the
@@ -13,7 +14,7 @@ import java.time.Duration;
  * @param maxLifetime an idle instance older than this is disposed instead of reused
  *     ({@code null} keeps instances forever)
  */
-public record PoolConfig(int poolSize, int poolMin, Duration acquireTimeout, Duration maxLifetime) {
+public record PoolConfig(int poolSize, int poolMin, Duration acquireTimeout, @Nullable Duration maxLifetime) {
 
     private static final Duration DEFAULT_ACQUIRE_TIMEOUT = Duration.ofSeconds(10);
 
@@ -40,7 +41,7 @@ public record PoolConfig(int poolSize, int poolMin, Duration acquireTimeout, Dur
 
     /** A pool of {@code poolSize} with no prewarm, a 10s acquire timeout, and unlimited lifetime. */
     public static PoolConfig of(int poolSize) {
-        return new PoolConfig(poolSize, 0, null, null);
+        return new PoolConfig(poolSize, 0, DEFAULT_ACQUIRE_TIMEOUT, null);
     }
 
     /** This configuration with {@code poolMin} instances built eagerly at worker start. */

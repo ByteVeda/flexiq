@@ -6,6 +6,7 @@ import java.util.Arrays;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.byteveda.taskito.errors.CryptoException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Wraps a delegate serializer, prefixing each payload with an HMAC-SHA256 tag.
@@ -24,7 +25,7 @@ public final class SignedSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serialize(Object value) {
+    public byte[] serialize(@Nullable Object value) {
         byte[] body = delegate.serialize(value);
         byte[] mac = mac(body);
         byte[] out = new byte[MAC_LENGTH + body.length];

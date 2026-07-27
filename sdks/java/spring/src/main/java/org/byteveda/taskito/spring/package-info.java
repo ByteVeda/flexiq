@@ -4,4 +4,7 @@
  * (see {@link org.byteveda.taskito.spring.TaskitoProperties}). Define your own
  * {@code Taskito} bean to override it.
  */
+@NullMarked
 package org.byteveda.taskito.spring;
+
+import org.jspecify.annotations.NullMarked;

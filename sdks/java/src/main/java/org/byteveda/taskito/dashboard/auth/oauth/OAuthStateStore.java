@@ -80,12 +80,12 @@ public final class OAuthStateStore {
         try {
             state = new OAuthState(
                     stateToken,
-                    (String) data.get("nonce"),
-                    (String) data.get("code_verifier"),
-                    (String) data.get("slot"),
-                    (String) data.get("next_url"),
-                    asLong(data.get("created_at")),
-                    asLong(data.get("expires_at")));
+                    Json.requireString(data, "nonce"),
+                    Json.requireString(data, "code_verifier"),
+                    Json.requireString(data, "slot"),
+                    Json.optionalString(data, "next_url"),
+                    Json.requireLong(data, "created_at"),
+                    Json.requireLong(data, "expires_at"));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -125,7 +125,7 @@ public final class OAuthStateStore {
             }
             long expires;
             try {
-                expires = asLong(data.get("expires_at"));
+                expires = Json.requireLong(data, "expires_at");
             } catch (RuntimeException e) {
                 continue;
             }
@@ -135,13 +135,6 @@ public final class OAuthStateStore {
             }
         }
         return removed;
-    }
-
-    private static long asLong(Object value) {
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        throw new IllegalArgumentException("expected numeric value, got " + value);
     }
 
     private static long nowSeconds() {

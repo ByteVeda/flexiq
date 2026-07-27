@@ -2,6 +2,7 @@ package org.byteveda.taskito.serialization;
 
 import java.lang.reflect.Type;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Applies a chain of {@link PayloadCodec}s around a delegate {@link Serializer}:
@@ -21,7 +22,7 @@ public final class CodecSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serialize(Object value) {
+    public byte[] serialize(@Nullable Object value) {
         byte[] bytes = delegate.serialize(value);
         for (PayloadCodec codec : codecs) {
             bytes = codec.encode(bytes);

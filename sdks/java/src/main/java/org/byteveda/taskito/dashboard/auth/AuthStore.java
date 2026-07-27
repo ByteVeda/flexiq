@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.byteveda.taskito.dashboard.store.SettingsAccess;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Users and sessions persisted in the settings KV store — no dedicated tables,
@@ -47,8 +48,18 @@ public final class AuthStore {
     }
 
     public Optional<User> getUser(String username) {
-        Object row = rawUsers().get(username);
-        return row instanceof Map<?, ?> map ? Optional.of(toUser(username, map)) : Optional.empty();
+        return userRow(rawUsers(), username).map(row -> toUser(username, row));
+    }
+
+    /** One user's record out of the shared blob, when it is present and well-formed. */
+    private static Optional<Map<String, Object>> userRow(Map<String, Object> users, String username) {
+        Object row = users.get(username);
+        if (!(row instanceof Map<?, ?> map)) {
+            return Optional.empty();
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> typed = (Map<String, Object>) map;
+        return Optional.of(typed);
     }
 
     /**
@@ -89,7 +100,7 @@ public final class AuthStore {
     }
 
     /** Verify credentials; {@code null} on any failure. Updates last-login on success. */
-    public User authenticate(String username, String password) {
+    public @Nullable User authenticate(String username, String password) {
         Optional<User> found = getUser(username);
         if (found.isEmpty()) {
             PasswordHasher.dummyVerify(password);
@@ -160,13 +171,17 @@ public final class AuthStore {
      * email/display-name and last-login.
      */
     public synchronized User getOrCreateOauthUser(
-            String slot, String subject, String email, String name, boolean emailVerified, List<String> adminEmails) {
+            String slot,
+            String subject,
+            @Nullable String email,
+            @Nullable String name,
+            boolean emailVerified,
+            List<String> adminEmails) {
         String username = slot + ":" + subject;
         Map<String, Object> users = rawUsers();
-        Object existing = users.get(username);
-        if (existing instanceof Map<?, ?> map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> row = (Map<String, Object>) map;
+        Optional<Map<String, Object>> existing = userRow(users, username);
+        if (existing.isPresent()) {
+            Map<String, Object> row = existing.get();
             row.put("email", email);
             row.put("display_name", name);
             row.put("last_login_at", nowMillis());
@@ -192,7 +207,7 @@ public final class AuthStore {
      * listed address. Everyone else — including the very first user — gets
      * viewer, so a stray first OAuth login can never win admin.
      */
-    public static Role oauthBootstrapRole(String email, boolean emailVerified, List<String> adminEmails) {
+    public static Role oauthBootstrapRole(@Nullable String email, boolean emailVerified, List<String> adminEmails) {
         if (!emailVerified || email == null || email.isBlank()) {
             return Role.VIEWER;
         }
@@ -253,11 +268,11 @@ public final class AuthStore {
         try {
             session = new Session(
                     token,
-                    (String) data.get("username"),
-                    Role.orViewer((String) data.get("role")).wire(),
-                    asLong(data.get("created_at")),
-                    asLong(data.get("expires_at")),
-                    (String) data.get("csrf_token"));
+                    Json.requireString(data, "username"),
+                    Role.orViewer(Json.optionalString(data, "role")).wire(),
+                    Json.requireLong(data, "created_at"),
+                    Json.requireLong(data, "expires_at"),
+                    Json.requireString(data, "csrf_token"));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -285,7 +300,7 @@ public final class AuthStore {
             }
             long expires;
             try {
-                expires = asLong(data.get("expires_at"));
+                expires = Json.requireLong(data, "expires_at");
             } catch (RuntimeException e) {
                 continue;
             }
@@ -350,22 +365,15 @@ public final class AuthStore {
         settings.setSetting(USERS_KEY, Json.toString(users));
     }
 
-    private static User toUser(String username, Map<?, ?> row) {
+    private static User toUser(String username, Map<String, Object> row) {
         return new User(
                 username,
-                (String) row.get("password_hash"),
-                Role.orViewer((String) row.get("role")).wire(),
-                asLong(row.get("created_at")),
-                row.get("last_login_at") == null ? null : asLong(row.get("last_login_at")),
-                (String) row.get("email"),
-                (String) row.get("display_name"));
-    }
-
-    private static long asLong(Object value) {
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        throw new IllegalArgumentException("expected numeric value, got " + value);
+                Json.requireString(row, "password_hash"),
+                Role.orViewer(Json.optionalString(row, "role")).wire(),
+                Json.requireLong(row, "created_at"),
+                Json.optionalLong(row, "last_login_at"),
+                Json.optionalString(row, "email"),
+                Json.optionalString(row, "display_name"));
     }
 
     private static long nowMillis() {

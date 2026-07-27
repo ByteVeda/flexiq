@@ -7,6 +7,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.dashboard.support.Http;
 import org.byteveda.taskito.model.JobFilter;
 import org.byteveda.taskito.model.JobStatus;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Read and action handlers for jobs, queues, dead-letters, metrics, and
@@ -56,7 +57,7 @@ public final class CoreHandlers {
         return queue.listJobs(filter.build()).stream().map(Contract::job).collect(Collectors.toList());
     }
 
-    public Object job(String id) {
+    public @Nullable Object job(String id) {
         return queue.getJob(id).map(Contract::job).orElse(null);
     }
 

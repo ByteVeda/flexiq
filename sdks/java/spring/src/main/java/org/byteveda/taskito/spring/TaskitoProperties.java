@@ -1,40 +1,41 @@
 package org.byteveda.taskito.spring;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /** Configuration for the auto-configured {@link org.byteveda.taskito.Taskito} bean, bound from {@code taskito.*}. */
 @ConfigurationProperties(prefix = "taskito")
 public class TaskitoProperties {
     /** Connection URL / DSN (e.g. a SQLite path, or a {@code postgres://}/{@code redis://} URL). */
-    private String url;
+    private @Nullable String url;
 
     /** Connection-pool size; unset uses the backend default. */
-    private Integer poolSize;
+    private @Nullable Integer poolSize;
 
     /** Optional namespace isolating this app's jobs within a shared store. */
-    private String namespace;
+    private @Nullable String namespace;
 
-    public String getUrl() {
+    public @Nullable String getUrl() {
         return url;
     }
 
-    public void setUrl(String url) {
+    public void setUrl(@Nullable String url) {
         this.url = url;
     }
 
-    public Integer getPoolSize() {
+    public @Nullable Integer getPoolSize() {
         return poolSize;
     }
 
-    public void setPoolSize(Integer poolSize) {
+    public void setPoolSize(@Nullable Integer poolSize) {
         this.poolSize = poolSize;
     }
 
-    public String getNamespace() {
+    public @Nullable String getNamespace() {
         return namespace;
     }
 
-    public void setNamespace(String namespace) {
+    public void setNamespace(@Nullable String namespace) {
         this.namespace = namespace;
     }
 
@@ -60,10 +61,10 @@ public class TaskitoProperties {
         private boolean authEnabled = false;
 
         /** Optional shared token gating {@code /api/*}; overrides the session flow. */
-        private String token;
+        private @Nullable String token;
 
         /** Optional unpacked SPA directory; null auto-discovers the bundled assets. */
-        private String staticDir;
+        private @Nullable String staticDir;
 
         /** Whether to keep the {@code Secure} cookie attribute (drop it for local HTTP). */
         private boolean secureCookies = true;
@@ -92,19 +93,19 @@ public class TaskitoProperties {
             this.authEnabled = authEnabled;
         }
 
-        public String getToken() {
+        public @Nullable String getToken() {
             return token;
         }
 
-        public void setToken(String token) {
+        public void setToken(@Nullable String token) {
             this.token = token;
         }
 
-        public String getStaticDir() {
+        public @Nullable String getStaticDir() {
             return staticDir;
         }
 
-        public void setStaticDir(String staticDir) {
+        public void setStaticDir(@Nullable String staticDir) {
             this.staticDir = staticDir;
         }
 
