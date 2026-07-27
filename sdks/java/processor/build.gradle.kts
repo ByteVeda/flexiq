@@ -1,11 +1,15 @@
 // Standalone compile-time annotation processor for @TaskHandler. Dependency-free
 // (reads annotations structurally via javax.lang.model), so it never forms a
 // cycle with the runtime it serves. Consumers add it via `annotationProcessor`.
+import net.ltgt.gradle.errorprone.CheckSeverity
+import net.ltgt.gradle.errorprone.errorprone
+
 plugins {
     `java-library`
     checkstyle
     id("com.diffplug.spotless") version "7.2.1"
     id("com.vanniktech.maven.publish") version "0.37.0"
+    id("net.ltgt.errorprone") version "5.1.0"
 }
 
 mavenPublishing {
@@ -49,6 +53,12 @@ repositories {
     mavenCentral()
 }
 
+dependencies {
+    errorprone("com.google.errorprone:error_prone_core:${property("errorProneVersion")}")
+    errorprone("com.uber.nullaway:nullaway:${property("nullAwayVersion")}")
+    compileOnly("org.jspecify:jspecify:${property("jspecifyVersion")}")
+}
+
 spotless {
     java {
         target("src/**/*.java")
@@ -63,4 +73,19 @@ checkstyle {
     toolVersion = "10.21.4"
     configFile = file("../config/checkstyle/checkstyle.xml")
     isIgnoreFailures = false
+}
+
+// Null-safety: @NullMarked sources checked by NullAway, matching the SDK module.
+tasks.withType<JavaCompile>().configureEach {
+    options.errorprone { isEnabled = false }
+}
+
+tasks.named<JavaCompile>("compileJava") {
+    options.errorprone {
+        isEnabled = true
+        disableAllChecks.set(true)
+        check("NullAway", CheckSeverity.ERROR)
+        option("NullAway:OnlyNullMarked", "true")
+        option("NullAway:JSpecifyMode", "true")
+    }
 }

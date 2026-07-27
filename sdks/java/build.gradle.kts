@@ -1,9 +1,13 @@
 
+import net.ltgt.gradle.errorprone.CheckSeverity
+import net.ltgt.gradle.errorprone.errorprone
+
 plugins {
     `java-library`
     checkstyle
     id("com.diffplug.spotless") version "7.2.1"
     id("com.vanniktech.maven.publish") version "0.37.0"
+    id("net.ltgt.errorprone") version "5.1.0"
 }
 
 java {
@@ -17,6 +21,32 @@ java {
 
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(17)
+    // Error Prone is carried only for NullAway; every other check stays off so the
+    // build fails on real nullness regressions and nothing else.
+    options.errorprone {
+        isEnabled = false
+    }
+}
+
+// NullAway makes the JSpecify annotations load-bearing: in a @NullMarked package
+// an unannotated reference is non-null, and dereferencing a @Nullable one fails
+// the build. OnlyNullMarked keeps the `package-info.java` annotations the single
+// source of truth — no package list duplicated here. Tests deliberately feed
+// nulls to assert the error paths, so they stay out.
+tasks.named<JavaCompile>("compileJava") {
+    options.errorprone {
+        isEnabled = true
+        disableAllChecks.set(true)
+        check("NullAway", CheckSeverity.ERROR)
+        option("NullAway:OnlyNullMarked", "true")
+        option("NullAway:JSpecifyMode", "true")
+        // picocli assigns command fields reflectively after construction, so the
+        // constructor-initialization check cannot see them being set.
+        option(
+            "NullAway:ExcludedFieldAnnotations",
+            "picocli.CommandLine.Option,picocli.CommandLine.Parameters,picocli.CommandLine.ParentCommand,picocli.CommandLine.Spec",
+        )
+    }
 }
 
 repositories {
@@ -80,7 +110,14 @@ sourceSets["test"].java.srcDir(
 )
 
 dependencies {
+    // Nullness contract of the public API. `api` so consumers' own null checkers
+    // (and Kotlin's platform-type inference) resolve the annotations; the jar is
+    // a few KB with no transitive dependencies.
+    api("org.jspecify:jspecify:${property("jspecifyVersion")}")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+
+    errorprone("com.google.errorprone:error_prone_core:${property("errorProneVersion")}")
+    errorprone("com.uber.nullaway:nullaway:${property("nullAwayVersion")}")
     implementation("info.picocli:picocli:4.7.6")
 
     // Optional: the MessagePack serializer. Compiled against, not bundled — a
