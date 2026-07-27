@@ -7,7 +7,7 @@
     "data-pipeline",
     "workflows",
     "saga-checkout",
-    "batch-emails",
+    "bulk-emails",
     "predicate-gated-jobs",
     "benchmark"
   ]

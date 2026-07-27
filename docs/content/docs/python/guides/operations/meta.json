@@ -8,7 +8,7 @@
     "security",
     "deployment",
     "mesh",
-    "autoscaler",
+    "autoscaling",
     "keda",
     "postgres",
     "migration"
