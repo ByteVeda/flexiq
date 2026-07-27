@@ -56,7 +56,7 @@ Two different code paths both `.delay()` into the same batched task. They accumu
 
 ## Trade-off
 
-Items live in memory until the buffer flushes. If the process crashes between `.delay()` and the flush, those items are lost. This matches Celery's `Batches` extension semantics.
+The buffer is **producer-side**: `.delay()` returns once the item is in memory, and nothing reaches storage until the batch flushes. If the process crashes between `.delay()` and the flush, those items are lost — they were never enqueued, so there is nothing for a worker to recover.
 
 <Callout type="warn" title="Do not enable batching for critical writes">
 Anything that must reach the queue with at-least-once semantics — financial transactions, billing events, audit logs — should use a regular task, not a batched one. The throughput win isn't worth the rare-but-real data-loss risk.
