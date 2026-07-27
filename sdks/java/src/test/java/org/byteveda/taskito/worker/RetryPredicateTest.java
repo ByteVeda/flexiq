@@ -42,14 +42,15 @@ class RetryPredicateTest {
             AtomicInteger retries = new AtomicInteger();
             CountDownLatch dead = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(permanent, (String payload) -> {
                         attempts.incrementAndGet();
                         throw new IllegalArgumentException("malformed input");
                     })
                     .on(EventName.RETRY, event -> retries.incrementAndGet())
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(25, TimeUnit.SECONDS), "task should dead-letter");
 
                 assertEquals(1, attempts.get(), "a rejected exception must not be retried");
@@ -75,13 +76,14 @@ class RetryPredicateTest {
             AtomicInteger attempts = new AtomicInteger();
             CountDownLatch dead = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(transientFailure, (String payload) -> {
                         attempts.incrementAndGet();
                         throw new IllegalStateException("connection reset");
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(25, TimeUnit.SECONDS), "task should exhaust its budget");
 
                 assertEquals(3, attempts.get(), "first run plus both retries");

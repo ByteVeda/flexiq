@@ -224,8 +224,9 @@ class PubSubTest {
             // No owning worker yet, so the subscription is not registered.
             assertTrue(queue.publish("orders", "o-1").isEmpty());
 
-            try (Worker worker =
-                    queue.worker().handle(SEND_EMAIL, payload -> payload).start()) {
+            Worker worker =
+                    queue.worker().handle(SEND_EMAIL, payload -> payload).start();
+            try (worker) {
                 List<Job> deliveries = queue.publish("orders", "o-2");
                 assertEquals(1, deliveries.size());
                 Job done = queue.awaitJob(deliveries.get(0).id, Duration.ofSeconds(10))
@@ -244,7 +245,8 @@ class PubSubTest {
                         Map.of("backend", "sqlite", "dsn", dir.resolve("t.db").toString()));
         JniQueueBackend backend = JniQueueBackend.open(options);
         try (Taskito queue = Taskito.builder().open(backend)) {
-            try (Worker worker = queue.worker().start()) {
+            Worker worker = queue.worker().start();
+            try (worker) {
                 String liveWorkerId = queue.listWorkers().get(0).workerId;
                 backend.registerSubscription("orders", "live", SEND_EMAIL.name(), "default", false, liveWorkerId);
                 backend.registerSubscription("orders", "ghost", SEND_EMAIL.name(), "default", false, "gone-worker");
@@ -270,7 +272,8 @@ class PubSubTest {
                 .writeValueAsString(
                         Map.of("backend", "sqlite", "dsn", dir.resolve("t.db").toString()));
         JniQueueBackend backend = JniQueueBackend.open(options);
-        try (Taskito queue = Taskito.builder().open(backend)) {
+        Taskito queue = Taskito.builder().open(backend);
+        try (queue) {
             TaskitoException rejected = assertThrows(
                     TaskitoException.class,
                     () -> backend.registerSubscription("orders", "sink", SEND_EMAIL.name(), "default", false, null));
@@ -290,8 +293,9 @@ class PubSubTest {
             assertTrue(queue.publish("orders", "o-1").isEmpty());
 
             // Neither must a worker start re-registering the declaration.
-            try (Worker worker =
-                    queue.worker().handle(SEND_EMAIL, payload -> payload).start()) {
+            Worker worker =
+                    queue.worker().handle(SEND_EMAIL, payload -> payload).start();
+            try (worker) {
                 assertTrue(queue.publish("orders", "o-2").isEmpty());
             }
         }
@@ -303,8 +307,9 @@ class PubSubTest {
         try (Taskito queue = open(dir)) {
             queue.subscribe("orders", SEND_EMAIL);
             assertTrue(queue.unsubscribe("orders", SEND_EMAIL.name()));
-            try (Worker worker =
-                    queue.worker().handle(SEND_EMAIL, payload -> payload).start()) {
+            Worker worker =
+                    queue.worker().handle(SEND_EMAIL, payload -> payload).start();
+            try (worker) {
                 assertTrue(queue.listSubscriptions("orders").isEmpty());
                 assertTrue(queue.publish("orders", "o-1").isEmpty());
             }
@@ -383,12 +388,13 @@ class PubSubTest {
                     "orders", flaky, SubscriptionOptions.builder().name("flaky").build());
 
             CountDownLatch dead = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(flaky, (String payload) -> {
                         throw new IllegalStateException("boom");
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.publish("orders", "o-1");
                 assertTrue(dead.await(20, TimeUnit.SECONDS), "the delivery should dead-letter");
             }

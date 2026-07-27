@@ -38,7 +38,7 @@ class WorkflowSagaTest {
 
             WorkflowRun run = queue.submitWorkflow(wf);
             Queue<Integer> undone = new ConcurrentLinkedQueue<>();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> p)
                     .handle(B, p -> p)
                     .handle(C, p -> {
@@ -53,7 +53,8 @@ class WorkflowSagaTest {
                         return p;
                     })
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPENSATED, status.state);
                 assertEquals(NodeStatus.COMPENSATED, status.node("a").orElseThrow().status);
@@ -84,14 +85,15 @@ class WorkflowSagaTest {
                     .step(Step.of("c", C, 3).after("a").maxRetries(0).build());
 
             WorkflowRun run = queue.submitWorkflow(wf);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> p)
                     .handle(C, p -> {
                         throw new IllegalStateException("boom");
                     })
                     .handle(UNDO_A, p -> p)
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertEquals(WorkflowState.COMPENSATED, run.await(Duration.ofSeconds(20)).state);
                 // The final event lands just after the run turns terminal; poll for it.
                 long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
@@ -127,13 +129,14 @@ class WorkflowSagaTest {
                     .step(Step.of("b", B, 2).after("a").maxRetries(0).build());
 
             WorkflowRun run = queue.submitWorkflow(wf);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> p)
                     .handle(B, p -> {
                         throw new IllegalStateException("boom");
                     })
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
             }

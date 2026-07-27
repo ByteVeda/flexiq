@@ -37,7 +37,7 @@ class TaskPolicyConfigTest {
                 queue.enqueue(solo, String.valueOf(i));
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(4)
                     .handle(solo, (String p) -> {
                         peak.accumulateAndGet(running.incrementAndGet(), Math::max);
@@ -50,7 +50,8 @@ class TaskPolicyConfigTest {
                         return null;
                     })
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "all four jobs should finish");
             }
         }
@@ -77,7 +78,7 @@ class TaskPolicyConfigTest {
                 queue.enqueue(solo, String.valueOf(i));
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(4)
                     .batchSize(4)
                     .handle(solo, (String p) -> {
@@ -91,7 +92,8 @@ class TaskPolicyConfigTest {
                         return null;
                     })
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "all four jobs should finish");
             }
         }
@@ -119,10 +121,11 @@ class TaskPolicyConfigTest {
             }
 
             long start = System.nanoTime();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(limited, (String p) -> null)
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "all three jobs should finish");
             }
             Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
@@ -149,13 +152,14 @@ class TaskPolicyConfigTest {
                 queue.enqueue(flaky, String.valueOf(i));
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(4)
                     .handle(flaky, (String p) -> {
                         throw new IllegalStateException("dependency down");
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(20, TimeUnit.SECONDS), "an over-budget job should dead-letter");
             }
 

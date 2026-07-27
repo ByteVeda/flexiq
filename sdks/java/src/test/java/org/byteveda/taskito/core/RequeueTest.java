@@ -27,13 +27,14 @@ class RequeueTest {
             CountDownLatch running = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             String id = queue.enqueue(TASK, 1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, payload -> {
                         running.countDown();
                         release.await();
                         return payload;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(running.await(20, TimeUnit.SECONDS), "handler did not start");
                 // Pause first, so the poller can't re-claim the job the moment the
                 // requeue makes it pending again and flip the status under the assert.

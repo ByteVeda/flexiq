@@ -35,12 +35,13 @@ class WorkflowCacheTest {
                     .step("after", AFTER, 1, "compute");
 
             AtomicInteger computeRuns = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(SEED, p -> p)
                     .handle(COMPUTE, p -> computeRuns.incrementAndGet())
                     .handle(AFTER, p -> p)
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 // First run executes compute.
                 WorkflowStatus first = queue.submitWorkflow(wf).await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, first.state);

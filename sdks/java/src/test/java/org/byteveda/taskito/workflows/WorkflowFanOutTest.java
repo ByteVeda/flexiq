@@ -31,7 +31,7 @@ class WorkflowFanOutTest {
                     .fanIn("sum", sum, "all", "square");
 
             WorkflowRun run = queue.submitWorkflow(wf);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(seed, n -> {
                         List<Integer> out = new ArrayList<>();
                         for (int i = 1; i <= n; i++) {
@@ -48,7 +48,8 @@ class WorkflowFanOutTest {
                         return total;
                     })
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
                 assertEquals(NodeStatus.COMPLETED, status.node("square").orElseThrow().status);

@@ -35,7 +35,7 @@ class DependsOnTest {
             String idA = queue.enqueue(a, "a");
             queue.enqueue(b, "b", EnqueueOptions.builder().dependsOn(idA).build());
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(a, p -> {
                         aDone.set(true);
                         return p;
@@ -45,7 +45,8 @@ class DependsOnTest {
                         bRan.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(bRan.await(20, TimeUnit.SECONDS), "dependent should run once its dependency completes");
                 assertTrue(bSawADone.get(), "the dependency must complete before the dependent runs");
             }
@@ -65,7 +66,7 @@ class DependsOnTest {
             String idB = queue.enqueue(
                     b, "b", EnqueueOptions.builder().dependsOn(idA).build());
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(a, p -> {
                         throw new RuntimeException("boom");
                     })
@@ -73,7 +74,8 @@ class DependsOnTest {
                         bRan.set(true);
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 Job jobB = queue.awaitJob(idB, Duration.ofSeconds(20)).orElseThrow();
                 assertEquals(JobStatus.CANCELLED, jobB.status, "a failed dependency cascade-cancels the dependent");
                 assertFalse(bRan.get(), "the dependent must never run");

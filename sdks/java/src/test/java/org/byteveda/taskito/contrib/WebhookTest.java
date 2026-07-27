@@ -67,7 +67,8 @@ class WebhookTest {
                     WebhookUpdate.builder().events(List.of("success")).build());
 
             queue.enqueue(task, 1);
-            try (Worker worker = queue.worker().handle(task, p -> p).start()) {
+            Worker worker = queue.worker().handle(task, p -> p).start();
+            try (worker) {
                 // The loopback URL fails the SSRF guard, but only a MATCHED hook
                 // records a delivery — which is exactly what we assert on.
                 List<Delivery> deliveries = List.of();

@@ -42,14 +42,15 @@ class TypedRetryExceptionTest {
             AtomicInteger retries = new AtomicInteger();
             CountDownLatch dead = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(charge, (String payload) -> {
                         attempts.incrementAndGet();
                         throw new NonRetryableException("card declined");
                     })
                     .on(EventName.RETRY, event -> retries.incrementAndGet())
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(25, TimeUnit.SECONDS), "task should dead-letter");
 
                 assertEquals(1, attempts.get(), "a permanent failure must not be retried");
@@ -75,13 +76,14 @@ class TypedRetryExceptionTest {
             AtomicInteger attempts = new AtomicInteger();
             CountDownLatch dead = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(sync, (String payload) -> {
                         attempts.incrementAndGet();
                         throw new RetryableException("upstream 503");
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(25, TimeUnit.SECONDS), "task should exhaust its budget");
 
                 assertEquals(3, attempts.get(), "first run plus both retries");
@@ -106,13 +108,14 @@ class TypedRetryExceptionTest {
             AtomicInteger attempts = new AtomicInteger();
             CountDownLatch dead = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(parse, (String payload) -> {
                         attempts.incrementAndGet();
                         throw new IllegalStateException("row 3", new NonRetryableException("malformed input"));
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(25, TimeUnit.SECONDS), "task should dead-letter");
 
                 assertEquals(1, attempts.get(), "a wrapped permanent failure must not be retried");

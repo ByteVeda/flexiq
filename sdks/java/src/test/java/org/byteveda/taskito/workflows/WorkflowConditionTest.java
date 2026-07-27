@@ -32,7 +32,7 @@ class WorkflowConditionTest {
                             .build());
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicBoolean recovered = new AtomicBoolean();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(RISKY, p -> {
                         throw new IllegalStateException("boom");
                     })
@@ -41,7 +41,8 @@ class WorkflowConditionTest {
                         return p;
                     })
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
                 assertEquals(NodeStatus.FAILED, status.node("risky").orElseThrow().status);
@@ -64,14 +65,15 @@ class WorkflowConditionTest {
                             .build());
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicBoolean recovered = new AtomicBoolean();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(RISKY, p -> p)
                     .handle(RECOVER, p -> {
                         recovered.set(true);
                         return p;
                     })
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
                 assertEquals(NodeStatus.SKIPPED, status.node("recover").orElseThrow().status);
@@ -93,7 +95,7 @@ class WorkflowConditionTest {
                             .build());
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicBoolean cleaned = new AtomicBoolean();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(RISKY, p -> {
                         throw new IllegalStateException("boom");
                     })
@@ -102,7 +104,8 @@ class WorkflowConditionTest {
                         return p;
                     })
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
                 assertEquals(NodeStatus.COMPLETED, status.node("cleanup").orElseThrow().status);
@@ -146,14 +149,15 @@ class WorkflowConditionTest {
                             .build());
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicBoolean checked = new AtomicBoolean();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(PRODUCER, p -> p)
                     .handle(CHECK, p -> {
                         checked.set(true);
                         return p;
                     })
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
                 assertEquals(

@@ -35,12 +35,13 @@ class WorkflowTest {
 
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicInteger ran = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(a, p -> ran.incrementAndGet())
                     .handle(b, p -> ran.incrementAndGet())
                     .handle(c, p -> ran.incrementAndGet())
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
                 assertEquals(3, ran.get());
@@ -64,14 +65,15 @@ class WorkflowTest {
 
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicInteger cRan = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(a, p -> p)
                     .handle(b, p -> {
                         throw new IllegalStateException("boom");
                     })
                     .handle(c, p -> cRan.incrementAndGet())
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
                 assertEquals(NodeStatus.FAILED, status.node("b").orElseThrow().status);
@@ -93,8 +95,8 @@ class WorkflowTest {
 
             Workflow wf = Workflow.named("evpipeline").step("a", a, 1);
             WorkflowRun run = queue.submitWorkflow(wf);
-            try (Worker worker =
-                    queue.worker().handle(a, p -> p).trackWorkflows().start()) {
+            Worker worker = queue.worker().handle(a, p -> p).trackWorkflows().start();
+            try (worker) {
                 run.await(Duration.ofSeconds(20));
                 // The completion event lands just after the run turns terminal.
                 long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();

@@ -33,7 +33,7 @@ class DeadLetterByTaskTest {
             queue.enqueue(beta, "3");
 
             CountDownLatch dead = new CountDownLatch(3);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(alpha, (String p) -> {
                         throw new IllegalStateException("boom");
                     })
@@ -41,7 +41,8 @@ class DeadLetterByTaskTest {
                         throw new IllegalStateException("boom");
                     })
                     .on(EventName.DEAD, event -> dead.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(dead.await(20, TimeUnit.SECONDS), "all three should dead-letter");
             }
 

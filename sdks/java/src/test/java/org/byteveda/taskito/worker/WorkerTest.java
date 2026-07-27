@@ -51,13 +51,14 @@ class WorkerTest {
             String id = queue.enqueue(add, payload);
 
             CountDownLatch done = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(
                             add,
                             (Map<String, Object> p) ->
                                     ((Number) p.get("a")).intValue() + ((Number) p.get("b")).intValue())
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "task should complete");
 
                 Optional<byte[]> result = queue.getResult(id);
@@ -89,7 +90,8 @@ class WorkerTest {
                 }
             });
             queue.enqueue(noop, new HashMap<>());
-            try (Worker worker = queue.worker().handle(noop, p -> "ok").start()) {
+            Worker worker = queue.worker().handle(noop, p -> "ok").start();
+            try (worker) {
                 assertTrue(secondSaw.await(20, TimeUnit.SECONDS), "second middleware must still see the outcome");
             }
         }
@@ -114,7 +116,7 @@ class WorkerTest {
 
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<OutcomeEvent> outcome = new AtomicReference<>();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(slow, p -> {
                         Thread.sleep(60);
                         return "ok";
@@ -123,7 +125,8 @@ class WorkerTest {
                         outcome.set(event);
                         done.countDown();
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "task should complete");
             }
 
@@ -148,7 +151,7 @@ class WorkerTest {
             queue.enqueue(flaky, "go");
             List<EventName> order = new CopyOnWriteArrayList<>();
             AtomicInteger attempts = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(flaky, (String payload) -> {
                         if (attempts.incrementAndGet() == 1) {
                             throw new IllegalStateException("first attempt fails");
@@ -157,7 +160,8 @@ class WorkerTest {
                     })
                     .onEvent(EventName.JOB_FAILED, event -> order.add(event.name()))
                     .on(EventName.RETRY, event -> order.add(event.name()))
-                    .start()) {
+                    .start();
+            try (worker) {
                 pollUntil(() -> order.contains(EventName.RETRY), "retry outcome never arrived");
                 int failedAt = order.indexOf(EventName.JOB_FAILED);
                 assertTrue(failedAt >= 0, "job.failed must fire for the failing attempt");

@@ -52,11 +52,12 @@ class CircuitBreakerTest {
                 queue.enqueue(failing, "boom");
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(failing, p -> {
                         throw new RuntimeException("boom");
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 CircuitBreakerState state = awaitOpenBreaker(queue, "cb.fail", Duration.ofSeconds(40));
                 assertTrue(state.isOpen(), "breaker should be open after reaching the failure threshold");
                 assertEquals(2, state.threshold);
