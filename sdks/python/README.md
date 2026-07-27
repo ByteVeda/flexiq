@@ -52,14 +52,14 @@ print(job.result(timeout=10))  # 5
 ## Features
 
 Each section links to its deep-dive guide. New here? Start with
-**[Capabilities at a glance](https://docs.byteveda.org/taskito/capabilities)**.
+**[Capabilities at a glance](https://docs.byteveda.org/taskito/python/getting-started/capabilities)**.
 
-- **Reliability** — retries with backoff, per-exception retry rules, soft timeouts, a dead-letter queue with replay, circuit breakers, idempotent enqueue. [→ guide](https://docs.byteveda.org/taskito/guides/reliability)
-- **Workflows** — compose with `chain`, fan out with `group`, fan in with `chord`, plus dependency graphs with cascade cancel. [→ guide](https://docs.byteveda.org/taskito/guides/workflows/canvas)
-- **Concurrency** — thread pool by default (I/O-bound); switch to `--pool prefork` for true CPU parallelism with no GIL contention. [→ guide](https://docs.byteveda.org/taskito/guides/advanced-execution/prefork)
-- **Scheduling** — priorities, rate limiting, periodic (cron) tasks, delayed execution, job expiration. [→ guide](https://docs.byteveda.org/taskito/guides/core/scheduling)
-- **Observability** — built-in web dashboard, events, HMAC-signed webhooks, Prometheus + OpenTelemetry exporters, worker heartbeats. [→ guide](https://docs.byteveda.org/taskito/guides/dashboard)
-- **Extensibility** — pluggable serializers, per-task middleware, a fully async API, Postgres/Redis backends. [→ guide](https://docs.byteveda.org/taskito/guides/extensibility)
+- **Reliability** — retries with backoff, per-exception retry rules, soft timeouts, a dead-letter queue with replay, circuit breakers, idempotent enqueue. [→ guide](https://docs.byteveda.org/taskito/python/guides/reliability)
+- **Workflows** — compose with `chain`, fan out with `group`, fan in with `chord`, plus dependency graphs with cascade cancel. [→ guide](https://docs.byteveda.org/taskito/python/guides/workflows/canvas)
+- **Concurrency** — thread pool by default (I/O-bound); switch to `--pool prefork` for true CPU parallelism with no GIL contention. [→ guide](https://docs.byteveda.org/taskito/python/guides/advanced-execution/prefork)
+- **Scheduling** — priorities, rate limiting, periodic (cron) tasks, delayed execution, job expiration. [→ guide](https://docs.byteveda.org/taskito/python/guides/core/scheduling)
+- **Observability** — built-in web dashboard, events, HMAC-signed webhooks, Prometheus + OpenTelemetry exporters, worker heartbeats. [→ guide](https://docs.byteveda.org/taskito/python/guides/dashboard)
+- **Extensibility** — pluggable serializers, per-task middleware, a fully async API, Postgres/Redis backends. [→ guide](https://docs.byteveda.org/taskito/python/guides/extensibility)
 
 ```python
 from taskito import chain, group, chord
@@ -98,7 +98,7 @@ def test_add():
 ## Documentation
 
 **[Read the docs →](https://docs.byteveda.org/taskito)** — guides, API reference, and architecture.
-Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/taskito/guides/operations/migration)**.
+Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/taskito/python/guides/operations/migration)**.
 For a project overview and the other SDKs, see the [main repository](https://github.com/ByteVeda/taskito).
 
 ## License
