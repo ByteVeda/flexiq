@@ -33,7 +33,7 @@ starts the resource health checker, and installs signal handlers.
 | `tags` | `list[str] \| None` | `None` | Tags for worker specialization / routing. |
 | `pool` | `str` | `"thread"` | `"thread"` or `"prefork"`. |
 | `app` | `str \| None` | `None` | Import path to the `Queue` (e.g. `"myapp:queue"`). **Required** when `pool="prefork"`. |
-| `mesh` | `MeshWorker \| None` | `None` | Gossip-based discovery, affinity, and work stealing. Requires the `mesh` cargo feature. |
+| `mesh` | `MeshWorker \| None` | `None` | Gossip-based discovery, affinity, and work stealing. Not in the PyPI wheel — see [Mesh](/python/guides/operations/mesh). |
 
 `arun_worker()` is the async twin — it runs the same blocking loop in a thread
 executor so it does not block the event loop, and takes the same arguments.
@@ -89,9 +89,11 @@ is running — it is the programmatic equivalent of the signal, useful from a
 health endpoint or a supervisor thread.
 
 <Callout type="warning">
-  Set `drain_timeout` above your longest task's `timeout`, or shutdown will cut
-  off jobs that would have finished. A job interrupted by the drain deadline is
-  retried according to its budget, so the work is not lost — but it is repeated.
+  Set `drain_timeout` above your longest task's `timeout`, or shutdown stops
+  waiting on jobs that would have finished. `drain_timeout` bounds how long the
+  drain *waits* — on the thread pool it does not interrupt a task that is still
+  running, so a job left unsettled is re-claimed and re-run by another worker
+  once the scheduler reaps it. The work is not lost, but it is repeated.
 </Callout>
 
 ## From the CLI

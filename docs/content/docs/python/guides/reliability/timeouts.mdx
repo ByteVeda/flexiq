@@ -19,6 +19,20 @@ The narrowest setting wins: per-job over per-task over queue default.
 
 ## What a timeout does
 
+How the deadline is enforced depends on the pool:
+
+| Pool | Enforcement |
+|---|---|
+| `"thread"` | The scheduler's stale-job reap marks the attempt timed out. The Python thread is **not** interrupted — it keeps running to completion in the background. |
+| `"prefork"` | A watchdog thread `SIGKILL`s the child process at the deadline, so the work really does stop. |
+
+This is a property of Python, not a gap: there is no safe way to interrupt an
+arbitrary thread mid-call. On the thread pool a hard timeout is therefore a
+bookkeeping outcome — the job is failed and retried on schedule while the
+orphaned attempt still holds its worker slot until it finishes on its own. Use
+`soft_timeout` (below) if you need the task itself to stop, or `pool="prefork"`
+if you need the runtime to guarantee it.
+
 A timed-out attempt is a **failure**, not a cancellation. It consumes one retry;
 if the budget still has room the job is re-enqueued with the usual backoff, and
 when the budget is exhausted the job moves to the
@@ -30,8 +44,9 @@ together rather than each on its own.
 
 ## Soft timeouts
 
-A hard timeout stops the attempt wherever it happens to be. `soft_timeout` gives
-the task a chance to wind down first — it is a deadline the task polls:
+A hard timeout settles the *job* at the deadline, but on the thread pool it does
+not stop the work. `soft_timeout` is the deadline the task polls itself, so the
+task actually unwinds:
 
 ```python
 from taskito import current_job
@@ -55,7 +70,7 @@ reached before the hard one:
 | Setting | Behaviour |
 |---|---|
 | `soft_timeout` only | Raises `SoftTimeoutError` at the deadline — but only where the task checks. |
-| `timeout` only | The attempt is killed at the deadline, wherever it is. |
+| `timeout` only | The job is failed at the deadline. The work stops only on `prefork`. |
 | Both (recommended) | The task gets a window to exit cleanly; the hard timeout is the backstop if it does not. |
 
 <Callout type="warning">
@@ -81,10 +96,10 @@ recovers that slot.
 
 | Setting | Scope | What it bounds |
 |---|---|---|
-| `timeout` | One attempt | Execution time before the attempt is killed. |
+| `timeout` | One attempt | Execution time before the attempt is failed (and, on `prefork`, killed). |
 | `soft_timeout` | One attempt | Polled deadline the task observes itself. |
 | `expires` | One job | How long a job may sit *unstarted* before it is skipped. |
-| `drain_timeout` | Worker | How long shutdown waits for running jobs to finish. |
+| `drain_timeout` | Worker | How long shutdown *waits* for running jobs before it stops waiting. |
 | `result_ttl` | One result | How long a finished job's result is retained. |
 
 `expires` is the one most often confused with `timeout`: it bounds staleness in
