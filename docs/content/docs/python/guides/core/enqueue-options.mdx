@@ -103,6 +103,8 @@ rather than job by job.
 `metadata` is an opaque JSON string with no size ceiling:
 
 ```python
+import json
+
 import_rows.apply_async(
     args=(file_id,),
     notes={"rows": 1200, "source": "s3"},

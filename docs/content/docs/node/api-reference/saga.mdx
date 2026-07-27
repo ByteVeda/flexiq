@@ -11,7 +11,7 @@ full example, see the [Sagas guide](/node/guides/workflows/saga).
 ## `compensate`
 
 ```ts
-step(name: string, task: string, options: { compensate?: string, … }): this
+step(name: string, task: string, options?: WorkflowStepOptions): this
 ```
 
 Names the registered task that undoes this step. If the run later fails,
