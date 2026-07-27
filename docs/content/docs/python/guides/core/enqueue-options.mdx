@@ -1,0 +1,129 @@
+---
+title: Enqueue options
+description: "Per-job overrides at submission — priority, delay, queue, timeout, dedup keys, expiry, notes, dependencies."
+---
+
+`delay()` is the short form — positional and keyword arguments go straight to
+the task. `apply_async()` is the same submission with every per-job override
+available:
+
+```python
+job = process_order.delay(order_id)
+
+job = process_order.apply_async(
+    args=(order_id,),
+    priority=10,
+    delay=30,
+    queue="orders",
+)
+```
+
+Each option overrides the corresponding default from `@queue.task(...)` or the
+`Queue(...)` constructor, for this job only.
+
+## Options
+
+| Option | Type | Overrides | Meaning |
+|---|---|---|---|
+| `args` | `tuple` | — | Positional arguments for the task. |
+| `kwargs` | `dict` | — | Keyword arguments for the task. |
+| `priority` | `int` | task `priority` | Higher runs first among eligible jobs. |
+| `delay` | `float` | — | Seconds before the job becomes eligible to run. |
+| `queue` | `str` | task `queue` | Named queue to submit into. |
+| `max_retries` | `int` | task `max_retries` | Retry budget for this job. |
+| `timeout` | `int` | task `timeout` | Per-attempt deadline in seconds. |
+| `unique_key` | `str` | — | Dedup key; alias of `idempotency_key`. |
+| `idempotency_key` | `str` | — | Explicit dedup key. |
+| `idempotent` | `bool` | task `idempotent` | Force or disable auto-derived dedup for this call. |
+| `expires` | `float` | task `expires` | Seconds until an unstarted job is skipped. |
+| `result_ttl` | `int` | queue `result_ttl` | How long this job's result is retained. |
+| `metadata` | `str` | — | Arbitrary JSON string attached to the job. |
+| `notes` | `dict` | — | Structured annotations, ≤ 15 top-level fields. |
+| `depends_on` | `str \| list[str]` | — | Job id(s) that must complete first. |
+
+## Scheduling and priority
+
+`delay` schedules the first attempt in the future; the scheduler picks the job
+up once it is due. For recurring schedules use
+[periodic tasks](/python/guides/core/scheduling) instead — a delayed job is a
+one-shot.
+
+```python
+send_reminder.apply_async(args=(user_id,), delay=3600)   # in an hour
+send_reminder.apply_async(args=(user_id,), priority=10)  # ahead of the pack
+```
+
+Priority orders *eligible* jobs against each other. It does not preempt work
+already running, and it cannot pull a job forward past its `delay`.
+
+## Deduplication
+
+`unique_key` (or `idempotency_key` — the same thing) collapses concurrent
+submissions: while a job with that key is pending or running, a second
+submission returns the existing job's id instead of creating a new row.
+
+```python
+sync_account.apply_async(args=(account_id,), unique_key=f"sync:{account_id}")
+```
+
+`idempotent=True` derives the key from the serialized payload instead, so
+identical calls coalesce without you naming a key. Set it per call to override
+the task's registration default in either direction. See
+[Idempotency](/python/guides/reliability/idempotency).
+
+## Expiry
+
+`expires` bounds how long a job may sit unstarted. A job that has not begun
+within the window is skipped — cancelled and archived rather than run late:
+
+```python
+send_otp.apply_async(args=(user_id,), expires=120)  # useless after 2 minutes
+```
+
+This is about staleness, not runtime. Use
+[`timeout`](/python/guides/reliability/timeouts) to bound execution.
+
+## Dependencies
+
+`depends_on` holds a job until the named job(s) complete:
+
+```python
+extract = extract_data.delay(source)
+transform = transform_data.apply_async(args=(source,), depends_on=extract.id)
+load = load_data.apply_async(args=(source,), depends_on=transform.id)
+```
+
+For anything past a simple chain — branches, joins, conditions, rollback —
+reach for [workflows](/python/guides/workflows), which track the run as a whole
+rather than job by job.
+
+## Notes and metadata
+
+`notes` is a validated dict (≤ 15 top-level fields) rendered by the dashboard;
+`metadata` is an opaque JSON string with no size ceiling:
+
+```python
+import json
+
+import_rows.apply_async(
+    args=(file_id,),
+    notes={"rows": 1200, "source": "s3"},
+    metadata=json.dumps({"trace_id": trace_id}),
+)
+```
+
+See [Structured notes](/python/guides/observability/notes) for the full
+contract.
+
+<Cards>
+  <Card
+    title="Cancellation"
+    href="/python/guides/core/cancellation"
+    description="Cancel a pending job, or ask a running one to stop."
+  />
+  <Card
+    title="Timeouts"
+    href="/python/guides/reliability/timeouts"
+    description="Hard and soft deadlines, and what a timed-out attempt does next."
+  />
+</Cards>

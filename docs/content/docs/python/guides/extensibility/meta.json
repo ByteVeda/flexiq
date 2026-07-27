@@ -1,4 +1,4 @@
 {
   "title": "Extensibility",
-  "pages": ["middleware", "serializers", "events-webhooks"]
+  "pages": ["events", "middleware", "webhooks", "serializers"]
 }

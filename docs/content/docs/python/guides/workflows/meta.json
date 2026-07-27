@@ -5,7 +5,7 @@
     "fan-out",
     "conditions",
     "gates",
-    "composition",
+    "sub-workflows",
     "saga",
     "caching",
     "analysis",

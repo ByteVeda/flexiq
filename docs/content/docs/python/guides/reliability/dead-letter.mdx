@@ -1,0 +1,130 @@
+---
+title: Dead-letter queue
+description: "Inspect, retry, and purge jobs that exhausted their retries — plus automatic DLQ retry."
+---
+
+When a job exhausts its retry budget it moves to the **dead-letter queue**
+(DLQ) rather than disappearing. The entry keeps the payload and the error
+history, so a failure can be investigated and replayed after the cause is
+fixed.
+
+```python
+for entry in queue.dead_letters(limit=20):
+    print(entry["task_name"], entry["error"])
+
+new_job_id = queue.retry_dead(entry["id"])   # re-enqueue it
+queue.delete_dead(entry["id"])               # or drop it
+```
+
+## Listing entries
+
+`dead_letters(limit, offset)` is the simple form. For anything that walks the
+whole queue, use the keyset-paginated variant — offsets get slower and can skip
+rows as the table changes underneath you:
+
+```python
+page = queue.dead_letters_after(limit=100)
+while True:
+    for entry in page.items:
+        triage(entry)
+    if page.next_cursor is None:
+        break
+    page = queue.dead_letters_after(limit=100, after=page.next_cursor)
+```
+
+## Why a job died
+
+The DLQ entry carries the final error. For the full per-attempt history — every
+failure, not just the last — read the job's error log:
+
+```python
+for error in queue.job_errors(job_id):
+    print(error["attempt"], error["error"])
+```
+
+That history is what distinguishes "failed the same way four times" (a real
+bug) from "three timeouts then a different error" (an unhealthy dependency).
+
+## Retrying
+
+```python
+new_job_id = queue.retry_dead(dead_id)
+```
+
+`retry_dead` re-enqueues the payload as a fresh job with a full retry budget and
+returns the new job id. Fix the cause first — a retry against an unchanged cause
+just walks back into the DLQ.
+
+<Callout type="info">
+  `retry_dead` re-enqueues a *dead* entry. `requeue_job` is a different tool: it
+  forces a **stuck running** job back to pending when its worker died. Only use
+  it once the owning worker is confirmed dead — a worker that is merely slow may
+  finish the original attempt, and the job then runs twice.
+</Callout>
+
+## Automatic retry
+
+The queue can drain the DLQ on its own, for failures that are transient by
+nature:
+
+```python
+queue = Queue(
+    dlq_auto_retry_delay=600,   # entries at least 10 minutes old
+    dlq_auto_retry_max=3,       # at most 3 automatic retries per entry
+)
+```
+
+`dlq_auto_retry_delay` is the minimum age before an entry is eligible — it stops
+a broken dependency from being hammered the instant jobs land. `dlq_auto_retry_max`
+caps how many times one entry may be auto-retried before it stays put and waits
+for a human. Leave `dlq_auto_retry_delay` as `None` (the default) to disable
+automatic retries entirely.
+
+Auto-retry suits infrastructure flakiness. It does not suit a poison payload:
+those entries burn their allowance and end up back in the DLQ anyway, just later.
+
+## Purging
+
+```python
+queue.purge_dead(older_than=7 * 86400)   # drop entries older than a week
+queue.delete_dead(dead_id)               # drop one
+```
+
+`purge_dead` returns how many entries it removed. For a standing policy, prefer
+[retention](/python/guides/operations/job-management) over an ad-hoc call — it
+applies the window continuously instead of whenever someone remembers.
+
+## Watching the DLQ
+
+The `JOB_DEAD` event fires as a job lands in the DLQ, which is the hook for
+alerting:
+
+```python
+from taskito import EventType
+
+def alert_on_dead(event_type, payload):
+    pager.notify(f"{payload['task_name']} dead-lettered: {payload['error']}")
+
+queue.on_event(EventType.JOB_DEAD, alert_on_dead)
+```
+
+A DLQ that grows steadily is the signal that matters — a handful of entries is
+normal, a rising line is a dependency failing faster than it recovers.
+
+<Cards>
+  <Card
+    title="Retries"
+    href="/python/guides/reliability/retries"
+    description="Backoff, retry budgets, and which exceptions retry at all."
+  />
+  <Card
+    title="Error handling"
+    href="/python/guides/reliability/error-handling"
+    description="The failure lifecycle and how to inspect it."
+  />
+  <Card
+    title="Job management"
+    href="/python/guides/operations/job-management"
+    description="Inspection, replay, retention, and bulk cleanup."
+  />
+</Cards>

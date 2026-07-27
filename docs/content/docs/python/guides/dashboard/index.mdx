@@ -122,7 +122,7 @@ Configuration (how to change it):
 | Reliability | **Circuit Breakers** | Automatic failure protection state, thresholds, cooldowns |
 | Reliability | **System** | Proxy reconstruction and interception strategy metrics |
 | Configuration | **Tasks** | Decorator defaults + runtime overrides per task ([guide](/python/guides/dashboard/task-overrides)) |
-| Configuration | **Webhooks** | HTTP event subscriptions with delivery history + replay ([guide](/python/guides/extensibility/events-webhooks)) |
+| Configuration | **Webhooks** | HTTP event subscriptions with delivery history + replay ([guide](/python/guides/extensibility/webhooks)) |
 | Configuration | **Settings** | Dashboard branding, external links, integrations |
 
 The full REST API surface is documented at
@@ -189,7 +189,7 @@ The **Webhooks** page lists every HTTP endpoint subscribed to job
 events. Add new endpoints with the **+ New webhook** button. Each row
 has a dropdown menu — send a test event, enable/disable, rotate the
 signing secret, or view the delivery history. Full guide:
-[Events & Webhooks](/python/guides/extensibility/events-webhooks).
+[Webhooks](/python/guides/extensibility/webhooks).
 
 ![Webhooks page with three subscriptions in different states](/screenshots/dashboard/webhooks-list.png)
 

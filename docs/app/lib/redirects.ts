@@ -47,6 +47,15 @@ export const REDIRECTS: Record<string, string> = {
   // normalized to the canonical "locks" / "saga" slugs shared with node/java.
   "/python/guides/reliability/locking": "/python/guides/reliability/locks",
   "/python/guides/workflows/sagas": "/python/guides/workflows/saga",
+  // Slug alignment: python's per-topic names normalized to the node/java ones,
+  // and its combined events+webhooks page split to match their two pages.
+  "/python/guides/workflows/composition":
+    "/python/guides/workflows/sub-workflows",
+  "/python/guides/operations/autoscaler":
+    "/python/guides/operations/autoscaling",
+  "/python/more/examples/batch-emails": "/python/more/examples/bulk-emails",
+  "/python/guides/extensibility/events-webhooks":
+    "/python/guides/extensibility/events",
 };
 
 /** The destination for a moved path, or undefined if it isn't a redirect. */

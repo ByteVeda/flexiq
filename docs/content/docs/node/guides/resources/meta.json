@@ -1,1 +1,11 @@
-{ "title": "Resources", "pages": ["dependency-injection", "interception"] }
+{
+  "title": "Resources",
+  "pages": [
+    "configuration",
+    "dependency-injection",
+    "interception",
+    "proxies",
+    "observability",
+    "testing"
+  ]
+}

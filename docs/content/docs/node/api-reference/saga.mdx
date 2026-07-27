@@ -1,0 +1,126 @@
+---
+title: Saga
+description: "The compensate step option, the saga run/node states, and the rollback contract."
+---
+
+Compensation is declared per step, at build time — there is no separate saga
+type and no task-level default compensator. A workflow becomes a saga the
+moment one of its steps sets `compensate`. For the conceptual walkthrough and a
+full example, see the [Sagas guide](/node/guides/workflows/saga).
+
+## `compensate`
+
+```ts
+step(name: string, task: string, options?: WorkflowStepOptions): this
+```
+
+Names the registered task that undoes this step. If the run later fails,
+completed compensable steps roll back in reverse-dependency order, each
+compensation job receiving the step's own forward result as its single
+positional argument.
+
+```ts
+queue.task("reserve", (orderId: string) => ({ orderId, hold: "h_1" }));
+queue.task("unreserve", (forward: { hold: string }) => inventory.release(forward.hold));
+
+const handle = queue.workflows
+  .define("checkout")
+  .step("reserve", "reserve", { args: [orderId], compensate: "unreserve" })
+  .step("charge", "charge", { after: "reserve", compensate: "refund" })
+  .step("ship", "ship", { after: "charge" })
+  .submit();
+```
+
+`compensate` lives on `WorkflowStepOptions`, so it is accepted by `step()` and
+by every [canvas](/node/api-reference/canvas) step. The specialised step kinds
+have no forward result to replay, and their option types omit the field
+entirely — `fanOut`, `fanIn`, `gate`, and `subWorkflow` reject it at compile
+time rather than at submit.
+
+## Compensator tasks
+
+A compensator is an ordinary task — no special registration. Its single
+argument is the forward step's return value, so give the forward task a return
+shape that carries whatever the rollback needs:
+
+```ts
+queue.task("charge", async (orderId: string) => {
+  const charge = await stripe.charge(orderId);
+  return { chargeId: charge.id, orderId };
+});
+
+queue.task("refund", async (forward: { chargeId: string }) => {
+  await stripe.refund(forward.chargeId);
+});
+```
+
+## Run states
+
+`WorkflowRunState` carries three saga states — every one terminal except
+`compensating`:
+
+| State | Terminal | Meaning |
+|---|:---:|---|
+| `compensating` | No | The run failed and rollback jobs are in flight. |
+| `compensated` | Yes | Every compensator for the run completed successfully. |
+| `compensation_failed` | Yes | A compensator itself failed; steps past that point are left as they were. |
+
+`handle.wait()` resolves on any terminal state, these two included.
+
+## Node states
+
+Per-node status gains the parallel set:
+
+| Status | Meaning |
+|---|---|
+| `compensating` | A compensation job has been enqueued for this node. |
+| `compensated` | The node's compensation job succeeded. |
+| `compensation_failed` | The node's compensation job exhausted its retries. |
+
+Only nodes that actually ran their forward task this run (`completed`) are
+compensable. `cache_hit`, `failed`, `skipped`, and pending nodes produced no
+side effect to undo, so rollback leaves them alone.
+
+Each node also carries the rollback's bookkeeping: `compensationJobId`,
+`compensationStartedAt`, `compensationCompletedAt`, and `compensationError`.
+
+<Callout type="info">
+  [`analyze(runId)`](/node/api-reference/workflows#analysis) counts both
+  `compensated` and `compensation_failed` toward `stats().failed` — a rolled-back
+  run is a failed run, not a successful one.
+</Callout>
+
+## Rollback mechanics
+
+When a run with compensable steps fails, completed compensable steps roll back
+in reverse-dependency order — deepest (most downstream) nodes first. Rollback is
+**fail-stop**: if any compensation job fails after exhausting its retries, the
+run ends `compensation_failed` and no further compensators are dispatched.
+
+Every compensation job is enqueued with the deterministic unique key
+`compensation:{runId}:{nodeName}` and `compensation: true` metadata alongside
+its `workflow_run_id` / `workflow_node_name`. The unique key makes a worker
+restart mid-rollback re-enqueue idempotently instead of double-compensating,
+and the marker routes the job's own outcome into the saga rather than the
+forward run.
+
+## Events
+
+Six [events](/node/guides/extensibility/events) cover a rollback. Run-level
+events carry a `WorkflowEvent` (`runId`, `state`, `error?`); per-node events
+carry `{ runId, node, error? }`:
+
+| Event | Emitted when |
+|---|---|
+| `workflow.compensating` | The run entered rollback. |
+| `workflow.node_compensating` | A node's compensation job was enqueued. |
+| `workflow.node_compensated` | A node's compensation job succeeded. |
+| `workflow.node_compensation_failed` | A node's compensation job failed. |
+| `workflow.compensated` | Rollback finished with every compensator succeeding. |
+| `workflow.compensation_failed` | Rollback stopped on a failed compensator. |
+
+```ts
+queue.on("workflow.node_compensation_failed", ({ runId, node, error }) => {
+  alert(`saga ${runId}: ${node} could not be rolled back — ${error}`);
+});
+```

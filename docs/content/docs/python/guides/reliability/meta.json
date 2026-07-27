@@ -6,7 +6,10 @@
     "guarantees",
     "idempotency",
     "rate-limiting",
+    "concurrency",
     "circuit-breakers",
+    "timeouts",
+    "dead-letter",
     "locks"
   ]
 }

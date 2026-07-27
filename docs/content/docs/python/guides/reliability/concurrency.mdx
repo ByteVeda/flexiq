@@ -1,0 +1,127 @@
+---
+title: Concurrency
+description: "Four independent knobs — worker pool size, cluster-wide task caps, per-worker fairness, and queue admission."
+---
+
+Concurrency in taskito is set at four different places, and they answer
+different questions. Getting them confused is the usual cause of "I set a limit
+and nothing changed".
+
+| Knob | Scope | Question it answers |
+|---|---|---|
+| `Queue(workers=N)` | One worker process | How many jobs can this process run at once? |
+| `@task(max_concurrent=N)` | Whole cluster | How many jobs of this task may run anywhere, at once? |
+| `@task(max_in_flight_per_task=N)` | One worker process | How much of one worker's pool may this task occupy? |
+| `set_queue_max_pending(...)` | Producer side | How deep may this queue's backlog get before enqueue is rejected? |
+
+## Worker pool size
+
+`workers` sets how many jobs a single worker process executes concurrently.
+`0` (the default) auto-detects the CPU count:
+
+```python
+queue = Queue(workers=8)
+```
+
+This is a per-process setting. Three workers with `workers=8` give the cluster
+24 concurrent slots — there is no global view here, which is what
+`max_concurrent` is for.
+
+Async tasks are bounded separately by `async_concurrency` (default 100), since
+they are cheap to hold open and mostly waiting on I/O.
+
+## Cluster-wide task caps
+
+`max_concurrent` limits how many jobs of one task run at once **across every
+worker**. The scheduler enforces it against the live running count, so it holds
+no matter how many workers are up:
+
+```python
+@queue.task(max_concurrent=2)
+def transcode(path: str) -> str: ...
+```
+
+Over the limit, further jobs stay pending and dispatch as running ones finish.
+This is the right knob for a downstream system with a hard ceiling — a licence
+that allows two encoders, an API that permits five concurrent sessions.
+
+It costs a storage read per dispatch to check. That is fine for expensive tasks
+and wasteful for cheap high-volume ones.
+
+## Per-worker fairness
+
+`max_in_flight_per_task` caps a task's share of one worker's dispatch slots, so
+a slow task cannot occupy the whole pool and starve everything else:
+
+```python
+@queue.task(max_in_flight_per_task=2)
+def slow_report(month: str) -> bytes: ...
+```
+
+This is in-process and free — no storage read. It is a **fairness** control, not
+a global limit: with four workers, up to eight of these can still run at once.
+Reach for it when one task's latency is hurting its neighbours, and for
+`max_concurrent` when an external system imposes the ceiling.
+
+## Queue-level limits
+
+Whole queues can be capped too, at runtime:
+
+```python
+queue.set_queue_concurrency("video", 4)      # at most 4 running from this queue
+queue.set_queue_rate_limit("video", "100/m") # throughput across the queue
+```
+
+## Admission control
+
+The knobs above shape what runs. `max_pending` bounds what may be *accepted* —
+once a queue holds that many pending jobs, `enqueue` and `enqueue_many` raise
+`QueueFullError`:
+
+```python
+queue = Queue(max_pending={"emails": 10_000})
+# or at runtime:
+queue.set_queue_max_pending("emails", 10_000)
+```
+
+This is enforced producer-side, so it applies even with no worker running —
+which is the point: a backlog that will take a day to drain is better rejected
+at the door than silently accumulated.
+
+<Callout type="info">
+  The check is a non-atomic count-then-insert, so brief overshoot is possible
+  under concurrent producers — the same soft guarantee as the rate limiter.
+  Queues absent from the map are uncapped and pay no overhead.
+</Callout>
+
+## Concurrency vs rate limiting
+
+Concurrency bounds *simultaneous* executions; [rate
+limiting](/python/guides/reliability/rate-limiting) bounds *throughput over
+time*. They compose, and most production tasks want both:
+
+```python
+@queue.task(max_concurrent=2, rate_limit="100/m")
+def call_partner_api(payload: dict) -> dict: ...
+```
+
+Two at a time, no more than a hundred a minute — the first protects the
+partner's connection limit, the second its quota.
+
+<Cards>
+  <Card
+    title="Rate limiting"
+    href="/python/guides/reliability/rate-limiting"
+    description="Token-bucket throughput limits per task and per queue."
+  />
+  <Card
+    title="Circuit breakers"
+    href="/python/guides/reliability/circuit-breakers"
+    description="Stop calling a downstream service that is already failing."
+  />
+  <Card
+    title="Worker"
+    href="/python/api-reference/worker"
+    description="Pools, tags, shutdown, and the full run_worker reference."
+  />
+</Cards>

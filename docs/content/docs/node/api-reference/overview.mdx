@@ -1,0 +1,72 @@
+---
+title: Overview
+description: "How the Node SDK is layered — from the Queue class down to the Rust core — and where each export lives."
+---
+
+```ts
+import { Queue } from "@byteveda/taskito";
+
+const queue = new Queue({ dbPath: "taskito.db" });
+```
+
+The SDK is a thin, typed shell over the Taskito Rust core. Application code only
+ever touches the top layer; the rest exist so the native boundary stays narrow
+and the TypeScript surface stays testable.
+
+## Layers
+
+| Layer | Where | Role |
+|---|---|---|
+| `Queue`, `Worker` | `src/queue.ts`, `src/worker.ts` | The public API. `Queue` registers tasks and owns enqueue, inspection, workflows, locks, periodics, pub/sub, and webhooks; `queue.runWorker()` returns the `Worker` handle. |
+| Managers | `src/workflows/`, `src/locks/`, `src/webhooks/`, `src/resources/` | Feature facades reached through the queue — `queue.workflows`, `queue.lock(...)`, `queue.webhooks`, the resource registry. Pure TypeScript over the native calls. |
+| Worker-side tracker | `src/workflows/tracker.ts` | Drives the step kinds the core cannot schedule statically: fan-out/fan-in expansion, conditions, gates, sub-workflows, and cached steps. Runs inside the worker, reacting to each job outcome. |
+| Native loader | `src/native.ts` | Resolves and types the napi-rs addon. Loads `native/index.js` through `createRequire` so bundlers leave the addon external. |
+| napi shell | `crates/taskito-node` | The `JsQueue` / `JsWorker` classes. Marshals JSON and buffers across the boundary — no scheduling logic of its own. |
+| Rust core | `crates/taskito-core` | Storage, scheduler, dispatch, locking, retention. Every backend (SQLite, PostgreSQL, Redis) is implemented here. |
+
+A call like `queue.enqueue("task", args)` flows `Queue` (serializes the payload,
+runs enqueue gates, interceptors, and middleware) → `JsQueue` → the Rust core,
+which writes the job and wakes a worker.
+
+## Module map
+
+Everything below is re-exported from the `@byteveda/taskito` barrel:
+
+| Module | Contents |
+|---|---|
+| `queue`, `worker`, `types` | `Queue`, `Worker`, and the shared option/row types (`Job`, `EnqueueOptions`, `TaskOptions`, `Stats`, …). |
+| `workflows` | The builder, `WorkflowManager`, run/node types, analysis, caching, tracker. |
+| `resources` | Worker dependency injection — scopes, pools, `useResource`, `mockResource`. |
+| `serializers` | `JsonSerializer`, `MsgpackSerializer`, `CborSerializer`, and the payload codecs. |
+| `predicates` | Enqueue-time gates — `Predicate`, `Decision`, `Recipes`, the registry and its metrics. |
+| `interception` | The `onEnqueue` hook — `Interception`, `Interceptor`. |
+| `proxies` | Large-payload handlers — `Proxies`, `FileProxyHandler`, `ProxySession`. |
+| `locks` | `Lock`, `LockInfo`. |
+| `events`, `middleware` | The event bus (`queue.on`) and the middleware hook types. |
+| `webhooks` | `WebhookManager` plus outbound-URL safety checks. |
+| `batching` | `Batcher` — producer-side accumulation into `enqueueMany`. |
+| `autoscale`, `scaler` | The bare-metal autoscaler and the KEDA-compatible metrics server. |
+| `dashboard` | `serveDashboard`, auth store, OAuth/SSO flow. |
+| `health` | `checkHealth`, `checkReadiness`, `resourceStatus`. |
+| `context` | `currentJob()` — the running job's ids, signal, and progress. |
+| `errors` | The `TaskitoError` hierarchy. |
+| `cli` | The `taskito` command. |
+| `contrib` | Optional integrations, each behind its own subpath. |
+
+## Package surface
+
+| Entry | Specifier |
+|---|---|
+| Barrel | `@byteveda/taskito` |
+| Integrations | `@byteveda/taskito/contrib/{otel,prometheus,sentry,express,fastify,nest}` |
+| CLI | `taskito` (the package's `bin`) |
+
+The package ships dual **ESM + CommonJS** with bundled type definitions, and
+resolves a prebuilt per-platform native addon at load time — see
+[Installation](/node/getting-started/installation).
+
+<Callout type="info">
+  Contrib entry points are deliberately *not* re-exported from the barrel: each
+  needs its own peer dependency installed. See
+  [Integrations](/node/guides/integrations).
+</Callout>

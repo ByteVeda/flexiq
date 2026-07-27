@@ -1,0 +1,115 @@
+---
+title: Cancellation
+description: "Cancel a pending job outright, or ask a running one to stop cooperatively — plus progress reporting."
+---
+
+Two different things are called cancellation, and they behave differently. A
+**pending** job can be cancelled outright — it never runs. A **running** job can
+only be asked to stop; Python has no safe way to kill a thread mid-work, so the
+task has to check in.
+
+## Cancel a pending job
+
+```python
+cancelled = queue.cancel_job(job.id)   # True if the job was still pending
+```
+
+`cancel_job` transitions a pending job straight to `cancelled`. It returns
+`False` if the job already started — use `cancel_running_job` for that case.
+
+## Cancel a running job
+
+```python
+queue.cancel_running_job(job.id)
+```
+
+`cancel_running_job` sets the cancel flag for a job that is already running. Nothing
+stops on its own: the task observes the flag by calling `check_cancelled()`,
+which raises `TaskCancelledError` when a cancel has been requested.
+
+```python
+from taskito import current_job
+
+@queue.task()
+def process_batch(rows: list[dict]) -> int:
+    done = 0
+    for row in rows:
+        current_job.check_cancelled()   # raises TaskCancelledError if requested
+        handle(row)
+        done += 1
+    return done
+```
+
+Call it at a natural boundary — between items, between pages, between retries of
+an inner call — not inside the tightest inner loop. Each check is a cheap
+storage read, and on the prefork pool a cancel signal delivered over IPC is
+observed without any storage round-trip at all.
+
+<Callout type="warning">
+  A task that never calls `check_cancelled()` runs to completion. Cancellation is
+  cooperative by design: killing a thread mid-write would leave partial work
+  behind with no chance to clean up.
+</Callout>
+
+## Soft timeouts use the same pattern
+
+`soft_timeout` is the deadline twin of cancellation — the task polls it rather
+than being interrupted:
+
+```python
+@queue.task(soft_timeout=25, timeout=30)
+def export(dataset: str) -> str:
+    for chunk in chunks(dataset):
+        current_job.check_timeout()     # raises SoftTimeoutError past 25s
+        write(chunk)
+    return "done"
+```
+
+The soft timeout gives the task a window to finish cleanly before the hard
+`timeout` kills the attempt. See [Timeouts](/python/guides/reliability/timeouts).
+
+## Progress
+
+A long task can report progress 0–100 through its context:
+
+```python
+@queue.task()
+def reindex(total: int) -> None:
+    for i in range(total):
+        step(i)
+        current_job.update_progress(int((i + 1) / total * 100))
+```
+
+Progress surfaces on the [dashboard](/python/guides/dashboard) and through
+inspection. `queue.update_progress(job_id, progress)` does the same from
+outside a task.
+
+## Cleaning up on cancel
+
+`TaskCancelledError` propagates like any other exception, so ordinary
+`try`/`finally` is enough to release what the task holds:
+
+```python
+@queue.task()
+def stream_export(dataset: str) -> None:
+    handle = open_export(dataset)
+    try:
+        for chunk in chunks(dataset):
+            current_job.check_cancelled()
+            handle.write(chunk)
+    finally:
+        handle.close()
+```
+
+<Cards>
+  <Card
+    title="Enqueue options"
+    href="/python/guides/core/enqueue-options"
+    description="Per-job overrides — priority, delay, timeout, dedup keys, expiry."
+  />
+  <Card
+    title="Timeouts"
+    href="/python/guides/reliability/timeouts"
+    description="Hard and soft deadlines, and what a timed-out attempt does next."
+  />
+</Cards>

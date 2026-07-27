@@ -3,11 +3,12 @@ title: API Reference
 description: "The Node.js SDK public surface — classes, methods, and the CLI."
 ---
 
-The public API exported from the `taskito` barrel. Contrib helpers live under
-`taskito/contrib/*` (see [Integrations](/node/guides/integrations)).
+The public API exported from the `@byteveda/taskito` barrel. Contrib helpers live
+under `@byteveda/taskito/contrib/*` (see [Integrations](/node/guides/integrations)).
 
 | Page | Covers |
 |---|---|
+| [Overview](/node/api-reference/overview) | How the SDK is layered, the module map, the package surface. |
 | [Queue](/node/api-reference/queue) | Construct, enqueue, inspect, manage, locks, periodic, webhooks. |
 | [Task](/node/api-reference/task) | `queue.task` registration and per-task config. |
 | [Worker](/node/api-reference/worker) | `runWorker` options and the worker handle. |
@@ -15,6 +16,8 @@ The public API exported from the `taskito` barrel. Contrib helpers live under
 | [Context](/node/api-reference/context) | `currentJob()` — signal, progress, ids. |
 | [Serializers](/node/api-reference/serializers) | `JsonSerializer`, `MsgpackSerializer`, `CborSerializer`, the `Serializer` interface. |
 | [Workflows](/node/api-reference/workflows) | The workflow builder + run handle. |
+| [Canvas](/node/api-reference/canvas) | `chain`, `group`, `chord` — builder shorthands for common DAG shapes. |
+| [Saga](/node/api-reference/saga) | `compensate`, the saga run/node states, the rollback contract. |
 | [Batching](/node/api-reference/batching) | `enqueueMany` and `Batcher` — many enqueues in one round-trip. |
 | [Testing](/node/api-reference/testing) | `mockResource` — stub an injected resource in tests. |
 | [Errors](/node/api-reference/errors) | The `TaskitoError` hierarchy. |
