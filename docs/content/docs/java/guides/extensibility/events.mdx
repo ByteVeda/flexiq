@@ -140,8 +140,9 @@ the worker (`Worker.Builder.trackWorkflows()`).
 <Callout type="info">
   This SDK's predicates are pass/reject only, so `PREDICATE_REJECTED` is the
   only one it emits. The other three are constants for the rest of the
-  cross-SDK contract — a deferred enqueue, an enqueue dropped without raising,
-  and a dispatch-time cancellation of an already-enqueued job. They exist here
+  cross-SDK contract — work held back for a delay (at enqueue or at dispatch,
+  where the payload also carries the job's id), an enqueue dropped without
+  raising, and a dispatch-time cancellation of an already-enqueued job. They exist here
   so a webhook subscription written against another SDK still resolves through
   `EventName.fromWire` and matches nothing rather than silently dropping.
 </Callout>

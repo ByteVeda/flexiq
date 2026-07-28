@@ -72,7 +72,8 @@ public enum EventName {
     /** An enqueue was rejected by a predicate or gate ({@code predicate.rejected}). */
     PREDICATE_REJECTED("predicate.rejected"),
     /**
-     * An enqueue was held back by a predicate ({@code predicate.deferred}).
+     * A predicate held work back for a delay ({@code predicate.deferred}) — at
+     * enqueue, or at dispatch, where the payload also carries the job's id.
      * Reserved: this SDK's predicates are pass/reject only.
      */
     PREDICATE_DEFERRED("predicate.deferred"),

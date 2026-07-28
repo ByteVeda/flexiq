@@ -73,7 +73,7 @@ for (const delivery of queue.webhooks.deliveries(hook.id)) {
 | `ok` | `true` when `status` is `"delivered"`. |
 | `attempts` | Number of HTTP attempts made. |
 | `payload` | The JSON body that was POSTed. |
-| `taskName` / `jobId` | The originating task and job. Both absent for worker, queue, and workflow events; `predicate.*` carries `taskName` but no `jobId` (they fire before any job exists). |
+| `taskName` / `jobId` | The originating task and job. Both absent for worker, queue, and workflow events; `predicate.*` carries `taskName` but no `jobId`, since this SDK's gates run at enqueue, before any job exists. |
 | `responseCode` | Last HTTP status, or `null` on a network error. |
 | `responseBody` | Last response body, truncated to 2 KiB, or `null`. |
 | `latencyMs` | Time from first attempt to the final outcome. |
