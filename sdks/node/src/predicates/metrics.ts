@@ -1,9 +1,11 @@
 import type { DecisionKind } from "./decisions";
 
 /**
- * What the gates decided, as returned by `Queue.predicateStats`. Node's keys
- * follow its decision kinds; the Python SDK's equivalents are `denied` for
- * `rejected` and `cancelled` for `skipped`.
+ * What the gates decided, as returned by `Queue.predicateStats`. These keys
+ * follow Node's decision kinds. Python's `predicate_stats` counts by outcome
+ * sentinel instead, so the two do not line up one-to-one: its `denied` (a bare
+ * `false`) and `cancelled` (a `Cancel`) both block the enqueue by raising, the
+ * way `rejected` does here, and it has no enqueue-time skip.
  */
 export interface PredicateStats {
   allowed: number;
