@@ -31,10 +31,11 @@ class InMemoryPubSubTest {
         try (Taskito queue = InMemoryTaskito.open()) {
             queue.subscribe("orders", EMAIL);
             queue.subscribe("orders", AUDIT);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(EMAIL, payload -> "email:" + payload)
                     .handle(AUDIT, payload -> "audit:" + payload)
-                    .start()) {
+                    .start();
+            try (worker) {
                 List<Job> deliveries = queue.publish("orders", "o-1");
                 assertEquals(2, deliveries.size());
                 for (Job delivery : deliveries) {
@@ -70,8 +71,8 @@ class InMemoryPubSubTest {
 
             // The redeclare replaced (not appended to) the local declaration:
             // a worker start re-registers exactly one subscription.
-            try (Worker worker =
-                    queue.worker().handle(AUDIT, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(AUDIT, payload -> payload).start();
+            try (worker) {
                 assertEquals(1, queue.listSubscriptions("orders").size());
                 assertEquals(1, queue.publish("orders", "o-1").size());
             }
@@ -93,8 +94,8 @@ class InMemoryPubSubTest {
         try (Taskito queue = InMemoryTaskito.open()) {
             queue.subscribe("orders", EMAIL);
             assertTrue(queue.unsubscribe("orders", EMAIL.name()));
-            try (Worker worker =
-                    queue.worker().handle(EMAIL, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(EMAIL, payload -> payload).start();
+            try (worker) {
                 assertTrue(queue.listSubscriptions("orders").isEmpty());
                 assertTrue(queue.publish("orders", "o-1").isEmpty());
             }
@@ -131,8 +132,8 @@ class InMemoryPubSubTest {
             assertTrue(queue.publish("orders", "o-1").isEmpty());
 
             // Neither must a worker start re-registering the declaration.
-            try (Worker worker =
-                    queue.worker().handle(EMAIL, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(EMAIL, payload -> payload).start();
+            try (worker) {
                 assertTrue(queue.publish("orders", "o-2").isEmpty());
             }
         }
@@ -214,10 +215,11 @@ class InMemoryPubSubTest {
             // The ephemeral subscriber has no owning worker yet: durable only.
             assertEquals(1, queue.publish("orders", "o-1").size());
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(EMAIL, payload -> payload)
                     .handle(AUDIT, payload -> payload)
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertEquals(2, queue.publish("orders", "o-2").size());
             }
 
@@ -280,8 +282,8 @@ class InMemoryPubSubTest {
             assertEquals(1, deliveries.size());
             Thread.sleep(15);
 
-            try (Worker worker =
-                    queue.worker().handle(EMAIL, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(EMAIL, payload -> payload).start();
+            try (worker) {
                 Job done = queue.awaitJob(deliveries.get(0).id, Duration.ofSeconds(10))
                         .orElseThrow();
                 assertEquals(JobStatus.CANCELLED, done.status);
@@ -299,8 +301,8 @@ class InMemoryPubSubTest {
                     "orders", "o-1", PublishOptions.builder().resultTtlMs(1L).build());
             assertEquals(1, deliveries.size());
 
-            try (Worker worker =
-                    queue.worker().handle(EMAIL, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(EMAIL, payload -> payload).start();
+            try (worker) {
                 Job done = queue.awaitJob(deliveries.get(0).id, Duration.ofSeconds(10))
                         .orElseThrow();
                 assertEquals(JobStatus.COMPLETE, done.status);

@@ -38,11 +38,12 @@ class DispatchOrderTest {
         for (int i = 0; i < total; i++) {
             queue.enqueue(rec, i);
         }
-        try (Worker worker = queue.worker()
+        Worker worker = queue.worker()
                 .concurrency(1)
                 .batchSize(1)
                 .handle(rec, order::add)
-                .start()) {
+                .start();
+        try (worker) {
             long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
             while (System.nanoTime() < deadline && order.size() < total) {
                 Thread.sleep(50);

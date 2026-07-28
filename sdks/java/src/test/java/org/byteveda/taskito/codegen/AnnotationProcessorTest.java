@@ -27,10 +27,11 @@ class AnnotationProcessorTest {
             String totalId = queue.enqueue(GreeterTasks.TOTAL, List.of(1, 2, 3, 4));
 
             CountDownLatch done = new CountDownLatch(2);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .apply(builder -> GreeterTasks.bind(builder, new Greeter()))
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "both tasks should complete");
                 assertEquals("hello ada", queue.getResult(greetId, String.class).orElseThrow());
                 assertEquals(10, queue.getResult(totalId, Integer.class).orElseThrow());
@@ -48,10 +49,11 @@ class AnnotationProcessorTest {
             queue.resource("salutation", ctx -> "hi");
             String id = queue.enqueue(ResourceGreeterTasks.GREET, "ada");
             CountDownLatch done = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .apply(builder -> ResourceGreeterTasks.bind(builder, new ResourceGreeter()))
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "task should complete");
                 assertEquals("hi ada", queue.getResult(id, String.class).orElseThrow());
             }
@@ -65,10 +67,11 @@ class AnnotationProcessorTest {
                 Taskito.builder().sqlite(dir.resolve("hr.db").toString()).open()) {
             String id = queue.enqueue(GreeterTasks.GREET, "grace");
             CountDownLatch done = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .register(GreeterTasks.handlers(new Greeter())) // generated HandlerRegistry
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS), "task should complete");
                 assertEquals("hello grace", queue.getResult(id, String.class).orElseThrow());
             }

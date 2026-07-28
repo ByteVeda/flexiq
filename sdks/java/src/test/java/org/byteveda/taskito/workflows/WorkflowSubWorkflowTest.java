@@ -35,13 +35,14 @@ class WorkflowSubWorkflowTest {
             WorkflowRun run = queue.submitWorkflow(parent);
             AtomicInteger childRan = new AtomicInteger();
             AtomicInteger finished = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(PREP, p -> p)
                     .handle(CHILD_A, p -> childRan.incrementAndGet())
                     .handle(CHILD_B, p -> childRan.incrementAndGet())
                     .handle(FINISH, p -> finished.incrementAndGet())
                     .trackWorkflows(parent)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
                 assertEquals(NodeStatus.COMPLETED, status.node("sub").orElseThrow().status);
@@ -66,14 +67,15 @@ class WorkflowSubWorkflowTest {
 
             WorkflowRun run = queue.submitWorkflow(parent);
             AtomicInteger finished = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(PREP, p -> p)
                     .handle(CHILD_A, p -> {
                         throw new IllegalStateException("boom");
                     })
                     .handle(FINISH, p -> finished.incrementAndGet())
                     .trackWorkflows(parent)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
                 assertEquals(NodeStatus.FAILED, status.node("sub").orElseThrow().status);

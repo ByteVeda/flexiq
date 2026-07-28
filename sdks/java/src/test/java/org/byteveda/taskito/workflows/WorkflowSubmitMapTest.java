@@ -29,12 +29,13 @@ class WorkflowSubmitMapTest {
                     .stepAfter("load", load, "transform");
 
             WorkflowRun run = queue.submitWorkflow(etl, Map.of("extract", 5, "transform", 6, "load", 7));
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(extract, p -> p)
                     .handle(transform, p -> p)
                     .handle(load, p -> p)
                     .trackWorkflows()
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
 

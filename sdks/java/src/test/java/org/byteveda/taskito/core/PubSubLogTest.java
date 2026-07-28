@@ -148,8 +148,8 @@ class PubSubLogTest {
             queue.subscribe("events", onEvent); // fan-out: one job per publish
             queue.subscribeLog("events", "log"); // log: one stored message per publish
 
-            try (Worker worker =
-                    queue.worker().handle(onEvent, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(onEvent, payload -> payload).start();
+            try (worker) {
                 List<Job> deliveries = queue.publish("events", "seen");
 
                 // The fan-out subscriber ran its job to completion...

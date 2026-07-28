@@ -40,7 +40,8 @@ class MiddlewareContextTest {
             });
 
             String id = queue.enqueue(echo, 7);
-            try (Worker worker = queue.worker().handle(echo, p -> p).start()) {
+            Worker worker = queue.worker().handle(echo, p -> p).start();
+            try (worker) {
                 queue.awaitJob(id, Duration.ofSeconds(10));
             }
             assertEquals("trace-123", afterSaw.get());

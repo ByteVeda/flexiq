@@ -26,7 +26,8 @@ class ErgonomicsTest {
         try (Taskito queue =
                 Taskito.builder().sqlite(dir.resolve("erg.db").toString()).open()) {
             String id = queue.enqueue(echo, 42);
-            try (Worker worker = queue.worker().handle(echo, p -> p).start()) {
+            Worker worker = queue.worker().handle(echo, p -> p).start();
+            try (worker) {
                 Job job = queue.awaitJob(id, Duration.ofSeconds(20)).orElseThrow();
                 assertEquals(JobStatus.COMPLETE, job.status);
                 assertEquals(42, queue.getResult(id, Integer.class).orElseThrow());

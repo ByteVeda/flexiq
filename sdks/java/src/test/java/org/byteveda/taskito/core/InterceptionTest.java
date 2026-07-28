@@ -34,13 +34,14 @@ class InterceptionTest {
             queue.intercept((task, payload) -> Interception.convert((Integer) payload * 10));
             AtomicInteger seen = new AtomicInteger();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> {
                         seen.set(p);
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(A, 5);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
                 assertEquals(50, seen.get());
@@ -57,13 +58,14 @@ class InterceptionTest {
                     task.equals("ic.a") ? Interception.redirect("ic.b", payload) : Interception.pass());
             AtomicInteger aRan = new AtomicInteger();
             CountDownLatch bRan = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> aRan.incrementAndGet())
                     .handle(B, p -> {
                         bRan.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(A, 1);
                 assertTrue(bRan.await(20, TimeUnit.SECONDS));
                 assertEquals(0, aRan.get());
@@ -97,13 +99,14 @@ class InterceptionTest {
             queue.intercept((task, payload) -> Interception.convert((Integer) payload * 10));
             AtomicInteger sum = new AtomicInteger();
             CountDownLatch ran = new CountDownLatch(3);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(A, p -> {
                         sum.addAndGet(p);
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueueMany(A, List.of(1, 2, 3));
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
                 assertEquals(60, sum.get()); // (1+2+3)*10 — interception ran on the batch

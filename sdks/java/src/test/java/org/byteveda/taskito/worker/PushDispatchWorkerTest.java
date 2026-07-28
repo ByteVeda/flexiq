@@ -25,10 +25,11 @@ class PushDispatchWorkerTest {
     void pushDispatchWorkerProcessesJobs(@TempDir Path dir) throws Exception {
         try (Taskito queue =
                 Taskito.builder().url(dir.resolve("push.db").toString()).open()) {
-            try (Worker ignored = queue.worker()
+            Worker worker = queue.worker()
                     .handle(ECHO, payload -> payload)
                     .pushDispatch(true)
-                    .start()) {
+                    .start();
+            try (worker) {
                 String id = queue.enqueue(ECHO, "via-push");
                 queue.awaitJob(id, Duration.ofSeconds(30));
                 assertEquals("via-push", queue.getResult(id, String.class).orElseThrow());
@@ -47,10 +48,11 @@ class PushDispatchWorkerTest {
         try (Taskito queue =
                 Taskito.builder().url(dir.resolve("push-pre.db").toString()).open()) {
             String id = queue.enqueue(ECHO, "before-start");
-            try (Worker ignored = queue.worker()
+            Worker worker = queue.worker()
                     .handle(ECHO, payload -> payload)
                     .pushDispatch(true)
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.awaitJob(id, Duration.ofSeconds(30));
                 assertEquals("before-start", queue.getResult(id, String.class).orElseThrow());
             }

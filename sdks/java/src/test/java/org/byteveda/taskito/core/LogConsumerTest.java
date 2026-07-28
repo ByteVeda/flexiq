@@ -73,7 +73,8 @@ class LogConsumerTest {
                 queue.publish("t-skip", value);
             }
 
-            try (Worker worker = queue.worker().start()) {
+            Worker worker = queue.worker().start();
+            try (worker) {
                 // Plain delivery: every handled message is acked, so the cursor catches up.
                 pollUntil(() -> invoke.size() == 3);
                 assertEquals(List.of("a", "b", "c"), invoke);

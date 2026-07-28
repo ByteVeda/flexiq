@@ -40,14 +40,15 @@ class ResourceTest {
             queue.resource("perTask", ResourceScope.TASK, ctx -> new Object(), value -> taskDisposed.incrementAndGet());
 
             CountDownLatch ran = new CountDownLatch(jobs);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         Resources.use("shared");
                         Resources.use("perTask");
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 for (int i = 0; i < jobs; i++) {
                     queue.enqueue(TASK, i);
                 }
@@ -87,7 +88,7 @@ class ResourceTest {
             });
             AtomicReference<Class<?>> thrown = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         try {
                             Resources.use("self");
@@ -98,7 +99,8 @@ class ResourceTest {
                         }
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
             }
@@ -117,7 +119,7 @@ class ResourceTest {
             AtomicReference<Object> first = new AtomicReference<>();
             AtomicReference<Object> second = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(jobs);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(1) // one thread → both jobs share its instance
                     .handle(TASK, p -> {
                         Object instance = Resources.use("perThread");
@@ -127,7 +129,8 @@ class ResourceTest {
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 for (int i = 0; i < jobs; i++) {
                     queue.enqueue(TASK, i);
                 }
@@ -150,14 +153,15 @@ class ResourceTest {
             AtomicReference<Object> a = new AtomicReference<>();
             AtomicReference<Object> b = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         a.set(Resources.use("perUse"));
                         b.set(Resources.use("perUse"));
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
             }
@@ -176,7 +180,7 @@ class ResourceTest {
             queue.resource("perThread", ResourceScope.THREAD, ctx -> ctx.use("perTask"));
             AtomicReference<Class<?>> thrown = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         try {
                             Resources.use("perThread");
@@ -187,7 +191,8 @@ class ResourceTest {
                         }
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
             }
@@ -204,7 +209,7 @@ class ResourceTest {
             queue.resource("shared", ctx -> ctx.use("perThread")); // WORKER factory
             AtomicReference<Class<?>> thrown = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         try {
                             Resources.use("shared");
@@ -215,7 +220,8 @@ class ResourceTest {
                         }
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
             }
@@ -239,15 +245,19 @@ class ResourceTest {
                 release.await(25, TimeUnit.SECONDS);
                 return p;
             };
-            try (Worker w1 = queue.worker().concurrency(1).handle(TASK, handler).start();
-                    Worker w2 =
-                            queue.worker().concurrency(1).handle(TASK, handler).start()) {
-                queue.enqueue(TASK, 1);
-                queue.enqueue(TASK, 2);
-                assertTrue(
-                        awaitCreated(queue, "perWorker", 2, Duration.ofSeconds(25)),
-                        "both workers did not each build their own instance");
-                release.countDown();
+            Worker w1 = queue.worker().concurrency(1).handle(TASK, handler).start();
+            try (w1) {
+                // Nested rather than a second resource in the same header, so a failure to
+                // start the second worker still closes the first.
+                Worker w2 = queue.worker().concurrency(1).handle(TASK, handler).start();
+                try (w2) {
+                    queue.enqueue(TASK, 1);
+                    queue.enqueue(TASK, 2);
+                    assertTrue(
+                            awaitCreated(queue, "perWorker", 2, Duration.ofSeconds(25)),
+                            "both workers did not each build their own instance");
+                    release.countDown();
+                }
             }
             // Shared-runtime would build once (created==1); per-worker builds one each.
             assertEquals(2, queue.resourceMetrics().get("perWorker").created());
@@ -265,7 +275,7 @@ class ResourceTest {
             AtomicReference<Object> first = new AtomicReference<>();
             AtomicReference<Object> second = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(jobs);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(1)
                     .handle(TASK, p -> {
                         Object instance = Resources.use("pooled");
@@ -275,7 +285,8 @@ class ResourceTest {
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 for (int i = 0; i < jobs; i++) {
                     queue.enqueue(TASK, i);
                 }
@@ -339,7 +350,8 @@ class ResourceTest {
                 Taskito.builder().url(dir.resolve("rpp.db").toString()).open()) {
             queue.resource(
                     "warm", PoolConfig.of(4).withPoolMin(2), ctx -> new Object(), value -> disposed.incrementAndGet());
-            try (Worker worker = queue.worker().handle(TASK, p -> p).start()) {
+            Worker worker = queue.worker().handle(TASK, p -> p).start();
+            try (worker) {
                 assertEquals(
                         2,
                         queue.resourceMetrics().get("warm").created(),
@@ -378,7 +390,7 @@ class ResourceTest {
             queue.resource("pooled", PoolConfig.of(1), ctx -> ctx.use("perTask"), value -> {});
             AtomicReference<RuntimeException> thrown = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, p -> {
                         try {
                             Resources.use("pooled");
@@ -389,7 +401,8 @@ class ResourceTest {
                         }
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
             }
@@ -410,7 +423,7 @@ class ResourceTest {
             // Hold both tasks at a barrier so each checks its own instance out.
             CyclicBarrier bothBusy = new CyclicBarrier(2);
             CountDownLatch ran = new CountDownLatch(2);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(2)
                     .handle(TASK, p -> {
                         Resources.use("conn");
@@ -418,7 +431,8 @@ class ResourceTest {
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 queue.enqueue(TASK, 2);
                 assertTrue(ran.await(25, TimeUnit.SECONDS));

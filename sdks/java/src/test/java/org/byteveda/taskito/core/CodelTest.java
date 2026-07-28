@@ -45,7 +45,7 @@ class CodelTest {
                 queue.enqueue(slow, "x");
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(1)
                     .batchSize(1)
                     .handle(slow, payload -> {
@@ -56,7 +56,8 @@ class CodelTest {
                         }
                         return null;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 // Poll until every job is accounted for and at least one was shed.
                 long deadline = System.nanoTime() + Duration.ofSeconds(45).toNanos();
                 long codelDead = 0;
@@ -110,7 +111,8 @@ class CodelTest {
             });
             queue.codel("default", 1, 30);
 
-            try (Worker worker = builder.start()) {
+            Worker worker = builder.start();
+            try (worker) {
                 long deadline = System.nanoTime() + Duration.ofSeconds(45).toNanos();
                 long codelDead = 0;
                 QueueStats stats = queue.stats();

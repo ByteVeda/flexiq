@@ -68,13 +68,14 @@ class PayloadCodecTest {
             Task<Integer> dbl = Task.of("cdc.double", Integer.class);
             AtomicInteger seen = new AtomicInteger();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(dbl, p -> {
                         seen.set(p);
                         ran.countDown();
                         return p * 2;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 String id = queue.enqueue(dbl, 21);
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
                 assertEquals(21, seen.get()); // payload decoded on the worker

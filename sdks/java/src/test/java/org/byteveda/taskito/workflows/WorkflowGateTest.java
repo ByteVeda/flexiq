@@ -88,11 +88,12 @@ class WorkflowGateTest {
             Workflow wf = gatedWorkflow(GateConfig.timeout(Duration.ofMillis(300), GateAction.APPROVE));
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicInteger deployed = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(PROCESS, p -> p)
                     .handle(DEPLOY, p -> deployed.incrementAndGet())
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 // No manual resolution — the timeout drives it to approval.
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.COMPLETED, status.state);
@@ -109,11 +110,12 @@ class WorkflowGateTest {
             Workflow wf = gatedWorkflow(GateConfig.timeout(Duration.ofMillis(300), GateAction.REJECT));
             WorkflowRun run = queue.submitWorkflow(wf);
             AtomicInteger deployed = new AtomicInteger();
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(PROCESS, p -> p)
                     .handle(DEPLOY, p -> deployed.incrementAndGet())
                     .trackWorkflows(wf)
-                    .start()) {
+                    .start();
+            try (worker) {
                 WorkflowStatus status = run.await(Duration.ofSeconds(20));
                 assertEquals(WorkflowState.FAILED, status.state);
                 assertEquals(NodeStatus.SKIPPED, status.node("deploy").orElseThrow().status);

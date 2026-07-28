@@ -45,7 +45,7 @@ class ResultBatchingTest {
                 queue.enqueue(boom, String.valueOf(i));
             }
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .concurrency(8)
                     .batchSize(each * 2)
                     .handle(ok, (String p) -> p)
@@ -60,7 +60,8 @@ class ResultBatchingTest {
                         dead.add(event.jobId);
                         finished.countDown();
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(finished.await(20, TimeUnit.SECONDS), "every job should report an outcome");
             }
         }

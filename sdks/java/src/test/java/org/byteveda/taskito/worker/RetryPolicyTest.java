@@ -42,7 +42,7 @@ class RetryPolicyTest {
             AtomicInteger retries = new AtomicInteger();
             CountDownLatch done = new CountDownLatch(1);
 
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(flaky, (String payload) -> {
                         if (attempts.incrementAndGet() < 3) {
                             throw new IllegalStateException("transient failure");
@@ -51,7 +51,8 @@ class RetryPolicyTest {
                     })
                     .on(EventName.RETRY, event -> retries.incrementAndGet())
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(25, TimeUnit.SECONDS), "task should eventually succeed");
 
                 assertEquals(3, attempts.get(), "should run three times (two failures, one success)");

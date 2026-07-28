@@ -32,13 +32,14 @@ class PerTaskCodecTest {
             Task<String> task = Task.of("ptc.echo", String.class).codecs("secret");
             AtomicReference<String> seen = new AtomicReference<>();
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(task, p -> {
                         seen.set(p);
                         ran.countDown();
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(task, "hello");
                 assertTrue(ran.await(20, TimeUnit.SECONDS));
                 assertEquals("hello", seen.get());
@@ -56,10 +57,11 @@ class PerTaskCodecTest {
             // EncryptedGreeterTasks.GREET is generated with .codecs("encrypted").
             String id = queue.enqueue(EncryptedGreeterTasks.GREET, "ada");
             CountDownLatch done = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .apply(builder -> EncryptedGreeterTasks.bind(builder, new EncryptedGreeter()))
                     .on(EventName.SUCCESS, event -> done.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 assertTrue(done.await(20, TimeUnit.SECONDS));
                 assertEquals("secret ada", queue.getResult(id, String.class).orElseThrow());
             }

@@ -58,10 +58,11 @@ class MiddlewareDisableTest {
             queue.use(counting);
 
             CountDownLatch first = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(counted, (String p) -> p)
                     .on(EventName.SUCCESS, event -> first.countDown())
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(counted, "1");
                 assertTrue(first.await(20, TimeUnit.SECONDS), "first job should run");
                 assertEquals(1, counting.before.get(), "middleware runs while enabled");
@@ -100,7 +101,7 @@ class MiddlewareDisableTest {
             queue.use(counting);
 
             CountDownLatch started = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(slow, (String p) -> {
                         started.countDown();
                         try {
@@ -110,7 +111,8 @@ class MiddlewareDisableTest {
                         }
                         return p;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(slow, "1");
                 assertTrue(started.await(20, TimeUnit.SECONDS), "handler should start");
 

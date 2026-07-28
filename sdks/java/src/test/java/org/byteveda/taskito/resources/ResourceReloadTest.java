@@ -43,13 +43,14 @@ class ResourceReloadTest {
             queue.resource("db", counted("conn", built, disposed, true));
 
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, payload -> {
                         seen.set(Resources.use("db"));
                         ran.countDown();
                         return payload;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS), "handler did not run");
                 assertEquals("conn-1", seen.get());
@@ -72,7 +73,8 @@ class ResourceReloadTest {
             queue.resource("hot", counted("hot", built, disposed, true));
             queue.resource("cold", counted("cold", built, disposed, false));
 
-            try (Worker worker = queue.worker().handle(TASK, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(TASK, payload -> payload).start();
+            try (worker) {
                 assertEquals(Map.of("hot", true), queue.reloadResources());
                 // Naming it explicitly reloads it whatever the flag says.
                 assertEquals(Map.of("cold", true), queue.reloadResources(List.of("cold")));
@@ -86,7 +88,8 @@ class ResourceReloadTest {
         try (Taskito queue =
                 Taskito.builder().url(dir.resolve("ru.db").toString()).open()) {
             queue.resource("db", ctx -> new Object());
-            try (Worker worker = queue.worker().handle(TASK, payload -> payload).start()) {
+            Worker worker = queue.worker().handle(TASK, payload -> payload).start();
+            try (worker) {
                 assertEquals(Map.of("nope", false), queue.reloadResources(List.of("nope")));
             }
         }
@@ -124,13 +127,14 @@ class ResourceReloadTest {
             });
 
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, payload -> {
                         Resources.use("outer");
                         ran.countDown();
                         return payload;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS), "handler did not run");
                 assertEquals("inner-1", outerSaw.get());
@@ -159,13 +163,14 @@ class ResourceReloadTest {
             });
 
             CountDownLatch ran = new CountDownLatch(1);
-            try (Worker worker = queue.worker()
+            Worker worker = queue.worker()
                     .handle(TASK, payload -> {
                         Resources.use("flaky");
                         ran.countDown();
                         return payload;
                     })
-                    .start()) {
+                    .start();
+            try (worker) {
                 queue.enqueue(TASK, 1);
                 assertTrue(ran.await(20, TimeUnit.SECONDS), "handler did not run");
                 assertFalse(queue.reloadResources(List.of("flaky")).get("flaky"));

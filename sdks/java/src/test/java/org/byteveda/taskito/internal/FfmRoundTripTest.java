@@ -31,7 +31,8 @@ class FfmRoundTripTest {
 
         try (Taskito queue =
                 Taskito.builder().url(dir.resolve("ffm.db").toString()).open()) {
-            try (Worker worker = queue.worker().handle(ECHO, p -> p).start()) {
+            Worker worker = queue.worker().handle(ECHO, p -> p).start();
+            try (worker) {
                 for (String payload : payloads) {
                     String id = queue.enqueue(ECHO, payload);
                     queue.awaitJob(id, Duration.ofSeconds(30));
@@ -48,7 +49,8 @@ class FfmRoundTripTest {
 
         try (Taskito queue =
                 Taskito.builder().url(dir.resolve("ffm-batch.db").toString()).open()) {
-            try (Worker worker = queue.worker().handle(ECHO, p -> p).start()) {
+            Worker worker = queue.worker().handle(ECHO, p -> p).start();
+            try (worker) {
                 List<String> ids = queue.enqueueMany(ECHO, payloads);
                 assertEquals(payloads.size(), ids.size());
                 for (int i = 0; i < ids.size(); i++) {
