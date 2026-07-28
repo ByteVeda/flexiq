@@ -11,6 +11,7 @@ import java.util.Map;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.byteveda.taskito.errors.ProxyException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Registry that deconstructs resources into signed {@link ProxyRef}s and
@@ -51,7 +52,7 @@ public final class Proxies {
     }
 
     /** Deconstruct {@code value} into a ref that expires after {@code ttl}. */
-    public ProxyRef deconstruct(Object value, Duration ttl) {
+    public ProxyRef deconstruct(Object value, @Nullable Duration ttl) {
         return deconstruct(value, ttl, null);
     }
 
@@ -60,7 +61,7 @@ public final class Proxies {
      * and {@code purpose} (nullable); throws if no handler accepts it.
      */
     @SuppressWarnings("unchecked")
-    public ProxyRef deconstruct(Object value, Duration ttl, String purpose) {
+    public ProxyRef deconstruct(Object value, @Nullable Duration ttl, @Nullable String purpose) {
         if (value == null) {
             throw new ProxyException("cannot deconstruct null");
         }
@@ -84,7 +85,7 @@ public final class Proxies {
      * Verify a ref's signature, expiry, and (when {@code expectedPurpose} is
      * non-null) its bound purpose, then reconstruct the resource.
      */
-    public Object reconstruct(ProxyRef ref, String expectedPurpose) {
+    public Object reconstruct(ProxyRef ref, @Nullable String expectedPurpose) {
         ProxyHandler<Object> handler = handlerFor(ref.handler());
         verify(ref, expectedPurpose);
         return handler.reconstruct(ref.reference());
@@ -109,7 +110,7 @@ public final class Proxies {
     }
 
     /** Verify a ref's signature, expiry, and (when requested) bound purpose. */
-    void verify(ProxyRef ref, String expectedPurpose) {
+    void verify(ProxyRef ref, @Nullable String expectedPurpose) {
         byte[] expected = sign(ref.handler(), ref.reference(), ref.expiresAtMs(), ref.purpose())
                 .getBytes(StandardCharsets.UTF_8);
         byte[] actual = (ref.signature() == null ? "" : ref.signature()).getBytes(StandardCharsets.UTF_8);
@@ -136,7 +137,8 @@ public final class Proxies {
         return (T) reconstruct(ref, expectedPurpose);
     }
 
-    private String sign(String handlerId, Map<String, Object> reference, Long expiresAtMs, String purpose) {
+    private String sign(
+            String handlerId, Map<String, Object> reference, @Nullable Long expiresAtMs, @Nullable String purpose) {
         try {
             Mac mac = Mac.getInstance(ALGORITHM);
             mac.init(new SecretKeySpec(key, ALGORITHM));

@@ -3,9 +3,11 @@ package org.byteveda.taskito.events;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import org.byteveda.taskito.logging.TaskitoLogger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Dispatches {@link TaskitoEvent}s to registered listeners. Thread-safe. An
@@ -16,7 +18,7 @@ public final class Emitter {
     private static final TaskitoLogger LOG = TaskitoLogger.create("events");
 
     private final Map<EventName, List<Consumer<TaskitoEvent>>> listeners = new EnumMap<>(EventName.class);
-    private final Emitter parent;
+    private final @Nullable Emitter parent;
 
     /** A standalone emitter: events dispatch to its own listeners only. */
     public Emitter() {
@@ -24,7 +26,7 @@ public final class Emitter {
     }
 
     /** An emitter that forwards every event to {@code parent} (nullable) after local dispatch. */
-    public Emitter(Emitter parent) {
+    public Emitter(@Nullable Emitter parent) {
         this.parent = parent;
         // Pre-bind every name so the map is never structurally mutated after
         // construction — registration and dispatch then race only on the
@@ -46,7 +48,12 @@ public final class Emitter {
 
     /** Subscribe to any event by name; the listener narrows to the concrete type. */
     public void onEvent(EventName name, Consumer<TaskitoEvent> listener) {
-        listeners.get(name).add(listener);
+        listenersFor(name).add(listener);
+    }
+
+    /** Listeners for {@code name}; every name is pre-bound at construction. */
+    private List<Consumer<TaskitoEvent>> listenersFor(EventName name) {
+        return Objects.requireNonNull(listeners.get(name), () -> name + " was not pre-bound");
     }
 
     /** Deliver a job outcome; equivalent to {@link #emit(TaskitoEvent)}. */
@@ -59,7 +66,7 @@ public final class Emitter {
      * emitter (when one exists); a throwing listener never blocks the rest.
      */
     public void emit(TaskitoEvent event) {
-        for (Consumer<TaskitoEvent> listener : listeners.get(event.name())) {
+        for (Consumer<TaskitoEvent> listener : listenersFor(event.name())) {
             try {
                 listener.accept(event);
             } catch (RuntimeException e) {

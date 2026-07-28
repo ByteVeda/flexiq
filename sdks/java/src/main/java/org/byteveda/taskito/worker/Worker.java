@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -44,6 +45,7 @@ import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.task.TaskFunction;
 import org.byteveda.taskito.workflows.Workflow;
 import org.byteveda.taskito.workflows.WorkflowTracker;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A running worker. Build one with {@link org.byteveda.taskito.Taskito#worker()}, register handlers,
@@ -58,14 +60,14 @@ public final class Worker implements AutoCloseable {
 
     private final WorkerControl control;
     private final ExecutorService executor;
-    private final WorkflowTracker tracker;
+    private final @Nullable WorkflowTracker tracker;
     private final ResourceRuntime resources;
-    private final Autoscaler autoscaler;
+    private final @Nullable Autoscaler autoscaler;
     private final List<LogConsumerThread> logConsumers;
     private final Emitter emitter;
     private final List<String> servedQueues;
     /** The owning client's live-worker tracker, or null for a manually built worker. */
-    private final WorkerLifecycle lifecycle;
+    private final @Nullable WorkerLifecycle lifecycle;
     /** Guards the one-shot {@code worker.stopped} emission shared by {@link #stop()} and {@link #close()}. */
     private final AtomicBoolean stoppedEmitted = new AtomicBoolean();
 
@@ -75,13 +77,13 @@ public final class Worker implements AutoCloseable {
     private Worker(
             WorkerControl control,
             ExecutorService executor,
-            WorkflowTracker tracker,
+            @Nullable WorkflowTracker tracker,
             ResourceRuntime resources,
-            Autoscaler autoscaler,
+            @Nullable Autoscaler autoscaler,
             List<LogConsumerThread> logConsumers,
             Emitter emitter,
             List<String> servedQueues,
-            WorkerLifecycle lifecycle) {
+            @Nullable WorkerLifecycle lifecycle) {
         this.control = control;
         this.executor = executor;
         this.tracker = tracker;
@@ -142,7 +144,7 @@ public final class Worker implements AutoCloseable {
     }
 
     /** Reject a parked workflow gate; the gate fails and its successors are skipped. */
-    public void rejectGate(String runId, String nodeName, String reason) {
+    public void rejectGate(String runId, String nodeName, @Nullable String reason) {
         requireTracker().resolveGate(runId, nodeName, false, reason == null ? "gate rejected" : reason);
     }
 
@@ -238,7 +240,7 @@ public final class Worker implements AutoCloseable {
         private final Map<String, PayloadCodec> codecs;
         private final Map<String, RegisteredTask> handlers = new HashMap<>();
         private List<LogConsumerConfig> logConsumers = List.of();
-        private LogTopicReader logTopicReader;
+        private @Nullable LogTopicReader logTopicReader;
         /**
          * Tasks carrying policy the worker must register, keyed by name. Holding the
          * task itself rather than a map per knob keeps {@link #encodeTaskConfigs}
@@ -250,17 +252,17 @@ public final class Worker implements AutoCloseable {
         private final Map<EventName, List<Consumer<TaskitoEvent>>> listeners = new EnumMap<>(EventName.class);
         private List<SubscriptionConfig> subscriptions = List.of();
         private Supplier<List<Map<String, Object>>> queueConfigs = List::of;
-        private List<String> queues;
+        private @Nullable List<String> queues;
         private int concurrency;
-        private Integer channelCapacity;
-        private Integer batchSize;
-        private WorkflowTracker tracker;
-        private AutoscaleOptions autoscale;
-        private MeshOptions mesh;
-        private Retention retention;
+        private @Nullable Integer channelCapacity;
+        private @Nullable Integer batchSize;
+        private @Nullable WorkflowTracker tracker;
+        private @Nullable AutoscaleOptions autoscale;
+        private @Nullable MeshOptions mesh;
+        private @Nullable Retention retention;
         private boolean pushDispatch;
-        private Emitter hub;
-        private WorkerLifecycle lifecycle;
+        private @Nullable Emitter hub;
+        private @Nullable WorkerLifecycle lifecycle;
 
         Builder(
                 QueueBackend backend,
@@ -487,7 +489,7 @@ public final class Worker implements AutoCloseable {
         }
 
         public Worker start() {
-            Autoscaler scaler = null;
+            @Nullable Autoscaler scaler = null;
             ExecutorService executor;
             if (autoscale != null) {
                 ThreadPoolExecutor pool = new ThreadPoolExecutor(
@@ -537,9 +539,11 @@ public final class Worker implements AutoCloseable {
             if (logConsumers.isEmpty()) {
                 return List.of();
             }
+            // Non-empty consumers imply a reader: logConsumers(..) sets both together.
+            LogTopicReader reader = Objects.requireNonNull(logTopicReader, "log consumers need a reader");
             List<LogConsumerThread> threads = new ArrayList<>(logConsumers.size());
             for (LogConsumerConfig config : logConsumers) {
-                LogConsumerThread thread = new LogConsumerThread(logTopicReader, serializer, config);
+                LogConsumerThread thread = new LogConsumerThread(reader, serializer, config);
                 thread.start();
                 threads.add(thread);
             }
@@ -699,7 +703,7 @@ public final class Worker implements AutoCloseable {
             return configs;
         }
 
-        private static void encodeRetryPolicy(RetryPolicy policy, Map<String, Object> config) {
+        private static void encodeRetryPolicy(@Nullable RetryPolicy policy, Map<String, Object> config) {
             if (policy == null) {
                 return;
             }
@@ -716,7 +720,7 @@ public final class Worker implements AutoCloseable {
             }
         }
 
-        private static void encodeCircuitBreaker(CircuitBreakerConfig breaker, Map<String, Object> config) {
+        private static void encodeCircuitBreaker(@Nullable CircuitBreakerConfig breaker, Map<String, Object> config) {
             if (breaker == null) {
                 return;
             }

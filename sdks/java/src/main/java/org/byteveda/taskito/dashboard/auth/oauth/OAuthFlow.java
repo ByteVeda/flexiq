@@ -18,6 +18,7 @@ import org.byteveda.taskito.dashboard.auth.oauth.model.ProviderIdentity;
 import org.byteveda.taskito.dashboard.auth.oauth.provider.OAuthProvider;
 import org.byteveda.taskito.dashboard.auth.oauth.provider.Providers;
 import org.byteveda.taskito.logging.TaskitoLogger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The seam between the HTTP handler layer and the provider implementations. It
@@ -48,7 +49,7 @@ public final class OAuthFlow {
     }
 
     /** The landed session plus the sanitised post-login redirect target. */
-    public record CallbackResult(Session session, String nextUrl) {}
+    public record CallbackResult(Session session, @Nullable String nextUrl) {}
 
     /** Instantiate one provider per configured slot, keyed by slot, in display order. */
     public static Map<String, OAuthProvider> buildProviders(OAuthConfig config, HttpClient http) {
@@ -85,7 +86,7 @@ public final class OAuthFlow {
      * is sanitised against {@link UrlSafety#isSafeRedirect}, falling back to
      * {@code "/"}.
      */
-    public String start(String slot, String nextUrl) {
+    public String start(String slot, @Nullable String nextUrl) {
         OAuthProvider provider = requireProvider(slot);
         String safeNext = nextUrl != null && UrlSafety.isSafeRedirect(nextUrl) ? nextUrl : "/";
         OAuthState state = stateStore.create(slot, safeNext);
@@ -101,7 +102,8 @@ public final class OAuthFlow {
      *     identity is outside a configured allowlist
      * @throws ProviderNotConfigured the slot has no registered provider
      */
-    public CallbackResult handleCallback(String slot, String code, String stateToken, String error) {
+    public CallbackResult handleCallback(
+            String slot, @Nullable String code, @Nullable String stateToken, @Nullable String error) {
         if (error != null && !error.isEmpty()) {
             throw new IdentityFetchError("provider returned error: " + error);
         }

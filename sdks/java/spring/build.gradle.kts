@@ -1,10 +1,14 @@
 // taskito-spring: a Spring Boot 3 starter that auto-configures a Taskito bean.
 // Spring Boot 3 requires Java 17, which matches the SDK baseline.
+import net.ltgt.gradle.errorprone.CheckSeverity
+import net.ltgt.gradle.errorprone.errorprone
+
 plugins {
     `java-library`
     checkstyle
     id("com.diffplug.spotless") version "7.2.1"
     id("com.vanniktech.maven.publish") version "0.37.0"
+    id("net.ltgt.errorprone") version "5.1.0"
 }
 
 mavenPublishing {
@@ -47,6 +51,8 @@ repositories { mavenCentral() }
 val springBoot = "3.3.5"
 
 dependencies {
+    errorprone("com.google.errorprone:error_prone_core:${property("errorProneVersion")}")
+    errorprone("com.uber.nullaway:nullaway:${property("nullAwayVersion")}")
     api(project(":"))
     // The runtime jar is native-free; tests auto-configure a real Taskito bean,
     // so stage the host-platform library from the root build.
@@ -82,3 +88,18 @@ checkstyle {
 }
 
 tasks.test { useJUnitPlatform() }
+
+// Null-safety: @NullMarked sources checked by NullAway, matching the SDK module.
+tasks.withType<JavaCompile>().configureEach {
+    options.errorprone { isEnabled = false }
+}
+
+tasks.named<JavaCompile>("compileJava") {
+    options.errorprone {
+        isEnabled = true
+        disableAllChecks.set(true)
+        check("NullAway", CheckSeverity.ERROR)
+        option("NullAway:OnlyNullMarked", "true")
+        option("NullAway:JSpecifyMode", "true")
+    }
+}

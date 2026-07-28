@@ -3,6 +3,7 @@ package org.byteveda.taskito.webhooks;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 
 /**
  * One attempted webhook delivery, persisted in the per-subscription delivery
@@ -17,16 +18,16 @@ public record Delivery(
         String id,
         String subscriptionId,
         String event,
-        String taskName,
-        String jobId,
+        @Nullable String taskName,
+        @Nullable String jobId,
         String status,
         int attempts,
-        Integer responseCode,
-        String responseBody,
-        Long latencyMs,
-        String error,
+        @Nullable Integer responseCode,
+        @Nullable String responseBody,
+        @Nullable Long latencyMs,
+        @Nullable String error,
         long createdAt,
-        Long completedAt) {
+        @Nullable Long completedAt) {
 
     static final String DELIVERED = "delivered";
     static final String FAILED = "failed";
@@ -44,10 +45,10 @@ public record Delivery(
             DeliveryContext ctx,
             String status,
             int attempts,
-            Integer responseCode,
-            String responseBody,
-            Long latencyMs,
-            String error) {
+            @Nullable Integer responseCode,
+            @Nullable String responseBody,
+            @Nullable Long latencyMs,
+            @Nullable String error) {
         long now = System.currentTimeMillis();
         return new Delivery(
                 UUID.randomUUID().toString(),
@@ -65,7 +66,7 @@ public record Delivery(
                 "pending".equals(status) ? null : now);
     }
 
-    private static String truncate(String body) {
+    private static @Nullable String truncate(@Nullable String body) {
         if (body == null) {
             return null;
         }

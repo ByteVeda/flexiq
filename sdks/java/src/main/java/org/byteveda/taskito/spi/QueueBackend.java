@@ -1,6 +1,7 @@
 package org.byteveda.taskito.spi;
 
 import java.util.Optional;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Low-level queue operations a backend provides, in native-shaped terms (opaque
@@ -61,18 +62,18 @@ public interface QueueBackend extends AutoCloseable {
      * without a seekable ordering cannot honour the cursor contract, and silently
      * returning an unpaginated list would look like the last page.
      */
-    default String listJobsAfterJson(String filterJson, String afterOrNull) {
+    default String listJobsAfterJson(String filterJson, @Nullable String afterOrNull) {
         throw new UnsupportedOperationException("keyset pagination not supported by this backend");
     }
 
     /** A keyset-paginated page of archived jobs as JSON. See {@link #listJobsAfterJson}. */
-    default String listArchivedAfterJson(long limit, String afterOrNull) {
+    default String listArchivedAfterJson(long limit, @Nullable String afterOrNull) {
         throw new UnsupportedOperationException("keyset pagination not supported by this backend");
     }
 
     String jobErrorsJson(String jobId);
 
-    String metricsJson(String taskNameOrNull, long sinceMs);
+    String metricsJson(@Nullable String taskNameOrNull, long sinceMs);
 
     String listWorkersJson();
 
@@ -154,22 +155,23 @@ public interface QueueBackend extends AutoCloseable {
      * backend can count against live storage, so non-native backends do not
      * support the dry-run.
      */
-    default String dryRunRetentionJson(String retentionJson) {
+    default String dryRunRetentionJson(@Nullable String retentionJson) {
         throw new UnsupportedOperationException("retention dry-run requires the native backend");
     }
 
     // ── Logs ────────────────────────────────────────────────────────
-    void writeTaskLog(String jobId, String taskName, String level, String message, String extraOrNull);
+    void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extraOrNull);
 
     String getTaskLogsJson(String jobId);
 
     /** Logs for a job after a cursor id; defaults to none for backends without cursor support. */
-    default String getTaskLogsAfterJson(String jobId, String afterIdOrNull) {
+    default String getTaskLogsAfterJson(String jobId, @Nullable String afterIdOrNull) {
         return "[]";
     }
 
     /** Logs across jobs filtered by task/level/since; defaults to none. */
-    default String queryTaskLogsJson(String taskNameOrNull, String levelOrNull, long sinceMs, long limit) {
+    default String queryTaskLogsJson(
+            @Nullable String taskNameOrNull, @Nullable String levelOrNull, long sinceMs, long limit) {
         return "[]";
     }
 
@@ -194,7 +196,13 @@ public interface QueueBackend extends AutoCloseable {
 
     // ── Periodic ────────────────────────────────────────────────────
     default long registerPeriodic(
-            String name, String taskName, String cron, byte[] args, String queue, String timezone, boolean enabled) {
+            String name,
+            String taskName,
+            String cron,
+            byte @Nullable [] args,
+            @Nullable String queue,
+            @Nullable String timezone,
+            boolean enabled) {
         throw new UnsupportedOperationException("periodic tasks not supported by this backend");
     }
 
@@ -230,7 +238,7 @@ public interface QueueBackend extends AutoCloseable {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull) {
+            @Nullable String ownerWorkerIdOrNull) {
         throw new UnsupportedOperationException(PUBSUB_UNSUPPORTED);
     }
 
@@ -255,10 +263,10 @@ public interface QueueBackend extends AutoCloseable {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull,
-            Integer priority,
-            Integer maxRetries,
-            Long timeoutMs) {
+            @Nullable String ownerWorkerIdOrNull,
+            @Nullable Integer priority,
+            @Nullable Integer maxRetries,
+            @Nullable Long timeoutMs) {
         registerSubscription(topic, subscriptionName, taskName, queue, durable, ownerWorkerIdOrNull);
     }
 
@@ -277,10 +285,10 @@ public interface QueueBackend extends AutoCloseable {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull,
-            Integer priority,
-            Integer maxRetries,
-            Long timeoutMs,
+            @Nullable String ownerWorkerIdOrNull,
+            @Nullable Integer priority,
+            @Nullable Integer maxRetries,
+            @Nullable Long timeoutMs,
             String mode) {
         if (!"fanout".equals(mode)) {
             throw new UnsupportedOperationException("log topics not supported by this backend");
@@ -298,7 +306,7 @@ public interface QueueBackend extends AutoCloseable {
     }
 
     /** A JSON array of subscriptions — all of them, or only a topic's active ones. */
-    default String listSubscriptionsJson(String topicOrNull) {
+    default String listSubscriptionsJson(@Nullable String topicOrNull) {
         throw new UnsupportedOperationException(PUBSUB_UNSUPPORTED);
     }
 
@@ -373,7 +381,7 @@ public interface QueueBackend extends AutoCloseable {
      * subscriber. {@code retentionMs} bounds a sub-less backlog; {@code null}
      * keeps messages until consumed.
      */
-    default void declareTopic(String name, Long retentionMs) {
+    default void declareTopic(String name, @Nullable Long retentionMs) {
         throw new UnsupportedOperationException(PUBSUB_UNSUPPORTED);
     }
 
@@ -393,16 +401,17 @@ public interface QueueBackend extends AutoCloseable {
             String stepsJson,
             String[] payloadNames,
             byte[][] payloads,
-            String queueDefault,
-            String paramsJson,
+            @Nullable String queueDefault,
+            @Nullable String paramsJson,
             String[] deferredNames,
-            String parentRunId,
-            String parentNodeName) {
+            @Nullable String parentRunId,
+            @Nullable String parentNodeName) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
     /** Record a node's terminal outcome; returns the run's final state, or {@code null}. */
-    default String markWorkflowNodeResult(String jobId, boolean succeeded, String error, boolean skipCascade) {
+    default String markWorkflowNodeResult(
+            String jobId, boolean succeeded, @Nullable String error, boolean skipCascade) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
@@ -410,7 +419,8 @@ public interface QueueBackend extends AutoCloseable {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
-    default String listWorkflowRunsJson(String definitionNameOrNull, String stateOrNull, long limit, long offset) {
+    default String listWorkflowRunsJson(
+            @Nullable String definitionNameOrNull, @Nullable String stateOrNull, long limit, long offset) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
@@ -486,7 +496,7 @@ public interface QueueBackend extends AutoCloseable {
     }
 
     /** Settle a parked gate: completed if approved, else failed with {@code error}. */
-    default void resolveWorkflowGate(String runId, String nodeName, boolean approved, String error) {
+    default void resolveWorkflowGate(String runId, String nodeName, boolean approved, @Nullable String error) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
@@ -496,7 +506,7 @@ public interface QueueBackend extends AutoCloseable {
     }
 
     /** Mark a node failed. */
-    default void failWorkflowNode(String runId, String nodeName, String error) {
+    default void failWorkflowNode(String runId, String nodeName, @Nullable String error) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
@@ -520,7 +530,7 @@ public interface QueueBackend extends AutoCloseable {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
-    default void setWorkflowRunCompensationFailed(String runId, long completedAt, String error) {
+    default void setWorkflowRunCompensationFailed(String runId, long completedAt, @Nullable String error) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
@@ -537,7 +547,8 @@ public interface QueueBackend extends AutoCloseable {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 
-    default void setWorkflowNodeCompensationFailed(String runId, String nodeName, String error, long completedAt) {
+    default void setWorkflowNodeCompensationFailed(
+            String runId, String nodeName, @Nullable String error, long completedAt) {
         throw new UnsupportedOperationException(WORKFLOWS_UNSUPPORTED);
     }
 

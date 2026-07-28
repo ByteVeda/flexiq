@@ -15,6 +15,7 @@ import org.byteveda.taskito.webhooks.Webhook;
 import org.byteveda.taskito.webhooks.WebhookManager;
 import org.byteveda.taskito.webhooks.WebhookUpdate;
 import org.byteveda.taskito.webhooks.WebhookUrlValidator;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Webhook subscription CRUD + test/replay + delivery history for the dashboard.
@@ -38,7 +39,7 @@ public final class WebhooksHandlers {
         return manager.list().stream().map(Contract::webhook).collect(Collectors.toList());
     }
 
-    public Object get(String id) {
+    public @Nullable Object get(String id) {
         return manager.get(id).map(Contract::webhook).orElse(null);
     }
 
@@ -66,7 +67,7 @@ public final class WebhooksHandlers {
         return Contract.webhookWithSecret(manager.create(spec));
     }
 
-    public Object update(String id, Map<String, Object> body) {
+    public @Nullable Object update(String id, Map<String, Object> body) {
         WebhookUpdate.Builder update = WebhookUpdate.builder();
         if (body.containsKey("url")) {
             String url = requireString(body, "url");
@@ -102,15 +103,15 @@ public final class WebhooksHandlers {
         return manager.update(id, update.build()).map(Contract::webhook).orElse(null);
     }
 
-    public Object delete(String id) {
+    public @Nullable Object delete(String id) {
         return manager.delete(id) ? Map.of("deleted", true) : null;
     }
 
-    public Object rotateSecret(String id) {
+    public @Nullable Object rotateSecret(String id) {
         return manager.rotateSecret(id).map(Contract::webhookWithSecret).orElse(null);
     }
 
-    public Object test(String id) {
+    public @Nullable Object test(String id) {
         if (manager.get(id).isEmpty()) {
             return null;
         }
@@ -125,11 +126,11 @@ public final class WebhooksHandlers {
                 .collect(Collectors.toList());
     }
 
-    public Object delivery(String id, String deliveryId) {
+    public @Nullable Object delivery(String id, String deliveryId) {
         return manager.delivery(id, deliveryId).map(Contract::delivery).orElse(null);
     }
 
-    public Object replayDelivery(String id, String deliveryId) {
+    public @Nullable Object replayDelivery(String id, String deliveryId) {
         if (manager.get(id).isEmpty() || manager.delivery(id, deliveryId).isEmpty()) {
             return null;
         }
@@ -146,14 +147,14 @@ public final class WebhooksHandlers {
         }
     }
 
-    private static String resolveSecret(Map<String, Object> body) {
+    private static @Nullable String resolveSecret(Map<String, Object> body) {
         if (isTruthy(body.get("generate_secret"))) {
             return WebhookManager.generateSecret();
         }
         return optionalString(body, "secret");
     }
 
-    private static List<EventName> parseEvents(Object raw) {
+    private static List<EventName> parseEvents(@Nullable Object raw) {
         if (raw == null) {
             return List.of();
         }
@@ -184,7 +185,7 @@ public final class WebhooksHandlers {
         }
     }
 
-    private static Map<String, String> headers(Object raw) {
+    private static Map<String, String> headers(@Nullable Object raw) {
         if (raw == null) {
             return Map.of();
         }
@@ -209,7 +210,7 @@ public final class WebhooksHandlers {
         return string;
     }
 
-    private static String optionalString(Map<String, Object> body, String key) {
+    private static @Nullable String optionalString(Map<String, Object> body, String key) {
         Object value = body.get(key);
         if (value == null) {
             return null;
@@ -220,7 +221,7 @@ public final class WebhooksHandlers {
         return string;
     }
 
-    private static int intOr(Object value, String name, int fallback) {
+    private static int intOr(@Nullable Object value, String name, int fallback) {
         if (value == null) {
             return fallback;
         }
@@ -230,7 +231,7 @@ public final class WebhooksHandlers {
         return number.intValue();
     }
 
-    private static long timeoutMs(Object seconds, long fallbackMs) {
+    private static long timeoutMs(@Nullable Object seconds, long fallbackMs) {
         if (seconds == null) {
             return fallbackMs;
         }
@@ -247,7 +248,7 @@ public final class WebhooksHandlers {
         return flag;
     }
 
-    private static boolean isTruthy(Object value) {
+    private static boolean isTruthy(@Nullable Object value) {
         return value instanceof Boolean flag && flag;
     }
 

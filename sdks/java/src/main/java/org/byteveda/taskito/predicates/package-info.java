@@ -7,4 +7,7 @@
  * {@link org.byteveda.taskito.predicates.Predicates#allOf},
  * {@code anyOf}, and {@code not}.
  */
+@NullMarked
 package org.byteveda.taskito.predicates;
+
+import org.jspecify.annotations.NullMarked;

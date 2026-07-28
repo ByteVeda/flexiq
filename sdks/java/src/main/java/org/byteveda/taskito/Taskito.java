@@ -75,6 +75,7 @@ import org.byteveda.taskito.workflows.Workflow;
 import org.byteveda.taskito.workflows.WorkflowRun;
 import org.byteveda.taskito.workflows.WorkflowState;
 import org.byteveda.taskito.workflows.WorkflowStatus;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The Taskito client: a handle to a storage backend through which you enqueue,
@@ -251,7 +252,7 @@ public interface Taskito extends AutoCloseable {
     <T> String enqueue(Task<T> task, T payload, EnqueueOptions options);
 
     /** Enqueue by task name with an arbitrary payload and default options. */
-    String enqueue(String taskName, Object payload);
+    String enqueue(String taskName, @Nullable Object payload);
 
     /**
      * Like {@link #enqueue(Task, Object)} but gate-aware: returns the job id, or
@@ -331,7 +332,7 @@ public interface Taskito extends AutoCloseable {
     List<JobError> jobErrors(String jobId);
 
     /** Per-execution metrics within the last {@code sinceMs}; null task = all. */
-    List<TaskMetric> metrics(String taskName, long sinceMs);
+    List<TaskMetric> metrics(@Nullable String taskName, long sinceMs);
 
     List<WorkerInfo> listWorkers();
 
@@ -421,7 +422,7 @@ public interface Taskito extends AutoCloseable {
      * @param retention the candidate windows to preview
      * @return the per-table counts a purge would remove
      */
-    RetentionPreview dryRunRetention(Retention retention);
+    RetentionPreview dryRunRetention(@Nullable Retention retention);
 
     // ── Middleware toggles ──────────────────────────────────────────
 
@@ -456,7 +457,7 @@ public interface Taskito extends AutoCloseable {
 
     void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message);
 
-    void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message, String extra);
+    void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message, @Nullable String extra);
 
     /**
      * Write a task log at a wire-form level.
@@ -472,7 +473,7 @@ public interface Taskito extends AutoCloseable {
      * @deprecated use {@link #writeTaskLog(String, String, TaskLogLevel, String, String)}.
      */
     @Deprecated
-    void writeTaskLog(String jobId, String taskName, String level, String message, String extra);
+    void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra);
 
     List<TaskLog> getTaskLogs(String jobId);
 
@@ -486,7 +487,7 @@ public interface Taskito extends AutoCloseable {
      * value must return nothing rather than throw, since it typically arrives from a query
      * string.
      */
-    List<TaskLog> queryTaskLogs(String taskName, String level, long sinceMs, long limit);
+    List<TaskLog> queryTaskLogs(@Nullable String taskName, @Nullable String level, long sinceMs, long limit);
 
     // ── Locks ───────────────────────────────────────────────────────
 
@@ -664,7 +665,7 @@ public interface Taskito extends AutoCloseable {
      * @param retention how long a sub-less message is retained, or {@code null} for unbounded
      * @return this instance, for chaining
      */
-    Taskito declareTopic(String name, Duration retention);
+    Taskito declareTopic(String name, @Nullable Duration retention);
 
     /** Every declared topic in the registry. */
     List<Topic> listDeclaredTopics();
@@ -712,7 +713,8 @@ public interface Taskito extends AutoCloseable {
      * so that a bare {@code null} filter stays unambiguous; unlike the log level, an
      * unrecognized state is rejected by the core.
      */
-    List<WorkflowRunInfo> listWorkflowRuns(String definitionName, String state, long limit, long offset);
+    List<WorkflowRunInfo> listWorkflowRuns(
+            @Nullable String definitionName, @Nullable String state, long limit, long offset);
 
     /** A single workflow run summary, or empty if the run no longer exists. */
     Optional<WorkflowRunInfo> getWorkflowRun(String runId);

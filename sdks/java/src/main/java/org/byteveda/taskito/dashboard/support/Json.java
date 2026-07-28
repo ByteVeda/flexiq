@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.errors.SerializationException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Shared JSON codec for the dashboard. Output is compact (no spaces) so that
@@ -28,7 +29,7 @@ public final class Json {
         }
     }
 
-    public static String toString(Object value) {
+    public static String toString(@Nullable Object value) {
         try {
             return MAPPER.writeValueAsString(value);
         } catch (IOException e) {
@@ -37,7 +38,7 @@ public final class Json {
     }
 
     /** Parse an object body; returns {@code null} for non-object or malformed input. */
-    public static Map<String, Object> readObject(byte[] body) {
+    public static @Nullable Map<String, Object> readObject(byte @Nullable [] body) {
         if (body == null || body.length == 0) {
             return null;
         }
@@ -49,7 +50,7 @@ public final class Json {
     }
 
     /** Parse a stored JSON string into a mutable map; {@code null} if malformed/non-object. */
-    public static Map<String, Object> parseMap(String json) {
+    public static @Nullable Map<String, Object> parseMap(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return null;
         }
@@ -61,7 +62,7 @@ public final class Json {
     }
 
     /** Parse a JSON array of strings; empty list if malformed/non-array/null. */
-    public static List<String> parseStringList(String json) {
+    public static List<String> parseStringList(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return List.of();
         }
@@ -79,7 +80,7 @@ public final class Json {
     }
 
     /** Parse a JSON array of objects into maps; empty list if malformed/non-array/null. */
-    public static List<Map<String, Object>> parseListOfObjects(String json) {
+    public static List<Map<String, Object>> parseListOfObjects(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return List.of();
         }
@@ -101,7 +102,35 @@ public final class Json {
         }
     }
 
-    private static Map<String, Object> asMap(JsonNode node) {
+    /** A required string field of a parsed record; throws when absent or not a string. */
+    public static String requireString(Map<String, Object> data, String key) {
+        Object value = data.get(key);
+        if (value instanceof String text) {
+            return text;
+        }
+        throw new IllegalArgumentException("expected a string at '" + key + "', got " + value);
+    }
+
+    /** An optional string field of a parsed record; {@code null} when absent or not a string. */
+    public static @Nullable String optionalString(Map<String, Object> data, String key) {
+        return data.get(key) instanceof String text ? text : null;
+    }
+
+    /** A required numeric field of a parsed record; throws when absent or not a number. */
+    public static long requireLong(Map<String, Object> data, String key) {
+        Object value = data.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        throw new IllegalArgumentException("expected a number at '" + key + "', got " + value);
+    }
+
+    /** An optional numeric field of a parsed record; {@code null} when absent or not a number. */
+    public static @Nullable Long optionalLong(Map<String, Object> data, String key) {
+        return data.get(key) instanceof Number number ? number.longValue() : null;
+    }
+
+    private static @Nullable Map<String, Object> asMap(@Nullable JsonNode node) {
         if (node == null || !node.isObject()) {
             return null;
         }

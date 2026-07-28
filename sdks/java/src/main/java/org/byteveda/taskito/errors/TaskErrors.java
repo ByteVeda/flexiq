@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Codec for the canonical cross-SDK task-error JSON
@@ -40,7 +41,7 @@ public final class TaskErrors {
      * string is a JSON object with a string {@code message} — the signal that it is plain
      * legacy/system text and must be surfaced as-is.
      */
-    public static TaskError decode(String raw) {
+    public static @Nullable TaskError decode(String raw) {
         if (raw == null || raw.isEmpty()) {
             return null;
         }
@@ -66,7 +67,7 @@ public final class TaskErrors {
         return decoded == null ? raw : decoded.summary();
     }
 
-    private static JsonNode readTree(String raw) {
+    private static @Nullable JsonNode readTree(String raw) {
         try {
             return JSON.readTree(raw);
         } catch (IOException e) {

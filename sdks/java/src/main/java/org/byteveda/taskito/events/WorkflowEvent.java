@@ -1,6 +1,7 @@
 package org.byteveda.taskito.events;
 
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A workflow run's lifecycle transition — submitted, finalized (completed /
@@ -13,7 +14,8 @@ import java.util.Set;
  * @param workflowName the workflow definition's name; null when not resolvable at the emit site
  * @param error the failure message; null unless the transition carries one
  */
-public record WorkflowEvent(EventName name, String runId, String workflowName, String error) implements TaskitoEvent {
+public record WorkflowEvent(EventName name, String runId, @Nullable String workflowName, @Nullable String error)
+        implements TaskitoEvent {
 
     private static final Set<EventName> RUN_EVENTS = Set.of(
             EventName.WORKFLOW_SUBMITTED,

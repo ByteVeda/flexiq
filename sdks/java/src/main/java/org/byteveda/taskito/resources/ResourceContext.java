@@ -1,5 +1,7 @@
 package org.byteveda.taskito.resources;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Handed to a resource factory so it can depend on other resources. A factory
  * may only depend on same-or-longer-lived resources: {@code WORKER} and
@@ -13,5 +15,5 @@ public interface ResourceContext {
     ResourceScope scope();
 
     /** Resolve another resource by name (building it if needed). */
-    <T> T use(String name);
+    <T> @Nullable T use(String name);
 }

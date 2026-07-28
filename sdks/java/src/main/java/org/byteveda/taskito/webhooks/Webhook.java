@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.events.EventName;
+import org.jspecify.annotations.Nullable;
 
 /** A stored webhook subscription. Timestamps are Unix milliseconds. */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -18,13 +19,13 @@ public final class Webhook {
     /** Event wire names this hook fires on, e.g. {@code job.completed} (legacy outcome aliases still match). */
     public final List<String> events;
 
-    public final String taskFilter;
+    public final @Nullable String taskFilter;
     public final Map<String, String> headers;
-    public final String secret;
+    public final @Nullable String secret;
     public final int maxRetries;
     public final long timeoutMs;
     public final boolean enabled;
-    public final String description;
+    public final @Nullable String description;
     public final long createdAt;
     public final long updatedAt;
 
@@ -32,14 +33,14 @@ public final class Webhook {
     Webhook(
             @JsonProperty("id") String id,
             @JsonProperty("url") String url,
-            @JsonProperty("events") List<String> events,
-            @JsonProperty("taskFilter") String taskFilter,
-            @JsonProperty("headers") Map<String, String> headers,
-            @JsonProperty("secret") String secret,
+            @JsonProperty("events") @Nullable List<String> events,
+            @JsonProperty("taskFilter") @Nullable String taskFilter,
+            @JsonProperty("headers") @Nullable Map<String, String> headers,
+            @JsonProperty("secret") @Nullable String secret,
             @JsonProperty("maxRetries") int maxRetries,
             @JsonProperty("timeoutMs") long timeoutMs,
             @JsonProperty("enabled") boolean enabled,
-            @JsonProperty("description") String description,
+            @JsonProperty("description") @Nullable String description,
             @JsonProperty("createdAt") long createdAt,
             @JsonProperty("updatedAt") long updatedAt) {
         this.id = id;
@@ -65,11 +66,18 @@ public final class Webhook {
         final String url;
         final List<String> events = new ArrayList<>();
         final Map<String, String> headers = new LinkedHashMap<>();
+
+        @Nullable
         String taskFilter;
+
+        @Nullable
         String secret;
+
         int maxRetries = 3;
         long timeoutMs = 10_000;
         boolean enabled = true;
+
+        @Nullable
         String description;
 
         Builder(String url) {
@@ -93,7 +101,7 @@ public final class Webhook {
             return this;
         }
 
-        public Builder secret(String secret) {
+        public Builder secret(@Nullable String secret) {
             this.secret = secret;
             return this;
         }

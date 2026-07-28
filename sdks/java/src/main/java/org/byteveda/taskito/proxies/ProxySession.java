@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import org.byteveda.taskito.errors.ProxyException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A unit-of-work wrapper over {@link Proxies} adding identity dedup and a
@@ -49,7 +50,7 @@ public final class ProxySession implements AutoCloseable {
     }
 
     /** Deconstruct {@code value} with a TTL, deduped by instance identity. */
-    public ProxyRef deconstruct(Object value, Duration ttl) {
+    public ProxyRef deconstruct(Object value, @Nullable Duration ttl) {
         return deconstruct(value, ttl, null);
     }
 
@@ -57,7 +58,7 @@ public final class ProxySession implements AutoCloseable {
      * Deconstruct {@code value} bound to {@code ttl}/{@code purpose} (both
      * nullable), deduped by (instance identity, purpose).
      */
-    public ProxyRef deconstruct(Object value, Duration ttl, String purpose) {
+    public ProxyRef deconstruct(Object value, @Nullable Duration ttl, @Nullable String purpose) {
         ensureOpen();
         if (value == null) {
             throw new ProxyException("cannot deconstruct null");
@@ -81,7 +82,7 @@ public final class ProxySession implements AutoCloseable {
      * Verify (always — including memo hits, so a ref that expires mid-session
      * stops resolving) and reconstruct {@code ref}, deduped by its signature.
      */
-    public Object reconstruct(ProxyRef ref, String expectedPurpose) {
+    public Object reconstruct(ProxyRef ref, @Nullable String expectedPurpose) {
         ensureOpen();
         ProxyHandler<Object> handler = proxies.handlerFor(ref.handler());
         proxies.verify(ref, expectedPurpose);

@@ -94,6 +94,12 @@ Each classifier jar carries only its own library; the runtime resolves the
 matching one from the classpath. Deploying to several platforms from one build?
 Add multiple classifier dependencies — extra platforms cost nothing at runtime.
 
+Anything outside that list — Windows on ARM, or an OS beyond Linux, macOS, and
+Windows — has no published artifact. The loader fails at startup with an
+`UnsatisfiedLinkError` naming the platform it detected rather than trying a
+binary built for another one. Those platforms are still supported by building
+the native library from source and pointing `-Dtaskito.native.lib` at it.
+
 At runtime the platform binary is extracted (content-addressed, safe under
 concurrent processes) and loaded. Two system properties tune this:
 `-Dtaskito.native.lib=/abs/path` loads an explicit library instead — for local

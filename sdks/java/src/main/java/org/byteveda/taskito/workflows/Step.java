@@ -5,25 +5,26 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.byteveda.taskito.task.Task;
+import org.jspecify.annotations.Nullable;
 
 /** One step in a {@link Workflow}: a task plus its payload, predecessors, and per-step overrides. */
 public final class Step {
     public final String name;
     public final String taskName;
-    public final Object payload;
+    public final @Nullable Object payload;
     public final List<String> after;
-    public final String queue;
-    public final Integer maxRetries;
-    public final Long timeoutMs;
-    public final Integer priority;
-    public final String fanOut;
-    public final String fanIn;
-    public final GateConfig gate;
-    public final String condition;
-    public final Condition callableCondition;
-    public final Workflow subWorkflow;
-    public final String compensate;
-    public final Long cacheTtlMs;
+    public final @Nullable String queue;
+    public final @Nullable Integer maxRetries;
+    public final @Nullable Long timeoutMs;
+    public final @Nullable Integer priority;
+    public final @Nullable String fanOut;
+    public final @Nullable String fanIn;
+    public final @Nullable GateConfig gate;
+    public final @Nullable String condition;
+    public final @Nullable Condition callableCondition;
+    public final @Nullable Workflow subWorkflow;
+    public final @Nullable String compensate;
+    public final @Nullable Long cacheTtlMs;
 
     private Step(Builder builder) {
         this.name = builder.name;
@@ -50,7 +51,7 @@ public final class Step {
     }
 
     /** Begin a step bound to a task name (untyped payload). */
-    public static Builder of(String name, String taskName, Object payload) {
+    public static Builder of(String name, String taskName, @Nullable Object payload) {
         return new Builder(name, taskName, payload);
     }
 
@@ -63,22 +64,22 @@ public final class Step {
     public static final class Builder {
         private final String name;
         private final String taskName;
-        private final Object payload;
+        private final @Nullable Object payload;
         private final List<String> after = new ArrayList<>();
-        private String queue;
-        private Integer maxRetries;
-        private Long timeoutMs;
-        private Integer priority;
-        private String fanOut;
-        private String fanIn;
-        private GateConfig gate;
-        private String condition;
-        private Condition callableCondition;
-        private Workflow subWorkflow;
-        private String compensate;
-        private Long cacheTtlMs;
+        private @Nullable String queue;
+        private @Nullable Integer maxRetries;
+        private @Nullable Long timeoutMs;
+        private @Nullable Integer priority;
+        private @Nullable String fanOut;
+        private @Nullable String fanIn;
+        private @Nullable GateConfig gate;
+        private @Nullable String condition;
+        private @Nullable Condition callableCondition;
+        private @Nullable Workflow subWorkflow;
+        private @Nullable String compensate;
+        private @Nullable Long cacheTtlMs;
 
-        private Builder(String name, String taskName, Object payload) {
+        private Builder(String name, String taskName, @Nullable Object payload) {
             this.name = name;
             this.taskName = taskName;
             this.payload = payload;
@@ -165,7 +166,7 @@ public final class Step {
          * Type-safe variant of {@link #condition(String)} — run this step only when
          * {@code condition} holds. Prefer this over the string overload.
          */
-        public Builder condition(WorkflowCondition condition) {
+        public Builder condition(@Nullable WorkflowCondition condition) {
             this.condition = condition == null ? null : condition.wire();
             return this;
         }

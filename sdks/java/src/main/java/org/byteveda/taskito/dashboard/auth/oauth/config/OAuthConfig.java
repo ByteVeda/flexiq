@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.byteveda.taskito.dashboard.auth.oauth.error.OAuthConfigError;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Operator-facing OAuth configuration, parsed entirely from environment
@@ -23,8 +24,8 @@ import org.byteveda.taskito.dashboard.auth.oauth.error.OAuthConfigError;
  */
 public record OAuthConfig(
         String redirectBaseUrl,
-        GoogleConfig google,
-        GitHubConfig github,
+        @Nullable GoogleConfig google,
+        @Nullable GitHubConfig github,
         List<OidcConfig> oidc,
         boolean passwordAuthEnabled,
         List<String> adminEmails) {
@@ -133,7 +134,7 @@ public record OAuthConfig(
         return Optional.of(config);
     }
 
-    private static GoogleConfig parseGoogle(Map<String, String> env) {
+    private static @Nullable GoogleConfig parseGoogle(Map<String, String> env) {
         String clientId = trimmed(env, ENV_GOOGLE_CLIENT_ID);
         String secret = trimmed(env, ENV_GOOGLE_CLIENT_SECRET);
         if (secret.isEmpty()) {
@@ -142,7 +143,7 @@ public record OAuthConfig(
         return new GoogleConfig(clientId, secret, splitCsv(env.get(ENV_GOOGLE_ALLOWED_DOMAINS)));
     }
 
-    private static GitHubConfig parseGithub(Map<String, String> env) {
+    private static @Nullable GitHubConfig parseGithub(Map<String, String> env) {
         String clientId = trimmed(env, ENV_GITHUB_CLIENT_ID);
         String secret = trimmed(env, ENV_GITHUB_CLIENT_SECRET);
         if (secret.isEmpty()) {
@@ -231,7 +232,7 @@ public record OAuthConfig(
         return url.substring(0, end);
     }
 
-    private static List<String> splitCsv(String raw) {
+    private static List<String> splitCsv(@Nullable String raw) {
         if (raw == null || raw.isBlank()) {
             return List.of();
         }

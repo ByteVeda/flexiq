@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Legacy shared-token mode: a single bearer token gates {@code /api/*} and every
@@ -26,7 +27,7 @@ public final class TokenAuth {
         this.token = token;
     }
 
-    public String presented(HttpExchange exchange) {
+    public @Nullable String presented(HttpExchange exchange) {
         String authorization = exchange.getRequestHeaders().getFirst("Authorization");
         if (authorization != null && authorization.startsWith("Bearer ")) {
             return authorization.substring("Bearer ".length()).trim();
@@ -38,7 +39,7 @@ public final class TokenAuth {
         return Cookies.get(exchange, Cookies.LEGACY_TOKEN);
     }
 
-    public boolean matches(String presented) {
+    public boolean matches(@Nullable String presented) {
         if (presented == null) {
             return false;
         }

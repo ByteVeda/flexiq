@@ -5,4 +5,7 @@
  * {@code GET /health}. Observability (metrics export) is left to the contrib
  * middleware; this only reports depth for scaling decisions.
  */
+@NullMarked
 package org.byteveda.taskito.scaler;
+
+import org.jspecify.annotations.NullMarked;

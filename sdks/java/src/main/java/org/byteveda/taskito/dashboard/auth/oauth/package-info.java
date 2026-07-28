@@ -23,4 +23,7 @@
  *       org.byteveda.taskito.dashboard.auth.oauth.UrlSafety}.
  * </ul>
  */
+@NullMarked
 package org.byteveda.taskito.dashboard.auth.oauth;
+
+import org.jspecify.annotations.NullMarked;

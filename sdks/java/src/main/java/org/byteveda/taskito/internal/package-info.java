@@ -1,2 +1,5 @@
 /** Implementation details: JNI bindings, native-library loading, and the default backend. Not public API. */
+@NullMarked
 package org.byteveda.taskito.internal;
+
+import org.jspecify.annotations.NullMarked;

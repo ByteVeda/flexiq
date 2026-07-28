@@ -1,6 +1,7 @@
 package org.byteveda.taskito.events;
 
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /** A finished job's outcome. {@code error} is null on success/cancel; {@code retryCount} is -1 when N/A. */
 public final class OutcomeEvent implements TaskitoEvent {
@@ -49,7 +50,7 @@ public final class OutcomeEvent implements TaskitoEvent {
      *     failed before it ever executed, or one the runtime recovered rather than a
      *     worker finishing it.
      */
-    public Long durationMs() {
+    public @Nullable Long durationMs() {
         return wallTimeNs > 0 ? wallTimeNs / 1_000_000L : null;
     }
 }

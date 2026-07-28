@@ -7,6 +7,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.byteveda.taskito.errors.CryptoException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Wraps a delegate serializer with AES-GCM encryption. Each payload is prefixed
@@ -28,7 +29,7 @@ public final class EncryptedSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serialize(Object value) {
+    public byte[] serialize(@Nullable Object value) {
         try {
             byte[] iv = new byte[IV_LENGTH];
             random.nextBytes(iv);

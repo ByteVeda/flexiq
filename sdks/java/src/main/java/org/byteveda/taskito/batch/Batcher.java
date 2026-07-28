@@ -9,6 +9,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.task.Task;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Buffers payloads for one task and enqueues them in a single
@@ -26,7 +27,7 @@ public final class Batcher<T> implements AutoCloseable {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(Batcher::daemon);
     private final Object lock = new Object();
     private final List<T> buffer = new ArrayList<>();
-    private ScheduledFuture<?> pendingFlush;
+    private @Nullable ScheduledFuture<?> pendingFlush;
     private boolean closed; // guarded by lock
 
     public Batcher(Taskito queue, Task<T> task, int maxBatch, Duration maxDelay) {

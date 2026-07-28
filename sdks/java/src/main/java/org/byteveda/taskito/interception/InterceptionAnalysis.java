@@ -1,6 +1,7 @@
 package org.byteveda.taskito.interception;
 
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * What the registered interceptors would do with one enqueue, without enqueuing
@@ -18,7 +19,11 @@ import java.util.List;
  *     {@code rejected}
  */
 public record InterceptionAnalysis(
-        String taskName, Object payload, List<Interception> outcomes, boolean rejected, String rejectionReason) {
+        String taskName,
+        @Nullable Object payload,
+        List<Interception> outcomes,
+        boolean rejected,
+        @Nullable String rejectionReason) {
 
     public InterceptionAnalysis {
         outcomes = List.copyOf(outcomes);

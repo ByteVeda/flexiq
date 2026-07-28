@@ -65,8 +65,11 @@ dependencies {
 Deploying one artifact to several platforms? Add multiple classifier
 dependencies — each jar carries only its own library, and the loader picks the
 right one at runtime. Supplying your own build instead (e.g. a custom feature
-set): skip the classifier and point `-Dtaskito.native.lib=/path/to/library` at
-it — the classifier-free main jar works with no bundled native.
+set, or a platform with no published artifact such as Windows on ARM): skip the
+classifier and point `-Dtaskito.native.lib=/path/to/library` at it — the
+classifier-free main jar works with no bundled native. On an unpublished
+platform the loader fails at startup naming the platform it detected, rather
+than loading a binary built for a different one.
 
 ```xml
 <!-- Maven: the processor is wired through the compiler plugin, not a dependency -->

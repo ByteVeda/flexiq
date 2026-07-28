@@ -3,6 +3,7 @@ package org.byteveda.taskito.serialization;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Type;
 import org.byteveda.taskito.errors.SerializationException;
+import org.jspecify.annotations.Nullable;
 
 /** Default {@link Serializer}: JSON via Jackson. */
 public final class JsonSerializer implements Serializer {
@@ -17,7 +18,7 @@ public final class JsonSerializer implements Serializer {
     }
 
     @Override
-    public byte[] serialize(Object value) {
+    public byte[] serialize(@Nullable Object value) {
         try {
             return mapper.writeValueAsBytes(value);
         } catch (Exception e) {

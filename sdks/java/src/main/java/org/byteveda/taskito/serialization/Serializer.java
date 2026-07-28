@@ -1,10 +1,11 @@
 package org.byteveda.taskito.serialization;
 
 import java.lang.reflect.Type;
+import org.jspecify.annotations.Nullable;
 
 /** Converts task payloads and results to and from the opaque bytes the core stores. */
 public interface Serializer {
-    byte[] serialize(Object value);
+    byte[] serialize(@Nullable Object value);
 
     <T> T deserialize(byte[] bytes, Class<T> type);
 
@@ -29,7 +30,7 @@ public interface Serializer {
      * {@code [args, kwargs]} from the binding contract; the default keeps the
      * bare-value body. Results always use {@link #serialize}/{@link #deserialize}.
      */
-    default byte[] serializeCall(Object payload) {
+    default byte[] serializeCall(@Nullable Object payload) {
         return serialize(payload);
     }
 

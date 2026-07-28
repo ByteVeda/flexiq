@@ -15,4 +15,7 @@
  * that each task checks one instance out of for its duration. Handlers resolve
  * them with {@link org.byteveda.taskito.resources.Resources#use(String)}.
  */
+@NullMarked
 package org.byteveda.taskito.resources;
+
+import org.jspecify.annotations.NullMarked;

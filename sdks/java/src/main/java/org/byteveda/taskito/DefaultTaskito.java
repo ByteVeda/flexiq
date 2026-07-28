@@ -97,6 +97,7 @@ import org.byteveda.taskito.workflows.Step;
 import org.byteveda.taskito.workflows.Workflow;
 import org.byteveda.taskito.workflows.WorkflowRun;
 import org.byteveda.taskito.workflows.WorkflowStatus;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Default {@link Taskito}: maps the typed public API onto a {@link QueueBackend},
@@ -226,7 +227,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
      * its full size. A no-op (and no query) for uncapped queues. Non-atomic
      * count-then-insert, like the rate limiter.
      */
-    private void rejectIfQueueFull(String queueOrNull, int incoming) {
+    private void rejectIfQueueFull(@Nullable String queueOrNull, int incoming) {
         String queue = queueOrDefault(queueOrNull);
         Integer cap = maxPending.get(queue);
         if (cap == null) {
@@ -332,7 +333,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public String enqueue(String taskName, Object payload) {
+    public String enqueue(String taskName, @Nullable Object payload) {
         return required(dispatchEnqueue(taskName, payload, EnqueueOptions.none(), List.of(), false), taskName);
     }
 
@@ -364,7 +365,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
      */
     private Optional<String> dispatchEnqueue(
             String taskName,
-            Object payload,
+            @Nullable Object payload,
             EnqueueOptions options,
             List<String> codecNames,
             boolean taskIdempotentDefault) {
@@ -425,7 +426,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
      * per-enqueue {@code idempotent(true)} or the task-level default auto-derives one from the
      * payload. Returns {@code null} when the enqueue should not be deduped.
      */
-    private static String resolveUniqueKey(
+    private static @Nullable String resolveUniqueKey(
             String taskName, byte[] preCodecPayload, EnqueueOptions options, boolean taskIdempotentDefault) {
         if (options.uniqueKey() != null) {
             return options.uniqueKey();
@@ -465,7 +466,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     /** Task and payload as the interceptor chain left them. */
-    private record Intercepted(String taskName, Object payload) {}
+    private record Intercepted(String taskName, @Nullable Object payload) {}
 
     /**
      * Run the interceptor chain in registration order, applying each outcome to the
@@ -473,7 +474,8 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
      * every interceptor returned so a dry run can report the chain without repeating
      * it — {@link #analyzeArguments} is then the same code path as a real enqueue.
      */
-    private Intercepted applyInterceptors(String taskName, Object payload, List<Interception> outcomes) {
+    private Intercepted applyInterceptors(
+            String taskName, @Nullable Object payload, @Nullable List<Interception> outcomes) {
         for (Interceptor interceptor : interceptors) {
             Interception outcome = interceptor.intercept(taskName, payload);
             if (outcome == null) {
@@ -517,7 +519,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
      * Evaluate registered gates in order; the first non-{@code Allow} decision wins.
      * Only gated tasks touch the counters — an ungated enqueue is not a decision.
      */
-    private EnqueueDecision evaluate(String taskName, Object payload) {
+    private EnqueueDecision evaluate(String taskName, @Nullable Object payload) {
         List<EnqueueGate> taskGates = gates.get(taskName);
         if (taskGates == null || taskGates.isEmpty()) {
             return EnqueueDecision.allow();
@@ -701,7 +703,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public List<TaskMetric> metrics(String taskName, long sinceMs) {
+    public List<TaskMetric> metrics(@Nullable String taskName, long sinceMs) {
         return decodeList(backend.metricsJson(taskName, sinceMs), TaskMetric.class);
     }
 
@@ -790,7 +792,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     /** The effective queue name: an unset option targets the {@code default} queue. */
-    private static String queueOrDefault(String queueOrNull) {
+    private static String queueOrDefault(@Nullable String queueOrNull) {
         return queueOrNull == null ? "default" : queueOrNull;
     }
 
@@ -815,7 +817,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public RetentionPreview dryRunRetention(Retention retention) {
+    public RetentionPreview dryRunRetention(@Nullable Retention retention) {
         String spec = retention == null ? null : encode(retention.toMap());
         return decode(backend.dryRunRetentionJson(spec), RetentionPreview.class);
     }
@@ -843,7 +845,8 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message, String extra) {
+    public void writeTaskLog(
+            String jobId, String taskName, TaskLogLevel level, String message, @Nullable String extra) {
         if (level == null) {
             throw new IllegalArgumentException("level must not be null");
         }
@@ -858,7 +861,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
 
     @Override
     @Deprecated
-    public void writeTaskLog(String jobId, String taskName, String level, String message, String extra) {
+    public void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra) {
         writeTaskLog(jobId, taskName, TaskLogLevel.fromWire(level), message, extra);
     }
 
@@ -873,7 +876,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public List<TaskLog> queryTaskLogs(String taskName, String level, long sinceMs, long limit) {
+    public List<TaskLog> queryTaskLogs(@Nullable String taskName, @Nullable String level, long sinceMs, long limit) {
         return decodeList(backend.queryTaskLogsJson(taskName, level, sinceMs, limit), TaskLog.class);
     }
 
@@ -1010,7 +1013,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
         return request;
     }
 
-    private static void putIfSet(Map<String, Object> request, String key, Object value) {
+    private static void putIfSet(Map<String, Object> request, String key, @Nullable Object value) {
         if (value != null) {
             request.put(key, value);
         }
@@ -1130,7 +1133,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public Taskito declareTopic(String name, Duration retention) {
+    public Taskito declareTopic(String name, @Nullable Duration retention) {
         Long retentionMs = retention == null ? null : retention.toMillis();
         backend.declareTopic(name, retentionMs);
         return this;
@@ -1196,7 +1199,7 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
             @JsonProperty("notes") String notes,
             @JsonProperty("createdAt") long createdAt) {}
 
-    private static Map<String, Object> parseJsonMap(String json) {
+    private static @Nullable Map<String, Object> parseJsonMap(@Nullable String json) {
         return json == null ? null : decodeMap(json, Object.class);
     }
 
@@ -1319,7 +1322,8 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
-    public List<WorkflowRunInfo> listWorkflowRuns(String definitionName, String state, long limit, long offset) {
+    public List<WorkflowRunInfo> listWorkflowRuns(
+            @Nullable String definitionName, @Nullable String state, long limit, long offset) {
         return decodeList(backend.listWorkflowRunsJson(definitionName, state, limit, offset), WorkflowRunInfo.class);
     }
 

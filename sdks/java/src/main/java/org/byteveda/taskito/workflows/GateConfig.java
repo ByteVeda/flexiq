@@ -2,6 +2,7 @@ package org.byteveda.taskito.workflows;
 
 import java.time.Duration;
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An approval gate on a workflow step. The node parks ({@code WAITING_APPROVAL})
@@ -13,7 +14,7 @@ import java.util.Objects;
  * @param onTimeout the action taken when {@code timeout} elapses (defaults to {@link GateAction#REJECT})
  * @param message an optional human-facing reason shown to the approver
  */
-public record GateConfig(Duration timeout, GateAction onTimeout, String message) {
+public record GateConfig(@Nullable Duration timeout, GateAction onTimeout, @Nullable String message) {
     public GateConfig {
         if (onTimeout == null) {
             onTimeout = GateAction.REJECT;
@@ -34,7 +35,7 @@ public record GateConfig(Duration timeout, GateAction onTimeout, String message)
     }
 
     /** A gate with a timeout and an approver-facing message. */
-    public static GateConfig timeout(Duration timeout, GateAction onTimeout, String message) {
+    public static GateConfig timeout(Duration timeout, GateAction onTimeout, @Nullable String message) {
         return new GateConfig(Objects.requireNonNull(timeout, "timeout"), onTimeout, message);
     }
 }

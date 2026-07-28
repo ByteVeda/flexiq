@@ -1,6 +1,7 @@
 package org.byteveda.taskito.pubsub;
 
 import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Options for {@code Taskito.subscribe(...)}. The subscription name defaults to
@@ -8,7 +9,7 @@ import java.util.Objects;
  * {@code true} (the registration persists across restarts).
  */
 public final class SubscriptionOptions {
-    private final String name;
+    private final @Nullable String name;
     private final String queue;
     private final boolean durable;
 
@@ -27,7 +28,7 @@ public final class SubscriptionOptions {
     }
 
     /** The explicit subscription name, or {@code null} to default to the task name. */
-    public String name() {
+    public @Nullable String name() {
         return name;
     }
 
@@ -42,7 +43,7 @@ public final class SubscriptionOptions {
     }
 
     public static final class Builder {
-        private String name;
+        private @Nullable String name;
         private String queue = "default";
         private boolean durable = true;
 
