@@ -18,7 +18,15 @@ class EventNameTest {
         for (EventName name : EventName.values()) {
             assertTrue(seen.add(name.wireName()), "duplicate wire name: " + name.wireName());
         }
-        assertEquals(26, seen.size());
+        assertEquals(29, seen.size());
+    }
+
+    @Test
+    void everyPredicateWireNameInTheContractHasAConstant() {
+        assertEquals("predicate.rejected", EventName.PREDICATE_REJECTED.wireName());
+        assertEquals("predicate.deferred", EventName.PREDICATE_DEFERRED.wireName());
+        assertEquals("predicate.skipped", EventName.PREDICATE_SKIPPED.wireName());
+        assertEquals("predicate.cancelled", EventName.PREDICATE_CANCELLED.wireName());
     }
 
     @Test

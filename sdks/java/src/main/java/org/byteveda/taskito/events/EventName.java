@@ -70,7 +70,23 @@ public enum EventName {
     /** One node's compensation job failed ({@code workflow.node_compensation_failed}). */
     WORKFLOW_NODE_COMPENSATION_FAILED("workflow.node_compensation_failed"),
     /** An enqueue was rejected by a predicate or gate ({@code predicate.rejected}). */
-    PREDICATE_REJECTED("predicate.rejected");
+    PREDICATE_REJECTED("predicate.rejected"),
+    /**
+     * An enqueue was held back by a predicate ({@code predicate.deferred}).
+     * Reserved: this SDK's predicates are pass/reject only.
+     */
+    PREDICATE_DEFERRED("predicate.deferred"),
+    /**
+     * An enqueue was dropped by a predicate without raising
+     * ({@code predicate.skipped}). Reserved: this SDK's predicates are
+     * pass/reject only.
+     */
+    PREDICATE_SKIPPED("predicate.skipped"),
+    /**
+     * A dispatch-time predicate cancelled an already-enqueued job
+     * ({@code predicate.cancelled}). Reserved: this SDK gates only at enqueue.
+     */
+    PREDICATE_CANCELLED("predicate.cancelled");
 
     /**
      * Wire names (+ the pre-taxonomy outcome aliases) to constants. The legacy
