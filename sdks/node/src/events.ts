@@ -2,7 +2,11 @@ import { createLogger } from "./utils";
 
 const log = createLogger("events");
 
-/** Every event name the queue can emit — the single source of truth. */
+/**
+ * The cross-SDK event taxonomy — the single source of truth for what this
+ * queue emits and what a webhook can subscribe to. Nearly every name is
+ * emitted here; the few reserved contract entries are noted inline.
+ */
 export const EVENT_NAMES = [
   "job.enqueued",
   "job.completed",
@@ -32,6 +36,10 @@ export const EVENT_NAMES = [
   "predicate.rejected",
   "predicate.skipped",
   "predicate.deferred",
+  // Reserved: a dispatch-time predicate cancelling an already-enqueued job.
+  // This SDK gates only at enqueue, where a terminal skip is
+  // `predicate.skipped` (no job exists yet), so nothing emits it here.
+  "predicate.cancelled",
 ] as const;
 
 /** A queue event name. */
@@ -137,6 +145,7 @@ export interface EventMap {
   "predicate.rejected": PredicateEvent;
   "predicate.skipped": PredicateEvent;
   "predicate.deferred": PredicateEvent;
+  "predicate.cancelled": PredicateEvent;
 }
 
 /**
