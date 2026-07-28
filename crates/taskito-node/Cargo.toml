@@ -23,7 +23,7 @@ push-dispatch = ["taskito-core/push-dispatch"]
 
 [dependencies]
 taskito-core = { path = "../taskito-core" }
-napi = { version = "2", default-features = false, features = ["napi8", "tokio_rt"] }
+napi = { version = "3", default-features = false, features = ["napi8", "tokio_rt"] }
 napi-derive = "2"
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
