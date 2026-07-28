@@ -20,7 +20,7 @@ restarts.
 ```ts
 const hook = queue.webhooks.create({
   url: "https://hooks.example.com/jobs",
-  events: ["job.dead", "job.completed", "worker.offline"], // any of the 26 wire names — omit for all
+  events: ["job.dead", "job.completed", "worker.offline"], // any of the 29 wire names — omit for all
   secret: process.env.WEBHOOK_SECRET,     // signs X-Taskito-Signature: sha256=...
   taskFilter: ["send_email"],             // optional — only screens task-bearing events
 });
@@ -32,7 +32,7 @@ queue.webhooks.delete(hook.id);
 | Field | Description |
 |---|---|
 | `url` | Endpoint to POST events to. |
-| `events` | Event names to deliver — any of the 26 dotted wire names (see [Events](/node/guides/extensibility/events) for the full list). Omit for all. |
+| `events` | Event names to deliver — any of the 29 dotted wire names (see [Events](/node/guides/extensibility/events) for the full list). Omit for all. |
 | `secret` | Signs each delivery as `X-Taskito-Signature: sha256=...`. |
 | `taskFilter` | Only deliver for these task names. |
 | `maxRetries` | Extra attempts after the first (default `3`). |
@@ -43,7 +43,7 @@ Deliveries for non-job events — worker, queue, workflow, and predicate — car
 no job identity; their `payload` matches the shapes documented on the
 [Events](/node/guides/extensibility/events) page instead of `OutcomeEvent`. A
 subscription's `taskFilter` only screens events that carry a task name
-(`job.*` and `predicate.rejected`) — worker, queue, and workflow events always
+(`job.*` and `predicate.*`) — worker, queue, and workflow events always
 deliver regardless of `taskFilter`.
 
 Deliveries fire from the **worker process** (where events originate). Verify the
@@ -73,7 +73,7 @@ for (const delivery of queue.webhooks.deliveries(hook.id)) {
 | `ok` | `true` when `status` is `"delivered"`. |
 | `attempts` | Number of HTTP attempts made. |
 | `payload` | The JSON body that was POSTed. |
-| `taskName` / `jobId` | The originating task and job. Both absent for worker, queue, and workflow events; `predicate.rejected` carries `taskName` but no `jobId` (it fires before any job exists). |
+| `taskName` / `jobId` | The originating task and job. Both absent for worker, queue, and workflow events; `predicate.*` carries `taskName` but no `jobId`, since this SDK's gates run at enqueue, before any job exists. |
 | `responseCode` | Last HTTP status, or `null` on a network error. |
 | `responseBody` | Last response body, truncated to 2 KiB, or `null`. |
 | `latencyMs` | Time from first attempt to the final outcome. |

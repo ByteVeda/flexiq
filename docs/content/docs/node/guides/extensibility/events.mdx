@@ -23,7 +23,7 @@ queue.off("job.retrying", onRetry); // same reference required to unsubscribe
 `queue.on` and `queue.off` are generically typed over `EventMap` — the event
 name narrows the handler's payload type automatically, so `e` above is
 `OutcomeEvent` for `job.retrying` and `WorkerEvent` for `worker.offline` with
-no casts needed. The package barrel also exports `EVENT_NAMES` (all 26 wire
+no casts needed. The package barrel also exports `EVENT_NAMES` (all 29 wire
 names, as a const tuple) and the `EventMap` / `EventPayload` types for typing
 handlers declared elsewhere:
 
@@ -112,15 +112,22 @@ that run's final `state` and `error`.
 
 ## Predicate events
 
+Gates run at enqueue time; each of the three non-`allow` decisions has its own
+event. See [Predicates](/node/guides/core/predicates) for the decision API.
+
 | Event | Fires when | Payload |
 |---|---|---|
-| `predicate.rejected` | A registered predicate rejects an enqueue, just before `PredicateRejectedError` throws. | `PredicateEvent` |
+| `predicate.rejected` | A gate returns `Decision.reject()` (or bare `false`), just before `PredicateRejectedError` throws. | `PredicateEvent` |
+| `predicate.skipped` | A gate returns `Decision.skip()` — the enqueue is dropped without throwing, and `tryEnqueue` returns `null`. | `PredicateEvent` |
+| `predicate.deferred` | A gate returns `Decision.defer(delayMs)` — the job is enqueued, delayed by `delayMs`. | `PredicateEvent` |
+| `predicate.cancelled` | Reserved — see note below. | `PredicateEvent` |
 
 <Callout type="info">
-  The cross-SDK event contract also defines `predicate.deferred` and
-  `predicate.cancelled`, for runtimes whose predicates can defer or cancel a
-  submission. This SDK's predicates are pass/reject only, so neither is
-  emitted here — see [Predicates](/node/guides/core/predicates).
+  `predicate.cancelled` means a *dispatch-time* predicate cancelled a job that
+  was already enqueued — an outcome only the Python SDK produces. This SDK's
+  gates run at enqueue only, where a terminal skip is `predicate.skipped` (no
+  job exists yet), so nothing emits it here. It stays in `EVENT_NAMES` so a
+  webhook subscription written against another SDK still loads and validates.
 </Callout>
 
 ## Payload types
@@ -168,6 +175,10 @@ interface NodeCompensationEvent {
 
 interface PredicateEvent {
   taskName: string;
+  /** The gate's reason, when it gave one (`predicate.rejected` / `.skipped`). */
+  reason?: string;
+  /** How long the enqueue was held back (`predicate.deferred` only). */
+  delayMs?: number;
 }
 ```
 

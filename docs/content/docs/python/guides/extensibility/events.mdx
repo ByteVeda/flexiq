@@ -48,6 +48,15 @@ delivery logs, and the REST API — e.g.
 | `PREDICATE_DEFERRED` | A predicate defers a task (enqueue- or dispatch-time) | `task_name`, `queue`, `defer_seconds`, `phase` (+ `job_id` at dispatch) |
 | `PREDICATE_CANCELLED` | A dispatch-time predicate cancels a job | `task_name`, `job_id`, `queue`, `phase` (+ `reason`) |
 | `PREDICATE_REJECTED` | An enqueue-time predicate rejects a task | `task_name`, `queue`, `phase` (+ `reason`) |
+| `PREDICATE_SKIPPED` | Reserved — see note below | `task_name` (+ `reason`) |
+
+<Callout type="info">
+  `PREDICATE_SKIPPED` is an enqueue dropped without raising, which the Node
+  SDK produces via `Decision.skip()`. Here a `Cancel` at enqueue raises
+  `PredicateRejectedError` and emits `PREDICATE_REJECTED` instead, so nothing
+  emits it. It stays in `EventType` so a webhook subscription written against
+  another SDK still validates and round-trips.
+</Callout>
 
 `duration_ms` is how long the job ran, so a listener needn't time it. On the
 outcome events (`JOB_RETRYING`, `JOB_DEAD`, `JOB_CANCELLED`) it is `None` when

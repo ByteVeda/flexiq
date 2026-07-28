@@ -110,5 +110,6 @@ def test_all_event_types_exist() -> None:
         "predicate.deferred",
         "predicate.cancelled",
         "predicate.rejected",
+        "predicate.skipped",
     }
     assert {e.value for e in EventType} == expected

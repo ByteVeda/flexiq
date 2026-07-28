@@ -145,16 +145,18 @@ it("still delivers task-less events to a task-filtered webhook", async () => {
   expect(events).not.toContain("job.enqueued");
 });
 
-it("exposes all 28 subscribable event names", () => {
+it("exposes all 29 subscribable event names", () => {
   const queue = newQueue();
   const names = queue.webhooks.eventTypes();
-  expect(names).toHaveLength(28);
+  expect(names).toHaveLength(29);
   expect(names).toContain("job.enqueued");
   expect(names).toContain("worker.online");
   expect(names).toContain("workflow.submitted");
   expect(names).toContain("predicate.rejected");
   expect(names).toContain("predicate.skipped");
   expect(names).toContain("predicate.deferred");
+  // Reserved here, but subscribable so a cross-SDK webhook config still loads.
+  expect(names).toContain("predicate.cancelled");
 });
 
 it("creates, lists, and deletes webhooks", () => {

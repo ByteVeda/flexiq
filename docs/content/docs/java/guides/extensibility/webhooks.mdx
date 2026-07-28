@@ -43,7 +43,7 @@ webhooks.delete(hook.id);
 
 | Builder method | Default | Description |
 |---|---|---|
-| `on(EventName...)` | — | Events to deliver — any of the 26 dotted wire names (job/worker/queue/workflow/predicate); see [Events](/java/guides/extensibility/events). |
+| `on(EventName...)` | — | Events to deliver — any of the 29 dotted wire names (job/worker/queue/workflow/predicate); see [Events](/java/guides/extensibility/events). |
 | `secret(String)` | none | Signs each delivery as `X-Taskito-Signature: sha256=<hex>`. |
 | `taskFilter(String)` | all tasks | Only deliver for this exact task name — screens task-bearing events only (see below). |
 | `header(String, String)` | — | Extra headers added to every delivery. |

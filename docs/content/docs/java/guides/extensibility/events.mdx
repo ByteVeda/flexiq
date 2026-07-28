@@ -133,12 +133,18 @@ the worker (`Worker.Builder.trackWorkflows()`).
 | Event | Fires when | Payload |
 |---|---|---|
 | `PREDICATE_REJECTED` (`predicate.rejected`) | A registered predicate rejects an enqueue. | `PredicateEvent` |
+| `PREDICATE_DEFERRED` (`predicate.deferred`) | Reserved — see note below. | `PredicateEvent` |
+| `PREDICATE_SKIPPED` (`predicate.skipped`) | Reserved — see note below. | `PredicateEvent` |
+| `PREDICATE_CANCELLED` (`predicate.cancelled`) | Reserved — see note below. | `PredicateEvent` |
 
 <Callout type="info">
-  The cross-SDK event contract also defines `predicate.deferred` and
-  `predicate.cancelled`, for runtimes whose predicates can defer or cancel a
-  submission. This SDK's predicates are pass/reject only, so neither has an
-  `EventName` constant here.
+  This SDK's predicates are pass/reject only, so `PREDICATE_REJECTED` is the
+  only one it emits. The other three are constants for the rest of the
+  cross-SDK contract — work held back for a delay (at enqueue or at dispatch,
+  where the payload also carries the job's id), an enqueue dropped without
+  raising, and a dispatch-time cancellation of an already-enqueued job. They exist here
+  so a webhook subscription written against another SDK still resolves through
+  `EventName.fromWire` and matches nothing rather than silently dropping.
 </Callout>
 
 <Callout type="info">

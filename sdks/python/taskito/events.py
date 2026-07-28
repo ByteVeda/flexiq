@@ -13,7 +13,12 @@ logger = logging.getLogger("taskito.events")
 
 
 class EventType(enum.Enum):
-    """Types of job and worker lifecycle events."""
+    """The cross-SDK event taxonomy, as job and worker lifecycle events.
+
+    Nearly every member is emitted by this runtime; the few reserved
+    contract entries other SDKs emit are noted per member, and exist so a
+    webhook subscription stays portable across SDKs.
+    """
 
     JOB_ENQUEUED = "job.enqueued"
     JOB_COMPLETED = "job.completed"
@@ -44,8 +49,13 @@ class EventType(enum.Enum):
     NODE_COMPENSATED = "workflow.node_compensated"
     NODE_COMPENSATION_FAILED = "workflow.node_compensation_failed"
     PREDICATE_DEFERRED = "predicate.deferred"
+    # A dispatch-time predicate cancelling an already-enqueued job.
     PREDICATE_CANCELLED = "predicate.cancelled"
     PREDICATE_REJECTED = "predicate.rejected"
+    # Reserved: an enqueue dropped without raising. Here a ``Cancel`` at
+    # enqueue raises ``PredicateRejectedError`` and emits PREDICATE_REJECTED
+    # instead, so nothing emits this.
+    PREDICATE_SKIPPED = "predicate.skipped"
 
 
 class EventBus:
