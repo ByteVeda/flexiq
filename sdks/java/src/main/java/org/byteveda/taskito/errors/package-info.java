@@ -16,4 +16,7 @@
  * the structured task-error JSON stored in job and dead-letter {@code error}
  * fields, and its decoded view {@link org.byteveda.taskito.errors.TaskError}.
  */
+@NullMarked
 package org.byteveda.taskito.errors;
+
+import org.jspecify.annotations.NullMarked;

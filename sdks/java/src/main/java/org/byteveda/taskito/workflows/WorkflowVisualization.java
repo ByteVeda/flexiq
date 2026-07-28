@@ -2,6 +2,7 @@ package org.byteveda.taskito.workflows;
 
 import java.util.HashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Renders a {@link Workflow}'s DAG as text for docs or debugging: Mermaid
@@ -66,7 +67,7 @@ public final class WorkflowVisualization {
         return kind == null ? step.name : step.name + " (" + kind + ")";
     }
 
-    private static String kind(Step step) {
+    private static @Nullable String kind(Step step) {
         if (step.gate != null) {
             return "gate";
         }

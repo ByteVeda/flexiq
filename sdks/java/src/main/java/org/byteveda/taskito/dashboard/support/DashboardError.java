@@ -1,5 +1,7 @@
 package org.byteveda.taskito.dashboard.support;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * A handler-level failure that maps to a specific HTTP status and a stable
  * machine-readable {@code error} code in the JSON body. Thrown by handlers and
@@ -21,7 +23,7 @@ public final class DashboardError extends RuntimeException {
     }
 
     /** The stable error code (also the exception message). */
-    public String code() {
+    public @Nullable String code() {
         return getMessage();
     }
 

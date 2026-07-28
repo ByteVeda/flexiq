@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.errors.NotesValidationException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Validation and canonical encoding for the structured {@code notes} field on a job.
@@ -43,7 +44,7 @@ public final class Notes {
      *
      * @throws NotesValidationException if any bound in the class contract is violated
      */
-    public static String encode(Map<String, ?> notes) {
+    public static @Nullable String encode(Map<String, ?> notes) {
         if (notes == null) {
             return null;
         }

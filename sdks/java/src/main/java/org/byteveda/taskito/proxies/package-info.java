@@ -11,4 +11,7 @@
  * type does the (de)construction, with an allowlist where it matters
  * (e.g. {@link org.byteveda.taskito.proxies.FileProxyHandler}).
  */
+@NullMarked
 package org.byteveda.taskito.proxies;
+
+import org.jspecify.annotations.NullMarked;

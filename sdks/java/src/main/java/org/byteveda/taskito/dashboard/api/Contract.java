@@ -18,6 +18,7 @@ import org.byteveda.taskito.model.WorkflowRunInfo;
 import org.byteveda.taskito.webhooks.Delivery;
 import org.byteveda.taskito.webhooks.Webhook;
 import org.byteveda.taskito.workflows.NodeSnapshot;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Maps the SDK's camelCase types to the snake_case JSON contract the React SPA
@@ -222,7 +223,7 @@ final class Contract {
      * null. {@code reported} is distinct from {@code enabled}: no worker has
      * swept yet, which is not the same as retention being switched off.
      */
-    static Map<String, Object> retention(EffectiveRetention r) {
+    static Map<String, Object> retention(@Nullable EffectiveRetention r) {
         Map<String, Object> windows = new LinkedHashMap<>();
         windows.put("task_logs_ttl_ms", r == null ? null : r.windows.taskLogsMs);
         windows.put("archived_jobs_ttl_ms", r == null ? null : r.windows.archivedJobsMs);

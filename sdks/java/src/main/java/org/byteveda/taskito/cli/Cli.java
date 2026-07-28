@@ -10,6 +10,7 @@ import org.byteveda.taskito.model.DeadJob;
 import org.byteveda.taskito.model.Job;
 import org.byteveda.taskito.model.JobFilter;
 import org.byteveda.taskito.model.JobStatus;
+import org.jspecify.annotations.Nullable;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -40,6 +41,7 @@ public final class Cli {
     String backend;
 
     @Option(names = "--url", description = "Connection string (SQLite path or URL); defaults to .taskito/taskito.db.")
+    @Nullable
     String url;
 
     Taskito open() {
@@ -90,6 +92,7 @@ public final class Cli {
         String task;
 
         @Parameters(index = "1", arity = "0..1", description = "JSON payload (default null).")
+        @Nullable
         String payload;
 
         @Override
@@ -108,9 +111,11 @@ public final class Cli {
         Cli parent;
 
         @Option(names = "--status", description = "Filter by status.")
+        @Nullable
         String status;
 
         @Option(names = "--queue", description = "Filter by queue.")
+        @Nullable
         String queue;
 
         @Option(names = "--limit", defaultValue = "50")
@@ -259,9 +264,11 @@ public final class Cli {
         boolean auth;
 
         @Option(names = "--token", description = "Require this token for API access.")
+        @Nullable
         String token;
 
         @Option(names = "--static", description = "Directory of the prebuilt SPA.")
+        @Nullable
         String staticDir;
 
         @Option(

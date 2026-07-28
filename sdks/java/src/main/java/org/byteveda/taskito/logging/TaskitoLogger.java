@@ -5,6 +5,7 @@ import java.io.StringWriter;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.function.Supplier;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A namespaced leveled logger ({@code [taskito:worker]}). Obtain via
@@ -18,7 +19,7 @@ public final class TaskitoLogger {
 
     private final String tag;
 
-    private TaskitoLogger(String namespace) {
+    private TaskitoLogger(@Nullable String namespace) {
         this.tag = namespace == null ? "taskito" : "taskito:" + namespace;
     }
 
@@ -74,7 +75,7 @@ public final class TaskitoLogger {
         }
     }
 
-    private void emit(LogLevel messageLevel, String message, Throwable cause) {
+    private void emit(LogLevel messageLevel, String message, @Nullable Throwable cause) {
         if (!messageLevel.passes(level)) {
             return;
         }

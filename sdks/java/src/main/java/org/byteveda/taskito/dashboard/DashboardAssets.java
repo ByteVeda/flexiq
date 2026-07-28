@@ -20,6 +20,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Stream;
 import org.byteveda.taskito.TaskitoException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Locates the dashboard SPA that ships inside the taskito jar and hands back a
@@ -39,12 +40,12 @@ final class DashboardAssets {
     private static final String DIR_OVERRIDE = "taskito.dashboard.dir";
 
     private static boolean attempted;
-    private static Path resolved;
+    private static @Nullable Path resolved;
 
     private DashboardAssets() {}
 
     /** The SPA root, or {@code null} when no SPA is bundled (then only /api/* responds). */
-    static synchronized Path resolveOrNull() {
+    static synchronized @Nullable Path resolveOrNull() {
         String override = System.getProperty(DIR_OVERRIDE);
         if (override != null) {
             return Paths.get(override).normalize();
@@ -56,7 +57,7 @@ final class DashboardAssets {
         return resolved;
     }
 
-    private static Path locate() {
+    private static @Nullable Path locate() {
         URL index = DashboardAssets.class.getResource(SENTINEL);
         if (index == null) {
             return null;

@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.model.QueueStats;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Serves queue depth over HTTP for an external autoscaler. Depth is
@@ -79,7 +80,7 @@ public final class Scaler implements AutoCloseable {
         send(exchange, 200, Map.of("status", "ok"));
     }
 
-    private static String queryParam(HttpExchange exchange, String key) {
+    private static @Nullable String queryParam(HttpExchange exchange, String key) {
         String query = exchange.getRequestURI().getQuery();
         if (query == null) {
             return null;

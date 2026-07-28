@@ -1,5 +1,7 @@
 package org.byteveda.taskito.internal;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * JNI surface for workflow operations (the native {@code workflows} feature).
  *
@@ -27,21 +29,21 @@ public final class NativeWorkflows {
             String stepsJson,
             String[] payloadNames,
             byte[][] payloads,
-            String queueDefault,
-            String paramsJson,
+            @Nullable String queueDefault,
+            @Nullable String paramsJson,
             String[] deferredNames,
-            String parentRunId,
-            String parentNodeName);
+            @Nullable String parentRunId,
+            @Nullable String parentNodeName);
 
     /** Record a node's terminal outcome; returns the run's final state, or {@code null}. */
     public static native String markWorkflowNodeResult(
-            long handle, String jobId, boolean succeeded, String error, boolean skipCascade);
+            long handle, String jobId, boolean succeeded, @Nullable String error, boolean skipCascade);
 
     /** Returns a JSON run + node snapshot, or {@code null} if the run is absent. */
     public static native String getWorkflowStatus(long handle, String runId);
 
     public static native String listWorkflowRuns(
-            long handle, String definitionNameOrNull, String stateOrNull, long limit, long offset);
+            long handle, @Nullable String definitionNameOrNull, @Nullable String stateOrNull, long limit, long offset);
 
     public static native String getWorkflowRun(long handle, String runId);
 
@@ -102,13 +104,13 @@ public final class NativeWorkflows {
 
     /** Settle a parked gate (or sub-workflow parent): completed if approved, else failed with {@code error}. */
     public static native void resolveWorkflowGate(
-            long handle, String runId, String nodeName, boolean approved, String error);
+            long handle, String runId, String nodeName, boolean approved, @Nullable String error);
 
     /** Promote a gate / sub-workflow node to running. */
     public static native void setWorkflowNodeRunning(long handle, String runId, String nodeName);
 
     /** Mark a node failed (e.g. a sub-workflow whose child could not be submitted). */
-    public static native void failWorkflowNode(long handle, String runId, String nodeName, String error);
+    public static native void failWorkflowNode(long handle, String runId, String nodeName, @Nullable String error);
 
     /** Mark a node skipped (its condition evaluated false) and cancel any bound job. */
     public static native void skipWorkflowNode(long handle, String runId, String nodeName);
@@ -123,7 +125,7 @@ public final class NativeWorkflows {
     public static native void setWorkflowRunCompensated(long handle, String runId, long completedAt);
 
     public static native void setWorkflowRunCompensationFailed(
-            long handle, String runId, long completedAt, String error);
+            long handle, String runId, long completedAt, @Nullable String error);
 
     public static native void setWorkflowRunCompletedWithFailures(long handle, String runId, long completedAt);
 
@@ -133,5 +135,5 @@ public final class NativeWorkflows {
     public static native void setWorkflowNodeCompensated(long handle, String runId, String nodeName, long completedAt);
 
     public static native void setWorkflowNodeCompensationFailed(
-            long handle, String runId, String nodeName, String error, long completedAt);
+            long handle, String runId, String nodeName, @Nullable String error, long completedAt);
 }

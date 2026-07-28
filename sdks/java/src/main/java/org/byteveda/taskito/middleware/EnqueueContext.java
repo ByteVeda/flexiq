@@ -3,6 +3,7 @@ package org.byteveda.taskito.middleware;
 import java.util.HashMap;
 import java.util.Map;
 import org.byteveda.taskito.task.EnqueueOptions;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A job being enqueued, passed to {@link Middleware#onEnqueue} before
@@ -11,11 +12,11 @@ import org.byteveda.taskito.task.EnqueueOptions;
  */
 public final class EnqueueContext {
     public final String taskName;
-    private Object payload;
+    private @Nullable Object payload;
     private EnqueueOptions options;
     private final Map<String, Object> metadata = new HashMap<>();
 
-    public EnqueueContext(String taskName, Object payload, EnqueueOptions options) {
+    public EnqueueContext(String taskName, @Nullable Object payload, EnqueueOptions options) {
         this.taskName = taskName;
         this.payload = payload;
         this.options = options;
@@ -30,11 +31,11 @@ public final class EnqueueContext {
         return metadata;
     }
 
-    public Object payload() {
+    public @Nullable Object payload() {
         return payload;
     }
 
-    public void payload(Object payload) {
+    public void payload(@Nullable Object payload) {
         this.payload = payload;
     }
 

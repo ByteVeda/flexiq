@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,6 +18,7 @@ import org.byteveda.taskito.events.NodeCompensationEvent;
 import org.byteveda.taskito.events.WorkflowEvent;
 import org.byteveda.taskito.spi.QueueBackend;
 import org.byteveda.taskito.task.EnqueueOptions;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Rolls back a failed workflow run. When a run with compensable steps fails, the
@@ -88,7 +90,7 @@ final class SagaOrchestrator {
     }
 
     /** Record a compensation job's outcome and advance (or finalize) the saga. */
-    void onCompensationCompleted(String jobId, boolean succeeded, String error) {
+    void onCompensationCompleted(String jobId, boolean succeeded, @Nullable String error) {
         String[] key = compensationJobs.remove(jobId);
         if (key == null) {
             return;
@@ -144,7 +146,9 @@ final class SagaOrchestrator {
         for (String node : wave) {
             // The runtime job id (the saga's routing key) is the value enqueue returns,
             // not the idempotency key we pass in — so register routing once we have it.
-            String compJobId = enqueueCompensation(runId, node, run.targets.get(node));
+            CompTarget target = Objects.requireNonNull(
+                    run.targets.get(node), () -> "no compensation target for node '" + node + "'");
+            String compJobId = enqueueCompensation(runId, node, target);
             compensationJobs.put(compJobId, new String[] {runId, node});
             backend.setWorkflowNodeCompensationJob(runId, node, compJobId, now());
             tracker.emit(new NodeCompensationEvent(EventName.WORKFLOW_NODE_COMPENSATING, runId, node, null));

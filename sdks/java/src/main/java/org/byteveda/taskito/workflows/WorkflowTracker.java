@@ -31,6 +31,7 @@ import org.byteveda.taskito.events.WorkflowEvent;
 import org.byteveda.taskito.logging.TaskitoLogger;
 import org.byteveda.taskito.serialization.Serializer;
 import org.byteveda.taskito.spi.QueueBackend;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Advances workflow node and run state from worker outcomes. Attach via
@@ -83,7 +84,7 @@ public final class WorkflowTracker {
     private final ConcurrentMap<String, Long> resultCache = new ConcurrentHashMap<>();
 
     /** The owning worker's emitter (bound at worker start); null until then. */
-    private volatile Emitter emitter;
+    private volatile @Nullable Emitter emitter;
 
     public WorkflowTracker(QueueBackend backend, Serializer serializer) {
         this.backend = backend;
@@ -134,7 +135,7 @@ public final class WorkflowTracker {
         onOutcome(event.jobId, false, event.error);
     }
 
-    private void onOutcome(String jobId, boolean succeeded, String error) {
+    private void onOutcome(String jobId, boolean succeeded, @Nullable String error) {
         // Compensation jobs carry compensation:true metadata, so they never map to
         // a forward node — route them to the saga instead.
         if (saga.isCompensationJob(jobId)) {
@@ -496,7 +497,7 @@ public final class WorkflowTracker {
         return allCompleted(node.predecessors, statuses);
     }
 
-    private Condition callableCondition(String runId, String nodeName) {
+    private @Nullable Condition callableCondition(String runId, String nodeName) {
         String wfName = workflowName(runId);
         if (wfName == null) {
             return null;
@@ -552,7 +553,7 @@ public final class WorkflowTracker {
      * {@code approved}, else fail it (and skip its successors). Idempotent — the
      * first of a manual call and a timeout wins.
      */
-    public void resolveGate(String runId, String nodeName, boolean approved, String error) {
+    public void resolveGate(String runId, String nodeName, boolean approved, @Nullable String error) {
         NodeSnapshot snap = statusMap(runId).get(nodeName);
         if (snap == null || snap.status != NodeStatus.WAITING_APPROVAL) {
             return; // only a parked gate can be resolved (wrong node, not yet parked, or already settled)
@@ -591,7 +592,7 @@ public final class WorkflowTracker {
                 node.priorityOrDefault());
     }
 
-    private byte[] deferredPayload(String runId, String nodeName) {
+    private byte @Nullable [] deferredPayload(String runId, String nodeName) {
         Map<String, byte[]> childPayloads = childRunPayloads.get(runId);
         if (childPayloads != null) {
             return childPayloads.get(nodeName); // a child run resolves only its run-scoped payloads
@@ -604,7 +605,7 @@ public final class WorkflowTracker {
     }
 
     /** The run's workflow-definition name, cached (drives the deferred-payload + condition registries). */
-    private String workflowName(String runId) {
+    private @Nullable String workflowName(String runId) {
         String cached = runNames.get(runId);
         if (cached != null) {
             return cached;
@@ -651,7 +652,7 @@ public final class WorkflowTracker {
     }
 
     /** Emit the run's terminal lifecycle event; unknown states (defensive) emit nothing. */
-    private void emitRunFinalized(String runId, String workflowName, String state) {
+    private void emitRunFinalized(String runId, @Nullable String workflowName, String state) {
         EventName name =
                 switch (state) {
                     case "completed" -> EventName.WORKFLOW_COMPLETED;
@@ -664,7 +665,8 @@ public final class WorkflowTracker {
         }
     }
 
-    private void resolveSubWorkflowParent(String parentRun, String parentNode, boolean succeeded, String error) {
+    private void resolveSubWorkflowParent(
+            String parentRun, String parentNode, boolean succeeded, @Nullable String error) {
         backend.resolveWorkflowGate(parentRun, parentNode, succeeded, error);
         RunPlan plan = plans.computeIfAbsent(parentRun, this::loadPlan);
         if (plan != null) {
@@ -792,7 +794,7 @@ public final class WorkflowTracker {
         return status == NodeStatus.COMPLETED || status == NodeStatus.CACHE_HIT;
     }
 
-    private RunPlan loadPlan(String runId) {
+    private @Nullable RunPlan loadPlan(String runId) {
         return backend.getWorkflowPlanJson(runId)
                 .map(raw -> RunPlan.from(decodeList(raw)))
                 .orElse(null);

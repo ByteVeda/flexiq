@@ -5,4 +5,7 @@
  * min and max, so a worker grows under load and shrinks when idle. Enable it via
  * {@code Worker.Builder.autoscale(...)}.
  */
+@NullMarked
 package org.byteveda.taskito.autoscale;
+
+import org.jspecify.annotations.NullMarked;

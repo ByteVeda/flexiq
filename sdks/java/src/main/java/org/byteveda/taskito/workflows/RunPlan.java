@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
+import org.jspecify.annotations.Nullable;
 
 /** A run's DAG: nodes by name plus successor adjacency, built from the native plan. */
 final class RunPlan {
@@ -34,6 +35,7 @@ final class RunPlan {
     }
 
     /** The plan node by name, or {@code null} if absent. */
+    @Nullable
     PlanNode node(String name) {
         return byName.get(name);
     }

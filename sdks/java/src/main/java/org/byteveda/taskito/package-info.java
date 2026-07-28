@@ -18,4 +18,7 @@
  *       whose default implementation lives in {@code internal}
  * </ul>
  */
+@NullMarked
 package org.byteveda.taskito;
+
+import org.jspecify.annotations.NullMarked;

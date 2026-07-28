@@ -7,4 +7,7 @@
  * implicit arg-walking, interception here is an explicit transform over the
  * typed payload.
  */
+@NullMarked
 package org.byteveda.taskito.interception;
+
+import org.jspecify.annotations.NullMarked;

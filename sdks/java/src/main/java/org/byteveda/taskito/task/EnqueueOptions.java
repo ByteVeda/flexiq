@@ -6,46 +6,47 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.serialization.Notes;
+import org.jspecify.annotations.Nullable;
 
 /** Immutable per-enqueue options. Unset fields take core defaults. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public final class EnqueueOptions {
     @JsonProperty("queue")
-    private final String queue;
+    private final @Nullable String queue;
 
     @JsonProperty("priority")
-    private final Integer priority;
+    private final @Nullable Integer priority;
 
     @JsonProperty("maxRetries")
-    private final Integer maxRetries;
+    private final @Nullable Integer maxRetries;
 
     @JsonProperty("timeoutMs")
-    private final Long timeoutMs;
+    private final @Nullable Long timeoutMs;
 
     @JsonProperty("delayMs")
-    private final Long delayMs;
+    private final @Nullable Long delayMs;
 
     @JsonProperty("uniqueKey")
-    private final String uniqueKey;
+    private final @Nullable String uniqueKey;
 
     @JsonProperty("metadata")
-    private final String metadata;
+    private final @Nullable String metadata;
 
     @JsonProperty("namespace")
-    private final String namespace;
+    private final @Nullable String namespace;
 
     @JsonProperty("dependsOn")
-    private final List<String> dependsOn;
+    private final @Nullable List<String> dependsOn;
 
     // Canonical JSON encoding of the structured notes (validated at build time), or null.
     @JsonProperty("notes")
-    private final String notes;
+    private final @Nullable String notes;
 
     // Idempotency inputs resolve to uniqueKey locally (see DefaultTaskito) and never cross
     // the wire, so they carry no @JsonProperty and are not serialized into the options JSON.
-    private final Boolean idempotent;
+    private final @Nullable Boolean idempotent;
 
-    private final String idempotencyKey;
+    private final @Nullable String idempotencyKey;
 
     private EnqueueOptions(Builder b) {
         this.queue = b.queue;
@@ -89,32 +90,32 @@ public final class EnqueueOptions {
     }
 
     /** The target queue, or {@code null} for the default. */
-    public String queue() {
+    public @Nullable String queue() {
         return queue;
     }
 
     /** The job priority, or {@code null} for the core default. */
-    public Integer priority() {
+    public @Nullable Integer priority() {
         return priority;
     }
 
     /** The retry budget, or {@code null} for the core default. */
-    public Integer maxRetries() {
+    public @Nullable Integer maxRetries() {
         return maxRetries;
     }
 
     /** The per-job timeout in milliseconds, or {@code null} for the core default. */
-    public Long timeoutMs() {
+    public @Nullable Long timeoutMs() {
         return timeoutMs;
     }
 
     /** Job ids this enqueue waits on before it can be dequeued, or {@code null} when none. */
-    public List<String> dependsOn() {
+    public @Nullable List<String> dependsOn() {
         return dependsOn;
     }
 
     /** The explicit dedup key, or {@code null} when none was set. */
-    public String uniqueKey() {
+    public @Nullable String uniqueKey() {
         return uniqueKey;
     }
 
@@ -122,28 +123,28 @@ public final class EnqueueOptions {
      * Tri-state idempotency toggle: {@code TRUE} forces auto-derivation of a {@code uniqueKey},
      * {@code FALSE} opts this enqueue out of a task-level default, {@code null} defers to the task.
      */
-    public Boolean idempotent() {
+    public @Nullable Boolean idempotent() {
         return idempotent;
     }
 
     /** An explicit idempotency key (used as the {@code uniqueKey} when set), or {@code null}. */
-    public String idempotencyKey() {
+    public @Nullable String idempotencyKey() {
         return idempotencyKey;
     }
 
     public static final class Builder {
-        private String queue;
-        private Integer priority;
-        private Integer maxRetries;
-        private Long timeoutMs;
-        private Long delayMs;
-        private String uniqueKey;
-        private String metadata;
-        private String namespace;
-        private List<String> dependsOn;
-        private String notes;
-        private Boolean idempotent;
-        private String idempotencyKey;
+        private @Nullable String queue;
+        private @Nullable Integer priority;
+        private @Nullable Integer maxRetries;
+        private @Nullable Long timeoutMs;
+        private @Nullable Long delayMs;
+        private @Nullable String uniqueKey;
+        private @Nullable String metadata;
+        private @Nullable String namespace;
+        private @Nullable List<String> dependsOn;
+        private @Nullable String notes;
+        private @Nullable Boolean idempotent;
+        private @Nullable String idempotencyKey;
 
         public Builder queue(String queue) {
             this.queue = queue;

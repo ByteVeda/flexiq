@@ -6,4 +6,7 @@
  * dead-lettering, middleware — applies per subscriber, and a failing subscriber
  * never affects its siblings.
  */
+@NullMarked
 package org.byteveda.taskito.pubsub;
+
+import org.jspecify.annotations.NullMarked;

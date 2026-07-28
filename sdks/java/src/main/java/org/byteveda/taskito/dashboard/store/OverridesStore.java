@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Per-task and per-queue runtime overrides, persisted in the settings KV at
@@ -27,11 +28,11 @@ public final class OverridesStore {
         this.settings = settings;
     }
 
-    public Map<String, Object> getTask(String name) {
+    public @Nullable Map<String, Object> getTask(String name) {
         return read(TASK_PREFIX + name);
     }
 
-    public Map<String, Object> getQueue(String name) {
+    public @Nullable Map<String, Object> getQueue(String name) {
         return read(QUEUE_PREFIX + name);
     }
 
@@ -71,7 +72,7 @@ public final class OverridesStore {
         return out;
     }
 
-    private Map<String, Object> read(String key) {
+    private @Nullable Map<String, Object> read(String key) {
         return settings.getSetting(key).map(Json::parseMap).orElse(null);
     }
 

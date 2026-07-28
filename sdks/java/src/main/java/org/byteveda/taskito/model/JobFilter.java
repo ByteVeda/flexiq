@@ -2,24 +2,25 @@ package org.byteveda.taskito.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 /** Immutable filter for {@link org.byteveda.taskito.Taskito#listJobs(JobFilter)}. Unset fields are ignored. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public final class JobFilter {
     @JsonProperty("status")
-    private final String status;
+    private final @Nullable String status;
 
     @JsonProperty("queue")
-    private final String queue;
+    private final @Nullable String queue;
 
     @JsonProperty("task")
-    private final String task;
+    private final @Nullable String task;
 
     @JsonProperty("limit")
-    private final Integer limit;
+    private final @Nullable Integer limit;
 
     @JsonProperty("offset")
-    private final Integer offset;
+    private final @Nullable Integer offset;
 
     private JobFilter(Builder b) {
         this.status = b.status;
@@ -38,11 +39,11 @@ public final class JobFilter {
     }
 
     public static final class Builder {
-        private String status;
-        private String queue;
-        private String task;
-        private Integer limit;
-        private Integer offset;
+        private @Nullable String status;
+        private @Nullable String queue;
+        private @Nullable String task;
+        private @Nullable Integer limit;
+        private @Nullable Integer offset;
 
         /** Lowercase wire status: pending/running/complete/failed/dead/cancelled. */
         public Builder status(JobStatus status) {

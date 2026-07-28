@@ -12,6 +12,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Loads the native Taskito library.
@@ -23,10 +24,24 @@ import java.util.Locale;
  * safe under concurrent processes (atomic move), avoids re-extraction across
  * runs, and never loads a stale binary from a previous build. Honor
  * {@code -Dtaskito.native.workdir} for hardened/noexec {@code /tmp} environments.
+ *
+ * <p>A platform with no published classifier artifact — Windows on ARM, or any OS
+ * beyond Linux/macOS/Windows — fails with an {@link UnsatisfiedLinkError} naming
+ * the detected platform. Such platforms are supported by building the crate
+ * locally and pointing {@code -Dtaskito.native.lib} at the result.
  */
 public final class NativeLoader {
     private static final String LIB = "taskito_java";
     private static final String WORKDIR_PROPERTY = "taskito.native.workdir";
+
+    /**
+     * Platforms a classifier artifact is published for. Mirrors
+     * {@code nativePlatforms} in {@code sdks/java/build.gradle.kts} — a platform
+     * added there must be added here for the loader to look for it.
+     */
+    private static final Set<String> PUBLISHED_PLATFORMS =
+            Set.of("linux-x86_64", "linux-aarch64", "osx-x86_64", "osx-aarch64", "windows-x86_64");
+
     private static boolean loaded;
 
     private NativeLoader() {}
@@ -102,18 +117,37 @@ public final class NativeLoader {
     }
 
     private static byte[] readResource() {
-        String resource = "/org/byteveda/taskito/native/" + platformDir() + "/" + System.mapLibraryName(LIB);
+        String platform = requirePublishedPlatform();
+        String resource = "/org/byteveda/taskito/native/" + platform + "/" + System.mapLibraryName(LIB);
         try (InputStream in = NativeLoader.class.getResourceAsStream(resource)) {
             if (in == null) {
-                throw new UnsatisfiedLinkError("no native library for platform '" + platformDir() + "' on the"
+                throw new UnsatisfiedLinkError("no native library for platform '" + platform + "' on the"
                         + " classpath (" + resource + "); add the classifier artifact"
-                        + " org.byteveda:taskito:<version>:" + platformDir()
+                        + " org.byteveda:taskito:<version>:" + platform
                         + " as a runtime dependency, or set -Dtaskito.native.lib=/path/to/library");
             }
             return in.readAllBytes();
         } catch (IOException e) {
             throw new UnsatisfiedLinkError("failed to read native library: " + e.getMessage());
         }
+    }
+
+    /**
+     * Fail with the detected platform rather than reaching for a binary that was
+     * never published for it — a classifier jar is only ever built for
+     * {@link #PUBLISHED_PLATFORMS}. Building the crate locally and pointing
+     * {@code -Dtaskito.native.lib} at the result stays supported everywhere.
+     */
+    private static String requirePublishedPlatform() {
+        String platform = platformDir();
+        if (!isPublished(platform)) {
+            throw new UnsatisfiedLinkError("no native library is published for platform '" + platform + "' (os.name="
+                    + System.getProperty("os.name", "") + ", os.arch=" + System.getProperty("os.arch", "")
+                    + "); published platforms are " + PUBLISHED_PLATFORMS
+                    + ". Build the taskito-java crate for this platform and set"
+                    + " -Dtaskito.native.lib=/path/to/library");
+        }
+        return platform;
     }
 
     /**
@@ -147,14 +181,52 @@ public final class NativeLoader {
         }
     }
 
-    /** Resource classifier directory, e.g. {@code linux-x86_64}. */
+    /**
+     * Resource classifier directory for the running platform, e.g.
+     * {@code linux-x86_64}. An OS or architecture Taskito does not publish for
+     * still gets its own honest name (e.g. {@code freebsd-x86_64}) so the failure
+     * says which platform it is instead of silently trying a Linux binary.
+     */
     static String platformDir() {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        String osDir = os.contains("win") ? "windows" : (os.contains("mac") || os.contains("darwin")) ? "osx" : "linux";
-        String archDir = (arch.equals("amd64") || arch.equals("x86_64"))
-                ? "x86_64"
-                : (arch.equals("aarch64") || arch.equals("arm64")) ? "aarch64" : arch;
-        return osDir + "-" + archDir;
+        return platformDir(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
+    }
+
+    /** {@link #platformDir()} over explicit values, so the mapping is testable. */
+    static String platformDir(String osName, String osArch) {
+        return osToken(osName.toLowerCase(Locale.ROOT)) + "-" + archToken(osArch.toLowerCase(Locale.ROOT));
+    }
+
+    /** Whether a classifier artifact exists for {@code platform}. */
+    static boolean isPublished(String platform) {
+        return PUBLISHED_PLATFORMS.contains(platform);
+    }
+
+    private static String osToken(String os) {
+        if (os.contains("win")) {
+            return "windows";
+        }
+        if (os.contains("mac") || os.contains("darwin")) {
+            return "osx";
+        }
+        if (os.contains("linux")) {
+            return "linux";
+        }
+        return sanitize(os);
+    }
+
+    private static String archToken(String arch) {
+        if (arch.equals("amd64") || arch.equals("x86_64")) {
+            return "x86_64";
+        }
+        if (arch.equals("aarch64") || arch.equals("arm64")) {
+            return "aarch64";
+        }
+        return sanitize(arch);
+    }
+
+    /** Keep the token usable as a resource path and file-name segment. */
+    private static String sanitize(String raw) {
+        String token = raw.replaceAll("[^a-z0-9]+", "");
+        return token.isEmpty() ? "unknown" : token;
     }
 }

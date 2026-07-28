@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /** Low-level {@code HttpExchange} helpers shared across dashboard handlers. */
 public final class Http {
@@ -67,7 +68,7 @@ public final class Http {
         respondJson(exchange, status, errorBody(code));
     }
 
-    public static Map<String, Object> errorBody(String code) {
+    public static Map<String, Object> errorBody(@Nullable String code) {
         return Collections.singletonMap("error", code);
     }
 

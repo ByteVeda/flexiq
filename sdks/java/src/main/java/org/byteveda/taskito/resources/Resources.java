@@ -2,6 +2,7 @@ package org.byteveda.taskito.resources;
 
 import org.byteveda.taskito.errors.ResourceException;
 import org.byteveda.taskito.internal.ScopeContext;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Resolve worker resources from inside a task handler: {@code Resources.use("db")}.
@@ -14,7 +15,7 @@ public final class Resources {
     private Resources() {}
 
     /** Resolve the named resource for the current task. */
-    public static <T> T use(String name) {
+    public static <T> @Nullable T use(String name) {
         TaskScope scope = ACTIVE.get();
         if (scope == null) {
             throw new ResourceException("Resources.use(\"" + name + "\") called outside a task handler");

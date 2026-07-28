@@ -3,6 +3,7 @@ package org.byteveda.taskito.model;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The retention windows a worker is actually applying, as reported by the
@@ -34,7 +35,7 @@ public final class EffectiveRetention {
             @JsonProperty("defaulted") boolean defaulted,
             @JsonProperty("namespace") String namespace,
             @JsonProperty("reported_at") long reportedAt,
-            @JsonProperty("windows") Windows windows) {
+            @JsonProperty("windows") @Nullable Windows windows) {
         this.enabled = enabled;
         this.defaulted = defaulted;
         this.namespace = namespace;
@@ -49,27 +50,27 @@ public final class EffectiveRetention {
         static final Windows EMPTY = new Windows(null, null, null, null, null);
 
         /** Terminal jobs, every terminal status. */
-        public final Long archivedJobsMs;
+        public final @Nullable Long archivedJobsMs;
 
         /** Dead-letter entries — the only copy of a payload a human must act on. */
-        public final Long deadLetterMs;
+        public final @Nullable Long deadLetterMs;
 
         /** Task logs — highest write volume, lowest per-row value. */
-        public final Long taskLogsMs;
+        public final @Nullable Long taskLogsMs;
 
         /** Task metrics — feeds the dashboard charts. */
-        public final Long taskMetricsMs;
+        public final @Nullable Long taskMetricsMs;
 
         /** Per-attempt job errors. */
-        public final Long jobErrorsMs;
+        public final @Nullable Long jobErrorsMs;
 
         @JsonCreator
         public Windows(
-                @JsonProperty("archived_jobs_ttl_ms") Long archivedJobsMs,
-                @JsonProperty("dead_letter_ttl_ms") Long deadLetterMs,
-                @JsonProperty("task_logs_ttl_ms") Long taskLogsMs,
-                @JsonProperty("task_metrics_ttl_ms") Long taskMetricsMs,
-                @JsonProperty("job_errors_ttl_ms") Long jobErrorsMs) {
+                @JsonProperty("archived_jobs_ttl_ms") @Nullable Long archivedJobsMs,
+                @JsonProperty("dead_letter_ttl_ms") @Nullable Long deadLetterMs,
+                @JsonProperty("task_logs_ttl_ms") @Nullable Long taskLogsMs,
+                @JsonProperty("task_metrics_ttl_ms") @Nullable Long taskMetricsMs,
+                @JsonProperty("job_errors_ttl_ms") @Nullable Long jobErrorsMs) {
             this.archivedJobsMs = archivedJobsMs;
             this.deadLetterMs = deadLetterMs;
             this.taskLogsMs = taskLogsMs;

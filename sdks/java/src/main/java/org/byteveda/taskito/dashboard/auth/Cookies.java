@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Cookie parsing and {@code Set-Cookie} formatting. The JDK has no cookie
@@ -40,7 +41,7 @@ public final class Cookies {
         return out;
     }
 
-    public static String get(HttpExchange exchange, String name) {
+    public static @Nullable String get(HttpExchange exchange, String name) {
         return parse(exchange).get(name);
     }
 

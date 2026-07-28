@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.errors.SerializationException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Mesh scheduling options for {@link Worker.Builder#mesh(MeshOptions)}. Workers
@@ -29,7 +30,7 @@ public final class MeshOptions {
     private final int gossipPort;
     private final List<String> seeds;
     private final String bindAddr;
-    private final String advertiseAddr;
+    private final @Nullable String advertiseAddr;
     private final boolean enableStealing;
     private final double affinityWeight;
     private final int localBufferCapacity;
@@ -37,7 +38,7 @@ public final class MeshOptions {
     private final int stealThreshold;
     private final int virtualNodes;
     private final int stealRateLimit;
-    private final String encryptionKey;
+    private final @Nullable String encryptionKey;
 
     private MeshOptions(Builder b) {
         this.gossipPort = b.gossipPort;
@@ -97,7 +98,7 @@ public final class MeshOptions {
         private int gossipPort = 7946;
         private final List<String> seeds = new ArrayList<>();
         private String bindAddr = "0.0.0.0";
-        private String advertiseAddr;
+        private @Nullable String advertiseAddr;
         private boolean enableStealing = true;
         private double affinityWeight = 0.7;
         private int localBufferCapacity = 64;
@@ -105,7 +106,7 @@ public final class MeshOptions {
         private int stealThreshold = 2;
         private int virtualNodes = 150;
         private int stealRateLimit = 10;
-        private String encryptionKey;
+        private @Nullable String encryptionKey;
 
         /** Gossip (UDP) port; the work-stealing (TCP) port is {@code port + 1}. */
         public Builder port(int port) {

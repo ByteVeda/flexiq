@@ -7,6 +7,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.dashboard.store.OverridesStore;
 import org.byteveda.taskito.model.CircuitBreakerState;
 import org.byteveda.taskito.model.TaskMetric;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Task/queue override CRUD plus the task/queue listings the overrides UI selects
@@ -43,7 +44,7 @@ public final class OverridesHandlers {
         return new ArrayList<>(names);
     }
 
-    public Object getTaskOverride(String name) {
+    public @Nullable Object getTaskOverride(String name) {
         return store.getTask(name);
     }
 
@@ -55,7 +56,7 @@ public final class OverridesHandlers {
         return Map.of("cleared", store.deleteTask(name));
     }
 
-    public Object getQueueOverride(String name) {
+    public @Nullable Object getQueueOverride(String name) {
         return store.getQueue(name);
     }
 

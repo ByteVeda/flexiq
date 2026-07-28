@@ -1,5 +1,7 @@
 package org.byteveda.taskito.events;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * One workflow node's compensation progress — {@link EventName#WORKFLOW_NODE_COMPENSATING},
  * {@link EventName#WORKFLOW_NODE_COMPENSATED}, or
@@ -10,7 +12,7 @@ package org.byteveda.taskito.events;
  * @param nodeName the node being rolled back
  * @param error the compensation failure; null unless the rollback failed
  */
-public record NodeCompensationEvent(EventName name, String runId, String nodeName, String error)
+public record NodeCompensationEvent(EventName name, String runId, String nodeName, @Nullable String error)
         implements TaskitoEvent {
 
     /** Validates {@code name} is a node-compensation constant. */

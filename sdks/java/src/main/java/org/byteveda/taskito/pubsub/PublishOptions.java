@@ -3,6 +3,7 @@ package org.byteveda.taskito.pubsub;
 import java.time.Duration;
 import java.util.Map;
 import org.byteveda.taskito.serialization.Notes;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Options for {@code Taskito.publish(...)}. Every field is optional; unset
@@ -10,15 +11,15 @@ import org.byteveda.taskito.serialization.Notes;
  * then the core defaults). All durations are milliseconds.
  */
 public final class PublishOptions {
-    private final String idempotencyKey;
-    private final String metadata;
-    private final String notes;
-    private final Integer priority;
-    private final Long delayMs;
-    private final Integer maxRetries;
-    private final Long timeoutMs;
-    private final Long expiresMs;
-    private final Long resultTtlMs;
+    private final @Nullable String idempotencyKey;
+    private final @Nullable String metadata;
+    private final @Nullable String notes;
+    private final @Nullable Integer priority;
+    private final @Nullable Long delayMs;
+    private final @Nullable Integer maxRetries;
+    private final @Nullable Long timeoutMs;
+    private final @Nullable Long expiresMs;
+    private final @Nullable Long resultTtlMs;
 
     private PublishOptions(Builder b) {
         this.idempotencyKey = b.idempotencyKey;
@@ -41,54 +42,54 @@ public final class PublishOptions {
     }
 
     /** The per-subscriber dedup key, or {@code null} when the publish is unkeyed. */
-    public String idempotencyKey() {
+    public @Nullable String idempotencyKey() {
         return idempotencyKey;
     }
 
     /** The opaque metadata blob every delivery carries, or {@code null}. */
-    public String metadata() {
+    public @Nullable String metadata() {
         return metadata;
     }
 
     /** Canonical notes JSON (validated at build time), or {@code null}. */
-    public String notes() {
+    public @Nullable String notes() {
         return notes;
     }
 
-    public Integer priority() {
+    public @Nullable Integer priority() {
         return priority;
     }
 
-    public Long delayMs() {
+    public @Nullable Long delayMs() {
         return delayMs;
     }
 
-    public Integer maxRetries() {
+    public @Nullable Integer maxRetries() {
         return maxRetries;
     }
 
-    public Long timeoutMs() {
+    public @Nullable Long timeoutMs() {
         return timeoutMs;
     }
 
-    public Long expiresMs() {
+    public @Nullable Long expiresMs() {
         return expiresMs;
     }
 
-    public Long resultTtlMs() {
+    public @Nullable Long resultTtlMs() {
         return resultTtlMs;
     }
 
     public static final class Builder {
-        private String idempotencyKey;
-        private String metadata;
-        private String notes;
-        private Integer priority;
-        private Long delayMs;
-        private Integer maxRetries;
-        private Long timeoutMs;
-        private Long expiresMs;
-        private Long resultTtlMs;
+        private @Nullable String idempotencyKey;
+        private @Nullable String metadata;
+        private @Nullable String notes;
+        private @Nullable Integer priority;
+        private @Nullable Long delayMs;
+        private @Nullable Integer maxRetries;
+        private @Nullable Long timeoutMs;
+        private @Nullable Long expiresMs;
+        private @Nullable Long resultTtlMs;
 
         /**
          * Dedupe per subscriber: republishing the same key yields no new deliveries,

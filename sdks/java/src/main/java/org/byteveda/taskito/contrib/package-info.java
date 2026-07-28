@@ -11,4 +11,7 @@
  *       failures and dead-letters to Sentry.
  * </ul>
  */
+@NullMarked
 package org.byteveda.taskito.contrib;
+
+import org.jspecify.annotations.NullMarked;

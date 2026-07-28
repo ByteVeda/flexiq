@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import org.byteveda.taskito.Taskito;
@@ -42,6 +43,7 @@ import org.byteveda.taskito.dashboard.store.SettingsAccess;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Http;
 import org.byteveda.taskito.logging.TaskitoLogger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A read/action dashboard API + static-SPA server backed by a {@link Taskito},
@@ -84,11 +86,11 @@ public final class DashboardServer implements AutoCloseable {
 
     private final HttpServer server;
     private final Taskito queue;
-    private final Path staticDir;
+    private final @Nullable Path staticDir;
     private final boolean secureCookies;
 
     private final AuthStore authStore;
-    private final TokenAuth tokenAuth;
+    private final @Nullable TokenAuth tokenAuth;
     private final boolean authEnabled;
     private final AuthHandlers authHandlers;
     private final OAuthHandlers oauthHandlers;
@@ -99,11 +101,11 @@ public final class DashboardServer implements AutoCloseable {
     private DashboardServer(
             HttpServer server,
             Taskito queue,
-            Path staticDir,
+            @Nullable Path staticDir,
             boolean secureCookies,
-            String token,
+            @Nullable String token,
             boolean authEnabled,
-            OAuthFlow oauth) {
+            @Nullable OAuthFlow oauth) {
         this.server = server;
         this.queue = queue;
         this.staticDir = staticDir;
@@ -129,17 +131,19 @@ public final class DashboardServer implements AutoCloseable {
     }
 
     /** Start in legacy shared-token mode; the session flow is disabled. */
-    public static DashboardServer start(Taskito queue, int port, String token) throws IOException {
+    public static DashboardServer start(Taskito queue, int port, @Nullable String token) throws IOException {
         return start(queue, port, token, null, true, false);
     }
 
     /** As {@link #start(Taskito, int, String)} but with an unpacked SPA directory. */
-    public static DashboardServer start(Taskito queue, int port, String token, String staticDir) throws IOException {
+    public static DashboardServer start(Taskito queue, int port, @Nullable String token, @Nullable String staticDir)
+            throws IOException {
         return start(queue, port, token, staticDir, true, false);
     }
 
     /** As the full variant with auth disabled (the default). */
-    public static DashboardServer start(Taskito queue, int port, String token, String staticDir, boolean secureCookies)
+    public static DashboardServer start(
+            Taskito queue, int port, @Nullable String token, @Nullable String staticDir, boolean secureCookies)
             throws IOException {
         return start(queue, port, token, staticDir, secureCookies, false);
     }
@@ -152,16 +156,21 @@ public final class DashboardServer implements AutoCloseable {
      * {@code Secure} cookie attribute for local HTTP development.
      */
     public static DashboardServer start(
-            Taskito queue, int port, String token, String staticDir, boolean secureCookies, boolean authEnabled)
+            Taskito queue,
+            int port,
+            @Nullable String token,
+            @Nullable String staticDir,
+            boolean secureCookies,
+            boolean authEnabled)
             throws IOException {
         // OAuth is session-mode only; open and legacy token modes have no login UI.
         boolean sessionMode = token == null && authEnabled;
-        OAuthFlow oauth = sessionMode ? buildOAuthFlow(queue, System.getenv()) : null;
+        @Nullable OAuthFlow oauth = sessionMode ? buildOAuthFlow(queue, System.getenv()) : null;
         return startInternal(queue, port, token, staticDir, secureCookies, authEnabled, oauth);
     }
 
     /** Test seam: start in session mode with an explicitly built OAuth flow. */
-    static DashboardServer startWithOAuth(Taskito queue, int port, boolean secureCookies, OAuthFlow oauth)
+    static DashboardServer startWithOAuth(Taskito queue, int port, boolean secureCookies, @Nullable OAuthFlow oauth)
             throws IOException {
         return startInternal(queue, port, null, null, secureCookies, true, oauth);
     }
@@ -169,11 +178,11 @@ public final class DashboardServer implements AutoCloseable {
     private static DashboardServer startInternal(
             Taskito queue,
             int port,
-            String token,
-            String staticDir,
+            @Nullable String token,
+            @Nullable String staticDir,
             boolean secureCookies,
             boolean authEnabled,
-            OAuthFlow oauth)
+            @Nullable OAuthFlow oauth)
             throws IOException {
         // Resolve assets before binding so a discovery failure can't leak a bound port.
         Path dir = staticDir != null ? Paths.get(staticDir).normalize() : DashboardAssets.resolveOrNull();
@@ -197,7 +206,7 @@ public final class DashboardServer implements AutoCloseable {
      * the OIDC providers) is caught as a {@link LinkageError} and likewise
      * disables OAuth, leaving password login intact.
      */
-    private static OAuthFlow buildOAuthFlow(Taskito queue, Map<String, String> env) {
+    private static @Nullable OAuthFlow buildOAuthFlow(Taskito queue, Map<String, String> env) {
         Optional<OAuthConfig> configured;
         try {
             configured = OAuthConfig.fromEnv(env);
@@ -266,7 +275,7 @@ public final class DashboardServer implements AutoCloseable {
         Map<String, String> query = Http.query(exchange);
         String method = exchange.getRequestMethod();
         if (tokenAuth != null) {
-            handleTokenMode(exchange, path, method, query);
+            handleTokenMode(tokenAuth, exchange, path, method, query);
             return;
         }
         if (!authEnabled) {
@@ -304,7 +313,8 @@ public final class DashboardServer implements AutoCloseable {
         }
     }
 
-    private void handleTokenMode(HttpExchange exchange, String path, String method, Map<String, String> query)
+    private void handleTokenMode(
+            TokenAuth tokenAuth, HttpExchange exchange, String path, String method, Map<String, String> query)
             throws IOException {
         if (path.equals("/api/auth/status")) {
             Http.respondJson(exchange, 200, TokenAuth.openStatus());
@@ -429,9 +439,10 @@ public final class DashboardServer implements AutoCloseable {
     private Object login(Req req, long ttl) {
         Map<String, Object> out = authHandlers.login(req.jsonBody());
         @SuppressWarnings("unchecked")
-        Map<String, Object> session = (Map<String, Object>) out.get("session");
-        String token = (String) session.remove("token");
-        String csrf = (String) session.get("csrf_token");
+        Map<String, Object> session = Objects.requireNonNull(
+                (Map<String, Object>) out.get("session"), "login response is missing its session");
+        String token = Objects.requireNonNull((String) session.remove("token"), "session is missing its token");
+        String csrf = Objects.requireNonNull((String) session.get("csrf_token"), "session is missing its CSRF token");
         var headers = req.exchange().getResponseHeaders();
         headers.add("Set-Cookie", Cookies.sessionCookie(token, secureCookies, ttl));
         headers.add("Set-Cookie", Cookies.csrfCookie(csrf, secureCookies, ttl));

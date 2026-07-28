@@ -25,6 +25,7 @@ import org.byteveda.taskito.serialization.Serializer;
 import org.byteveda.taskito.spi.QueueBackend;
 import org.byteveda.taskito.spi.WorkerBridge;
 import org.byteveda.taskito.spi.WorkerControl;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Bridges native job dispatch to registered handlers. {@code onJob} hands work to
@@ -202,7 +203,7 @@ final class WorkerDispatchBridge implements WorkerBridge {
         }
     }
 
-    private static JsonNode readTree(String json) {
+    private static @Nullable JsonNode readTree(String json) {
         try {
             return JSON.readTree(json);
         } catch (Exception e) {

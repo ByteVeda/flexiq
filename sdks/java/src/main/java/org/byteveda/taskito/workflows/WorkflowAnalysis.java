@@ -46,7 +46,7 @@ public final class WorkflowAnalysis {
         Deque<String> ready = new ArrayDeque<>();
         // Seed with roots in declaration order for a stable result.
         for (Step step : workflow.steps()) {
-            if (indegree.get(step.name) == 0) {
+            if (indegree.getOrDefault(step.name, 0) == 0) {
                 ready.add(step.name);
             }
         }
@@ -56,7 +56,7 @@ public final class WorkflowAnalysis {
             order.add(node);
             for (String next : successors.getOrDefault(node, List.of())) {
                 indegree.merge(next, -1, (count, delta) -> count + delta);
-                if (indegree.get(next) == 0) {
+                if (indegree.getOrDefault(next, 0) == 0) {
                     ready.add(next);
                 }
             }
@@ -75,7 +75,7 @@ public final class WorkflowAnalysis {
         for (String node : topologicalOrder(workflow)) {
             int depth = 0;
             for (String pred : predecessors.getOrDefault(node, List.of())) {
-                depth = Math.max(depth, level.get(pred) + 1);
+                depth = Math.max(depth, level.getOrDefault(pred, 0) + 1);
             }
             level.put(node, depth);
             while (levels.size() <= depth) {
@@ -104,7 +104,7 @@ public final class WorkflowAnalysis {
         Map<String, Integer> indegree = indegree(workflow);
         List<String> roots = new ArrayList<>();
         for (Step step : workflow.steps()) {
-            if (indegree.get(step.name) == 0) {
+            if (indegree.getOrDefault(step.name, 0) == 0) {
                 roots.add(step.name);
             }
         }

@@ -1,6 +1,7 @@
 package org.byteveda.taskito.logging;
 
 import java.util.Locale;
+import org.jspecify.annotations.Nullable;
 
 /** Severity, from most to least verbose. {@link #SILENT} disables all output. */
 public enum LogLevel {
@@ -22,7 +23,7 @@ public enum LogLevel {
     }
 
     /** Case-insensitive parse; {@code null} when {@code raw} is not a level name. */
-    static LogLevel parseOrNull(String raw) {
+    static @Nullable LogLevel parseOrNull(String raw) {
         if (raw == null) {
             return null;
         }

@@ -5,6 +5,7 @@ import io.micrometer.observation.ObservationRegistry;
 import java.util.function.Predicate;
 import org.byteveda.taskito.middleware.Middleware;
 import org.byteveda.taskito.middleware.TaskContext;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Wraps each task execution in a Micrometer {@link Observation}: one
@@ -56,7 +57,7 @@ public final class TaskitoObservation implements Middleware {
         stop(context, error);
     }
 
-    private void stop(TaskContext context, Throwable error) {
+    private void stop(TaskContext context, @Nullable Throwable error) {
         Observation.Scope scope = (Observation.Scope) context.attributes().remove(SCOPE);
         if (scope != null) {
             scope.close();

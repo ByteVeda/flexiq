@@ -6,6 +6,7 @@ import java.util.function.Supplier;
 import org.byteveda.taskito.spi.QueueBackend;
 import org.byteveda.taskito.spi.WorkerBridge;
 import org.byteveda.taskito.spi.WorkerControl;
+import org.jspecify.annotations.Nullable;
 
 /**
  * JNI-backed {@link QueueBackend} over a native queue handle. Every call holds
@@ -113,12 +114,12 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listJobsAfterJson(String filterJson, String afterOrNull) {
+    public String listJobsAfterJson(String filterJson, @Nullable String afterOrNull) {
         return withOpenHandle(() -> NativeQueue.listJobsAfter(handle, filterJson, afterOrNull));
     }
 
     @Override
-    public String listArchivedAfterJson(long limit, String afterOrNull) {
+    public String listArchivedAfterJson(long limit, @Nullable String afterOrNull) {
         return withOpenHandle(() -> NativeQueue.listArchivedAfter(handle, limit, afterOrNull));
     }
 
@@ -128,7 +129,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String metricsJson(String taskNameOrNull, long sinceMs) {
+    public String metricsJson(@Nullable String taskNameOrNull, long sinceMs) {
         return withOpenHandle(() -> NativeQueue.metrics(handle, taskNameOrNull, sinceMs));
     }
 
@@ -242,7 +243,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String dryRunRetentionJson(String retentionJson) {
+    public String dryRunRetentionJson(@Nullable String retentionJson) {
         return withOpenHandle(() -> NativeQueue.dryRunRetention(handle, retentionJson));
     }
 
@@ -252,7 +253,8 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void writeTaskLog(String jobId, String taskName, String level, String message, String extraOrNull) {
+    public void writeTaskLog(
+            String jobId, String taskName, String level, String message, @Nullable String extraOrNull) {
         withOpenHandle(() -> {
             NativeQueue.writeTaskLog(handle, jobId, taskName, level, message, extraOrNull);
             return null;
@@ -265,12 +267,13 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String getTaskLogsAfterJson(String jobId, String afterIdOrNull) {
+    public String getTaskLogsAfterJson(String jobId, @Nullable String afterIdOrNull) {
         return withOpenHandle(() -> NativeQueue.getTaskLogsAfter(handle, jobId, afterIdOrNull));
     }
 
     @Override
-    public String queryTaskLogsJson(String taskNameOrNull, String levelOrNull, long sinceMs, long limit) {
+    public String queryTaskLogsJson(
+            @Nullable String taskNameOrNull, @Nullable String levelOrNull, long sinceMs, long limit) {
         return withOpenHandle(() -> NativeQueue.queryTaskLogs(handle, taskNameOrNull, levelOrNull, sinceMs, limit));
     }
 
@@ -296,7 +299,13 @@ public final class JniQueueBackend implements QueueBackend {
 
     @Override
     public long registerPeriodic(
-            String name, String taskName, String cron, byte[] args, String queue, String timezone, boolean enabled) {
+            String name,
+            String taskName,
+            String cron,
+            byte @Nullable [] args,
+            @Nullable String queue,
+            @Nullable String timezone,
+            boolean enabled) {
         return withOpenHandle(
                 () -> NativeQueue.registerPeriodic(handle, name, taskName, cron, args, queue, timezone, enabled));
     }
@@ -323,7 +332,7 @@ public final class JniQueueBackend implements QueueBackend {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull) {
+            @Nullable String ownerWorkerIdOrNull) {
         // Route the settings-less form through the full one (nulls = queue
         // defaults) so this backend is reachable via either overload.
         registerSubscription(topic, subscriptionName, taskName, queue, durable, ownerWorkerIdOrNull, null, null, null);
@@ -336,10 +345,10 @@ public final class JniQueueBackend implements QueueBackend {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull,
-            Integer priority,
-            Integer maxRetries,
-            Long timeoutMs) {
+            @Nullable String ownerWorkerIdOrNull,
+            @Nullable Integer priority,
+            @Nullable Integer maxRetries,
+            @Nullable Long timeoutMs) {
         // Default to fan-out; the mode-carrying overload handles log subscriptions.
         registerSubscription(
                 topic,
@@ -361,10 +370,10 @@ public final class JniQueueBackend implements QueueBackend {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull,
-            Integer priority,
-            Integer maxRetries,
-            Long timeoutMs,
+            @Nullable String ownerWorkerIdOrNull,
+            @Nullable Integer priority,
+            @Nullable Integer maxRetries,
+            @Nullable Long timeoutMs,
             String mode) {
         // JNI carries primitives, not boxed nullables — a null delivery setting
         // crosses as the MIN sentinel the native side reads as "queue default".
@@ -389,7 +398,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listSubscriptionsJson(String topicOrNull) {
+    public String listSubscriptionsJson(@Nullable String topicOrNull) {
         return withOpenHandle(() -> NativeQueue.listSubscriptions(handle, topicOrNull));
     }
 
@@ -450,7 +459,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void declareTopic(String name, Long retentionMs) {
+    public void declareTopic(String name, @Nullable Long retentionMs) {
         // JNI carries a primitive long — a null retention crosses as the MIN
         // sentinel the native side reads as "unbounded".
         long nativeRetentionMs = retentionMs == null ? Long.MIN_VALUE : retentionMs;
@@ -472,11 +481,11 @@ public final class JniQueueBackend implements QueueBackend {
             String stepsJson,
             String[] payloadNames,
             byte[][] payloads,
-            String queueDefault,
-            String paramsJson,
+            @Nullable String queueDefault,
+            @Nullable String paramsJson,
             String[] deferredNames,
-            String parentRunId,
-            String parentNodeName) {
+            @Nullable String parentRunId,
+            @Nullable String parentNodeName) {
         return withOpenHandle(() -> NativeWorkflows.submitWorkflow(
                 handle,
                 name,
@@ -492,7 +501,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String markWorkflowNodeResult(String jobId, boolean succeeded, String error, boolean skipCascade) {
+    public String markWorkflowNodeResult(String jobId, boolean succeeded, @Nullable String error, boolean skipCascade) {
         return withOpenHandle(
                 () -> NativeWorkflows.markWorkflowNodeResult(handle, jobId, succeeded, error, skipCascade));
     }
@@ -503,7 +512,8 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public String listWorkflowRunsJson(String definitionNameOrNull, String stateOrNull, long limit, long offset) {
+    public String listWorkflowRunsJson(
+            @Nullable String definitionNameOrNull, @Nullable String stateOrNull, long limit, long offset) {
         return withOpenHandle(
                 () -> NativeWorkflows.listWorkflowRuns(handle, definitionNameOrNull, stateOrNull, limit, offset));
     }
@@ -612,7 +622,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void resolveWorkflowGate(String runId, String nodeName, boolean approved, String error) {
+    public void resolveWorkflowGate(String runId, String nodeName, boolean approved, @Nullable String error) {
         withOpenHandle(() -> {
             NativeWorkflows.resolveWorkflowGate(handle, runId, nodeName, approved, error);
             return null;
@@ -628,7 +638,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void failWorkflowNode(String runId, String nodeName, String error) {
+    public void failWorkflowNode(String runId, String nodeName, @Nullable String error) {
         withOpenHandle(() -> {
             NativeWorkflows.failWorkflowNode(handle, runId, nodeName, error);
             return null;
@@ -668,7 +678,7 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void setWorkflowRunCompensationFailed(String runId, long completedAt, String error) {
+    public void setWorkflowRunCompensationFailed(String runId, long completedAt, @Nullable String error) {
         withOpenHandle(() -> {
             NativeWorkflows.setWorkflowRunCompensationFailed(handle, runId, completedAt, error);
             return null;
@@ -701,7 +711,8 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
-    public void setWorkflowNodeCompensationFailed(String runId, String nodeName, String error, long completedAt) {
+    public void setWorkflowNodeCompensationFailed(
+            String runId, String nodeName, @Nullable String error, long completedAt) {
         withOpenHandle(() -> {
             NativeWorkflows.setWorkflowNodeCompensationFailed(handle, runId, nodeName, error, completedAt);
             return null;

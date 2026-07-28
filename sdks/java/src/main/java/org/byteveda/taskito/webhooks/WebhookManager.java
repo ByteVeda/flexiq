@@ -24,6 +24,7 @@ import org.byteveda.taskito.events.WorkerEvent;
 import org.byteveda.taskito.events.WorkflowEvent;
 import org.byteveda.taskito.logging.TaskitoLogger;
 import org.byteveda.taskito.middleware.Middleware;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Manages webhook subscriptions and dispatches matching job outcomes to them.
@@ -48,7 +49,7 @@ public final class WebhookManager implements Middleware {
     private final WebhookStore store;
     private final DeliveryStore deliveryStore;
     private final Deliverer deliverer = new Deliverer();
-    private volatile CachedHooks cached;
+    private volatile @Nullable CachedHooks cached;
 
     private WebhookManager(Taskito queue) {
         this.store = new WebhookStore(queue);
@@ -201,7 +202,8 @@ public final class WebhookManager implements Middleware {
         return sendSynthetic(hook.get(), ctx, replayPayload(source));
     }
 
-    public List<Delivery> deliveries(String id, String statusFilter, String eventFilter, int limit, int offset) {
+    public List<Delivery> deliveries(
+            String id, @Nullable String statusFilter, @Nullable String eventFilter, int limit, int offset) {
         return deliveryStore.listFor(id, statusFilter, eventFilter, limit, offset);
     }
 
@@ -291,7 +293,7 @@ public final class WebhookManager implements Middleware {
     }
 
     /** The task an event concerns, or null for events that carry no task. */
-    private static String taskNameOf(TaskitoEvent event) {
+    private static @Nullable String taskNameOf(TaskitoEvent event) {
         if (event instanceof EnqueuedEvent enqueued) {
             return enqueued.taskName();
         }
@@ -360,7 +362,7 @@ public final class WebhookManager implements Middleware {
     /** An immutable webhook list plus when it was read from the store. */
     private record CachedHooks(List<Webhook> hooks, long loadedAt) {}
 
-    private static boolean matches(String filter, String taskName) {
+    private static boolean matches(@Nullable String filter, @Nullable String taskName) {
         return filter == null || filter.equals(taskName);
     }
 

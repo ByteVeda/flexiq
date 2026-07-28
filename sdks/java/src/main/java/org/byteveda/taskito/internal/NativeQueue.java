@@ -1,5 +1,7 @@
 package org.byteveda.taskito.internal;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * JNI surface over the Taskito core.
  *
@@ -49,13 +51,13 @@ public final class NativeQueue {
 
     public static native String listJobs(long handle, String filterJson);
 
-    public static native String listJobsAfter(long handle, String filterJson, String afterOrNull);
+    public static native String listJobsAfter(long handle, String filterJson, @Nullable String afterOrNull);
 
-    public static native String listArchivedAfter(long handle, long limit, String afterOrNull);
+    public static native String listArchivedAfter(long handle, long limit, @Nullable String afterOrNull);
 
     public static native String jobErrors(long handle, String jobId);
 
-    public static native String metrics(long handle, String taskNameOrNull, long sinceMs);
+    public static native String metrics(long handle, @Nullable String taskNameOrNull, long sinceMs);
 
     public static native String listWorkers(long handle);
 
@@ -114,18 +116,18 @@ public final class NativeQueue {
      * the policy the elected cleaner reported for this namespace, falling back
      * to the recommended defaults only when no cleaner has swept yet.
      */
-    public static native String dryRunRetention(long handle, String retentionJson);
+    public static native String dryRunRetention(long handle, @Nullable String retentionJson);
 
     // ── Logs ────────────────────────────────────────────────────────
     public static native void writeTaskLog(
-            long handle, String jobId, String taskName, String level, String message, String extraOrNull);
+            long handle, String jobId, String taskName, String level, String message, @Nullable String extraOrNull);
 
     public static native String getTaskLogs(long handle, String jobId);
 
-    public static native String getTaskLogsAfter(long handle, String jobId, String afterIdOrNull);
+    public static native String getTaskLogsAfter(long handle, String jobId, @Nullable String afterIdOrNull);
 
     public static native String queryTaskLogs(
-            long handle, String taskNameOrNull, String levelOrNull, long sinceMs, long limit);
+            long handle, @Nullable String taskNameOrNull, @Nullable String levelOrNull, long sinceMs, long limit);
 
     // ── Locks ───────────────────────────────────────────────────────
     public static native boolean acquireLock(long handle, String name, String ownerId, long ttlMs);
@@ -144,9 +146,9 @@ public final class NativeQueue {
             String name,
             String taskName,
             String cron,
-            byte[] args,
-            String queue,
-            String timezone,
+            byte @Nullable [] args,
+            @Nullable String queue,
+            @Nullable String timezone,
             boolean enabled);
 
     /** A JSON array of every registered periodic task (enabled and paused). */
@@ -173,14 +175,14 @@ public final class NativeQueue {
             String taskName,
             String queue,
             boolean durable,
-            String ownerWorkerIdOrNull,
+            @Nullable String ownerWorkerIdOrNull,
             int priority,
             int maxRetries,
             long timeoutMs,
             String mode);
 
     /** A JSON array of subscriptions — all of them, or only a topic's active ones. */
-    public static native String listSubscriptions(long handle, String topicOrNull);
+    public static native String listSubscriptions(long handle, @Nullable String topicOrNull);
 
     /** Remove a subscription; false if none matched. */
     public static native boolean unsubscribe(long handle, String topic, String subscriptionName);

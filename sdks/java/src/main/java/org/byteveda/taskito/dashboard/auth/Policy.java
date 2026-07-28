@@ -58,13 +58,14 @@ public final class Policy {
         if (isPublicPath(path)) {
             return;
         }
-        if (!ctx.authenticated()) {
+        Session session = ctx.session();
+        if (session == null) {
             throw DashboardError.unauthorized("not_authenticated");
         }
         if (isStateChanging(method) && !isCsrfExempt(path) && !ctx.csrfValid()) {
             throw DashboardError.forbidden("csrf_failed");
         }
-        if (requiresAdmin(path, method) && Role.orViewer(ctx.session().role()) != Role.ADMIN) {
+        if (requiresAdmin(path, method) && Role.orViewer(session.role()) != Role.ADMIN) {
             throw DashboardError.forbidden("forbidden");
         }
     }

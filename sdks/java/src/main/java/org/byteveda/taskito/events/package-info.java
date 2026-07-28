@@ -5,4 +5,7 @@
  * {@link org.byteveda.taskito.events.TaskitoEvent} types carrying each, and the
  * {@link org.byteveda.taskito.events.Emitter} that dispatches them.
  */
+@NullMarked
 package org.byteveda.taskito.events;
+
+import org.jspecify.annotations.NullMarked;

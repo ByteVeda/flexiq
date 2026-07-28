@@ -3,6 +3,7 @@ package org.byteveda.taskito.dashboard.auth;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import java.util.Locale;
+import org.jspecify.annotations.Nullable;
 
 /** A dashboard user's access level. Wire form is the lowercase name, stored in settings. */
 public enum Role {
@@ -19,7 +20,7 @@ public enum Role {
 
     /** Parse a wire form ({@code "admin"}/{@code "viewer"}); null for anything else. */
     @JsonCreator
-    public static Role fromWire(String wire) {
+    public static @Nullable Role fromWire(@Nullable String wire) {
         if (wire == null) {
             return null;
         }
@@ -36,7 +37,7 @@ public enum Role {
      * unrecognized value yields the least-privileged role rather than locking the
      * user out or granting more than was stored.
      */
-    public static Role orViewer(String wire) {
+    public static Role orViewer(@Nullable String wire) {
         Role role = fromWire(wire);
         return role == null ? VIEWER : role;
     }

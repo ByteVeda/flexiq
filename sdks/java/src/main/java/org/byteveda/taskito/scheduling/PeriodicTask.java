@@ -1,13 +1,15 @@
 package org.byteveda.taskito.scheduling;
 
+import org.jspecify.annotations.Nullable;
+
 /** A cron-scheduled task registration. The worker enqueues it when due. */
 public final class PeriodicTask {
     public final String name;
     public final String taskName;
     public final String cron;
-    public final Object payload;
-    public final String queue;
-    public final String timezone;
+    public final @Nullable Object payload;
+    public final @Nullable String queue;
+    public final @Nullable String timezone;
     public final boolean enabled;
 
     private PeriodicTask(Builder b) {
@@ -28,9 +30,9 @@ public final class PeriodicTask {
         private final String name;
         private final String taskName;
         private final String cron;
-        private Object payload;
-        private String queue;
-        private String timezone;
+        private @Nullable Object payload;
+        private @Nullable String queue;
+        private @Nullable String timezone;
         private boolean enabled = true;
 
         Builder(String name, String taskName, String cron) {
@@ -39,17 +41,17 @@ public final class PeriodicTask {
             this.cron = cron;
         }
 
-        public Builder payload(Object payload) {
+        public Builder payload(@Nullable Object payload) {
             this.payload = payload;
             return this;
         }
 
-        public Builder queue(String queue) {
+        public Builder queue(@Nullable String queue) {
             this.queue = queue;
             return this;
         }
 
-        public Builder timezone(String timezone) {
+        public Builder timezone(@Nullable String timezone) {
             this.timezone = timezone;
             return this;
         }
