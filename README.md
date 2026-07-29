@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/public/logo.png" alt="taskito" width="220">
+
 # taskito
 
 A Rust-powered task queue with native SDKs. One engine — no broker required, just SQLite, Postgres, or Redis.
