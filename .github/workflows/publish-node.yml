@@ -247,6 +247,25 @@ jobs:
           pnpm exec napi artifacts -d artifacts
           ls -R npm
 
+      # `create-npm-dirs` scaffolds a directory per configured target whether or
+      # not a matching binary arrives, and `artifacts` only warns when it cannot
+      # place one. A failed build can't get this far (`needs: build`), but a
+      # target/filename mismatch would ship an empty platform package and still
+      # list it in optionalDependencies, breaking installs on that platform.
+      - name: Verify every platform package carries its binary
+        working-directory: sdks/node
+        run: |
+          missing=""
+          for dir in npm/*/; do
+            if [ "$(find "$dir" -maxdepth 1 -name '*.node' | wc -l)" -eq 0 ]; then
+              missing="${missing} ${dir%/}"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Platform packages with no native binary:${missing}"
+            exit 1
+          fi
+
       - name: Inject optionalDependencies into the main package
         working-directory: sdks/node
         run: |
