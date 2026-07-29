@@ -180,17 +180,12 @@
   font-size: 17px;
 }
 .logo {
-  width: 27px;
+  /* Wider than tall (770×513), so size on height and let the width follow —
+     a square box would crop the flanking queue arrows. */
   height: 27px;
-  border-radius: 8px;
-  position: relative;
+  width: auto;
   flex: none;
-  background: linear-gradient(135deg, var(--indigo-br), var(--indigo-dk));
-  box-shadow:
-    0 0 0 1px var(--line2),
-    0 6px 18px -6px var(--indigo);
-  display: grid;
-  place-items: center;
+  display: block;
 }
 /* real logo mark (tile) */
 .logo-mark {

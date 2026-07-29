@@ -67,7 +67,12 @@ export function Footer() {
       <div className="foot-grid">
         <div className="foot-brand">
           <span className="brand">
-            <span className="logo" aria-hidden="true" />
+            <img
+              className="logo"
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt=""
+              aria-hidden="true"
+            />
             <span className="brand-word">
               taski<span className="bto">to</span>
             </span>

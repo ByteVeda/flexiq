@@ -187,7 +187,12 @@ export function SiteNav({
         </button>
       ) : null}
       <Link to="/" className="brand">
-        <span className="logo" aria-hidden="true" />
+        <img
+          className="logo"
+          src={`${import.meta.env.BASE_URL}logo.png`}
+          alt=""
+          aria-hidden="true"
+        />
         <span>
           task<span className="bto">ito</span>
         </span>

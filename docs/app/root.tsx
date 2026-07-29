@@ -11,7 +11,29 @@ import { DEFAULT_SDK, SDK_IDS } from "@/lib";
 import type { Route } from "./+types/root";
 import "./app.css";
 
+// `public/` assets are copied verbatim, so they need the deploy base prefix
+// (`/taskito/` on Pages, `/` locally) rather than a bare absolute path.
+const asset = (file: string) => `${import.meta.env.BASE_URL}${file}`;
+
 export const links: Route.LinksFunction = () => [
+  {
+    rel: "icon",
+    type: "image/x-icon",
+    href: asset("favicon.ico"),
+    sizes: "48x48",
+  },
+  {
+    rel: "icon",
+    type: "image/png",
+    href: asset("favicon-96x96.png"),
+    sizes: "96x96",
+  },
+  {
+    rel: "apple-touch-icon",
+    href: asset("apple-touch-icon.png"),
+    sizes: "180x180",
+  },
+  { rel: "manifest", href: asset("site.webmanifest") },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {
     rel: "preconnect",
