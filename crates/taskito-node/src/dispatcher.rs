@@ -119,7 +119,7 @@ async fn run_one(callback: &TaskCallback, storage: &StorageBackend, mut job: Job
     // awaited value back to this async context through a oneshot. The JS view
     // is copied out (Buffer -> Vec) while still on that side.
     let (tx, rx) = oneshot::channel::<napi::Result<TaskOutcome>>();
-    callback.call_with_return_value(
+    let dispatch = callback.call_with_return_value(
         invocation,
         ThreadsafeFunctionCallMode::NonBlocking,
         // napi 3 hands the callback a `Result`: a JS task that throws before it
@@ -135,6 +135,15 @@ async fn run_one(callback: &TaskCallback, storage: &StorageBackend, mut job: Job
             Ok(())
         },
     );
+    // A rejected dispatch never runs the callback. When napi rejects it inside
+    // the FFI call it also leaks the boxed closure, so `tx` is never dropped and
+    // `rx` below would park forever on a job with no timeout. Retryable: the
+    // queue is closing or saturated, not the task itself.
+    if dispatch != Status::Ok {
+        let wall_time_ns = started.elapsed().as_nanos() as i64;
+        let reason = format!("node task dispatch rejected: {dispatch:?}");
+        return failure(job, reason, wall_time_ns, false, true);
+    }
 
     // Enforce the per-job timeout (the core stores `timeout_ms` but leaves
     // enforcement to the shell). `timeout_ms <= 0` means no limit.
