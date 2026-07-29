@@ -174,8 +174,15 @@ pub fn start_worker(
                 worker_id.clone(),
                 build_mesh_config(mesh_cfg),
             ));
-            let gossip = mesh_node.spawn_gossip(mesh_queues, capacity as u16);
-            let steal_server = mesh_node.spawn_steal_server();
+            // Both spawns call `tokio::spawn` internally, and we are on the JS
+            // thread, which carries no ambient runtime context — enter the napi
+            // runtime first or the spawn panics and aborts the process.
+            let (gossip, steal_server) = within_runtime_if_available(|| {
+                (
+                    mesh_node.spawn_gossip(mesh_queues, capacity as u16),
+                    mesh_node.spawn_steal_server(),
+                )
+            });
             let bridge_scheduler = scheduler.clone();
             let bridge_node = mesh_node.clone();
             spawn(async move {
