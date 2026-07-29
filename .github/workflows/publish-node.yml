@@ -243,7 +243,7 @@ jobs:
       - name: Assemble per-platform npm packages
         working-directory: sdks/node
         run: |
-          pnpm exec napi create-npm-dir -t .
+          pnpm exec napi create-npm-dirs
           pnpm exec napi artifacts -d artifacts
           ls -R npm
 
