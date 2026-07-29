@@ -1,11 +1,13 @@
 <div align="center">
 
-<img src="docs/public/logo.png" alt="taskito" width="220">
+<p><img src="docs/public/logo.png" alt="" width="150"></p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/public/wordmark-dark.svg">
-  <img src="docs/public/wordmark-light.svg" alt="taskito" width="260">
-</picture>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/public/wordmark-dark.svg">
+    <img src="docs/public/wordmark-light.svg" alt="taskito" width="190">
+  </picture>
+</p>
 
 A Rust-powered task queue with native SDKs. One engine — no broker required, just SQLite, Postgres, or Redis.
 
