@@ -16,4 +16,4 @@ bincode = "1"
 log = { workspace = true }
 rand = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-base64 = "0.22"
+base64 = "0.23"

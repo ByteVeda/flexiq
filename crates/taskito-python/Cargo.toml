@@ -34,7 +34,7 @@ taskito-workflows = { path = "../taskito-workflows", optional = true }
 taskito-mesh = { path = "../taskito-mesh", optional = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 log = { workspace = true }
 pyo3-log = "0.13"
 gethostname = "1.1.0"

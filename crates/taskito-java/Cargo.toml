@@ -25,7 +25,7 @@ push-dispatch = ["taskito-core/push-dispatch"]
 taskito-core = { path = "../taskito-core" }
 taskito-workflows = { path = "../taskito-workflows", optional = true }
 taskito-mesh = { path = "../taskito-mesh", optional = true }
-base64 = "0.22"
+base64 = "0.23"
 jni = "0.21"
 serde = { workspace = true }
 serde_json = { workspace = true }
