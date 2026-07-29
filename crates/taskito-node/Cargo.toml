@@ -23,8 +23,14 @@ push-dispatch = ["taskito-core/push-dispatch"]
 
 [dependencies]
 taskito-core = { path = "../taskito-core" }
-napi = { version = "2", default-features = false, features = ["napi8", "tokio_rt"] }
-napi-derive = "2"
+# `dyn-symbols` is a napi 3 default that `default-features = false` drops; it
+# resolves the Node symbols at load time rather than linking against them.
+napi = { version = "3", default-features = false, features = [
+    "napi8",
+    "tokio_rt",
+    "dyn-symbols",
+] }
+napi-derive = "3"
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
 async-trait = { workspace = true }

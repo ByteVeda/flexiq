@@ -1,14 +1,20 @@
 //! `JsQueue` — the producer/inspection surface over the core storage.
 
-use napi::bindgen_prelude::{Buffer, Result};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction};
+use napi::bindgen_prelude::{Buffer, Promise, Result, Status, Unknown};
+use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use taskito_core::{Storage, StorageBackend};
 
 use crate::config::{EnqueueJob, EnqueueOptions, OpenOptions, WorkerOptions};
-use crate::convert::{build_new_job, job_to_js, JsJob, JsOutcome, JsTaskInvocation};
+use crate::convert::{build_new_job, job_to_js, JsJob, JsOutcome, JsTaskInvocation, JsTaskOutcome};
 use crate::error::to_napi_err;
 use crate::worker::{start_worker, JsWorker};
+
+/// Outcome callback registered from JS: `(outcome) => void`. Its return value is
+/// ignored, hence `Unknown`. See [`crate::dispatcher::TaskCallback`] for the
+/// meaning of the trailing `false`.
+pub type OutcomeCallback =
+    ThreadsafeFunction<JsOutcome, Unknown<'static>, JsOutcome, Status, false>;
 
 mod admin;
 mod inspect;
@@ -135,8 +141,17 @@ impl JsQueue {
     #[napi]
     pub fn run_worker(
         &self,
-        callback: ThreadsafeFunction<JsTaskInvocation, ErrorStrategy::Fatal>,
-        outcome_callback: ThreadsafeFunction<JsOutcome, ErrorStrategy::Fatal>,
+        // Spelled out rather than written as the `TaskCallback` / `OutcomeCallback`
+        // aliases: napi-derive resolves these generics syntactically, and an alias
+        // reaches the generated `index.d.ts` as an undefined type name.
+        callback: ThreadsafeFunction<
+            JsTaskInvocation,
+            Promise<JsTaskOutcome>,
+            JsTaskInvocation,
+            Status,
+            false,
+        >,
+        outcome_callback: ThreadsafeFunction<JsOutcome, Unknown<'static>, JsOutcome, Status, false>,
         options: Option<WorkerOptions>,
     ) -> Result<JsWorker> {
         start_worker(

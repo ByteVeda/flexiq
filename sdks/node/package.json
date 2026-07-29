@@ -1,7 +1,7 @@
 {
   "name": "@byteveda/taskito",
   "version": "0.21.0",
-  "description": "Rust-powered task queue for Node.js — no broker required.",
+  "description": "Rust-powered task queue for Node.js \u2014 no broker required.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
@@ -77,20 +77,20 @@
     "directory": "sdks/node"
   },
   "napi": {
-    "name": "taskito",
-    "triples": {
-      "defaults": true,
-      "additional": [
-        "aarch64-apple-darwin",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-unknown-linux-musl",
-        "aarch64-unknown-linux-musl"
-      ]
-    }
+    "binaryName": "taskito",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl"
+    ]
   },
   "scripts": {
     "build": "pnpm run build:native && pnpm run build:ts",
-    "build:native": "napi build --platform --release --cargo-cwd ../../crates/taskito-node --features postgres,redis,mesh,workflows native",
+    "build:native": "napi build --platform --release --manifest-path ../../crates/taskito-node/Cargo.toml --features postgres,redis,mesh,workflows --output-dir native",
     "build:ts": "tsup",
     "build:dashboard": "pnpm -C ../../dashboard exec vite build --outDir ../sdks/node/static/dashboard --emptyOutDir",
     "prepack": "pnpm run build:dashboard",
@@ -101,7 +101,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@napi-rs/cli": "^2.18.4",
+    "@napi-rs/cli": "^3.8.0",
     "@nestjs/common": "^11.1.27",
     "@nestjs/core": "^11.1.27",
     "@nestjs/testing": "^11.1.27",

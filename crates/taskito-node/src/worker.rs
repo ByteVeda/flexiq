@@ -6,17 +6,18 @@
 use std::sync::Arc;
 
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
 use taskito_core::worker::WorkerDispatcher;
 use taskito_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use tokio::sync::Notify;
 
 use crate::config::WorkerOptions;
-use crate::convert::{outcome_to_js, JsOutcome, JsTaskInvocation};
-use crate::dispatcher::NodeDispatcher;
+use crate::convert::outcome_to_js;
+use crate::dispatcher::{NodeDispatcher, TaskCallback};
 #[cfg(feature = "mesh")]
 use crate::error::invalid_arg;
+use crate::queue::OutcomeCallback;
 
 const DEFAULT_QUEUE: &str = "default";
 const DEFAULT_CHANNEL_CAPACITY: usize = 128;
@@ -61,8 +62,8 @@ pub fn start_worker(
     storage: StorageBackend,
     namespace: Option<String>,
     options: WorkerOptions,
-    callback: ThreadsafeFunction<JsTaskInvocation, ErrorStrategy::Fatal>,
-    outcome_callback: ThreadsafeFunction<JsOutcome, ErrorStrategy::Fatal>,
+    callback: TaskCallback,
+    outcome_callback: OutcomeCallback,
 ) -> Result<JsWorker> {
     let queues = options
         .queues
@@ -174,8 +175,15 @@ pub fn start_worker(
                 worker_id.clone(),
                 build_mesh_config(mesh_cfg),
             ));
-            let gossip = mesh_node.spawn_gossip(mesh_queues, capacity as u16);
-            let steal_server = mesh_node.spawn_steal_server();
+            // Both spawns call `tokio::spawn` internally, and we are on the JS
+            // thread, which carries no ambient runtime context — enter the napi
+            // runtime first or the spawn panics and aborts the process.
+            let (gossip, steal_server) = within_runtime_if_available(|| {
+                (
+                    mesh_node.spawn_gossip(mesh_queues, capacity as u16),
+                    mesh_node.spawn_steal_server(),
+                )
+            });
             let bridge_scheduler = scheduler.clone();
             let bridge_node = mesh_node.clone();
             spawn(async move {
