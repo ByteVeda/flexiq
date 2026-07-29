@@ -6,17 +6,18 @@
 use std::sync::Arc;
 
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
 use taskito_core::worker::WorkerDispatcher;
 use taskito_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use tokio::sync::Notify;
 
 use crate::config::WorkerOptions;
-use crate::convert::{outcome_to_js, JsOutcome, JsTaskInvocation};
-use crate::dispatcher::NodeDispatcher;
+use crate::convert::outcome_to_js;
+use crate::dispatcher::{NodeDispatcher, TaskCallback};
 #[cfg(feature = "mesh")]
 use crate::error::invalid_arg;
+use crate::queue::OutcomeCallback;
 
 const DEFAULT_QUEUE: &str = "default";
 const DEFAULT_CHANNEL_CAPACITY: usize = 128;
@@ -61,8 +62,8 @@ pub fn start_worker(
     storage: StorageBackend,
     namespace: Option<String>,
     options: WorkerOptions,
-    callback: ThreadsafeFunction<JsTaskInvocation, ErrorStrategy::Fatal>,
-    outcome_callback: ThreadsafeFunction<JsOutcome, ErrorStrategy::Fatal>,
+    callback: TaskCallback,
+    outcome_callback: OutcomeCallback,
 ) -> Result<JsWorker> {
     let queues = options
         .queues

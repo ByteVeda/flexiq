@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
-use napi::bindgen_prelude::{spawn, spawn_blocking, Buffer, Promise};
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::bindgen_prelude::{spawn, spawn_blocking, Buffer, Promise, Status};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::Env;
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
 use taskito_core::worker::WorkerDispatcher;
@@ -20,11 +21,16 @@ use tokio::sync::{oneshot, Semaphore};
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
 
 /// Task callback registered from JS: `(invocation) => Promise<JsTaskOutcome>`.
-type TaskCallback = ThreadsafeFunction<JsTaskInvocation, ErrorStrategy::Fatal>;
+/// `false` is napi's `CalleeHandled` flag — the JS side is called with the bare
+/// invocation rather than a `(err, value)` pair.
+pub type TaskCallback =
+    ThreadsafeFunction<JsTaskInvocation, Promise<JsTaskOutcome>, JsTaskInvocation, Status, false>;
 
 /// Executes jobs by dispatching them to a JavaScript callback.
 pub struct NodeDispatcher {
-    callback: TaskCallback,
+    /// `Arc` because napi 3's `ThreadsafeFunction` is not `Clone` — every
+    /// spawned job needs its own handle to the same callback.
+    callback: Arc<TaskCallback>,
     storage: StorageBackend,
     /// Caps jobs running at once. Without it the loop spawns every job it is
     /// handed and immediately takes the next, so nothing bounds concurrency.
@@ -47,7 +53,7 @@ impl NodeDispatcher {
             .map(|c| c.max(1))
             .unwrap_or(Semaphore::MAX_PERMITS);
         Self {
-            callback,
+            callback: Arc::new(callback),
             storage,
             concurrency: Arc::new(Semaphore::new(permits)),
         }
@@ -116,9 +122,14 @@ async fn run_one(callback: &TaskCallback, storage: &StorageBackend, mut job: Job
     callback.call_with_return_value(
         invocation,
         ThreadsafeFunctionCallMode::NonBlocking,
-        move |promise: Promise<JsTaskOutcome>| {
+        // napi 3 hands the callback a `Result`: a JS task that throws before it
+        // can resolve an outcome arrives here as `Err` instead of aborting.
+        move |promise: napi::Result<Promise<JsTaskOutcome>>, _env: Env| {
             spawn(async move {
-                let outcome = promise.await.map(TaskOutcome::from);
+                let outcome = match promise {
+                    Ok(promise) => promise.await.map(TaskOutcome::from),
+                    Err(err) => Err(err),
+                };
                 let _ = tx.send(outcome);
             });
             Ok(())
