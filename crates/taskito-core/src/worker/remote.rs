@@ -67,6 +67,10 @@ pub enum AttachError {
     /// Another executor is already attached under this id.
     #[error("executor {0} is already attached")]
     DuplicateId(String),
+
+    /// The dispatcher is shutting down and accepts no new executors.
+    #[error("dispatcher is shutting down")]
+    ShuttingDown,
 }
 
 /// A snapshot of one attached executor.
@@ -245,6 +249,9 @@ impl Shared {
     /// Handshake and register. The ack is sent even when the version is
     /// rejected, so both ends log both versions instead of one side guessing.
     fn attach(self: &Arc<Self>, transport: Box<dyn Transport>) -> Result<String, AttachError> {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return Err(AttachError::ShuttingDown);
+        }
         let peer = transport.peer();
         let (read, write, connection) = transport.split()?;
         let mut reader = FrameReader::new(read);
@@ -301,6 +308,12 @@ impl Shared {
 
         {
             let mut executors = self.executors.lock().unwrap_or_else(recover);
+            // Re-check under the registry lock: `drain_and_close` empties this
+            // map, so an attach racing it would leave an executor nobody ever
+            // shuts down or joins.
+            if self.shutdown.load(Ordering::SeqCst) {
+                return Err(AttachError::ShuttingDown);
+            }
             if executors.contains_key(&executor_id) {
                 return Err(AttachError::DuplicateId(executor_id));
             }

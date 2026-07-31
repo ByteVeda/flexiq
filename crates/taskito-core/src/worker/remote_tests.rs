@@ -503,6 +503,27 @@ fn a_dropped_executor_leaves_its_job_for_the_scheduler_to_recover() {
 }
 
 #[test]
+fn attach_is_refused_once_shutdown_has_started() {
+    // An executor attaching after `drain_and_close` drained the registry would
+    // never be told to stop and never be joined — a leaked reader thread.
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+    WorkerDispatcher::shutdown(&dispatcher);
+
+    let (_executor, attached) = FakeExecutor::attach_with_version(
+        &dispatcher,
+        "exec-late",
+        &["resize"],
+        1,
+        PROTOCOL_VERSION,
+    );
+    assert!(matches!(
+        attached.expect_err("attach must be refused during shutdown"),
+        AttachError::ShuttingDown
+    ));
+    assert!(dispatcher.executors().is_empty());
+}
+
+#[test]
 fn an_idle_executor_outlives_the_handshake_budget() {
     // Regression: the handshake read timeout used to leak onto the attached
     // connection, so every executor was dropped once it idled past it.
