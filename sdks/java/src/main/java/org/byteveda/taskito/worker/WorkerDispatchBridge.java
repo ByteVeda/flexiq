@@ -38,7 +38,12 @@ final class WorkerDispatchBridge implements WorkerBridge {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<Map<String, Object>>() {};
 
-    private final QueueBackend backend;
+    /**
+     * Absent for an attached executor, which reads no storage: job metadata is
+     * then unavailable to middleware, and the toggle list is empty.
+     */
+    private final @Nullable QueueBackend backend;
+
     private final Map<String, RegisteredTask> handlers;
     private final Serializer serializer;
     private final ExecutorService executor;
@@ -51,7 +56,7 @@ final class WorkerDispatchBridge implements WorkerBridge {
     private final CompletableFuture<WorkerControl> control = new CompletableFuture<>();
 
     WorkerDispatchBridge(
-            QueueBackend backend,
+            @Nullable QueueBackend backend,
             Map<String, RegisteredTask> handlers,
             Serializer serializer,
             ExecutorService executor,
@@ -188,6 +193,9 @@ final class WorkerDispatchBridge implements WorkerBridge {
 
     /** Lazily load a job's metadata blob into a map (empty on absence/parse failure). */
     private Map<String, Object> loadMetadata(String jobId) {
+        if (backend == null) {
+            return Collections.emptyMap();
+        }
         try {
             JsonNode view = backend.getJobJson(jobId)
                     .map(WorkerDispatchBridge::readTree)

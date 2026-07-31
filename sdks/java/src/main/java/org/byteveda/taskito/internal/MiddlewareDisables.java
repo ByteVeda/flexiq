@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.byteveda.taskito.logging.TaskitoLogger;
 import org.byteveda.taskito.middleware.Middleware;
 import org.byteveda.taskito.spi.QueueBackend;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Per-task middleware disable list, persisted under
@@ -26,9 +27,14 @@ public final class MiddlewareDisables {
 
     private static final String KEY_PREFIX = "middleware:disabled:";
 
-    private final QueueBackend backend;
+    /**
+     * Absent for an attached executor, which has no storage to read toggles
+     * from; nothing is then disabled, which is the same answer an unconfigured
+     * queue gives.
+     */
+    private final @Nullable QueueBackend backend;
 
-    public MiddlewareDisables(QueueBackend backend) {
+    public MiddlewareDisables(@Nullable QueueBackend backend) {
         this.backend = backend;
     }
 
@@ -48,6 +54,9 @@ public final class MiddlewareDisables {
 
     /** Names disabled for {@code taskName}; empty when none are, or the list is unreadable. */
     public List<String> disabledFor(String taskName) {
+        if (backend == null) {
+            return List.of();
+        }
         Optional<String> raw = backend.getSetting(key(taskName));
         if (raw.isEmpty()) {
             return List.of();
