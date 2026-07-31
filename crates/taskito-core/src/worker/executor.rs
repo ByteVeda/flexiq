@@ -298,12 +298,16 @@ pub struct ExecutorSession {
 }
 
 impl ExecutorSession {
-    /// Whether the scheduler session is still open.
+    /// Whether this executor is still accepting work.
+    ///
+    /// False once the session ends *or* a local drain starts: a caller parked
+    /// in [`ExecutorSession::wait`] has to be released by its own `stop()` too,
+    /// and after a drain there is nothing left to wait for.
     pub fn is_running(&self) -> bool {
         !self.shared.session_over.load(Ordering::Acquire)
     }
 
-    /// Block until the scheduler ends the session. Does not drain or join —
+    /// Block until this executor stops accepting work. Does not drain or join —
     /// that is [`ExecutorHandle::shutdown`]'s job.
     pub fn wait(&self) {
         while self.is_running() {
@@ -325,12 +329,12 @@ impl ExecutorHandle {
         }
     }
 
-    /// Whether the scheduler session is still open.
+    /// Whether this executor is still accepting work.
     pub fn is_running(&self) -> bool {
         !self.shared.session_over.load(Ordering::Acquire)
     }
 
-    /// Block until the scheduler ends the session, then drain and join.
+    /// Block until this executor stops accepting work, then drain and join.
     pub fn wait(self) {
         while self.is_running() {
             thread::sleep(POLL);
@@ -427,7 +431,8 @@ struct Shared {
     in_flight: AtomicU32,
     /// Set once no further jobs will be accepted.
     draining: AtomicBool,
-    /// Set when the reader's conversation with the scheduler has ended.
+    /// Set when this executor stops accepting work — the reader's conversation
+    /// ending, or a local drain.
     session_over: AtomicBool,
     /// Set once every result the pool produced has been written.
     results_flushed: AtomicBool,
@@ -474,6 +479,9 @@ impl Shared {
         self.free_slots.store(0, Ordering::Relaxed);
         self.send(&ExecutorMessage::Heartbeat { free_slots: 0 }, &[]);
         self.job_tx.lock().unwrap_or_else(recover).take();
+        // Release anyone parked in `wait`: the reader is still blocked on a read
+        // only the scheduler could satisfy, so nothing else would wake them.
+        self.session_over.store(true, Ordering::Release);
         log::info!(
             "[taskito] executor {} draining; no further jobs will be accepted",
             self.executor_id

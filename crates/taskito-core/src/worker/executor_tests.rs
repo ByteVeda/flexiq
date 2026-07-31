@@ -930,6 +930,34 @@ fn shutdown_is_bounded_when_a_job_never_finishes() {
 }
 
 #[test]
+fn a_local_stop_releases_a_parked_waiter() {
+    // Regression: `stop()` cannot unpark the reader, which is blocked on a read
+    // only the scheduler could satisfy. If the session were only ended by the
+    // reader, a shell that called `stop()` from a signal handler and then waited
+    // would hang forever instead of shutting down.
+    let (_scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+    let session = handle.session();
+    assert!(session.is_running());
+
+    let waiting = thread::spawn(move || session.wait());
+    thread::sleep(Duration::from_millis(50));
+    assert!(!waiting.is_finished(), "the waiter must park while running");
+
+    handle.stop();
+
+    let deadline = Instant::now() + SETTLE;
+    while !waiting.is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "stop() never released the waiter"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    waiting.join().expect("waiter thread");
+    handle.shutdown();
+}
+
+#[test]
 fn wait_timeout_reports_a_session_that_is_still_open() {
     let attached = attach(&["resize"], 1);
 
