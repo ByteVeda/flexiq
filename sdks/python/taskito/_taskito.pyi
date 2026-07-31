@@ -578,3 +578,6 @@ def _init_rust_logging() -> None:
 def reserved_setting_prefixes() -> list[str]:
     """Settings-key prefixes the dashboard's generic KV surface must hide."""
     ...
+
+WORKER_PROTOCOL_VERSION: int
+"""Frame-format version an executor must announce to attach."""

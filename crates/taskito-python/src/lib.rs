@@ -43,6 +43,11 @@ fn reserved_setting_prefixes() -> Vec<String> {
 fn _taskito(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_init_rust_logging, m)?)?;
     m.add_function(wrap_pyfunction!(reserved_setting_prefixes, m)?)?;
+    // Sourced from the core so the executor side never mirrors the literal.
+    m.add(
+        "WORKER_PROTOCOL_VERSION",
+        taskito_core::worker::protocol::PROTOCOL_VERSION,
+    )?;
     m.add_class::<PyQueue>()?;
     m.add_class::<PyJob>()?;
     m.add_class::<PyTaskConfig>()?;

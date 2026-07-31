@@ -2579,7 +2579,6 @@ name = "taskito-python"
 version = "0.21.0"
 dependencies = [
  "async-trait",
- "base64 0.23.0",
  "crossbeam-channel",
  "gethostname",
  "log",

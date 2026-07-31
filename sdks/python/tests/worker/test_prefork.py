@@ -209,6 +209,31 @@ def test_prefork_no_timeout_unaffected(timeout_app: object) -> None:
 
 
 @prefork_unix_only
+def test_prefork_round_trips_binary_payloads(timeout_app: object) -> None:
+    """Frames carry payloads as raw bytes after the header line, so a payload
+    containing newlines must not desync the stream in either direction."""
+    queue: Queue = timeout_app.queue  # type: ignore[attr-defined]
+
+    blob = b'\n{"type":"success"}\n\x00\xff\n'
+    job = timeout_app.echo_bytes.delay(blob)  # type: ignore[attr-defined]
+    _start_prefork_worker(queue)
+
+    assert job.result(timeout=15) == blob
+
+
+@prefork_unix_only
+def test_prefork_task_returning_none_completes(timeout_app: object) -> None:
+    """A result frame that declares no payload still completes the job."""
+    queue: Queue = timeout_app.queue  # type: ignore[attr-defined]
+
+    job = timeout_app.returns_nothing.delay()  # type: ignore[attr-defined]
+    _start_prefork_worker(queue)
+
+    assert _wait_for_terminal(job, timeout=15) == "complete"
+    assert job.result(timeout=5) is None
+
+
+@prefork_unix_only
 def test_prefork_finishes_before_deadline(timeout_app: object) -> None:
     """A task that completes well before its deadline returns normally — the
     watchdog only fires when the deadline is actually crossed."""

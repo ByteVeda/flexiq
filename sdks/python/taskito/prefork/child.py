@@ -3,21 +3,20 @@
 Each child is an independent Python interpreter that:
 1. Imports the app module and builds the task registry.
 2. Initializes resources (if any).
-3. Runs a stdin reader thread that demultiplexes ``job``, ``cancel``, and
-   ``shutdown`` messages from the parent. Jobs go on an internal queue;
+3. Completes the ``hello``/``hello_ack`` handshake with the parent.
+4. Runs a stdin reader thread that demultiplexes ``job``, ``cancel``, and
+   ``shutdown`` frames from the parent. Jobs go on an internal queue;
    cancels populate a local set that ``current_job.check_cancelled()`` reads
    via a registered hook.
-4. Pulls jobs off the internal queue on the main thread, executes them,
-   and writes JSON results to stdout.
+5. Pulls jobs off the internal queue on the main thread, executes them,
+   and writes result frames to stdout.
 
 Spawned by the Rust ``PreforkPool`` via ``python -m taskito.prefork <app_path>``.
 """
 
 from __future__ import annotations
 
-import base64
 import importlib
-import json
 import logging
 import os
 import queue as _queue_mod
@@ -28,6 +27,7 @@ import time
 import traceback
 from typing import Any
 
+from taskito import __version__
 from taskito.async_support.helpers import run_maybe_async
 from taskito.context import (
     _clear_context,
@@ -39,12 +39,17 @@ from taskito.context import (
 from taskito.exceptions import TaskCancelledError
 from taskito.log_config import silence_asyncio_pipe_noise
 from taskito.task_errors import encode_task_error
+from taskito.worker_protocol import (
+    WORKER_PROTOCOL_VERSION,
+    ProtocolError,
+    read_frame,
+    write_frame,
+)
 
 logger = logging.getLogger("taskito.prefork.child")
 
-# Sentinel pushed onto the internal job queue when the parent requests
-# shutdown so the main loop can terminate without polling.
-_SHUTDOWN_SENTINEL: dict[str, Any] = {"__shutdown__": True}
+# One job at a time per child: each is a whole interpreter.
+_SLOTS = 1
 
 
 def _import_queue(app_path: str) -> Any:
@@ -57,10 +62,39 @@ def _import_queue(app_path: str) -> Any:
     return queue
 
 
-def _write_message(msg: dict[str, Any]) -> None:
-    """Write a JSON message to stdout (one line, flushed)."""
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+def _write_message(header: dict[str, Any], payload: bytes = b"") -> None:
+    """Write one frame to the parent."""
+    write_frame(sys.stdout.buffer, header, payload)
+
+
+def _handshake(queue: Any) -> None:
+    """Announce what this child can run and check the parent speaks our version.
+
+    Runs before the stdin reader thread starts so the ack is not consumed by it.
+    """
+    _write_message(
+        {
+            "type": "hello",
+            "executor_id": f"prefork-{os.getpid()}",
+            "sdk": "python",
+            "version": __version__,
+            "tasks": sorted(queue._task_registry),
+            "slots": _SLOTS,
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+        }
+    )
+
+    ack, _ = read_frame(sys.stdin.buffer)
+    if ack.get("type") != "hello_ack":
+        raise ProtocolError(f"expected hello_ack, got {ack.get('type')!r}")
+
+    theirs = ack.get("protocol_version")
+    if theirs != WORKER_PROTOCOL_VERSION:
+        raise ProtocolError(
+            f"worker protocol mismatch: parent speaks {theirs}, "
+            f"we speak {WORKER_PROTOCOL_VERSION} — check TASKITO_PYTHON points "
+            f"at the interpreter holding the same taskito install"
+        )
 
 
 class _CancelSignal:
@@ -91,11 +125,11 @@ class _CancelSignal:
 def _execute_job(
     queue: Any,
     job: dict[str, Any],
-) -> dict[str, Any]:
-    """Execute a single job and return the result message."""
+    payload: bytes,
+) -> tuple[dict[str, Any], bytes]:
+    """Execute a single job and return its result frame and result payload."""
     task_name = job["task_name"]
     job_id = job["id"]
-    payload = base64.b64decode(job["payload"])
     retry_count = job.get("retry_count", 0)
     max_retries = job.get("max_retries", 3)
 
@@ -112,7 +146,7 @@ def _execute_job(
             "wall_time_ns": 0,
             "should_retry": False,
             "timed_out": False,
-        }
+        }, b""
 
     _set_context(job_id, task_name, retry_count, job.get("queue", "default"))
 
@@ -126,10 +160,10 @@ def _execute_job(
         return {
             "type": "success",
             "job_id": job_id,
-            "result": base64.b64encode(result_bytes).decode() if result_bytes else None,
+            "result_len": None if result_bytes is None else len(result_bytes),
             "task_name": task_name,
             "wall_time_ns": wall_time_ns,
-        }
+        }, result_bytes or b""
 
     except TaskCancelledError:
         wall_time_ns = time.monotonic_ns() - start_ns
@@ -138,7 +172,7 @@ def _execute_job(
             "job_id": job_id,
             "task_name": task_name,
             "wall_time_ns": wall_time_ns,
-        }
+        }, b""
 
     except Exception:
         wall_time_ns = time.monotonic_ns() - start_ns
@@ -170,53 +204,51 @@ def _execute_job(
             "wall_time_ns": wall_time_ns,
             "should_retry": should_retry,
             "timed_out": False,
-        }
+        }, b""
 
     finally:
         _clear_context()
 
 
 def _spawn_stdin_reader(
-    job_queue: _queue_mod.Queue[dict[str, Any]],
+    job_queue: _queue_mod.Queue[tuple[dict[str, Any], bytes] | None],
     cancels: _CancelSignal,
 ) -> threading.Thread:
-    """Run a background thread that demultiplexes parent → child messages.
+    """Run a background thread that demultiplexes parent → child frames.
 
     The main thread is blocked inside ``_execute_job`` while a job is
-    running, so reading stdin must happen elsewhere. This thread converts
-    the line-delimited JSON stream into queue items + cancel-set updates.
+    running, so reading stdin must happen elsewhere. This thread turns the
+    frame stream into queue items + cancel-set updates.
     """
 
     def reader() -> None:
         try:
-            for line in sys.stdin:
-                line = line.strip()
-                if not line:
-                    continue
+            while True:
                 try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError as e:
-                    logger.warning("invalid IPC message from parent: %s", e)
-                    continue
+                    msg, payload = read_frame(sys.stdin.buffer)
+                except ProtocolError as e:
+                    # A desynced stream cannot be resynchronised: the payload
+                    # boundary is lost, so every later frame would be garbage.
+                    logger.error("invalid frame from parent: %s", e)
+                    return
 
                 msg_type = msg.get("type")
                 if msg_type == "shutdown":
-                    job_queue.put(_SHUTDOWN_SENTINEL)
                     return
                 if msg_type == "job":
-                    job_queue.put(msg)
+                    job_queue.put((msg, payload))
                 elif msg_type == "cancel":
                     job_id = msg.get("job_id")
                     if isinstance(job_id, str):
                         cancels.request(job_id)
                 else:
-                    logger.warning("unknown IPC message type: %r", msg_type)
+                    logger.warning("unknown frame type from parent: %r", msg_type)
         except (BrokenPipeError, EOFError, KeyboardInterrupt):
             logger.debug("child stdin closed")
         finally:
-            # Ensure the main loop wakes up even if stdin closed without a
-            # shutdown message (e.g. the parent died).
-            job_queue.put(_SHUTDOWN_SENTINEL)
+            # Wake the main loop even if stdin closed without a shutdown
+            # frame (e.g. the parent died).
+            job_queue.put(None)
 
     thread = threading.Thread(target=reader, name="taskito-prefork-stdin", daemon=True)
     thread.start()
@@ -264,21 +296,23 @@ def main() -> None:
     if runtime is not None:
         runtime.initialize()
 
-    job_queue: _queue_mod.Queue[dict[str, Any]] = _queue_mod.Queue()
+    _handshake(queue)
+
+    job_queue: _queue_mod.Queue[tuple[dict[str, Any], bytes] | None] = _queue_mod.Queue()
     cancels = _CancelSignal()
     set_local_cancel_check(cancels.is_requested)
     _spawn_stdin_reader(job_queue, cancels)
 
-    _write_message({"type": "ready"})
     logger.info("child ready (app=%s, pid=%d)", app_path, os.getpid())
 
     try:
         while True:
-            msg = job_queue.get()
-            if msg is _SHUTDOWN_SENTINEL:
+            item = job_queue.get()
+            if item is None:
                 break
-            result = _execute_job(queue, msg)
-            _write_message(result)
+            job, payload = item
+            result, result_payload = _execute_job(queue, job, payload)
+            _write_message(result, result_payload)
             # Drop the cancel marker once the result is written so a future
             # job with the same ID (extremely unlikely, but possible across
             # ID-reuse boundaries) does not auto-cancel.

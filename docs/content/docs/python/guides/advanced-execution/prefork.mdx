@@ -54,8 +54,8 @@ defaults to `thread`, while Celery defaults to `prefork`.
 />
 
 1. The Rust scheduler dequeues jobs from storage
-2. `PreforkPool` serializes each job as JSON and writes it to the least-loaded child's stdin pipe
-3. Each child deserializes the job, executes the task wrapper (with middleware, resources, proxies), and writes the result as JSON to stdout
+2. `PreforkPool` frames each job as a JSON header line followed by the task payload's raw bytes, and writes it to the least-loaded child's stdin pipe
+3. Each child decodes the frame, executes the task wrapper (with middleware, resources, proxies), and writes the result back as the same kind of frame on stdout
 4. Reader threads parse results and feed them back to the scheduler
 5. The scheduler updates job status in storage
 

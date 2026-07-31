@@ -1,62 +1,29 @@
 //! Child process handle — spawn, write jobs, read results.
 //!
-//! A child is split into two halves after spawning:
-//! - `ChildWriter`: sends jobs to the child's stdin (owned by dispatch thread)
-//! - `ChildReader`: reads results from the child's stdout (owned by reader thread)
+//! A child is split into three halves after spawning:
+//! - `ChildWriter`: sends frames to the child's stdin (owned by dispatch thread)
+//! - `ChildReader`: reads frames from the child's stdout (owned by reader thread)
 //! - `ChildProcess`: holds the process handle for lifecycle management
+//!
+//! The frames themselves are the shared worker protocol, so a pipe child and a
+//! socket-attached executor speak the same wire format.
 
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::BufReader;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use super::protocol::{ChildMessage, ParentMessage};
+use taskito_core::worker::protocol::{
+    ExecutorMessage, FrameReader, FrameWriter, SchedulerMessage, PROTOCOL_VERSION,
+};
 
-/// Writer half — sends job messages to the child process via stdin.
-pub struct ChildWriter {
-    writer: BufWriter<ChildStdin>,
-}
+/// Identity this pool announces in `hello_ack`. Informational — it only ever
+/// reaches the child's logs.
+const SCHEDULER_ID: &str = "prefork";
 
-impl ChildWriter {
-    /// Send a message to the child process.
-    pub fn send(&mut self, msg: &ParentMessage) -> std::io::Result<()> {
-        let json = serde_json::to_string(msg)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-        self.writer.write_all(json.as_bytes())?;
-        self.writer.write_all(b"\n")?;
-        self.writer.flush()
-    }
+/// Writer half — sends frames to the child process via stdin.
+pub type ChildWriter = FrameWriter<ChildStdin>;
 
-    /// Send a shutdown message. Errors are silently ignored (child may already be gone).
-    pub fn send_shutdown(&mut self) {
-        let _ = self.send(&ParentMessage::Shutdown);
-    }
-
-    /// Send a cooperative-cancel request for `job_id`. Returns the underlying
-    /// I/O error if the pipe is broken so the caller can decide whether to
-    /// retry or drop the request.
-    pub fn send_cancel(&mut self, job_id: &str) -> std::io::Result<()> {
-        self.send(&ParentMessage::Cancel {
-            job_id: job_id.to_string(),
-        })
-    }
-}
-
-/// Reader half — reads result messages from the child process via stdout.
-pub struct ChildReader {
-    reader: BufReader<ChildStdout>,
-}
-
-impl ChildReader {
-    /// Read one message from the child's stdout. Blocks until a line is available.
-    pub fn read(&mut self) -> Result<ChildMessage, String> {
-        let mut line = String::new();
-        match self.reader.read_line(&mut line) {
-            Ok(0) => Err("child process closed stdout".into()),
-            Ok(_) => serde_json::from_str(&line)
-                .map_err(|e| format!("failed to parse child message: {e}")),
-            Err(e) => Err(format!("failed to read from child stdout: {e}")),
-        }
-    }
-}
+/// Reader half — reads frames from the child process via stdout.
+pub type ChildReader = FrameReader<BufReader<ChildStdout>>;
 
 /// Process handle for lifecycle management.
 pub struct ChildProcess {
@@ -99,9 +66,12 @@ impl ChildProcess {
     }
 }
 
-/// Spawn a child worker process and wait for its `ready` signal.
+/// Spawn a child worker process and complete the `hello`/`hello_ack` handshake.
 ///
-/// Returns the three split halves: writer, reader, and process handle.
+/// Returns the three split halves: writer, reader, and process handle. The ack
+/// is sent even on a version mismatch so both sides can log both versions —
+/// `TASKITO_PYTHON` lets the child run from a different interpreter, so a
+/// mismatched taskito install is reachable in practice.
 pub fn spawn_child(
     python: &str,
     app_path: &str,
@@ -117,26 +87,36 @@ pub fn spawn_child(
     let stdin = process.stdin.take().expect("stdin should be piped");
     let stdout = process.stdout.take().expect("stdout should be piped");
 
-    let mut reader = ChildReader {
-        reader: BufReader::new(stdout),
+    let mut reader = ChildReader::new(BufReader::new(stdout));
+    let mut writer = ChildWriter::new(stdin);
+
+    let hello = reader
+        .read::<ExecutorMessage>()
+        .map_err(|e| format!("child handshake failed: {e}"))?
+        .0;
+    let ExecutorMessage::Hello {
+        sdk,
+        version,
+        protocol_version,
+        ..
+    } = hello
+    else {
+        return Err("child sent a non-hello frame before the handshake completed".into());
     };
 
-    // Wait for ready signal
-    match reader.read()? {
-        ChildMessage::Ready => {}
-        other => {
-            return Err(format!(
-                "expected ready message, got: {:?}",
-                std::any::type_name_of_val(&other)
-            ));
-        }
+    writer
+        .write_header(&SchedulerMessage::HelloAck {
+            scheduler_id: SCHEDULER_ID.to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        })
+        .map_err(|e| format!("failed to acknowledge child handshake: {e}"))?;
+
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(format!(
+            "child speaks worker protocol {protocol_version}, we speak {PROTOCOL_VERSION} \
+             (child is {sdk} {version}; check TASKITO_PYTHON points at the same install)"
+        ));
     }
 
-    Ok((
-        ChildWriter {
-            writer: BufWriter::new(stdin),
-        },
-        reader,
-        ChildProcess { process },
-    ))
+    Ok((writer, reader, ChildProcess { process }))
 }
