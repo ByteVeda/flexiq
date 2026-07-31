@@ -1,8 +1,10 @@
 pub mod dispatcher;
+pub mod protocol;
 pub mod registry;
 pub mod runner;
 
 pub use dispatcher::NativeDispatcher;
+pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use runner::{Worker, WorkerHandle};
 
