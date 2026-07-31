@@ -24,6 +24,7 @@ import {
   TaskitoError,
 } from "./errors";
 import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
+import { Executor, type ExecutorRunOptions } from "./executor";
 import {
   type Interception,
   type InterceptionAnalysis,
@@ -1640,6 +1641,31 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     });
     this.liveWorkers.add(worker);
     return worker;
+  }
+
+  /**
+   * Attach to a detached scheduler and run its jobs in this process.
+   *
+   * The inverse of {@link Queue.runWorker}: the scheduler holds the database
+   * connection and dispatches over a socket, so this process runs task bodies
+   * without polling storage itself. Hold the returned {@link Executor}.
+   */
+  runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
+    const disables = new MiddlewareDisableStore(this.native);
+    return Executor.start(this.native, {
+      tasks: this.tasks,
+      serializer: this.serializer,
+      codecs: this.codecs,
+      middlewareFor: (taskName) => {
+        const disabled = disables.getFor(taskName);
+        return disabled.length === 0
+          ? this.middleware
+          : this.middleware.filter((mw, index) => !disabled.includes(middlewareKey(mw, index)));
+      },
+      emitter: this.emitter,
+      resources: this.resources,
+      run: options,
+    });
   }
 
   /**
