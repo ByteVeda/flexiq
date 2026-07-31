@@ -39,37 +39,57 @@ pub struct UnsafeWebhookUrl(String);
 /// time: a guard whose behaviour depends on a process-global read is one whose
 /// behaviour changes underneath a running server.
 pub fn validate_webhook_url(url: &str, allow_private: bool) -> Result<(), UnsafeWebhookUrl> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| refuse("URL must include a scheme, http or https"))?;
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+    // Parsed with the same parser the request will use. A hand-rolled split can
+    // disagree with it about where the host ends, and a guard that inspects one
+    // host while the client dials another is not a guard at all.
+    let parsed =
+        reqwest::Url::parse(url).map_err(|error| refuse(format!("URL is not usable: {error}")))?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err(refuse(format!(
-            "URL scheme must be http or https, got '{scheme}'"
+            "URL scheme must be http or https, got '{}'",
+            parsed.scheme()
         )));
     }
+    let host = parsed
+        .host()
+        .ok_or_else(|| refuse("URL must include a hostname"))?;
 
-    let host = hostname(rest).ok_or_else(|| refuse("URL must include a hostname"))?;
     if allow_private {
         return Ok(());
     }
 
-    let lowered = host.to_ascii_lowercase();
-    if BLOCKED_HOSTNAMES.contains(&lowered.as_str())
-        || BLOCKED_SUFFIXES
-            .iter()
-            .any(|suffix| lowered.ends_with(suffix))
+    // `Url::host` already separates a literal address from a name, so the two
+    // cases cannot be confused by anything in the authority.
+    let name = match host {
+        url::Host::Ipv4(address) => {
+            return refuse_if_private(IpAddr::V4(address), &address.to_string())
+        }
+        url::Host::Ipv6(address) => {
+            return refuse_if_private(IpAddr::V6(address), &address.to_string())
+        }
+        url::Host::Domain(name) => name.to_ascii_lowercase(),
+    };
+
+    if BLOCKED_HOSTNAMES.contains(&name.as_str())
+        || BLOCKED_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
     {
         return Err(refuse(format!(
-            "URL host '{host}' resolves to a private network"
+            "URL host '{name}' resolves to a private network"
         )));
     }
 
-    for address in resolve(&lowered)? {
-        if is_private(address) {
-            return Err(refuse(format!(
-                "URL host '{host}' resolves to private address {address}"
-            )));
-        }
+    for address in resolve(&name)? {
+        refuse_if_private(address, &name)?;
+    }
+    Ok(())
+}
+
+fn refuse_if_private(address: IpAddr, host: &str) -> Result<(), UnsafeWebhookUrl> {
+    if is_private(address) {
+        return Err(refuse(format!(
+            "URL host '{host}' resolves to private address {address}"
+        )));
     }
     Ok(())
 }
@@ -83,24 +103,6 @@ pub fn is_safe_redirect(path: Option<&str>) -> bool {
         return false;
     };
     path.starts_with('/') && !path.starts_with("//") && !path.starts_with("/\\")
-}
-
-/// Host portion of everything after `scheme://`, without userinfo or port.
-fn hostname(rest: &str) -> Option<String> {
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .filter(|value| !value.is_empty())?;
-    // Userinfo can itself contain an `@`, so the host is after the last one.
-    let host_port = authority.rsplit('@').next()?;
-
-    let host = if let Some(end) = host_port.strip_prefix('[') {
-        // IPv6 literal: `[::1]:8080`.
-        end.split(']').next()?.to_string()
-    } else {
-        host_port.split(':').next()?.to_string()
-    };
-    (!host.is_empty()).then_some(host)
 }
 
 /// Literal IPs are checked as written; names are resolved first.
@@ -220,16 +222,16 @@ mod tests {
     }
 
     #[test]
-    fn hostnames_are_extracted_from_full_urls() {
-        assert_eq!(
-            hostname("user:pw@example.com:8443/x?y=1").as_deref(),
-            Some("example.com")
+    fn the_authority_is_read_the_way_the_client_reads_it() {
+        // Userinfo containing something host-shaped must not be mistaken for
+        // the host: the request would go to example.com either way.
+        validate_webhook_url("https://127.0.0.1@93.184.216.34/hook", false)
+            .expect("the host is the public address, not the userinfo");
+        assert!(
+            validate_webhook_url("https://93.184.216.34@127.0.0.1/hook", false).is_err(),
+            "and the reverse must be refused"
         );
-        assert_eq!(
-            hostname("[2001:4860:4860::8888]:443/x").as_deref(),
-            Some("2001:4860:4860::8888")
-        );
-        assert_eq!(hostname("/just-a-path"), None);
+        assert!(validate_webhook_url("https:///no-host", false).is_err());
     }
 
     #[test]
