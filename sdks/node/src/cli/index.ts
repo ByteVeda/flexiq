@@ -9,6 +9,7 @@ import {
   registerDashboard,
   registerDlq,
   registerEnqueue,
+  registerExecutor,
   registerJobs,
   registerQueues,
   registerRun,
@@ -38,6 +39,7 @@ registerCancel(program);
 registerQueues(program);
 registerDlq(program);
 registerRun(program);
+registerExecutor(program);
 registerDashboard(program);
 registerScaler(program);
 registerAutoscale(program);
