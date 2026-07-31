@@ -47,7 +47,7 @@ pub use storage::StorageBackend;
 pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, ExecutorClient, ExecutorConfig,
-    ExecutorError, ExecutorHandle, ExecutorMessage, NativeDispatcher, ProtocolError, RemoteConfig,
-    RemoteDispatcher, SchedulerMessage, Secret, TaskError, TaskRegistry, TaskResult, Transport,
-    Worker, WorkerDispatcher, WorkerHandle, PROTOCOL_VERSION,
+    ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession, NativeDispatcher,
+    ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret, TaskError,
+    TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, PROTOCOL_VERSION,
 };

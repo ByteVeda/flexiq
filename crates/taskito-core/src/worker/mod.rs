@@ -13,7 +13,9 @@ pub use auth::Secret;
 pub use cancel::CancelSignals;
 pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
-pub use executor::{ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle};
+pub use executor::{
+    ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
+};
 pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};

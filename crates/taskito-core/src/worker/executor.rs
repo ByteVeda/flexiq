@@ -287,10 +287,42 @@ pub struct ExecutorHandle {
     threads: Vec<JoinHandle<()>>,
 }
 
+/// A cheap, cloneable view of whether an executor's session is still open.
+///
+/// [`ExecutorHandle::wait`] consumes the handle, which a shell that needs to
+/// observe the session from elsewhere — an async runtime resolving a promise,
+/// say — cannot do while it also holds the handle to shut it down.
+#[derive(Clone)]
+pub struct ExecutorSession {
+    shared: Arc<Shared>,
+}
+
+impl ExecutorSession {
+    /// Whether the scheduler session is still open.
+    pub fn is_running(&self) -> bool {
+        !self.shared.session_over.load(Ordering::Acquire)
+    }
+
+    /// Block until the scheduler ends the session. Does not drain or join —
+    /// that is [`ExecutorHandle::shutdown`]'s job.
+    pub fn wait(&self) {
+        while self.is_running() {
+            thread::sleep(POLL);
+        }
+    }
+}
+
 impl ExecutorHandle {
     /// Id this executor attached under.
     pub fn executor_id(&self) -> &str {
         &self.shared.executor_id
+    }
+
+    /// A view another thread can watch the session through.
+    pub fn session(&self) -> ExecutorSession {
+        ExecutorSession {
+            shared: self.shared.clone(),
+        }
     }
 
     /// Whether the scheduler session is still open.
