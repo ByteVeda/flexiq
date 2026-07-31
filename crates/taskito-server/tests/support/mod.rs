@@ -4,6 +4,8 @@
 //! one of them read as dead code in the others.
 #![allow(dead_code)]
 
+pub mod oidc_issuer;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
