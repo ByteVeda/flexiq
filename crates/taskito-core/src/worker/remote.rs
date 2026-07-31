@@ -420,6 +420,11 @@ impl Shared {
                 Placement::Unadvertised => "no attached executor advertises it",
             };
 
+            if self.shutdown.load(Ordering::Relaxed) {
+                self.fail_unplaceable(&job, "the dispatcher is shutting down");
+                return;
+            }
+
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() || tokio::time::timeout(remaining, changed).await.is_err() {
                 self.fail_unplaceable(&job, reason);
