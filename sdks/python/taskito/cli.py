@@ -14,6 +14,7 @@ from taskito._taskito import Executor as _Executor
 from taskito.app import Queue
 from taskito.autoscale import AutoscaleConfig, serve_autoscaler
 from taskito.dashboard import serve_dashboard
+from taskito.detached import DETACHED_ENV
 from taskito.log_config import configure as configure_logging
 from taskito.scaler import serve_scaler
 
@@ -355,6 +356,12 @@ def run_executor(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     slots = _executor_slots(args.slots)
+
+    # Set before the app is imported: building a Queue is what opens storage,
+    # and an executor must not. Inherited by the prefork children, which import
+    # the same app module in their own interpreters.
+    os.environ[DETACHED_ENV] = "1"
+
     queue = _load_queue(args.app)
     tasks = sorted(queue._task_registry)
 
