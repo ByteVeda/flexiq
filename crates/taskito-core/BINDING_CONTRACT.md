@@ -68,7 +68,7 @@ handler-binding model.
 ## Dispatch call sequence
 1. Shell constructs `Storage` (SQLite default; `postgres`/`redis` features) — `storage/traits.rs`.
 2. Shell constructs `Scheduler::new(storage, queues, SchedulerConfig, namespace)` — `scheduler/mod.rs`.
-3. Shell implements `WorkerDispatcher` — `worker.rs`.
+3. Shell implements `WorkerDispatcher` — `worker/mod.rs`.
 4. `Scheduler.run(job_tx)` polls + claims jobs and sends each `Job` over a
    `tokio::sync::mpsc::Sender<Job>` — `scheduler/poller.rs`, `scheduler/mod.rs`.
 5. `WorkerDispatcher::run(job_rx, result_tx)` receives the `Job`, deserializes
@@ -86,7 +86,7 @@ Scheduler.handle_result ─▶ ResultOutcome ─▶ shell emits events / middlew
 ```
 
 ## What a shell MUST implement
-### `WorkerDispatcher` — `worker.rs`
+### `WorkerDispatcher` — `worker/mod.rs`
 | Method | Signature | Required |
 |--------|-----------|----------|
 | `run` | `async fn run(&self, job_rx: tokio::sync::mpsc::Receiver<Job>, result_tx: crossbeam_channel::Sender<JobResult>)` | yes |
