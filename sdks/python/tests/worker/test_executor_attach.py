@@ -40,6 +40,7 @@ APP_PATH = "attach_app:queue"
 ECHO = "attach_app.echo"
 BOOM = "attach_app.boom"
 SLOW = "attach_app.slow"
+REPORTS = "attach_app.reports"
 
 # Generous: a cold subprocess import of the app plus a prefork child spawn.
 ATTACH_TIMEOUT = 60.0
@@ -477,5 +478,59 @@ def test_slots_run_jobs_concurrently(scheduler: FakeScheduler, tmp_path: Path) -
         release_tasks(markers)
         finished = {scheduler.next_result()[0]["job_id"] for _ in range(2)}
         assert finished == {"job-1", "job-2"}
+    finally:
+        terminate(process)
+
+
+def test_the_executor_opens_no_storage(scheduler: FakeScheduler, tmp_path: Path) -> None:
+    """The point of the attach split: app code without database credentials.
+
+    Pointed at a Postgres DSN nothing is listening on. An executor that opened
+    storage could not even start; one that does not never notices.
+    """
+    env = dict(os.environ)
+    env["TASKITO_PYTHON"] = sys.executable
+    env["TASKITO_ATTACH"] = f"127.0.0.1:{scheduler.port}"
+    env.pop("TASKITO_ATTACH_TOKEN", None)
+    # Port 1 on loopback is reserved and nothing listens there.
+    env["TASKITO_EXECUTOR_TEST_BACKEND"] = "postgres"
+    env["TASKITO_EXECUTOR_TEST_DB"] = "postgres://taskito:nope@127.0.0.1:1/absent"
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "taskito.cli", "executor", "--app", APP_PATH],
+        cwd=str(APP_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        hello = scheduler.accept()
+        assert set(hello["tasks"]) >= {ECHO, BOOM, SLOW}
+
+        # And it still runs jobs, on a prefork child that also opened nothing.
+        scheduler.send_job("job-1", ECHO, payload_for(ECHO, "detached"))
+        header, _ = scheduler.next_result()
+        assert header["type"] == "success", header
+    finally:
+        terminate(process)
+
+
+def test_progress_and_logs_degrade_rather_than_failing_the_job(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """A task calling `update_progress` must not fail for want of storage.
+
+    Losing the progress bar is a degradation; failing the job over it would be
+    a regression for anyone moving a worker to an executor.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept()
+        scheduler.send_job("job-1", REPORTS, payload_for(REPORTS))
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert header["job_id"] == "job-1"
     finally:
         terminate(process)

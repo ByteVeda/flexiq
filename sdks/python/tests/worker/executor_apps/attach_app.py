@@ -17,7 +17,15 @@ from pathlib import Path
 from taskito import Queue
 from taskito.context import current_job
 
-queue = Queue(db_path=os.environ.get("TASKITO_EXECUTOR_TEST_DB", "/tmp/taskito-executor.db"))
+# The backend is configurable so one test can point this at a database that
+# does not exist, proving an executor never connects to it.
+queue = Queue(
+    backend=os.environ.get("TASKITO_EXECUTOR_TEST_BACKEND", "sqlite"),
+    db_path=os.environ.get("TASKITO_EXECUTOR_TEST_DB", "/tmp/taskito-executor.db"),
+    db_url=os.environ.get("TASKITO_EXECUTOR_TEST_DB")
+    if os.environ.get("TASKITO_EXECUTOR_TEST_BACKEND")
+    else None,
+)
 
 
 def _markers() -> Path | None:
@@ -62,3 +70,16 @@ def slow(max_iters: int = 600) -> int:
             return completed
         time.sleep(0.05)
     return max_iters
+
+
+@queue.task(max_retries=0)
+def reports() -> str:
+    """Use the job-scoped conveniences that need storage in a worker.
+
+    On an executor there is none, so these degrade; the job must still finish.
+    """
+    current_job.update_progress(50)
+    current_job.log("halfway")
+    current_job.publish({"stage": "halfway"})
+    current_job.update_progress(100)
+    return "reported"
