@@ -1,0 +1,207 @@
+//! Environment-only configuration.
+//!
+//! The server takes no required flags: everything is read from the process
+//! environment so one image is configured entirely by the deployment. Parsing
+//! works over a plain map — `Config::from_env` collects the real environment,
+//! and tests build a map without touching global state.
+
+pub mod backend;
+pub mod dashboard;
+pub mod listen;
+
+use std::collections::HashMap;
+
+use anyhow::{bail, Context, Result};
+
+use crate::config::dashboard::DashboardConfig;
+use crate::config::listen::AttachListen;
+
+/// Environment variables as a lookup map.
+pub type Env = HashMap<String, String>;
+
+/// Fully validated server configuration.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Storage connection string.
+    pub dsn: String,
+    /// Explicit backend name, when the DSN scheme is not enough.
+    pub backend: Option<String>,
+    /// Tenant namespace the scheduler is scoped to.
+    pub namespace: Option<String>,
+    /// Queues the scheduler consumes.
+    pub queues: Vec<String>,
+    /// Dispatch concurrency. `None` sizes it from the capacity attached
+    /// executors advertise.
+    pub workers: Option<usize>,
+    /// Whether this process runs retention and cleanup.
+    pub maintenance: bool,
+    /// Where executors attach. `None` disables the listener.
+    pub attach: Option<AttachListen>,
+    /// Where the dashboard listens. `None` disables it.
+    pub dashboard: Option<DashboardConfig>,
+}
+
+impl Config {
+    /// Read and validate configuration from the process environment.
+    pub fn from_env() -> Result<Self> {
+        Self::from_map(&std::env::vars().collect())
+    }
+
+    /// Read and validate configuration from an explicit map.
+    pub fn from_map(env: &Env) -> Result<Self> {
+        let dsn = value(env, "TASKITO_DSN")
+            .context("TASKITO_DSN is required — the storage connection string")?;
+        let allow_insecure = flag(env, "TASKITO_ALLOW_INSECURE", false);
+
+        let config = Self {
+            dsn,
+            backend: value(env, "TASKITO_BACKEND"),
+            namespace: value(env, "TASKITO_NAMESPACE"),
+            queues: queues(env),
+            workers: usize_value(env, "TASKITO_WORKERS")?,
+            maintenance: flag(env, "TASKITO_MAINTENANCE", true),
+            attach: listen::from_env(env)?,
+            dashboard: dashboard::from_env(env, allow_insecure)?,
+        };
+
+        if config.attach.is_none() && config.dashboard.is_none() {
+            bail!(
+                "nothing to run: set TASKITO_LISTEN (executor attach), \
+                 TASKITO_DASHBOARD (dashboard), or both"
+            );
+        }
+        Ok(config)
+    }
+}
+
+/// A set environment variable, with surrounding whitespace trimmed. Empty
+/// values read as unset so `FOO=` in a compose file means "off".
+pub fn value(env: &Env, key: &str) -> Option<String> {
+    env.get(key)
+        .map(|raw| raw.trim().to_string())
+        .filter(|trimmed| !trimmed.is_empty())
+}
+
+/// A boolean variable. `1`/`true`/`on`/`yes` enable, `0`/`false`/`off`/`no`
+/// disable, anything else falls back to `default`.
+pub fn flag(env: &Env, key: &str, default: bool) -> bool {
+    match value(env, key) {
+        None => default,
+        Some(raw) => match raw.to_ascii_lowercase().as_str() {
+            "1" | "true" | "on" | "yes" => true,
+            "0" | "false" | "off" | "no" => false,
+            _ => default,
+        },
+    }
+}
+
+fn usize_value(env: &Env, key: &str) -> Result<Option<usize>> {
+    match value(env, key) {
+        None => Ok(None),
+        Some(raw) => {
+            let parsed: usize = raw
+                .parse()
+                .with_context(|| format!("{key} must be a positive integer, got '{raw}'"))?;
+            if parsed == 0 {
+                bail!("{key} must be greater than zero");
+            }
+            Ok(Some(parsed))
+        }
+    }
+}
+
+fn queues(env: &Env) -> Vec<String> {
+    match value(env, "TASKITO_QUEUES") {
+        None => vec!["default".to_string()],
+        Some(raw) => {
+            let parsed: Vec<String> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
+            if parsed.is_empty() {
+                vec!["default".to_string()]
+            } else {
+                parsed
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> Env {
+        pairs
+            .iter()
+            .map(|(key, val)| (key.to_string(), val.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn dsn_is_required() {
+        let error = Config::from_map(&env(&[("TASKITO_DASHBOARD", "127.0.0.1:8080")]))
+            .expect_err("must reject a missing DSN");
+        assert!(error.to_string().contains("TASKITO_DSN"));
+    }
+
+    #[test]
+    fn defaults_fill_in_around_the_dsn() {
+        let config = Config::from_map(&env(&[
+            ("TASKITO_DSN", ":memory:"),
+            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+        ]))
+        .expect("valid config");
+        assert_eq!(config.queues, vec!["default".to_string()]);
+        assert!(config.maintenance);
+        assert!(config.workers.is_none());
+        assert!(config.attach.is_none());
+    }
+
+    #[test]
+    fn queues_split_on_commas_and_ignore_blanks() {
+        let config = Config::from_map(&env(&[
+            ("TASKITO_DSN", ":memory:"),
+            ("TASKITO_QUEUES", " high , ,default "),
+            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+        ]))
+        .expect("valid config");
+        assert_eq!(
+            config.queues,
+            vec!["high".to_string(), "default".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_empty_value_reads_as_unset() {
+        let config = Config::from_map(&env(&[
+            ("TASKITO_DSN", ":memory:"),
+            ("TASKITO_NAMESPACE", "   "),
+            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+        ]))
+        .expect("valid config");
+        assert!(config.namespace.is_none());
+    }
+
+    #[test]
+    fn a_config_that_runs_nothing_is_rejected() {
+        let error =
+            Config::from_map(&env(&[("TASKITO_DSN", ":memory:")])).expect_err("must reject");
+        assert!(error.to_string().contains("nothing to run"));
+    }
+
+    #[test]
+    fn worker_count_must_be_a_positive_integer() {
+        for bad in ["0", "-1", "many"] {
+            let error = Config::from_map(&env(&[
+                ("TASKITO_DSN", ":memory:"),
+                ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+                ("TASKITO_WORKERS", bad),
+            ]))
+            .expect_err("must reject");
+            assert!(error.to_string().contains("TASKITO_WORKERS"));
+        }
+    }
+}
