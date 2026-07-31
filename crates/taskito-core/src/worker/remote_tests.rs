@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
+use super::auth::Secret;
 use super::protocol::{
     ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
 };
@@ -34,8 +35,14 @@ impl FakeExecutor {
         tasks: &[&str],
         slots: u32,
     ) -> Result<Self, AttachError> {
-        let (executor, attached) =
-            Self::attach_with_version(dispatcher, executor_id, tasks, slots, PROTOCOL_VERSION);
+        let (executor, attached) = Self::dial(
+            dispatcher,
+            executor_id,
+            tasks,
+            slots,
+            PROTOCOL_VERSION,
+            None,
+        );
         attached.map(|_| executor)
     }
 
@@ -47,6 +54,24 @@ impl FakeExecutor {
         tasks: &[&str],
         slots: u32,
         protocol_version: u32,
+    ) -> (Self, Result<String, AttachError>) {
+        Self::dial(
+            dispatcher,
+            executor_id,
+            tasks,
+            slots,
+            protocol_version,
+            None,
+        )
+    }
+
+    fn dial(
+        dispatcher: &RemoteDispatcher,
+        executor_id: &str,
+        tasks: &[&str],
+        slots: u32,
+        protocol_version: u32,
+        token: Option<&str>,
     ) -> (Self, Result<String, AttachError>) {
         let (scheduler_end, executor_end) = MemoryTransport::pair();
         let (read, write, _timeout) = Box::new(executor_end).split().expect("split executor end");
@@ -64,6 +89,7 @@ impl FakeExecutor {
                 tasks: tasks.iter().map(|t| (*t).to_string()).collect(),
                 slots,
                 protocol_version,
+                token: token.map(Secret::new),
             })
             .expect("send hello");
 

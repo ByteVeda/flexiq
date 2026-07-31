@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Context, Result};
 
 use crate::config::dashboard::DashboardConfig;
-use crate::config::listen::AttachListen;
+use crate::config::listen::AttachConfig;
 
 /// Environment variables as a lookup map.
 pub type Env = HashMap<String, String>;
@@ -35,8 +35,9 @@ pub struct Config {
     pub workers: Option<usize>,
     /// Whether this process runs retention and cleanup.
     pub maintenance: bool,
-    /// Where executors attach. `None` disables the listener.
-    pub attach: Option<AttachListen>,
+    /// Where executors attach, and what they must present. `None` disables the
+    /// listener.
+    pub attach: Option<AttachConfig>,
     /// Where the dashboard listens. `None` disables it.
     pub dashboard: Option<DashboardConfig>,
 }

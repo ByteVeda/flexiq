@@ -28,6 +28,11 @@ use crate::runtime::shutdown::Shutdown;
 /// How long the accept loop sleeps between polls when no peer is waiting.
 const ACCEPT_POLL: Duration = Duration::from_millis(100);
 
+/// Handshakes allowed to run at once. Every unauthenticated peer holds a thread
+/// for up to `handshake_timeout`, so without a cap a connect flood would spawn
+/// threads without bound. Past it, connections are dropped rather than queued.
+const MAX_PENDING_HANDSHAKES: usize = 64;
+
 /// A running attach listener.
 pub struct ListenerHandle {
     accept_thread: JoinHandle<()>,
@@ -153,6 +158,14 @@ fn accept_loop(
                         // Reap finished handshakes so a reconnect loop cannot
                         // grow this vector for the life of the process.
                         handshakes.retain(|handle| !handle.is_finished());
+                        if handshakes.len() >= MAX_PENDING_HANDSHAKES {
+                            log::warn!(
+                                "attach from {} dropped: {MAX_PENDING_HANDSHAKES} handshakes \
+                                 already pending",
+                                transport.peer()
+                            );
+                            continue;
+                        }
                         handshakes.push(spawn_handshake(
                             transport,
                             dispatcher.clone(),

@@ -18,6 +18,7 @@ use std::io::{BufRead, BufWriter, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use super::auth::Secret;
 use crate::job::Job;
 use crate::scheduler::JobResult;
 
@@ -144,6 +145,13 @@ pub enum ExecutorMessage {
         slots: u32,
         /// Version the executor speaks.
         protocol_version: u32,
+        /// Shared secret, when the scheduler is configured to require one.
+        ///
+        /// Omitted from the wire when absent so a transport that needs no
+        /// credential — a pipe to a prefork child, a Unix socket behind
+        /// filesystem permissions — sends the same frame it always did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
     },
     /// Liveness signal carrying current free capacity.
     Heartbeat {
@@ -481,6 +489,7 @@ mod tests {
                 tasks: vec!["resize".into(), "thumbnail".into()],
                 slots: 4,
                 protocol_version: PROTOCOL_VERSION,
+                token: None,
             },
             &[],
         );
@@ -507,6 +516,58 @@ mod tests {
             &[],
         );
         assert!(matches!(ack, SchedulerMessage::HelloAck { .. }));
+    }
+
+    fn hello_with_token(token: Option<&str>) -> ExecutorMessage {
+        ExecutorMessage::Hello {
+            executor_id: "exec-1".into(),
+            sdk: "test".into(),
+            version: "0.0.0".into(),
+            tasks: vec!["resize".into()],
+            slots: 1,
+            protocol_version: PROTOCOL_VERSION,
+            token: token.map(Secret::new),
+        }
+    }
+
+    #[test]
+    fn a_hello_without_a_token_stays_off_the_wire_and_parses_back() {
+        let mut buf = Vec::new();
+        FrameWriter::new(&mut buf)
+            .write_header(&hello_with_token(None))
+            .expect("write");
+        let header = String::from_utf8(buf.clone()).expect("utf-8 header");
+        assert!(
+            !header.contains("token"),
+            "an absent token must not appear as a null field: {header}"
+        );
+
+        // The same shape an executor built before this field existed sends.
+        let legacy = br#"{"type":"hello","executor_id":"exec-1","sdk":"test","version":"0.0.0","tasks":[],"slots":1,"protocol_version":1}
+"#;
+        assert!(matches!(
+            FrameReader::new(&legacy[..])
+                .read::<ExecutorMessage>()
+                .expect("legacy hello must still parse")
+                .0,
+            ExecutorMessage::Hello { token: None, .. }
+        ));
+    }
+
+    #[test]
+    fn a_hello_token_round_trips_but_never_prints() {
+        let (frame, _) = round_trip(&hello_with_token(Some("s3cret-value")), &[]);
+        match &frame {
+            ExecutorMessage::Hello { token, .. } => {
+                let presented = token.as_ref().expect("the token must survive the wire");
+                assert!(presented.matches(&Secret::new("s3cret-value")));
+            }
+            other => panic!("expected hello, got {other:?}"),
+        }
+        assert!(
+            !format!("{frame:?}").contains("s3cret"),
+            "a debug dump of a frame must not carry token material"
+        );
     }
 
     #[test]
