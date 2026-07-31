@@ -247,6 +247,7 @@ mod tests {
                 discovery_url: None,
                 allowed_domains: allowed_domains.iter().map(|d| d.to_string()).collect(),
                 allowed_orgs: vec![],
+                github: crate::dashboard::auth::oauth::config::GitHubEndpoints::default(),
             }],
         })
     }

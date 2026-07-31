@@ -12,7 +12,9 @@ use taskito_core::{Storage, StorageBackend};
 
 use support::{call, dashboard_state, dashboard_state_with_oauth, get, temp_storage};
 use taskito_server::config::dashboard::AuthMode;
-use taskito_server::dashboard::auth::oauth::config::{OAuthConfig, ProviderConfig, ProviderKind};
+use taskito_server::dashboard::auth::oauth::config::{
+    GitHubEndpoints, OAuthConfig, ProviderConfig, ProviderKind,
+};
 use taskito_server::dashboard::auth::oauth::state;
 
 fn github_config() -> OAuthConfig {
@@ -29,6 +31,7 @@ fn github_config() -> OAuthConfig {
             discovery_url: None,
             allowed_domains: vec![],
             allowed_orgs: vec![],
+            github: GitHubEndpoints::default(),
         }],
     }
 }

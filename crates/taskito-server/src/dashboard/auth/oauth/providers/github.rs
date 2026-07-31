@@ -10,10 +10,6 @@ use serde_json::Value;
 use crate::dashboard::auth::oauth::config::ProviderConfig;
 use crate::dashboard::auth::oauth::providers::{Identity, OAuthError, OAuthRuntime};
 
-const AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
-const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-const API_BASE: &str = "https://api.github.com";
-
 /// Scopes needed to read the account and its verified email.
 const BASE_SCOPE: &str = "read:user user:email";
 
@@ -41,7 +37,8 @@ pub fn authorization_url(
         ("allow_signup", "false"),
     ];
     format!(
-        "{AUTHORIZE_URL}?{}",
+        "{}?{}",
+        provider.github.authorize,
         serde_urlencoded::to_string(params).unwrap_or_default()
     )
 }
@@ -56,7 +53,7 @@ pub async fn exchange_code(
 ) -> Result<Identity, OAuthError> {
     let access_token = fetch_token(runtime, provider, code, code_verifier, redirect_uri).await?;
 
-    let user = api_get(runtime, "/user", &access_token).await?;
+    let user = api_get(runtime, provider, "/user", &access_token).await?;
     let subject = user
         .get("id")
         .and_then(|id| id.as_i64().map(|id| id.to_string()))
@@ -67,7 +64,7 @@ pub async fn exchange_code(
         .filter(|login| !login.is_empty())
         .ok_or_else(|| OAuthError::IdentityFetch("GitHub /user is missing 'login'".into()))?;
 
-    let (email, email_verified) = primary_email(runtime, &access_token).await;
+    let (email, email_verified) = primary_email(runtime, provider, &access_token).await;
     verify_org_membership(runtime, provider, login, &access_token).await?;
 
     Ok(Identity {
@@ -101,7 +98,7 @@ async fn fetch_token(
     ];
     let response = runtime
         .http()
-        .post(TOKEN_URL)
+        .post(&provider.github.token)
         // GitHub answers form-encoded unless asked otherwise.
         .header("Accept", "application/json")
         .form(&form)
@@ -135,8 +132,12 @@ async fn fetch_token(
 ///
 /// An unverified address is never returned: every downstream decision — the
 /// domain allowlist, the admin list — treats an email as an identity claim.
-async fn primary_email(runtime: &OAuthRuntime, access_token: &str) -> (Option<String>, bool) {
-    let Ok(emails) = api_get(runtime, "/user/emails", access_token).await else {
+async fn primary_email(
+    runtime: &OAuthRuntime,
+    provider: &ProviderConfig,
+    access_token: &str,
+) -> (Option<String>, bool) {
+    let Ok(emails) = api_get(runtime, provider, "/user/emails", access_token).await else {
         return (None, false);
     };
     let found = emails.as_array().and_then(|entries| {
@@ -172,7 +173,10 @@ async fn verify_org_membership(
     for org in &provider.allowed_orgs {
         let response = runtime
             .http()
-            .get(format!("{API_BASE}/orgs/{org}/members/{login}"))
+            .get(format!(
+                "{}/orgs/{org}/members/{login}",
+                provider.github.api_base
+            ))
             .headers(api_headers(access_token))
             .send()
             .await
@@ -199,12 +203,13 @@ async fn verify_org_membership(
 
 async fn api_get(
     runtime: &OAuthRuntime,
+    provider: &ProviderConfig,
     path: &str,
     access_token: &str,
 ) -> Result<Value, OAuthError> {
     let response = runtime
         .http()
-        .get(format!("{API_BASE}{path}"))
+        .get(format!("{}{path}", provider.github.api_base))
         .headers(api_headers(access_token))
         .send()
         .await
@@ -255,6 +260,7 @@ mod tests {
             discovery_url: None,
             allowed_domains: vec![],
             allowed_orgs: allowed_orgs.iter().map(|org| org.to_string()).collect(),
+            github: crate::dashboard::auth::oauth::config::GitHubEndpoints::default(),
         }
     }
 
@@ -266,7 +272,7 @@ mod tests {
             "challenge",
             "https://ops.example.com/api/auth/oauth/callback/github",
         );
-        assert!(url.starts_with(AUTHORIZE_URL));
+        assert!(url.starts_with("https://github.com/login/oauth/authorize"));
         assert!(url.contains("code_challenge=challenge"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("state=state-token"));

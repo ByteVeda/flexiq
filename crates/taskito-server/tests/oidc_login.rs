@@ -14,7 +14,9 @@ use taskito_core::{Storage, StorageBackend};
 use support::oidc_issuer::{NextToken, StubIssuer};
 use support::{call, dashboard_state_with_oauth, get, temp_storage, TempStorage};
 use taskito_server::dashboard::auth::model::Role;
-use taskito_server::dashboard::auth::oauth::config::{OAuthConfig, ProviderConfig, ProviderKind};
+use taskito_server::dashboard::auth::oauth::config::{
+    GitHubEndpoints, OAuthConfig, ProviderConfig, ProviderKind,
+};
 use taskito_server::dashboard::auth::oauth::state::{OAuthState, STATE_PREFIX};
 use taskito_server::dashboard::auth::store;
 use taskito_server::dashboard::state::SharedState;
@@ -41,6 +43,7 @@ async fn harness(label: &str, admin_emails: &[&str]) -> (TempStorage, SharedStat
             discovery_url: Some(issuer.discovery_url()),
             allowed_domains: vec![],
             allowed_orgs: vec![],
+            github: GitHubEndpoints::default(),
         }],
     };
     let state = dashboard_state_with_oauth(&storage, config);

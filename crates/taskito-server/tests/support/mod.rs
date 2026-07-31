@@ -4,6 +4,7 @@
 //! one of them read as dead code in the others.
 #![allow(dead_code)]
 
+pub mod github_stub;
 pub mod oidc_issuer;
 pub mod webhook_receiver;
 

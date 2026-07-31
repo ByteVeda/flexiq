@@ -40,6 +40,43 @@ impl ProviderKind {
     }
 }
 
+/// Where GitHub's OAuth and API endpoints live.
+///
+/// Overridable so the exchange can be pointed at a stub: GitHub publishes no
+/// discovery document, so without this the flow is only reachable against the
+/// real github.com and cannot be regression-tested at all.
+#[derive(Debug, Clone)]
+pub struct GitHubEndpoints {
+    /// Where the browser is sent to authenticate.
+    pub authorize: String,
+    /// Where the code is exchanged.
+    pub token: String,
+    /// Root of the REST API.
+    pub api_base: String,
+}
+
+impl Default for GitHubEndpoints {
+    fn default() -> Self {
+        Self {
+            authorize: "https://github.com/login/oauth/authorize".to_string(),
+            token: "https://github.com/login/oauth/access_token".to_string(),
+            api_base: "https://api.github.com".to_string(),
+        }
+    }
+}
+
+impl GitHubEndpoints {
+    /// Point every endpoint at one base, for a stub that serves all of them.
+    pub fn rooted_at(base: &str) -> Self {
+        let base = base.trim_end_matches('/');
+        Self {
+            authorize: format!("{base}/login/oauth/authorize"),
+            token: format!("{base}/login/oauth/access_token"),
+            api_base: base.to_string(),
+        }
+    }
+}
+
 /// One configured provider.
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
@@ -59,6 +96,8 @@ pub struct ProviderConfig {
     pub allowed_domains: Vec<String>,
     /// GitHub orgs permitted to log in; empty means any.
     pub allowed_orgs: Vec<String>,
+    /// GitHub's endpoints. Always the real ones outside tests.
+    pub github: GitHubEndpoints,
 }
 
 /// Top-level OAuth configuration.
@@ -108,6 +147,7 @@ pub fn from_env(env: &Env) -> Result<Option<OAuthConfig>> {
             discovery_url: Some(GOOGLE_DISCOVERY_URL.to_string()),
             allowed_domains: csv(env, "TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS"),
             allowed_orgs: Vec::new(),
+            github: GitHubEndpoints::default(),
         });
     }
 
@@ -121,6 +161,7 @@ pub fn from_env(env: &Env) -> Result<Option<OAuthConfig>> {
             discovery_url: None,
             allowed_domains: Vec::new(),
             allowed_orgs: csv(env, "TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS"),
+            github: GitHubEndpoints::default(),
         });
     }
 
@@ -182,6 +223,7 @@ fn oidc_provider(env: &Env, slot: &str, existing: &[ProviderConfig]) -> Result<P
         discovery_url: Some(discovery_url),
         allowed_domains: csv(env, &format!("{prefix}_ALLOWED_DOMAINS")),
         allowed_orgs: Vec::new(),
+        github: GitHubEndpoints::default(),
     })
 }
 
