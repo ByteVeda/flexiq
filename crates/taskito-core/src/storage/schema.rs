@@ -104,6 +104,7 @@ diesel::table! {
         memory_bytes -> BigInt,
         succeeded -> Bool,
         recorded_at -> BigInt,
+        namespace -> Nullable<Text>,
     }
 }
 
@@ -129,6 +130,7 @@ diesel::table! {
         message -> Text,
         extra -> Nullable<Text>,
         logged_at -> BigInt,
+        namespace -> Nullable<Text>,
     }
 }
 

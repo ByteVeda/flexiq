@@ -164,8 +164,18 @@ impl RedisStorage {
     }
 
     /// Global queue statistics: live counts plus terminal counts from the
-    /// archive.
-    pub fn stats(&self) -> Result<QueueStats> {
+    /// archive. `namespace` of `None` counts every namespace, matching
+    /// `list_jobs`.
+    pub fn stats(&self, namespace: Option<&str>) -> Result<QueueStats> {
+        if let Some(scope) = namespace {
+            let mut conn = self.conn()?;
+            let mut stats = QueueStats::default();
+            for job in self.jobs_in_namespace(&mut conn, scope)? {
+                Self::tally(&mut stats, job.status);
+            }
+            return Ok(stats);
+        }
+
         let mut conn = self.conn()?;
         let mut stats = QueueStats::default();
 
@@ -267,14 +277,66 @@ impl RedisStorage {
     }
 
     /// Statistics for one queue: live counts plus archived terminal counts.
-    pub fn stats_by_queue(&self, queue_name: &str) -> Result<QueueStats> {
+    pub fn stats_by_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<QueueStats> {
         let mut conn = self.conn()?;
-        self.queue_stats(&mut conn, queue_name)
+        let Some(scope) = namespace else {
+            return self.queue_stats(&mut conn, queue_name);
+        };
+
+        let mut stats = QueueStats::default();
+        for job in self.jobs_in_namespace(&mut conn, scope)? {
+            if job.queue == queue_name {
+                Self::tally(&mut stats, job.status);
+            }
+        }
+        Ok(stats)
+    }
+
+    /// Every live and archived job in `namespace`, blob-free.
+    ///
+    /// Redis has no per-namespace index, so a scoped count walks the same
+    /// candidate set `list_jobs` does — O(N), like every other Redis listing,
+    /// and correct for rows written before namespaces were used.
+    fn jobs_in_namespace(&self, conn: &mut redis::Connection, namespace: &str) -> Result<Vec<Job>> {
+        let live_key = self.key(&["jobs", "all"]);
+        let live_ids: Vec<String> = conn.zrange(&live_key, 0, -1).map_err(map_err)?;
+        let mut jobs = self.load_live_jobs(conn, &live_ids)?;
+
+        let archived_key = self.key(&["archived", "all"]);
+        let archived_ids: Vec<String> = conn.zrange(&archived_key, 0, -1).map_err(map_err)?;
+        jobs.extend(self.load_archived_jobs(conn, &archived_ids)?);
+
+        jobs.retain(|job| job.namespace.as_deref() == Some(namespace));
+        Ok(jobs)
+    }
+
+    /// Add one job to the matching `QueueStats` field.
+    fn tally(stats: &mut QueueStats, status: JobStatus) {
+        let field = match status {
+            JobStatus::Pending => &mut stats.pending,
+            JobStatus::Running => &mut stats.running,
+            JobStatus::Complete => &mut stats.completed,
+            JobStatus::Failed => &mut stats.failed,
+            JobStatus::Dead => &mut stats.dead,
+            JobStatus::Cancelled => &mut stats.cancelled,
+        };
+        *field += 1;
     }
 
     /// Statistics broken down per queue name.
-    pub fn stats_all_queues(&self) -> Result<std::collections::HashMap<String, QueueStats>> {
+    pub fn stats_all_queues(
+        &self,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>> {
         let mut conn = self.conn()?;
+
+        if let Some(scope) = namespace {
+            let mut map = std::collections::HashMap::<String, QueueStats>::new();
+            for job in self.jobs_in_namespace(&mut conn, scope)? {
+                Self::tally(map.entry(job.queue.clone()).or_default(), job.status);
+            }
+            return Ok(map);
+        }
 
         // Enumerate queues by scanning the live and archived per-queue membership
         // keys (one per queue with at least one job — empty sets are auto-removed

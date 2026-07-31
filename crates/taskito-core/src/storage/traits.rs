@@ -89,7 +89,10 @@ pub trait Storage: Send + Sync + Clone {
     fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool>;
     /// Cancel a `Pending` job (archived as `Cancelled`) and cascade-cancel its
     /// dependents. Returns `false` when the job is missing or not pending.
-    fn cancel_job(&self, id: &str) -> Result<bool>;
+    /// A job in another namespace reports `false`, the same answer an unknown
+    /// or already-terminal id gets: a caller scoped to one namespace learns
+    /// nothing about ids outside it. `None` addresses every namespace.
+    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Set the cancel-requested flag on a `Running` job — the task must poll
     /// for it. Returns `false` when no running job matched.
     fn request_cancel(&self, id: &str) -> Result<bool>;
@@ -147,7 +150,8 @@ pub trait Storage: Send + Sync + Clone {
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     /// Global queue statistics: live counts from `jobs`, terminal counts from
     /// `archived_jobs`.
-    fn stats(&self) -> Result<QueueStats>;
+    /// `namespace` of `None` counts every namespace, matching `list_jobs`.
+    fn stats(&self, namespace: Option<&str>) -> Result<QueueStats>;
     /// Read-only retention dry-run: count the rows each purge would delete under
     /// `cutoffs`, without deleting anything. The per-table counts mirror the
     /// purge predicates exactly — `archived_jobs`/`dead_letter` always include
@@ -182,22 +186,36 @@ pub trait Storage: Send + Sync + Clone {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
     fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()>;
     /// Dead-letter entries, newest first, paginated.
-    fn list_dead(&self, limit: i64, offset: i64) -> Result<Vec<DeadJob>>;
+    /// `namespace` of `None` returns every namespace, matching `list_jobs`.
+    fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>>;
     /// Keyset-paginated `list_dead`, ordered by `(failed_at, id)` descending.
     /// See [`Storage::list_jobs_after`] for the cursor contract.
-    fn list_dead_after(&self, limit: i64, after: Option<(i64, &str)>) -> Result<Vec<DeadJob>>;
+    fn list_dead_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>>;
     /// Dead-letter entries for one task, newest first, paginated.
-    fn list_dead_by_task(&self, task_name: &str, limit: i64, offset: i64) -> Result<Vec<DeadJob>>;
+    fn list_dead_by_task(
+        &self,
+        task_name: &str,
+        limit: i64,
+        offset: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>>;
     /// Delete every dead-letter entry for a task. Returns the number removed.
     fn purge_dead_by_task(&self, task_name: &str) -> Result<u64>;
     /// Re-enqueue a dead-letter entry as a fresh job, deleting the entry.
     /// Returns the new job's id; `JobNotFound` if the entry is absent.
-    fn retry_dead(&self, dead_id: &str) -> Result<String>;
+    /// An entry in another namespace reports `JobNotFound`.
+    fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String>;
     /// Purge dead-letter entries older than the cutoff. Returns the count
     /// removed.
     fn purge_dead(&self, older_than_ms: i64) -> Result<u64>;
     /// Delete one dead-letter entry. Returns `false` when no row matched.
-    fn delete_dead(&self, dead_id: &str) -> Result<bool>;
+    /// An entry in another namespace reports `false`.
+    fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Purge dead-letter entries by the global/per-entry TTL. Returns the
     /// count removed.
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
@@ -350,10 +368,17 @@ pub trait Storage: Send + Sync + Clone {
         wall_time_ns: i64,
         memory_bytes: i64,
         succeeded: bool,
+        namespace: Option<&str>,
     ) -> Result<()>;
     /// Metrics recorded since `since_ms` for one task, or all tasks when
     /// `name` is `None`.
-    fn get_metrics(&self, name: Option<&str>, since_ms: i64) -> Result<Vec<TaskMetric>>;
+    /// `namespace` of `None` returns every namespace, matching `list_jobs`.
+    fn get_metrics(
+        &self,
+        name: Option<&str>,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<TaskMetric>>;
     /// Purge metric records older than the cutoff. Returns the count removed.
     fn purge_metrics(&self, older_than_ms: i64) -> Result<u64>;
     /// Record a replay of a completed job, pairing original and replay
@@ -380,6 +405,7 @@ pub trait Storage: Send + Sync + Clone {
         level: &str,
         message: &str,
         extra: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<()>;
     /// All log lines for a job, in emission order.
     fn get_task_logs(&self, job_id: &str) -> Result<Vec<TaskLogEntry>>;
@@ -398,6 +424,7 @@ pub trait Storage: Send + Sync + Clone {
         level: Option<&str>,
         since_ms: i64,
         limit: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<TaskLogEntry>>;
     /// Purge log lines older than the cutoff. Returns the count removed.
     fn purge_task_logs(&self, older_than_ms: i64) -> Result<u64>;
@@ -534,9 +561,12 @@ pub trait Storage: Send + Sync + Clone {
 
     /// Statistics for one queue: live counts from `jobs`, terminal counts
     /// from `archived_jobs`.
-    fn stats_by_queue(&self, queue_name: &str) -> Result<QueueStats>;
+    fn stats_by_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<QueueStats>;
     /// Statistics broken down per queue name.
-    fn stats_all_queues(&self) -> Result<std::collections::HashMap<String, QueueStats>>;
+    fn stats_all_queues(
+        &self,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>>;
 
     // ── Filtered job listing ─────────────────────────────────────
 

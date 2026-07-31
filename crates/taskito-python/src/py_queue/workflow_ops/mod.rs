@@ -90,6 +90,7 @@ pub(super) fn cascade_skip_pending_nodes(
     wf_storage: &WorkflowStorageBackend,
     run_id: &str,
     nodes: &[WorkflowNode],
+    namespace: Option<&str>,
 ) -> CoreResult<()> {
     for node in nodes {
         if !matches!(
@@ -99,7 +100,7 @@ pub(super) fn cascade_skip_pending_nodes(
             continue;
         }
         if let Some(job_id) = &node.job_id {
-            if let Err(e) = storage.cancel_job(job_id) {
+            if let Err(e) = storage.cancel_job(job_id, namespace) {
                 log::warn!(
                     "[taskito] cancel_job({}) failed during cascade skip for run {}: {}",
                     job_id,
@@ -207,7 +208,7 @@ mod tests {
         );
 
         let nodes = wf_storage.get_workflow_nodes(&run_id).unwrap();
-        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &nodes).unwrap();
+        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &nodes, None).unwrap();
 
         assert_eq!(
             fetch_node(&wf_storage, &run_id, "p").status,
@@ -250,7 +251,7 @@ mod tests {
         );
 
         let nodes = wf_storage.get_workflow_nodes(&run_id).unwrap();
-        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &nodes).unwrap();
+        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &nodes, None).unwrap();
 
         let pending_job = storage.get_job(&pending_job_id).unwrap().unwrap();
         assert_eq!(pending_job.status.wire_name(), "Cancelled");
@@ -263,7 +264,7 @@ mod tests {
     fn cascade_skip_is_a_noop_for_empty_node_slice() {
         let (storage, wf_storage) = make_storages();
         let run_id = seed_run(&wf_storage);
-        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &[]).unwrap();
+        cascade_skip_pending_nodes(&storage, &wf_storage, &run_id, &[], None).unwrap();
         assert!(wf_storage.get_workflow_nodes(&run_id).unwrap().is_empty());
     }
 }

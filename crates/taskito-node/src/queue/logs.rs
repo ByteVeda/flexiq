@@ -23,7 +23,14 @@ impl JsQueue {
         extra: Option<String>,
     ) -> Result<()> {
         self.storage
-            .write_task_log(&job_id, &task_name, &level, &message, extra.as_deref())
+            .write_task_log(
+                &job_id,
+                &task_name,
+                &level,
+                &message,
+                extra.as_deref(),
+                self.namespace.as_deref(),
+            )
             .map_err(to_napi_err)
     }
 

@@ -856,6 +856,9 @@ macro_rules! impl_diesel_job_ops {
                                 memory_bytes: 0,
                                 succeeded: true,
                                 recorded_at: now,
+                                // Taken from the job itself, which is the only
+                                // place this batch knows a namespace from.
+                                namespace: row.namespace.as_deref(),
                             })
                             .execute(conn)?;
                     }
@@ -967,7 +970,11 @@ macro_rules! impl_diesel_job_ops {
 
             /// Cancel a pending job and cascade-cancel its dependents. The
             /// cancelled job moves from `jobs` into `archived_jobs`.
-            pub fn cancel_job(&self, id: &str) -> Result<bool> {
+            ///
+            /// A job in another namespace reports `false`, the same answer an
+            /// unknown or already-terminal id gets: a caller scoped to one
+            /// tenant learns nothing about ids outside it.
+            pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
                 let now = now_millis();
 
                 let archived = self.write_transaction(|conn| {
@@ -981,6 +988,10 @@ macro_rules! impl_diesel_job_ops {
                         Some(row) => row,
                         None => return Ok(false),
                     };
+
+                    if namespace.is_some_and(|scope| row.namespace.as_deref() != Some(scope)) {
+                        return Ok(false);
+                    }
 
                     row.status = JobStatus::Cancelled as i32;
                     row.completed_at = Some(now);
@@ -1212,18 +1223,37 @@ macro_rules! impl_diesel_job_ops {
 
             /// Get queue statistics. Pending/Running counts come from the live
             /// `jobs` table; terminal counts come from `archived_jobs`.
-            pub fn stats(&self) -> Result<QueueStats> {
+            /// `namespace` of `None` counts every namespace, matching
+            /// `list_jobs`.
+            pub fn stats(&self, namespace: Option<&str>) -> Result<QueueStats> {
                 let mut conn = self.conn()?;
 
-                let live_rows: Vec<(i32, i64)> = jobs::table
-                    .group_by(jobs::status)
-                    .select((jobs::status, diesel::dsl::count(jobs::id)))
-                    .load(&mut conn)?;
+                // Written out per branch rather than boxed: Diesel's boxed
+                // queries have no `GROUP BY`, and the unscoped shape must stay
+                // exactly the single grouped scan it has always been.
+                let live_rows: Vec<(i32, i64)> = match namespace {
+                    Some(ns) => jobs::table
+                        .filter(jobs::namespace.eq(ns))
+                        .group_by(jobs::status)
+                        .select((jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                    None => jobs::table
+                        .group_by(jobs::status)
+                        .select((jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                };
 
-                let archived_rows: Vec<(i32, i64)> = archived_jobs::table
-                    .group_by(archived_jobs::status)
-                    .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
-                    .load(&mut conn)?;
+                let archived_rows: Vec<(i32, i64)> = match namespace {
+                    Some(ns) => archived_jobs::table
+                        .filter(archived_jobs::namespace.eq(ns))
+                        .group_by(archived_jobs::status)
+                        .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
+                        .load(&mut conn)?,
+                    None => archived_jobs::table
+                        .group_by(archived_jobs::status)
+                        .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
+                        .load(&mut conn)?,
+                };
 
                 let mut stats = QueueStats::default();
                 Self::apply_status_count(&mut stats, live_rows);
@@ -1233,20 +1263,40 @@ macro_rules! impl_diesel_job_ops {
 
             /// Get queue statistics for a specific queue. Pending/Running counts
             /// come from `jobs`; terminal counts come from `archived_jobs`.
-            pub fn stats_by_queue(&self, queue_name: &str) -> Result<QueueStats> {
+            pub fn stats_by_queue(
+                &self,
+                queue_name: &str,
+                namespace: Option<&str>,
+            ) -> Result<QueueStats> {
                 let mut conn = self.conn()?;
 
-                let live_rows: Vec<(i32, i64)> = jobs::table
-                    .filter(jobs::queue.eq(queue_name))
-                    .group_by(jobs::status)
-                    .select((jobs::status, diesel::dsl::count(jobs::id)))
-                    .load(&mut conn)?;
+                let live_rows: Vec<(i32, i64)> = match namespace {
+                    Some(ns) => jobs::table
+                        .filter(jobs::queue.eq(queue_name))
+                        .filter(jobs::namespace.eq(ns))
+                        .group_by(jobs::status)
+                        .select((jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                    None => jobs::table
+                        .filter(jobs::queue.eq(queue_name))
+                        .group_by(jobs::status)
+                        .select((jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                };
 
-                let archived_rows: Vec<(i32, i64)> = archived_jobs::table
-                    .filter(archived_jobs::queue.eq(queue_name))
-                    .group_by(archived_jobs::status)
-                    .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
-                    .load(&mut conn)?;
+                let archived_rows: Vec<(i32, i64)> = match namespace {
+                    Some(ns) => archived_jobs::table
+                        .filter(archived_jobs::queue.eq(queue_name))
+                        .filter(archived_jobs::namespace.eq(ns))
+                        .group_by(archived_jobs::status)
+                        .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
+                        .load(&mut conn)?,
+                    None => archived_jobs::table
+                        .filter(archived_jobs::queue.eq(queue_name))
+                        .group_by(archived_jobs::status)
+                        .select((archived_jobs::status, diesel::dsl::count(archived_jobs::id)))
+                        .load(&mut conn)?,
+                };
 
                 let mut stats = QueueStats::default();
                 Self::apply_status_count(&mut stats, live_rows);
@@ -1258,22 +1308,41 @@ macro_rules! impl_diesel_job_ops {
             /// counts come from `jobs`; terminal counts from `archived_jobs`.
             pub fn stats_all_queues(
                 &self,
+                namespace: Option<&str>,
             ) -> Result<std::collections::HashMap<String, QueueStats>> {
                 let mut conn = self.conn()?;
 
-                let live_rows: Vec<(String, i32, i64)> = jobs::table
-                    .group_by((jobs::queue, jobs::status))
-                    .select((jobs::queue, jobs::status, diesel::dsl::count(jobs::id)))
-                    .load(&mut conn)?;
+                let live_rows: Vec<(String, i32, i64)> = match namespace {
+                    Some(ns) => jobs::table
+                        .filter(jobs::namespace.eq(ns))
+                        .group_by((jobs::queue, jobs::status))
+                        .select((jobs::queue, jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                    None => jobs::table
+                        .group_by((jobs::queue, jobs::status))
+                        .select((jobs::queue, jobs::status, diesel::dsl::count(jobs::id)))
+                        .load(&mut conn)?,
+                };
 
-                let archived_rows: Vec<(String, i32, i64)> = archived_jobs::table
-                    .group_by((archived_jobs::queue, archived_jobs::status))
-                    .select((
-                        archived_jobs::queue,
-                        archived_jobs::status,
-                        diesel::dsl::count(archived_jobs::id),
-                    ))
-                    .load(&mut conn)?;
+                let archived_rows: Vec<(String, i32, i64)> = match namespace {
+                    Some(ns) => archived_jobs::table
+                        .filter(archived_jobs::namespace.eq(ns))
+                        .group_by((archived_jobs::queue, archived_jobs::status))
+                        .select((
+                            archived_jobs::queue,
+                            archived_jobs::status,
+                            diesel::dsl::count(archived_jobs::id),
+                        ))
+                        .load(&mut conn)?,
+                    None => archived_jobs::table
+                        .group_by((archived_jobs::queue, archived_jobs::status))
+                        .select((
+                            archived_jobs::queue,
+                            archived_jobs::status,
+                            diesel::dsl::count(archived_jobs::id),
+                        ))
+                        .load(&mut conn)?,
+                };
 
                 let mut map = std::collections::HashMap::<String, QueueStats>::new();
                 for (queue, status, count) in live_rows.into_iter().chain(archived_rows) {

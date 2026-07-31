@@ -1185,7 +1185,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(outcome, ResultOutcome::DeadLettered { .. }));
-        let dead = scheduler.storage.list_dead(10, 0).unwrap();
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
         assert!(dead.iter().any(|d| d.original_job_id == job.id));
     }
 
@@ -1210,7 +1210,7 @@ mod tests {
         let dead = scheduler.storage.get_job(&job.id).unwrap().unwrap();
         assert_eq!(dead.status, JobStatus::Dead);
 
-        let dlq = scheduler.storage.list_dead(10, 0).unwrap();
+        let dlq = scheduler.storage.list_dead(10, 0, None).unwrap();
         assert_eq!(dlq.len(), 1);
         assert_eq!(dlq[0].original_job_id, job.id);
     }
@@ -1875,7 +1875,7 @@ mod tests {
             .unwrap();
         assert!(kept.is_empty(), "a sustained-overload job is shed");
 
-        let dead = scheduler.storage.list_dead(10, 0).unwrap();
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
         assert!(
             dead.iter()
                 .any(|d| d.error.as_deref().is_some_and(|e| e.starts_with("codel:"))),
@@ -2127,7 +2127,7 @@ mod tests {
             fail_once(&scheduler, &job.id, "marked");
         }
 
-        let dead = scheduler.storage.list_dead(10, 0).unwrap();
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
         assert_eq!(dead.len(), 1);
         assert_eq!(
             dead[0].metadata.as_deref(),
@@ -2245,7 +2245,7 @@ mod tests {
 
         scheduler.reap_stale().unwrap();
 
-        let dead = scheduler.storage.list_dead(10, 0).unwrap();
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
         assert!(dead.iter().any(|d| d.original_job_id == job.id));
     }
 
@@ -2462,7 +2462,7 @@ mod tests {
             .unwrap();
         scheduler
             .storage
-            .write_task_log(&job.id, "keeps_logs", "INFO", "msg", None)
+            .write_task_log(&job.id, "keeps_logs", "INFO", "msg", None, None)
             .unwrap();
         scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
         std::thread::sleep(Duration::from_millis(10));
@@ -2702,7 +2702,7 @@ mod tests {
             .unwrap();
         scheduler
             .storage
-            .write_task_log(&job.id, "keeps_archived", "INFO", "msg", None)
+            .write_task_log(&job.id, "keeps_archived", "INFO", "msg", None, None)
             .unwrap();
         scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
         std::thread::sleep(Duration::from_millis(10));

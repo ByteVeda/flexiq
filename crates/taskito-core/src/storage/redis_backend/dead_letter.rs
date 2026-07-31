@@ -129,8 +129,22 @@ impl RedisStorage {
         Ok(())
     }
 
-    /// Dead-letter entries, newest first, paginated.
-    pub fn list_dead(&self, limit: i64, offset: i64) -> Result<Vec<DeadJob>> {
+    /// Dead-letter entries, newest first, paginated. `namespace` of `None`
+    /// returns every namespace, matching `list_jobs`.
+    pub fn list_dead(
+        &self,
+        limit: i64,
+        offset: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        // Scoped: namespace is not indexed, so the set is walked newest-first
+        // and paginated after the filter, like `list_dead_by_task`.
+        if let Some(scope) = namespace {
+            return self.list_dead_matching(limit, offset, |entry| {
+                entry.namespace.as_deref() == Some(scope)
+            });
+        }
+
         let mut conn = self.conn()?;
         let dlq_all = self.key(&["dlq", "all"]);
 
@@ -162,24 +176,102 @@ impl RedisStorage {
     /// Keyset-paginated `list_dead`, ordered by `(failed_at, id)` descending.
     /// `dlq:all` is scored by `failed_at`, so the cursor maps straight onto the
     /// ZSET keyset.
-    pub fn list_dead_after(&self, limit: i64, after: Option<(i64, &str)>) -> Result<Vec<DeadJob>> {
+    ///
+    /// A namespace filter is not indexed, so the scoped form keeps advancing the
+    /// cursor until the page is full — the caller still gets `limit` rows rather
+    /// than a page thinned by rows it may not see.
+    pub fn list_dead_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        if limit <= 0 {
+            return Ok(Vec::new());
+        }
         let mut conn = self.conn()?;
         let dlq_all = self.key(&["dlq", "all"]);
-        let ids = super::zset_keyset_page(&mut conn, &dlq_all, after, limit)?;
 
-        let mut results = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let dlq_key = self.key(&["dlq", id]);
-            let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
-            if let Some(d) = data {
+        let mut results: Vec<DeadJob> = Vec::with_capacity(limit as usize);
+        let mut cursor: Option<(i64, String)> =
+            after.map(|(failed_at, id)| (failed_at, id.to_string()));
+
+        loop {
+            let borrowed = cursor.as_ref().map(|(at, id)| (*at, id.as_str()));
+            let ids = super::zset_keyset_page(&mut conn, &dlq_all, borrowed, limit)?;
+            if ids.is_empty() {
+                break;
+            }
+
+            // Advanced from the last row *examined*, not the last one kept: a
+            // page that filters out entirely still has to move the cursor, or
+            // the walk would re-read it forever.
+            let mut examined = None;
+            for id in &ids {
+                let dlq_key = self.key(&["dlq", id]);
+                let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
+                let Some(d) = data else { continue };
                 let entry: DeadJobEntry = serde_json::from_str(&d)?;
+                examined = Some((entry.failed_at, entry.id.clone()));
+                if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+                    continue;
+                }
                 let mut dead = DeadJob::from(entry);
                 strip_dead_blob(&mut dead);
                 results.push(dead);
+                if results.len() as i64 == limit {
+                    return Ok(results);
+                }
             }
+
+            // Unscoped pages are already exactly the answer; only a filtered
+            // walk needs to look past this page.
+            if namespace.is_none() || (ids.len() as i64) < limit || examined.is_none() {
+                break;
+            }
+            cursor = examined;
         }
 
         Ok(results)
+    }
+
+    /// Walk the DLQ newest-first, keeping entries `matches` accepts, and return
+    /// one page of them.
+    fn list_dead_matching(
+        &self,
+        limit: i64,
+        offset: i64,
+        matches: impl Fn(&DeadJobEntry) -> bool,
+    ) -> Result<Vec<DeadJob>> {
+        if limit <= 0 {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn()?;
+        let dlq_all = self.key(&["dlq", "all"]);
+        let offset = offset.max(0) as usize;
+        let limit = limit as usize;
+
+        let ids: Vec<String> = conn.zrevrange(&dlq_all, 0, -1).map_err(map_err)?;
+        let mut kept = Vec::new();
+        for id in ids {
+            let dlq_key = self.key(&["dlq", &id]);
+            let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
+            let Some(d) = data else { continue };
+            let entry: DeadJobEntry = serde_json::from_str(&d)?;
+            if !matches(&entry) {
+                continue;
+            }
+            let mut dead = DeadJob::from(entry);
+            strip_dead_blob(&mut dead);
+            kept.push(dead);
+            // Stop once this page can be served. Saturating: both are public
+            // i64 inputs.
+            if kept.len() >= offset.saturating_add(limit) {
+                break;
+            }
+        }
+
+        Ok(kept.into_iter().skip(offset).take(limit).collect())
     }
 
     /// Dead-letter entries for one task, newest first, paginated.
@@ -188,42 +280,14 @@ impl RedisStorage {
         task_name: &str,
         limit: i64,
         offset: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<DeadJob>> {
-        // Mirror `list_dead`'s non-positive-limit convention (Redis LIMIT with a
-        // count of 0 returns nothing): no page to build.
-        if limit <= 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut conn = self.conn()?;
-        let dlq_all = self.key(&["dlq", "all"]);
-        let offset = offset.max(0) as usize;
-        let limit = limit as usize;
-
-        // No per-task index by design: scan the global DLQ set newest-first and
-        // filter on `task_name`, paginating after the filter.
-        let ids: Vec<String> = conn.zrevrange(&dlq_all, 0, -1).map_err(map_err)?;
-
-        let mut matches = Vec::new();
-        for id in ids {
-            let dlq_key = self.key(&["dlq", &id]);
-            let data: Option<String> = conn.get(&dlq_key).map_err(map_err)?;
-            if let Some(d) = data {
-                let entry: DeadJobEntry = serde_json::from_str(&d)?;
-                if entry.task_name == task_name {
-                    let mut dead = DeadJob::from(entry);
-                    strip_dead_blob(&mut dead);
-                    matches.push(dead);
-                    // Stop once we have enough matches to satisfy this page.
-                    // saturating: offset/limit are public i64 inputs.
-                    if matches.len() >= offset.saturating_add(limit) {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(matches.into_iter().skip(offset).take(limit).collect())
+        // Neither task name nor namespace is indexed by design, so the global
+        // DLQ set is walked newest-first and paginated after the filter.
+        self.list_dead_matching(limit, offset, |entry| {
+            entry.task_name == task_name
+                && namespace.is_none_or(|scope| entry.namespace.as_deref() == Some(scope))
+        })
     }
 
     /// Delete every dead-letter entry for a task. Returns the number removed.
@@ -266,8 +330,9 @@ impl RedisStorage {
     }
 
     /// Re-enqueue a dead-letter entry as a fresh job, deleting the entry.
-    /// Returns the new job's id; `JobNotFound` if the entry is absent.
-    pub fn retry_dead(&self, dead_id: &str) -> Result<String> {
+    /// Returns the new job's id; `JobNotFound` if the entry is absent or lives
+    /// in another namespace — a scoped caller cannot tell the two apart.
+    pub fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String> {
         let mut conn = self.conn()?;
         let dlq_key = self.key(&["dlq", dead_id]);
 
@@ -279,6 +344,9 @@ impl RedisStorage {
             })?;
 
         let entry: DeadJobEntry = serde_json::from_str(&data)?;
+        if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+            return Err(QueueError::JobNotFound(dead_id.to_string()));
+        }
 
         // Attribution + original job id for the sub:dead removal below, captured
         // before `entry`'s fields are moved into `new_job`. The re-enqueue below
@@ -383,7 +451,9 @@ impl RedisStorage {
     }
 
     /// Delete one dead-letter entry. Returns `false` when none matched.
-    pub fn delete_dead(&self, dead_id: &str) -> Result<bool> {
+    /// An entry in another namespace reports `false`, the same answer an
+    /// unknown id gets.
+    pub fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
         let dlq_key = self.key(&["dlq", dead_id]);
         let dlq_all = self.key(&["dlq", "all"]);
@@ -395,6 +465,9 @@ impl RedisStorage {
             return Ok(false);
         };
         let entry: DeadJobEntry = serde_json::from_str(&d)?;
+        if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+            return Ok(false);
+        }
 
         let pipe = &mut redis::pipe();
         pipe.del(&dlq_key);

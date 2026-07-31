@@ -94,8 +94,9 @@ async fn fetch(state: &SharedState, params: &Params) -> ApiResult<Vec<TaskMetric
     let task_name = params.get("task").map(str::to_string);
     let since_seconds = params.int("since", 3_600)?;
     let since_ms = now_millis().saturating_sub(since_seconds.saturating_mul(1_000));
+    let namespace = state.namespace.clone();
     on_storage(state, move |storage| {
-        storage.get_metrics(task_name.as_deref(), since_ms)
+        storage.get_metrics(task_name.as_deref(), since_ms, namespace.as_deref())
     })
     .await
 }

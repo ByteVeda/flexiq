@@ -259,7 +259,13 @@ impl PyQueue {
                 }
 
                 let nodes = wf_storage.get_workflow_nodes(&rid)?;
-                cascade_skip_pending_nodes(&self.storage, &wf_storage, &rid, &nodes)?;
+                cascade_skip_pending_nodes(
+                    &self.storage,
+                    &wf_storage,
+                    &rid,
+                    &nodes,
+                    self.namespace.as_deref(),
+                )?;
 
                 wf_storage.update_workflow_run_state(&rid, WorkflowState::Cancelled, None)?;
                 wf_storage.set_workflow_run_completed(&rid, now)?;

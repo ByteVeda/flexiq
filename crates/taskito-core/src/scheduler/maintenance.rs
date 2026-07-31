@@ -364,7 +364,10 @@ impl Scheduler {
             {
                 continue;
             }
-            match self.storage.retry_dead(&entry.id) {
+            match self
+                .storage
+                .retry_dead(&entry.id, self.namespace.as_deref())
+            {
                 Ok(new_id) => {
                     info!(
                         "dlq auto-retry: {} -> {} (attempt {}/{})",

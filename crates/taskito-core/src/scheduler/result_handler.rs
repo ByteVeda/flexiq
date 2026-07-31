@@ -51,10 +51,14 @@ impl Scheduler {
                     log::error!("failed to record error for job {job_id}: {e}");
                 }
 
-                if let Err(e) =
-                    self.storage
-                        .record_metric(&task_name, &job_id, wall_time_ns, 0, false)
-                {
+                if let Err(e) = self.storage.record_metric(
+                    &task_name,
+                    &job_id,
+                    wall_time_ns,
+                    0,
+                    false,
+                    self.namespace.as_deref(),
+                ) {
                     log::error!("failed to record metric for job {job_id}: {e}");
                 }
 
@@ -157,10 +161,14 @@ impl Scheduler {
                 if let Err(e) = self.storage.mark_cancelled(&job_id) {
                     error!("failed to mark job {job_id} as cancelled: {e}");
                 }
-                if let Err(e) =
-                    self.storage
-                        .record_metric(&task_name, &job_id, wall_time_ns, 0, false)
-                {
+                if let Err(e) = self.storage.record_metric(
+                    &task_name,
+                    &job_id,
+                    wall_time_ns,
+                    0,
+                    false,
+                    self.namespace.as_deref(),
+                ) {
                     error!("failed to record metric for cancelled job {job_id}: {e}");
                 }
                 let queue = self
@@ -263,10 +271,14 @@ impl Scheduler {
             error!("failed to clear execution claim for job {}: {e}", c.job_id);
         }
 
-        if let Err(e) = self
-            .storage
-            .record_metric(&c.task_name, &c.job_id, c.wall_time_ns, 0, true)
-        {
+        if let Err(e) = self.storage.record_metric(
+            &c.task_name,
+            &c.job_id,
+            c.wall_time_ns,
+            0,
+            true,
+            self.namespace.as_deref(),
+        ) {
             error!("failed to record metric for job {}: {e}", c.job_id);
         }
 

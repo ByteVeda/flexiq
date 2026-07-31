@@ -17,7 +17,8 @@ const TARGET_QUEUE_DEPTH: i64 = 10;
 
 /// `GET /api/stats` — status counts across every queue.
 pub async fn stats(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
-    let stats = on_storage(&state, |storage| storage.stats()).await?;
+    let namespace = state.namespace.clone();
+    let stats = on_storage(&state, move |storage| storage.stats(namespace.as_deref())).await?;
     Ok(Json(dto::queue_stats(&stats)))
 }
 
@@ -28,11 +29,19 @@ pub async fn stats_by_queue(
 ) -> ApiResult<Json<Value>> {
     match params.get("queue").map(str::to_string) {
         Some(queue) => {
-            let stats = on_storage(&state, move |storage| storage.stats_by_queue(&queue)).await?;
+            let namespace = state.namespace.clone();
+            let stats = on_storage(&state, move |storage| {
+                storage.stats_by_queue(&queue, namespace.as_deref())
+            })
+            .await?;
             Ok(Json(dto::queue_stats(&stats)))
         }
         None => {
-            let per_queue = on_storage(&state, |storage| storage.stats_all_queues()).await?;
+            let namespace = state.namespace.clone();
+            let per_queue = on_storage(&state, move |storage| {
+                storage.stats_all_queues(namespace.as_deref())
+            })
+            .await?;
             let mut body = Map::new();
             for (queue, stats) in per_queue {
                 body.insert(queue, dto::queue_stats(&stats));
@@ -89,9 +98,16 @@ pub async fn resume(
 /// `totalCapacity` is the execution capacity attached executors advertise; in
 /// this process there is no in-process worker pool to report instead.
 pub async fn scaler(State(state): State<SharedState>, params: Params) -> ApiResult<Json<Value>> {
-    let overall = on_storage(&state, |storage| storage.stats()).await?;
+    let namespace = state.namespace.clone();
+    let overall = {
+        let namespace = namespace.clone();
+        on_storage(&state, move |storage| storage.stats(namespace.as_deref())).await?
+    };
     let workers = on_storage(&state, |storage| storage.list_workers()).await?;
-    let per_queue = on_storage(&state, |storage| storage.stats_all_queues()).await?;
+    let per_queue = on_storage(&state, move |storage| {
+        storage.stats_all_queues(namespace.as_deref())
+    })
+    .await?;
 
     let total_capacity = state
         .dispatcher

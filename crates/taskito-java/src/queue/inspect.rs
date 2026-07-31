@@ -44,7 +44,12 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_stats<'loc
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        new_string(env, to_json(&StatsView::from(queue.storage.stats()?))?)
+        new_string(
+            env,
+            to_json(&StatsView::from(
+                queue.storage.stats(queue.namespace.as_deref())?,
+            ))?,
+        )
     })
 }
 
@@ -59,7 +64,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_statsByQue
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &queue_name)?;
-        let stats = queue.storage.stats_by_queue(&name)?;
+        let stats = queue
+            .storage
+            .stats_by_queue(&name, queue.namespace.as_deref())?;
         new_string(env, to_json(&StatsView::from(stats))?)
     })
 }
@@ -91,7 +98,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_statsAllQu
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        let all = queue.storage.stats_all_queues()?;
+        let all = queue.storage.stats_all_queues(queue.namespace.as_deref())?;
         let mapped: HashMap<String, StatsView> = all
             .into_iter()
             .map(|(k, v)| (k, StatsView::from(v)))
@@ -243,7 +250,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_metrics<'l
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let task = read_optional_string(env, &task_name)?;
-        let metrics = queue.storage.get_metrics(task.as_deref(), since_ms)?;
+        let metrics =
+            queue
+                .storage
+                .get_metrics(task.as_deref(), since_ms, queue.namespace.as_deref())?;
         let views: Vec<MetricView> = metrics.iter().map(MetricView::from).collect();
         new_string(env, to_json(&views)?)
     })

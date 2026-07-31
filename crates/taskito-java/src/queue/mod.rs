@@ -181,7 +181,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_cancel<'lo
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        Ok(to_jboolean(queue.storage.cancel_job(&id)?))
+        Ok(to_jboolean(
+            queue.storage.cancel_job(&id, queue.namespace.as_deref())?,
+        ))
     })
 }
 

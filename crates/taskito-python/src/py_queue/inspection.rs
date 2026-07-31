@@ -162,7 +162,7 @@ impl PyQueue {
         }
         let dead = self
             .storage
-            .list_dead(limit, offset)
+            .list_dead(limit, offset, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -199,7 +199,7 @@ impl PyQueue {
         let cursor = decode_after(after)?;
         let dead = self
             .storage
-            .list_dead_after(limit, cursor)
+            .list_dead_after(limit, cursor, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let next = next_cursor(&dead, limit, |d| (d.failed_at, &d.id));
@@ -238,7 +238,7 @@ impl PyQueue {
         }
         let dead = self
             .storage
-            .list_dead_by_task(task_name, limit, offset)
+            .list_dead_by_task(task_name, limit, offset, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -270,7 +270,7 @@ impl PyQueue {
     /// Re-enqueue a dead letter job. Returns new job ID.
     pub fn retry_dead(&self, dead_id: &str) -> PyResult<String> {
         self.storage
-            .retry_dead(dead_id)
+            .retry_dead(dead_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -293,7 +293,7 @@ impl PyQueue {
     /// Delete a single dead letter entry without re-enqueueing.
     pub fn delete_dead(&self, dead_id: &str) -> PyResult<bool> {
         self.storage
-            .delete_dead(dead_id)
+            .delete_dead(dead_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -331,7 +331,7 @@ impl PyQueue {
         let since_ms = now_millis().saturating_sub(since_seconds.saturating_mul(1000));
         let rows = self
             .storage
-            .get_metrics(task_name, since_ms)
+            .get_metrics(task_name, since_ms, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -433,7 +433,14 @@ impl PyQueue {
         extra: Option<&str>,
     ) -> PyResult<()> {
         self.storage
-            .write_task_log(job_id, task_name, level, message, extra)
+            .write_task_log(
+                job_id,
+                task_name,
+                level,
+                message,
+                extra,
+                self.namespace.as_deref(),
+            )
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -478,7 +485,7 @@ impl PyQueue {
         let since_ms = now_millis().saturating_sub(since_seconds.saturating_mul(1000));
         let rows = self
             .storage
-            .query_task_logs(task_name, level, since_ms, limit)
+            .query_task_logs(task_name, level, since_ms, limit, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {

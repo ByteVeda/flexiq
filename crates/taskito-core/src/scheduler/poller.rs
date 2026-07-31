@@ -525,11 +525,17 @@ impl Scheduler {
     }
 
     /// Running-job count for a queue, cached exactly like [`Self::cached_task_running`].
+    ///
+    /// Counted within this scheduler's namespace: it only ever dequeues its own,
+    /// so another tenant's running jobs must not spend this one's budget.
     fn cached_queue_running(&self, counts: &mut GateCounts, queue: &str) -> Result<i64> {
         if let Some(&n) = counts.queue_running.get(queue) {
             return Ok(n);
         }
-        let n = self.storage.stats_by_queue(queue)?.running;
+        let n = self
+            .storage
+            .stats_by_queue(queue, self.namespace.as_deref())?
+            .running;
         counts.queue_running.insert(queue.to_string(), n);
         Ok(n)
     }

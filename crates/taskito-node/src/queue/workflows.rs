@@ -221,7 +221,13 @@ impl JsQueue {
                 .map_err(to_napi_err)?;
             if !skip_cascade {
                 let nodes = wf.get_workflow_nodes(&run_id).map_err(to_napi_err)?;
-                cascade_skip_pending(&self.storage, &wf, &run_id, &nodes);
+                cascade_skip_pending(
+                    &self.storage,
+                    &wf,
+                    &run_id,
+                    &nodes,
+                    self.namespace.as_deref(),
+                );
             }
         }
 
@@ -455,7 +461,7 @@ impl JsQueue {
         // so they don't run untracked (orphaned) outside the workflow.
         if let Err(err) = wf.create_workflow_nodes_batch(&nodes).map_err(to_napi_err) {
             for id in &child_job_ids {
-                let _ = self.storage.cancel_job(id);
+                let _ = self.storage.cancel_job(id, self.namespace.as_deref());
             }
             return Err(err);
         }
@@ -504,7 +510,7 @@ impl JsQueue {
             .set_workflow_node_job(&run_id, &node_name, &job.id)
             .map_err(to_napi_err)
         {
-            let _ = self.storage.cancel_job(&job.id);
+            let _ = self.storage.cancel_job(&job.id, self.namespace.as_deref());
             return Err(err);
         }
         Ok(job.id)
@@ -568,7 +574,7 @@ impl JsQueue {
             .map_err(to_napi_err)?
         {
             if let Some(job_id) = &node.job_id {
-                if let Err(e) = self.storage.cancel_job(job_id) {
+                if let Err(e) = self.storage.cancel_job(job_id, self.namespace.as_deref()) {
                     log::warn!("[taskito-node] cancel_job({job_id}) during skip: {e}");
                 }
             }
@@ -721,7 +727,7 @@ impl JsQueue {
             .set_workflow_node_compensation_job(&run_id, &node_name, &job.id, now)
             .map_err(to_napi_err)
         {
-            let _ = self.storage.cancel_job(&job.id);
+            let _ = self.storage.cancel_job(&job.id, self.namespace.as_deref());
             return Err(err);
         }
         Ok(job.id)
@@ -745,7 +751,13 @@ impl JsQueue {
     pub fn cascade_skip_pending(&self, run_id: String) -> Result<()> {
         let wf = self.workflow_store()?;
         let nodes = wf.get_workflow_nodes(&run_id).map_err(to_napi_err)?;
-        cascade_skip_pending(&self.storage, &wf, &run_id, &nodes);
+        cascade_skip_pending(
+            &self.storage,
+            &wf,
+            &run_id,
+            &nodes,
+            self.namespace.as_deref(),
+        );
         Ok(())
     }
 
@@ -891,6 +903,7 @@ fn cascade_skip_pending(
     wf: &WorkflowStorageBackend,
     run_id: &str,
     nodes: &[WorkflowNode],
+    namespace: Option<&str>,
 ) {
     for node in nodes {
         if !matches!(
@@ -900,7 +913,7 @@ fn cascade_skip_pending(
             continue;
         }
         if let Some(job_id) = &node.job_id {
-            if let Err(e) = storage.cancel_job(job_id) {
+            if let Err(e) = storage.cancel_job(job_id, namespace) {
                 log::warn!("[taskito-node] cancel_job({job_id}) during workflow cascade: {e}");
             }
         }

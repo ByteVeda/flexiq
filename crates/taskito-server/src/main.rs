@@ -13,7 +13,8 @@ const ENV_HELP: &str = "\
 Configuration (environment only):
   TASKITO_DSN                    storage connection string (required)
   TASKITO_BACKEND                sqlite | postgres | redis (default: from the DSN)
-  TASKITO_NAMESPACE              tenant namespace to scope the scheduler to
+  TASKITO_NAMESPACE              tenant namespace scoping the scheduler and
+                                 every dashboard view (unset = all namespaces)
   TASKITO_QUEUES                 comma-separated queues (default: default)
   TASKITO_WORKERS                dispatch concurrency (default: attached slots)
   TASKITO_MAINTENANCE            on | off — run retention and cleanup (default: on)

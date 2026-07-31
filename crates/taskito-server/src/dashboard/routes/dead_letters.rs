@@ -15,7 +15,11 @@ use crate::dashboard::state::SharedState;
 pub async fn list(State(state): State<SharedState>, params: Params) -> ApiResult<Json<Value>> {
     let limit = params.int("limit", 20)?;
     let offset = params.int("offset", 0)?;
-    let entries = on_storage(&state, move |storage| storage.list_dead(limit, offset)).await?;
+    let namespace = state.namespace.clone();
+    let entries = on_storage(&state, move |storage| {
+        storage.list_dead(limit, offset, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(Value::Array(
         entries.iter().map(dto::dead_job).collect(),
     )))
@@ -35,7 +39,11 @@ pub async fn retry(
     State(state): State<SharedState>,
     Path(dead_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let new_job_id = on_storage(&state, move |storage| storage.retry_dead(&dead_id)).await?;
+    let namespace = state.namespace.clone();
+    let new_job_id = on_storage(&state, move |storage| {
+        storage.retry_dead(&dead_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "new_job_id": new_job_id })))
 }
 
@@ -44,6 +52,10 @@ pub async fn delete(
     State(state): State<SharedState>,
     Path(dead_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let deleted = on_storage(&state, move |storage| storage.delete_dead(&dead_id)).await?;
+    let namespace = state.namespace.clone();
+    let deleted = on_storage(&state, move |storage| {
+        storage.delete_dead(&dead_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "deleted": deleted })))
 }

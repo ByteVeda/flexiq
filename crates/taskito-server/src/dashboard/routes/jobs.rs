@@ -118,7 +118,11 @@ pub async fn cancel(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let cancelled = on_storage(&state, move |storage| storage.cancel_job(&job_id)).await?;
+    let namespace = state.namespace.clone();
+    let cancelled = on_storage(&state, move |storage| {
+        storage.cancel_job(&job_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(json!({ "cancelled": cancelled })))
 }
 

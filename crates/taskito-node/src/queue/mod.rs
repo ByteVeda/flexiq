@@ -112,7 +112,9 @@ impl JsQueue {
     /// Cancel a pending job immediately. Returns false if it was not pending.
     #[napi]
     pub fn cancel_job(&self, id: String) -> Result<bool> {
-        self.storage.cancel_job(&id).map_err(to_napi_err)
+        self.storage
+            .cancel_job(&id, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Request cancellation of a running job (cooperative). Returns false if

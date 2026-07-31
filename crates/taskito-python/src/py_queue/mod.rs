@@ -490,7 +490,7 @@ impl PyQueue {
     /// Cancel a pending job. Returns True if cancelled, False if not pending.
     pub fn cancel_job(&self, job_id: &str) -> PyResult<bool> {
         self.storage
-            .cancel_job(job_id)
+            .cancel_job(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -555,7 +555,7 @@ impl PyQueue {
     pub fn stats(&self) -> PyResult<Py<PyAny>> {
         let stats = self
             .storage
-            .stats()
+            .stats(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -574,7 +574,7 @@ impl PyQueue {
     pub fn stats_by_queue(&self, queue_name: &str) -> PyResult<Py<PyAny>> {
         let stats = self
             .storage
-            .stats_by_queue(queue_name)
+            .stats_by_queue(queue_name, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -601,7 +601,7 @@ impl PyQueue {
     pub fn stats_all_queues(&self) -> PyResult<Py<PyAny>> {
         let all = self
             .storage
-            .stats_all_queues()
+            .stats_all_queues(self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {

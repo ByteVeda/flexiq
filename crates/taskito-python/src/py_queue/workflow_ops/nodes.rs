@@ -90,7 +90,13 @@ impl PyQueue {
             // Python tracker manages cascade (conditions / continue mode).
             if !succeeded && !skip_cascade {
                 let nodes = wf_storage.get_workflow_nodes(&run_id)?;
-                cascade_skip_pending_nodes(&self.storage, &wf_storage, &run_id, &nodes)?;
+                cascade_skip_pending_nodes(
+                    &self.storage,
+                    &wf_storage,
+                    &run_id,
+                    &nodes,
+                    self.namespace.as_deref(),
+                )?;
             }
 
             // Note: fan-out parent status is NOT updated here. The tracker calls
@@ -247,7 +253,7 @@ impl PyQueue {
             let node = wf_storage.get_workflow_node(&run_id_owned, &node_name_owned)?;
             if let Some(node) = node {
                 if let Some(job_id) = &node.job_id {
-                    if let Err(e) = self.storage.cancel_job(job_id) {
+                    if let Err(e) = self.storage.cancel_job(job_id, self.namespace.as_deref()) {
                         log::warn!(
                             "[taskito] cancel_job({}) failed while skipping node '{}' in run {}: {}",
                             job_id,

@@ -28,9 +28,14 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_writeTaskL
         let level = read_string(env, &level)?;
         let message = read_string(env, &message)?;
         let extra = read_optional_string(env, &extra)?;
-        queue
-            .storage
-            .write_task_log(&job_id, &task_name, &level, &message, extra.as_deref())?;
+        queue.storage.write_task_log(
+            &job_id,
+            &task_name,
+            &level,
+            &message,
+            extra.as_deref(),
+            queue.namespace.as_deref(),
+        )?;
         Ok(())
     })
 }
@@ -94,6 +99,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_queryTaskL
             level.as_deref(),
             since_ms,
             limit.max(0),
+            queue.namespace.as_deref(),
         )?;
         let views: Vec<LogView> = logs.iter().map(LogView::from).collect();
         new_string(env, to_json(&views)?)
