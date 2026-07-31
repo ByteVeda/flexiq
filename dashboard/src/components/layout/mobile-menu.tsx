@@ -9,15 +9,17 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui";
+import { useExecutorsSupported } from "@/features/executors";
 import { useBranding, useExternalLinks } from "@/features/settings";
 import { cn } from "@/lib/cn";
-import { NAV } from "./nav-config";
+import { visibleNav } from "./nav-config";
 
 export function MobileMenu() {
   const { pathname } = useLocation();
   const { title } = useBranding();
   const externalLinks = useExternalLinks();
   const [open, setOpen] = useState(false);
+  const nav = visibleNav({ "/executors": useExecutorsSupported() });
 
   const close = () => setOpen(false);
 
@@ -33,7 +35,7 @@ export function MobileMenu() {
           <SheetTitle>{title} Dashboard</SheetTitle>
         </SheetHeader>
         <nav className="flex-1 overflow-y-auto px-3 py-3">
-          {NAV.map((group) => (
+          {nav.map((group) => (
             <div key={group.title} className="mt-4 first:mt-1">
               <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
                 {group.title}

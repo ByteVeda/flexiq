@@ -1,13 +1,14 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ExternalLink as ExternalLinkIcon } from "lucide-react";
 import { LiveDot } from "@/components/ui";
+import { useExecutorsSupported } from "@/features/executors";
 import { useStats } from "@/features/overview/hooks";
 import { useBranding, useExternalLinks } from "@/features/settings";
 import { cn } from "@/lib/cn";
 import { formatCount } from "@/lib/number";
 import { site } from "@/lib/site";
 import { BrandMark } from "./brand-mark";
-import { NAV } from "./nav-config";
+import { visibleNav } from "./nav-config";
 
 export function Sidebar() {
   const { pathname } = useLocation();
@@ -15,6 +16,7 @@ export function Sidebar() {
   const externalLinks = useExternalLinks();
   const { data: stats, isError, isPending } = useStats();
   const deadCount = stats?.dead ?? 0;
+  const nav = visibleNav({ "/executors": useExecutorsSupported() });
 
   const coreTone = isError ? "danger" : isPending && !stats ? "warning" : "success";
   const coreLabel = isError
@@ -44,7 +46,7 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
-        {NAV.map((group) => (
+        {nav.map((group) => (
           <div key={group.title} className="mt-[18px] first:mt-1.5">
             <div className="px-2.5 pb-[7px] font-mono text-[0.62rem] font-semibold uppercase tracking-[0.13em] text-[var(--fg-subtle)]">
               {group.title}

@@ -64,6 +64,38 @@ export interface Job {
   notes: string | null;
 }
 
+/**
+ * One executor attached to a standalone scheduler.
+ *
+ * Only `taskito-server` serves `/api/executors`; an SDK dashboard answers 404
+ * and the page hides itself.
+ */
+export interface Executor {
+  executor_id: string;
+  sdk: string;
+  version: string;
+  /** Task names it advertises; the scheduler sends it nothing else. */
+  tasks: string[];
+  slots: number;
+  free_slots: number;
+  in_flight: number;
+  /** Peer label for logs, never a credential. */
+  peer: string;
+  /** Milliseconds since its last frame. */
+  idle_ms: number;
+}
+
+export interface ExecutorCapacity {
+  executors: number;
+  total_slots: number;
+  free_slots: number;
+}
+
+export interface ExecutorInventory {
+  executors: Executor[];
+  capacity: ExecutorCapacity;
+}
+
 export interface JobError {
   attempt: number;
   error: string;
