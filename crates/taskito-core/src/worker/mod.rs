@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cancel;
 pub mod dial;
 pub mod dispatcher;
 pub mod executor;
@@ -9,6 +10,7 @@ pub mod runner;
 pub mod transport;
 
 pub use auth::Secret;
+pub use cancel::CancelSignals;
 pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
 pub use executor::{ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle};
