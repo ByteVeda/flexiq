@@ -14,6 +14,7 @@ pub mod oauth;
 pub mod password;
 pub mod routes;
 pub mod store;
+pub mod throttle;
 
 use axum::routing::{get, post};
 use axum::Router;

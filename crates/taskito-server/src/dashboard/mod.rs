@@ -48,9 +48,15 @@ pub async fn serve(state: SharedState, shutdown: Shutdown) -> anyhow::Result<()>
     let bind = state.config.bind;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     log::info!("[taskito] dashboard on http://{bind}");
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(async move { shutdown.wait().await })
-        .await?;
+    // `into_make_service_with_connect_info` is what makes the peer address
+    // reachable from a handler; without it the login throttle can only key on
+    // the username.
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move { shutdown.wait().await })
+    .await?;
     Ok(())
 }
 

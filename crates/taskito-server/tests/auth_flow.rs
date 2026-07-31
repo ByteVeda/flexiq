@@ -406,6 +406,62 @@ async fn changing_a_password_requires_the_old_one() {
 }
 
 #[tokio::test]
+async fn repeated_bad_passwords_are_locked_out() {
+    let storage = temp_storage("auth-throttle");
+    let state = dashboard_state(&storage, AuthMode::Session);
+    admin_session(&state).await;
+
+    let attempt = || {
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "ops", "password": "wrong-password" }),
+        )
+    };
+
+    // The budget is spent on rejected credentials only.
+    for round in 0..10 {
+        let (status, _, _) = call(&state, attempt()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "attempt {round}");
+    }
+
+    let (status, headers, body) = call(&state, attempt()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], json!("too_many_attempts"));
+    assert!(
+        headers.contains_key("retry-after"),
+        "a lockout must say how long it lasts"
+    );
+
+    // The lockout is per identity: another account is unaffected...
+    let (status, _, _) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "someone-else", "password": "wrong-password" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // ...and the right password is refused too while the window holds, so a
+    // guesser cannot tell a hit from a miss during a lockout. Clearing on a
+    // successful login is covered in `throttle.rs`, where it costs no PBKDF2
+    // rounds.
+    let (status, _, _) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "ops", "password": "supersecret" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn a_session_minted_by_another_sdk_is_accepted() {
     let storage = temp_storage("auth-interop");
     let state = dashboard_state(&storage, AuthMode::Session);

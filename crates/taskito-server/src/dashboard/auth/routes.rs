@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::config::dashboard::AuthMode;
 use crate::dashboard::auth::context::RequestContext;
 use crate::dashboard::auth::model::{validate_password, validate_username, Role};
+use crate::dashboard::auth::throttle::{ClientAddr, LoginThrottle};
 use crate::dashboard::auth::{cookies, store};
 use crate::dashboard::blocking::{on_storage, on_storage_api};
 use crate::dashboard::error::{ApiError, ApiResult};
@@ -53,12 +54,21 @@ pub async fn setup(
 /// is an account-enumeration oracle.
 pub async fn login(
     State(state): State<SharedState>,
+    client: ClientAddr,
     Json(body): Json<Value>,
 ) -> ApiResult<Response> {
     let username = required_field(&body, "username")?;
     let password = required_field(&body, "password")?;
 
-    let (user, session) = on_storage_api(&state, move |storage| {
+    // Keyed by client and username together: probing one account must not lock
+    // its real owner out from somewhere else, and one client must not get a
+    // fresh budget per username it invents.
+    let throttle_key = LoginThrottle::key(client.label().as_deref(), &username);
+    if let Err(wait) = state.login_throttle.check(&throttle_key) {
+        return Err(ApiError::TooManyAttempts(wait.as_secs().max(1)));
+    }
+
+    let attempt = on_storage_api(&state, move |storage| {
         if store::count_users(storage)? == 0 {
             return Err(ApiError::BadRequest("setup_required".into()));
         }
@@ -67,7 +77,22 @@ pub async fn login(
         let session = store::create_session(storage, &user)?;
         Ok((user, session))
     })
-    .await?;
+    .await;
+
+    let (user, session) = match attempt {
+        Ok(authenticated) => {
+            state.login_throttle.clear(&throttle_key);
+            authenticated
+        }
+        Err(error) => {
+            // Only a rejected credential counts; a storage fault is not the
+            // caller's doing and must not lock them out.
+            if matches!(&error, ApiError::BadRequest(reason) if reason == "invalid_credentials") {
+                state.login_throttle.record_failure(&throttle_key);
+            }
+            return Err(error);
+        }
+    };
 
     // The token rides in the HttpOnly cookie and never in the body.
     let body = json!({

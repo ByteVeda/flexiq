@@ -26,6 +26,8 @@ pub enum ApiError {
     /// Auth endpoints called while auth is disabled — 404, so the SPA hides
     /// its login affordances.
     AuthDisabled,
+    /// Too many failed attempts — 429, with the seconds left to wait.
+    TooManyAttempts(u64),
     /// Anything unexpected — 500 with a generic body, details go to the log.
     Internal(anyhow::Error),
 }
@@ -39,6 +41,15 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // A lockout has to say how long it lasts, or a client can only poll.
+        if let Self::TooManyAttempts(retry_after_seconds) = self {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("retry-after", retry_after_seconds.to_string())],
+                Json(json!({ "error": "too_many_attempts" })),
+            )
+                .into_response();
+        }
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, message),
@@ -49,6 +60,11 @@ impl IntoResponse for ApiError {
                 "setup_required".to_string(),
             ),
             Self::AuthDisabled => (StatusCode::NOT_FOUND, "auth_disabled".to_string()),
+            // Handled above; matched again so the arm list stays exhaustive.
+            Self::TooManyAttempts(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_attempts".to_string(),
+            ),
             Self::Internal(error) => {
                 // The cause is for the operator's log, never the response — it
                 // can carry a DSN or a query fragment.
@@ -106,5 +122,21 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(status_of(ApiError::AuthDisabled), StatusCode::NOT_FOUND);
+        assert_eq!(
+            status_of(ApiError::TooManyAttempts(42)),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn a_lockout_says_how_long_to_wait() {
+        let response = ApiError::TooManyAttempts(120).into_response();
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .map(|v| v.to_str().unwrap()),
+            Some("120")
+        );
     }
 }

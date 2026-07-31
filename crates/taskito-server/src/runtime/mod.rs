@@ -4,6 +4,7 @@
 pub mod listener;
 pub mod scheduler;
 pub mod shutdown;
+pub mod upkeep;
 
 use std::sync::Arc;
 
@@ -17,20 +18,13 @@ use crate::dashboard::static_assets::StaticAssets;
 use crate::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
 use crate::runtime::shutdown::{wait_for_signal, Shutdown};
 
-/// One-time auth work at startup: create the configured admin and clear
-/// sessions that expired while the process was down.
+/// Create the configured admin, if the deployment asked for one.
 fn prepare_auth(storage: &taskito_core::StorageBackend, config: &DashboardConfig) {
     if config.auth != AuthMode::Session {
         return;
     }
     if let Some((username, password)) = &config.admin_bootstrap {
         crate::dashboard::auth::bootstrap::admin_from_env(storage, username, password);
-    }
-    match crate::dashboard::auth::store::prune_expired_sessions(storage) {
-        Ok(0) => {}
-        Ok(removed) => log::info!("[taskito] pruned {removed} expired dashboard session(s)"),
-        // Stale sessions are inert, so this is worth a line and nothing more.
-        Err(error) => log::warn!("pruning expired sessions failed: {error}"),
     }
 }
 
@@ -74,6 +68,14 @@ pub fn run(config: Config) -> Result<()> {
         .build()
         .context("failed to build the async runtime")?;
 
+    // Expired sessions and abandoned logins are swept on a cadence, not just
+    // at boot: a server that never restarts would otherwise accumulate them.
+    let upkeep = config
+        .dashboard
+        .as_ref()
+        .filter(|dashboard| dashboard.auth == AuthMode::Session)
+        .map(|_| upkeep::spawn(backend.storage.clone(), shutdown.clone()));
+
     let served = runtime.block_on(async {
         let signals = tokio::spawn({
             let shutdown = shutdown.clone();
@@ -101,6 +103,7 @@ pub fn run(config: Config) -> Result<()> {
                     namespace: config.namespace.clone(),
                     queues: config.queues.clone(),
                     maintenance: config.maintenance,
+                    login_throttle: Default::default(),
                 });
                 crate::dashboard::serve(state, shutdown.clone()).await
             }
@@ -124,6 +127,9 @@ pub fn run(config: Config) -> Result<()> {
     }
     if let Some(supervisor) = supervisor {
         supervisor.shutdown();
+    }
+    if let Some(upkeep) = upkeep {
+        let _ = upkeep.join();
     }
     served
 }
