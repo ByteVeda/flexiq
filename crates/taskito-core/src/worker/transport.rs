@@ -26,6 +26,7 @@ pub type WriteHalf = Box<dyn Write + Send>;
 /// reader return, so shutdown cannot hang on a peer that stops responding.
 pub struct Connection {
     set_read_timeout: Box<dyn Fn(Option<Duration>) -> io::Result<()> + Send + Sync>,
+    set_write_timeout: Box<dyn Fn(Option<Duration>) -> io::Result<()> + Send + Sync>,
     close: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -36,6 +37,14 @@ impl Connection {
     /// platform socket behaviour the socket transports inherit.
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         (self.set_read_timeout)(timeout)
+    }
+
+    /// Bound how long a write may block. `None` blocks indefinitely.
+    ///
+    /// A peer that stops reading fills the kernel send buffer, and an unbounded
+    /// write would then park the dispatch thread for good.
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        (self.set_write_timeout)(timeout)
     }
 
     /// Tear the connection down so a reader blocked on it returns. Idempotent
@@ -79,12 +88,16 @@ impl Transport for UnixTransport {
         // Every clone shares one fd, so the control reaches the read half.
         let read = self.0.try_clone()?;
         let control = Arc::new(self.0.try_clone()?);
+        let writer_control = control.clone();
         let closer = control.clone();
         Ok((
             Box::new(BufReader::new(read)),
             Box::new(self.0),
             Connection {
                 set_read_timeout: Box::new(move |timeout| control.set_read_timeout(timeout)),
+                set_write_timeout: Box::new(move |timeout| {
+                    writer_control.set_write_timeout(timeout)
+                }),
                 close: Box::new(move || {
                     let _ = closer.shutdown(std::net::Shutdown::Both);
                 }),
@@ -121,12 +134,16 @@ impl Transport for TcpTransport {
     fn split(self: Box<Self>) -> io::Result<(ReadHalf, WriteHalf, Connection)> {
         let read = self.0.try_clone()?;
         let control = Arc::new(self.0.try_clone()?);
+        let writer_control = control.clone();
         let closer = control.clone();
         Ok((
             Box::new(BufReader::new(read)),
             Box::new(self.0),
             Connection {
                 set_read_timeout: Box::new(move |timeout| control.set_read_timeout(timeout)),
+                set_write_timeout: Box::new(move |timeout| {
+                    writer_control.set_write_timeout(timeout)
+                }),
                 close: Box::new(move || {
                     let _ = closer.shutdown(std::net::Shutdown::Both);
                 }),
@@ -188,6 +205,8 @@ impl Transport for MemoryTransport {
                     *control.read_timeout.lock().unwrap_or_else(recover) = timeout;
                     Ok(())
                 }),
+                // The in-memory buffer is unbounded, so a write never blocks.
+                set_write_timeout: Box::new(|_| Ok(())),
                 close: Box::new(move || closer.close_reader()),
             },
         ))

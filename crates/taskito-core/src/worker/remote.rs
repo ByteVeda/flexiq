@@ -33,6 +33,9 @@ pub struct RemoteConfig {
     /// How long a job waits for a slot on an executor advertising its task
     /// before it is failed back retryably.
     pub placement_timeout: Duration,
+    /// How long a dispatch write may block before the executor is treated as
+    /// wedged. Bounds the dispatch thread against a peer that stops reading.
+    pub write_timeout: Duration,
     /// How long shutdown waits for attached executors to finish in-flight
     /// jobs before their connections are closed.
     pub shutdown_drain: Duration,
@@ -46,6 +49,7 @@ impl Default for RemoteConfig {
             scheduler_id: format!("scheduler-{}", uuid::Uuid::now_v7()),
             handshake_timeout: Duration::from_secs(10),
             placement_timeout: Duration::from_secs(30),
+            write_timeout: Duration::from_secs(30),
             shutdown_drain: Duration::from_secs(30),
             cancel_capacity: 1024,
         }
@@ -254,6 +258,7 @@ impl Shared {
         }
         let peer = transport.peer();
         let (read, write, connection) = transport.split()?;
+        connection.set_write_timeout(Some(self.config.write_timeout))?;
         let mut reader = FrameReader::new(read);
         let mut writer = FrameWriter::new(write);
 
