@@ -38,14 +38,32 @@ class ProtocolError(Exception):
 
 
 def declared_payload_len(header: dict[str, Any]) -> int:
-    """Bytes of payload a header says follow it."""
+    """Bytes of payload a header says follow it.
+
+    Validated here rather than at the call sites: a negative or non-integer
+    length would otherwise reach ``stream.read(n)``, where a negative count
+    drains the connection to EOF.
+    """
     kind = header.get("type")
     if kind == "job":
-        return int(header.get("payload_len") or 0)
+        return _checked_len(header.get("payload_len") or 0, "payload_len")
     if kind == "success":
         result_len = header.get("result_len")
-        return 0 if result_len is None else int(result_len)
+        return 0 if result_len is None else _checked_len(result_len, "result_len")
     return 0
+
+
+def _checked_len(value: Any, field: str) -> int:
+    """Coerce a declared length, rejecting anything unusable as a read count."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ProtocolError(f"{field} must be an integer, got {type(value).__name__}")
+    if value < 0:
+        raise ProtocolError(f"{field} must not be negative, got {value}")
+    if value > MAX_PAYLOAD_BYTES:
+        raise ProtocolError(
+            f"frame payload of {value} bytes exceeds the {MAX_PAYLOAD_BYTES} byte limit"
+        )
+    return int(value)
 
 
 def write_frame(stream: BinaryIO, header: dict[str, Any], payload: bytes = b"") -> None:
@@ -80,12 +98,7 @@ def read_frame(stream: BinaryIO) -> tuple[dict[str, Any], bytes]:
     if not isinstance(header, dict):
         raise ProtocolError("frame header must be a JSON object")
 
-    length = declared_payload_len(header)
-    if length > MAX_PAYLOAD_BYTES:
-        raise ProtocolError(
-            f"frame payload of {length} bytes exceeds the {MAX_PAYLOAD_BYTES} byte limit"
-        )
-    return header, _read_exact(stream, length)
+    return header, _read_exact(stream, declared_payload_len(header))
 
 
 def _read_exact(stream: BinaryIO, length: int) -> bytes:
