@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod dial;
 pub mod dispatcher;
 pub mod executor;
 pub mod protocol;
@@ -8,6 +9,7 @@ pub mod runner;
 pub mod transport;
 
 pub use auth::Secret;
+pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
 pub use executor::{ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle};
 pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
