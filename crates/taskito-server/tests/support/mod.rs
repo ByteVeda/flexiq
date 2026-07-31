@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod oidc_issuer;
+pub mod webhook_receiver;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
