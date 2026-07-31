@@ -60,6 +60,10 @@ pub enum QueueError {
     #[error("lock not acquired: {0}")]
     LockNotAcquired(String),
 
+    /// A compare-and-set write lost to a concurrent writer on every attempt.
+    #[error("setting '{0}' was changed by another writer on every attempt")]
+    SettingConflict(String),
+
     /// Any other failure that fits no specific variant.
     #[error("{0}")]
     Other(String),

@@ -5,6 +5,7 @@
 //! the next job without a restart — which is also why this process can write it
 //! without knowing anything about the middleware itself.
 
+use serde_json::Value;
 use taskito_core::{Result, Storage};
 
 use crate::dashboard::stores::kv;
@@ -43,19 +44,30 @@ pub fn set_disabled(
     middleware_name: &str,
     disabled: bool,
 ) -> Result<Vec<String>> {
-    let mut current = get_for(storage, task_name)?;
-    if disabled {
-        if !current.iter().any(|name| name == middleware_name) {
-            current.push(middleware_name.to_string());
+    // Edited as raw JSON so an entry this build would not parse is left alone
+    // rather than dropped by the write.
+    let current: Vec<String> = kv::update(storage, &key(task_name), |names: &mut Vec<Value>| {
+        let already = names
+            .iter()
+            .any(|name| name.as_str() == Some(middleware_name));
+        if disabled {
+            if !already {
+                names.push(Value::String(middleware_name.to_string()));
+            }
+        } else {
+            names.retain(|name| name.as_str() != Some(middleware_name));
         }
-    } else {
-        current.retain(|name| name != middleware_name);
-    }
+        names
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    })?;
 
+    // An empty list leaves no row rather than storing `[]`, so a task with
+    // nothing disabled leaves no trace in the settings listing.
     if current.is_empty() {
         storage.delete_setting(&key(task_name))?;
-    } else {
-        kv::write(storage, &key(task_name), &current)?;
     }
     Ok(current)
 }

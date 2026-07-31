@@ -131,17 +131,22 @@ pub fn set(
     }
     validate(scope, patch)?;
 
-    let mut merged = get(scope, storage, name)?.unwrap_or_default();
-    merged.remove("updated_at");
-    for (field, value) in patch {
-        if value.is_null() {
-            merged.remove(field);
-        } else {
-            merged.insert(field.clone(), value.clone());
-        }
-    }
-    merged.insert("updated_at".into(), json!(now_millis()));
-    kv::write(storage, &format!("{}{name}", scope.prefix()), &merged)?;
+    let merged = kv::update(
+        storage,
+        &format!("{}{name}", scope.prefix()),
+        |stored: &mut Map<String, Value>| {
+            stored.remove("updated_at");
+            for (field, value) in patch {
+                if value.is_null() {
+                    stored.remove(field);
+                } else {
+                    stored.insert(field.clone(), value.clone());
+                }
+            }
+            stored.insert("updated_at".into(), json!(now_millis()));
+            stored.clone()
+        },
+    )?;
     Ok(merged)
 }
 

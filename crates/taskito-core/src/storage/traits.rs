@@ -580,6 +580,14 @@ pub trait Storage: Send + Sync + Clone {
     fn get_setting(&self, key: &str) -> Result<Option<String>>;
     /// Insert or update a setting.
     fn set_setting(&self, key: &str, value: &str) -> Result<()>;
+    /// Write a setting only if it still holds ``expected``, where ``None``
+    /// means the key must be unset. Returns ``false`` when another writer got
+    /// there first, so a read-modify-write caller can re-read and retry.
+    ///
+    /// Every backend does this in one atomic operation — the settings rows hold
+    /// whole JSON documents, and a plain [`Storage::set_setting`] after a read
+    /// would silently drop a concurrent edit.
+    fn set_setting_if(&self, key: &str, expected: Option<&str>, value: &str) -> Result<bool>;
     /// Delete a setting. Returns ``true`` if a row was removed.
     fn delete_setting(&self, key: &str) -> Result<bool>;
     /// Return all settings as a key→value map.

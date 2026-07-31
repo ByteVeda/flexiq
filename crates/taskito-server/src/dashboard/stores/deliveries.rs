@@ -180,12 +180,17 @@ pub fn record_attempt(
     record.completed_at = (record.status != DeliveryStatus::Pending).then_some(now);
     record.response_body = record.response_body.as_deref().map(truncate);
 
-    let mut rows = load(storage, &record.subscription_id)?;
-    rows.push(record.clone());
-    if rows.len() > MAX_PER_WEBHOOK {
-        rows.drain(..rows.len() - MAX_PER_WEBHOOK);
-    }
-    kv::write(storage, &key(&record.subscription_id), &rows)?;
+    let row = serde_json::to_value(&record)?;
+    kv::update(
+        storage,
+        &key(&record.subscription_id),
+        |rows: &mut Vec<Value>| {
+            rows.push(row.clone());
+            if rows.len() > MAX_PER_WEBHOOK {
+                rows.drain(..rows.len() - MAX_PER_WEBHOOK);
+            }
+        },
+    )?;
     Ok(record)
 }
 

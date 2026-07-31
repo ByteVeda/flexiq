@@ -1045,6 +1045,36 @@ fn test_setting_list_returns_all() {
 }
 
 #[test]
+fn test_setting_cas_writes_only_on_the_expected_value() {
+    let storage = test_storage();
+    storage.set_setting("k", "v1").unwrap();
+
+    assert!(!storage.set_setting_if("k", Some("stale"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("v1".to_string()));
+
+    assert!(storage.set_setting_if("k", Some("v1"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("v2".to_string()));
+}
+
+#[test]
+fn test_setting_cas_creates_only_when_unset() {
+    let storage = test_storage();
+    assert!(storage.set_setting_if("k", None, "first").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("first".to_string()));
+
+    // The key now exists, so the "must be unset" branch must not overwrite it.
+    assert!(!storage.set_setting_if("k", None, "second").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("first".to_string()));
+}
+
+#[test]
+fn test_setting_cas_on_a_missing_key_expecting_a_value_fails() {
+    let storage = test_storage();
+    assert!(!storage.set_setting_if("k", Some("v1"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), None);
+}
+
+#[test]
 fn test_setting_preserves_unicode_and_json() {
     let storage = test_storage();
     let payload = r#"{"label":"Grafana ⏱️","url":"https://grafana.example/dash"}"#;

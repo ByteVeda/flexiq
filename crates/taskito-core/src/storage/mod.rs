@@ -1174,6 +1174,14 @@ macro_rules! impl_storage {
             fn set_setting(&self, key: &str, value: &str) -> $crate::error::Result<()> {
                 self.set_setting(key, value)
             }
+            fn set_setting_if(
+                &self,
+                key: &str,
+                expected: Option<&str>,
+                value: &str,
+            ) -> $crate::error::Result<bool> {
+                self.set_setting_if(key, expected, value)
+            }
             fn delete_setting(&self, key: &str) -> $crate::error::Result<bool> {
                 self.delete_setting(key)
             }
@@ -1873,6 +1881,9 @@ impl Storage for StorageBackend {
     }
     fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         delegate!(self, set_setting, key, value)
+    }
+    fn set_setting_if(&self, key: &str, expected: Option<&str>, value: &str) -> Result<bool> {
+        delegate!(self, set_setting_if, key, expected, value)
     }
     fn delete_setting(&self, key: &str) -> Result<bool> {
         delegate!(self, delete_setting, key)
