@@ -89,7 +89,23 @@ pub fn spawn_child(
 
     let mut reader = ChildReader::new(BufReader::new(stdout));
     let mut writer = ChildWriter::new(stdin);
+    // `Child::drop` does not terminate the process, so every failure below has
+    // to reap it or the child survives as an orphan the restart path never
+    // notices (it is only ever reached via `is_alive()` on a live handle).
+    let mut child = ChildProcess { process };
 
+    let handshake = handshake(&mut reader, &mut writer);
+    match handshake {
+        Ok(()) => Ok((writer, reader, child)),
+        Err(e) => {
+            child.kill_and_reap();
+            Err(e)
+        }
+    }
+}
+
+/// Read the child's `hello`, acknowledge it, and check the protocol version.
+fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), String> {
     let hello = reader
         .read::<ExecutorMessage>()
         .map_err(|e| format!("child handshake failed: {e}"))?
@@ -118,5 +134,5 @@ pub fn spawn_child(
         ));
     }
 
-    Ok((writer, reader, ChildProcess { process }))
+    Ok(())
 }
