@@ -69,14 +69,21 @@ async fn begin_login(state: &SharedState, storage: &StorageBackend) -> String {
 }
 
 async fn land_callback(state: &SharedState, token: &str) -> (StatusCode, HeaderMap) {
-    let (status, headers, _) = call(
-        state,
-        get(&format!(
-            "/api/auth/oauth/callback/github?code=stub-code&state={token}"
-        )),
-    )
-    .await;
+    let (status, headers, _) = call(state, callback_request(token, Some(token))).await;
     (status, headers)
+}
+
+/// A callback request presenting `cookie` as the browser's state marker.
+fn callback_request(token: &str, cookie: Option<&str>) -> axum::http::Request<axum::body::Body> {
+    let mut request = axum::http::Request::builder().uri(format!(
+        "/api/auth/oauth/callback/github?code=stub-code&state={token}"
+    ));
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("taskito_oauth_state={cookie}"));
+    }
+    request
+        .body(axum::body::Body::empty())
+        .expect("valid request")
 }
 
 fn location_of(headers: &HeaderMap) -> String {

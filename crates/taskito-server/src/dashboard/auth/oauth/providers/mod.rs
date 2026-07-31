@@ -63,13 +63,16 @@ impl OAuthRuntime {
     pub fn new(config: OAuthConfig) -> Self {
         Self {
             config,
+            // Not `unwrap_or_default()`: the default client has no timeout and
+            // follows redirects, so falling back to it would quietly drop both
+            // controls this client exists for.
             http: reqwest::Client::builder()
                 .timeout(HTTP_TIMEOUT)
                 // A provider that redirects the token exchange somewhere else
-                // is not a provider we should be handing a client secret to.
+                // is not one we should hand a client secret to.
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
-                .unwrap_or_default(),
+                .expect("a client with only a timeout and a redirect policy always builds"),
             discovery: Mutex::new(HashMap::new()),
             jwks: Mutex::new(HashMap::new()),
         }

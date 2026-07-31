@@ -84,7 +84,8 @@ pub async fn create(
 ) -> ApiResult<Json<Value>> {
     let body = object(&body)?;
     let url = required_string(body, "url")?;
-    validate_webhook_url(&url).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    validate_webhook_url(&url, state.config.allow_private_webhooks)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
     let mut subscription = WebhookSubscription::new(url);
     apply_patch(&mut subscription, body)?;
@@ -114,7 +115,8 @@ pub async fn update(
             .as_str()
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ApiError::BadRequest("missing or empty field 'url'".into()))?;
-        validate_webhook_url(url).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        validate_webhook_url(url, state.config.allow_private_webhooks)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
         subscription.url = url.to_string();
     }
     apply_patch(&mut subscription, patch)?;
@@ -177,7 +179,8 @@ pub async fn test(
         "message": "synthetic test event from dashboard",
     });
 
-    let outcome = webhook_sender::deliver(&subscription, &payload).await;
+    let outcome =
+        webhook_sender::deliver(&subscription, &payload, state.config.allow_private_webhooks).await;
     Ok(Json(json!({
         "status": outcome.status,
         "delivered": outcome.delivered(),
@@ -254,7 +257,12 @@ pub async fn replay_delivery(
 
     let mut payload = record.payload.clone();
     payload.insert("replay_of".into(), json!(record.id));
-    let outcome = webhook_sender::deliver(&subscription, &Value::Object(payload.clone())).await;
+    let outcome = webhook_sender::deliver(
+        &subscription,
+        &Value::Object(payload.clone()),
+        state.config.allow_private_webhooks,
+    )
+    .await;
 
     let (delivered, status) = (outcome.delivered(), outcome.status);
     let attempt = DeliveryRecord {

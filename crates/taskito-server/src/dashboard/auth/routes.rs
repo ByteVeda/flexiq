@@ -168,15 +168,23 @@ pub async fn change_password(
     let new_password = required_field(&body, "new_password")?;
     validate_password(&new_password).map_err(ApiError::BadRequest)?;
 
-    on_storage_api(&state, move |storage| {
+    let revoked = on_storage_api(&state, move |storage| {
         let user = store::authenticate(storage, &session.username, &old_password)?
             .ok_or_else(|| ApiError::BadRequest("invalid_credentials".into()))?;
         store::update_password(storage, &user.username, &new_password)?
-            .map_err(ApiError::BadRequest)
+            .map_err(ApiError::BadRequest)?;
+        // The usual reason to change a password is that something leaked, and a
+        // session minted with the old one would otherwise keep working for its
+        // full TTL. The caller's own session survives.
+        Ok(store::revoke_sessions_for(
+            storage,
+            &user.username,
+            Some(&session.token),
+        )?)
     })
     .await?;
 
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "sessions_revoked": revoked })))
 }
 
 fn required_field(body: &Value, field: &str) -> ApiResult<String> {

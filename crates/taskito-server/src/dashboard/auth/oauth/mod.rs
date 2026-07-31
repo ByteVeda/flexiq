@@ -15,6 +15,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
+use crate::dashboard::auth::context::oauth_state_cookie;
 use crate::dashboard::auth::oauth::providers::{OAuthError, OAuthRuntime};
 use crate::dashboard::auth::{cookies, store};
 use crate::dashboard::blocking::{on_storage, on_storage_api};
@@ -86,7 +87,14 @@ pub async fn start(
             ApiError::BadRequest("oauth_unavailable".into())
         })?;
 
-    Ok(redirect_to(&url, HeaderMap::new()))
+    // The state row proves the flow was started here; the cookie proves it was
+    // started by *this* browser. Without it an attacker can begin a flow, hold
+    // the code, and have a victim's browser complete it — landing the victim in
+    // the attacker's account.
+    Ok(redirect_to(
+        &url,
+        cookies::oauth_state(&token, state.config.secure_cookies),
+    ))
 }
 
 /// `GET /api/auth/oauth/callback/{slot}` — verify, create a session, land home.
@@ -96,18 +104,29 @@ pub async fn start(
 pub async fn callback(
     State(state): State<SharedState>,
     Path(slot): Path<String>,
+    headers: HeaderMap,
     params: Params,
 ) -> ApiResult<Response> {
     let runtime = require_runtime(&state)?;
     let provider = runtime.provider(&slot).map_err(not_configured)?.clone();
+    // Cleared on every exit below: a marker outliving its flow is a marker
+    // some later callback could be matched against.
+    let clear = cookies::cleared_oauth_state(state.config.secure_cookies);
 
     if let Some(error) = params.get("error") {
         log::warn!("provider '{slot}' returned an error at callback: {error}");
-        return Ok(redirect_to(LOGIN_FAILED, HeaderMap::new()));
+        return Ok(redirect_to(LOGIN_FAILED, clear));
     }
     let (Some(code), Some(token)) = (params.get("code"), params.get("state")) else {
-        return Ok(redirect_to(LOGIN_STATE_INVALID, HeaderMap::new()));
+        return Ok(redirect_to(LOGIN_STATE_INVALID, clear));
     };
+
+    // This is the login-CSRF check: the browser finishing the flow must be the
+    // one that started it, which only its own cookie can show.
+    if oauth_state_cookie(&headers).as_deref() != Some(token) {
+        log::warn!("provider callback on '{slot}' arrived without the browser's own state cookie");
+        return Ok(redirect_to(LOGIN_STATE_INVALID, clear));
+    }
 
     let lookup = token.to_string();
     let Some(row) = on_storage(&state, move |storage| state::consume(storage, &lookup)).await?
@@ -142,7 +161,7 @@ pub async fn callback(
                 OAuthError::StateInvalid => LOGIN_STATE_INVALID,
                 _ => LOGIN_FAILED,
             };
-            return Ok(redirect_to(destination, HeaderMap::new()));
+            return Ok(redirect_to(destination, clear));
         }
     };
 
@@ -166,10 +185,11 @@ pub async fn callback(
         log::warn!("pruning expired OAuth state failed");
     }
 
-    Ok(redirect_to(
-        &row.next_url,
-        cookies::established(&session, state.config.secure_cookies),
-    ))
+    let mut headers = cookies::established(&session, state.config.secure_cookies);
+    for value in clear.get_all(axum::http::header::SET_COOKIE) {
+        headers.append(axum::http::header::SET_COOKIE, value.clone());
+    }
+    Ok(redirect_to(&row.next_url, headers))
 }
 
 fn require_runtime(state: &SharedState) -> ApiResult<&OAuthRuntime> {

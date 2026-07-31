@@ -24,7 +24,12 @@ const PASSWORD_MIN_LEN: usize = 8;
 const PASSWORD_MAX_LEN: usize = 256;
 
 /// A dashboard user's access level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization never fails: these rows are a cross-SDK contract, and a role
+/// this build does not recognise must degrade to `viewer`, not make the whole
+/// user unreadable. A dropped user row shrinks `count_users`, which is what
+/// decides whether unauthenticated setup is still open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Full read/write access.
@@ -48,6 +53,15 @@ impl Role {
             Some("admin") => Self::Admin,
             _ => Self::Viewer,
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Anything unrecognised — including a non-string — reads as the least
+        // privileged role rather than as a parse error.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(Self::parse_or_viewer(value.as_str()))
     }
 }
 
@@ -173,6 +187,21 @@ mod tests {
         assert_eq!(Role::parse_or_viewer(Some("admin")), Role::Admin);
         assert_eq!(Role::parse_or_viewer(Some("superuser")), Role::Viewer);
         assert_eq!(Role::parse_or_viewer(None), Role::Viewer);
+    }
+
+    #[test]
+    fn an_unknown_role_reads_as_viewer_rather_than_failing() {
+        // A row written by a build that knows a role this one does not must
+        // still parse: dropping it would shrink the user count and reopen
+        // unauthenticated setup.
+        for stored in ["\"superuser\"", "\"\"", "null", "7"] {
+            let role: Role = serde_json::from_str(stored).expect("must not fail");
+            assert_eq!(role, Role::Viewer, "for {stored}");
+        }
+        assert_eq!(
+            serde_json::from_str::<Role>("\"admin\"").expect("valid"),
+            Role::Admin
+        );
     }
 
     #[test]

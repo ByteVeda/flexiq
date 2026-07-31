@@ -12,6 +12,8 @@ pub const SESSION_COOKIE: &str = "taskito_session";
 pub const CSRF_COOKIE: &str = "taskito_csrf";
 /// Header the SPA echoes the CSRF token in.
 pub const CSRF_HEADER: &str = "x-csrf-token";
+/// Cookie binding an in-flight provider login to the browser that began it.
+pub const OAUTH_STATE_COOKIE: &str = "taskito_oauth_state";
 
 /// Auth state attached to one request.
 #[derive(Debug, Clone, Default)]
@@ -60,6 +62,13 @@ impl RequestContext {
         };
         !cookie.is_empty() && cookie == header && cookie == session.csrf_token
     }
+}
+
+/// The in-flight login marker this browser presented, if any.
+pub fn oauth_state_cookie(headers: &HeaderMap) -> Option<String> {
+    parse_cookies(header_value(headers, "cookie").as_deref())
+        .get(OAUTH_STATE_COOKIE)
+        .cloned()
 }
 
 /// Session token presented in the request, if any.

@@ -122,6 +122,9 @@ pub fn dashboard_state_for(
             secure_cookies: false,
             admin_bootstrap: None,
             oauth: None,
+            // Off by default, exactly as in production. Only the delivery
+            // tests, whose receiver is on loopback, turn it on.
+            allow_private_webhooks: false,
         },
         oauth: None,
         namespace: None,
@@ -136,6 +139,15 @@ pub fn dashboard_state_with_oauth(storage: &StorageBackend, oauth: OAuthConfig) 
     let mut state = dashboard_state(storage, AuthMode::Session);
     let shared = Arc::get_mut(&mut state).expect("the state is not shared yet");
     shared.oauth = Some(Arc::new(OAuthRuntime::new(oauth)));
+    state
+}
+
+/// [`dashboard_state`] with the SSRF escape hatch on, for tests whose webhook
+/// endpoint necessarily runs on loopback.
+pub fn dashboard_state_allowing_loopback_webhooks(storage: &StorageBackend) -> SharedState {
+    let mut state = dashboard_state(storage, AuthMode::Open);
+    let shared = Arc::get_mut(&mut state).expect("the state is not shared yet");
+    shared.config.allow_private_webhooks = true;
     state
 }
 

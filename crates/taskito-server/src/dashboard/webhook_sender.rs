@@ -41,13 +41,17 @@ impl SendOutcome {
 }
 
 /// POST `payload` to `subscription`, signing it when a secret is configured.
-pub async fn deliver(subscription: &WebhookSubscription, payload: &Value) -> SendOutcome {
+pub async fn deliver(
+    subscription: &WebhookSubscription,
+    payload: &Value,
+    allow_private: bool,
+) -> SendOutcome {
     let started = Instant::now();
 
     // Re-validate at send time: a host that resolved publicly at registration
     // may have been rebound since. A residual race remains between this
     // resolve and the connect, but it closes the wide window.
-    if let Err(error) = validate_webhook_url(&subscription.url) {
+    if let Err(error) = validate_webhook_url(&subscription.url, allow_private) {
         return SendOutcome {
             error: Some(error.to_string()),
             latency_ms: elapsed_ms(started),
@@ -86,10 +90,9 @@ pub async fn deliver(subscription: &WebhookSubscription, payload: &Value) -> Sen
     match request.body(body).send().await {
         Ok(response) => {
             let status = response.status().as_u16() as i64;
-            let body = response.text().await.ok().map(|text| truncate(&text));
             SendOutcome {
                 status: Some(status),
-                body,
+                body: read_bounded(response).await,
                 latency_ms: elapsed_ms(started),
                 error: None,
             }
@@ -102,6 +105,31 @@ pub async fn deliver(subscription: &WebhookSubscription, payload: &Value) -> Sen
             error: Some(error.to_string()),
         },
     }
+}
+
+/// Read at most [`MAX_RESPONSE_BYTES`] of the response.
+///
+/// `text()` would buffer whatever the endpoint chose to send before any cap
+/// applied — the operator configures that URL, but the body is the far side's
+/// to decide. Streaming stops as soon as the budget is spent.
+async fn read_bounded(response: reqwest::Response) -> Option<String> {
+    let mut response = response;
+    let mut buffered: Vec<u8> = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let room = MAX_RESPONSE_BYTES.saturating_sub(buffered.len());
+                if room == 0 {
+                    break;
+                }
+                buffered.extend_from_slice(&chunk[..chunk.len().min(room)]);
+            }
+            Ok(None) => break,
+            // A read that fails mid-body still leaves whatever arrived useful.
+            Err(_) => break,
+        }
+    }
+    (!buffered.is_empty()).then(|| String::from_utf8_lossy(&buffered).into_owned())
 }
 
 /// `sha256=<hex>` over the exact bytes on the wire.
@@ -122,17 +150,6 @@ fn timeout_of(subscription: &WebhookSubscription) -> Duration {
 
 fn elapsed_ms(started: Instant) -> i64 {
     started.elapsed().as_millis().min(i64::MAX as u128) as i64
-}
-
-fn truncate(body: &str) -> String {
-    if body.len() <= MAX_RESPONSE_BYTES {
-        return body.to_string();
-    }
-    let mut cut = MAX_RESPONSE_BYTES;
-    while cut > 0 && !body.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    body[..cut].to_string()
 }
 
 #[cfg(test)]

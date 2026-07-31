@@ -7,8 +7,12 @@
 use axum::http::header::SET_COOKIE;
 use axum::http::HeaderMap;
 
-use crate::dashboard::auth::context::{CSRF_COOKIE, SESSION_COOKIE};
+use crate::dashboard::auth::context::{CSRF_COOKIE, OAUTH_STATE_COOKIE, SESSION_COOKIE};
 use crate::dashboard::auth::model::{Session, SESSION_TTL_SECONDS};
+
+/// How long the browser holds the in-flight login marker. Matches the state
+/// row's own lifetime.
+const OAUTH_STATE_MAX_AGE: i64 = 5 * 60;
 
 /// Headers that establish a session.
 ///
@@ -26,6 +30,33 @@ pub fn established(session: &Session, secure: bool) -> HeaderMap {
             session.csrf_token
         ),
     ])
+}
+
+/// Header binding an in-flight provider login to this browser.
+///
+/// `SameSite=Lax` rather than `Strict`: the provider redirects the browser back
+/// with a top-level GET, and `Strict` would withhold the cookie exactly then.
+pub fn oauth_state(token: &str, secure: bool) -> HeaderMap {
+    let secure = if secure { "; Secure" } else { "" };
+    single(format!(
+        "{OAUTH_STATE_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/{secure}; Max-Age={OAUTH_STATE_MAX_AGE}"
+    ))
+}
+
+/// Header clearing that marker, whatever the outcome.
+pub fn cleared_oauth_state(secure: bool) -> HeaderMap {
+    let secure = if secure { "; Secure" } else { "" };
+    single(format!(
+        "{OAUTH_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/{secure}; Max-Age=0"
+    ))
+}
+
+fn single(cookie: String) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = cookie.parse() {
+        headers.append(SET_COOKIE, value);
+    }
+    headers
 }
 
 /// Headers that clear a session.
@@ -93,6 +124,21 @@ mod tests {
         let cookies = cookie_strings(&established(&session(), false));
         assert!(!cookies[0].contains("Secure"));
         assert!(cookies[0].contains("HttpOnly"));
+    }
+
+    #[test]
+    fn the_oauth_marker_is_lax_so_the_provider_redirect_carries_it() {
+        let cookies = cookie_strings(&oauth_state("state-token", true));
+        assert_eq!(cookies.len(), 1);
+        assert!(cookies[0].starts_with("taskito_oauth_state=state-token"));
+        assert!(cookies[0].contains("HttpOnly"));
+        // Strict would be withheld on the provider's top-level redirect back,
+        // which is the one request that has to carry it.
+        assert!(cookies[0].contains("SameSite=Lax"));
+        assert!(!cookies[0].contains("SameSite=Strict"));
+
+        let cleared = cookie_strings(&cleared_oauth_state(true));
+        assert!(cleared[0].contains("Max-Age=0"));
     }
 
     #[test]

@@ -11,15 +11,8 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 
 use support::webhook_receiver::WebhookReceiver;
-use support::{call, dashboard_state, get, json_request, temp_storage};
-use taskito_server::config::dashboard::AuthMode;
+use support::{call, dashboard_state_allowing_loopback_webhooks, get, json_request, temp_storage};
 use taskito_server::dashboard::state::SharedState;
-
-/// The receiver runs on loopback, which the SSRF guard refuses by design.
-/// Delivery tests are exactly the case the escape hatch exists for.
-fn allow_loopback_deliveries() {
-    std::env::set_var("TASKITO_WEBHOOKS_ALLOW_PRIVATE", "1");
-}
 
 /// Create a subscription pointing at `url`, returning `(id, secret)`.
 async fn create_webhook(state: &SharedState, url: &str) -> (String, String) {
@@ -53,9 +46,8 @@ fn expected_signature(secret: &str, body: &str) -> String {
 
 #[tokio::test]
 async fn a_test_send_is_signed_and_reported() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-test-send");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
     let (id, secret) = create_webhook(&state, &receiver.url).await;
 
@@ -90,9 +82,8 @@ async fn a_test_send_is_signed_and_reported() {
 
 #[tokio::test]
 async fn a_subscription_without_a_secret_is_sent_unsigned() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-unsigned");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
 
     let (_, _, created) = call(
@@ -118,9 +109,8 @@ async fn a_subscription_without_a_secret_is_sent_unsigned() {
 
 #[tokio::test]
 async fn custom_headers_ride_along() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-headers");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
 
     let (_, _, created) = call(
@@ -153,9 +143,8 @@ async fn custom_headers_ride_along() {
 
 #[tokio::test]
 async fn a_rejecting_endpoint_reports_the_failure() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-rejected");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
     receiver.respond_with(503);
     let (id, _) = create_webhook(&state, &receiver.url).await;
@@ -172,9 +161,8 @@ async fn a_rejecting_endpoint_reports_the_failure() {
 
 #[tokio::test]
 async fn an_unreachable_endpoint_reports_no_status() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-unreachable");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
 
     // Bind and drop, so the port is almost certainly closed.
     let dead_url = {
@@ -197,9 +185,8 @@ async fn an_unreachable_endpoint_reports_no_status() {
 
 #[tokio::test]
 async fn replaying_a_delivery_resends_it_and_records_a_new_attempt() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-replay");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
     let (id, _) = create_webhook(&state, &receiver.url).await;
 
@@ -250,9 +237,8 @@ async fn replaying_a_delivery_resends_it_and_records_a_new_attempt() {
 
 #[tokio::test]
 async fn a_replay_of_an_unknown_delivery_is_a_404() {
-    allow_loopback_deliveries();
     let storage = temp_storage("webhook-replay-missing");
-    let state = dashboard_state(&storage, AuthMode::Open);
+    let state = dashboard_state_allowing_loopback_webhooks(&storage);
     let receiver = WebhookReceiver::start().await;
     let (id, _) = create_webhook(&state, &receiver.url).await;
 

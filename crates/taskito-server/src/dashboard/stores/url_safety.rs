@@ -8,8 +8,9 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 
-/// Escape hatch for local development against `http://localhost`.
-const ALLOW_PRIVATE_VAR: &str = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+/// Escape hatch for local development against `http://localhost`, read once
+/// into configuration rather than per call.
+pub const ALLOW_PRIVATE_VAR: &str = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
 
 /// Names that mean "this host" or "this network" whatever DNS says.
 const BLOCKED_HOSTNAMES: [&str; 4] = [
@@ -33,7 +34,11 @@ const BLOCKED_SUFFIXES: [&str; 6] = [
 pub struct UnsafeWebhookUrl(String);
 
 /// Reject `url` unless it targets a public http/https destination.
-pub fn validate_webhook_url(url: &str) -> Result<(), UnsafeWebhookUrl> {
+///
+/// `allow_private` comes from configuration, not from the environment at call
+/// time: a guard whose behaviour depends on a process-global read is one whose
+/// behaviour changes underneath a running server.
+pub fn validate_webhook_url(url: &str, allow_private: bool) -> Result<(), UnsafeWebhookUrl> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| refuse("URL must include a scheme, http or https"))?;
@@ -44,7 +49,7 @@ pub fn validate_webhook_url(url: &str) -> Result<(), UnsafeWebhookUrl> {
     }
 
     let host = hostname(rest).ok_or_else(|| refuse("URL must include a hostname"))?;
-    if std::env::var_os(ALLOW_PRIVATE_VAR).is_some() {
+    if allow_private {
         return Ok(());
     }
 
@@ -163,9 +168,9 @@ mod tests {
 
     #[test]
     fn only_http_schemes_are_accepted() {
-        assert!(validate_webhook_url("ftp://example.com/hook").is_err());
-        assert!(validate_webhook_url("file:///etc/passwd").is_err());
-        assert!(validate_webhook_url("example.com/hook").is_err());
+        assert!(validate_webhook_url("ftp://example.com/hook", false).is_err());
+        assert!(validate_webhook_url("file:///etc/passwd", false).is_err());
+        assert!(validate_webhook_url("example.com/hook", false).is_err());
     }
 
     #[test]
@@ -180,7 +185,10 @@ mod tests {
             "http://100.64.0.1/hook",
             "http://0.0.0.0/hook",
         ] {
-            assert!(validate_webhook_url(url).is_err(), "must refuse {url}");
+            assert!(
+                validate_webhook_url(url, false).is_err(),
+                "must refuse {url}"
+            );
         }
     }
 
@@ -191,13 +199,24 @@ mod tests {
             "https://api.internal/hook",
             "https://db.local/hook",
         ] {
-            assert!(validate_webhook_url(url).is_err(), "must refuse {url}");
+            assert!(
+                validate_webhook_url(url, false).is_err(),
+                "must refuse {url}"
+            );
         }
     }
 
     #[test]
     fn a_public_literal_is_accepted() {
-        validate_webhook_url("https://93.184.216.34/hook").expect("public address");
+        validate_webhook_url("https://93.184.216.34/hook", false).expect("public address");
+    }
+
+    #[test]
+    fn the_escape_hatch_admits_loopback_for_local_development() {
+        assert!(validate_webhook_url("http://127.0.0.1:9000/hook", false).is_err());
+        validate_webhook_url("http://127.0.0.1:9000/hook", true).expect("allowed when configured");
+        // Scheme and hostname are structural, so the hatch does not reach them.
+        assert!(validate_webhook_url("ftp://127.0.0.1/hook", true).is_err());
     }
 
     #[test]

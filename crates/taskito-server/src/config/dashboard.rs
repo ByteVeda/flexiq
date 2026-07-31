@@ -36,6 +36,8 @@ pub struct DashboardConfig {
     pub admin_bootstrap: Option<(String, String)>,
     /// Provider login configuration, when any provider is set up.
     pub oauth: Option<OAuthConfig>,
+    /// Whether webhooks may target private addresses. Development only.
+    pub allow_private_webhooks: bool,
 }
 
 /// Parse the dashboard block, or `None` when the dashboard is disabled.
@@ -70,6 +72,11 @@ pub fn from_env(env: &Env, allow_insecure: bool) -> Result<Option<DashboardConfi
             AuthMode::Session => oauth_from_env(env)?,
             AuthMode::Open => None,
         },
+        allow_private_webhooks: flag(
+            env,
+            crate::dashboard::stores::url_safety::ALLOW_PRIVATE_VAR,
+            false,
+        ),
     }))
 }
 

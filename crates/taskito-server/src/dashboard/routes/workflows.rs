@@ -46,6 +46,9 @@ pub async fn list(State(state): State<SharedState>, params: Params) -> ApiResult
         })));
     }
 
+    // Clamped like the keyset branch: `limit` comes straight from the query
+    // string, and the offset path would otherwise read the whole table.
+    let limit = limit.clamp(1, MAX_LIMIT);
     let offset = params.int("offset", 0)?;
     let runs = on_workflows(&state, move |workflows| {
         workflows

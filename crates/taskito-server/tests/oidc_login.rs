@@ -77,15 +77,22 @@ async fn begin_login(state: &SharedState, storage: &StorageBackend) -> (String, 
     (token, row.nonce)
 }
 
-/// Land the callback for `token`.
+/// Land the callback for `token`, carrying the marker `start` set.
 async fn land_callback(state: &SharedState, token: &str) -> (StatusCode, HeaderMap, Value) {
-    call(
-        state,
-        get(&format!(
-            "/api/auth/oauth/callback/{SLOT}?code=stub-code&state={token}"
-        )),
-    )
-    .await
+    call(state, callback_request(token, Some(token))).await
+}
+
+/// A callback request presenting `cookie` as the browser's state marker.
+fn callback_request(token: &str, cookie: Option<&str>) -> axum::http::Request<axum::body::Body> {
+    let mut request = axum::http::Request::builder().uri(format!(
+        "/api/auth/oauth/callback/{SLOT}?code=stub-code&state={token}"
+    ));
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("taskito_oauth_state={cookie}"));
+    }
+    request
+        .body(axum::body::Body::empty())
+        .expect("valid request")
 }
 
 fn location_of(headers: &HeaderMap) -> String {
@@ -275,6 +282,92 @@ async fn a_forged_or_stale_id_token_is_refused() {
 }
 
 #[tokio::test]
+async fn a_callback_from_another_browser_is_refused() {
+    let (storage, state, issuer) = harness("oidc-login-csrf", &[]).await;
+    let backend: &StorageBackend = &storage;
+    let (token, nonce) = begin_login(&state, backend).await;
+    issuer.expect_exchange(NextToken::valid(&issuer.issuer_url(), CLIENT_ID, &nonce));
+
+    // The attacker holds a valid code and state for their own account and gets
+    // a victim's browser to load the callback. That browser never started this
+    // flow, so it carries no marker.
+    let (status, headers, _) = call(&state, callback_request(&token, None)).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(location_of(&headers), "/login?error=oauth_state_invalid");
+    assert!(
+        session_cookie(&headers).is_none(),
+        "a session here would log the victim into the attacker's account"
+    );
+    assert_eq!(store::count_users(backend).expect("storage"), 0);
+    assert_eq!(
+        issuer.exchanges(),
+        0,
+        "the code must never be exchanged for an unbound callback"
+    );
+
+    // A marker naming some other flow is no better than none.
+    let (_, headers, _) = call(
+        &state,
+        callback_request(&token, Some("someone-elses-state")),
+    )
+    .await;
+    assert!(session_cookie(&headers).is_none());
+}
+
+#[tokio::test]
+async fn a_successful_login_clears_the_flow_marker() {
+    let (storage, state, issuer) = harness("oidc-marker-cleared", &[]).await;
+    let backend: &StorageBackend = &storage;
+    let (token, nonce) = begin_login(&state, backend).await;
+    issuer.expect_exchange(NextToken::valid(&issuer.issuer_url(), CLIENT_ID, &nonce));
+
+    let (_, headers, _) = land_callback(&state, &token).await;
+    let cookies: Vec<&str> = headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    assert!(
+        cookies.iter().any(
+            |cookie| cookie.starts_with("taskito_oauth_state=") && cookie.contains("Max-Age=0")
+        ),
+        "the marker must not outlive its flow"
+    );
+}
+
+#[tokio::test]
+async fn a_rotated_signing_key_does_not_lock_logins_out() {
+    let (storage, state, issuer) = harness("oidc-rotation", &[]).await;
+    let backend: &StorageBackend = &storage;
+
+    // First login warms the JWKS cache.
+    let (token, nonce) = begin_login(&state, backend).await;
+    issuer.expect_exchange(NextToken::valid(&issuer.issuer_url(), CLIENT_ID, &nonce));
+    let (_, headers, _) = land_callback(&state, &token).await;
+    assert!(session_cookie(&headers).is_some());
+    let fetches_after_first = issuer.jwks_fetches();
+
+    // The issuer rotates. The cached set no longer holds the token's kid.
+    issuer.rotate_keys();
+    let (token, nonce) = begin_login(&state, backend).await;
+    issuer.expect_exchange(
+        NextToken::valid(&issuer.issuer_url(), CLIENT_ID, &nonce).signed_with_rotated_key(),
+    );
+    let (status, headers, _) = land_callback(&state, &token).await;
+
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(location_of(&headers), "/", "the login must still succeed");
+    assert!(
+        session_cookie(&headers).is_some(),
+        "a rotated key must not lock every login out until the process restarts"
+    );
+    assert!(
+        issuer.jwks_fetches() > fetches_after_first,
+        "the miss must have driven a refetch, not been served from cache"
+    );
+}
+
+#[tokio::test]
 async fn a_second_callback_with_the_same_state_is_refused() {
     let (storage, state, issuer) = harness("oidc-replay", &[]).await;
     let backend: &StorageBackend = &storage;
@@ -304,11 +397,22 @@ async fn a_returning_user_keeps_its_role_and_refreshes_its_profile() {
     issuer.expect_exchange(NextToken::valid(&issuer.issuer_url(), CLIENT_ID, &nonce));
     land_callback(&state, &token).await;
 
-    // Promote out of band, as an operator would.
+    // Promote out of band, as an operator would, and persist it — the point of
+    // the test is that the next login does not undo this.
     let username = format!("{SLOT}:provider-subject-1");
+    store::upsert_provider_user(backend, SLOT, "provider-subject-1", None, None, Role::Admin)
+        .expect("storage");
     let mut users = store::list_users(backend).expect("storage");
     let user = users.get_mut(&username).expect("the user exists");
-    assert_eq!(user.role, Role::Viewer);
+    user.role = Role::Admin;
+    store::replace_user(backend, user).expect("persist the promotion");
+    assert_eq!(
+        store::get_user(backend, &username)
+            .expect("storage")
+            .expect("the user exists")
+            .role,
+        Role::Admin
+    );
 
     let (token, nonce) = begin_login(&state, backend).await;
     issuer.expect_exchange(
@@ -321,6 +425,11 @@ async fn a_returning_user_keeps_its_role_and_refreshes_its_profile() {
         .expect("storage")
         .expect("the user still exists");
     assert_eq!(user.email.as_deref(), Some("moved@example.com"));
+    assert_eq!(
+        user.role,
+        Role::Admin,
+        "a later login refreshes the profile but must not reset the role"
+    );
     assert_eq!(
         store::count_users(backend).expect("storage"),
         1,

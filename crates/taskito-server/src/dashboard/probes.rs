@@ -1,7 +1,7 @@
 //! Liveness, readiness, and Prometheus scrape endpoints.
 
 use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ pub async fn readiness(
     State(state): State<SharedState>,
     Extension(context): Extension<RequestContext>,
     headers: HeaderMap,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
     require_probe_access(&state, &headers, &context)?;
 
     let mut checks = serde_json::Map::new();
@@ -57,10 +57,22 @@ pub async fn readiness(
         }
     }
 
-    Ok(Json(json!({
-        "status": if ready { "ready" } else { "degraded" },
-        "checks": Value::Object(checks),
-    })))
+    // The body explains, the status decides: a scheduler removes a replica from
+    // its endpoints on the code, and a degraded replica answering 200 keeps
+    // taking traffic it cannot serve.
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    Ok((
+        status,
+        Json(json!({
+            "status": if ready { "ready" } else { "degraded" },
+            "checks": Value::Object(checks),
+        })),
+    )
+        .into_response())
 }
 
 /// Prometheus exposition derived from storage.
@@ -163,10 +175,44 @@ fn escape_label(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
-/// First line of an error only — storage errors can carry query fragments.
+/// Longest error detail echoed in a readiness body.
+const BRIEF_MAX: usize = 160;
+
+/// One short line from an error.
+///
+/// Readiness is reachable unauthenticated in open mode, and a storage error's
+/// full display can carry a DSN, a host, or a query fragment — so this takes the
+/// first line and caps it rather than forwarding whatever the driver said.
 fn brief(error: &ApiError) -> String {
-    match error {
+    let full = match error {
         ApiError::Internal(inner) => inner.to_string(),
         other => format!("{other:?}"),
+    };
+    let first = full.lines().next().unwrap_or_default().trim().to_string();
+    match first.char_indices().nth(BRIEF_MAX) {
+        Some((cut, _)) => format!("{}…", &first[..cut]),
+        None => first,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brief_keeps_one_short_line() {
+        let sprawling = ApiError::Internal(anyhow::anyhow!(
+            "connection to postgres://user:pw@db.internal/app failed\nSELECT * FROM jobs WHERE …\nbacktrace"
+        ));
+        let line = brief(&sprawling);
+        assert!(!line.contains('\n'), "one line only");
+        assert!(!line.contains("SELECT"), "the query must not survive");
+        assert!(line.chars().count() <= BRIEF_MAX + 1);
+    }
+
+    #[test]
+    fn brief_truncates_a_single_long_line() {
+        let long = ApiError::Internal(anyhow::anyhow!("x".repeat(1_000)));
+        assert_eq!(brief(&long).chars().count(), BRIEF_MAX + 1);
     }
 }

@@ -220,9 +220,13 @@ def parity_servers(seeded_queue: tuple[Queue, str]) -> Generator[tuple[str, str]
             if _get(rust_url, "/health", timeout=1.0)[0] == 200:
                 break
         except OSError:
-            time.sleep(0.2)
+            pass
+        # Sleep on every miss, not only on a connection error: a server that
+        # answers non-200 while starting would otherwise spin this loop.
+        time.sleep(0.2)
     else:
         process.kill()
+        process.wait(timeout=5)
         pytest.fail("taskito-server did not become ready within 30s")
 
     try:

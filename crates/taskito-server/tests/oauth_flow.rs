@@ -45,6 +45,22 @@ fn location(headers: &axum::http::HeaderMap) -> String {
         .to_string()
 }
 
+/// A callback request presenting `cookie` as the browser's state marker.
+///
+/// `start` sets that cookie; without it the callback is refused before the
+/// state row is even read, which is what stops login CSRF.
+fn callback_request(token: &str, cookie: Option<&str>) -> axum::http::Request<axum::body::Body> {
+    let mut request = axum::http::Request::builder().uri(format!(
+        "/api/auth/oauth/callback/github?code=abc&state={token}"
+    ));
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", format!("taskito_oauth_state={cookie}"));
+    }
+    request
+        .body(axum::body::Body::empty())
+        .expect("valid request")
+}
+
 /// The `state` parameter carried in a redirect URL.
 fn state_token(url: &str) -> String {
     url.split(['?', '&'])
@@ -163,12 +179,9 @@ async fn a_callback_without_valid_state_lands_on_the_login_page() {
     assert_eq!(status, StatusCode::FOUND);
     assert_eq!(location(&headers), "/login?error=oauth_state_invalid");
 
-    // A state token nobody issued.
-    let (_, headers, _) = call(
-        &state,
-        get("/api/auth/oauth/callback/github?code=abc&state=forged"),
-    )
-    .await;
+    // A state token nobody issued, presented with a matching marker so the
+    // request gets past the binding check.
+    let (_, headers, _) = call(&state, callback_request("forged", Some("forged"))).await;
     assert_eq!(location(&headers), "/login?error=oauth_state_invalid");
 
     // The provider itself reported a failure.
@@ -186,21 +199,27 @@ async fn a_state_row_cannot_be_replayed_or_redeemed_on_another_slot() {
     let state = dashboard_state_with_oauth(&storage, github_config());
     let backend: &StorageBackend = &storage;
 
-    // A state minted for a different slot must not be accepted here.
+    // A state minted for a different slot must not be accepted here. The
+    // browser presents its own marker, so the request gets past the binding
+    // check and reaches the slot comparison.
     let (token, _) = state::create(backend, "acme-okta", "/").expect("create state");
-    let (_, headers, _) = call(
-        &state,
-        get(&format!(
-            "/api/auth/oauth/callback/github?code=abc&state={token}"
-        )),
-    )
-    .await;
+    let (_, headers, _) = call(&state, callback_request(&token, Some(&token))).await;
     assert_eq!(location(&headers), "/login?error=oauth_state_invalid");
 
     // Consuming it — even on a rejected path — must burn the row.
     assert!(
         state::consume(backend, &token).expect("storage").is_none(),
         "a state row is single-use even when the callback is rejected"
+    );
+
+    // An unbound callback is refused *before* the row is read, so a forged
+    // request cannot cancel someone else's pending login.
+    let (token, _) = state::create(backend, "github", "/").expect("create state");
+    let (_, headers, _) = call(&state, callback_request(&token, None)).await;
+    assert_eq!(location(&headers), "/login?error=oauth_state_invalid");
+    assert!(
+        state::consume(backend, &token).expect("storage").is_some(),
+        "an unbound callback must not burn a row it never proved it owned"
     );
 }
 

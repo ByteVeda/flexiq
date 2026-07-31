@@ -13,21 +13,39 @@ use crate::dashboard::security::random_token;
 use crate::dashboard::stores::kv;
 
 /// Every user, keyed by username.
+///
+/// A row that cannot be read is skipped and logged. It is never silent: an
+/// unreadable row is invisible to every listing, and the operator needs to know
+/// the store holds something this build does not understand.
 pub fn list_users(storage: &impl Storage) -> Result<BTreeMap<String, User>> {
     let rows: Map<String, Value> = kv::read(storage, USERS_KEY)?;
     Ok(rows
         .into_iter()
-        .filter_map(|(username, row)| {
-            let mut user: User = serde_json::from_value(row).ok()?;
-            user.username = username.clone();
-            Some((username, user))
-        })
+        .filter_map(
+            |(username, row)| match serde_json::from_value::<User>(row) {
+                Ok(mut user) => {
+                    user.username = username.clone();
+                    Some((username, user))
+                }
+                Err(error) => {
+                    log::warn!(
+                        "dashboard user '{username}' is unreadable and was skipped: {error}"
+                    );
+                    None
+                }
+            },
+        )
         .collect())
 }
 
-/// How many users exist. Zero is what puts the dashboard in setup mode.
+/// How many users the store holds.
+///
+/// Counts **stored** entries, not parsed ones. Zero is what leaves
+/// unauthenticated setup open, so a row this build cannot parse must still keep
+/// the door shut.
 pub fn count_users(storage: &impl Storage) -> Result<usize> {
-    Ok(list_users(storage)?.len())
+    let rows: Map<String, Value> = kv::read(storage, USERS_KEY)?;
+    Ok(rows.len())
 }
 
 /// One user by name.
@@ -62,6 +80,20 @@ pub fn create_user(
     users.insert(username.to_string(), user.clone());
     save_users(storage, &users)?;
     Ok(Ok(user))
+}
+
+/// Persist a changed user row, keyed by its username.
+///
+/// The role is deliberately not something a provider login can set; an operator
+/// changing it needs a way in that the login path does not have.
+pub fn replace_user(storage: &impl Storage, user: &User) -> Result<bool> {
+    let mut users = list_users(storage)?;
+    if !users.contains_key(&user.username) {
+        return Ok(false);
+    }
+    users.insert(user.username.clone(), user.clone());
+    save_users(storage, &users)?;
+    Ok(true)
 }
 
 /// Replace a user's password.
@@ -195,6 +227,31 @@ pub fn delete_session(storage: &impl Storage, token: &str) -> Result<bool> {
     storage.delete_setting(&format!("{SESSION_PREFIX}{token}"))
 }
 
+/// Invalidate every session belonging to `username`, except `keep_token`.
+///
+/// The reason to change a password is usually that a credential leaked, so the
+/// sessions minted with the old one must not outlive it. The caller's own
+/// session is kept so the operator is not logged out of the tab they are using.
+pub fn revoke_sessions_for(
+    storage: &impl Storage,
+    username: &str,
+    keep_token: Option<&str>,
+) -> Result<usize> {
+    let mut revoked = 0;
+    for (token, raw) in kv::scan_prefix(storage, SESSION_PREFIX)? {
+        if keep_token == Some(token.as_str()) {
+            continue;
+        }
+        let belongs = serde_json::from_str::<Session>(&raw)
+            .map(|session| session.username == username)
+            .unwrap_or(false);
+        if belongs && delete_session(storage, &token)? {
+            revoked += 1;
+        }
+    }
+    Ok(revoked)
+}
+
 /// Best-effort cleanup of expired sessions. Returns how many were removed.
 pub fn prune_expired_sessions(storage: &impl Storage) -> Result<usize> {
     let now = now_seconds();
@@ -257,6 +314,26 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_row_still_counts_as_a_user() {
+        let storage = storage();
+        // Shaped like a user but missing the field this build needs. Setup must
+        // stay closed even though the row cannot be listed.
+        kv::write(
+            &storage,
+            USERS_KEY,
+            &serde_json::json!({ "ops": { "unexpected": true } }),
+        )
+        .expect("seed a foreign row");
+
+        assert!(list_users(&storage).expect("storage").is_empty());
+        assert_eq!(
+            count_users(&storage).expect("storage"),
+            1,
+            "an unreadable row must not reopen setup"
+        );
+    }
+
+    #[test]
     fn a_duplicate_username_is_refused() {
         let storage = storage();
         create_user(&storage, "ops", "supersecret", Role::Admin)
@@ -295,6 +372,40 @@ mod tests {
         assert!(get_session(&storage, &session.token)
             .expect("storage")
             .is_none());
+    }
+
+    #[test]
+    fn changing_a_password_can_revoke_every_other_session() {
+        let storage = storage();
+        let user = create_user(&storage, "ops", "supersecret", Role::Admin)
+            .expect("storage")
+            .expect("valid user");
+        let other = create_user(&storage, "reader", "supersecret", Role::Viewer)
+            .expect("storage")
+            .expect("valid user");
+
+        let keep = create_session(&storage, &user).expect("session");
+        let leaked = create_session(&storage, &user).expect("session");
+        let unrelated = create_session(&storage, &other).expect("session");
+
+        let revoked = revoke_sessions_for(&storage, "ops", Some(&keep.token)).expect("storage");
+        assert_eq!(revoked, 1);
+
+        assert!(get_session(&storage, &keep.token)
+            .expect("storage")
+            .is_some());
+        assert!(
+            get_session(&storage, &leaked.token)
+                .expect("storage")
+                .is_none(),
+            "the sessions minted with the old password must be gone"
+        );
+        assert!(
+            get_session(&storage, &unrelated.token)
+                .expect("storage")
+                .is_some(),
+            "another user's session is not this user's to revoke"
+        );
     }
 
     #[test]

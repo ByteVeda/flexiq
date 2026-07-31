@@ -22,6 +22,12 @@ const JWKS: &str = include_str!("../fixtures/oidc_test_jwks.json");
 /// `kid` of the key in that set.
 pub const KEY_ID: &str = "test-key";
 
+/// A second key, for standing in as the issuer's post-rotation key.
+const ROTATED_KEY_PEM: &[u8] = include_bytes!("../fixtures/oidc_test_key_rotated.pem");
+const ROTATED_JWKS: &str = include_str!("../fixtures/oidc_test_jwks_rotated.json");
+/// `kid` of the rotated key.
+pub const ROTATED_KEY_ID: &str = "test-key-rotated";
+
 /// What the next token exchange should hand back.
 #[derive(Clone)]
 pub struct NextToken {
@@ -29,6 +35,8 @@ pub struct NextToken {
     pub claims: Value,
     /// `kid` written into the JWT header.
     pub key_id: Option<String>,
+    /// Sign with the rotated key instead of the original.
+    pub rotated: bool,
     /// Corrupt the signature after signing, to prove verification is real.
     pub tamper: bool,
 }
@@ -53,6 +61,7 @@ impl NextToken {
                 "name": "Ops Person",
             }),
             key_id: Some(KEY_ID.to_string()),
+            rotated: false,
             tamper: false,
         }
     }
@@ -74,12 +83,22 @@ impl NextToken {
         self.tamper = true;
         self
     }
+
+    /// Sign with the issuer's post-rotation key, naming its `kid`.
+    pub fn signed_with_rotated_key(mut self) -> Self {
+        self.rotated = true;
+        self.key_id = Some(ROTATED_KEY_ID.to_string());
+        self
+    }
 }
 
 struct Issuer {
     base_url: String,
     next: Mutex<Option<NextToken>>,
     exchanges: std::sync::atomic::AtomicUsize,
+    /// Whether `/jwks` publishes the rotated set.
+    rotated: std::sync::atomic::AtomicBool,
+    jwks_fetches: std::sync::atomic::AtomicUsize,
 }
 
 /// A running stub issuer. Dropping it stops the server.
@@ -105,6 +124,8 @@ impl StubIssuer {
             base_url: base_url.clone(),
             next: Mutex::new(None),
             exchanges: std::sync::atomic::AtomicUsize::new(0),
+            rotated: std::sync::atomic::AtomicBool::new(false),
+            jwks_fetches: std::sync::atomic::AtomicUsize::new(0),
         });
         let app = Router::new()
             .route("/.well-known/openid-configuration", get(discovery))
@@ -143,6 +164,20 @@ impl StubIssuer {
         *self.issuer.next.lock().expect("stub lock") = Some(token);
     }
 
+    /// Publish the rotated key set from now on, as an issuer does on rotation.
+    pub fn rotate_keys(&self) {
+        self.issuer
+            .rotated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many times `/jwks` was fetched — a cached client fetches once.
+    pub fn jwks_fetches(&self) -> usize {
+        self.issuer
+            .jwks_fetches
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// How many token exchanges actually reached the stub.
     ///
     /// A negative test that never gets here proves nothing about verification —
@@ -171,8 +206,16 @@ async fn discovery(State(issuer): State<Arc<Issuer>>) -> Json<Value> {
     }))
 }
 
-async fn jwks() -> Json<Value> {
-    Json(serde_json::from_str(JWKS).expect("the fixture JWKS parses"))
+async fn jwks(State(issuer): State<Arc<Issuer>>) -> Json<Value> {
+    issuer
+        .jwks_fetches
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let published = if issuer.rotated.load(std::sync::atomic::Ordering::SeqCst) {
+        ROTATED_JWKS
+    } else {
+        JWKS
+    };
+    Json(serde_json::from_str(published).expect("the fixture JWKS parses"))
 }
 
 async fn token(State(issuer): State<Arc<Issuer>>) -> Json<Value> {
@@ -188,7 +231,12 @@ async fn token(State(issuer): State<Arc<Issuer>>) -> Json<Value> {
 
     let mut header = Header::new(Algorithm::RS256);
     header.kid = armed.key_id.clone();
-    let key = EncodingKey::from_rsa_pem(SIGNING_KEY_PEM).expect("the fixture key parses");
+    let pem = if armed.rotated {
+        ROTATED_KEY_PEM
+    } else {
+        SIGNING_KEY_PEM
+    };
+    let key = EncodingKey::from_rsa_pem(pem).expect("the fixture key parses");
     let mut id_token = jsonwebtoken::encode(&header, &armed.claims, &key).expect("sign the token");
 
     if armed.tamper {

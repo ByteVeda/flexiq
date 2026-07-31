@@ -155,16 +155,20 @@ async fn verify_id_token(
 ) -> Result<Claims, OAuthError> {
     let header = decode_header(id_token)
         .map_err(|error| OAuthError::IdentityFetch(format!("id_token is malformed: {error}")))?;
-    let keys = jwks(runtime, provider, &discovery.jwks_uri).await?;
-
     // A token that names a `kid` must be verified with *that* key: falling back
     // to some other key would accept a token signed by a retired or unrelated
     // one. Only a token naming no `kid` may use a single-key set.
-    let jwk = match header.kid.as_deref() {
-        Some(kid) => keys.find(kid),
-        None => keys.keys.first().filter(|_| keys.keys.len() == 1),
+    let mut keys = jwks(runtime, provider, &discovery.jwks_uri, false).await?;
+    if select_key(&keys, header.kid.as_deref()).is_none() {
+        // Issuers rotate on a schedule, so a stale cache is normal operation
+        // rather than an attack. Refetch once — and only once, so a token
+        // naming a `kid` that never existed cannot drive a fetch per request.
+        keys = jwks(runtime, provider, &discovery.jwks_uri, true).await?;
     }
-    .ok_or_else(|| OAuthError::IdentityFetch("no signing key matches the id_token's kid".into()))?;
+
+    let jwk = select_key(&keys, header.kid.as_deref()).ok_or_else(|| {
+        OAuthError::IdentityFetch("no signing key matches the id_token's kid".into())
+    })?;
     let key = DecodingKey::from_jwk(jwk)
         .map_err(|error| OAuthError::IdentityFetch(format!("unusable signing key: {error}")))?;
 
@@ -206,18 +210,30 @@ async fn discovery(
 }
 
 /// The provider's signing keys, cached after the first fetch.
+/// The key a token should be verified with, if the set holds it.
+fn select_key<'a>(keys: &'a JwkSet, kid: Option<&str>) -> Option<&'a jsonwebtoken::jwk::Jwk> {
+    match kid {
+        Some(kid) => keys.find(kid),
+        None => keys.keys.first().filter(|_| keys.keys.len() == 1),
+    }
+}
+
+/// `refresh` bypasses the cache, for the one retry a `kid` miss earns.
 async fn jwks(
     runtime: &OAuthRuntime,
     provider: &ProviderConfig,
     jwks_uri: &str,
+    refresh: bool,
 ) -> Result<JwkSet, OAuthError> {
-    if let Some(cached) = runtime
-        .jwks
-        .lock()
-        .unwrap_or_else(recover)
-        .get(&provider.slot)
-    {
-        return Ok(cached.clone());
+    if !refresh {
+        if let Some(cached) = runtime
+            .jwks
+            .lock()
+            .unwrap_or_else(recover)
+            .get(&provider.slot)
+        {
+            return Ok(cached.clone());
+        }
     }
     let keys: JwkSet = fetch_json(runtime, jwks_uri, "JWKS").await?;
     runtime
