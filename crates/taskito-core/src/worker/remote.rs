@@ -385,7 +385,7 @@ impl Shared {
         // Stop accepting cancels so the router drains and exits while the
         // writers it uses are still alive.
         self.set_cancel_sender(None);
-        self.drain_and_close();
+        self.drain_and_close().await;
 
         let readers = std::mem::take(&mut *self.readers.lock().unwrap_or_else(recover));
         for handle in readers {
@@ -699,7 +699,7 @@ impl Shared {
     /// Closing is what bounds shutdown: a reader thread is parked on a blocking
     /// read, and an executor that stops responding would otherwise keep it —
     /// and the join below it — parked forever.
-    fn drain_and_close(&self) {
+    async fn drain_and_close(&self) {
         let executors: Vec<Arc<Executor>> = self
             .executors
             .lock()
@@ -717,9 +717,11 @@ impl Shared {
                 .write_shutdown();
         }
 
+        // Awaited, not slept: `run` shares a runtime with the scheduler task,
+        // and a blocking sleep here starves it for the whole drain budget.
         let deadline = Instant::now() + self.config.shutdown_drain;
         while Instant::now() < deadline && executors.iter().any(Executor::is_busy) {
-            std::thread::sleep(DRAIN_POLL);
+            tokio::time::sleep(DRAIN_POLL).await;
         }
 
         for executor in &executors {
