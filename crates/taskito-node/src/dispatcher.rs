@@ -14,8 +14,8 @@ use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::Env;
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
-use taskito_core::worker::WorkerDispatcher;
-use taskito_core::{Storage, StorageBackend};
+use taskito_core::worker::{CancelSignals, WorkerDispatcher};
+use taskito_core::StorageBackend;
 use tokio::sync::{oneshot, Semaphore};
 
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
@@ -31,7 +31,9 @@ pub struct NodeDispatcher {
     /// `Arc` because napi 3's `ThreadsafeFunction` is not `Clone` — every
     /// spawned job needs its own handle to the same callback.
     callback: Arc<TaskCallback>,
-    storage: StorageBackend,
+    /// Where a cancel comes from: the storage flag for a worker, the scheduler's
+    /// `cancel` frame for an attached executor, which has no storage at all.
+    cancels: Arc<CancelSignals>,
     /// Caps jobs running at once. Without it the loop spawns every job it is
     /// handed and immediately takes the next, so nothing bounds concurrency.
     ///
@@ -49,12 +51,30 @@ impl NodeDispatcher {
         storage: StorageBackend,
         concurrency: Option<usize>,
     ) -> Self {
+        Self::with_cancels(
+            callback,
+            Arc::new(CancelSignals::from_storage(storage)),
+            concurrency,
+        )
+    }
+
+    /// A dispatcher with no storage, for an attached executor. Cancels arrive
+    /// only through [`WorkerDispatcher::notify_cancel`].
+    pub fn detached(callback: TaskCallback, concurrency: Option<usize>) -> Self {
+        Self::with_cancels(callback, Arc::new(CancelSignals::detached()), concurrency)
+    }
+
+    fn with_cancels(
+        callback: TaskCallback,
+        cancels: Arc<CancelSignals>,
+        concurrency: Option<usize>,
+    ) -> Self {
         let permits = concurrency
             .map(|c| c.max(1))
             .unwrap_or(Semaphore::MAX_PERMITS);
         Self {
             callback: Arc::new(callback),
-            storage,
+            cancels,
             concurrency: Arc::new(Semaphore::new(permits)),
         }
     }
@@ -80,12 +100,15 @@ impl WorkerDispatcher for NodeDispatcher {
                 Err(_) => break,
             };
             let callback = self.callback.clone();
-            let storage = self.storage.clone();
+            let cancels = self.cancels.clone();
             let result_tx = result_tx.clone();
             spawn(async move {
                 let _permit = permit;
                 let job_id = job.id.clone();
-                let result = run_one(&callback, &storage, job).await;
+                let result = run_one(&callback, &cancels, job).await;
+                // Release the cancel record now the job has reported, so a
+                // long-lived process does not accumulate ids.
+                cancels.forget(&job_id);
                 // A full bounded channel parks the sender — do it on the
                 // blocking pool, never on the shared async runtime.
                 match spawn_blocking(move || result_tx.send(result)).await {
@@ -102,10 +125,14 @@ impl WorkerDispatcher for NodeDispatcher {
     }
 
     fn shutdown(&self) {}
+
+    fn notify_cancel(&self, job_id: &str) {
+        self.cancels.signal(job_id);
+    }
 }
 
 /// Invoke the JS task for one job and translate the outcome into a [`JobResult`].
-async fn run_one(callback: &TaskCallback, storage: &StorageBackend, mut job: Job) -> JobResult {
+async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job) -> JobResult {
     let started = Instant::now();
     let invocation = JsTaskInvocation {
         id: job.id.clone(),
@@ -163,13 +190,11 @@ async fn run_one(callback: &TaskCallback, storage: &StorageBackend, mut job: Job
             },
             // A failed task that was cancel-requested is a cancellation, not a
             // failure (the JS side aborts via the cancel signal).
-            Some(_) if storage.is_cancel_requested(&job.id).unwrap_or(false) => {
-                JobResult::Cancelled {
-                    job_id: job.id,
-                    task_name: job.task_name,
-                    wall_time_ns,
-                }
-            }
+            Some(_) if cancels.is_cancelled(&job.id) => JobResult::Cancelled {
+                job_id: job.id,
+                task_name: job.task_name,
+                wall_time_ns,
+            },
             Some(error) => failure(job, error, wall_time_ns, false, outcome.retryable),
         },
         // The promise rejected rather than resolving an outcome: the shell threw

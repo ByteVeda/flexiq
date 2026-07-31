@@ -10,9 +10,11 @@ mod config;
 mod convert;
 mod dispatcher;
 mod error;
+mod executor;
 mod queue;
 mod worker;
 
+pub use executor::{start_executor, JsExecutor};
 pub use queue::JsQueue;
 pub use worker::JsWorker;
 
