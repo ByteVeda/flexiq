@@ -375,7 +375,17 @@ impl<R: BufRead> FrameReader<R> {
             return Err(ProtocolError::Eof);
         }
         if !header.ends_with(b"\n") {
-            return Err(ProtocolError::HeaderTooLarge);
+            // Only a header that actually reached the cap is oversized. Fewer
+            // bytes with no newline means the peer closed mid-header — a
+            // truncated frame, which the `Eof` contract says surfaces as I/O.
+            if read as u64 == MAX_HEADER_BYTES {
+                return Err(ProtocolError::HeaderTooLarge);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "peer closed mid-header",
+            )
+            .into());
         }
         Ok(header)
     }
@@ -650,6 +660,17 @@ mod tests {
         let err = FrameReader::new(buf.as_slice())
             .read::<SchedulerMessage>()
             .expect_err("truncated frame must not read");
+        assert!(matches!(err, ProtocolError::Io(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn truncated_header_is_an_io_error_not_an_oversized_header() {
+        // A short header with no newline is a mid-frame disconnect, not a peer
+        // that blew the size cap — the two must not report the same way.
+        let buf = br#"{"type":"job","id":"j""#;
+        let err = FrameReader::new(&buf[..])
+            .read::<SchedulerMessage>()
+            .expect_err("truncated header must not read");
         assert!(matches!(err, ProtocolError::Io(_)), "got {err:?}");
     }
 
