@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod dispatcher;
+pub mod executor;
 pub mod protocol;
 pub mod registry;
 pub mod remote;
@@ -8,6 +9,7 @@ pub mod transport;
 
 pub use auth::Secret;
 pub use dispatcher::NativeDispatcher;
+pub use executor::{ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle};
 pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
@@ -43,6 +45,8 @@ pub trait WorkerDispatcher: Send + Sync {
     fn notify_cancel(&self, _job_id: &str) {}
 }
 
+#[cfg(test)]
+mod executor_tests;
 #[cfg(test)]
 mod remote_tests;
 #[cfg(test)]
