@@ -47,5 +47,5 @@ pub use storage::StorageBackend;
 pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 pub use worker::{
     ExecutorMessage, NativeDispatcher, ProtocolError, SchedulerMessage, TaskError, TaskRegistry,
-    TaskResult, Worker, WorkerDispatcher, WorkerHandle, PROTOCOL_VERSION,
+    TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, PROTOCOL_VERSION,
 };
