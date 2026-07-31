@@ -10,6 +10,7 @@ import {
   ListTree,
   type LucideIcon,
   Moon,
+  Plug,
   ScrollText,
   Server,
   Settings2,
@@ -28,6 +29,7 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@/components/ui";
+import { useExecutorsSupported } from "@/features/executors";
 import { type RefreshOption, useCommandPalette, useRefreshInterval, useTheme } from "@/providers";
 
 interface NavCmd {
@@ -37,13 +39,19 @@ interface NavCmd {
   hint?: string;
 }
 
-const NAV_COMMANDS: NavCmd[] = [
+interface NavCmdEntry extends NavCmd {
+  /** Hidden until the server confirms it serves the route. */
+  optional?: boolean;
+}
+
+const NAV_COMMANDS: NavCmdEntry[] = [
   { label: "Overview", to: "/", icon: LayoutDashboard, hint: "Home" },
   { label: "Jobs", to: "/jobs", icon: ListTree },
   { label: "Metrics", to: "/metrics", icon: BarChart3 },
   { label: "Logs", to: "/logs", icon: ScrollText },
   { label: "Queues", to: "/queues", icon: Box },
   { label: "Workers", to: "/workers", icon: Server },
+  { label: "Executors", to: "/executors", icon: Plug, optional: true },
   { label: "Resources", to: "/resources", icon: Activity },
   { label: "Dead letters", to: "/dead-letters", icon: Skull },
   { label: "Circuit breakers", to: "/circuit-breakers", icon: CircuitBoard },
@@ -61,6 +69,12 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const { setTheme } = useTheme();
   const { setOption } = useRefreshInterval();
+  const executorsSupported = useExecutorsSupported();
+  // Same rule as the sidebar: a command that would 404 is worse than a
+  // command that shows up a moment late.
+  const navCommands = NAV_COMMANDS.filter(
+    (command) => !command.optional || executorsSupported === true,
+  );
 
   const go = useCallback(
     (to: string) => {
@@ -76,7 +90,7 @@ export function CommandPalette() {
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
         <CommandGroup heading="Go to">
-          {NAV_COMMANDS.map(({ label, to, icon: Icon, hint }) => (
+          {navCommands.map(({ label, to, icon: Icon, hint }) => (
             <CommandItem key={to} value={`go ${label} ${to}`} onSelect={() => go(to)}>
               <Icon aria-hidden />
               <span>{label}</span>

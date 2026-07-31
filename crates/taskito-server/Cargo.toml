@@ -1,0 +1,51 @@
+[package]
+name = "taskito-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Standalone Taskito scheduler, executor attach listener, and dashboard server"
+publish = false
+
+[lib]
+name = "taskito_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "taskito-server"
+path = "src/main.rs"
+
+[features]
+default = []
+# Forward backend selection down to core + workflow storage so one DSN sniff
+# in config/backend.rs can open Postgres / Redis when compiled in.
+postgres = ["taskito-core/postgres", "taskito-workflows/postgres"]
+redis = ["taskito-core/redis", "taskito-workflows/redis"]
+
+[dependencies]
+taskito-core = { path = "../taskito-core" }
+taskito-workflows = { path = "../taskito-workflows" }
+axum = "0.8"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = "0.7"
+anyhow = "1"
+log = { workspace = true }
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+rand = { workspace = true }
+base64 = "0.23"
+sha2 = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac = "0.12"
+thiserror = { workspace = true }
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Same parser reqwest uses, so the SSRF guard and the request agree on the host.
+url = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

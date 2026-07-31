@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   ListTree,
   type LucideIcon,
+  Plug,
   Radio,
   ScrollText,
   Server,
@@ -20,6 +21,11 @@ export interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /**
+   * Route only some servers serve. Hidden until the server confirms it: the
+   * standalone scheduler exposes executors, an SDK dashboard does not.
+   */
+  optional?: boolean;
 }
 
 export interface NavGroup {
@@ -48,6 +54,7 @@ export const NAV: NavGroup[] = [
     items: [
       { to: "/queues", label: "Queues", icon: Box },
       { to: "/workers", label: "Workers", icon: Server },
+      { to: "/executors", label: "Executors", icon: Plug, optional: true },
       { to: "/resources", label: "Resources", icon: Activity },
     ],
   },
@@ -68,3 +75,19 @@ export const NAV: NavGroup[] = [
     ],
   },
 ];
+
+/**
+ * `NAV` with unsupported routes removed, and any group they emptied dropped
+ * with them.
+ *
+ * `supported` is keyed by path so a future optional route needs no new
+ * plumbing; `undefined` means "not known yet", which reads as hidden — better
+ * a nav entry that appears a moment late than one that vanishes under the
+ * cursor.
+ */
+export function visibleNav(supported: Record<string, boolean | undefined>): NavGroup[] {
+  return NAV.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.optional || supported[item.to] === true),
+  })).filter((group) => group.items.length > 0);
+}
