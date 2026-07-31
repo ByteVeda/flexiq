@@ -308,7 +308,13 @@ impl Shared {
         }
 
         let handle = Arc::clone(self).spawn_reader(executor, reader);
-        self.readers.lock().unwrap_or_else(recover).push(handle);
+        {
+            let mut readers = self.readers.lock().unwrap_or_else(recover);
+            // Reap handles of already-detached executors so a reconnect loop
+            // cannot grow this vector for the life of the process.
+            readers.retain(|reader| !reader.is_finished());
+            readers.push(handle);
+        }
         self.capacity_changed.notify_waiters();
 
         log::info!("[taskito] executor {executor_id} attached from {peer} with {slots} slot(s)");
