@@ -16,7 +16,6 @@
 
 mod child;
 mod dispatch;
-pub mod protocol;
 mod slot;
 mod watchdog;
 
@@ -30,10 +29,10 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
+use taskito_core::worker::protocol::ExecutorMessage;
 use taskito_core::worker::WorkerDispatcher;
 
 use child::{spawn_child, ChildProcess, ChildReader, ChildWriter};
-use protocol::ParentMessage;
 use slot::{ActiveJob, SlotState};
 
 /// How long graceful shutdown will wait for each child to drain before
@@ -180,7 +179,8 @@ impl WorkerDispatcher for PreforkPool {
         for idx in 0..num_workers {
             if let Ok(mut guard) = writers[idx].lock() {
                 if let Some(w) = guard.as_mut() {
-                    w.send_shutdown();
+                    // Best-effort: the child may already be gone.
+                    let _ = w.write_shutdown();
                     log::info!("[taskito] sent shutdown to prefork child {idx}");
                 }
             }
@@ -280,10 +280,9 @@ fn dispatch_job(
     };
     slot::set(slots, idx, active);
 
-    let msg = ParentMessage::from(&job);
     let send_result = match writers[idx].lock() {
         Ok(mut guard) => match guard.as_mut() {
-            Some(writer) => writer.send(&msg),
+            Some(writer) => writer.write_job(&job),
             None => {
                 drop(guard);
                 let _ = slot::take(slots, idx);
@@ -374,9 +373,9 @@ fn spawn_reader_thread(
     thread::Builder::new()
         .name(format!("taskito-prefork-reader-{idx}"))
         .spawn(move || loop {
-            match reader.read() {
-                Ok(msg) => {
-                    let Some(job_result) = msg.into_job_result() else {
+            match reader.read::<ExecutorMessage>() {
+                Ok((msg, payload)) => {
+                    let Some(job_result) = msg.into_job_result(payload) else {
                         continue;
                     };
                     if slot::take(&slots, idx).is_none() {
@@ -425,7 +424,7 @@ fn spawn_cancel_router(
                 let Some(writer) = guard.as_mut() else {
                     continue;
                 };
-                if let Err(e) = writer.send_cancel(&job_id) {
+                if let Err(e) = writer.write_cancel(&job_id) {
                     log::warn!(
                         "[taskito] failed to forward cancel for {job_id} to child {idx}: {e}"
                     );

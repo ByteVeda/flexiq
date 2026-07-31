@@ -1,10 +1,18 @@
 pub mod dispatcher;
+pub mod protocol;
 pub mod registry;
+pub mod remote;
 pub mod runner;
+pub mod transport;
 
 pub use dispatcher::NativeDispatcher;
+pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
+pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
 pub use runner::{Worker, WorkerHandle};
+#[cfg(unix)]
+pub use transport::UnixTransport;
+pub use transport::{MemoryTransport, TcpTransport, Transport};
 
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
@@ -33,5 +41,7 @@ pub trait WorkerDispatcher: Send + Sync {
     fn notify_cancel(&self, _job_id: &str) {}
 }
 
+#[cfg(test)]
+mod remote_tests;
 #[cfg(test)]
 mod tests;

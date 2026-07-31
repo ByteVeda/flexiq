@@ -33,6 +33,19 @@ def quick(x: int) -> int:
     return x * 2
 
 
+@queue.task()
+def echo_bytes(blob: bytes) -> bytes:
+    """Echo a binary blob — frames carry payloads raw, so a payload containing
+    newlines must survive intact in both directions."""
+    return blob
+
+
+@queue.task()
+def returns_nothing() -> None:
+    """Returns None — a result frame that declares no payload at all."""
+    return None
+
+
 @queue.task(timeout=2, max_retries=0)
 def sleep_then_finish(seconds: float) -> str:
     """Sleeps for `seconds`, then finishes — used to verify the watchdog only

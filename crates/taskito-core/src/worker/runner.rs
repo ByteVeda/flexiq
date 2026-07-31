@@ -1,4 +1,4 @@
-//! Turn-key worker: wires a [`Scheduler`], a [`NativeDispatcher`], the result
+//! Turn-key worker: wires a [`Scheduler`], a [`WorkerDispatcher`], the result
 //! drain loop, and the heartbeat/reap cadence into one `Worker::spawn()` call —
 //! the zero-to-executed-task path for a Rust consumer.
 //!
@@ -42,6 +42,7 @@ pub struct Worker {
     queue_configs: Vec<(String, QueueConfig)>,
     worker_id: Option<String>,
     on_outcome: Option<OutcomeCallback>,
+    dispatcher: Option<(String, Arc<dyn WorkerDispatcher>)>,
 }
 
 impl Worker {
@@ -58,6 +59,7 @@ impl Worker {
             queue_configs: Vec::new(),
             worker_id: None,
             on_outcome: None,
+            dispatcher: None,
         }
     }
 
@@ -110,6 +112,23 @@ impl Worker {
         self
     }
 
+    /// Run tasks on `dispatcher` instead of the built-in native pool — e.g. a
+    /// [`RemoteDispatcher`](super::RemoteDispatcher) feeding attached
+    /// executors. Registered handlers are then unused, and `num_workers`
+    /// should match the dispatcher's own concurrency so `max_in_flight` bounds
+    /// dispatch correctly.
+    ///
+    /// `pool_type` is what the worker registry reports, so it must describe the
+    /// pool that is actually running.
+    pub fn dispatcher(
+        mut self,
+        pool_type: impl Into<String>,
+        dispatcher: Arc<dyn WorkerDispatcher>,
+    ) -> Self {
+        self.dispatcher = Some((pool_type.into(), dispatcher));
+        self
+    }
+
     /// Register a blocking handler. See [`TaskRegistry::register`].
     pub fn register(
         mut self,
@@ -145,10 +164,18 @@ impl Worker {
             queue_configs,
             worker_id,
             on_outcome,
+            dispatcher,
         } = self;
 
         let worker_id =
             worker_id.unwrap_or_else(|| format!("rust-worker-{}", uuid::Uuid::now_v7()));
+        let (pool_type, dispatcher): (String, Arc<dyn WorkerDispatcher>) = dispatcher
+            .unwrap_or_else(|| {
+                (
+                    "native".to_string(),
+                    Arc::new(NativeDispatcher::new(registry, num_workers)),
+                )
+            });
 
         storage.register_worker(
             &worker_id,
@@ -159,7 +186,7 @@ impl Worker {
             num_workers as i32,
             None,
             Some(std::process::id() as i32),
-            Some("native"),
+            Some(&pool_type),
         )?;
 
         // Bound dispatch to the pool size so this scheduler never claims more
@@ -182,7 +209,6 @@ impl Worker {
         let (job_tx, job_rx) = tokio::sync::mpsc::channel(num_workers * 2);
         let (result_tx, result_rx) = crossbeam_channel::bounded(num_workers * 2);
 
-        let dispatcher = Arc::new(NativeDispatcher::new(registry, num_workers));
         let runtime_done = Arc::new(AtomicBool::new(false));
 
         // Runtime thread: scheduler dispatch + task execution. `result_tx`
@@ -300,7 +326,7 @@ pub struct WorkerHandle {
     worker_id: String,
     storage: StorageBackend,
     shutdown: Arc<tokio::sync::Notify>,
-    dispatcher: Arc<NativeDispatcher>,
+    dispatcher: Arc<dyn WorkerDispatcher>,
     stop_tx: Option<std_mpsc::Sender<()>>,
     threads: Vec<thread::JoinHandle<()>>,
 }

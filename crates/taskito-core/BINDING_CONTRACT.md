@@ -68,7 +68,7 @@ handler-binding model.
 ## Dispatch call sequence
 1. Shell constructs `Storage` (SQLite default; `postgres`/`redis` features) — `storage/traits.rs`.
 2. Shell constructs `Scheduler::new(storage, queues, SchedulerConfig, namespace)` — `scheduler/mod.rs`.
-3. Shell implements `WorkerDispatcher` — `worker.rs`.
+3. Shell implements `WorkerDispatcher` — `worker/mod.rs`.
 4. `Scheduler.run(job_tx)` polls + claims jobs and sends each `Job` over a
    `tokio::sync::mpsc::Sender<Job>` — `scheduler/poller.rs`, `scheduler/mod.rs`.
 5. `WorkerDispatcher::run(job_rx, result_tx)` receives the `Job`, deserializes
@@ -86,7 +86,7 @@ Scheduler.handle_result ─▶ ResultOutcome ─▶ shell emits events / middlew
 ```
 
 ## What a shell MUST implement
-### `WorkerDispatcher` — `worker.rs`
+### `WorkerDispatcher` — `worker/mod.rs`
 | Method | Signature | Required |
 |--------|-----------|----------|
 | `run` | `async fn run(&self, job_rx: tokio::sync::mpsc::Receiver<Job>, result_tx: crossbeam_channel::Sender<JobResult>)` | yes |
@@ -95,6 +95,46 @@ Scheduler.handle_result ─▶ ResultOutcome ─▶ shell emits events / middlew
 
 Channels: inbound `tokio::sync::mpsc::Receiver<Job>` (async); outbound
 `crossbeam_channel::Sender<JobResult>` (sync, cloneable).
+
+## Worker frame protocol (out-of-process executors) — `worker/protocol.rs`
+
+A dispatcher that runs tasks in another process speaks this format over its
+stream. The same format serves a pipe (the prefork pool's stdio children) and a
+socket, so an executor written in any SDK attaches to any scheduler.
+
+A frame is a JSON header line, then exactly the number of raw payload bytes the
+header declares:
+
+```
+{"type":"job","id":"018f…","task_name":"resize","payload_len":7,…}\n
+<7 raw bytes>
+```
+
+The blob is **not** base64-encoded — the bytes on the wire are the wire-envelope
+bytes of the section above, unchanged. `MAX_HEADER_BYTES` (64 KiB) and
+`MAX_PAYLOAD_BYTES` (64 MiB) bound a desynced or hostile peer.
+
+| Frame | Direction | Payload |
+|---|---|---|
+| `hello` | executor → scheduler | `{executor_id, sdk, version, tasks[], slots, protocol_version}` |
+| `hello_ack` | scheduler → executor | `{scheduler_id, protocol_version}` |
+| `heartbeat` | executor → scheduler | `{free_slots}` |
+| `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace}` + blob |
+| `cancel` | scheduler → executor | `{job_id}` |
+| `shutdown` | scheduler → executor | — |
+| `success` | executor → scheduler | `{job_id, result_len, task_name, wall_time_ns}` + blob |
+| `failure` | executor → scheduler | `{job_id, error, retry_count, max_retries, task_name, wall_time_ns, should_retry, timed_out}` |
+| `cancelled` | executor → scheduler | `{job_id, task_name, wall_time_ns}` |
+
+Rules:
+- `hello` is the first frame on every connection; no `job` may precede its ack.
+- Both sides announce `protocol_version` and both reject a mismatch. A version
+  is never silently downgraded. The scheduler sends `hello_ack` even when it is
+  rejecting, so both ends can log both versions.
+- `result_len: null` means the task returned nothing; `0` means it returned an
+  empty value. They are distinct.
+- `should_retry` is the executor's decision — only it can see the exception. The
+  core never inspects one.
 
 ## Task errors (structured, cross-SDK)
 When a task raises, the shell reports the failure as a **canonical JSON object**
