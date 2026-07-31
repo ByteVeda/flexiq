@@ -157,16 +157,14 @@ async fn verify_id_token(
         .map_err(|error| OAuthError::IdentityFetch(format!("id_token is malformed: {error}")))?;
     let keys = jwks(runtime, provider, &discovery.jwks_uri).await?;
 
-    // Pick the key the token names; a single-key set is allowed to answer for
-    // a token that names no `kid`.
-    let jwk = header
-        .kid
-        .as_deref()
-        .and_then(|kid| keys.find(kid))
-        .or_else(|| keys.keys.first().filter(|_| keys.keys.len() == 1))
-        .ok_or_else(|| {
-            OAuthError::IdentityFetch("no signing key matches the id_token's kid".into())
-        })?;
+    // A token that names a `kid` must be verified with *that* key: falling back
+    // to some other key would accept a token signed by a retired or unrelated
+    // one. Only a token naming no `kid` may use a single-key set.
+    let jwk = match header.kid.as_deref() {
+        Some(kid) => keys.find(kid),
+        None => keys.keys.first().filter(|_| keys.keys.len() == 1),
+    }
+    .ok_or_else(|| OAuthError::IdentityFetch("no signing key matches the id_token's kid".into()))?;
     let key = DecodingKey::from_jwk(jwk)
         .map_err(|error| OAuthError::IdentityFetch(format!("unusable signing key: {error}")))?;
 
