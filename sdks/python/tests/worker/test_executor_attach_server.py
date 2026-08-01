@@ -30,6 +30,7 @@ from test_executor_attach import (
     BOOM,
     ECHO,
     SLOW,
+    read_stderr,
     spawn_executor,
     terminate,
     wait_started,
@@ -97,7 +98,7 @@ def wait_for_port(port: int, process: subprocess.Popen[str], timeout: float = SE
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise AssertionError(f"the server exited early: {process.stderr.read()}")
+            raise AssertionError(f"the server exited early: {read_stderr(process)}")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 return
@@ -206,7 +207,7 @@ def test_a_bad_token_is_refused_by_the_real_listener(tmp_path: Path) -> None:
         executor = spawn_executor(port, db_path, token="wrong-token-0123456789")
         try:
             assert executor.wait(timeout=SETTLE) != 0
-            assert "token" in executor.stderr.read().lower()
+            assert "token" in read_stderr(executor).lower()
         finally:
             terminate(executor)
     finally:

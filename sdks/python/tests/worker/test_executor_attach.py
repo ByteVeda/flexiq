@@ -202,6 +202,13 @@ def spawn_executor(
     )
 
 
+def read_stderr(process: subprocess.Popen[str]) -> str:
+    """Drain a process's stderr, which every spawn here pipes."""
+    assert process.stderr is not None, "the process was spawned without a stderr pipe"
+    text: str = process.stderr.read()
+    return text
+
+
 def terminate(process: subprocess.Popen[str]) -> None:
     """Best-effort teardown for a process a test did not stop itself."""
     if process.poll() is None:
@@ -233,9 +240,10 @@ def release_tasks(markers: Path) -> None:
 
 def payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
     """Encode a call the way the enqueue path does."""
-    from attach_app import queue
+    from attach_app import queue  # type: ignore[import-not-found]
 
-    return queue._get_serializer(task_name).dumps((args, kwargs))
+    payload: bytes = queue._get_serializer(task_name).dumps((args, kwargs))
+    return payload
 
 
 @pytest.fixture(autouse=True)
@@ -399,7 +407,7 @@ def test_a_refused_attach_exits_nonzero_with_a_token_hint(
         assert hello["token"] == "attach-token-0123456789"
 
         assert process.wait(timeout=60) != 0
-        assert "token" in process.stderr.read().lower()
+        assert "token" in read_stderr(process).lower()
     finally:
         terminate(process)
 
@@ -413,7 +421,7 @@ def test_an_unreachable_scheduler_exits_nonzero(tmp_path: Path) -> None:
     process = spawn_executor(closed_port, tmp_path / "t.db")
     try:
         assert process.wait(timeout=60) != 0
-        assert "could not reach the scheduler" in process.stderr.read()
+        assert "could not reach the scheduler" in read_stderr(process)
     finally:
         terminate(process)
 
