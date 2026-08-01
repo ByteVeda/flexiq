@@ -224,6 +224,18 @@ impl RedisStorage {
                 }
             }
 
+            // A whole page can be members whose blob is already gone —
+            // `dlq:all` still indexes them, so nothing above set `examined`.
+            // Breaking here would end the walk and report the DLQ exhausted
+            // while matching entries sit below the page, so advance from the
+            // ZSET member itself.
+            if examined.is_none() {
+                if let Some(last) = ids.last() {
+                    let score: Option<f64> = conn.zscore(&dlq_all, last).map_err(map_err)?;
+                    examined = score.map(|failed_at| (failed_at as i64, last.clone()));
+                }
+            }
+
             // Unscoped pages are already exactly the answer; only a filtered
             // walk needs to look past this page.
             if namespace.is_none() || (ids.len() as i64) < limit || examined.is_none() {
