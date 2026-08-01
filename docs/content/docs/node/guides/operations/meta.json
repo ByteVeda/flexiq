@@ -1,1 +1,1 @@
-{ "title": "Operations", "pages": ["backends", "inspection", "dashboard", "dashboard-api", "sso", "mesh", "keda", "autoscaling", "cli", "testing", "security", "troubleshooting", "deployment", "migration"] }
+{ "title": "Operations", "pages": ["backends", "inspection", "dashboard", "dashboard-api", "sso", "mesh", "keda", "autoscaling", "cli", "testing", "security", "troubleshooting", "deployment", "executor", "migration"] }

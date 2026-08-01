@@ -1,0 +1,185 @@
+---
+title: Attached Executors
+description: "Run task bodies in your app container while a separate scheduler holds the database credentials."
+---
+
+An **attached executor** splits a worker in two. The scheduler — `taskito-server`
+— holds the database connection, claims jobs, and owns retries, the dead-letter
+queue and retention. Your app container runs `taskito executor`, which dials the
+scheduler, announces the tasks it can run, and executes whatever it is sent.
+
+The app image needs no database credentials and no inbound port.
+
+```
+┌────────────────────────┐         ┌──────────────────────────────┐
+│ taskito-server         │◀────────│ app container (unchanged)    │
+│ scheduler + dashboard  │  dial   │  <app entrypoint>            │
+│ retry / DLQ / breaker  │  out    │  + taskito executor          │
+│ retention / reaper     │────────▶│                              │
+└────────────────────────┘  jobs   └──────────────────────────────┘
+            │
+        storage (source of truth)
+```
+
+<Callout type="info" title="This is opt-in">
+  An in-process worker stays the default and the simplest deployment. Reach for
+  an executor when the app image is large enough that running a second copy of
+  it as a worker is the expensive part — an interpreter or JVM plus model
+  weights resident twice, and a multi-gigabyte image pull on every scale-up.
+</Callout>
+
+## Running the scheduler
+
+`taskito-server` is configured entirely through the environment — there are no
+flags. At minimum it needs a DSN and an attach address:
+
+```bash
+TASKITO_DSN=postgres://user:pass@db/taskito \
+TASKITO_LISTEN=0.0.0.0:7749 \
+TASKITO_ATTACH_TOKEN=$(openssl rand -hex 32) \
+taskito-server
+```
+
+The scheduler starts lazily, on the **first attach**. With nothing attached it
+would claim jobs no executor advertises, and each would fail retryably once the
+placement timeout elapsed — a retry storm against an idle deployment.
+
+## Running an executor
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH_TOKEN=... \
+taskito executor --app myapp:queue --slots 4
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```bash
+TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH_TOKEN=... \
+taskito executor ./app.js --slots 4
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```bash
+TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH_TOKEN=... \
+java -cp app.jar org.byteveda.taskito.cli.Cli executor --slots 4
+```
+
+Handlers are discovered from the classpath through `META-INF/services`, so no
+application `main` has to run to register them.
+
+  </Tab>
+</CodeTabs>
+
+`--slots` is how many jobs run at once; the scheduler dispatches a task name
+only to executors that advertised it, so a handler missing from an executor is a
+job that never reaches it.
+
+<Callout type="warn" title="The token is read from the environment, never a flag">
+  A secret in `argv` shows up in `ps` output and shell history. Every SDK reads
+  `TASKITO_ATTACH_TOKEN` from the environment and offers no flag for it.
+</Callout>
+
+## Security
+
+The attach port dispatches code, so the defaults are strict:
+
+- A **non-loopback** `TASKITO_LISTEN` refuses to start without
+  `TASKITO_ATTACH_TOKEN`.
+- The shared secret is compared in constant time, and never logged — an attach
+  failure is logged with the executor id and peer only.
+- `hello` must arrive before any other frame; an unauthenticated socket is
+  dropped rather than queued, and never receives an acknowledgement.
+- Use a Unix socket (`unix:/run/taskito.sock`) for a same-pod sidecar; it needs
+  no token because the filesystem permissions are the boundary.
+
+## What a task can do on an executor
+
+A task body behaves the same as it does on an in-process worker. Progress, log
+lines and published partials all work — the executor has no storage, so it
+reports them to the scheduler, which applies them:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task()
+def resize(path: str) -> str:
+    current_job.update_progress(50)
+    current_job.log("halfway")
+    current_job.publish({"stage": "halfway"})
+    return "done"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("resize", async (path: string) => {
+  const job = currentJob();
+  job?.setProgress(50);
+  job?.publish({ stage: "halfway" });
+  return "done";
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+@TaskHandler("resize")
+public String resize(String path) {
+    JobContext job = JobContext.current();
+    job.setProgress(50);
+    job.log("halfway");
+    job.publish(Map.of("stage", "halfway"));
+    return "done";
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+Middleware disabled from the dashboard is honoured too. The executor cannot read
+settings, so the scheduler resolves the list and attaches it to each dispatch —
+a toggle still takes effect on the next job, with nothing to restart.
+
+### What is not available
+
+Anything that needs the database directly. An enqueue, a workflow submission or
+a queue inspection raises rather than silently doing nothing, because an enqueue
+that quietly vanished would be worse than one that failed.
+
+A handful of job fields also arrive as zeros and nulls, because a dispatch frame
+carries what running the task needs rather than the whole row: `created_at`,
+`scheduled_at`, `priority`, `unique_key` and `notes`. `metadata` is the
+exception — middleware reads it, so it rides the frame. A task that needs the
+rest wants a worker, not an executor.
+
+## Version skew
+
+The scheduler and its executors upgrade independently. The handshake carries a
+capability list rather than a version both sides must match, so a newer executor
+attached to an older scheduler never sends a frame that scheduler could not
+parse — it degrades instead.
+
+Concretely: a scheduler that does not advertise `side_channel` gets no progress
+or task-log frames, and those calls become no-ops (logged once). Everything else
+— dispatch, results, retries, cancellation — is unaffected. The executor logs
+which capabilities it negotiated at attach.
+
+## Trade-offs
+
+| Cost | Mitigation |
+|---|---|
+| CPU-heavy tasks compete with request latency in the app container | Cap `--slots`; or run a second replica set from the same image with the HTTP server off |
+| A network hop per job | Use a Unix socket for same-pod sidecars; attach is a poor fit for microsecond-scale tasks |
+| The attach port dispatches code | Token or mTLS, and never a permissive default |
