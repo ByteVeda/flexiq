@@ -92,7 +92,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
 
     /**
      * List the generated companions in {@code META-INF/services} so
-     * {@code ServiceLoader.load(HandlerRegistry.class)} finds them.
+     * {@code ServiceLoader.load(HandlerRegistryProvider.class)} finds them.
      */
     private void writeServiceFile() {
         if (providers.isEmpty()) {
@@ -119,15 +119,18 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
 
     /**
      * Whether {@code owner} can be built by {@link java.util.ServiceLoader} — a
-     * non-abstract type with an accessible no-arg constructor.
+     * top-level, non-abstract type with an accessible no-arg constructor.
      *
      * <p>A class with only injected dependencies cannot be, and only the user's
      * own code knows how to build it; that stays the explicit
      * {@code register(...)} path.
+     *
+     * <p>Every nested owner is excluded, static ones included: the companion is
+     * written at package level and names the handler by its simple name, which
+     * does not resolve for an {@code Outer.Inner}.
      */
     private boolean isServiceLoadable(TypeElement owner) {
-        if (owner.getModifiers().contains(Modifier.ABSTRACT)
-                || owner.getNestingKind().isNested() && !owner.getModifiers().contains(Modifier.STATIC)) {
+        if (owner.getModifiers().contains(Modifier.ABSTRACT) || owner.getNestingKind().isNested()) {
             return false;
         }
         boolean declaresAny = false;
@@ -275,9 +278,9 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
                     .printMessage(
                             Diagnostic.Kind.NOTE,
                             ownerSimple
-                                    + " has no accessible no-arg constructor, so it cannot be discovered by"
-                                    + " `taskito executor`; register its handlers explicitly with "
-                                    + companion + ".handlers(impl)",
+                                    + " is not a top-level type with an accessible no-arg constructor, so it"
+                                    + " cannot be discovered by `taskito executor`; register its handlers"
+                                    + " explicitly with " + companion + ".handlers(impl)",
                             owner);
         }
         out.append("}\n");
