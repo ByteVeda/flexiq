@@ -5,7 +5,7 @@
 //! like any other, so the same claim, retry, and reaper machinery applies.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -16,15 +16,17 @@ use tokio::sync::Notify;
 
 use super::auth::Secret;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
+    PROTOCOL_VERSION,
 };
+use super::side_channel::SideChannel;
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
 use crate::job::Job;
 use crate::scheduler::JobResult;
 
 /// Tuning for a [`RemoteDispatcher`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RemoteConfig {
     /// Identity announced in `hello_ack`.
     pub scheduler_id: String,
@@ -49,6 +51,18 @@ pub struct RemoteConfig {
     pub shutdown_drain: Duration,
     /// Capacity of the cancel side-channel.
     pub cancel_capacity: usize,
+    /// Storage this scheduler applies executor-reported progress and task logs
+    /// through, and resolves middleware toggles from.
+    ///
+    /// `None` leaves attached executors as they were before the side-channel
+    /// existed: they are told so in the handshake, never send the frames, and
+    /// their tasks' progress and logs go nowhere. Every real deployment sets
+    /// this — it is `None` only where there is no storage to point at, which in
+    /// practice means tests.
+    pub side_channel: Option<Arc<dyn SideChannel>>,
+    /// How many side-channel operations may be queued for application before
+    /// the oldest logs are dropped.
+    pub side_channel_capacity: usize,
 }
 
 impl Default for RemoteConfig {
@@ -61,7 +75,27 @@ impl Default for RemoteConfig {
             write_timeout: Duration::from_secs(30),
             shutdown_drain: Duration::from_secs(30),
             cancel_capacity: 1024,
+            side_channel: None,
+            side_channel_capacity: 4096,
         }
+    }
+}
+
+impl std::fmt::Debug for RemoteConfig {
+    /// Hand-written because a `dyn SideChannel` is not `Debug`, and requiring it
+    /// would push the bound onto every implementation for the sake of a log line.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteConfig")
+            .field("scheduler_id", &self.scheduler_id)
+            .field("auth_token", &self.auth_token)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("placement_timeout", &self.placement_timeout)
+            .field("write_timeout", &self.write_timeout)
+            .field("shutdown_drain", &self.shutdown_drain)
+            .field("cancel_capacity", &self.cancel_capacity)
+            .field("side_channel", &self.side_channel.is_some())
+            .field("side_channel_capacity", &self.side_channel_capacity)
+            .finish()
     }
 }
 
@@ -149,6 +183,17 @@ pub struct RemoteDispatcher {
 impl RemoteDispatcher {
     /// Build a dispatcher with no executors attached yet.
     pub fn new(config: RemoteConfig) -> Self {
+        // Started here rather than in `run`: a reader thread exists from the
+        // first attach, and an executor may report progress before the
+        // scheduler has dispatched anything through this handle.
+        let (side_channel, drain) = match config.side_channel.clone() {
+            Some(sink) => {
+                let (pump, handle) = SideChannelPump::start(sink, config.side_channel_capacity);
+                (Some(pump), Some(handle))
+            }
+            None => (None, None),
+        };
+
         Self {
             shared: Arc::new(Shared {
                 config,
@@ -159,6 +204,8 @@ impl RemoteDispatcher {
                 readers: Mutex::new(Vec::new()),
                 shutdown: AtomicBool::new(false),
                 started_at: Instant::now(),
+                side_channel,
+                side_channel_drain: Mutex::new(drain),
             }),
         }
     }
@@ -197,6 +244,17 @@ impl WorkerDispatcher for RemoteDispatcher {
     }
 }
 
+/// What the scheduler remembers about a job it handed to an executor.
+///
+/// More than the task name because a side-channel frame carries only a job id:
+/// the namespace a log row belongs in has to come from somewhere, and the
+/// dispatch already knew it.
+#[derive(Debug, Clone)]
+struct InFlight {
+    task_name: String,
+    namespace: Option<String>,
+}
+
 /// One attached executor: what it can run, what it is running, and how to
 /// reach it.
 struct Executor {
@@ -206,9 +264,10 @@ struct Executor {
     tasks: HashSet<String>,
     slots: u32,
     free: AtomicU32,
-    /// Job id → task name. Taking an entry is the exactly-once token for
-    /// emitting that job's single `JobResult`.
-    in_flight: Mutex<HashMap<String, String>>,
+    /// Job id → what was dispatched. Taking an entry is the exactly-once token
+    /// for emitting that job's single `JobResult`; holding one is also this
+    /// executor's authority to report progress or logs against that job.
+    in_flight: Mutex<HashMap<String, InFlight>>,
     writer: Mutex<FrameWriter<WriteHalf>>,
     connection: Connection,
     peer: String,
@@ -219,6 +278,18 @@ struct Executor {
 impl Executor {
     fn is_busy(executor: &Arc<Self>) -> bool {
         !executor.in_flight.lock().unwrap_or_else(recover).is_empty()
+    }
+
+    /// What this executor is running `job_id` as, or `None` when it is not.
+    ///
+    /// The authority check for every side-channel frame: an executor may write
+    /// progress and logs only against jobs the scheduler actually gave it.
+    fn running(&self, job_id: &str) -> Option<InFlight> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(recover)
+            .get(job_id)
+            .cloned()
     }
 
     fn snapshot(&self, now_ms: u32) -> AttachedExecutor {
@@ -235,6 +306,170 @@ impl Executor {
             peer: self.peer.clone(),
             idle_ms: now_ms.saturating_sub(self.last_seen_ms.load(Ordering::Relaxed)),
         }
+    }
+}
+
+/// One executor-reported log line, on its way to storage.
+struct LogLine {
+    job_id: String,
+    task_name: String,
+    level: String,
+    message: String,
+    extra: Option<String>,
+    namespace: Option<String>,
+}
+
+/// Applies executor-reported progress and logs to storage, off the reader
+/// thread.
+///
+/// The reader thread also carries job results, and results are the thing the
+/// scheduler cannot afford to delay. Applying a row inline would put every
+/// result on that connection behind a database write, so the writes are queued
+/// here and drained by one thread instead.
+///
+/// The two kinds queue separately because they are different data. Progress is
+/// idempotent-latest — only the newest value per job matters — so it collapses
+/// into a map and a backlog costs one row per job rather than growing. A log
+/// line *is* data and cannot be collapsed, so its queue is bounded and drops
+/// oldest with a counter, the trade every log shipper makes.
+struct SideChannelPump {
+    sink: Arc<dyn SideChannel>,
+    /// Job id → newest progress not yet applied.
+    pending_progress: Mutex<HashMap<String, i32>>,
+    /// Capacity 1: a pending wake-up already covers every value in the map, so
+    /// a second one would only make the drain spin.
+    progress_wake: Sender<()>,
+    logs: Sender<LogLine>,
+    /// A clone of the drain's receiver, used only to shed the head of a full
+    /// queue. Discarding from the sending side is safe because the item is
+    /// being dropped either way.
+    log_shed: Receiver<LogLine>,
+    /// Log lines discarded because the queue was full, reported at teardown so
+    /// a silent gap never reads as a quiet task.
+    dropped_logs: AtomicU64,
+}
+
+/// The drain thread's lifetime controls.
+///
+/// The queues cannot be what ends it: the pump holds their senders and lives as
+/// long as the dispatcher, so a dedicated signal is what makes a bounded
+/// shutdown possible.
+struct SideChannelDrain {
+    /// Never sent on — dropping it is the signal.
+    close: Sender<()>,
+    handle: JoinHandle<()>,
+}
+
+impl SideChannelPump {
+    /// Start the pump and its drain thread.
+    fn start(sink: Arc<dyn SideChannel>, capacity: usize) -> (Arc<Self>, SideChannelDrain) {
+        let (progress_wake, progress_rx) = crossbeam_channel::bounded(1);
+        let (logs, log_rx) = crossbeam_channel::bounded(capacity.max(1));
+        let (close, close_rx) = crossbeam_channel::bounded::<()>(0);
+        let pump = Arc::new(Self {
+            sink,
+            pending_progress: Mutex::new(HashMap::new()),
+            progress_wake,
+            logs,
+            log_shed: log_rx.clone(),
+            dropped_logs: AtomicU64::new(0),
+        });
+        let handle = Arc::clone(&pump).spawn_drain(progress_rx, log_rx, close_rx);
+        (pump, SideChannelDrain { close, handle })
+    }
+
+    /// Record the newest progress for a job and ask for a flush.
+    ///
+    /// The value lands in the map before the wake-up, so a full wake channel
+    /// loses nothing: the flush that is already pending will pick this value up.
+    fn progress(&self, job_id: &str, progress: i32) {
+        self.pending_progress
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(job_id.to_string(), progress);
+        let _ = self.progress_wake.try_send(());
+    }
+
+    /// Queue one log line, shedding the oldest when the queue is full.
+    fn log(&self, line: LogLine) {
+        let mut line = line;
+        loop {
+            match self.logs.try_send(line) {
+                Ok(()) => return,
+                Err(TrySendError::Disconnected(_)) => return,
+                Err(TrySendError::Full(rejected)) => {
+                    line = rejected;
+                    // Drop-oldest, not drop-newest: when a task floods, the
+                    // lines nearest the present are the ones worth keeping. A
+                    // failed shed means the drain just emptied a slot, so the
+                    // retry fits.
+                    if self.log_shed.try_recv().is_ok() {
+                        self.dropped_logs.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply every progress value recorded since the last flush.
+    fn flush_progress(&self) {
+        let batch = std::mem::take(&mut *self.pending_progress.lock().unwrap_or_else(recover));
+        for (job_id, progress) in batch {
+            self.sink.update_progress(&job_id, progress);
+        }
+    }
+
+    fn write(&self, line: &LogLine) {
+        self.sink.write_task_log(
+            &line.job_id,
+            &line.task_name,
+            &line.level,
+            &line.message,
+            line.extra.as_deref(),
+            line.namespace.as_deref(),
+        );
+    }
+
+    /// Drain thread: apply work from both queues until asked to stop.
+    fn spawn_drain(
+        self: Arc<Self>,
+        progress_rx: Receiver<()>,
+        log_rx: Receiver<LogLine>,
+        close_rx: Receiver<()>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name("taskito-side-channel".into())
+            .spawn(move || {
+                loop {
+                    crossbeam_channel::select! {
+                        recv(progress_rx) -> woken => match woken {
+                            Ok(()) => self.flush_progress(),
+                            Err(_) => break,
+                        },
+                        recv(log_rx) -> line => match line {
+                            Ok(line) => self.write(&line),
+                            Err(_) => break,
+                        },
+                        recv(close_rx) -> _ => break,
+                    }
+                }
+
+                // Stopping is not the same as being empty, and what is still
+                // queued belongs in storage.
+                for line in log_rx.try_iter() {
+                    self.write(&line);
+                }
+                self.flush_progress();
+
+                let dropped = self.dropped_logs.load(Ordering::Relaxed);
+                if dropped > 0 {
+                    log::warn!(
+                        "[taskito] dropped {dropped} executor task log line(s) that arrived \
+                         faster than they could be written"
+                    );
+                }
+            })
+            .expect("failed to spawn the executor side-channel thread")
     }
 }
 
@@ -262,6 +497,12 @@ struct Shared {
     readers: Mutex<Vec<JoinHandle<()>>>,
     shutdown: AtomicBool,
     started_at: Instant,
+    /// Applies executor-reported progress and logs. `None` when the deployment
+    /// configured no storage to apply them to, which is also what the handshake
+    /// tells executors so they never send the frames.
+    side_channel: Option<Arc<SideChannelPump>>,
+    /// Stopped after the readers, so a frame read on the way down still lands.
+    side_channel_drain: Mutex<Option<SideChannelDrain>>,
 }
 
 impl Shared {
@@ -321,6 +562,7 @@ impl Shared {
         writer.write_header(&SchedulerMessage::HelloAck {
             scheduler_id: self.config.scheduler_id.clone(),
             protocol_version: PROTOCOL_VERSION,
+            capabilities: self.capabilities(),
         })?;
 
         if protocol_version != PROTOCOL_VERSION {
@@ -398,6 +640,18 @@ impl Shared {
             })
     }
 
+    /// Optional behaviours to announce in `hello_ack`.
+    ///
+    /// Announcing rather than versioning is the point: an executor that sees no
+    /// capability sends no frame the scheduler could not handle, so the two
+    /// sides upgrade independently.
+    fn capabilities(&self) -> Vec<String> {
+        match self.side_channel {
+            Some(_) => vec![CAP_SIDE_CHANNEL.to_string()],
+            None => Vec::new(),
+        }
+    }
+
     /// Milliseconds since the dispatcher was created — a monotonic clock for
     /// liveness that a wall-clock jump cannot move backwards.
     fn elapsed_ms(&self) -> u32 {
@@ -435,6 +689,25 @@ impl Shared {
             let _ = handle.join();
         }
         let _ = cancel_router.join();
+        self.stop_side_channel();
+    }
+
+    /// Close the side-channel queues and wait for what is in them to be written.
+    ///
+    /// After the readers have joined, so a progress report that arrived on the
+    /// way down is queued before the senders are dropped, and the drain still
+    /// flushes it.
+    fn stop_side_channel(&self) {
+        let drain = self
+            .side_channel_drain
+            .lock()
+            .unwrap_or_else(recover)
+            .take();
+        let Some(SideChannelDrain { close, handle }) = drain else {
+            return;
+        };
+        drop(close);
+        let _ = handle.join();
     }
 
     /// Place one job, waiting for a slot if every advertising executor is busy.
@@ -517,17 +790,26 @@ impl Shared {
     /// dropped, and the job is left to the scheduler's reaper — the same
     /// recovery path a mid-job executor crash takes.
     fn dispatch_to(&self, executor: &Arc<Executor>, job: Job) {
-        executor
-            .in_flight
-            .lock()
-            .unwrap_or_else(recover)
-            .insert(job.id.clone(), job.task_name.clone());
+        executor.in_flight.lock().unwrap_or_else(recover).insert(
+            job.id.clone(),
+            InFlight {
+                task_name: job.task_name.clone(),
+                namespace: job.namespace.clone(),
+            },
+        );
+
+        // Resolved here rather than read by the executor: it has no storage to
+        // read from, and the scheduler is already touching the row.
+        let disabled = match &self.side_channel {
+            Some(pump) => pump.sink.disabled_middleware(&job.task_name),
+            None => Vec::new(),
+        };
 
         let write = executor
             .writer
             .lock()
             .unwrap_or_else(recover)
-            .write_job(&job);
+            .write_job_with(&job, disabled);
 
         if let Err(e) = write {
             executor
@@ -625,6 +907,28 @@ impl Shared {
             return;
         }
 
+        // Handled before `into_job_result` on purpose: these are not results.
+        // Taking the in-flight entry — which is what the result path does — is
+        // the exactly-once token for the job's single outcome, and a progress
+        // report must never spend it.
+        let message = match message {
+            ExecutorMessage::Progress { job_id, progress } => {
+                self.apply_progress(executor, &job_id, progress);
+                return;
+            }
+            ExecutorMessage::TaskLog {
+                job_id,
+                level,
+                message: text,
+                task_name: _,
+                extra_len: _,
+            } => {
+                self.apply_task_log(executor, &job_id, &level, &text, payload);
+                return;
+            }
+            other => other,
+        };
+
         let Some(result) = message.into_job_result(payload) else {
             log::warn!(
                 "[taskito] executor {} sent a handshake frame mid-stream",
@@ -653,6 +957,90 @@ impl Shared {
         executor.free.fetch_add(1, Ordering::Relaxed);
         self.capacity_changed.notify_waiters();
         self.emit(result);
+    }
+
+    /// Record progress an executor reported for a job it is running.
+    fn apply_progress(&self, executor: &Arc<Executor>, job_id: &str, progress: i32) {
+        let Some((pump, _)) = self.side_channel_for(executor, job_id, "progress") else {
+            return;
+        };
+        pump.progress(job_id, progress);
+    }
+
+    /// Record a log line — or a published partial — an executor reported.
+    ///
+    /// The row is attributed to the task the *scheduler* dispatched, not the
+    /// name on the frame: it knows which is true, and a log row that says
+    /// otherwise would misattribute work in the dashboard.
+    fn apply_task_log(
+        &self,
+        executor: &Arc<Executor>,
+        job_id: &str,
+        level: &str,
+        message: &str,
+        extra: Vec<u8>,
+    ) {
+        let Some((pump, dispatched)) = self.side_channel_for(executor, job_id, "task log") else {
+            return;
+        };
+        // The blob is whatever the SDK encoded; storage takes it as a string,
+        // so a non-UTF-8 payload is a broken sender rather than data to store.
+        let extra = match extra.is_empty() {
+            true => None,
+            false => match String::from_utf8(extra) {
+                Ok(extra) => Some(extra),
+                Err(_) => {
+                    log::warn!(
+                        "[taskito] executor {} sent a task log for job {job_id} whose extra blob \
+                         is not UTF-8; dropping the blob",
+                        executor.id
+                    );
+                    None
+                }
+            },
+        };
+        pump.log(LogLine {
+            job_id: job_id.to_string(),
+            task_name: dispatched.task_name,
+            level: level.to_string(),
+            message: message.to_string(),
+            extra,
+            namespace: dispatched.namespace,
+        });
+    }
+
+    /// The pump to apply a side-channel frame through, plus what the scheduler
+    /// dispatched — once the frame has been shown to be one this executor is
+    /// entitled to send.
+    ///
+    /// An executor may write only against jobs the scheduler gave it. Without
+    /// that check any attached peer could rewrite another executor's progress
+    /// or forge log lines on its jobs — an authenticated executor is trusted to
+    /// run its own work, not to speak for the whole fleet.
+    fn side_channel_for(
+        &self,
+        executor: &Arc<Executor>,
+        job_id: &str,
+        what: &str,
+    ) -> Option<(&Arc<SideChannelPump>, InFlight)> {
+        let Some(pump) = self.side_channel.as_ref() else {
+            // Never advertised, so a correct executor never sent this.
+            log::debug!(
+                "[taskito] executor {} sent a {what} frame but this scheduler advertised no \
+                 side-channel; dropping",
+                executor.id
+            );
+            return None;
+        };
+        let Some(dispatched) = executor.running(job_id) else {
+            log::warn!(
+                "[taskito] executor {} sent a {what} for job {job_id}, which it is not running; \
+                 dropping",
+                executor.id
+            );
+            return None;
+        };
+        Some((pump, dispatched))
     }
 
     /// Drop an executor whose connection ended, leaving its in-flight jobs to
