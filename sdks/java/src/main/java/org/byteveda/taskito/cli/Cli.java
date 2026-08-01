@@ -293,7 +293,7 @@ public final class Cli {
                     .slots(slotCount)
                     // Env only, never a flag: a token in argv is visible in `ps`
                     // output and lands in shell history.
-                    .token(System.getenv("TASKITO_ATTACH_TOKEN"))
+                    .token(envOrNull("TASKITO_ATTACH_TOKEN"))
                     .executorId(executorId);
 
             if (builder.tasks().isEmpty()) {
@@ -351,6 +351,16 @@ public final class Cli {
             } catch (IllegalStateException alreadyShuttingDown) {
                 // Nothing to undo — the hook is doing its job right now.
             }
+        }
+
+        /**
+         * An environment value, or null when unset <em>or blank</em>. Compose
+         * files and container runtimes set empty strings freely, and an empty
+         * token must read as "no token" rather than be presented as one.
+         */
+        private static @Nullable String envOrNull(String name) {
+            String value = System.getenv(name);
+            return value == null || value.isBlank() ? null : value;
         }
 
         /** Slots from the flag, then the env, then one. */
