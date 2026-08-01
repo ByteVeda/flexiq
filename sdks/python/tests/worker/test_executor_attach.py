@@ -13,6 +13,7 @@ observable from inside the test interpreter.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import signal
 import socket
@@ -41,6 +42,7 @@ ECHO = "attach_app.echo"
 BOOM = "attach_app.boom"
 SLOW = "attach_app.slow"
 REPORTS = "attach_app.reports"
+MIDDLEWARED = "attach_app.middlewared"
 
 # Generous: a cold subprocess import of the app plus a prefork child spawn.
 ATTACH_TIMEOUT = 60.0
@@ -60,8 +62,18 @@ class FakeScheduler:
         self._rfile: Any = None
         self._wfile: Any = None
 
-    def accept(self, timeout: float = ATTACH_TIMEOUT) -> dict[str, Any]:
-        """Accept the attach and complete the handshake, returning the hello."""
+    def accept(
+        self,
+        timeout: float = ATTACH_TIMEOUT,
+        capabilities: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Accept the attach and complete the handshake, returning the hello.
+
+        ``capabilities`` is what this scheduler promises to do on the
+        executor's behalf. The default — nothing — is a scheduler built before
+        the side-channel existed, which is the compatibility case worth having
+        as the default rather than the exception.
+        """
         self._listener.settimeout(timeout)
         self._conn, _ = self._listener.accept()
         self._conn.settimeout(FRAME_TIMEOUT)
@@ -75,6 +87,7 @@ class FakeScheduler:
                 "type": "hello_ack",
                 "scheduler_id": "fake-scheduler",
                 "protocol_version": WORKER_PROTOCOL_VERSION,
+                "capabilities": capabilities or [],
             }
         )
         return hello
@@ -101,6 +114,7 @@ class FakeScheduler:
         retry_count: int = 0,
         max_retries: int = 3,
         timeout_ms: int = 30_000,
+        disabled_middleware: list[str] | None = None,
     ) -> None:
         self.send(
             {
@@ -113,6 +127,10 @@ class FakeScheduler:
                 "queue": "default",
                 "timeout_ms": timeout_ms,
                 "namespace": None,
+                # Resolved by the scheduler, because an executor has no
+                # settings store of its own to read the toggle list from.
+                "disabled_middleware": disabled_middleware or [],
+                "metadata": None,
             },
             payload,
         )
@@ -125,6 +143,27 @@ class FakeScheduler:
             header, payload = read_frame(self._rfile)
             if header.get("type") != "heartbeat":
                 return header, payload
+
+    def collect_until_result(
+        self, timeout: float = FRAME_TIMEOUT
+    ) -> tuple[dict[str, Any], list[tuple[dict[str, Any], bytes]]]:
+        """Every side-channel frame a job produced, plus its result.
+
+        The result is ordered behind them on one connection, so its arrival is
+        what proves the collection is complete rather than merely early.
+        """
+        deadline = time.monotonic() + timeout
+        side_channel: list[tuple[dict[str, Any], bytes]] = []
+        while True:
+            assert time.monotonic() < deadline, "no result frame arrived"
+            header, payload = read_frame(self._rfile)
+            kind = header.get("type")
+            if kind == "heartbeat":
+                continue
+            if kind in ("progress", "task_log"):
+                side_channel.append((header, payload))
+                continue
+            return header, side_channel
 
     def next_heartbeat(self, free_slots: int, timeout: float = FRAME_TIMEOUT) -> None:
         """Block until the executor reports exactly ``free_slots`` free."""
@@ -244,6 +283,13 @@ def payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
 
     payload: bytes = queue._get_serializer(task_name).dumps((args, kwargs))
     return payload
+
+
+def decode_result(task_name: str, payload: bytes) -> Any:
+    """Decode a success frame's blob with the task's own serializer."""
+    from attach_app import queue  # type: ignore[import-not-found]
+
+    return queue._get_serializer(task_name).loads(payload)
 
 
 @pytest.fixture(autouse=True)
@@ -529,16 +575,88 @@ def test_progress_and_logs_degrade_rather_than_failing_the_job(
 ) -> None:
     """A task calling `update_progress` must not fail for want of storage.
 
-    Losing the progress bar is a degradation; failing the job over it would be
-    a regression for anyone moving a worker to an executor.
+    This scheduler advertises no side-channel — an older `taskito-server` —
+    so the executor sends nothing it could not parse. Losing the progress bar
+    is a degradation; failing the job over it would be a regression for anyone
+    moving a worker to an executor.
     """
     process = spawn_executor(scheduler.port, tmp_path / "t.db")
     try:
         scheduler.accept()
         scheduler.send_job("job-1", REPORTS, payload_for(REPORTS))
 
-        header, _ = scheduler.next_result()
+        header, side_channel = scheduler.collect_until_result()
         assert header["type"] == "success", header
         assert header["job_id"] == "job-1"
+        assert side_channel == [], (
+            "an executor must send no frame a scheduler did not advertise support for"
+        )
+    finally:
+        terminate(process)
+
+
+def test_progress_and_logs_reach_a_scheduler_that_advertised_the_side_channel(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """The whole point of #589: a task on an executor is not silently poorer.
+
+    Both hops are under test — the task writes to a prefork child, the child
+    frames it to the executor, and the executor frames it to the scheduler.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["side_channel"])
+        scheduler.send_job("job-1", REPORTS, payload_for(REPORTS))
+
+        header, side_channel = scheduler.collect_until_result()
+        assert header["type"] == "success", header
+
+        progress = [frame["progress"] for frame, _ in side_channel if frame["type"] == "progress"]
+        assert progress, "the task's progress must reach the scheduler"
+        assert progress[-1] == 100, f"the final progress must be the last value: {progress}"
+
+        logs = [(frame, payload) for frame, payload in side_channel if frame["type"] == "task_log"]
+        assert [frame["job_id"] for frame, _ in logs] == ["job-1", "job-1"]
+
+        info = next(frame for frame, _ in logs if frame["level"] == "info")
+        assert info["message"] == "halfway"
+        assert info["task_name"] == REPORTS
+
+        # `publish` is a `result`-level log, which is what `job.stream()` reads.
+        partial, extra = next((frame, blob) for frame, blob in logs if frame["level"] == "result")
+        assert partial["extra_len"] == len(extra)
+        assert json.loads(extra) == {"stage": "halfway"}
+    finally:
+        terminate(process)
+
+
+def test_a_middleware_disabled_on_the_dispatch_does_not_run(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """A dashboard toggle has to reach a process that cannot read settings.
+
+    It rides the job frame instead, so the executor honours it without ever
+    touching the database the scheduler holds.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["side_channel"])
+
+        scheduler.send_job("job-1", MIDDLEWARED, payload_for(MIDDLEWARED))
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(MIDDLEWARED, payload) == "recorder", "the middleware should run"
+
+        scheduler.send_job(
+            "job-2",
+            MIDDLEWARED,
+            payload_for(MIDDLEWARED),
+            disabled_middleware=["recorder"],
+        )
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(MIDDLEWARED, payload) == "", (
+            "a middleware disabled on the dispatch frame must not run"
+        )
     finally:
         terminate(process)

@@ -13,9 +13,11 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from taskito import Queue
 from taskito.context import current_job
+from taskito.middleware import TaskMiddleware
 
 # The backend is configurable so one test can point this at a database that
 # does not exist, proving an executor never connects to it.
@@ -76,10 +78,35 @@ def slow(max_iters: int = 600) -> int:
 def reports() -> str:
     """Use the job-scoped conveniences that need storage in a worker.
 
-    On an executor there is none, so these degrade; the job must still finish.
+    On an executor there is none of its own, so these travel to the scheduler
+    when it advertised a side-channel and degrade to nothing when it did not.
+    Either way the job must finish.
     """
     current_job.update_progress(50)
     current_job.log("halfway")
     current_job.publish({"stage": "halfway"})
     current_job.update_progress(100)
     return "reported"
+
+
+#: Middleware that ran for the job this child is executing. A prefork child
+#: runs one job at a time, and its result is how the test reads this back —
+#: an executor has no storage to record it in.
+_ran: list[str] = []
+
+
+class RecordingMiddleware(TaskMiddleware):
+    """Records that it ran, so a dashboard toggle is observable."""
+
+    name = "recorder"
+
+    def before(self, ctx: Any) -> None:
+        _ran.append(self.name)
+
+
+@queue.task(max_retries=0, middleware=[RecordingMiddleware()])
+def middlewared() -> str:
+    """Report which middleware ran around this call."""
+    ran = ",".join(_ran)
+    _ran.clear()
+    return ran
