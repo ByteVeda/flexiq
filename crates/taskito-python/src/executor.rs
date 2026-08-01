@@ -148,7 +148,12 @@ impl PyExecutor {
     }
 
     /// Ask the scheduler to stop sending work and finish what is in flight.
-    /// Returns immediately, so it is safe to call from a signal handler.
+    ///
+    /// Returns immediately when it can take the handle lock, which is what
+    /// makes it safe on the signal-handling path CPython actually uses: the
+    /// handler runs on the main thread only between `wait` calls, when the lock
+    /// is free. A caller on any *other* thread can instead block for up to the
+    /// current `wait`'s `timeout_ms`, since `wait` holds the lock across it.
     fn stop(&self) {
         self.with_handle(ExecutorHandle::stop);
     }
