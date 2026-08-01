@@ -36,8 +36,13 @@ pub fn get_for(storage: &impl Storage, task_name: &str) -> Result<Vec<String>> {
 
 /// Flip one middleware on or off for a task; returns the new disable list.
 ///
-/// An empty list deletes the row rather than storing `[]`, so a task with
-/// nothing disabled leaves no trace in the settings listing.
+/// An emptied list leaves a `[]` row rather than deleting it. Deleting sat
+/// outside the compare-and-set, so a concurrent writer's entry could be added
+/// between the swap and the delete and then removed by it — the very lost
+/// update the compare-and-set exists to prevent. Nothing reads the difference:
+/// [`get_for`] parses `[]` as "nothing disabled", [`list_all`] filters empty
+/// lists out, and the key is a reserved prefix, so the generic settings view
+/// does not show it either.
 pub fn set_disabled(
     storage: &impl Storage,
     task_name: &str,
@@ -64,11 +69,6 @@ pub fn set_disabled(
             .collect()
     })?;
 
-    // An empty list leaves no row rather than storing `[]`, so a task with
-    // nothing disabled leaves no trace in the settings listing.
-    if current.is_empty() {
-        storage.delete_setting(&key(task_name))?;
-    }
     Ok(current)
 }
 

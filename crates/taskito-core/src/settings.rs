@@ -12,11 +12,12 @@
 /// writers use the [`Storage`](crate::storage::Storage) settings methods, which
 /// stay unrestricted.
 pub const RESERVED_SETTING_PREFIXES: &[&str] = &[
-    "auth:",            // dashboard sessions, OAuth state, API tokens
-    "retention:",       // the windows a cleanup leader publishes
-    "taskito.webhooks", // webhook store
-    "webhook:",         // webhook store
-    "webhooks:",        // webhook subscriptions and delivery log
+    "auth:",                // dashboard sessions, OAuth state, API tokens
+    "middleware:disabled:", // per-task middleware disable lists
+    "retention:",           // the windows a cleanup leader publishes
+    "taskito.webhooks",     // webhook store
+    "webhook:",             // webhook store
+    "webhooks:",            // webhook subscriptions and delivery log
 ];
 
 /// Whether `key` falls under a reserved prefix.

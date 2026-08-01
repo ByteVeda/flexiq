@@ -93,6 +93,70 @@ fn concurrent_middleware_toggles_all_survive() {
 }
 
 #[test]
+fn emptying_the_disable_list_leaves_the_row_behind() {
+    // The removal used to delete the row *after* the compare-and-set returned,
+    // so an entry added by another writer between the swap and the delete was
+    // wiped by it. Asserted as an invariant rather than by racing threads: the
+    // window is a few instructions wide, and a test that has to win a race to
+    // fail is a test that reports green on a broken build.
+    let storage = temp_storage("settings-cas-middleware-empty");
+
+    middleware::set_disabled(&*storage, "resize", "mw-1", true).expect("disable");
+    let left = middleware::set_disabled(&*storage, "resize", "mw-1", false).expect("re-enable");
+    assert!(left.is_empty(), "the list is empty again: {left:?}");
+
+    assert_eq!(
+        storage
+            .get_setting("middleware:disabled:resize")
+            .expect("read the row"),
+        Some("[]".to_string()),
+        "an emptied list must leave its row, so no delete can race a concurrent add"
+    );
+    // Nothing reads the difference: the row parses as "nothing disabled" and
+    // never reaches the listing.
+    assert!(middleware::get_for(&*storage, "resize")
+        .expect("read the disable list")
+        .is_empty());
+    assert!(middleware::list_all(&*storage)
+        .expect("list disables")
+        .is_empty());
+}
+
+#[test]
+fn concurrent_middleware_toggles_survive_both_directions() {
+    // Both directions on one task name, guarding the compare-and-set itself.
+    let storage = temp_storage("settings-cas-middleware-mixed");
+
+    // Half the writers own an entry and keep it; the other half add theirs and
+    // immediately take it away, emptying the list whenever they are last.
+    concurrently(&storage, |storage, index| {
+        let name = format!("mw-{index}");
+        if index % 2 == 0 {
+            middleware::set_disabled(storage, "resize", &name, true).expect("disable");
+        } else {
+            middleware::set_disabled(storage, "resize", &name, true).expect("disable");
+            middleware::set_disabled(storage, "resize", &name, false).expect("re-enable");
+        }
+    });
+
+    let disabled = middleware::get_for(&*storage, "resize").expect("read the disable list");
+    for index in (0..WRITERS).step_by(2) {
+        let name = format!("mw-{index}");
+        assert!(
+            disabled.contains(&name),
+            "{name} was set and never unset, so it must survive: {disabled:?}"
+        );
+    }
+    for index in (1..WRITERS).step_by(2) {
+        let name = format!("mw-{index}");
+        assert!(
+            !disabled.contains(&name),
+            "{name} was unset by its own writer: {disabled:?}"
+        );
+    }
+}
+
+#[test]
 fn a_write_that_lost_the_race_is_refused_rather_than_applied() {
     let storage = temp_storage("settings-cas-refusal");
     storage.set_setting("k", "v1").expect("seed the row");
