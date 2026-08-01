@@ -130,7 +130,8 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
      * does not resolve for an {@code Outer.Inner}.
      */
     private boolean isServiceLoadable(TypeElement owner) {
-        if (owner.getModifiers().contains(Modifier.ABSTRACT) || owner.getNestingKind().isNested()) {
+        if (owner.getModifiers().contains(Modifier.ABSTRACT)
+                || owner.getNestingKind().isNested()) {
             return false;
         }
         boolean declaresAny = false;
