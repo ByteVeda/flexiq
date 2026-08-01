@@ -52,6 +52,32 @@ public final class MiddlewareDisables {
         return middleware.getClass().getName();
     }
 
+    /**
+     * {@code middleware} minus the names in {@code disabledJson}.
+     *
+     * <p>For an attached executor, whose toggle list arrives on the dispatch
+     * frame rather than from a settings read it has no storage to perform. A
+     * corrupt list runs everything, which is the same failure-open stance
+     * {@link #disabledFor} takes.
+     */
+    public static List<Middleware> without(List<Middleware> middleware, String disabledJson) {
+        if (middleware.isEmpty()) {
+            return middleware;
+        }
+        List<String> disabled;
+        try {
+            List<String> parsed = JSON.readValue(disabledJson, NAMES);
+            disabled = parsed == null ? List.of() : parsed;
+        } catch (Exception e) {
+            LOG.warn("dispatched middleware disable list is not valid JSON; treating as empty");
+            return middleware;
+        }
+        if (disabled.isEmpty()) {
+            return middleware;
+        }
+        return middleware.stream().filter(m -> !disabled.contains(nameOf(m))).toList();
+    }
+
     /** Names disabled for {@code taskName}; empty when none are, or the list is unreadable. */
     public List<String> disabledFor(String taskName) {
         if (backend == null) {

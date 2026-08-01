@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import org.byteveda.taskito.JobContext;
 import org.byteveda.taskito.errors.TaskErrors;
 import org.byteveda.taskito.events.Emitter;
 import org.byteveda.taskito.events.EventName;
@@ -80,11 +81,23 @@ final class WorkerDispatchBridge implements WorkerBridge {
     }
 
     @Override
-    public void onJob(long token, String jobId, String taskName, byte[] payload) {
-        executor.execute(() -> runJob(token, jobId, taskName, payload));
+    public void onJob(
+            long token,
+            String jobId,
+            String taskName,
+            byte[] payload,
+            @Nullable String metadataJson,
+            @Nullable String disabledMiddlewareJson) {
+        executor.execute(() -> runJob(token, jobId, taskName, payload, metadataJson, disabledMiddlewareJson));
     }
 
-    private void runJob(long token, String jobId, String taskName, byte[] payload) {
+    private void runJob(
+            long token,
+            String jobId,
+            String taskName,
+            byte[] payload,
+            @Nullable String metadataJson,
+            @Nullable String disabledMiddlewareJson) {
         WorkerControl bound = control.join();
         RegisteredTask task = handlers.get(taskName);
         if (task == null) {
@@ -92,7 +105,11 @@ final class WorkerDispatchBridge implements WorkerBridge {
             bound.failJob(token, "no handler registered for task '" + taskName + "'", true);
             return;
         }
-        JobInfo job = new JobInfo(jobId, taskName, () -> loadMetadata(jobId));
+        // Off the dispatch when it came with one — an executor cannot read the
+        // row — else lazily off the backend, which only a worker has.
+        JobInfo job = metadataJson == null
+                ? new JobInfo(jobId, taskName, () -> loadMetadata(jobId))
+                : new JobInfo(jobId, taskName, () -> parseMetadata(metadataJson));
         TaskContext context = new TaskContext(jobId, taskName, job);
         // Bind a per-task resource scope around the handler; skip all wiring when
         // no resources are registered (zero overhead for the common case).
@@ -100,16 +117,19 @@ final class WorkerDispatchBridge implements WorkerBridge {
         if (scope != null) {
             Resources.enter(scope);
         }
+        JobContext.enter(new JobContext(jobId, taskName, sinkFor(bound)));
         // Empty until resolved, so a failure to read the disable list runs onError
         // on nothing — which is right, because no before() ran either.
         List<Middleware> chain = List.of();
         try {
             // Resolved once and reused below: re-reading the disable list between
             // before and after would let a mid-job toggle run after on a middleware
-            // whose before never ran. Inside the try because it reads the backend,
-            // so a settings failure fails the job rather than leaving it unresolved
-            // with its resource scope still bound.
-            chain = disables.resolve(taskName, middleware);
+            // whose before never ran. Inside the try because it may read the
+            // backend, so a settings failure fails the job rather than leaving it
+            // unresolved with its resource scope still bound.
+            chain = disabledMiddlewareJson == null
+                    ? disables.resolve(taskName, middleware)
+                    : MiddlewareDisables.without(middleware, disabledMiddlewareJson);
             for (Middleware m : chain) {
                 m.before(context);
             }
@@ -130,9 +150,56 @@ final class WorkerDispatchBridge implements WorkerBridge {
             emitter.emit(new OutcomeEvent(EventName.JOB_FAILED, jobId, taskName, encoded, -1, false, 0L));
             bound.failJob(token, encoded, RetryDecision.isRetryable(task.retryOn, t));
         } finally {
+            JobContext.exit();
             if (scope != null) {
                 Resources.exit(scope); // unbind the thread + dispose task-scoped resources (LIFO)
             }
+        }
+    }
+
+    /**
+     * Where a running job's progress and logs go.
+     *
+     * <p>The one place the two deployments differ: a worker has the database
+     * and writes to it, an executor does not and reports to the scheduler,
+     * which writes on its behalf. A task body sees neither.
+     */
+    private JobContext.Sink sinkFor(WorkerControl bound) {
+        QueueBackend storage = backend;
+        if (storage == null) {
+            return new JobContext.Sink() {
+                @Override
+                public void setProgress(String jobId, int progress) {
+                    bound.reportProgress(jobId, progress);
+                }
+
+                @Override
+                public void writeTaskLog(
+                        String jobId, String taskName, String level, String message, @Nullable String extra) {
+                    bound.writeTaskLog(jobId, taskName, level, message, extra);
+                }
+            };
+        }
+        return new JobContext.Sink() {
+            @Override
+            public void setProgress(String jobId, int progress) {
+                storage.setProgress(jobId, progress);
+            }
+
+            @Override
+            public void writeTaskLog(
+                    String jobId, String taskName, String level, String message, @Nullable String extra) {
+                storage.writeTaskLog(jobId, taskName, level, message, extra);
+            }
+        };
+    }
+
+    /** Parse a metadata blob carried on the dispatch (empty on absence/parse failure). */
+    private static Map<String, Object> parseMetadata(String metadataJson) {
+        try {
+            return metadataJson.isEmpty() ? Collections.emptyMap() : JSON.readValue(metadataJson, MAP);
+        } catch (Exception e) {
+            return Collections.emptyMap();
         }
     }
 
