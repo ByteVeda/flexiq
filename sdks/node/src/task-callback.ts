@@ -27,6 +27,14 @@ export interface TaskCallbackDeps {
   resources: ResourceRuntime;
   /** Backs progress, published partials, and the cancel-flag poll. */
   queue: NativeQueue;
+  /**
+   * Overrides how a running job learns it was cancelled.
+   *
+   * An attached executor reads no storage, so the flag `queue` would poll is
+   * never set; its cancels arrive as protocol frames instead, and this reads
+   * the native state those land in.
+   */
+  isCancelled?: (jobId: string) => boolean;
 }
 
 /**
@@ -40,6 +48,7 @@ export function createTaskCallback(
   deps: TaskCallbackDeps,
 ): (invocation: JsTaskInvocation) => Promise<JsTaskOutcome> {
   const { tasks, serializer, codecs, middlewareFor, emitter, resources, queue } = deps;
+  const isCancelled = deps.isCancelled ?? ((jobId: string) => queue.isCancelRequested(jobId));
 
   return async (invocation: JsTaskInvocation): Promise<JsTaskOutcome> => {
     // Built-in workflow cache-return: echo the single (cached) arg as the result.
@@ -78,7 +87,7 @@ export function createTaskCallback(
     };
     const poller = setInterval(() => {
       try {
-        if (queue.isCancelRequested(invocation.id)) {
+        if (isCancelled(invocation.id)) {
           controller.abort();
         }
       } catch (error) {

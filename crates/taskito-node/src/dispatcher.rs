@@ -64,6 +64,13 @@ impl NodeDispatcher {
         Self::with_cancels(callback, Arc::new(CancelSignals::detached()), concurrency)
     }
 
+    /// The cancel source this dispatcher reads. An attached executor hands it to
+    /// its JS side, which has no storage to poll and so cannot otherwise learn
+    /// that a running job was cancelled.
+    pub fn cancels(&self) -> Arc<CancelSignals> {
+        self.cancels.clone()
+    }
+
     fn with_cancels(
         callback: TaskCallback,
         cancels: Arc<CancelSignals>,

@@ -81,6 +81,12 @@ export class Executor {
     }
     const advertised = [...(run?.tasks ?? tasks.keys())];
 
+    // The executor does not exist yet, and the callback it needs must already
+    // be able to reach it — a cancel frame lands in native state that a running
+    // handler polls. Resolved through this holder, assigned once the attach
+    // succeeds; until then nothing is running, so nothing can be cancelled.
+    let attached: NativeExecutor | undefined;
+
     const taskCallback = createTaskCallback({
       tasks,
       serializer,
@@ -89,6 +95,7 @@ export class Executor {
       emitter,
       resources,
       queue,
+      isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
     });
 
     const native = await startNativeExecutor(taskCallback, {
@@ -104,6 +111,7 @@ export class Executor {
       shutdownDrainMs: run?.shutdownDrainMs,
     });
 
+    attached = native;
     // Only lease the resource runtime once the attach actually succeeded, so a
     // refused handshake leaks nothing.
     resources.acquireWorker();

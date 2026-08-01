@@ -16,8 +16,8 @@ use napi::bindgen_prelude::{spawn_blocking, Promise, Result, Status};
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use taskito_core::worker::{
-    AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    WorkerDispatcher,
+    AttachAddress, CancelSignals, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
+    ExecutorSession, WorkerDispatcher,
 };
 
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
@@ -57,6 +57,9 @@ pub struct JsExecutor {
     /// Taken by `shutdown`, which consumes the handle to join its threads.
     handle: Arc<Mutex<Option<ExecutorHandle>>>,
     session: ExecutorSession,
+    /// Cancels delivered as protocol frames. The JS side polls this instead of
+    /// a storage flag, which a detached executor does not have.
+    cancels: Arc<CancelSignals>,
     scheduler_id: String,
     executor_id: String,
     peer: String,
@@ -86,6 +89,15 @@ impl JsExecutor {
     #[napi]
     pub fn is_running(&self) -> bool {
         self.session.is_running()
+    }
+
+    /// Whether the scheduler has asked for `job_id` to be cancelled.
+    ///
+    /// The cancel arrives as a frame, not a storage flag, so this is the only
+    /// way a running handler can observe one.
+    #[napi]
+    pub fn is_cancel_requested(&self, job_id: String) -> bool {
+        self.cancels.is_cancelled(&job_id)
     }
 
     /// Resolve once the scheduler ends the session — a `shutdown` frame, or the
@@ -198,13 +210,14 @@ pub async fn start_executor(
         let scheduler_id = client.scheduler_id().to_string();
         let peer = client.peer().to_string();
 
-        let pool: Arc<dyn WorkerDispatcher> =
-            Arc::new(NodeDispatcher::detached(callback, Some(slots as usize)));
-        let handle = client.spawn(pool);
+        let dispatcher = NodeDispatcher::detached(callback, Some(slots as usize));
+        let cancels = dispatcher.cancels();
+        let handle = client.spawn(Arc::new(dispatcher) as Arc<dyn WorkerDispatcher>);
 
         Ok(JsExecutor {
             executor_id: handle.executor_id().to_string(),
             session: handle.session(),
+            cancels,
             handle: Arc::new(Mutex::new(Some(handle))),
             scheduler_id,
             peer,
