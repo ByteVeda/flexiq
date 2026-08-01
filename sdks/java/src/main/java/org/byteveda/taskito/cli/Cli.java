@@ -259,6 +259,9 @@ public final class Cli {
         /** How long a shutdown hook waits for the drain before letting the JVM go. */
         private static final int DRAIN_WAIT_SECONDS = 40;
 
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec spec;
+
         @Option(
                 names = "--attach",
                 description = "Scheduler address: host:port, :port, or unix:/path (env: TASKITO_ATTACH).")
@@ -281,12 +284,13 @@ public final class Cli {
                 return 1;
             }
 
+            int slotCount = resolveSlots();
             org.byteveda.taskito.worker.Executor.Builder builder = org.byteveda.taskito.worker.Executor.builder()
                     // Handlers come from META-INF/services, so no application
                     // code has to run to register them.
                     .discover()
                     .attach(address)
-                    .slots(resolveSlots())
+                    .slots(slotCount)
                     // Env only, never a flag: a token in argv is visible in `ps`
                     // output and lands in shell history.
                     .token(System.getenv("TASKITO_ATTACH_TOKEN"))
@@ -304,7 +308,7 @@ public final class Cli {
                         executor.executorId(),
                         executor.schedulerId(),
                         executor.peer(),
-                        resolveSlots(),
+                        slotCount,
                         builder.tasks().size());
                 // A shutdown hook does not hold the JVM open, so stopping alone
                 // would let the process exit while the drain was still running
@@ -352,18 +356,32 @@ public final class Cli {
         /** Slots from the flag, then the env, then one. */
         private int resolveSlots() {
             if (slots != null) {
-                return slots;
+                return atLeastOne(slots, "--slots");
             }
             String raw = System.getenv("TASKITO_SLOTS");
             if (raw == null || raw.isBlank()) {
                 return 1;
             }
+            int parsed;
             try {
-                return Integer.parseInt(raw.trim());
+                parsed = Integer.parseInt(raw.trim());
             } catch (NumberFormatException e) {
                 throw new CommandLine.ParameterException(
-                        new CommandLine(this), "TASKITO_SLOTS must be an integer, got '" + raw + "'");
+                        spec.commandLine(), "TASKITO_SLOTS must be an integer, got '" + raw + "'");
             }
+            return atLeastOne(parsed, "TASKITO_SLOTS");
+        }
+
+        /**
+         * Reject a count the executor would silently clamp, so the banner cannot
+         * announce a concurrency the executor does not run with.
+         */
+        private int atLeastOne(int value, String source) {
+            if (value < 1) {
+                throw new CommandLine.ParameterException(
+                        spec.commandLine(), source + " must be at least 1, got " + value);
+            }
+            return value;
         }
     }
 
