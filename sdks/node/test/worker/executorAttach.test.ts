@@ -56,6 +56,8 @@ class FakeScheduler {
   refuse = false;
   /** Optional behaviours this scheduler advertises in its `hello_ack`. */
   capabilities: readonly string[] = [];
+  /** Run immediately after the ack, to dispatch into the attach window. */
+  afterAck?: () => void;
 
   private constructor(server: Server, port: number, connected: Promise<void>) {
     this.server = server;
@@ -124,6 +126,7 @@ class FakeScheduler {
             // side-channel existed, and the case worth defaulting to.
             capabilities: this.capabilities,
           });
+          this.afterAck?.();
         } else {
           this.socket?.destroy();
         }
@@ -664,6 +667,34 @@ it("skips a middleware the dispatch says is disabled", async () => {
     });
     expect((await scheduler.nextResult()).header.type).toBe("success");
     expect(ran).toEqual(["recorder"]);
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("honours the toggles on a job dispatched in the same tick as the ack", async () => {
+  // The earliest a scheduler can dispatch: the job frame follows the ack with
+  // nothing in between. The native attach starts its job loop before
+  // `runExecutor` resolves, so an invocation here can outrun the holder the
+  // callback reads the executor from — and reading it empty would run a
+  // middleware the dispatch said was disabled.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const ran: string[] = [];
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.use({ name: "recorder", before: () => void ran.push("recorder") });
+    queue.task("echo", (value: string) => `echo:${value}`);
+
+    const payload = payloadFor(queue, ["a"]);
+    scheduler.afterAck = () => {
+      scheduler?.sendJob("job-1", "echo", payload, { disabledMiddleware: ["recorder"] });
+    };
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+
+    expect((await scheduler.nextResult()).header.type).toBe("success");
+    expect(ran).toEqual([]);
   } finally {
     delete process.env[DETACHED_ENV];
   }

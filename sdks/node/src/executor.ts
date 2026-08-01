@@ -94,10 +94,19 @@ export class Executor {
     // The executor does not exist yet, and the callback it needs must already
     // be able to reach it — a cancel frame lands in native state that a running
     // handler polls. Resolved through this holder, assigned once the attach
-    // succeeds; until then nothing is running, so nothing can be cancelled.
+    // succeeds.
+    //
+    // The native attach starts its job loop before this promise resolves, so
+    // the scheduler can dispatch into that window. An invocation waits for the
+    // holder to be filled rather than reading it empty, which would run a
+    // middleware the dispatch said was disabled and drop the job's progress.
     let attached: NativeExecutor | undefined;
+    let markAttached: () => void = () => {};
+    const attachedReady = new Promise<void>((resolve) => {
+      markAttached = resolve;
+    });
 
-    const taskCallback = createTaskCallback({
+    const invoke = createTaskCallback({
       tasks,
       serializer,
       codecs,
@@ -115,6 +124,11 @@ export class Executor {
         attached?.writeTaskLog(jobId, taskName, level, message, extra),
     });
 
+    const taskCallback: typeof invoke = async (invocation) => {
+      await attachedReady;
+      return invoke(invocation);
+    };
+
     const native = await startNativeExecutor(taskCallback, {
       address,
       tasks: advertised,
@@ -129,6 +143,7 @@ export class Executor {
     });
 
     attached = native;
+    markAttached();
     try {
       // Only lease the resource runtime once the attach actually succeeded, so a
       // refused handshake leaks nothing.
