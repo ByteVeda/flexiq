@@ -1658,18 +1658,17 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * without polling storage itself. Hold the returned {@link Executor}.
    */
   async runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
-    const disables = new MiddlewareDisableStore(this.native);
     const executor: Executor = await Executor.start(this.native, {
       onStopped: () => this.liveExecutors.delete(executor),
       tasks: this.tasks,
       serializer: this.serializer,
       codecs: this.codecs,
-      middlewareFor: (taskName) => {
-        const disabled = disables.getFor(taskName);
-        return disabled.length === 0
+      // The list is supplied rather than read: an executor opens no storage,
+      // so the scheduler resolves the toggles and sends them with the job.
+      middlewareFor: (_taskName, disabled) =>
+        disabled.length === 0
           ? this.middleware
-          : this.middleware.filter((mw, index) => !disabled.includes(middlewareKey(mw, index)));
-      },
+          : this.middleware.filter((mw, index) => !disabled.includes(middlewareKey(mw, index))),
       emitter: this.emitter,
       resources: this.resources,
       run: options,

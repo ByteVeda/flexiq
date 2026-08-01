@@ -43,7 +43,14 @@ export interface ExecutorStartParams {
   tasks: ReadonlyMap<string, RegisteredTask>;
   serializer: Serializer;
   codecs?: ReadonlyMap<string, PayloadCodec>;
-  middlewareFor: (taskName: string) => readonly Middleware[];
+  /**
+   * The middleware chain for a task, minus `disabled`.
+   *
+   * Takes the disable list rather than reading one: an executor has no
+   * settings store, so the scheduler resolves it and attaches it to each
+   * dispatch.
+   */
+  middlewareFor: (taskName: string, disabled: readonly string[]) => readonly Middleware[];
   emitter: Emitter;
   resources: ResourceRuntime;
   run?: ExecutorRunOptions;
@@ -94,11 +101,18 @@ export class Executor {
       tasks,
       serializer,
       codecs,
-      middlewareFor,
+      // Every one of these reaches for the executor rather than for storage,
+      // which this process deliberately has none of: the scheduler holds the
+      // connection and does the work on its behalf.
+      middlewareFor: (taskName, jobId) =>
+        middlewareFor(taskName, attached?.disabledMiddleware(jobId) ?? []),
       emitter,
       resources,
       queue,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
+      setProgress: (jobId, progress) => attached?.reportProgress(jobId, progress),
+      writeTaskLog: (jobId, taskName, level, message, extra) =>
+        attached?.writeTaskLog(jobId, taskName, level, message, extra),
     });
 
     const native = await startNativeExecutor(taskCallback, {
