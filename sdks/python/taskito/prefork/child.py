@@ -120,7 +120,11 @@ class _ParentSink:
     def _send(header: dict[str, Any], payload: bytes = b"") -> None:
         try:
             _write_message(header, payload)
-        except (BrokenPipeError, EOFError, ValueError, ProtocolError):
+        except (OSError, EOFError, ValueError, ProtocolError):
+            # `OSError` rather than `BrokenPipeError` alone: a closed stream
+            # fails with `EBADF`, and `flush` can surface `EPIPE` on its own.
+            # Either would otherwise escape into the task body this exists to
+            # keep whole.
             logger.debug("could not forward %s to the parent", header["type"], exc_info=True)
 
 
