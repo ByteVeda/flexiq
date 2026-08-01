@@ -113,6 +113,18 @@ def enqueue(db_path: Path, task_name: str, args: tuple = ()) -> str:
     return str(queue.enqueue(task_name, args).id)
 
 
+def wait_for_attach(db_path: Path) -> None:
+    """Block until an executor is attached and dispatching.
+
+    The scheduler starts on the first attach, and nothing records that in
+    storage, so the only non-racy proof is a job the executor has to run. A
+    fixed sleep would be a guess about app import and prefork spawn times on a
+    loaded runner.
+    """
+    probe = enqueue(db_path, ECHO, ("ready",))
+    wait_for_status(db_path, probe, "complete")
+
+
 def wait_for_status(db_path: Path, job_id: str, status: str, timeout: float = SETTLE) -> None:
     queue = Queue(db_path=str(db_path))
     deadline = time.monotonic() + timeout
@@ -132,8 +144,7 @@ def test_a_real_scheduler_dispatches_to_an_attached_executor(
     port, db_path = scheduler
     process = spawn_executor(port, db_path)
     try:
-        # The scheduler starts on the first attach, so enqueue after attaching.
-        time.sleep(1.0)
+        wait_for_attach(db_path)
         job_id = enqueue(db_path, ECHO, ("hello",))
         wait_for_status(db_path, job_id, "complete")
     finally:
@@ -146,7 +157,7 @@ def test_a_failure_is_retried_by_the_real_scheduler(
     port, db_path = scheduler
     process = spawn_executor(port, db_path)
     try:
-        time.sleep(1.0)
+        wait_for_attach(db_path)
         job_id = enqueue(db_path, BOOM)
 
         # `boom` always raises. The error reaching storage is what proves the
@@ -173,7 +184,7 @@ def test_sigterm_drains_against_a_real_scheduler(
     markers = tmp_path / "markers"
     process = spawn_executor(port, db_path, markers=markers)
     try:
-        time.sleep(1.0)
+        wait_for_attach(db_path)
         job_id = enqueue(db_path, SLOW, (600,))
         wait_started(markers, job_id)
 
