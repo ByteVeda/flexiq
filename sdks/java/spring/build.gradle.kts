@@ -91,12 +91,14 @@ tasks.test { useJUnitPlatform() }
 
 // Null-safety: @NullMarked sources checked by NullAway, matching the SDK module.
 tasks.withType<JavaCompile>().configureEach {
-    options.errorprone { isEnabled = false }
+    // `enabled.set(...)`, never `isEnabled = ...`: that assignment resolves
+    // against the outer JavaCompile receiver and disables the compile task.
+    options.errorprone { enabled.set(false) }
 }
 
 tasks.named<JavaCompile>("compileJava") {
     options.errorprone {
-        isEnabled = true
+        enabled.set(true)
         disableAllChecks.set(true)
         check("NullAway", CheckSeverity.ERROR)
         option("NullAway:OnlyNullMarked", "true")
