@@ -3,7 +3,8 @@
 //! An in-process worker reads the storage flag `Storage::request_cancel` sets.
 //! An attached executor has no storage — it is the whole point of #546 that it
 //! carries no database credentials — and learns instead from the `cancel` frame
-//! the scheduler sends, which arrives as [`WorkerDispatcher::notify_cancel`].
+//! the scheduler sends, which arrives as
+//! [`WorkerDispatcher::notify_cancel`](super::WorkerDispatcher::notify_cancel).
 //!
 //! Both sources answer one question, so both dispatchers ask it here rather
 //! than growing two cancel paths each.
