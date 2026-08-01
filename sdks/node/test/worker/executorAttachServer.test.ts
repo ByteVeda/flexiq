@@ -68,7 +68,9 @@ async function startScheduler(options?: { token?: string }): Promise<{
     env.TASKITO_ATTACH_TOKEN = options.token;
   }
 
-  server = spawn(resolve(SERVER_BIN as string), { env, stdio: "pipe" });
+  // Discarded, not piped: nothing reads these, and a scheduler that logs per
+  // job fills the pipe buffer and then blocks on its next write.
+  server = spawn(resolve(SERVER_BIN as string), { env, stdio: "ignore" });
   await waitForPort(port);
   return { port, dbPath };
 }
