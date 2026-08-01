@@ -925,3 +925,19 @@ fn an_empty_extra_is_stored_as_empty_rather_than_absent() {
         assert_eq!(kind(&expect_result(results)), "success");
     });
 }
+
+#[test]
+fn dropping_a_dispatcher_that_never_ran_stops_the_drain_thread() {
+    // The pump starts in `new` but only `run` stops it, so a dispatcher that is
+    // built and dropped without running would leak the thread — and with it the
+    // sink — for the life of the process.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(Arc::clone(&sink));
+    drop(dispatcher);
+
+    assert_eq!(
+        Arc::strong_count(&sink),
+        1,
+        "the drain thread outlived the dispatcher that started it"
+    );
+}

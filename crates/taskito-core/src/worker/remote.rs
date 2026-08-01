@@ -505,6 +505,16 @@ struct Shared {
     side_channel_drain: Mutex<Option<SideChannelDrain>>,
 }
 
+impl Drop for Shared {
+    /// `run` stops the drain thread on the way out, but a dispatcher that is
+    /// built and dropped without ever running would otherwise leave it alive
+    /// for the life of the process. `stop_side_channel` takes the handle out of
+    /// the mutex, so the second call is a no-op.
+    fn drop(&mut self) {
+        self.stop_side_channel();
+    }
+}
+
 impl Shared {
     /// Handshake and register.
     ///
