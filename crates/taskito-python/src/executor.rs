@@ -79,8 +79,9 @@ impl PyExecutor {
             config.executor_id = id;
         }
 
-        let pool: Arc<dyn taskito_core::WorkerDispatcher> =
-            Arc::new(PreforkPool::new(slots as usize, app_path.to_string()));
+        // Kept typed as well as erased: the side-channel handle only exists
+        // once the handshake has completed, so it is installed after `spawn`.
+        let pool = Arc::new(PreforkPool::new(slots as usize, app_path.to_string()));
 
         // Dialling and the handshake both block on the network; holding the GIL
         // across them would freeze every other Python thread in the process.
@@ -101,7 +102,10 @@ impl PyExecutor {
 
         let scheduler_id = client.scheduler_id().to_string();
         let peer = client.peer().to_string();
-        let handle = client.spawn(pool);
+        let handle = client.spawn(pool.clone() as Arc<dyn taskito_core::WorkerDispatcher>);
+        // A child's progress and task logs reach storage only through the
+        // scheduler, and this is the relay they travel the second hop on.
+        pool.set_side_channel(handle.side_channel());
 
         Ok(Self {
             executor_id: handle.executor_id().to_string(),
