@@ -15,6 +15,9 @@ struct MetricEntry {
     pub memory_bytes: i64,
     pub succeeded: bool,
     pub recorded_at: i64,
+    /// Absent on rows written before namespaces reached the metric store.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 impl From<MetricEntry> for TaskMetric {
@@ -67,6 +70,7 @@ impl RedisStorage {
         wall_time_ns: i64,
         memory_bytes: i64,
         succeeded: bool,
+        namespace: Option<&str>,
     ) -> Result<()> {
         let mut conn = self.conn()?;
         let id = uuid::Uuid::now_v7().to_string();
@@ -80,6 +84,7 @@ impl RedisStorage {
             memory_bytes,
             succeeded,
             recorded_at: now,
+            namespace: namespace.map(str::to_string),
         };
 
         let json = serde_json::to_string(&entry)?;
@@ -99,7 +104,12 @@ impl RedisStorage {
 
     /// Metrics recorded since `since_ms` (Unix milliseconds) for one task, or
     /// all tasks when `name` is `None`.
-    pub fn get_metrics(&self, name: Option<&str>, since_ms: i64) -> Result<Vec<TaskMetric>> {
+    pub fn get_metrics(
+        &self,
+        name: Option<&str>,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<TaskMetric>> {
         let mut conn = self.conn()?;
 
         let ids: Vec<String> = if let Some(n) = name {
@@ -118,6 +128,10 @@ impl RedisStorage {
             let data: Option<String> = conn.get(&metric_key).map_err(map_err)?;
             if let Some(d) = data {
                 let entry: MetricEntry = serde_json::from_str(&d)?;
+                // Not indexed by namespace, so the scope is applied in memory.
+                if namespace.is_some_and(|ns| entry.namespace.as_deref() != Some(ns)) {
+                    continue;
+                }
                 rows.push(TaskMetric::from(entry));
             }
         }

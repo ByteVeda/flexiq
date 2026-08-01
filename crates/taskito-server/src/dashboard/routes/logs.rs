@@ -19,8 +19,15 @@ pub async fn query(State(state): State<SharedState>, params: Params) -> ApiResul
     let limit = params.int("limit", 100)?;
     let since_ms = now_millis().saturating_sub(since_seconds.saturating_mul(1_000));
 
+    let namespace = state.namespace.clone();
     let logs = on_storage(&state, move |storage| {
-        storage.query_task_logs(task_name.as_deref(), level.as_deref(), since_ms, limit)
+        storage.query_task_logs(
+            task_name.as_deref(),
+            level.as_deref(),
+            since_ms,
+            limit,
+            namespace.as_deref(),
+        )
     })
     .await?;
 

@@ -146,11 +146,11 @@ fn test_reschedule(s: &impl Storage) {
 
 fn test_cancel_job(s: &impl Storage) {
     let job = s.enqueue(make_job("q-cancel", "cancel_me")).unwrap();
-    assert!(s.cancel_job(&job.id).unwrap());
+    assert!(s.cancel_job(&job.id, None).unwrap());
 
     let fetched = s.get_job(&job.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Cancelled);
-    assert!(!s.cancel_job(&job.id).unwrap());
+    assert!(!s.cancel_job(&job.id, None).unwrap());
 }
 
 fn test_stats(s: &impl Storage) {
@@ -158,7 +158,7 @@ fn test_stats(s: &impl Storage) {
     s.enqueue(make_job(q, "t1")).unwrap();
     s.enqueue(make_job(q, "t2")).unwrap();
 
-    let stats = s.stats().unwrap();
+    let stats = s.stats(None).unwrap();
     assert!(stats.pending >= 2);
 }
 
@@ -170,7 +170,7 @@ fn test_stats_by_queue_and_task(s: &impl Storage) {
     s.enqueue(make_job(q, task)).unwrap();
 
     // 3 pending, none running yet.
-    let st = s.stats_by_queue(q).unwrap();
+    let st = s.stats_by_queue(q, None).unwrap();
     assert_eq!(st.pending, 3);
     assert_eq!(st.running, 0);
     assert_eq!(s.count_running_by_task(task).unwrap(), 0);
@@ -181,7 +181,7 @@ fn test_stats_by_queue_and_task(s: &impl Storage) {
     let d1 = s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
     assert_eq!(s.count_running_by_task(task).unwrap(), 2);
-    let st = s.stats_by_queue(q).unwrap();
+    let st = s.stats_by_queue(q, None).unwrap();
     assert_eq!(st.running, 2);
     assert_eq!(st.pending, 1);
     assert_eq!(s.count_pending_by_queue(q).unwrap(), 1);
@@ -189,13 +189,13 @@ fn test_stats_by_queue_and_task(s: &impl Storage) {
     // Complete one — running drops, completed rises.
     s.complete(&d1.id, None).unwrap();
     assert_eq!(s.count_running_by_task(task).unwrap(), 1);
-    let st = s.stats_by_queue(q).unwrap();
+    let st = s.stats_by_queue(q, None).unwrap();
     assert_eq!(st.pending, 1);
     assert_eq!(st.running, 1);
     assert_eq!(st.completed, 1);
 
     // stats_all_queues reports the same breakdown for this queue.
-    let all = s.stats_all_queues().unwrap();
+    let all = s.stats_all_queues(None).unwrap();
     let qs = all.get(q).expect("queue should appear in stats_all_queues");
     assert_eq!(qs.pending, 1);
     assert_eq!(qs.running, 1);
@@ -251,7 +251,7 @@ fn test_dead_letter_queue(s: &impl Storage) {
     let fetched = s.get_job(&job.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Dead);
 
-    let dead = s.list_dead(10, 0).unwrap();
+    let dead = s.list_dead(10, 0, None).unwrap();
     assert!(!dead.is_empty());
 }
 
@@ -348,12 +348,12 @@ fn seed_purgeable_rows(s: &impl Storage, q: &str, now: i64) -> String {
     // Side tables: logs, metrics, one error.
     let side = s.enqueue(make_job(q, "dr_side")).unwrap();
     for i in 0..3 {
-        s.write_task_log(&side.id, "dr_side", "info", &format!("l{i}"), None)
+        s.write_task_log(&side.id, "dr_side", "info", &format!("l{i}"), None, None)
             .unwrap();
     }
-    s.record_metric("dr_metric", &side.id, 10, 20, true)
+    s.record_metric("dr_metric", &side.id, 10, 20, true, None)
         .unwrap();
-    s.record_metric("dr_metric", &side.id, 11, 21, true)
+    s.record_metric("dr_metric", &side.id, 11, 21, true, None)
         .unwrap();
     s.record_error(&side.id, 0, "e0").unwrap();
 
@@ -440,20 +440,23 @@ fn test_dead_letter_by_task(s: &impl Storage) {
     move_to_dlq("task_a");
     move_to_dlq("task_b");
 
-    let task_a = s.list_dead_by_task("task_a", 10, 0).unwrap();
+    let task_a = s.list_dead_by_task("task_a", 10, 0, None).unwrap();
     assert_eq!(task_a.len(), 2);
     assert!(task_a.iter().all(|d| d.task_name == "task_a"));
 
     // Pagination: one entry per page.
-    let page = s.list_dead_by_task("task_a", 1, 1).unwrap();
+    let page = s.list_dead_by_task("task_a", 1, 1, None).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].task_name, "task_a");
 
     // Purge removes only the matching task's entries.
     assert_eq!(s.purge_dead_by_task("task_a").unwrap(), 2);
-    assert!(s.list_dead_by_task("task_a", 10, 0).unwrap().is_empty());
+    assert!(s
+        .list_dead_by_task("task_a", 10, 0, None)
+        .unwrap()
+        .is_empty());
 
-    let task_b = s.list_dead_by_task("task_b", 10, 0).unwrap();
+    let task_b = s.list_dead_by_task("task_b", 10, 0, None).unwrap();
     assert_eq!(task_b.len(), 1);
     assert_eq!(task_b[0].task_name, "task_b");
 }
@@ -465,15 +468,15 @@ fn test_delete_dead(s: &impl Storage) {
     let running = s.get_job(&job.id).unwrap().unwrap();
     s.move_to_dlq(&running, "err", None).unwrap();
 
-    let dead = s.list_dead(100, 0).unwrap();
+    let dead = s.list_dead(100, 0, None).unwrap();
     let entry = dead
         .iter()
         .find(|d| d.original_job_id == job.id)
         .expect("our DLQ entry should exist");
     let dead_id = entry.id.clone();
 
-    assert!(s.delete_dead(&dead_id).unwrap());
-    assert!(!s.delete_dead(&dead_id).unwrap());
+    assert!(s.delete_dead(&dead_id, None).unwrap());
+    assert!(!s.delete_dead(&dead_id, None).unwrap());
 }
 
 fn test_list_dead_for_retry(s: &impl Storage) {
@@ -735,7 +738,7 @@ fn test_complete_batch(s: &impl Storage) {
         assert!(!claims.contains(id), "claim row must be cleared");
     }
 
-    let metrics = s.get_metrics(Some(task), 0).unwrap();
+    let metrics = s.get_metrics(Some(task), 0, None).unwrap();
     assert_eq!(metrics.len(), 3, "one success metric per completed job");
 
     // Empty input is a no-op, not an error.
@@ -914,7 +917,7 @@ fn test_immediate_archival(s: &impl Storage) {
     s.fail(&failed.id, "boom").unwrap();
 
     let cancelled = s.enqueue(make_job(q, "arch_cancel")).unwrap();
-    assert!(s.cancel_job(&cancelled.id).unwrap());
+    assert!(s.cancel_job(&cancelled.id, None).unwrap());
 
     // One running and one pending left live. Enqueue the to-be-running job
     // first so the FIFO dequeue claims it, leaving the later one pending.
@@ -937,7 +940,7 @@ fn test_immediate_archival(s: &impl Storage) {
     );
 
     // Per-queue stats: terminals from the archive, pending/running live.
-    let stats = s.stats_by_queue(q).unwrap();
+    let stats = s.stats_by_queue(q, None).unwrap();
     assert_eq!(stats.completed, 1, "completed");
     assert_eq!(stats.failed, 1, "failed");
     assert_eq!(stats.cancelled, 1, "cancelled");
@@ -990,7 +993,7 @@ fn test_dependent_blocked_by_cancelled_parent(s: &impl Storage) {
     let b = s.enqueue(b_job).unwrap();
 
     // Cancelling A archives it as Cancelled. B's dependency is now unsatisfiable.
-    assert!(s.cancel_job(&a.id).unwrap());
+    assert!(s.cancel_job(&a.id, None).unwrap());
 
     // A dequeue attempt must not return B (its archived parent is non-Complete).
     // Cascade-cancel may also have archived B; either way it must not dequeue.
@@ -1091,7 +1094,7 @@ fn test_listing_is_blob_free(s: &impl Storage) {
     let running = s.get_job(&job.id).unwrap().unwrap();
     s.move_to_dlq(&running, "boom", None).unwrap();
 
-    let dead = s.list_dead(10, 0).unwrap();
+    let dead = s.list_dead(10, 0, None).unwrap();
     let entry = dead.iter().find(|d| d.original_job_id == job.id).unwrap();
     assert_eq!(entry.task_name, "blob_free_task");
     assert!(
@@ -1636,7 +1639,7 @@ fn test_enqueue_unique_batch(s: &impl Storage) {
         .enqueue_unique_batch(vec![keyed("uk-a"), keyed("uk-b"), keyed("uk-c")])
         .unwrap();
     assert_eq!(first.len(), 3);
-    assert_eq!(s.stats_by_queue(q).unwrap().pending, 3);
+    assert_eq!(s.stats_by_queue(q, None).unwrap().pending, 3);
 
     // Replay the same keys: each active job is returned in place (dedup), and
     // no duplicate rows are created.
@@ -1651,7 +1654,7 @@ fn test_enqueue_unique_batch(s: &impl Storage) {
         );
     }
     assert_eq!(
-        s.stats_by_queue(q).unwrap().pending,
+        s.stats_by_queue(q, None).unwrap().pending,
         3,
         "replay must not create duplicate deliveries"
     );
@@ -1692,7 +1695,7 @@ fn test_enqueue_batch_dedup(s: &impl Storage) {
         created.iter().map(|job| job.id.as_str()).collect();
     assert_eq!(distinct.len(), 4, "only the two keyless rows are new jobs");
     assert_eq!(
-        s.stats_by_queue(q).unwrap().pending,
+        s.stats_by_queue(q, None).unwrap().pending,
         4,
         "duplicates create no rows: active + ebd-b + two keyless"
     );
@@ -1700,7 +1703,7 @@ fn test_enqueue_batch_dedup(s: &impl Storage) {
     // A batch with no unique keys still round-trips through the plain path.
     let plain = enqueue_batch_dedup(s, vec![make_job(q, "ebd_task")]).unwrap();
     assert_eq!(plain.len(), 1);
-    assert_eq!(s.stats_by_queue(q).unwrap().pending, 5);
+    assert_eq!(s.stats_by_queue(q, None).unwrap().pending, 5);
 }
 
 /// Every backend validates dependencies across a mixed batch, including the
@@ -1934,7 +1937,7 @@ fn page_all_dead(s: &impl Storage, page_size: i64) -> Vec<DeadJob> {
     let mut cursor: Option<(i64, String)> = None;
     loop {
         let after = cursor.as_ref().map(|(k, id)| (*k, id.as_str()));
-        let page = s.list_dead_after(page_size, after).unwrap();
+        let page = s.list_dead_after(page_size, after, None).unwrap();
         if page.is_empty() {
             break;
         }
@@ -1974,7 +1977,7 @@ fn page_all_archived(s: &impl Storage, page_size: i64) -> Vec<String> {
 fn test_task_logs_after_cursor(s: &impl Storage) {
     let job = s.enqueue(make_job("q-logs", "log_task")).unwrap();
     for i in 0..3 {
-        s.write_task_log(&job.id, "log_task", "result", &format!("m{i}"), None)
+        s.write_task_log(&job.id, "log_task", "result", &format!("m{i}"), None, None)
             .unwrap();
     }
 
@@ -1996,7 +1999,9 @@ fn test_task_logs_after_cursor(s: &impl Storage) {
     assert!(after_last.is_empty());
 
     // A zero limit is an empty page, even on the filtered (unindexed) path.
-    let zero = s.query_task_logs(Some("log_task"), None, 0, 0).unwrap();
+    let zero = s
+        .query_task_logs(Some("log_task"), None, 0, 0, None)
+        .unwrap();
     assert!(zero.is_empty());
 }
 
@@ -2156,7 +2161,7 @@ fn redis_purge_dead_drains_across_batches(s: &taskito_core::RedisStorage) {
         "batched purge_dead must remove all >500 eligible entries, got {removed}"
     );
     assert!(
-        s.list_dead(10_000, 0).unwrap().is_empty(),
+        s.list_dead(10_000, 0, None).unwrap().is_empty(),
         "batched purge_dead must fully drain the DLQ"
     );
 }
@@ -2298,7 +2303,7 @@ fn redis_move_to_dlq_leaves_consistent_state(s: &taskito_core::RedisStorage) {
 
     s.move_to_dlq(&running, "boom", None).unwrap();
 
-    let dead = s.list_dead(10, 0).unwrap();
+    let dead = s.list_dead(10, 0, None).unwrap();
     assert!(
         dead.iter().any(|d| d.original_job_id == job.id),
         "job must be present in the DLQ"
@@ -2330,13 +2335,13 @@ fn redis_move_to_dlq_skips_already_archived(s: &taskito_core::RedisStorage) {
 
     // A racer archives the job first (Complete).
     s.complete(&job.id, None).unwrap();
-    let before = s.list_dead(1000, 0).unwrap().len();
+    let before = s.list_dead(1000, 0, None).unwrap().len();
 
     // The stale move_to_dlq must be a no-op.
     s.move_to_dlq(&running, "boom", None).unwrap();
 
     assert_eq!(
-        s.list_dead(1000, 0).unwrap().len(),
+        s.list_dead(1000, 0, None).unwrap().len(),
         before,
         "move_to_dlq must not dead-letter an already-archived job"
     );
@@ -2356,7 +2361,7 @@ fn redis_mutators_reject_archived_jobs(s: &taskito_core::RedisStorage) {
 
     // Cancel a pending job → archived as Cancelled.
     let cancelled = s.enqueue(make_job(q, "redis_archived_cancel")).unwrap();
-    assert!(s.cancel_job(&cancelled.id).unwrap());
+    assert!(s.cancel_job(&cancelled.id, None).unwrap());
     assert!(matches!(
         s.retry(&cancelled.id, now_millis()),
         Err(taskito_core::error::QueueError::JobNotFound(_))

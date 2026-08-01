@@ -79,9 +79,19 @@ impl RedisStorage {
     /// is not `Running`, its `complete` errors and the caller falls back.
     pub fn complete_batch(&self, completions: &[crate::job::JobCompletion]) -> Result<()> {
         for c in completions {
+            // Read before the archive move so the job's namespace is still
+            // reachable; it is the only namespace this batch knows.
+            let namespace = self.get_job(&c.job_id)?.and_then(|job| job.namespace);
             self.complete(&c.job_id, c.result.clone())?;
             self.complete_execution(&c.job_id)?;
-            self.record_metric(&c.task_name, &c.job_id, c.wall_time_ns, 0, true)?;
+            self.record_metric(
+                &c.task_name,
+                &c.job_id,
+                c.wall_time_ns,
+                0,
+                true,
+                namespace.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -200,7 +210,10 @@ impl RedisStorage {
 
     /// Cancel a `Pending` job (archived as `Cancelled`) and cascade-cancel its
     /// dependents. Returns `false` when the job is missing or not pending.
-    pub fn cancel_job(&self, id: &str) -> Result<bool> {
+    ///
+    /// A job in another namespace also reports `false`, so a scoped caller
+    /// learns nothing about ids outside its own namespace.
+    pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
         let job = match self.get_job(id)? {
             Some(j) => j,
@@ -208,6 +221,9 @@ impl RedisStorage {
         };
 
         if job.status != JobStatus::Pending {
+            return Ok(false);
+        }
+        if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
             return Ok(false);
         }
 

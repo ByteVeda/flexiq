@@ -65,14 +65,14 @@ fn test_notes_survive_dlq_round_trip() {
         .move_to_dlq(&job, "boom", None)
         .expect("move_to_dlq");
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     let entry = dead
         .iter()
         .find(|d| d.original_job_id == job.id)
         .expect("dead entry");
     assert_eq!(entry.notes.as_deref(), Some(r#"{"customer_id":"cus_xyz"}"#));
 
-    let new_id = storage.retry_dead(&entry.id).expect("retry_dead");
+    let new_id = storage.retry_dead(&entry.id, None).expect("retry_dead");
     let retried = storage.get_job(&new_id).unwrap().unwrap();
     assert_eq!(
         retried.notes.as_deref(),
@@ -93,14 +93,14 @@ fn test_metadata_survives_dlq_round_trip() {
         .move_to_dlq(&job, "boom", None)
         .expect("move_to_dlq");
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     let entry = dead
         .iter()
         .find(|d| d.original_job_id == job.id)
         .expect("dead entry");
     assert_eq!(entry.metadata.as_deref(), Some(r#"{"user_id":"u1"}"#));
 
-    let new_id = storage.retry_dead(&entry.id).expect("retry_dead");
+    let new_id = storage.retry_dead(&entry.id, None).expect("retry_dead");
     let retried = storage.get_job(&new_id).unwrap().unwrap();
     let meta: serde_json::Value =
         serde_json::from_str(retried.metadata.as_deref().expect("metadata")).unwrap();
@@ -386,7 +386,7 @@ fn test_dead_letter_queue() {
     let fetched = storage.get_job(&job.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Dead);
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead.len(), 1);
     assert_eq!(dead[0].original_job_id, job.id);
 }
@@ -404,21 +404,21 @@ fn test_retry_dead() {
         .move_to_dlq(&running_job, "fatal error", None)
         .unwrap();
 
-    let dead = storage.list_dead(10, 0).unwrap();
-    let new_id = storage.retry_dead(&dead[0].id).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
+    let new_id = storage.retry_dead(&dead[0].id, None).unwrap();
 
     let new_job = storage.get_job(&new_id).unwrap().unwrap();
     assert_eq!(new_job.status, JobStatus::Pending);
     assert_eq!(new_job.task_name, "retry_dead_task");
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     assert!(dead.is_empty());
 }
 
 #[test]
 fn test_retry_dead_missing_id_returns_not_found() {
     let storage = test_storage();
-    match storage.retry_dead("does-not-exist") {
+    match storage.retry_dead("does-not-exist", None) {
         Err(QueueError::JobNotFound(id)) => assert_eq!(id, "does-not-exist"),
         other => panic!("expected JobNotFound, got {other:?}"),
     }
@@ -552,7 +552,7 @@ fn test_stats() {
     storage.enqueue(make_job("t1")).unwrap();
     storage.enqueue(make_job("t2")).unwrap();
 
-    let stats = storage.stats().unwrap();
+    let stats = storage.stats(None).unwrap();
     assert_eq!(stats.pending, 2);
     assert_eq!(stats.running, 0);
 }
@@ -562,13 +562,13 @@ fn test_cancel_job() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("cancel_me")).unwrap();
 
-    assert!(storage.cancel_job(&job.id).unwrap());
+    assert!(storage.cancel_job(&job.id, None).unwrap());
 
     let fetched = storage.get_job(&job.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Cancelled);
 
     // Cancelling again should return false
-    assert!(!storage.cancel_job(&job.id).unwrap());
+    assert!(!storage.cancel_job(&job.id, None).unwrap());
 }
 
 #[test]
@@ -617,7 +617,7 @@ fn test_enqueue_batch_dedup_is_atomic() {
         Err(QueueError::DependencyNotFound(_))
     ));
     assert_eq!(
-        storage.stats().unwrap().pending,
+        storage.stats(None).unwrap().pending,
         0,
         "the keyed row must roll back with the batch, not persist alone"
     );
@@ -628,7 +628,7 @@ fn test_enqueue_unique_rejects_dead_dependency() {
     let storage = test_storage();
     // A cancelled (archived, non-Complete) dependency must be rejected.
     let dep = storage.enqueue(make_job("dep_to_cancel")).unwrap();
-    assert!(storage.cancel_job(&dep.id).unwrap());
+    assert!(storage.cancel_job(&dep.id, None).unwrap());
 
     let mut job = make_job("unique_blocked");
     job.unique_key = Some("uk-dead-dep".to_string());
@@ -681,7 +681,7 @@ fn test_enqueue_batch() {
     let result = storage.enqueue_batch(jobs).unwrap();
     assert_eq!(result.len(), 5);
 
-    let stats = storage.stats().unwrap();
+    let stats = storage.stats(None).unwrap();
     assert_eq!(stats.pending, 5);
 }
 
@@ -744,13 +744,13 @@ fn test_purge_metrics_drains_across_batches() {
     let job = storage.enqueue(make_job("purge_metric_batch")).unwrap();
     for _ in 0..550 {
         storage
-            .record_metric("purge_metric_batch", &job.id, 1, 1, true)
+            .record_metric("purge_metric_batch", &job.id, 1, 1, true, None)
             .unwrap();
     }
 
     let purged = storage.purge_metrics(now_millis() + 10_000).unwrap();
     assert_eq!(purged, 550, "batched purge must drain every metric row");
-    assert!(storage.get_metrics(None, 0).unwrap().is_empty());
+    assert!(storage.get_metrics(None, 0, None).unwrap().is_empty());
 }
 
 #[test]
@@ -759,7 +759,7 @@ fn test_purge_task_logs_drains_across_batches() {
     let job = storage.enqueue(make_job("purge_log_batch")).unwrap();
     for _ in 0..550 {
         storage
-            .write_task_log(&job.id, "purge_log_batch", "INFO", "msg", None)
+            .write_task_log(&job.id, "purge_log_batch", "INFO", "msg", None, None)
             .unwrap();
     }
 
@@ -836,7 +836,7 @@ fn test_cascade_cancel_on_job_cancel() {
     dep_c.depends_on = vec![job_b.id.clone()];
     let job_c = storage.enqueue(dep_c).unwrap();
 
-    storage.cancel_job(&job_a.id).unwrap();
+    storage.cancel_job(&job_a.id, None).unwrap();
 
     let b = storage.get_job(&job_b.id).unwrap().unwrap();
     assert_eq!(b.status, JobStatus::Cancelled);
@@ -1045,6 +1045,36 @@ fn test_setting_list_returns_all() {
 }
 
 #[test]
+fn test_setting_cas_writes_only_on_the_expected_value() {
+    let storage = test_storage();
+    storage.set_setting("k", "v1").unwrap();
+
+    assert!(!storage.set_setting_if("k", Some("stale"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("v1".to_string()));
+
+    assert!(storage.set_setting_if("k", Some("v1"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("v2".to_string()));
+}
+
+#[test]
+fn test_setting_cas_creates_only_when_unset() {
+    let storage = test_storage();
+    assert!(storage.set_setting_if("k", None, "first").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("first".to_string()));
+
+    // The key now exists, so the "must be unset" branch must not overwrite it.
+    assert!(!storage.set_setting_if("k", None, "second").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), Some("first".to_string()));
+}
+
+#[test]
+fn test_setting_cas_on_a_missing_key_expecting_a_value_fails() {
+    let storage = test_storage();
+    assert!(!storage.set_setting_if("k", Some("v1"), "v2").unwrap());
+    assert_eq!(storage.get_setting("k").unwrap(), None);
+}
+
+#[test]
 fn test_setting_preserves_unicode_and_json() {
     let storage = test_storage();
     let payload = r#"{"label":"Grafana ⏱️","url":"https://grafana.example/dash"}"#;
@@ -1118,7 +1148,7 @@ fn test_enqueue_batch_crosses_chunk_boundary() {
 
     let result = storage.enqueue_batch(jobs).unwrap();
     assert_eq!(result.len(), count);
-    assert_eq!(storage.stats().unwrap().pending, count as i64);
+    assert_eq!(storage.stats(None).unwrap().pending, count as i64);
 }
 
 #[test]
@@ -1291,7 +1321,7 @@ fn test_stats_counts_archived_terminals() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
 
-    let stats = storage.stats().unwrap();
+    let stats = storage.stats(None).unwrap();
     assert_eq!(stats.completed, 3);
     assert_eq!(stats.pending, 1);
     assert_eq!(stats.running, 1);
@@ -1343,7 +1373,7 @@ fn test_fail_and_cancel_archive_immediately() {
 
     // Cancelled pending job is archived.
     let cancelled = storage.enqueue(make_job("to_cancel")).unwrap();
-    assert!(storage.cancel_job(&cancelled.id).unwrap());
+    assert!(storage.cancel_job(&cancelled.id, None).unwrap());
     assert_eq!(jobs_row_count(&storage, &cancelled.id), 0);
     assert_eq!(archived_row_count(&storage, &cancelled.id), 1);
     assert_eq!(
@@ -1462,7 +1492,7 @@ fn test_cancel_pending_archives_job() {
     let job = storage.enqueue(make_job("cancel_inline")).unwrap();
 
     // Cancelling a pending job archives it: the live row leaves `jobs`.
-    assert!(storage.cancel_job(&job.id).unwrap());
+    assert!(storage.cancel_job(&job.id, None).unwrap());
     assert_eq!(jobs_row_count(&storage, &job.id), 0);
     assert_eq!(
         storage.get_job(&job.id).unwrap().unwrap().status,
@@ -1519,17 +1549,17 @@ fn test_delete_dead_existing() {
     let running = storage.get_job(&job.id).unwrap().unwrap();
     storage.move_to_dlq(&running, "err", None).unwrap();
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead.len(), 1);
 
-    assert!(storage.delete_dead(&dead[0].id).unwrap());
-    assert!(storage.list_dead(10, 0).unwrap().is_empty());
+    assert!(storage.delete_dead(&dead[0].id, None).unwrap());
+    assert!(storage.list_dead(10, 0, None).unwrap().is_empty());
 }
 
 #[test]
 fn test_delete_dead_nonexistent() {
     let storage = test_storage();
-    assert!(!storage.delete_dead("nope").unwrap());
+    assert!(!storage.delete_dead("nope", None).unwrap());
 }
 
 #[test]
@@ -1605,14 +1635,14 @@ fn test_count_expired_rows_matches_purge_exactly() {
     let side = storage.enqueue(make_job("dr_side")).unwrap();
     for i in 0..3 {
         storage
-            .write_task_log(&side.id, "dr_side", "info", &format!("l{i}"), None)
+            .write_task_log(&side.id, "dr_side", "info", &format!("l{i}"), None, None)
             .unwrap();
     }
     storage
-        .record_metric("dr_metric", &side.id, 10, 20, true)
+        .record_metric("dr_metric", &side.id, 10, 20, true, None)
         .unwrap();
     storage
-        .record_metric("dr_metric", &side.id, 11, 21, true)
+        .record_metric("dr_metric", &side.id, 11, 21, true, None)
         .unwrap();
     storage.record_error(&side.id, 0, "e0").unwrap();
 
@@ -1695,7 +1725,7 @@ fn test_purge_dead_drains_across_batches() {
 
     let removed = storage.purge_dead(now_millis() + 10_000).unwrap();
     assert_eq!(removed, 550, "batched purge must drain every dead row");
-    assert!(storage.list_dead(1000, 0).unwrap().is_empty());
+    assert!(storage.list_dead(1000, 0, None).unwrap().is_empty());
 }
 
 #[test]
@@ -1713,7 +1743,7 @@ fn test_purge_dead_with_ttl_drains_across_batches() {
         .purge_dead_with_ttl(Some(now_millis() + 10_000))
         .unwrap();
     assert_eq!(removed, 550, "batched TTL purge must drain every dead row");
-    assert!(storage.list_dead(1000, 0).unwrap().is_empty());
+    assert!(storage.list_dead(1000, 0, None).unwrap().is_empty());
 }
 
 #[test]
@@ -1757,15 +1787,15 @@ fn test_dlq_retry_count_round_trip() {
     let running = storage.get_job(&job.id).unwrap().unwrap();
     storage.move_to_dlq(&running, "err1", None).unwrap();
 
-    let dead = storage.list_dead(10, 0).unwrap();
+    let dead = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead[0].dlq_retry_count, 0);
 
-    let new_id = storage.retry_dead(&dead[0].id).unwrap();
+    let new_id = storage.retry_dead(&dead[0].id, None).unwrap();
     storage.dequeue("default", now + 2000, None).unwrap();
     let running2 = storage.get_job(&new_id).unwrap().unwrap();
     storage.move_to_dlq(&running2, "err2", None).unwrap();
 
-    let dead2 = storage.list_dead(10, 0).unwrap();
+    let dead2 = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead2[0].dlq_retry_count, 1);
 }
 

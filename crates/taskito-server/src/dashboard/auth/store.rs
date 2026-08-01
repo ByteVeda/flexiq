@@ -18,24 +18,7 @@ use crate::dashboard::stores::kv;
 /// unreadable row is invisible to every listing, and the operator needs to know
 /// the store holds something this build does not understand.
 pub fn list_users(storage: &impl Storage) -> Result<BTreeMap<String, User>> {
-    let rows: Map<String, Value> = kv::read(storage, USERS_KEY)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(
-            |(username, row)| match serde_json::from_value::<User>(row) {
-                Ok(mut user) => {
-                    user.username = username.clone();
-                    Some((username, user))
-                }
-                Err(error) => {
-                    log::warn!(
-                        "dashboard user '{username}' is unreadable and was skipped: {error}"
-                    );
-                    None
-                }
-            },
-        )
-        .collect())
+    Ok(parse_users(&kv::read(storage, USERS_KEY)?))
 }
 
 /// How many users the store holds.
@@ -63,11 +46,9 @@ pub fn create_user(
     password: &str,
     role: Role,
 ) -> Result<std::result::Result<User, String>> {
-    let mut users = list_users(storage)?;
-    if users.contains_key(username) {
-        return Ok(Err(format!("user '{username}' already exists")));
-    }
     let now = now_millis();
+    // Hashed out here: the closure below re-runs on a lost race, and hashing is
+    // the expensive part of this call.
     let user = User {
         username: username.to_string(),
         password_hash: password::hash(password),
@@ -77,9 +58,13 @@ pub fn create_user(
         email: None,
         display_name: None,
     };
-    users.insert(username.to_string(), user.clone());
-    save_users(storage, &users)?;
-    Ok(Ok(user))
+    edit_users(storage, |users| {
+        if users.contains_key(username) {
+            return Err(format!("user '{username}' already exists"));
+        }
+        users.insert(username.to_string(), user.clone());
+        Ok(user.clone())
+    })
 }
 
 /// Persist a changed user row, keyed by its username.
@@ -87,13 +72,13 @@ pub fn create_user(
 /// The role is deliberately not something a provider login can set; an operator
 /// changing it needs a way in that the login path does not have.
 pub fn replace_user(storage: &impl Storage, user: &User) -> Result<bool> {
-    let mut users = list_users(storage)?;
-    if !users.contains_key(&user.username) {
-        return Ok(false);
-    }
-    users.insert(user.username.clone(), user.clone());
-    save_users(storage, &users)?;
-    Ok(true)
+    edit_users(storage, |users| {
+        if !users.contains_key(&user.username) {
+            return false;
+        }
+        users.insert(user.username.clone(), user.clone());
+        true
+    })
 }
 
 /// Replace a user's password.
@@ -102,13 +87,14 @@ pub fn update_password(
     username: &str,
     new_password: &str,
 ) -> Result<std::result::Result<(), String>> {
-    let mut users = list_users(storage)?;
-    let Some(user) = users.get_mut(username) else {
-        return Ok(Err(format!("user '{username}' does not exist")));
-    };
-    user.password_hash = password::hash(new_password);
-    save_users(storage, &users)?;
-    Ok(Ok(()))
+    let hash = password::hash(new_password);
+    edit_users(storage, |users| {
+        let Some(user) = users.get_mut(username) else {
+            return Err(format!("user '{username}' does not exist"));
+        };
+        user.password_hash = hash.clone();
+        Ok(())
+    })
 }
 
 /// Verify credentials, stamping `last_login_at` on success.
@@ -120,18 +106,25 @@ pub fn authenticate(
     username: &str,
     submitted: &str,
 ) -> Result<Option<User>> {
-    let mut users = list_users(storage)?;
-    let Some(user) = users.get_mut(username) else {
+    // Verified before the write, and once: hashing inside the retry loop would
+    // pay for it again on every lost race.
+    let Some(user) = list_users(storage)?.remove(username) else {
         password::verify(submitted, &password::dummy_hash());
         return Ok(None);
     };
     if !password::verify(submitted, &user.password_hash) {
         return Ok(None);
     }
-    user.last_login_at = Some(now_millis());
-    let authenticated = user.clone();
-    save_users(storage, &users)?;
-    Ok(Some(authenticated))
+
+    let now = now_millis();
+    let stamped = edit_users(storage, |users| {
+        let stored = users.get_mut(username)?;
+        stored.last_login_at = Some(now);
+        Some(stored.clone())
+    })?;
+    // A row deleted between the check and the stamp does not undo a login that
+    // was valid when it was made.
+    Ok(Some(stamped.unwrap_or(user)))
 }
 
 /// Look up or create the user backing a provider identity.
@@ -147,13 +140,12 @@ pub fn upsert_provider_user(
     role_on_create: Role,
 ) -> Result<User> {
     let username = format!("{slot}:{subject}");
-    let mut users = list_users(storage)?;
     let now = now_millis();
 
-    let user = match users.get_mut(&username) {
+    edit_users(storage, |users| match users.get_mut(&username) {
+        // Refresh the profile, but never the role: an allowlist change must not
+        // silently demote or promote on the next login.
         Some(existing) => {
-            // Refresh the profile, but never the role: an allowlist change
-            // must not silently demote or promote on the next login.
             if let Some(email) = email {
                 existing.email = Some(email.to_string());
             }
@@ -176,9 +168,7 @@ pub fn upsert_provider_user(
             users.insert(username.clone(), created.clone());
             created
         }
-    };
-    save_users(storage, &users)?;
-    Ok(user)
+    })
 }
 
 /// Start a session for `user`.
@@ -268,16 +258,62 @@ pub fn prune_expired_sessions(storage: &impl Storage) -> Result<usize> {
     Ok(removed)
 }
 
-fn save_users(storage: &impl Storage, users: &BTreeMap<String, User>) -> Result<()> {
-    let rows: Map<String, Value> = users
-        .iter()
-        .filter_map(|(username, user)| {
-            serde_json::to_value(user)
-                .ok()
-                .map(|value| (username.clone(), value))
-        })
-        .collect();
-    kv::write(storage, USERS_KEY, &rows)
+/// Read every user, apply `mutate`, and write the result back only if nobody
+/// else touched the document meanwhile.
+///
+/// `mutate` re-runs on a lost race, so anything expensive — password hashing,
+/// above all — belongs outside it.
+fn edit_users<R>(
+    storage: &impl Storage,
+    mut mutate: impl FnMut(&mut BTreeMap<String, User>) -> R,
+) -> Result<R> {
+    kv::update(storage, USERS_KEY, |rows: &mut Map<String, Value>| {
+        let before = parse_users(rows);
+        let mut users = before.clone();
+        let outcome = mutate(&mut users);
+
+        // Edited per user rather than by replacing the document. A row this
+        // build cannot parse never reaches `users`, so writing the whole map
+        // back would delete it — and deleting the last row that `count_users`
+        // can see reopens the setup flow, which is an authentication bypass.
+        for (username, user) in &users {
+            if let Ok(value) = serde_json::to_value(user) {
+                rows.insert(username.clone(), value);
+            }
+        }
+        // Only rows this build could read are removable; anything it skipped is
+        // not this edit's to delete.
+        for username in before.keys() {
+            if !users.contains_key(username) {
+                rows.remove(username);
+            }
+        }
+        outcome
+    })
+}
+
+/// Parse stored rows into users.
+///
+/// A row that cannot be read is skipped and logged. It is never silent: an
+/// unreadable row is invisible to every listing, and the operator needs to know
+/// the store holds something this build does not understand.
+fn parse_users(rows: &Map<String, Value>) -> BTreeMap<String, User> {
+    rows.iter()
+        .filter_map(
+            |(username, row)| match serde_json::from_value::<User>(row.clone()) {
+                Ok(mut user) => {
+                    user.username = username.clone();
+                    Some((username.clone(), user))
+                }
+                Err(error) => {
+                    log::warn!(
+                        "dashboard user '{username}' is unreadable and was skipped: {error}"
+                    );
+                    None
+                }
+            },
+        )
+        .collect()
 }
 
 /// Sessions store Unix **seconds**, matching the SDK dashboards.
@@ -330,6 +366,35 @@ mod tests {
             count_users(&storage).expect("storage"),
             1,
             "an unreadable row must not reopen setup"
+        );
+    }
+
+    #[test]
+    fn an_edit_leaves_a_row_this_build_cannot_read() {
+        // `edit_users` used to replace the whole document with only the rows it
+        // could parse, so one create deleted every unreadable neighbour. If the
+        // deleted row was the last one `count_users` could see, setup reopened.
+        let storage = storage();
+        kv::write(
+            &storage,
+            USERS_KEY,
+            &serde_json::json!({ "legacy": { "unexpected": true } }),
+        )
+        .expect("seed a foreign row");
+
+        create_user(&storage, "ops", "supersecret", Role::Admin)
+            .expect("storage")
+            .expect("created");
+
+        let rows: Map<String, Value> = kv::read(&storage, USERS_KEY).expect("storage");
+        assert!(
+            rows.contains_key("legacy"),
+            "an edit to a neighbour must not delete an unreadable row: {rows:?}"
+        );
+        assert_eq!(
+            count_users(&storage).expect("storage"),
+            2,
+            "both rows still count toward keeping setup closed"
         );
     }
 

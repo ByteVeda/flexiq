@@ -31,7 +31,8 @@ pub async fn readiness(
     let mut checks = serde_json::Map::new();
     let mut ready = true;
 
-    match on_storage(&state, |storage| storage.stats()).await {
+    let namespace = state.namespace.clone();
+    match on_storage(&state, move |storage| storage.stats(namespace.as_deref())).await {
         Ok(_) => {
             checks.insert("storage".into(), json!("ok"));
         }
@@ -87,7 +88,11 @@ pub async fn metrics(
 ) -> ApiResult<Response> {
     require_probe_access(&state, &headers, &context)?;
 
-    let per_queue = on_storage(&state, |storage| storage.stats_all_queues()).await?;
+    let namespace = state.namespace.clone();
+    let per_queue = on_storage(&state, move |storage| {
+        storage.stats_all_queues(namespace.as_deref())
+    })
+    .await?;
     let workers = on_storage(&state, |storage| storage.list_workers()).await?;
 
     let mut body = String::new();

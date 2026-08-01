@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod dispatcher;
 pub mod protocol;
 pub mod registry;
@@ -5,6 +6,7 @@ pub mod remote;
 pub mod runner;
 pub mod transport;
 
+pub use auth::Secret;
 pub use dispatcher::NativeDispatcher;
 pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};

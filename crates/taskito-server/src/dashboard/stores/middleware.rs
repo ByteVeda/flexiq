@@ -5,6 +5,7 @@
 //! the next job without a restart — which is also why this process can write it
 //! without knowing anything about the middleware itself.
 
+use serde_json::Value;
 use taskito_core::{Result, Storage};
 
 use crate::dashboard::stores::kv;
@@ -35,28 +36,39 @@ pub fn get_for(storage: &impl Storage, task_name: &str) -> Result<Vec<String>> {
 
 /// Flip one middleware on or off for a task; returns the new disable list.
 ///
-/// An empty list deletes the row rather than storing `[]`, so a task with
-/// nothing disabled leaves no trace in the settings listing.
+/// An emptied list leaves a `[]` row rather than deleting it. Deleting sat
+/// outside the compare-and-set, so a concurrent writer's entry could be added
+/// between the swap and the delete and then removed by it — the very lost
+/// update the compare-and-set exists to prevent. Nothing reads the difference:
+/// [`get_for`] parses `[]` as "nothing disabled", [`list_all`] filters empty
+/// lists out, and the key is a reserved prefix, so the generic settings view
+/// does not show it either.
 pub fn set_disabled(
     storage: &impl Storage,
     task_name: &str,
     middleware_name: &str,
     disabled: bool,
 ) -> Result<Vec<String>> {
-    let mut current = get_for(storage, task_name)?;
-    if disabled {
-        if !current.iter().any(|name| name == middleware_name) {
-            current.push(middleware_name.to_string());
+    // Edited as raw JSON so an entry this build would not parse is left alone
+    // rather than dropped by the write.
+    let current: Vec<String> = kv::update(storage, &key(task_name), |names: &mut Vec<Value>| {
+        let already = names
+            .iter()
+            .any(|name| name.as_str() == Some(middleware_name));
+        if disabled {
+            if !already {
+                names.push(Value::String(middleware_name.to_string()));
+            }
+        } else {
+            names.retain(|name| name.as_str() != Some(middleware_name));
         }
-    } else {
-        current.retain(|name| name != middleware_name);
-    }
+        names
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    })?;
 
-    if current.is_empty() {
-        storage.delete_setting(&key(task_name))?;
-    } else {
-        kv::write(storage, &key(task_name), &current)?;
-    }
     Ok(current)
 }
 

@@ -516,8 +516,12 @@ macro_rules! impl_storage {
             fn requeue_stuck(&self, id: &str, now: i64) -> $crate::error::Result<bool> {
                 self.requeue_stuck(id, now)
             }
-            fn cancel_job(&self, id: &str) -> $crate::error::Result<bool> {
-                self.cancel_job(id)
+            fn cancel_job(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.cancel_job(id, namespace)
             }
             fn request_cancel(&self, id: &str) -> $crate::error::Result<bool> {
                 self.request_cancel(id)
@@ -569,8 +573,11 @@ macro_rules! impl_storage {
             fn get_job(&self, id: &str) -> $crate::error::Result<Option<$crate::job::Job>> {
                 self.get_job(id)
             }
-            fn stats(&self) -> $crate::error::Result<$crate::storage::QueueStats> {
-                self.stats()
+            fn stats(
+                &self,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::QueueStats> {
+                self.stats(namespace)
             }
             fn count_expired_rows(
                 &self,
@@ -627,35 +634,46 @@ macro_rules! impl_storage {
                 &self,
                 limit: i64,
                 offset: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
-                self.list_dead(limit, offset)
+                self.list_dead(limit, offset, namespace)
             }
             fn list_dead_after(
                 &self,
                 limit: i64,
                 after: Option<(i64, &str)>,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
-                self.list_dead_after(limit, after)
+                self.list_dead_after(limit, after, namespace)
             }
             fn list_dead_by_task(
                 &self,
                 task_name: &str,
                 limit: i64,
                 offset: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::DeadJob>> {
-                self.list_dead_by_task(task_name, limit, offset)
+                self.list_dead_by_task(task_name, limit, offset, namespace)
             }
             fn purge_dead_by_task(&self, task_name: &str) -> $crate::error::Result<u64> {
                 self.purge_dead_by_task(task_name)
             }
-            fn retry_dead(&self, dead_id: &str) -> $crate::error::Result<String> {
-                self.retry_dead(dead_id)
+            fn retry_dead(
+                &self,
+                dead_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<String> {
+                self.retry_dead(dead_id, namespace)
             }
             fn purge_dead(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_dead(older_than_ms)
             }
-            fn delete_dead(&self, dead_id: &str) -> $crate::error::Result<bool> {
-                self.delete_dead(dead_id)
+            fn delete_dead(
+                &self,
+                dead_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.delete_dead(dead_id, namespace)
             }
             fn purge_dead_with_ttl(
                 &self,
@@ -857,15 +875,24 @@ macro_rules! impl_storage {
                 wall_time_ns: i64,
                 memory_bytes: i64,
                 succeeded: bool,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.record_metric(task_name, job_id, wall_time_ns, memory_bytes, succeeded)
+                self.record_metric(
+                    task_name,
+                    job_id,
+                    wall_time_ns,
+                    memory_bytes,
+                    succeeded,
+                    namespace,
+                )
             }
             fn get_metrics(
                 &self,
                 name: Option<&str>,
                 since_ms: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::TaskMetric>> {
-                self.get_metrics(name, since_ms)
+                self.get_metrics(name, since_ms, namespace)
             }
             fn purge_metrics(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_metrics(older_than_ms)
@@ -901,8 +928,9 @@ macro_rules! impl_storage {
                 level: &str,
                 message: &str,
                 extra: Option<&str>,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.write_task_log(job_id, task_name, level, message, extra)
+                self.write_task_log(job_id, task_name, level, message, extra, namespace)
             }
             fn get_task_logs(
                 &self,
@@ -923,8 +951,9 @@ macro_rules! impl_storage {
                 level: Option<&str>,
                 since_ms: i64,
                 limit: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::TaskLogEntry>> {
-                self.query_task_logs(task_name, level, since_ms, limit)
+                self.query_task_logs(task_name, level, since_ms, limit, namespace)
             }
             fn purge_task_logs(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_task_logs(older_than_ms)
@@ -1107,14 +1136,16 @@ macro_rules! impl_storage {
             fn stats_by_queue(
                 &self,
                 queue_name: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<$crate::storage::QueueStats> {
-                self.stats_by_queue(queue_name)
+                self.stats_by_queue(queue_name, namespace)
             }
             fn stats_all_queues(
                 &self,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<std::collections::HashMap<String, $crate::storage::QueueStats>>
             {
-                self.stats_all_queues()
+                self.stats_all_queues(namespace)
             }
             fn list_jobs_filtered(
                 &self,
@@ -1173,6 +1204,14 @@ macro_rules! impl_storage {
             }
             fn set_setting(&self, key: &str, value: &str) -> $crate::error::Result<()> {
                 self.set_setting(key, value)
+            }
+            fn set_setting_if(
+                &self,
+                key: &str,
+                expected: Option<&str>,
+                value: &str,
+            ) -> $crate::error::Result<bool> {
+                self.set_setting_if(key, expected, value)
             }
             fn delete_setting(&self, key: &str) -> $crate::error::Result<bool> {
                 self.delete_setting(key)
@@ -1328,8 +1367,8 @@ impl Storage for StorageBackend {
     fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool> {
         delegate!(self, requeue_stuck, id, now)
     }
-    fn cancel_job(&self, id: &str) -> Result<bool> {
-        delegate!(self, cancel_job, id)
+    fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, cancel_job, id, namespace)
     }
     fn request_cancel(&self, id: &str) -> Result<bool> {
         delegate!(self, request_cancel, id)
@@ -1386,8 +1425,8 @@ impl Storage for StorageBackend {
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
         delegate!(self, get_job, id)
     }
-    fn stats(&self) -> Result<QueueStats> {
-        delegate!(self, stats)
+    fn stats(&self, namespace: Option<&str>) -> Result<QueueStats> {
+        delegate!(self, stats, namespace)
     }
     fn count_expired_rows(&self, cutoffs: &RetentionCutoffs, now: i64) -> Result<RetentionCounts> {
         delegate!(self, count_expired_rows, cutoffs, now)
@@ -1420,26 +1459,37 @@ impl Storage for StorageBackend {
     fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
         delegate!(self, move_to_dlq, job, error, metadata)
     }
-    fn list_dead(&self, limit: i64, offset: i64) -> Result<Vec<DeadJob>> {
-        delegate!(self, list_dead, limit, offset)
+    fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
+        delegate!(self, list_dead, limit, offset, namespace)
     }
-    fn list_dead_after(&self, limit: i64, after: Option<(i64, &str)>) -> Result<Vec<DeadJob>> {
-        delegate!(self, list_dead_after, limit, after)
+    fn list_dead_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        delegate!(self, list_dead_after, limit, after, namespace)
     }
-    fn list_dead_by_task(&self, task_name: &str, limit: i64, offset: i64) -> Result<Vec<DeadJob>> {
-        delegate!(self, list_dead_by_task, task_name, limit, offset)
+    fn list_dead_by_task(
+        &self,
+        task_name: &str,
+        limit: i64,
+        offset: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<DeadJob>> {
+        delegate!(self, list_dead_by_task, task_name, limit, offset, namespace)
     }
     fn purge_dead_by_task(&self, task_name: &str) -> Result<u64> {
         delegate!(self, purge_dead_by_task, task_name)
     }
-    fn retry_dead(&self, dead_id: &str) -> Result<String> {
-        delegate!(self, retry_dead, dead_id)
+    fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String> {
+        delegate!(self, retry_dead, dead_id, namespace)
     }
     fn purge_dead(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_dead, older_than_ms)
     }
-    fn delete_dead(&self, dead_id: &str) -> Result<bool> {
-        delegate!(self, delete_dead, dead_id)
+    fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, delete_dead, dead_id, namespace)
     }
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64> {
         delegate!(self, purge_dead_with_ttl, global_cutoff_ms)
@@ -1601,6 +1651,7 @@ impl Storage for StorageBackend {
         wall_time_ns: i64,
         memory_bytes: i64,
         succeeded: bool,
+        namespace: Option<&str>,
     ) -> Result<()> {
         delegate!(
             self,
@@ -1609,11 +1660,17 @@ impl Storage for StorageBackend {
             job_id,
             wall_time_ns,
             memory_bytes,
-            succeeded
+            succeeded,
+            namespace
         )
     }
-    fn get_metrics(&self, name: Option<&str>, since_ms: i64) -> Result<Vec<records::TaskMetric>> {
-        delegate!(self, get_metrics, name, since_ms)
+    fn get_metrics(
+        &self,
+        name: Option<&str>,
+        since_ms: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<records::TaskMetric>> {
+        delegate!(self, get_metrics, name, since_ms, namespace)
     }
     fn purge_metrics(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_metrics, older_than_ms)
@@ -1648,6 +1705,7 @@ impl Storage for StorageBackend {
         level: &str,
         message: &str,
         extra: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<()> {
         delegate!(
             self,
@@ -1656,7 +1714,8 @@ impl Storage for StorageBackend {
             task_name,
             level,
             message,
-            extra
+            extra,
+            namespace
         )
     }
     fn get_task_logs(&self, job_id: &str) -> Result<Vec<records::TaskLogEntry>> {
@@ -1675,8 +1734,17 @@ impl Storage for StorageBackend {
         level: Option<&str>,
         since_ms: i64,
         limit: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<records::TaskLogEntry>> {
-        delegate!(self, query_task_logs, task_name, level, since_ms, limit)
+        delegate!(
+            self,
+            query_task_logs,
+            task_name,
+            level,
+            since_ms,
+            limit,
+            namespace
+        )
     }
     fn purge_task_logs(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_task_logs, older_than_ms)
@@ -1805,11 +1873,14 @@ impl Storage for StorageBackend {
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         delegate!(self, count_pending_by_queue, queue_name)
     }
-    fn stats_by_queue(&self, queue_name: &str) -> Result<QueueStats> {
-        delegate!(self, stats_by_queue, queue_name)
+    fn stats_by_queue(&self, queue_name: &str, namespace: Option<&str>) -> Result<QueueStats> {
+        delegate!(self, stats_by_queue, queue_name, namespace)
     }
-    fn stats_all_queues(&self) -> Result<std::collections::HashMap<String, QueueStats>> {
-        delegate!(self, stats_all_queues)
+    fn stats_all_queues(
+        &self,
+        namespace: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, QueueStats>> {
+        delegate!(self, stats_all_queues, namespace)
     }
     fn list_jobs_filtered(
         &self,
@@ -1873,6 +1944,9 @@ impl Storage for StorageBackend {
     }
     fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         delegate!(self, set_setting, key, value)
+    }
+    fn set_setting_if(&self, key: &str, expected: Option<&str>, value: &str) -> Result<bool> {
+        delegate!(self, set_setting_if, key, expected, value)
     }
     fn delete_setting(&self, key: &str) -> Result<bool> {
         delegate!(self, delete_setting, key)

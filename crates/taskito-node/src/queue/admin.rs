@@ -28,8 +28,11 @@ impl JsQueue {
         let limit = non_negative(limit.unwrap_or(DEFAULT_LIMIT), "limit")?;
         let offset = non_negative(offset.unwrap_or(0), "offset")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let dead = storage.list_dead(limit, offset).map_err(to_napi_err)?;
+            let dead = storage
+                .list_dead(limit, offset, namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(dead.into_iter().map(dead_job_to_js).collect())
         })
         .await
@@ -46,6 +49,7 @@ impl JsQueue {
     ) -> Result<JsDeadJobPage> {
         let limit = non_negative(limit.unwrap_or(DEFAULT_LIMIT), "limit")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             // A malformed cursor is a bad request, not a reason to silently
             // restart from the first page.
@@ -55,7 +59,7 @@ impl JsQueue {
                 .transpose()
                 .map_err(to_napi_err)?;
             let dead = storage
-                .list_dead_after(limit, cursor)
+                .list_dead_after(limit, cursor, namespace.as_deref())
                 .map_err(to_napi_err)?;
             let next_cursor =
                 taskito_core::storage::cursor::next_cursor(&dead, limit, |d| (d.failed_at, &d.id));
@@ -79,9 +83,10 @@ impl JsQueue {
         let limit = non_negative(limit.unwrap_or(DEFAULT_LIMIT), "limit")?;
         let offset = non_negative(offset.unwrap_or(0), "offset")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let dead = storage
-                .list_dead_by_task(&task_name, limit, offset)
+                .list_dead_by_task(&task_name, limit, offset, namespace.as_deref())
                 .map_err(to_napi_err)?;
             Ok(dead.into_iter().map(dead_job_to_js).collect())
         })
@@ -148,7 +153,9 @@ impl JsQueue {
     /// Re-enqueue a dead-letter entry. Returns the new job id.
     #[napi]
     pub fn retry_dead(&self, dead_id: String) -> Result<String> {
-        self.storage.retry_dead(&dead_id).map_err(to_napi_err)
+        self.storage
+            .retry_dead(&dead_id, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Force a stuck Running job back to Pending, releasing its execution claim.
@@ -163,7 +170,9 @@ impl JsQueue {
     /// Delete a dead-letter entry. Returns false if it didn't exist.
     #[napi]
     pub fn delete_dead(&self, dead_id: String) -> Result<bool> {
-        self.storage.delete_dead(&dead_id).map_err(to_napi_err)
+        self.storage
+            .delete_dead(&dead_id, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Purge dead-letter entries older than `older_than_ms`. Returns the count removed.

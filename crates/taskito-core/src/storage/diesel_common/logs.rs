@@ -2,7 +2,8 @@
 macro_rules! impl_diesel_log_ops {
     ($storage_type:ty) => {
         impl $storage_type {
-            /// Write a structured log entry for a task.
+            /// Write a structured log entry for a task, tagged with the
+            /// namespace the writer is scoped to.
             pub fn write_task_log(
                 &self,
                 job_id: &str,
@@ -10,6 +11,7 @@ macro_rules! impl_diesel_log_ops {
                 level: &str,
                 message: &str,
                 extra: Option<&str>,
+                namespace: Option<&str>,
             ) -> Result<()> {
                 let mut conn = self.conn()?;
                 let id = uuid::Uuid::now_v7().to_string();
@@ -23,6 +25,7 @@ macro_rules! impl_diesel_log_ops {
                     message,
                     extra,
                     logged_at: now,
+                    namespace,
                 };
 
                 diesel::insert_into(task_logs::table)
@@ -67,13 +70,15 @@ macro_rules! impl_diesel_log_ops {
                 Ok(rows.into_iter().map(Into::into).collect())
             }
 
-            /// Query logs by task name, level, etc.
+            /// Query logs by task name, level, etc. `namespace` of `None`
+            /// returns every namespace, matching `list_jobs`.
             pub fn query_task_logs(
                 &self,
                 task_name: Option<&str>,
                 level: Option<&str>,
                 since_ms: i64,
                 limit: i64,
+                namespace: Option<&str>,
             ) -> Result<Vec<$crate::storage::records::TaskLogEntry>> {
                 let mut conn = self.conn()?;
 
@@ -86,6 +91,9 @@ macro_rules! impl_diesel_log_ops {
                 }
                 if let Some(l) = level {
                     query = query.filter(task_logs::level.eq(l));
+                }
+                if let Some(ns) = namespace {
+                    query = query.filter(task_logs::namespace.eq(ns));
                 }
 
                 let rows = query

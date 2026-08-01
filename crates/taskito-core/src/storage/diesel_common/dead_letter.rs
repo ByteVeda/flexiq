@@ -86,13 +86,25 @@ macro_rules! impl_diesel_dead_letter_ops {
                 Ok(())
             }
 
-            /// List dead letter entries.
-            pub fn list_dead(&self, limit: i64, offset: i64) -> Result<Vec<DeadJob>> {
+            /// List dead letter entries. `namespace` of `None` returns every
+            /// namespace, matching `list_jobs`.
+            pub fn list_dead(
+                &self,
+                limit: i64,
+                offset: i64,
+                namespace: Option<&str>,
+            ) -> Result<Vec<DeadJob>> {
                 let mut conn = self.conn()?;
 
                 // Narrow projection: DLQ listings never render the arg blob.
-                let rows: Vec<NarrowDeadLetterRow> = dead_letter::table
-                    .order(dead_letter::failed_at.desc())
+                let mut query = dead_letter::table
+                    .into_boxed()
+                    .order(dead_letter::failed_at.desc());
+                if let Some(ns) = namespace {
+                    query = query.filter(dead_letter::namespace.eq(ns));
+                }
+
+                let rows: Vec<NarrowDeadLetterRow> = query
                     .limit(limit)
                     .offset(offset)
                     .select(NarrowDeadLetterRow::as_select())
@@ -107,6 +119,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                 &self,
                 limit: i64,
                 after: Option<(i64, &str)>,
+                namespace: Option<&str>,
             ) -> Result<Vec<DeadJob>> {
                 if limit <= 0 {
                     return Ok(Vec::new());
@@ -127,6 +140,9 @@ macro_rules! impl_diesel_dead_letter_ops {
                                 .and(dead_letter::id.lt(cursor_id))),
                     );
                 }
+                if let Some(ns) = namespace {
+                    query = query.filter(dead_letter::namespace.eq(ns));
+                }
 
                 let rows: Vec<NarrowDeadLetterRow> = query
                     .limit(limit)
@@ -142,6 +158,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                 task_name: &str,
                 limit: i64,
                 offset: i64,
+                namespace: Option<&str>,
             ) -> Result<Vec<DeadJob>> {
                 // Normalize pagination so every backend agrees: a non-positive
                 // limit yields no page (matches Redis), and offset never goes
@@ -153,9 +170,15 @@ macro_rules! impl_diesel_dead_letter_ops {
 
                 let mut conn = self.conn()?;
 
-                let rows: Vec<NarrowDeadLetterRow> = dead_letter::table
+                let mut query = dead_letter::table
+                    .into_boxed()
                     .filter(dead_letter::task_name.eq(task_name))
-                    .order(dead_letter::failed_at.desc())
+                    .order(dead_letter::failed_at.desc());
+                if let Some(ns) = namespace {
+                    query = query.filter(dead_letter::namespace.eq(ns));
+                }
+
+                let rows: Vec<NarrowDeadLetterRow> = query
                     .limit(limit)
                     .offset(offset)
                     .select(NarrowDeadLetterRow::as_select())
@@ -183,7 +206,11 @@ macro_rules! impl_diesel_dead_letter_ops {
             /// delete inside the transaction asserts a row was actually removed,
             /// preventing two concurrent retries from both committing a fresh
             /// enqueue against the same dead-letter id.
-            pub fn retry_dead(&self, dead_id: &str) -> Result<String> {
+            ///
+            /// An entry in another namespace reports `JobNotFound`: a caller
+            /// scoped to one tenant must not be able to tell an id it may not
+            /// touch from one that does not exist.
+            pub fn retry_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<String> {
                 let mut conn = self.conn()?;
 
                 let dead_row: DeadLetterRow = match dead_letter::table
@@ -197,6 +224,10 @@ macro_rules! impl_diesel_dead_letter_ops {
                     }
                     Err(err) => return Err(err.into()),
                 };
+
+                if !Self::in_namespace(dead_row.namespace.as_deref(), namespace) {
+                    return Err(QueueError::JobNotFound(dead_id.to_string()));
+                }
 
                 let retry_metadata = {
                     let next_count = dead_row.dlq_retry_count + 1;
@@ -309,11 +340,22 @@ macro_rules! impl_diesel_dead_letter_ops {
             }
 
             /// Delete a single dead letter entry. Returns true if it existed.
-            pub fn delete_dead(&self, dead_id: &str) -> Result<bool> {
+            ///
+            /// An entry in another namespace reports `false`, the same answer an
+            /// unknown id gets.
+            pub fn delete_dead(&self, dead_id: &str, namespace: Option<&str>) -> Result<bool> {
                 let mut conn = self.conn()?;
-                let affected =
-                    diesel::delete(dead_letter::table.find(dead_id)).execute(&mut conn)?;
-                Ok(affected > 0)
+                let mut delete = diesel::delete(dead_letter::table.find(dead_id)).into_boxed();
+                if let Some(ns) = namespace {
+                    delete = delete.filter(dead_letter::namespace.eq(ns));
+                }
+                Ok(delete.execute(&mut conn)? > 0)
+            }
+
+            /// Whether a row's namespace is visible to a caller scoped to
+            /// `caller`. An unscoped caller sees every namespace.
+            fn in_namespace(row: Option<&str>, caller: Option<&str>) -> bool {
+                caller.is_none_or(|scope| row == Some(scope))
             }
 
             /// Purge dead letter entries respecting per-entry TTL overrides.

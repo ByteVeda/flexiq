@@ -2,7 +2,8 @@
 macro_rules! impl_diesel_metric_ops {
     ($storage_type:ty) => {
         impl $storage_type {
-            /// Record a task execution metric.
+            /// Record a task execution metric, tagged with the namespace the
+            /// recording scheduler is scoped to.
             pub fn record_metric(
                 &self,
                 task_name: &str,
@@ -10,6 +11,7 @@ macro_rules! impl_diesel_metric_ops {
                 wall_time_ns: i64,
                 memory_bytes: i64,
                 succeeded: bool,
+                namespace: Option<&str>,
             ) -> Result<()> {
                 let mut conn = self.conn()?;
                 let id = uuid::Uuid::now_v7().to_string();
@@ -23,6 +25,7 @@ macro_rules! impl_diesel_metric_ops {
                     memory_bytes,
                     succeeded,
                     recorded_at: now,
+                    namespace,
                 };
 
                 diesel::insert_into(task_metrics::table)
@@ -33,10 +36,13 @@ macro_rules! impl_diesel_metric_ops {
             }
 
             /// Get aggregated metrics for a task (or all tasks if name is None).
+            /// `namespace` of `None` returns every namespace, matching
+            /// `list_jobs`.
             pub fn get_metrics(
                 &self,
                 name: Option<&str>,
                 since_ms: i64,
+                namespace: Option<&str>,
             ) -> Result<Vec<$crate::storage::records::TaskMetric>> {
                 let mut conn = self.conn()?;
 
@@ -46,6 +52,9 @@ macro_rules! impl_diesel_metric_ops {
 
                 if let Some(n) = name {
                     query = query.filter(task_metrics::task_name.eq(n));
+                }
+                if let Some(ns) = namespace {
+                    query = query.filter(task_metrics::namespace.eq(ns));
                 }
 
                 let rows = query

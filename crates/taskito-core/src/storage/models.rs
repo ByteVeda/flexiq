@@ -269,6 +269,7 @@ pub struct TaskMetricRow {
     pub memory_bytes: i64,
     pub succeeded: bool,
     pub recorded_at: i64,
+    pub namespace: Option<String>,
 }
 
 #[derive(Insertable, Debug)]
@@ -281,6 +282,7 @@ pub struct NewTaskMetricRow<'a> {
     pub memory_bytes: i64,
     pub succeeded: bool,
     pub recorded_at: i64,
+    pub namespace: Option<&'a str>,
 }
 
 // ── Replay History ───────────────────────────────────────────────
@@ -323,6 +325,7 @@ pub struct TaskLogRow {
     pub message: String,
     pub extra: Option<String>,
     pub logged_at: i64,
+    pub namespace: Option<String>,
 }
 
 #[derive(Insertable, Debug)]
@@ -335,6 +338,7 @@ pub struct NewTaskLogRow<'a> {
     pub message: &'a str,
     pub extra: Option<&'a str>,
     pub logged_at: i64,
+    pub namespace: Option<&'a str>,
 }
 
 // ── Circuit Breaker ──────────────────────────────────────────────

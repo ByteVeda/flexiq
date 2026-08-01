@@ -75,18 +75,25 @@ impl JsQueue {
     #[napi]
     pub async fn stats(&self) -> Result<JsStats> {
         let storage = self.storage.clone();
-        spawn_blocking(move || storage.stats().map(stats_to_js).map_err(to_napi_err))
-            .await
-            .map_err(join_to_napi_err)?
+        let namespace = self.namespace.clone();
+        spawn_blocking(move || {
+            storage
+                .stats(namespace.as_deref())
+                .map(stats_to_js)
+                .map_err(to_napi_err)
+        })
+        .await
+        .map_err(join_to_napi_err)?
     }
 
     /// Job counts by status for a single queue.
     #[napi]
     pub async fn stats_by_queue(&self, queue: String) -> Result<JsStats> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             storage
-                .stats_by_queue(&queue)
+                .stats_by_queue(&queue, namespace.as_deref())
                 .map(stats_to_js)
                 .map_err(to_napi_err)
         })
@@ -98,8 +105,11 @@ impl JsQueue {
     #[napi]
     pub async fn stats_all_queues(&self) -> Result<HashMap<String, JsStats>> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let all = storage.stats_all_queues().map_err(to_napi_err)?;
+            let all = storage
+                .stats_all_queues(namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(all.into_iter().map(|(k, v)| (k, stats_to_js(v))).collect())
         })
         .await
@@ -293,9 +303,10 @@ impl JsQueue {
     #[napi]
     pub async fn get_metrics(&self, task: Option<String>, since_ms: i64) -> Result<Vec<JsMetric>> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let metrics = storage
-                .get_metrics(task.as_deref(), since_ms)
+                .get_metrics(task.as_deref(), since_ms, namespace.as_deref())
                 .map_err(to_napi_err)?;
             Ok(metrics.into_iter().map(metric_to_js).collect())
         })
@@ -315,9 +326,16 @@ impl JsQueue {
     ) -> Result<Vec<JsTaskLog>> {
         non_negative(limit, "limit")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let rows = storage
-                .query_task_logs(task_name.as_deref(), level.as_deref(), since_ms, limit)
+                .query_task_logs(
+                    task_name.as_deref(),
+                    level.as_deref(),
+                    since_ms,
+                    limit,
+                    namespace.as_deref(),
+                )
                 .map_err(to_napi_err)?;
             Ok(rows.into_iter().map(log_to_js).collect())
         })

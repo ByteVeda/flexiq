@@ -2,7 +2,9 @@
 
 use anyhow::Result;
 use clap::Parser;
-use taskito_server::config::{dashboard::scrub_bootstrap_password, Config};
+use taskito_server::config::{
+    dashboard::scrub_bootstrap_password, listen::scrub_attach_token, Config,
+};
 use taskito_server::runtime;
 
 /// Environment variables the server reads, shown in `--help` because there are
@@ -11,12 +13,15 @@ const ENV_HELP: &str = "\
 Configuration (environment only):
   TASKITO_DSN                    storage connection string (required)
   TASKITO_BACKEND                sqlite | postgres | redis (default: from the DSN)
-  TASKITO_NAMESPACE              tenant namespace to scope the scheduler to
+  TASKITO_NAMESPACE              tenant namespace scoping the scheduler and
+                                 every dashboard view (unset = all namespaces)
   TASKITO_QUEUES                 comma-separated queues (default: default)
   TASKITO_WORKERS                dispatch concurrency (default: attached slots)
   TASKITO_MAINTENANCE            on | off — run retention and cleanup (default: on)
   TASKITO_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
                                  or unix:/run/taskito.sock (default: off)
+  TASKITO_ATTACH_TOKEN           shared secret executors present when attaching;
+                                 required for a non-loopback TASKITO_LISTEN
   TASKITO_DASHBOARD              dashboard address, e.g. 127.0.0.1:8080 (default: off)
   TASKITO_DASHBOARD_AUTH         off | session (default: off)
   TASKITO_DASHBOARD_ASSETS       serve the SPA from this directory
@@ -42,5 +47,6 @@ fn main() -> Result<()> {
 
     let config = Config::from_env()?;
     scrub_bootstrap_password();
+    scrub_attach_token();
     runtime::run(config)
 }

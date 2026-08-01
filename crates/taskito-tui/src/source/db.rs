@@ -28,8 +28,13 @@ impl DbSource {
 
 impl DataSource for DbSource {
     fn stats(&self) -> Result<StatsSnapshot> {
-        let overall = self.be.storage.stats()?;
-        let mut per_queue: Vec<_> = self.be.storage.stats_all_queues()?.into_iter().collect();
+        let overall = self.be.storage.stats(None)?;
+        let mut per_queue: Vec<_> = self
+            .be
+            .storage
+            .stats_all_queues(None)?
+            .into_iter()
+            .collect();
         per_queue.sort_by(|a, b| a.0.cmp(&b.0));
         let paused = self.be.storage.list_paused_queues()?;
         Ok(StatsSnapshot {
@@ -85,7 +90,7 @@ impl DataSource for DbSource {
     }
 
     fn dead_letters(&self, limit: i64) -> Result<Vec<DeadRow>> {
-        let dead = self.be.storage.list_dead(limit, 0)?;
+        let dead = self.be.storage.list_dead(limit, 0, None)?;
         Ok(dead
             .into_iter()
             .map(|d| DeadRow {
@@ -159,7 +164,7 @@ impl DataSource for DbSource {
         // Try the Pending path; if the job isn't Pending (e.g. it started
         // running since the UI snapshot), fall back to the cooperative Running
         // path. Never relies on stale UI state to choose.
-        if self.be.storage.cancel_job(id)? {
+        if self.be.storage.cancel_job(id, None)? {
             return Ok(true);
         }
         Ok(self.be.storage.request_cancel(id)?)
@@ -208,11 +213,11 @@ impl DataSource for DbSource {
     }
 
     fn retry_dead(&self, dead_id: &str) -> Result<String> {
-        Ok(self.be.storage.retry_dead(dead_id)?)
+        Ok(self.be.storage.retry_dead(dead_id, None)?)
     }
 
     fn delete_dead(&self, dead_id: &str) -> Result<bool> {
-        Ok(self.be.storage.delete_dead(dead_id)?)
+        Ok(self.be.storage.delete_dead(dead_id, None)?)
     }
 
     fn purge_dead(&self) -> Result<u64> {

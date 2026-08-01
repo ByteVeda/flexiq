@@ -28,6 +28,9 @@ pub enum ApiError {
     AuthDisabled,
     /// Too many failed attempts — 429, with the seconds left to wait.
     TooManyAttempts(u64),
+    /// A concurrent writer won every attempt — 409, so the client knows the
+    /// request was well-formed and retrying it may work.
+    Conflict(String),
     /// Anything unexpected — 500 with a generic body, details go to the log.
     Internal(anyhow::Error),
 }
@@ -52,6 +55,7 @@ impl IntoResponse for ApiError {
         }
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            Self::Conflict(message) => (StatusCode::CONFLICT, message),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, message),
             Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "not_authenticated".to_string()),
             Self::Forbidden(reason) => (StatusCode::FORBIDDEN, reason.to_string()),
@@ -81,7 +85,13 @@ impl IntoResponse for ApiError {
 
 impl From<taskito_core::QueueError> for ApiError {
     fn from(error: taskito_core::QueueError) -> Self {
-        Self::Internal(error.into())
+        match error {
+            // Losing every compare-and-set attempt is contention, not a fault:
+            // the request was well-formed and retrying it may well succeed, so
+            // a 500 would tell the client the opposite of the truth.
+            taskito_core::QueueError::SettingConflict(_) => Self::Conflict(error.to_string()),
+            other => Self::Internal(other.into()),
+        }
     }
 }
 

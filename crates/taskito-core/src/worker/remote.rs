@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use tokio::sync::Notify;
 
+use super::auth::Secret;
 use super::protocol::{
     ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
 };
@@ -27,6 +28,13 @@ use crate::scheduler::JobResult;
 pub struct RemoteConfig {
     /// Identity announced in `hello_ack`.
     pub scheduler_id: String,
+    /// Shared secret an executor must present in its `hello`.
+    ///
+    /// `None` accepts any peer that reaches the transport, which is only safe
+    /// when the transport itself is the boundary — a pipe to a child process, a
+    /// loopback socket, or a Unix socket with restrictive permissions. A
+    /// listener reachable off-host must set this.
+    pub auth_token: Option<Secret>,
     /// How long the handshake may take before the connection is dropped, so a
     /// peer that connects and says nothing cannot pin an attach.
     pub handshake_timeout: Duration,
@@ -47,6 +55,7 @@ impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             scheduler_id: format!("scheduler-{}", uuid::Uuid::now_v7()),
+            auth_token: None,
             handshake_timeout: Duration::from_secs(10),
             placement_timeout: Duration::from_secs(30),
             write_timeout: Duration::from_secs(30),
@@ -67,6 +76,12 @@ pub enum AttachError {
     /// not speak ([`ProtocolError::VersionMismatch`]).
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
+
+    /// The `hello` carried no shared secret, or the wrong one. The message
+    /// deliberately says nothing about which: a peer probing the port learns
+    /// only that it was refused.
+    #[error("executor {0} presented no valid attach credential")]
+    Unauthorized(String),
 
     /// Another executor is already attached under this id.
     #[error("executor {0} is already attached")]
@@ -250,8 +265,13 @@ struct Shared {
 }
 
 impl Shared {
-    /// Handshake and register. The ack is sent even when the version is
-    /// rejected, so both ends log both versions instead of one side guessing.
+    /// Handshake and register.
+    ///
+    /// The order is the security property: `hello`, then the credential, then
+    /// anything back. An unauthenticated peer gets no ack and never enters the
+    /// registry, so it can never be handed a job; returning drops the transport
+    /// and closes the socket. Past that gate the ack is sent even on a version
+    /// mismatch, so both ends log both versions.
     fn attach(self: &Arc<Self>, transport: Box<dyn Transport>) -> Result<String, AttachError> {
         if self.shutdown.load(Ordering::SeqCst) {
             return Err(AttachError::ShuttingDown);
@@ -267,7 +287,6 @@ impl Shared {
         // past this budget.
         connection.set_read_timeout(Some(self.config.handshake_timeout))?;
         let hello = reader.read::<ExecutorMessage>()?.0;
-        connection.set_read_timeout(None)?;
         let ExecutorMessage::Hello {
             executor_id,
             sdk,
@@ -275,10 +294,29 @@ impl Shared {
             tasks,
             slots,
             protocol_version,
+            token,
         } = hello
         else {
+            log::warn!("[taskito] attach from {peer} sent a frame before hello; dropping");
             return Err(ProtocolError::UnexpectedFrame { expected: "hello" }.into());
         };
+
+        if let Some(expected) = &self.config.auth_token {
+            if !token.is_some_and(|presented| expected.matches(&presented)) {
+                // Vague on purpose: a peer probing the port learns only that it
+                // was refused, not whether its token was missing or wrong.
+                log::warn!(
+                    "[taskito] rejecting executor {executor_id} ({sdk} {version}, {peer}): \
+                     invalid attach credential"
+                );
+                return Err(AttachError::Unauthorized(executor_id));
+            }
+        }
+
+        // Bound the handshake only. An attached executor waiting between jobs
+        // must block indefinitely, or it would be dropped every time it idled
+        // past this budget.
+        connection.set_read_timeout(None)?;
 
         writer.write_header(&SchedulerMessage::HelloAck {
             scheduler_id: self.config.scheduler_id.clone(),

@@ -35,10 +35,12 @@ pub fn run(config: Config) -> Result<()> {
 
     // The dispatcher exists only when executors can reach us; without a
     // listener there is nothing to dispatch to and the scheduler stays off.
-    let dispatcher = config
-        .attach
-        .as_ref()
-        .map(|_| RemoteDispatcher::new(RemoteConfig::default()));
+    let dispatcher = config.attach.as_ref().map(|attach| {
+        RemoteDispatcher::new(RemoteConfig {
+            auth_token: attach.token.clone(),
+            ..RemoteConfig::default()
+        })
+    });
 
     let supervisor = dispatcher.as_ref().map(|dispatcher| {
         Arc::new(SchedulerSupervisor::new(
@@ -54,8 +56,8 @@ pub fn run(config: Config) -> Result<()> {
     });
 
     let attach_listener = match (config.attach.clone(), &dispatcher, &supervisor) {
-        (Some(address), Some(dispatcher), Some(supervisor)) => Some(listener::spawn(
-            address,
+        (Some(attach), Some(dispatcher), Some(supervisor)) => Some(listener::spawn(
+            attach.listen,
             dispatcher.clone(),
             supervisor.clone(),
             shutdown.clone(),

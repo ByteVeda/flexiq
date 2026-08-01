@@ -11,6 +11,23 @@ fn settings_key(storage: &RedisStorage) -> String {
     storage.key(&["dashboard", "settings"])
 }
 
+/// Lua script: write a hash field only if it still holds the expected value.
+/// `ARGV[2]` is `1` when a value is expected and `0` when the field must be
+/// unset — an empty string is a legitimate stored value, so absence needs its
+/// own flag rather than a sentinel.
+const COMPARE_AND_SET_SCRIPT: &str = r#"
+    local current = redis.call('HGET', KEYS[1], ARGV[1])
+    if ARGV[2] == '1' then
+        if current == false or current ~= ARGV[3] then
+            return 0
+        end
+    elseif current ~= false then
+        return 0
+    end
+    redis.call('HSET', KEYS[1], ARGV[1], ARGV[4])
+    return 1
+"#;
+
 impl RedisStorage {
     /// Fetch a single setting value by key, or `None` if unset.
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -25,6 +42,21 @@ impl RedisStorage {
         conn.hset::<_, _, _, ()>(settings_key(self), key, value)
             .map_err(map_err)?;
         Ok(())
+    }
+
+    /// Write a setting only if it still holds `expected`. `None` means the key
+    /// must be unset.
+    pub fn set_setting_if(&self, key: &str, expected: Option<&str>, value: &str) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let written: i32 = redis::Script::new(COMPARE_AND_SET_SCRIPT)
+            .key(settings_key(self))
+            .arg(key)
+            .arg(i32::from(expected.is_some()))
+            .arg(expected.unwrap_or_default())
+            .arg(value)
+            .invoke(&mut conn)
+            .map_err(map_err)?;
+        Ok(written == 1)
     }
 
     /// Delete a setting. Returns `true` if an entry was removed.

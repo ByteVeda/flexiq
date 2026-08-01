@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use diesel::prelude::*;
 
 use super::super::models::DashboardSettingRow;
@@ -8,46 +6,4 @@ use super::SqliteStorage;
 use crate::error::Result;
 use crate::job::now_millis;
 
-impl SqliteStorage {
-    /// Fetch a single setting value by key, or `None` if unset.
-    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let mut conn = self.conn()?;
-        let row: Option<DashboardSettingRow> = dashboard_settings::table
-            .filter(dashboard_settings::key.eq(key))
-            .first::<DashboardSettingRow>(&mut conn)
-            .optional()?;
-        Ok(row.map(|r| r.value))
-    }
-
-    /// Insert or update a setting.
-    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
-        let mut conn = self.conn()?;
-        let row = DashboardSettingRow {
-            key: key.to_string(),
-            value: value.to_string(),
-            updated_at: now_millis(),
-        };
-        diesel::replace_into(dashboard_settings::table)
-            .values(&row)
-            .execute(&mut conn)?;
-        Ok(())
-    }
-
-    /// Delete a setting. Returns `true` if a row was removed.
-    pub fn delete_setting(&self, key: &str) -> Result<bool> {
-        let mut conn = self.conn()?;
-        let deleted =
-            diesel::delete(dashboard_settings::table.filter(dashboard_settings::key.eq(key)))
-                .execute(&mut conn)?;
-        Ok(deleted > 0)
-    }
-
-    /// Return all settings as a key-to-value map.
-    pub fn list_settings(&self) -> Result<HashMap<String, String>> {
-        let mut conn = self.conn()?;
-        let rows: Vec<DashboardSettingRow> = dashboard_settings::table
-            .select(DashboardSettingRow::as_select())
-            .load(&mut conn)?;
-        Ok(rows.into_iter().map(|r| (r.key, r.value)).collect())
-    }
-}
+crate::storage::diesel_common::impl_diesel_setting_ops!(SqliteStorage);

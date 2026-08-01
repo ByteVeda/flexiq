@@ -15,6 +15,9 @@ struct LogEntry {
     pub message: String,
     pub extra: Option<String>,
     pub logged_at: i64,
+    /// Absent on rows written before namespaces reached the log store.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 impl From<LogEntry> for TaskLogEntry {
@@ -40,6 +43,7 @@ impl RedisStorage {
         level: &str,
         message: &str,
         extra: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<()> {
         let mut conn = self.conn()?;
         let id = uuid::Uuid::now_v7().to_string();
@@ -53,6 +57,7 @@ impl RedisStorage {
             message: message.to_string(),
             extra: extra.map(|s| s.to_string()),
             logged_at: now,
+            namespace: namespace.map(str::to_string),
         };
 
         let json = serde_json::to_string(&entry)?;
@@ -136,6 +141,7 @@ impl RedisStorage {
         level: Option<&str>,
         since_ms: i64,
         limit: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<TaskLogEntry>> {
         // A zero limit is an empty page; without this the filtered walk below
         // never hits its `rows.len() == limit` stop and scans the whole range.
@@ -145,11 +151,11 @@ impl RedisStorage {
         let mut conn = self.conn()?;
         let all_key = self.key(&["logs", "all"]);
 
-        // Fast path: with no task/level filter the page is exactly the newest
-        // `limit` ids at or after `since_ms`, so bound the fetch server-side
+        // Fast path: with no task/level/namespace filter the page is exactly the
+        // newest `limit` ids at or after `since_ms`, so bound the fetch server-side
         // (`logs:all` is scored by logged_at) instead of loading every id since
         // the cutoff and truncating in memory.
-        if task_name.is_none() && level.is_none() {
+        if task_name.is_none() && level.is_none() && namespace.is_none() {
             let ids: Vec<String> = if limit >= 0 {
                 conn.zrevrangebyscore_limit(&all_key, "+inf", since_ms as f64, 0, limit as isize)
                     .map_err(map_err)?
@@ -200,6 +206,9 @@ impl RedisStorage {
                     continue;
                 }
                 if level.is_some_and(|l| entry.level != l) {
+                    continue;
+                }
+                if namespace.is_some_and(|ns| entry.namespace.as_deref() != Some(ns)) {
                     continue;
                 }
 

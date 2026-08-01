@@ -58,9 +58,10 @@ pub async fn list_tasks(State(state): State<SharedState>) -> ApiResult<Json<Valu
 /// `GET /api/queues` — every known queue, with its override and pause state.
 pub async fn list_queues(State(state): State<SharedState>) -> ApiResult<Json<Value>> {
     let configured = state.queues.clone();
-    let (per_queue, paused, stored) = on_storage(&state, |storage| {
+    let namespace = state.namespace.clone();
+    let (per_queue, paused, stored) = on_storage(&state, move |storage| {
         Ok((
-            storage.stats_all_queues()?,
+            storage.stats_all_queues(namespace.as_deref())?,
             storage.list_paused_queues()?,
             overrides::list(Scope::Queue, storage)?,
         ))

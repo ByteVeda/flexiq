@@ -526,7 +526,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_cancel
             match node.status {
                 WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready => {
                     if let Some(job_id) = &node.job_id {
-                        let _ = queue.storage.cancel_job(job_id);
+                        let _ = queue.storage.cancel_job(job_id, queue.namespace.as_deref());
                     }
                     wf.update_workflow_node_status(
                         &run_id,
@@ -800,7 +800,7 @@ fn expand_fan_out(
     // run untracked outside the workflow.
     if let Err(err) = wf.create_workflow_nodes_batch(&nodes) {
         for id in &child_job_ids {
-            let _ = queue.storage.cancel_job(id);
+            let _ = queue.storage.cancel_job(id, queue.namespace.as_deref());
         }
         return Err(err.into());
     }
@@ -909,7 +909,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_create
         })?;
         // Cancel the job if binding fails, so it can't run untracked.
         if let Err(err) = wf.set_workflow_node_job(&run_id, &node_name, &job.id) {
-            let _ = q.storage.cancel_job(&job.id);
+            let _ = q.storage.cancel_job(&job.id, q.namespace.as_deref());
             return Err(err.into());
         }
         new_string(env, job.id)
@@ -1101,7 +1101,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_skipWo
         if let Some(node) = wf.get_workflow_node(&run_id, &node_name)? {
             if let Some(job_id) = &node.job_id {
                 // Surface a storage failure rather than skipping while the bound job runs.
-                queue.storage.cancel_job(job_id)?;
+                queue
+                    .storage
+                    .cancel_job(job_id, queue.namespace.as_deref())?;
             }
         }
         wf.update_workflow_node_status(&run_id, &node_name, WorkflowNodeStatus::Skipped)?;
@@ -1378,7 +1380,7 @@ fn cascade_skip_pending(
             continue;
         }
         if let Some(job_id) = &node.job_id {
-            if let Err(e) = queue.storage.cancel_job(job_id) {
+            if let Err(e) = queue.storage.cancel_job(job_id, queue.namespace.as_deref()) {
                 log::warn!("[taskito-java] cancel_job({job_id}) during workflow cascade: {e}");
             }
         }

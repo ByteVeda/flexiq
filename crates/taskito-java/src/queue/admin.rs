@@ -22,7 +22,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_listDead<'
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        let dead = queue.storage.list_dead(limit.max(0), offset.max(0))?;
+        let dead =
+            queue
+                .storage
+                .list_dead(limit.max(0), offset.max(0), queue.namespace.as_deref())?;
         let views: Vec<DeadJobView> = dead.iter().map(DeadJobView::from).collect();
         new_string(env, to_json(&views)?)
     })
@@ -39,7 +42,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_retryDead<
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &dead_id)?;
-        new_string(env, queue.storage.retry_dead(&id)?)
+        new_string(
+            env,
+            queue.storage.retry_dead(&id, queue.namespace.as_deref())?,
+        )
     })
 }
 
@@ -54,7 +60,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_deleteDead
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &dead_id)?;
-        Ok(super::to_jboolean(queue.storage.delete_dead(&id)?))
+        Ok(super::to_jboolean(
+            queue.storage.delete_dead(&id, queue.namespace.as_deref())?,
+        ))
     })
 }
 
@@ -105,9 +113,12 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_listDeadBy
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let task = read_string(env, &task_name)?;
-        let dead = queue
-            .storage
-            .list_dead_by_task(&task, limit.max(0), offset.max(0))?;
+        let dead = queue.storage.list_dead_by_task(
+            &task,
+            limit.max(0),
+            offset.max(0),
+            queue.namespace.as_deref(),
+        )?;
         let views: Vec<DeadJobView> = dead.iter().map(DeadJobView::from).collect();
         new_string(env, to_json(&views)?)
     })

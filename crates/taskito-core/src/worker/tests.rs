@@ -55,7 +55,7 @@ fn wait_for_status(storage: &StorageBackend, job_id: &str, wanted: JobStatus) ->
 fn wait_for_dead(storage: &StorageBackend, job_id: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let dead = storage.list_dead(50, 0).expect("list_dead");
+        let dead = storage.list_dead(50, 0, None).expect("list_dead");
         if dead.iter().any(|d| d.original_job_id == job_id) {
             return;
         }

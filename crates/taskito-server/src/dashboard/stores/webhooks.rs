@@ -140,10 +140,14 @@ pub fn get(storage: &impl Storage, id: &str) -> Result<Option<WebhookSubscriptio
 }
 
 /// Append a subscription.
+///
+/// The stored rows are edited as raw JSON rather than parsed subscriptions, so
+/// a row this build cannot read survives an edit to its neighbours.
 pub fn create(storage: &impl Storage, subscription: &WebhookSubscription) -> Result<()> {
-    let mut rows = list_all(storage)?;
-    rows.push(subscription.clone());
-    kv::write(storage, SUBSCRIPTIONS_KEY, &rows)
+    let row = serde_json::to_value(subscription)?;
+    kv::update(storage, SUBSCRIPTIONS_KEY, |rows: &mut Vec<Value>| {
+        rows.push(row.clone());
+    })
 }
 
 /// Replace a subscription in place, stamping `updated_at`. `None` when the id
@@ -152,32 +156,37 @@ pub fn replace(
     storage: &impl Storage,
     mut subscription: WebhookSubscription,
 ) -> Result<Option<WebhookSubscription>> {
-    let mut rows = list_all(storage)?;
-    let Some(slot) = rows
-        .iter_mut()
-        .find(|candidate| candidate.id == subscription.id)
-    else {
-        return Ok(None);
-    };
     subscription.updated_at = now_millis();
-    *slot = subscription.clone();
-    kv::write(storage, SUBSCRIPTIONS_KEY, &rows)?;
-    Ok(Some(subscription))
+    let row = serde_json::to_value(&subscription)?;
+    let replaced = kv::update(
+        storage,
+        SUBSCRIPTIONS_KEY,
+        |rows: &mut Vec<Value>| match rows
+            .iter_mut()
+            .find(|candidate| row_id(candidate) == Some(subscription.id.as_str()))
+        {
+            Some(slot) => {
+                *slot = row.clone();
+                true
+            }
+            None => false,
+        },
+    )?;
+    Ok(replaced.then_some(subscription))
 }
 
 /// Remove a subscription. `false` when the id is unknown.
 pub fn delete(storage: &impl Storage, id: &str) -> Result<bool> {
-    let rows = list_all(storage)?;
-    let remaining: Vec<WebhookSubscription> = rows
-        .iter()
-        .filter(|subscription| subscription.id != id)
-        .cloned()
-        .collect();
-    if remaining.len() == rows.len() {
-        return Ok(false);
-    }
-    kv::write(storage, SUBSCRIPTIONS_KEY, &remaining)?;
-    Ok(true)
+    kv::update(storage, SUBSCRIPTIONS_KEY, |rows: &mut Vec<Value>| {
+        let before = rows.len();
+        rows.retain(|row| row_id(row) != Some(id));
+        rows.len() != before
+    })
+}
+
+/// The `id` of a stored row, when it has a readable one.
+fn row_id(row: &Value) -> Option<&str> {
+    row.get("id").and_then(Value::as_str)
 }
 
 #[cfg(test)]
