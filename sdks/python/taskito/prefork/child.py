@@ -36,6 +36,12 @@ from taskito.context import (
     clear_local_cancel_check,
     set_local_cancel_check,
 )
+from taskito.detached import (
+    clear_sink,
+    install_sink,
+    is_detached,
+    set_disabled_middleware,
+)
 from taskito.exceptions import TaskCancelledError
 from taskito.log_config import silence_asyncio_pipe_noise
 from taskito.task_errors import encode_task_error
@@ -62,9 +68,60 @@ def _import_queue(app_path: str) -> Any:
     return queue
 
 
+# Results are written by the main thread, but a task reporting progress may be
+# on any thread it started. Two frames interleaved on one pipe would desync the
+# parent's reader for good, so every write takes this.
+_stdout_lock = threading.Lock()
+
+
 def _write_message(header: dict[str, Any], payload: bytes = b"") -> None:
     """Write one frame to the parent."""
-    write_frame(sys.stdout.buffer, header, payload)
+    with _stdout_lock:
+        write_frame(sys.stdout.buffer, header, payload)
+
+
+class _ParentSink:
+    """Sends this child's progress and task logs on to its parent.
+
+    A detached child has no storage — that is the point of an executor — so
+    these travel one hop to the pool and a second to the scheduler, which owns
+    the database and applies them. Failures are swallowed: the pipe breaking is
+    the parent going away, which the main loop discovers on its own, and a task
+    reporting progress must not be the thing that fails.
+    """
+
+    def update_progress(self, job_id: str, progress: int) -> None:
+        self._send({"type": "progress", "job_id": job_id, "progress": progress})
+
+    def write_task_log(
+        self,
+        job_id: str,
+        task_name: str,
+        level: str,
+        message: str,
+        extra: str | None,
+    ) -> None:
+        payload = b"" if extra is None else extra.encode()
+        self._send(
+            {
+                "type": "task_log",
+                "job_id": job_id,
+                "task_name": task_name,
+                "level": level,
+                "message": message,
+                # ``None`` and an empty blob are different, so the length is
+                # read off the value rather than off the encoded bytes.
+                "extra_len": None if extra is None else len(payload),
+            },
+            payload,
+        )
+
+    @staticmethod
+    def _send(header: dict[str, Any], payload: bytes = b"") -> None:
+        try:
+            _write_message(header, payload)
+        except (BrokenPipeError, EOFError, ValueError, ProtocolError):
+            logger.debug("could not forward %s to the parent", header["type"], exc_info=True)
 
 
 def _handshake(queue: Any) -> None:
@@ -149,6 +206,10 @@ def _execute_job(
         }, b""
 
     _set_context(job_id, task_name, retry_count, job.get("queue", "default"))
+    # Resolved by the scheduler and carried on the frame, because an executor
+    # has no settings store of its own to read the toggle list from. Empty from
+    # an in-process worker's parent, which reads storage directly instead.
+    set_disabled_middleware(job.get("disabled_middleware") or ())
 
     start_ns = time.monotonic_ns()
     try:
@@ -208,6 +269,7 @@ def _execute_job(
 
     finally:
         _clear_context()
+        set_disabled_middleware(())
 
 
 def _spawn_stdin_reader(
@@ -301,6 +363,10 @@ def main() -> None:
     job_queue: _queue_mod.Queue[tuple[dict[str, Any], bytes] | None] = _queue_mod.Queue()
     cancels = _CancelSignal()
     set_local_cancel_check(cancels.is_requested)
+    # Only under an executor: a child of an in-process worker holds real storage
+    # and writes its own progress and logs, so it has nothing to forward.
+    if is_detached():
+        install_sink(_ParentSink())
     _spawn_stdin_reader(job_queue, cancels)
 
     logger.info("child ready (app=%s, pid=%d)", app_path, os.getpid())
@@ -322,6 +388,7 @@ def main() -> None:
 
     finally:
         clear_local_cancel_check()
+        clear_sink()
         if runtime is not None:
             try:
                 runtime.teardown()
