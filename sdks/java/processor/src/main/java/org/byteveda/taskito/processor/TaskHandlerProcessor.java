@@ -32,8 +32,8 @@ import org.jspecify.annotations.Nullable;
  * {@code bind(Worker.Builder, <Class>)}. Reads the annotation structurally, so it
  * needs no dependency on the runtime module.
  *
- * <p>When the annotated class has an accessible no-arg constructor, the companion
- * also gets a {@code provider()} method and is listed in
+ * <p>When the annotated class is top-level with an accessible no-arg constructor,
+ * the companion also gets a nested {@code Provider} class and is listed in
  * {@code META-INF/services}, which is what lets {@code taskito executor} find
  * handlers on the classpath with no user {@code main}.
  */
