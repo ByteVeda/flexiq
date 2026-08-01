@@ -10,7 +10,7 @@ import os
 import sys
 import time
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from taskito._taskito import PyTaskConfig
@@ -19,6 +19,8 @@ from taskito.batching.config import BatchConfig
 from taskito.codecs import CodecSerializer
 from taskito.context import _clear_context
 from taskito.dashboard.middleware_store import MiddlewareDisableStore
+from taskito.detached import disabled_middleware as dispatched_disabled_middleware
+from taskito.detached import is_detached
 from taskito.enums import coerce_enum
 from taskito.inject import Inject, _InjectAlias
 from taskito.middleware import middleware_key
@@ -118,7 +120,16 @@ class QueueDecoratorMixin:
         dispatch. The cache is invalidated immediately on same-process disable
         changes (via ``_mw_disable_version``) and expires after
         ``_MW_CHAIN_TTL`` so out-of-process changes still take effect promptly.
+
+        An attached executor takes a different route entirely: it has no
+        settings store to read, so the scheduler resolves the list and attaches
+        it to the dispatch. That is per job rather than per task name, so it
+        also bypasses the cache — there is nothing to save, the list arrived
+        with the work.
         """
+        if is_detached():
+            return self._chain_without(task_name, dispatched_disabled_middleware())
+
         version = self._mw_disable_version
         cached = self._mw_chain_cache.get(task_name)
         if cached is not None:
@@ -126,20 +137,26 @@ class QueueDecoratorMixin:
             if cached_version == version and time.monotonic() - computed_at < _MW_CHAIN_TTL:
                 return chain
 
-        per_task = self._task_middleware.get(task_name, [])
-        chain = self._global_middleware + per_task
         try:
             disabled = MiddlewareDisableStore(self).get_for(task_name)  # type: ignore[arg-type]
         except Exception:  # pragma: no cover - storage read failure is non-fatal
             disabled = []
-        if disabled:
-            disabled_set = set(disabled)
-            # ``middleware_key`` matches admin discovery's keying (name, else
-            # class path) so a dashboard disable on an unnamed middleware works.
-            chain = [mw for mw in chain if middleware_key(mw) not in disabled_set]
+        chain = self._chain_without(task_name, disabled)
 
         self._mw_chain_cache[task_name] = (chain, version, time.monotonic())
         return chain
+
+    def _chain_without(self, task_name: str, disabled: Sequence[str]) -> list[TaskMiddleware]:
+        """This task's chain, minus ``disabled``.
+
+        ``middleware_key`` matches admin discovery's keying (name, else class
+        path) so a dashboard disable on an unnamed middleware works.
+        """
+        chain = self._global_middleware + self._task_middleware.get(task_name, [])
+        if not disabled:
+            return chain
+        disabled_set = set(disabled)
+        return [mw for mw in chain if middleware_key(mw) not in disabled_set]
 
     def _wrap_task(self, fn: Callable, task_name: str) -> Callable:
         """The blocking entry point Rust calls: drive the shared lifecycle to completion.

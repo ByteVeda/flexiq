@@ -30,7 +30,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
 use taskito_core::worker::protocol::ExecutorMessage;
-use taskito_core::worker::WorkerDispatcher;
+use taskito_core::worker::{ExecutorSideChannel, WorkerDispatcher};
 
 use child::{spawn_child, ChildProcess, ChildReader, ChildWriter};
 use slot::{ActiveJob, SlotState};
@@ -53,6 +53,14 @@ type WriterPool = Arc<Vec<Mutex<Option<ChildWriter>>>>;
 type ProcessPool = Arc<Vec<Mutex<Option<ChildProcess>>>>;
 type InFlightCounters = Arc<Vec<AtomicU32>>;
 
+/// Where a child's progress and task logs are relayed, once this pool is
+/// attached to a scheduler.
+///
+/// Shared rather than owned because `run()` — and so the reader threads — can
+/// start before the attach completes: the handle only exists after the
+/// handshake, and installing it is what a detached child's frames wait for.
+type SideChannelSlot = Arc<Mutex<Option<ExecutorSideChannel>>>;
+
 /// Multi-process worker pool that dispatches jobs to child Python processes.
 pub struct PreforkPool {
     num_workers: usize,
@@ -63,6 +71,7 @@ pub struct PreforkPool {
     /// the sender when `run()` starts and clears it on shutdown so
     /// `notify_cancel` becomes a no-op once the pool is no longer running.
     cancel_tx: Mutex<Option<Sender<String>>>,
+    side_channel: SideChannelSlot,
 }
 
 impl PreforkPool {
@@ -75,7 +84,21 @@ impl PreforkPool {
             python,
             shutdown: AtomicBool::new(false),
             cancel_tx: Mutex::new(None),
+            side_channel: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Relay children's progress and task logs to `side_channel`.
+    ///
+    /// Called once the attach has completed, which is the earliest the handle
+    /// exists. Until then — and always for an in-process worker, whose children
+    /// hold real storage and write for themselves — a child's side-channel
+    /// frames are dropped.
+    pub fn set_side_channel(&self, side_channel: ExecutorSideChannel) {
+        *self
+            .side_channel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(side_channel);
     }
 }
 
@@ -105,6 +128,7 @@ impl WorkerDispatcher for PreforkPool {
                 &slots,
                 &in_flight,
                 &result_tx,
+                &self.side_channel,
             ) {
                 reader_handles.push(handle);
             }
@@ -151,6 +175,7 @@ impl WorkerDispatcher for PreforkPool {
                     &slots,
                     &in_flight,
                     &result_tx,
+                    &self.side_channel,
                 ) {
                     reader_handles.push(handle);
                     log::info!(
@@ -165,7 +190,7 @@ impl WorkerDispatcher for PreforkPool {
                 .collect();
             let idx = dispatch::least_loaded(&counts);
 
-            dispatch_job(idx, job, &writers, &slots, &in_flight);
+            dispatch_job(idx, job, &writers, &slots, &in_flight, &self.side_channel);
         }
 
         // Stop accepting new cancel requests so the router can drain and exit
@@ -268,6 +293,7 @@ fn dispatch_job(
     writers: &WriterPool,
     slots: &SlotState,
     in_flight: &InFlightCounters,
+    side_channel: &SideChannelSlot,
 ) {
     let active = ActiveJob {
         job_id: job.id.clone(),
@@ -280,9 +306,24 @@ fn dispatch_job(
     };
     slot::set(slots, idx, active);
 
+    // Carried on to the child, which is where the task body — and so the
+    // middleware chain — actually runs. Empty under an in-process worker,
+    // whose children read the toggle list from storage themselves.
+    //
+    // Cloned out of the slot before it is used, as `relay_side_channel` does:
+    // the relay takes locks of its own, and this module holds exactly one at a
+    // time.
+    let relay = side_channel
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let disabled = relay
+        .map(|relay| relay.disabled_middleware(&job.id))
+        .unwrap_or_default();
+
     let send_result = match writers[idx].lock() {
         Ok(mut guard) => match guard.as_mut() {
-            Some(writer) => writer.write_job(&job),
+            Some(writer) => writer.write_job_with(&job, disabled),
             None => {
                 drop(guard);
                 let _ = slot::take(slots, idx);
@@ -327,6 +368,7 @@ fn start_child(
     slots: &SlotState,
     in_flight: &InFlightCounters,
     result_tx: &Sender<JobResult>,
+    side_channel: &SideChannelSlot,
 ) -> Option<JoinHandle<()>> {
     match spawn_child(python, app_path) {
         Ok((writer, reader, process)) => {
@@ -348,6 +390,7 @@ fn start_child(
                 slots.clone(),
                 in_flight.clone(),
                 result_tx.clone(),
+                side_channel.clone(),
             ))
         }
         Err(e) => {
@@ -369,12 +412,20 @@ fn spawn_reader_thread(
     slots: SlotState,
     in_flight: InFlightCounters,
     result_tx: Sender<JobResult>,
+    side_channel: SideChannelSlot,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name(format!("taskito-prefork-reader-{idx}"))
         .spawn(move || loop {
             match reader.read::<ExecutorMessage>() {
                 Ok((msg, payload)) => {
+                    // A detached child cannot reach storage, so its progress and
+                    // logs arrive here to be passed on. Handled before the
+                    // result path: they are not outcomes, and taking the slot —
+                    // which is what completing a job does — would strand it.
+                    let Some(msg) = relay_side_channel(&side_channel, msg, &payload) else {
+                        continue;
+                    };
                     let Some(job_result) = msg.into_job_result(payload) else {
                         continue;
                     };
@@ -395,6 +446,47 @@ fn spawn_reader_thread(
             }
         })
         .expect("failed to spawn prefork reader thread")
+}
+
+/// Pass a child's progress or task log on to the scheduler.
+///
+/// Returns the frame untouched when it is not one of those, so the caller can
+/// go on to treat it as a result. A frame with nowhere to go — an in-process
+/// worker's pool, or an attach whose scheduler advertised no side-channel — is
+/// dropped, which is what the child's own degraded path would have done.
+fn relay_side_channel(
+    side_channel: &SideChannelSlot,
+    msg: ExecutorMessage,
+    payload: &[u8],
+) -> Option<ExecutorMessage> {
+    let (ExecutorMessage::Progress { .. } | ExecutorMessage::TaskLog { .. }) = &msg else {
+        return Some(msg);
+    };
+
+    let relay = side_channel
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+
+    match msg {
+        ExecutorMessage::Progress { job_id, progress } => {
+            relay.report_progress(&job_id, progress);
+        }
+        ExecutorMessage::TaskLog {
+            job_id,
+            task_name,
+            level,
+            message,
+            extra_len,
+        } => {
+            // Absent and empty are different, so the blob is taken from the
+            // declared length rather than from whether the payload is empty.
+            let extra = extra_len.map(|_| String::from_utf8_lossy(payload).into_owned());
+            relay.write_task_log(&job_id, &task_name, &level, &message, extra.as_deref());
+        }
+        _ => unreachable!("the guard above admits only side-channel frames"),
+    }
+    None
 }
 
 /// Cancel router: forwards cooperative-cancel requests to the child

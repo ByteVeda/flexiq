@@ -13,6 +13,7 @@ Build the binary with::
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -29,6 +30,8 @@ from test_executor_attach import (
     APP_PATH,
     BOOM,
     ECHO,
+    MIDDLEWARED,
+    REPORTS,
     SLOW,
     read_stderr,
     spawn_executor,
@@ -171,6 +174,85 @@ def test_a_failure_is_retried_by_the_real_scheduler(
                 return
             time.sleep(0.05)
         raise AssertionError("the failure never reached storage")
+    finally:
+        terminate(process)
+
+
+def test_progress_and_logs_reach_storage_through_a_real_scheduler(
+    scheduler: tuple[int, Path], tmp_path: Path
+) -> None:
+    """The done-when for #589, against the binary an operator actually runs.
+
+    The executor holds no database credentials, so a progress bar and task logs
+    appearing in storage can only have got there through the scheduler.
+    """
+    port, db_path = scheduler
+    process = spawn_executor(port, db_path)
+    try:
+        wait_for_attach(db_path)
+        job_id = enqueue(db_path, REPORTS)
+        wait_for_status(db_path, job_id, "complete")
+
+        # The side-channel is fire-and-forget, so both the last progress value
+        # and the logs may land just after the result. The job completing is
+        # not a barrier for them, and must not be: making it one would put a
+        # database write between a task and its own result.
+        queue = Queue(db_path=str(db_path))
+        deadline = time.monotonic() + SETTLE
+        logs: list = []
+        progress = None
+        while time.monotonic() < deadline and not (progress == 100 and len(logs) >= 2):
+            job = queue.get_job(job_id)
+            progress = None if job is None else job.progress
+            logs = queue.task_logs(job_id)
+            time.sleep(0.05)
+
+        assert progress == 100, f"the task's final progress must reach storage, saw {progress}"
+
+        levels = {entry["level"]: entry for entry in logs}
+        assert "info" in levels, f"the task's log line must reach storage: {logs}"
+        assert levels["info"]["message"] == "halfway"
+        assert levels["info"]["task_name"] == REPORTS
+        # `publish` is a `result`-level log, which is what `job.stream()` reads.
+        assert "result" in levels, f"the published partial must reach storage: {logs}"
+        assert json.loads(levels["result"]["extra"]) == {"stage": "halfway"}
+    finally:
+        terminate(process)
+
+
+def test_a_dashboard_toggle_reaches_an_attached_executor(
+    scheduler: tuple[int, Path], tmp_path: Path
+) -> None:
+    """An executor cannot read settings, so the scheduler has to carry them."""
+    port, db_path = scheduler
+    process = spawn_executor(port, db_path)
+    try:
+        wait_for_attach(db_path)
+        queue = Queue(db_path=str(db_path))
+
+        ran = enqueue(db_path, MIDDLEWARED)
+        wait_for_status(db_path, ran, "complete")
+        job = queue.get_job(ran)
+        assert job is not None
+        assert job.result(timeout=SETTLE) == "recorder", "the middleware should run by default"
+
+        queue.disable_middleware_for_task(MIDDLEWARED, "recorder")
+        # The scheduler resolves the list per dispatch behind a short cache, so
+        # a toggle takes effect within it rather than instantly.
+        deadline = time.monotonic() + SETTLE
+        while time.monotonic() < deadline:
+            # Each wait gets what is left of the outer budget rather than a
+            # fresh `SETTLE`, or one slow attempt would spend the whole thing
+            # and leave no room for the retry this loop exists to make.
+            remaining = max(deadline - time.monotonic(), 0.1)
+            job_id = enqueue(db_path, MIDDLEWARED)
+            wait_for_status(db_path, job_id, "complete", timeout=remaining)
+            toggled = queue.get_job(job_id)
+            assert toggled is not None
+            if toggled.result(timeout=remaining) == "":
+                return
+            time.sleep(0.5)
+        raise AssertionError("a middleware disabled in the dashboard still ran on the executor")
     finally:
         terminate(process)
 

@@ -1199,3 +1199,46 @@ fn a_dispatched_toggle_list_is_readable_until_the_job_reports() {
 
     handle.shutdown();
 }
+
+#[test]
+fn a_result_never_overtakes_what_the_task_already_reported() {
+    // The scheduler drops a side-channel frame naming a job it no longer
+    // holds, and a result is what makes it stop holding one. So a task's final
+    // progress — the value a progress bar ends on — is lost unless the
+    // executor puts it on the wire ahead of the result.
+    let (mut scheduler, handle, pool) =
+        FakeScheduler::attach_with(&["resize"], 1, vec![CAP_SIDE_CHANNEL.to_string()]);
+    let side_channel = handle.side_channel();
+
+    let (release, held) = crossbeam_channel::bounded(1);
+    pool.on("resize", Behaviour::Block(held));
+    scheduler.send_job("job-1", "resize", b"payload");
+
+    // Reported while the job is running, exactly as a task body would.
+    side_channel.report_progress("job-1", 100);
+    side_channel.write_task_log("job-1", "resize", "info", "done", None);
+    let _ = release.send(());
+
+    let deadline = Instant::now() + SETTLE;
+    let mut seen = Vec::new();
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "no result frame arrived: {seen:?}"
+        );
+        match scheduler.next_frame().0 {
+            ExecutorMessage::Heartbeat { .. } => continue,
+            ExecutorMessage::Progress { .. } => seen.push("progress"),
+            ExecutorMessage::TaskLog { .. } => seen.push("task_log"),
+            ExecutorMessage::Success { .. } => break,
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+
+    assert!(
+        seen.contains(&"progress") && seen.contains(&"task_log"),
+        "both must precede the result, saw {seen:?}"
+    );
+
+    handle.shutdown();
+}

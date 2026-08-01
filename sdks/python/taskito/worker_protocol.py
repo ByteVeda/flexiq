@@ -50,6 +50,11 @@ def declared_payload_len(header: dict[str, Any]) -> int:
     if kind == "success":
         result_len = header.get("result_len")
         return 0 if result_len is None else _checked_len(result_len, "result_len")
+    if kind == "task_log":
+        # A published partial can be arbitrarily large, so ``extra`` rides as
+        # the frame's blob rather than inside the header.
+        extra_len = header.get("extra_len")
+        return 0 if extra_len is None else _checked_len(extra_len, "extra_len")
     return 0
 
 

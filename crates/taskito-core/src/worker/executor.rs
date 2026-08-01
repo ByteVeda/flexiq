@@ -941,21 +941,18 @@ fn spawn_result_loop(
         .spawn(move || {
             let mut sending = true;
             while sending {
-                // Results first, and drained to empty before anything else is
-                // considered: a finished job is what the scheduler is waiting
-                // on, and progress for a job that already ended is worthless.
-                match result_rx.try_recv() {
-                    Ok(result) => {
-                        sending = send_result(&shared, result);
-                        continue;
-                    }
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => break,
-                    Err(crossbeam_channel::TryRecvError::Empty) => {}
-                }
-
                 crossbeam_channel::select! {
                     recv(result_rx) -> result => match result {
-                        Ok(result) => sending = send_result(&shared, result),
+                        Ok(result) => {
+                            // Everything the task already reported goes out
+                            // first. The scheduler drops a side-channel frame
+                            // for a job it no longer holds, so a result that
+                            // overtook them would silently lose the task's
+                            // final progress and its last log lines — the two
+                            // it is most likely to care about.
+                            sending = flush_side_channel(&shared, &log_rx)
+                                && send_result(&shared, result);
+                        }
                         Err(_) => break,
                     },
                     recv(progress_rx) -> woken => match woken {
@@ -976,12 +973,7 @@ fn spawn_result_loop(
             // wire, but only while the connection is good, and never at the
             // cost of holding the teardown open.
             if sending {
-                for line in log_rx.try_iter() {
-                    if !shared.send_log(&line) {
-                        break;
-                    }
-                }
-                shared.flush_progress();
+                flush_side_channel(&shared, &log_rx);
             }
 
             let dropped = shared.dropped_logs.load(Ordering::Relaxed);
@@ -995,6 +987,22 @@ fn spawn_result_loop(
             shared.results_flushed.store(true, Ordering::Release);
         })
         .expect("spawning the executor result thread cannot fail with a valid name")
+}
+
+/// Frame every side-channel operation queued so far.
+///
+/// Bounded work: both queues are capped, and each entry is one small frame on
+/// an already-open socket. Returns whether the connection is still usable.
+fn flush_side_channel(shared: &Arc<Shared>, log_rx: &Receiver<PendingLog>) -> bool {
+    if !shared.flush_progress() {
+        return false;
+    }
+    for line in log_rx.try_iter() {
+        if !shared.send_log(&line) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Frame one job outcome. Returns whether the connection is still usable.

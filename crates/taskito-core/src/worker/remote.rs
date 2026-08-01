@@ -336,6 +336,10 @@ struct SideChannelPump {
     sink: Arc<dyn SideChannel>,
     /// Job id → newest progress not yet applied.
     pending_progress: Mutex<HashMap<String, i32>>,
+    /// Held across a progress write, so settling a job cannot conclude there is
+    /// nothing left to do while the drain is still mid-write on its value.
+    /// Always taken before `pending_progress`, never the other way round.
+    applying_progress: Mutex<()>,
     /// Capacity 1: a pending wake-up already covers every value in the map, so
     /// a second one would only make the drain spin.
     progress_wake: Sender<()>,
@@ -369,6 +373,7 @@ impl SideChannelPump {
         let pump = Arc::new(Self {
             sink,
             pending_progress: Mutex::new(HashMap::new()),
+            applying_progress: Mutex::new(()),
             progress_wake,
             logs,
             log_shed: log_rx.clone(),
@@ -411,8 +416,29 @@ impl SideChannelPump {
         }
     }
 
+    /// Apply the progress recorded for one job, if any is still pending.
+    ///
+    /// A completed job's row moves out of `jobs` and into `archived_jobs`, and
+    /// `update_progress` only writes the former — so progress applied after a
+    /// result is not late, it is lost. Settling the job's own value before its
+    /// result goes to the scheduler is what makes the fire-and-forget contract
+    /// hold. One small write, on the reader thread, once per job: the task has
+    /// already returned and its executor's slot is already free.
+    fn settle_progress(&self, job_id: &str) {
+        let _applying = self.applying_progress.lock().unwrap_or_else(recover);
+        let pending = self
+            .pending_progress
+            .lock()
+            .unwrap_or_else(recover)
+            .remove(job_id);
+        if let Some(progress) = pending {
+            self.sink.update_progress(job_id, progress);
+        }
+    }
+
     /// Apply every progress value recorded since the last flush.
     fn flush_progress(&self) {
+        let _applying = self.applying_progress.lock().unwrap_or_else(recover);
         let batch = std::mem::take(&mut *self.pending_progress.lock().unwrap_or_else(recover));
         for (job_id, progress) in batch {
             self.sink.update_progress(&job_id, progress);
@@ -985,6 +1011,14 @@ impl Shared {
                 result.job_id()
             );
             return;
+        }
+
+        // Before the result, not after: completing the job archives its row,
+        // and the drain thread racing that would silently drop the task's final
+        // progress. Ordered on the wire already — the executor flushes its
+        // queues before framing a result — so by here the value is in hand.
+        if let Some(pump) = self.side_channel.as_ref() {
+            pump.settle_progress(result.job_id());
         }
 
         executor.free.fetch_add(1, Ordering::Relaxed);

@@ -624,6 +624,9 @@ struct RecordingSink {
     progress: Mutex<Vec<(String, i32)>>,
     logs: Mutex<Vec<AppliedLog>>,
     disabled: Mutex<HashMap<String, Vec<String>>>,
+    /// How long a progress write takes, for tests that need the drain thread to
+    /// lose a race it would otherwise sometimes win. Zero everywhere else.
+    progress_delay: Mutex<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -644,6 +647,10 @@ impl RecordingSink {
         );
     }
 
+    fn delay_progress(&self, delay: Duration) {
+        *self.progress_delay.lock().expect("progress delay") = delay;
+    }
+
     fn progress(&self) -> Vec<(String, i32)> {
         self.progress.lock().expect("progress").clone()
     }
@@ -655,6 +662,10 @@ impl RecordingSink {
 
 impl SideChannel for RecordingSink {
     fn update_progress(&self, job_id: &str, progress: i32) {
+        let delay = *self.progress_delay.lock().expect("progress delay");
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
         self.progress
             .lock()
             .expect("progress")
@@ -895,6 +906,36 @@ fn a_side_channel_frame_never_settles_the_job_it_names() {
         // entry had already been taken.
         executor.succeed("job-1", "resize", Some(b"done"));
         assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn a_jobs_final_progress_is_applied_before_its_result() {
+    // Completing a job archives its row, and `update_progress` writes only the
+    // live table — so progress that lands after the result is not late, it is
+    // lost. The delay makes the drain thread lose a race it would otherwise
+    // sometimes win, which is what made this flaky rather than always wrong.
+    let sink = Arc::new(RecordingSink::default());
+    sink.delay_progress(Duration::from_millis(200));
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"payload"))
+            .expect("send job");
+        executor.expect_dispatch();
+
+        // Ordered on the wire, the way a real executor flushes its queues
+        // before framing a result.
+        executor.report_progress("job-1", 100);
+        executor.succeed("job-1", "resize", None);
+
+        assert_eq!(kind(&expect_result(results)), "success");
+        assert!(
+            sink.progress().contains(&("job-1".to_string(), 100)),
+            "the result overtook the task's final progress: {:?}",
+            sink.progress()
+        );
     });
 }
 
