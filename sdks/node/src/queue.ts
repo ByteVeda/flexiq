@@ -183,6 +183,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly resources = new ResourceRuntime();
   /** Workers started from this queue and not yet stopped — the shutdown set. */
   private readonly liveWorkers = new Set<Worker>();
+  private readonly liveExecutors = new Set<Executor>();
   private readonly webhookManager: WebhookManager;
   /** Built lazily — its constructor throws on addons lacking the `workflows` feature. */
   private workflowManager?: WorkflowManager;
@@ -1656,9 +1657,10 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * connection and dispatches over a socket, so this process runs task bodies
    * without polling storage itself. Hold the returned {@link Executor}.
    */
-  runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
+  async runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
     const disables = new MiddlewareDisableStore(this.native);
-    return Executor.start(this.native, {
+    const executor: Executor = await Executor.start(this.native, {
+      onStopped: () => this.liveExecutors.delete(executor),
       tasks: this.tasks,
       serializer: this.serializer,
       codecs: this.codecs,
@@ -1672,20 +1674,27 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       resources: this.resources,
       run: options,
     });
+    this.liveExecutors.add(executor);
+    return executor;
   }
 
   /**
-   * Stop every worker started from this queue — the programmatic equivalent of
-   * SIGINT/SIGTERM. Dispatch halts at once and the promise resolves once
-   * worker-scoped resources are disposed. Handlers already mid-flight are not
-   * awaited: like {@link Worker.stop}, this stops dispatch rather than draining
-   * the invocations in progress.
+   * Stop every worker and executor started from this queue — the programmatic
+   * equivalent of SIGINT/SIGTERM. Dispatch halts at once and the promise
+   * resolves once worker-scoped resources are disposed. Handlers already
+   * mid-flight are not awaited: like {@link Worker.stop}, this stops dispatch
+   * rather than draining the invocations in progress. An executor is the
+   * exception — {@link Executor.stop} drains before it disconnects.
    *
-   * A no-op when no worker is running, and safe alongside a direct
-   * {@link Worker.stop} — stopping twice does nothing the second time.
+   * A no-op when nothing is running, and safe alongside a direct
+   * {@link Worker.stop} or {@link Executor.stop} — stopping twice does nothing
+   * the second time.
    */
   async shutdown(): Promise<void> {
-    await Promise.all([...this.liveWorkers].map((worker) => worker.stop()));
+    await Promise.all([
+      ...[...this.liveWorkers].map((worker) => worker.stop()),
+      ...[...this.liveExecutors].map((executor) => executor.stop()),
+    ]);
   }
 }
 
