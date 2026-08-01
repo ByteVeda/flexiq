@@ -28,14 +28,78 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import NoReturn
+from collections.abc import Sequence
+from typing import NoReturn, Protocol
 
 logger = logging.getLogger("taskito.executor")
 
-__all__ = ["DETACHED_ENV", "DetachedNative", "DetachedStorageError", "is_detached"]
+__all__ = [
+    "DETACHED_ENV",
+    "DetachedNative",
+    "DetachedStorageError",
+    "ExecutorSink",
+    "clear_sink",
+    "disabled_middleware",
+    "install_sink",
+    "is_detached",
+    "set_disabled_middleware",
+]
 
 #: Marks this process as an executor, so a ``Queue`` built here opens no storage.
 DETACHED_ENV = "TASKITO_DETACHED_EXECUTOR"
+
+
+class ExecutorSink(Protocol):
+    """Where an executor's storage-shaped writes go instead of a database.
+
+    Implemented by the prefork child, which frames them to its parent; the
+    parent relays them to the scheduler, which owns the connection. Both
+    methods are fire-and-forget: a task reporting progress must not be able to
+    fail, or block, because of what is happening at the far end.
+    """
+
+    def update_progress(self, job_id: str, progress: int) -> None: ...
+
+    def write_task_log(
+        self,
+        job_id: str,
+        task_name: str,
+        level: str,
+        message: str,
+        extra: str | None,
+    ) -> None: ...
+
+
+#: Installed by the prefork child once it is running under an executor.
+_sink: ExecutorSink | None = None
+
+#: Middleware disabled for the job this process is running, as resolved by the
+#: scheduler and carried on the dispatch frame. A prefork child runs one job at
+#: a time, so a single value is the whole story.
+_disabled_middleware: tuple[str, ...] = ()
+
+
+def install_sink(sink: ExecutorSink) -> None:
+    """Route this process's progress and task logs through ``sink``."""
+    global _sink
+    _sink = sink
+
+
+def clear_sink() -> None:
+    """Stop routing writes, so they degrade to a warning again."""
+    global _sink
+    _sink = None
+
+
+def set_disabled_middleware(disabled: Sequence[str]) -> None:
+    """Record the toggle list the scheduler attached to the current dispatch."""
+    global _disabled_middleware
+    _disabled_middleware = tuple(disabled)
+
+
+def disabled_middleware() -> tuple[str, ...]:
+    """Middleware disabled for the job running in this process."""
+    return _disabled_middleware
 
 
 class DetachedStorageError(RuntimeError, AttributeError):
@@ -60,6 +124,13 @@ class DetachedNative:
     on, and refuses everything else. A task calling ``update_progress`` must not
     fail merely because it happens to be running detached, but a task calling
     ``enqueue`` must not appear to succeed.
+
+    Progress and task logs are forwarded to the installed :class:`ExecutorSink`
+    rather than dropped: the executor has no storage, but the scheduler does,
+    and it applies them on this process's behalf. Without a sink — an app
+    importing itself outside ``taskito executor``, or a scheduler that
+    advertised no side-channel — they degrade to one warning, as they did
+    before the side-channel existed.
     """
 
     __slots__ = ("_warned",)
@@ -73,14 +144,17 @@ class DetachedNative:
         if what not in self._warned:
             self._warned.add(what)
             logger.warning(
-                "%s is unavailable on an attached executor, which has no storage; "
-                "ignoring. Run an in-process worker if you need it.",
+                "%s is unavailable on an attached executor with no side-channel to the "
+                "scheduler; ignoring. Run an in-process worker if you need it.",
                 what,
             )
 
     def update_progress(self, job_id: str, progress: int) -> None:
-        """Ignored: progress lives in storage, and there is none here."""
-        self._warn_once("update_progress")
+        """Reported to the scheduler, which owns the storage this lives in."""
+        if _sink is None:
+            self._warn_once("update_progress")
+            return
+        _sink.update_progress(job_id, progress)
 
     def write_task_log(
         self,
@@ -90,8 +164,11 @@ class DetachedNative:
         message: str,
         extra: str | None = None,
     ) -> None:
-        """Ignored: task logs and published partials live in storage."""
-        self._warn_once("current_job.log/publish")
+        """Reported to the scheduler. A published partial arrives as ``result``."""
+        if _sink is None:
+            self._warn_once("current_job.log/publish")
+            return
+        _sink.write_task_log(job_id, task_name, level, message, extra)
 
     def is_cancel_requested(self, job_id: str) -> bool:
         """Always false: a cancel reaches an executor as a protocol frame.
