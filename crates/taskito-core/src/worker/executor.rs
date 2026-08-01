@@ -477,11 +477,14 @@ impl Shared {
             return;
         }
         self.free_slots.store(0, Ordering::Relaxed);
-        self.send(&ExecutorMessage::Heartbeat { free_slots: 0 }, &[]);
         self.job_tx.lock().unwrap_or_else(recover).take();
         // Release anyone parked in `wait`: the reader is still blocked on a read
         // only the scheduler could satisfy, so nothing else would wake them.
         self.session_over.store(true, Ordering::Release);
+        // Announced last, because a scheduler that stopped reading blocks this
+        // write for up to `write_timeout`. `stop` is documented as safe on a
+        // signal-handling path, so the local drain must not wait on the peer.
+        self.send(&ExecutorMessage::Heartbeat { free_slots: 0 }, &[]);
         log::info!(
             "[taskito] executor {} draining; no further jobs will be accepted",
             self.executor_id
