@@ -91,15 +91,22 @@ impl AttachAddress {
     pub fn connect(&self, timeout: Duration) -> io::Result<Box<dyn Transport>> {
         match self {
             Self::Tcp(target) => {
-                let address = target
-                    .to_socket_addrs()
-                    .map_err(|error| {
-                        invalid(format!("'{target}' is not a valid host:port: {error}"))
-                    })?
-                    .next()
-                    .ok_or_else(|| invalid(format!("'{target}' resolved to no address")))?;
-                let stream = TcpStream::connect_timeout(&address, timeout)?;
-                Ok(Box::new(TcpTransport::new(stream)?))
+                let addresses = target.to_socket_addrs().map_err(|error| {
+                    invalid(format!("'{target}' is not a valid host:port: {error}"))
+                })?;
+                // Every resolved address is tried, not just the first: a
+                // dual-stack scheduler resolves to both an AAAA and an A
+                // record, and a host that cannot route one still reaches the
+                // other. The last failure is what gets reported.
+                let mut last_error = None;
+                for address in addresses {
+                    match TcpStream::connect_timeout(&address, timeout) {
+                        Ok(stream) => return Ok(Box::new(TcpTransport::new(stream)?)),
+                        Err(error) => last_error = Some(error),
+                    }
+                }
+                Err(last_error
+                    .unwrap_or_else(|| invalid(format!("'{target}' resolved to no address"))))
             }
             #[cfg(unix)]
             Self::Unix(path) => {
