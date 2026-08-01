@@ -38,6 +38,8 @@ export interface ExecutorRunOptions {
 
 /** Inputs assembled by {@link Queue.runExecutor}. @internal */
 export interface ExecutorStartParams {
+  /** Called once the executor has stopped, so the queue can forget it. */
+  onStopped?: () => void;
   tasks: ReadonlyMap<string, RegisteredTask>;
   serializer: Serializer;
   codecs?: ReadonlyMap<string, PayloadCodec>;
@@ -62,6 +64,7 @@ export class Executor {
     private readonly native: NativeExecutor,
     private readonly resources: ResourceRuntime,
     private readonly emitter: Emitter,
+    private readonly onStopped?: () => void,
   ) {}
 
   /**
@@ -71,7 +74,7 @@ export class Executor {
    * @internal
    */
   static async start(queue: NativeQueue, params: ExecutorStartParams): Promise<Executor> {
-    const { tasks, serializer, codecs, middlewareFor, emitter, resources, run } = params;
+    const { tasks, serializer, codecs, middlewareFor, emitter, resources, run, onStopped } = params;
 
     const address = run?.attach ?? process.env.TASKITO_ATTACH;
     if (!address) {
@@ -112,12 +115,22 @@ export class Executor {
     });
 
     attached = native;
-    // Only lease the resource runtime once the attach actually succeeded, so a
-    // refused handshake leaks nothing.
-    resources.acquireWorker();
-    emitter.emit("worker.started", { workerId: native.executorId });
+    try {
+      // Only lease the resource runtime once the attach actually succeeded, so a
+      // refused handshake leaks nothing.
+      resources.acquireWorker();
+      emitter.emit("worker.started", { workerId: native.executorId });
+    } catch (error) {
+      // The session is live by now and no caller holds an `Executor` to stop
+      // it, so a throwing resource factory or `worker.started` listener would
+      // leak the attach until the process exits.
+      await native.shutdown().catch((failure) => {
+        log.debug(() => "releasing the attach after a failed start failed", failure);
+      });
+      throw error;
+    }
 
-    return new Executor(native, resources, emitter);
+    return new Executor(native, resources, emitter, onStopped);
   }
 
   /** Identity the scheduler announced when it accepted this attach. */
@@ -169,6 +182,7 @@ export class Executor {
         log.debug(() => "resource release during executor shutdown failed", error);
       }
       this.emitter.emit("worker.stopped", { workerId: this.executorId });
+      this.onStopped?.();
     }
   }
 }
