@@ -76,11 +76,14 @@ describe("taskito CLI", () => {
         stdio: "ignore",
         env: { ...process.env, TASKITO_INDEX: indexUrl, TASKITO_DB: db, TASKITO_MARKER: marker },
       });
-      expect(await waitForFile(marker, 6000)).toBe(true);
+      expect(await waitForFile(marker, 25_000)).toBe(true);
     } finally {
       child?.kill("SIGTERM");
     }
-  });
+    // Spawning a second Node, importing the SDK and opening SQLite before the
+    // job can run costs more than the file's default budget on a cold Windows
+    // runner, where this timed out at just over six seconds.
+  }, 30_000);
 });
 
 async function waitForFile(path: string, timeoutMs: number): Promise<boolean> {
