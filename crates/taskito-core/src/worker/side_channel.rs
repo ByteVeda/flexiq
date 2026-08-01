@@ -113,6 +113,17 @@ fn recover<T>(poisoned: PoisonError<T>) -> T {
 
 impl SideChannel for StorageSideChannel {
     fn update_progress(&self, job_id: &str, progress: i32) {
+        // Checked here rather than left to storage: the in-process SDK paths
+        // reject or clamp before they ever call storage, so an attached
+        // executor's value is the one that would otherwise reach it unchecked
+        // and come back as a generic write failure.
+        if !(0..=100).contains(&progress) {
+            log::warn!(
+                "[taskito] executor reported progress {progress} for job {job_id}, which is \
+                 outside 0-100; dropping it"
+            );
+            return;
+        }
         if let Err(error) = self.storage.update_progress(job_id, progress) {
             log::warn!("[taskito] could not record progress for job {job_id}: {error}");
         }
@@ -159,12 +170,56 @@ impl SideChannel for StorageSideChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::job::{now_millis, NewJob};
     use crate::storage::sqlite::SqliteStorage;
 
     fn channel() -> StorageSideChannel {
         StorageSideChannel::new(StorageBackend::Sqlite(
             SqliteStorage::in_memory().expect("in-memory storage"),
         ))
+    }
+
+    fn enqueued(channel: &StorageSideChannel) -> String {
+        channel
+            .storage
+            .enqueue(NewJob {
+                queue: "default".to_string(),
+                task_name: "resize".to_string(),
+                payload: vec![1, 2, 3],
+                priority: 0,
+                scheduled_at: now_millis(),
+                max_retries: 3,
+                timeout_ms: 300_000,
+                unique_key: None,
+                metadata: None,
+                notes: None,
+                depends_on: vec![],
+                expires_at: None,
+                result_ttl_ms: None,
+                namespace: None,
+            })
+            .expect("enqueue")
+            .id
+    }
+
+    #[test]
+    fn progress_outside_the_documented_range_is_dropped() {
+        // An attached executor is the one caller that reaches storage without
+        // passing an SDK boundary that already rejects or clamps, so the check
+        // has to happen before the write rather than inside it.
+        let channel = channel();
+        let job_id = enqueued(&channel);
+
+        channel.update_progress(&job_id, 40);
+        channel.update_progress(&job_id, 101);
+        channel.update_progress(&job_id, -1);
+
+        let job = channel.storage.get_job(&job_id).expect("get").expect("job");
+        assert_eq!(
+            job.progress,
+            Some(40),
+            "an out-of-range report must not disturb the last good value"
+        );
     }
 
     #[test]
