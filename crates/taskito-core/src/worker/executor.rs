@@ -30,17 +30,19 @@
 //! # }
 //! ```
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use tokio::sync::mpsc::error::TrySendError;
 
 use super::auth::Secret;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
+    PROTOCOL_VERSION,
 };
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
@@ -80,6 +82,12 @@ pub struct ExecutorConfig {
     /// How long a drain waits for in-flight jobs to finish and their results to
     /// reach the scheduler before the connection is closed anyway.
     pub shutdown_drain: Duration,
+    /// How many side-channel operations may be queued before the oldest task
+    /// log lines are dropped.
+    ///
+    /// Bounds what a task in a tight progress or logging loop can cost: it
+    /// never blocks on the socket, and it never grows this queue without limit.
+    pub side_channel_capacity: usize,
 }
 
 impl ExecutorConfig {
@@ -101,6 +109,7 @@ impl ExecutorConfig {
             write_timeout: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(5),
             shutdown_drain: Duration::from_secs(30),
+            side_channel_capacity: 4096,
         }
     }
 }
@@ -137,6 +146,9 @@ pub struct ExecutorClient {
     config: ExecutorConfig,
     scheduler_id: String,
     peer: String,
+    /// What the scheduler said it can do for us. Empty against a scheduler
+    /// built before capabilities existed.
+    capabilities: Vec<String>,
     reader: FrameReader<ReadHalf>,
     link: Link,
 }
@@ -170,7 +182,7 @@ impl ExecutorClient {
             token: config.token.clone(),
         })?;
 
-        let scheduler_id = read_ack(&mut reader)?;
+        let (scheduler_id, capabilities) = read_ack(&mut reader)?;
         connection.set_read_timeout(None)?;
 
         log::info!(
@@ -178,10 +190,18 @@ impl ExecutorClient {
             config.executor_id,
             config.slots
         );
+        if !capabilities.iter().any(|cap| cap == CAP_SIDE_CHANNEL) {
+            log::info!(
+                "[taskito] scheduler {scheduler_id} advertises no side-channel; progress and task \
+                 logs from tasks on executor {} will be dropped",
+                config.executor_id
+            );
+        }
 
         Ok(Self {
             scheduler_id,
             peer,
+            capabilities,
             reader,
             link: Link {
                 writer: Mutex::new(writer),
@@ -196,6 +216,11 @@ impl ExecutorClient {
         &self.scheduler_id
     }
 
+    /// Whether the scheduler will apply progress and task logs on our behalf.
+    pub fn supports_side_channel(&self) -> bool {
+        self.capabilities.iter().any(|cap| cap == CAP_SIDE_CHANNEL)
+    }
+
     /// Peer label of the scheduler connection, for logs.
     pub fn peer(&self) -> &str {
         &self.peer
@@ -206,6 +231,7 @@ impl ExecutorClient {
     /// Returns immediately; the returned handle is how the caller waits for the
     /// scheduler to end the session, or asks for a drain of its own.
     pub fn spawn(self, dispatcher: Arc<dyn WorkerDispatcher>) -> ExecutorHandle {
+        let side_channel = self.supports_side_channel();
         let Self {
             config,
             reader,
@@ -220,6 +246,8 @@ impl ExecutorClient {
         let capacity = (config.slots as usize).max(1) * 2;
         let (job_tx, job_rx) = tokio::sync::mpsc::channel(capacity);
         let (result_tx, result_rx) = crossbeam_channel::bounded(capacity);
+        let (progress_wake, progress_rx) = crossbeam_channel::bounded(1);
+        let (log_tx, log_rx) = crossbeam_channel::bounded(config.side_channel_capacity.max(1));
 
         let shared = Arc::new(Shared {
             link,
@@ -231,11 +259,18 @@ impl ExecutorClient {
             session_over: AtomicBool::new(false),
             results_flushed: AtomicBool::new(false),
             job_tx: Mutex::new(Some(job_tx)),
+            side_channel,
+            pending_progress: Mutex::new(HashMap::new()),
+            progress_wake,
+            log_tx,
+            log_shed: log_rx.clone(),
+            dropped_logs: AtomicU64::new(0),
+            toggles: Mutex::new(HashMap::new()),
         });
 
         let threads = vec![
             spawn_runtime(dispatcher.clone(), job_rx, result_tx),
-            spawn_result_loop(shared.clone(), result_rx),
+            spawn_result_loop(shared.clone(), result_rx, progress_rx, log_rx),
             spawn_heartbeat(shared.clone(), config.heartbeat_interval),
             spawn_reader(shared.clone(), reader, dispatcher.clone()),
         ];
@@ -249,13 +284,15 @@ impl ExecutorClient {
     }
 }
 
-/// Read the frame that completes the handshake.
-fn read_ack(reader: &mut FrameReader<ReadHalf>) -> Result<String, ExecutorError> {
+/// Read the frame that completes the handshake, returning the scheduler's
+/// identity and the optional behaviours it advertised.
+fn read_ack(reader: &mut FrameReader<ReadHalf>) -> Result<(String, Vec<String>), ExecutorError> {
     match reader.read::<SchedulerMessage>() {
         Ok((
             SchedulerMessage::HelloAck {
                 scheduler_id,
                 protocol_version,
+                capabilities,
             },
             _,
         )) => {
@@ -266,7 +303,7 @@ fn read_ack(reader: &mut FrameReader<ReadHalf>) -> Result<String, ExecutorError>
                 }
                 .into());
             }
-            Ok(scheduler_id)
+            Ok((scheduler_id, capabilities))
         }
         Ok(_) => Err(ProtocolError::UnexpectedFrame {
             expected: "hello_ack",
@@ -316,6 +353,80 @@ impl ExecutorSession {
     }
 }
 
+/// Reports a running task's progress and logs to the scheduler.
+///
+/// An executor has no storage, so these are the operations it cannot perform
+/// itself: the scheduler holds the connection and applies them on its behalf.
+/// Cheap to clone and safe to call from any thread — a task body reaches one of
+/// these through its SDK's job context.
+///
+/// Every method is fire-and-forget. Nothing here blocks on the socket, nothing
+/// fails a job, and nothing is sent at all when the scheduler did not advertise
+/// [`CAP_SIDE_CHANNEL`] — an executor never writes a frame its peer could not
+/// understand.
+#[derive(Clone)]
+pub struct ExecutorSideChannel {
+    shared: Arc<Shared>,
+}
+
+impl ExecutorSideChannel {
+    /// Whether the attached scheduler applies these operations.
+    ///
+    /// False against a scheduler with no storage configured for it, or one
+    /// built before the side-channel existed. Callers do not have to check —
+    /// the methods below are no-ops either way — but an SDK can use it to warn
+    /// once rather than silently dropping a task's progress bar.
+    pub fn is_supported(&self) -> bool {
+        self.shared.side_channel
+    }
+
+    /// Middleware the operator has disabled for a running job's task.
+    ///
+    /// Resolved by the scheduler at dispatch and carried on the job frame, so
+    /// an executor honours a dashboard toggle without a settings read it has no
+    /// storage to perform. Empty for an unknown job, or for one with nothing
+    /// disabled — the same answer, and the same behaviour, either way.
+    pub fn disabled_middleware(&self, job_id: &str) -> Vec<String> {
+        self.shared.toggles_for(job_id)
+    }
+
+    /// Report a running job's progress (0-100).
+    ///
+    /// Coalescing: only the newest value per job survives a backlog, which is
+    /// exactly right for a value that is idempotent-latest.
+    pub fn report_progress(&self, job_id: &str, progress: i32) {
+        if !self.shared.side_channel {
+            return;
+        }
+        self.shared.queue_progress(job_id, progress);
+    }
+
+    /// Write one structured log line for a running job. `extra` is pre-encoded
+    /// JSON; a published partial is this at level `result`.
+    ///
+    /// Log lines are data and cannot coalesce, so a flood sheds the oldest
+    /// rather than growing without bound or blocking the task.
+    pub fn write_task_log(
+        &self,
+        job_id: &str,
+        task_name: &str,
+        level: &str,
+        message: &str,
+        extra: Option<&str>,
+    ) {
+        if !self.shared.side_channel {
+            return;
+        }
+        self.shared.queue_log(PendingLog {
+            job_id: job_id.to_string(),
+            task_name: task_name.to_string(),
+            level: level.to_string(),
+            message: message.to_string(),
+            extra: extra.map(str::to_string),
+        });
+    }
+}
+
 impl ExecutorHandle {
     /// Id this executor attached under.
     pub fn executor_id(&self) -> &str {
@@ -325,6 +436,13 @@ impl ExecutorHandle {
     /// A view another thread can watch the session through.
     pub fn session(&self) -> ExecutorSession {
         ExecutorSession {
+            shared: self.shared.clone(),
+        }
+    }
+
+    /// The handle a running task reports progress and logs through.
+    pub fn side_channel(&self) -> ExecutorSideChannel {
+        ExecutorSideChannel {
             shared: self.shared.clone(),
         }
     }
@@ -447,6 +565,40 @@ struct Shared {
     /// once it has finished the jobs it already holds. Held in an `Option` so a
     /// local shutdown can release it without waiting on the parked reader.
     job_tx: Mutex<Option<JobSender>>,
+    /// Whether the scheduler advertised [`CAP_SIDE_CHANNEL`]. False turns
+    /// [`ExecutorSideChannel`] into a no-op, so a frame the peer could not
+    /// understand is never written.
+    side_channel: bool,
+    /// Job id → newest progress not yet framed. Progress is idempotent-latest,
+    /// so a backlog collapses instead of growing.
+    pending_progress: Mutex<HashMap<String, i32>>,
+    /// Capacity 1: one pending wake-up already covers every value in the map.
+    progress_wake: Sender<()>,
+    log_tx: Sender<PendingLog>,
+    /// A clone of the result loop's receiver, used only to shed the head of a
+    /// full queue.
+    log_shed: Receiver<PendingLog>,
+    /// Log lines dropped under backpressure, reported once the session ends.
+    dropped_logs: AtomicU64,
+    /// Job id → middleware the scheduler resolved as disabled for it.
+    ///
+    /// Kept beside the job rather than on it because a toggle list is dashboard
+    /// state, not a job column — the same reason [`CancelSignals`] holds
+    /// frame-delivered cancels instead of the job carrying a flag. Entries are
+    /// released when the job reports, so the map cannot grow for the life of
+    /// the process.
+    ///
+    /// [`CancelSignals`]: super::cancel::CancelSignals
+    toggles: Mutex<HashMap<String, Vec<String>>>,
+}
+
+/// One task log line waiting to be framed to the scheduler.
+struct PendingLog {
+    job_id: String,
+    task_name: String,
+    level: String,
+    message: String,
+    extra: Option<String>,
 }
 
 impl Shared {
@@ -517,6 +669,92 @@ impl Shared {
                 Some(running.saturating_sub(1))
             });
         self.publish_free();
+    }
+
+    /// Record the toggle list a dispatch carried.
+    fn remember_toggles(&self, job_id: &str, disabled: Vec<String>) {
+        // An empty list is the common case and the default answer, so storing
+        // it would only grow the map for nothing.
+        if disabled.is_empty() {
+            return;
+        }
+        self.toggles
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(job_id.to_string(), disabled);
+    }
+
+    /// Middleware disabled for a running job, empty when there are none.
+    fn toggles_for(&self, job_id: &str) -> Vec<String> {
+        self.toggles
+            .lock()
+            .unwrap_or_else(recover)
+            .get(job_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Release a finished job's toggle list.
+    fn forget_toggles(&self, job_id: &str) {
+        self.toggles.lock().unwrap_or_else(recover).remove(job_id);
+    }
+
+    /// Record the newest progress for a job and ask the result loop to frame it.
+    ///
+    /// The value lands in the map before the wake-up, so a full wake channel
+    /// loses nothing: the flush already pending will pick this value up.
+    fn queue_progress(&self, job_id: &str, progress: i32) {
+        self.pending_progress
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(job_id.to_string(), progress);
+        let _ = self.progress_wake.try_send(());
+    }
+
+    /// Queue one log line, shedding the oldest when the queue is full.
+    ///
+    /// Never blocks: a task in a logging loop must not be able to stall on the
+    /// socket, so backpressure is paid in dropped lines rather than in latency.
+    fn queue_log(&self, line: PendingLog) {
+        let mut line = line;
+        loop {
+            match self.log_tx.try_send(line) {
+                Ok(()) => return,
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => return,
+                Err(crossbeam_channel::TrySendError::Full(rejected)) => {
+                    line = rejected;
+                    // Drop-oldest, not drop-newest: when a task floods, the
+                    // lines nearest the present are the ones worth keeping. A
+                    // failed shed means a slot just freed, so the retry fits.
+                    if self.log_shed.try_recv().is_ok() {
+                        self.dropped_logs.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Frame every progress value recorded since the last flush.
+    fn flush_progress(&self) -> bool {
+        let batch = std::mem::take(&mut *self.pending_progress.lock().unwrap_or_else(recover));
+        for (job_id, progress) in batch {
+            if !self.send(&ExecutorMessage::Progress { job_id, progress }, &[]) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Frame one queued log line.
+    fn send_log(&self, line: &PendingLog) -> bool {
+        let (frame, payload) = ExecutorMessage::task_log(
+            line.job_id.as_str(),
+            line.task_name.as_str(),
+            line.level.as_str(),
+            line.message.as_str(),
+            line.extra.as_deref(),
+        );
+        self.send(&frame, &payload)
     }
 
     /// Recompute free capacity from the in-flight count, unless draining — a
@@ -618,7 +856,7 @@ fn spawn_reader(
 /// and the race is expected: a `job` already in flight when the zero-capacity
 /// heartbeat lands is normal, not a fault.
 fn accept_job(shared: &Arc<Shared>, frame: SchedulerMessage, payload: Vec<u8>) {
-    let Some(job) = frame.into_job(payload) else {
+    let Some(dispatch) = frame.into_dispatch(payload) else {
         // `hello_ack` is the only frame left, and it is handshake-only.
         log::warn!(
             "[taskito] executor {} received a handshake frame mid-stream",
@@ -626,6 +864,11 @@ fn accept_job(shared: &Arc<Shared>, frame: SchedulerMessage, payload: Vec<u8>) {
         );
         return;
     };
+    let job = dispatch.job;
+
+    // Recorded before the job is handed over, so a handler that reaches for the
+    // toggle list on its very first line already finds it.
+    shared.remember_toggles(&job.id, dispatch.disabled_middleware);
 
     let Some(sender) = shared.job_sender() else {
         decline(shared, &job, "the executor is draining");
@@ -659,6 +902,10 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
         shared.executor_id,
         job.id
     );
+    // This job reports here instead of through `send_result`, so the entry
+    // `accept_job` recorded before it knew the job would be declined has to be
+    // released on this path too.
+    shared.forget_toggles(&job.id);
     let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Failure {
         job_id: job.id.clone(),
         error: format!("executor did not run '{}': {reason}", job.task_name),
@@ -673,32 +920,90 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
 }
 
 /// Result thread: every outcome the pool produces, framed back to the
-/// scheduler.
+/// scheduler, plus the side-channel traffic riding the same writer.
 ///
-/// Ends when the pool has dropped its sender and the queue is empty, which is
-/// what releases the teardown — a result written after the socket closed would
-/// be a job silently lost.
-fn spawn_result_loop(shared: Arc<Shared>, result_rx: Receiver<JobResult>) -> JoinHandle<()> {
+/// One thread for both because the writer is one lock: a task thread that
+/// framed its own progress would contend with results for it, and could park a
+/// task body on a wedged scheduler for the whole write timeout. Queueing
+/// instead keeps the task's call free and the socket single-writer.
+///
+/// Ends when the pool has dropped its result sender and the queue is empty,
+/// which is what releases the teardown — a result written after the socket
+/// closed would be a job silently lost.
+fn spawn_result_loop(
+    shared: Arc<Shared>,
+    result_rx: Receiver<JobResult>,
+    progress_rx: Receiver<()>,
+    log_rx: Receiver<PendingLog>,
+) -> JoinHandle<()> {
     thread::Builder::new()
         .name("taskito-executor-results".to_string())
         .spawn(move || {
-            loop {
-                match result_rx.recv_timeout(POLL) {
+            let mut sending = true;
+            while sending {
+                // Results first, and drained to empty before anything else is
+                // considered: a finished job is what the scheduler is waiting
+                // on, and progress for a job that already ended is worthless.
+                match result_rx.try_recv() {
                     Ok(result) => {
-                        let (frame, payload) = ExecutorMessage::from_job_result(result);
-                        let sent = shared.send(&frame, &payload);
-                        shared.job_finished();
-                        if !sent {
-                            break;
-                        }
+                        sending = send_result(&shared, result);
+                        continue;
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => break,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+                    Err(crossbeam_channel::TryRecvError::Empty) => {}
                 }
+
+                crossbeam_channel::select! {
+                    recv(result_rx) -> result => match result {
+                        Ok(result) => sending = send_result(&shared, result),
+                        Err(_) => break,
+                    },
+                    recv(progress_rx) -> woken => match woken {
+                        Ok(()) => sending = shared.flush_progress(),
+                        Err(_) => break,
+                    },
+                    recv(log_rx) -> line => match line {
+                        Ok(line) => sending = shared.send_log(&line),
+                        Err(_) => break,
+                    },
+                    // Bounded so a session that ends with every queue quiet is
+                    // still noticed promptly.
+                    default(POLL) => {}
+                }
+            }
+
+            // Best-effort tail: what a task already reported belongs on the
+            // wire, but only while the connection is good, and never at the
+            // cost of holding the teardown open.
+            if sending {
+                for line in log_rx.try_iter() {
+                    if !shared.send_log(&line) {
+                        break;
+                    }
+                }
+                shared.flush_progress();
+            }
+
+            let dropped = shared.dropped_logs.load(Ordering::Relaxed);
+            if dropped > 0 {
+                log::warn!(
+                    "[taskito] executor {} dropped {dropped} task log line(s) that were produced \
+                     faster than they could be sent",
+                    shared.executor_id
+                );
             }
             shared.results_flushed.store(true, Ordering::Release);
         })
         .expect("spawning the executor result thread cannot fail with a valid name")
+}
+
+/// Frame one job outcome. Returns whether the connection is still usable.
+fn send_result(shared: &Arc<Shared>, result: JobResult) -> bool {
+    shared.forget_toggles(result.job_id());
+    let (frame, payload) = ExecutorMessage::from_job_result(result);
+    let sent = shared.send(&frame, &payload);
+    shared.job_finished();
+    sent
 }
 
 /// Heartbeat thread: liveness plus current free capacity.

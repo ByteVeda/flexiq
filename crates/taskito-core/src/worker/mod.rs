@@ -7,6 +7,7 @@ pub mod protocol;
 pub mod registry;
 pub mod remote;
 pub mod runner;
+pub mod side_channel;
 pub mod transport;
 
 pub use auth::Secret;
@@ -15,11 +16,15 @@ pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
 pub use executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
+    ExecutorSideChannel,
 };
-pub use protocol::{ExecutorMessage, ProtocolError, SchedulerMessage, PROTOCOL_VERSION};
+pub use protocol::{
+    Dispatch, ExecutorMessage, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+};
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
 pub use runner::{Worker, WorkerHandle};
+pub use side_channel::{SideChannel, StorageSideChannel};
 #[cfg(unix)]
 pub use transport::UnixTransport;
 pub use transport::{MemoryTransport, TcpTransport, Transport};

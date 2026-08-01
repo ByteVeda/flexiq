@@ -124,6 +124,10 @@ fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), S
         .write_header(&SchedulerMessage::HelloAck {
             scheduler_id: SCHEDULER_ID.to_string(),
             protocol_version: PROTOCOL_VERSION,
+            // Nothing to advertise: a child of an in-process worker holds real
+            // storage and writes its own progress and logs, so it has no reason
+            // to send them to this pool.
+            capabilities: Vec::new(),
         })
         .map_err(|e| format!("failed to acknowledge child handshake: {e}"))?;
 

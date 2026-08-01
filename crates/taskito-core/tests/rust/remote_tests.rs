@@ -1,10 +1,12 @@
 //! Tests for [`RemoteDispatcher`], driven over [`MemoryTransport`] so no
 //! socket is bound. A `FakeExecutor` plays the far end of the connection.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use taskito_core::job::{now_millis, Job, JobStatus, NewJob};
 use taskito_core::scheduler::{JobResult, SchedulerConfig};
@@ -12,9 +14,11 @@ use taskito_core::storage::sqlite::SqliteStorage;
 use taskito_core::storage::{Storage, StorageBackend};
 use taskito_core::worker::auth::Secret;
 use taskito_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
+    PROTOCOL_VERSION,
 };
 use taskito_core::worker::remote::{AttachError, RemoteConfig, RemoteDispatcher};
+use taskito_core::worker::side_channel::SideChannel;
 use taskito_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
 use taskito_core::worker::Worker;
 use taskito_core::worker::WorkerDispatcher;
@@ -609,4 +613,426 @@ fn wait_until(mut condition: impl FnMut() -> bool, message: &str) {
         assert!(Instant::now() < deadline, "{message}");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+// ── Side-channel ────────────────────────────────────────────────────
+
+/// A [`SideChannel`] that records instead of writing, so a test can assert on
+/// exactly what the dispatcher decided to apply.
+#[derive(Default)]
+struct RecordingSink {
+    progress: Mutex<Vec<(String, i32)>>,
+    logs: Mutex<Vec<AppliedLog>>,
+    disabled: Mutex<HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppliedLog {
+    job_id: String,
+    task_name: String,
+    level: String,
+    message: String,
+    extra: Option<String>,
+    namespace: Option<String>,
+}
+
+impl RecordingSink {
+    fn disable(&self, task_name: &str, middleware: &[&str]) {
+        self.disabled.lock().expect("disabled").insert(
+            task_name.to_string(),
+            middleware.iter().map(|name| (*name).to_string()).collect(),
+        );
+    }
+
+    fn progress(&self) -> Vec<(String, i32)> {
+        self.progress.lock().expect("progress").clone()
+    }
+
+    fn logs(&self) -> Vec<AppliedLog> {
+        self.logs.lock().expect("logs").clone()
+    }
+}
+
+impl SideChannel for RecordingSink {
+    fn update_progress(&self, job_id: &str, progress: i32) {
+        self.progress
+            .lock()
+            .expect("progress")
+            .push((job_id.to_string(), progress));
+    }
+
+    fn write_task_log(
+        &self,
+        job_id: &str,
+        task_name: &str,
+        level: &str,
+        message: &str,
+        extra: Option<&str>,
+        namespace: Option<&str>,
+    ) {
+        self.logs.lock().expect("logs").push(AppliedLog {
+            job_id: job_id.to_string(),
+            task_name: task_name.to_string(),
+            level: level.to_string(),
+            message: message.to_string(),
+            extra: extra.map(str::to_string),
+            namespace: namespace.map(str::to_string),
+        });
+    }
+
+    fn disabled_middleware(&self, task_name: &str) -> Vec<String> {
+        self.disabled
+            .lock()
+            .expect("disabled")
+            .get(task_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// A dispatcher applying its side-channel through `sink`.
+fn dispatcher_with_sink(sink: Arc<RecordingSink>) -> RemoteDispatcher {
+    RemoteDispatcher::new(RemoteConfig {
+        scheduler_id: "scheduler-test".to_string(),
+        placement_timeout: Duration::from_secs(5),
+        shutdown_drain: Duration::from_millis(200),
+        side_channel: Some(sink),
+        ..RemoteConfig::default()
+    })
+}
+
+impl FakeExecutor {
+    fn expect_ack_capabilities(&mut self) -> Vec<String> {
+        match self.read().expect("read ack").0 {
+            SchedulerMessage::HelloAck { capabilities, .. } => capabilities,
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+    }
+
+    /// Read the next job frame in full, skipping the handshake ack.
+    fn expect_dispatch(&mut self) -> (Job, Vec<String>) {
+        loop {
+            match self.read().expect("read frame") {
+                (SchedulerMessage::HelloAck { .. }, _) => continue,
+                (frame, payload) => {
+                    let dispatch = frame.into_dispatch(payload).expect("a job frame");
+                    return (dispatch.job, dispatch.disabled_middleware);
+                }
+            }
+        }
+    }
+
+    fn report_progress(&mut self, job_id: &str, progress: i32) {
+        self.writer
+            .write_header(&ExecutorMessage::Progress {
+                job_id: job_id.to_string(),
+                progress,
+            })
+            .expect("send progress");
+    }
+
+    fn report_log(
+        &mut self,
+        job_id: &str,
+        task_name: &str,
+        level: &str,
+        message: &str,
+        extra: Option<&str>,
+    ) {
+        let (frame, payload) = ExecutorMessage::task_log(job_id, task_name, level, message, extra);
+        self.writer.write(&frame, &payload).expect("send task log");
+    }
+}
+
+#[test]
+fn a_scheduler_with_storage_advertises_the_side_channel() {
+    let dispatcher = dispatcher_with_sink(Arc::new(RecordingSink::default()));
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+    assert_eq!(executor.expect_ack_capabilities(), [CAP_SIDE_CHANNEL]);
+}
+
+#[test]
+fn a_scheduler_without_storage_advertises_nothing() {
+    // The negotiation contract from the other side: with nothing to apply
+    // through, the ack promises nothing and a correct executor sends no frame.
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+    assert!(executor.expect_ack_capabilities().is_empty());
+}
+
+#[test]
+fn a_dispatch_carries_the_toggles_and_metadata_an_executor_cannot_read() {
+    let sink = Arc::new(RecordingSink::default());
+    sink.disable("resize", &["tracing", "app.mw.Audit"]);
+    let dispatcher = dispatcher_with_sink(sink);
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        let mut job = make_job("job-1", "resize", b"payload");
+        job.metadata = Some(r#"{"trace_id":"abc"}"#.to_string());
+        jobs.blocking_send(job).expect("send job");
+
+        let (dispatched, disabled) = executor.expect_dispatch();
+        assert_eq!(disabled, ["tracing", "app.mw.Audit"]);
+        assert_eq!(
+            dispatched.metadata.as_deref(),
+            Some(r#"{"trace_id":"abc"}"#),
+            "middleware reads metadata, and an executor cannot fetch the row"
+        );
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn progress_and_logs_from_a_running_job_are_applied() {
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        let mut job = make_job("job-1", "resize", b"payload");
+        job.namespace = Some("tenant-a".to_string());
+        jobs.blocking_send(job).expect("send job");
+        executor.expect_dispatch();
+
+        executor.report_progress("job-1", 50);
+        executor.report_log("job-1", "resize", "info", "halfway", None);
+        executor.report_log("job-1", "resize", "result", "", Some(r#"{"step":3}"#));
+
+        wait_until(
+            || sink.progress().contains(&("job-1".to_string(), 50)),
+            "progress was never applied",
+        );
+        wait_until(
+            || sink.logs().len() == 2,
+            "the log lines were never applied",
+        );
+
+        let logs = sink.logs();
+        assert_eq!(
+            logs[0],
+            AppliedLog {
+                job_id: "job-1".to_string(),
+                task_name: "resize".to_string(),
+                level: "info".to_string(),
+                message: "halfway".to_string(),
+                extra: None,
+                // From the dispatch: only the scheduler knows the namespace.
+                namespace: Some("tenant-a".to_string()),
+            }
+        );
+        assert_eq!(logs[1].level, "result");
+        assert_eq!(logs[1].extra.as_deref(), Some(r#"{"step":3}"#));
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn an_executor_cannot_write_against_a_job_it_is_not_running() {
+    // An authenticated executor is trusted to run its own work, not to speak
+    // for the fleet: without this check any attached peer could rewrite another
+    // executor's progress or forge log lines on its jobs.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"payload"))
+            .expect("send job");
+        executor.expect_dispatch();
+
+        executor.report_progress("someone-elses-job", 99);
+        executor.report_log("someone-elses-job", "resize", "info", "forged", None);
+        // Ordered behind them on the same connection, so its arrival proves the
+        // two above were seen and dropped rather than merely still in flight.
+        executor.report_progress("job-1", 10);
+
+        wait_until(
+            || sink.progress().contains(&("job-1".to_string(), 10)),
+            "the executor's own progress was never applied",
+        );
+        assert!(
+            !sink
+                .progress()
+                .iter()
+                .any(|(job_id, _)| job_id == "someone-elses-job"),
+            "progress for another executor's job must be dropped"
+        );
+        assert!(sink.logs().is_empty(), "a forged log line must be dropped");
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn a_side_channel_frame_never_settles_the_job_it_names() {
+    // Progress and logs are handled before the result path on purpose: taking
+    // the in-flight entry is the exactly-once token for a job's one outcome,
+    // and a progress report must not spend it.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"payload"))
+            .expect("send job");
+        executor.expect_dispatch();
+
+        executor.report_progress("job-1", 10);
+        wait_until(|| !sink.progress().is_empty(), "progress was never applied");
+
+        assert!(
+            results.recv_timeout(Duration::from_millis(200)).is_err(),
+            "a side-channel frame must not produce a job result"
+        );
+
+        // The real outcome still lands, which it could not if the in-flight
+        // entry had already been taken.
+        executor.succeed("job-1", "resize", Some(b"done"));
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn an_empty_extra_is_stored_as_empty_rather_than_absent() {
+    // The frame keeps `Some(0)` and `None` apart, so the row has to as well: an
+    // `extra` of `""` that lands as NULL is data the sender did send.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"payload"))
+            .expect("send job");
+        executor.expect_dispatch();
+
+        executor.report_log("job-1", "resize", "info", "empty", Some(""));
+        executor.report_log("job-1", "resize", "info", "absent", None);
+
+        wait_until(
+            || sink.logs().len() == 2,
+            "both log lines were never applied",
+        );
+        let logs = sink.logs();
+        assert_eq!(logs[0].extra.as_deref(), Some(""));
+        assert_eq!(logs[1].extra, None);
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn dropping_a_dispatcher_that_never_ran_stops_the_drain_thread() {
+    // The pump starts in `new` but only `run` stops it, so a dispatcher that is
+    // built and dropped without running would leak the thread — and with it the
+    // sink — for the life of the process.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(Arc::clone(&sink));
+    drop(dispatcher);
+
+    assert_eq!(
+        Arc::strong_count(&sink),
+        1,
+        "the drain thread outlived the dispatcher that started it"
+    );
+}
+
+/// A [`SideChannel`] whose settings read parks until the test releases it,
+/// standing in for a slow settings backend.
+struct ParkingSink {
+    entered: Sender<()>,
+    release: Receiver<()>,
+}
+
+impl SideChannel for ParkingSink {
+    fn update_progress(&self, _job_id: &str, _progress: i32) {}
+
+    fn write_task_log(
+        &self,
+        _job_id: &str,
+        _task_name: &str,
+        _level: &str,
+        _message: &str,
+        _extra: Option<&str>,
+        _namespace: Option<&str>,
+    ) {
+    }
+
+    fn disabled_middleware(&self, _task_name: &str) -> Vec<String> {
+        let _ = self.entered.try_send(());
+        // Returns as soon as the test drops its sender. Bounded rather than
+        // waiting forever so a regression fails the assertion below instead of
+        // wedging the runtime this parks on.
+        let _ = self.release.recv_timeout(SETTLE * 2);
+        vec!["tracing".to_string()]
+    }
+}
+
+#[test]
+fn resolving_toggles_does_not_stall_the_runtime_the_scheduler_shares() {
+    let (entered_tx, entered_rx) = crossbeam_channel::bounded(1);
+    let (release_tx, release_rx) = crossbeam_channel::bounded::<()>(0);
+    let dispatcher = RemoteDispatcher::new(RemoteConfig {
+        scheduler_id: "scheduler-test".to_string(),
+        placement_timeout: Duration::from_secs(5),
+        shutdown_drain: Duration::from_millis(200),
+        side_channel: Some(Arc::new(ParkingSink {
+            entered: entered_tx,
+            release: release_rx,
+        })),
+        ..RemoteConfig::default()
+    });
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    // One worker thread, so anything that blocks on it blocks the scheduler
+    // task too — the constraint `drain_and_close` documents.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (job_tx, job_rx) = tokio::sync::mpsc::channel(4);
+    let (result_tx, result_rx) = crossbeam_channel::bounded(4);
+    let running = {
+        let dispatcher = dispatcher.clone();
+        runtime.spawn(async move { dispatcher.run(job_rx, result_tx).await })
+    };
+
+    job_tx
+        .blocking_send(make_job("job-1", "resize", b"payload"))
+        .expect("send job");
+    entered_rx
+        .recv_timeout(SETTLE)
+        .expect("the toggle read never started");
+
+    // The read is parked. Had it been running on the worker thread, nothing
+    // else on this runtime could make progress.
+    let ran = Arc::new(AtomicBool::new(false));
+    runtime.spawn({
+        let ran = Arc::clone(&ran);
+        async move { ran.store(true, Ordering::SeqCst) }
+    });
+    wait_until(
+        || ran.load(Ordering::SeqCst),
+        "a parked settings read starved the runtime",
+    );
+
+    drop(release_tx);
+    let (_, disabled) = executor.expect_dispatch();
+    assert_eq!(
+        disabled,
+        ["tracing"],
+        "the resolved list must still reach the dispatch"
+    );
+
+    executor.succeed("job-1", "resize", None);
+    assert_eq!(kind(&expect_result(&result_rx)), "success");
+    drop(job_tx);
+    runtime.block_on(async { running.await.expect("run loop") });
 }

@@ -14,7 +14,7 @@ use std::time::Duration;
 use taskito_core::worker::protocol::{FrameReader, FrameWriter, ProtocolError};
 use taskito_core::{
     ExecutorMessage, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
-    Storage, PROTOCOL_VERSION,
+    Storage, StorageSideChannel, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 use taskito_server::config::listen::AttachListen;
 use taskito_server::runtime::listener;
@@ -183,6 +183,9 @@ impl Harness {
             // Keep the tests quick: a job nobody advertises should fail back
             // fast rather than hold the run open.
             placement_timeout: Duration::from_secs(5),
+            // Exactly what `runtime::run` installs, so these tests exercise the
+            // wiring a deployment actually gets.
+            side_channel: Some(Arc::new(StorageSideChannel::new(storage.clone()))),
             ..RemoteConfig::default()
         });
         let supervisor = Arc::new(SchedulerSupervisor::new(
@@ -341,4 +344,140 @@ impl Executor {
             })
             .expect("send the failure frame");
     }
+}
+
+impl Executor {
+    /// Attach and return what the scheduler advertised in its ack.
+    fn attach_reporting_capabilities(port: u16, tasks: &[&str]) -> (Self, Vec<String>) {
+        let mut executor = Self::dial(port, tasks, None);
+        match executor
+            .reader
+            .read::<SchedulerMessage>()
+            .expect("the scheduler must answer the handshake")
+            .0
+        {
+            SchedulerMessage::HelloAck { capabilities, .. } => (executor, capabilities),
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+    }
+
+    fn report_progress(&mut self, job: &Dispatched, progress: i32) {
+        self.writer
+            .write_header(&ExecutorMessage::Progress {
+                job_id: job.0.clone(),
+                progress,
+            })
+            .expect("send the progress frame");
+    }
+
+    fn report_log(&mut self, job: &Dispatched, level: &str, message: &str, extra: Option<&str>) {
+        let (frame, payload) =
+            ExecutorMessage::task_log(job.0.as_str(), job.1.as_str(), level, message, extra);
+        self.writer
+            .write(&frame, &payload)
+            .expect("send the task log frame");
+    }
+}
+
+#[test]
+fn an_executor_reports_progress_and_logs_through_the_scheduler() {
+    // The whole point of the side-channel: the executor holds no database
+    // credentials, so these rows can only reach storage via the scheduler.
+    let storage = temp_storage("attach-side-channel");
+    let job = storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let (mut executor, capabilities) =
+        Executor::attach_reporting_capabilities(harness.port(), &["greet"]);
+    assert_eq!(
+        capabilities,
+        [CAP_SIDE_CHANNEL],
+        "a scheduler with storage must advertise the side-channel"
+    );
+
+    let dispatched = executor.expect_job();
+    executor.report_progress(&dispatched, 50);
+    executor.report_log(&dispatched, "info", "halfway", None);
+    executor.report_log(&dispatched, "result", "", Some(r#"{"step":3}"#));
+
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id).expect("read the job back"),
+            Some(ref current) if current.progress == Some(50)
+        )
+    })
+    .expect("the executor's progress must reach storage");
+
+    poll_until(Duration::from_secs(10), || {
+        storage.get_task_logs(&job.id).expect("read the logs").len() == 2
+    })
+    .expect("the executor's task logs must reach storage");
+
+    let logs = storage.get_task_logs(&job.id).expect("read the logs");
+    let info = logs
+        .iter()
+        .find(|entry| entry.level == "info")
+        .expect("the info line");
+    assert_eq!(info.message, "halfway");
+    assert_eq!(info.task_name, "greet");
+
+    // A published partial is a `result`-level log, which is what `job.stream()`
+    // consumers read.
+    let partial = logs
+        .iter()
+        .find(|entry| entry.level == "result")
+        .expect("the published partial");
+    assert_eq!(partial.extra.as_deref(), Some(r#"{"step":3}"#));
+
+    executor.succeed(&dispatched);
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must still complete after side-channel traffic");
+
+    harness.stop();
+}
+
+#[test]
+fn a_dashboard_toggle_rides_the_dispatch_frame() {
+    let storage = temp_storage("attach-toggles");
+    storage
+        .set_setting("middleware:disabled:greet", r#"["tracing"]"#)
+        .expect("disable a middleware the way a dashboard does");
+    storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let mut executor = Executor::attach(harness.port(), &["greet"]);
+
+    let (frame, payload) = executor
+        .reader
+        .read::<SchedulerMessage>()
+        .expect("read a scheduler frame");
+    let dispatch = frame.into_dispatch(payload).expect("a job frame");
+    assert_eq!(
+        dispatch.disabled_middleware,
+        ["tracing"],
+        "an executor cannot read settings, so the toggle must arrive on the frame"
+    );
+
+    // Answered before teardown: a job left claimed keeps the scheduler's own
+    // shutdown waiting, which has nothing to do with what this test asserts.
+    let job = dispatch.job;
+    executor.succeed(&(job.id.clone(), job.task_name.clone(), job.retry_count));
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must complete");
+
+    harness.stop();
 }
