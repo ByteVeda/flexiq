@@ -36,6 +36,6 @@ public final class InMemorySettings implements SettingsAccess {
      */
     @Override
     public List<String> reservedPrefixes() {
-        return List.of("auth:", "retention:", "taskito.webhooks", "webhook:", "webhooks:");
+        return List.of("auth:", "middleware:disabled:", "retention:", "taskito.webhooks", "webhook:", "webhooks:");
     }
 }
