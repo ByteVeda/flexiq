@@ -24,7 +24,21 @@ use crate::scheduler::JobResult;
 
 /// Frame format version. Both sides announce it in the handshake; a mismatch
 /// is rejected rather than silently downgraded.
+///
+/// Optional additions do *not* bump this. A version bump forces scheduler and
+/// executors to upgrade in lockstep, which is exactly the coupling an attached
+/// deployment exists to remove; anything a peer can do without is negotiated
+/// through [`SchedulerMessage::HelloAck`]'s capability list instead.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Capability: the scheduler applies [`ExecutorMessage::Progress`] and
+/// [`ExecutorMessage::TaskLog`] frames to storage on the executor's behalf.
+///
+/// An executor emits neither frame unless the `hello_ack` advertised this, so
+/// a new executor attached to an older scheduler sends nothing it cannot
+/// understand — it degrades to dropping progress and logs, as it did before
+/// the side-channel existed.
+pub const CAP_SIDE_CHANNEL: &str = "side_channel";
 
 /// Header cap, bounding a peer that never sends a newline.
 pub const MAX_HEADER_BYTES: u64 = 64 * 1024;
@@ -97,6 +111,12 @@ pub enum SchedulerMessage {
         scheduler_id: String,
         /// Version the scheduler speaks, so a rejected peer can log both.
         protocol_version: u32,
+        /// Optional behaviours this scheduler supports, e.g.
+        /// [`CAP_SIDE_CHANNEL`]. Absent on a scheduler built before the list
+        /// existed, which is why it defaults to empty rather than being
+        /// required: an executor that sees no capability sends no new frames.
+        #[serde(default)]
+        capabilities: Vec<String>,
     },
     /// Run a job. The task payload follows the header as raw bytes.
     Job {
@@ -116,6 +136,20 @@ pub enum SchedulerMessage {
         timeout_ms: i64,
         /// Namespace the job belongs to.
         namespace: Option<String>,
+        /// Middleware the operator has disabled for this task, resolved by the
+        /// scheduler at dispatch time.
+        ///
+        /// An executor has no storage to read the toggle list from, so it
+        /// rides the dispatch instead. That changes the semantics from
+        /// "re-read on every invocation" to "attached to every dispatch",
+        /// which is observably identical: a toggle flipped in the dashboard
+        /// still takes effect on the next job, with nothing to restart.
+        #[serde(default)]
+        disabled_middleware: Vec<String>,
+        /// The job's metadata blob, as stored. Middleware reads it, and an
+        /// executor cannot fetch the row itself.
+        #[serde(default)]
+        metadata: Option<String>,
     },
     /// Cooperative-cancel request, so the executor observes a cancel without
     /// either side polling storage.
@@ -157,6 +191,42 @@ pub enum ExecutorMessage {
     Heartbeat {
         /// Slots free right now.
         free_slots: u32,
+    },
+    /// Progress for a running job, to be applied to storage by the scheduler.
+    ///
+    /// Fire-and-forget: there is nothing to answer, and a task that only wanted
+    /// to report progress must never block on the scheduler to do it. Sent only
+    /// when the `hello_ack` advertised [`CAP_SIDE_CHANNEL`].
+    Progress {
+        /// Job being reported on. The scheduler drops a frame naming a job the
+        /// sending executor is not running.
+        job_id: String,
+        /// Completion percentage, 0-100.
+        progress: i32,
+    },
+    /// One structured log line for a running job, applied by the scheduler.
+    ///
+    /// A published partial is this frame at level `result`, so `log` and
+    /// `publish` share one frame type — the same collapse
+    /// [`crate::storage::Storage::write_task_log`] already makes. Sent only
+    /// when the `hello_ack` advertised [`CAP_SIDE_CHANNEL`].
+    TaskLog {
+        /// Job being logged against.
+        job_id: String,
+        /// Task that is running.
+        task_name: String,
+        /// Log level, e.g. `"info"`, or `"result"` for a published partial.
+        level: String,
+        /// Human-readable message. Empty for a published partial, whose value
+        /// lives in `extra`.
+        message: String,
+        /// Length of the pre-encoded JSON `extra` blob that follows, or `None`
+        /// when there is none.
+        ///
+        /// Carried as the frame's payload rather than inside the header: a
+        /// published partial can be arbitrarily large, and a header is capped
+        /// at [`MAX_HEADER_BYTES`].
+        extra_len: Option<usize>,
     },
     /// The task completed. Its serialized result, if any, follows the header.
     Success {
@@ -221,6 +291,7 @@ impl Frame for ExecutorMessage {
     fn payload_len(&self) -> usize {
         match self {
             Self::Success { result_len, .. } => result_len.unwrap_or(0),
+            Self::TaskLog { extra_len, .. } => extra_len.unwrap_or(0),
             _ => 0,
         }
     }
@@ -228,6 +299,27 @@ impl Frame for ExecutorMessage {
 
 impl From<&Job> for SchedulerMessage {
     fn from(job: &Job) -> Self {
+        Self::job_with(job, Vec::new())
+    }
+}
+
+/// A dispatched job, as an executor sees it: the job itself plus the toggle
+/// list the scheduler resolved for it.
+///
+/// The disable list is not a [`Job`] column — it is dashboard state resolved
+/// per dispatch — so it travels beside the job rather than inside it.
+#[derive(Debug)]
+pub struct Dispatch {
+    /// The job to run.
+    pub job: Job,
+    /// Middleware disabled for this task, as resolved by the scheduler.
+    pub disabled_middleware: Vec<String>,
+}
+
+impl SchedulerMessage {
+    /// Build a dispatch frame for `job`, carrying the middleware the scheduler
+    /// resolved as disabled for its task.
+    pub fn job_with(job: &Job, disabled_middleware: Vec<String>) -> Self {
         Self::Job {
             id: job.id.clone(),
             task_name: job.task_name.clone(),
@@ -237,15 +329,15 @@ impl From<&Job> for SchedulerMessage {
             queue: job.queue.clone(),
             timeout_ms: job.timeout_ms,
             namespace: job.namespace.clone(),
+            disabled_middleware,
+            metadata: job.metadata.clone(),
         }
     }
-}
 
-impl SchedulerMessage {
-    /// Rebuild the [`Job`] a dispatch frame describes. `None` for control
-    /// frames (`hello_ack`, `cancel`, `shutdown`).
+    /// Rebuild what a dispatch frame describes. `None` for control frames
+    /// (`hello_ack`, `cancel`, `shutdown`).
     ///
-    /// The inverse of [`SchedulerMessage::from`]. A frame carries only what
+    /// The inverse of [`SchedulerMessage::job_with`]. A frame carries only what
     /// running a task needs, so the columns an executor never reads — timing,
     /// dedup key, archived result — take their defaults rather than being put
     /// on the wire. `status` is [`JobStatus::Running`] because that is what the
@@ -253,13 +345,15 @@ impl SchedulerMessage {
     ///
     /// Those defaults are not purely internal: the Node and Python SDKs build
     /// their handler-visible job objects straight from this `Job`, so a task
-    /// reading `created_at`, `scheduled_at`, `priority`, `metadata`,
-    /// `unique_key` or `notes` sees zeros and nulls on an attached executor
-    /// where an in-process worker would show the stored values. Carrying them
-    /// would mean widening the frame for fields no dispatch decision uses, so
-    /// the difference is documented rather than papered over — see the
-    /// `detached` module in each SDK for the other side of the same trade.
-    pub fn into_job(self, payload: Vec<u8>) -> Option<Job> {
+    /// reading `created_at`, `scheduled_at`, `priority`, `unique_key` or
+    /// `notes` sees zeros and nulls on an attached executor where an in-process
+    /// worker would show the stored values. Carrying them would mean widening
+    /// the frame for fields no dispatch decision uses, so the difference is
+    /// documented rather than papered over — see the `detached` module in each
+    /// SDK for the other side of the same trade. `metadata` is the exception:
+    /// middleware reads it, and an executor cannot fetch the row, so it rides
+    /// the frame.
+    pub fn into_dispatch(self, payload: Vec<u8>) -> Option<Dispatch> {
         match self {
             Self::HelloAck { .. } | Self::Cancel { .. } | Self::Shutdown => None,
             Self::Job {
@@ -270,32 +364,37 @@ impl SchedulerMessage {
                 queue,
                 timeout_ms,
                 namespace,
+                disabled_middleware,
+                metadata,
                 payload_len: _,
-            } => Some(Job {
-                id,
-                queue,
-                task_name,
-                payload,
-                status: JobStatus::Running,
-                priority: 0,
-                created_at: 0,
-                scheduled_at: 0,
-                started_at: None,
-                completed_at: None,
-                retry_count,
-                max_retries,
-                result: None,
-                error: None,
-                timeout_ms,
-                unique_key: None,
-                progress: None,
-                metadata: None,
-                notes: None,
-                cancel_requested: false,
-                expires_at: None,
-                result_ttl_ms: None,
-                namespace,
-                has_deps: false,
+            } => Some(Dispatch {
+                job: Job {
+                    id,
+                    queue,
+                    task_name,
+                    payload,
+                    status: JobStatus::Running,
+                    priority: 0,
+                    created_at: 0,
+                    scheduled_at: 0,
+                    started_at: None,
+                    completed_at: None,
+                    retry_count,
+                    max_retries,
+                    result: None,
+                    error: None,
+                    timeout_ms,
+                    unique_key: None,
+                    progress: None,
+                    metadata,
+                    notes: None,
+                    cancel_requested: false,
+                    expires_at: None,
+                    result_ttl_ms: None,
+                    namespace,
+                    has_deps: false,
+                },
+                disabled_middleware,
             }),
         }
     }
@@ -367,11 +466,46 @@ impl ExecutorMessage {
         }
     }
 
+    /// Build a `task_log` frame and its payload.
+    ///
+    /// `extra` is pre-encoded JSON, exactly as
+    /// [`crate::storage::Storage::write_task_log`] takes it, and rides as the
+    /// frame's blob rather than in the header.
+    pub fn task_log(
+        job_id: impl Into<String>,
+        task_name: impl Into<String>,
+        level: impl Into<String>,
+        message: impl Into<String>,
+        extra: Option<&str>,
+    ) -> (Self, Vec<u8>) {
+        let payload = extra.map(|extra| extra.as_bytes().to_vec());
+        (
+            Self::TaskLog {
+                job_id: job_id.into(),
+                task_name: task_name.into(),
+                level: level.into(),
+                message: message.into(),
+                // Read off the `Option`, not the flattened payload: an empty
+                // `extra` and no `extra` are different, exactly as they are for
+                // a success result.
+                extra_len: payload.as_ref().map(Vec::len),
+            },
+            payload.unwrap_or_default(),
+        )
+    }
+
     /// Convert a result frame plus its payload into a [`JobResult`]. `None` for
-    /// non-result frames (`hello`, `heartbeat`).
+    /// non-result frames (`hello`, `heartbeat`, and the side-channel frames).
+    ///
+    /// Side-channel frames answering `None` is what keeps them out of the
+    /// exactly-once accounting: a progress report must never be mistaken for
+    /// the job's one outcome.
     pub fn into_job_result(self, payload: Vec<u8>) -> Option<JobResult> {
         match self {
-            Self::Hello { .. } | Self::Heartbeat { .. } => None,
+            Self::Hello { .. }
+            | Self::Heartbeat { .. }
+            | Self::Progress { .. }
+            | Self::TaskLog { .. } => None,
             Self::Success {
                 job_id,
                 result_len,
@@ -454,7 +588,19 @@ impl<W: Write> FrameWriter<W> {
 
     /// Dispatch a job, sending its payload as the frame's blob.
     pub fn write_job(&mut self, job: &Job) -> Result<(), ProtocolError> {
-        self.write(&SchedulerMessage::from(job), &job.payload)
+        self.write_job_with(job, Vec::new())
+    }
+
+    /// Dispatch a job along with the middleware disabled for its task.
+    pub fn write_job_with(
+        &mut self,
+        job: &Job,
+        disabled_middleware: Vec<String>,
+    ) -> Result<(), ProtocolError> {
+        self.write(
+            &SchedulerMessage::job_with(job, disabled_middleware),
+            &job.payload,
+        )
     }
 
     /// Ask the peer to cancel a running job.
@@ -590,6 +736,8 @@ mod tests {
                 queue,
                 timeout_ms,
                 namespace,
+                disabled_middleware,
+                metadata,
             } => {
                 assert_eq!(id, "job-1");
                 assert_eq!(task_name, "resize");
@@ -599,6 +747,8 @@ mod tests {
                 assert_eq!(queue, "default");
                 assert_eq!(timeout_ms, 30_000);
                 assert_eq!(namespace.as_deref(), Some("tenant-a"));
+                assert!(disabled_middleware.is_empty());
+                assert_eq!(metadata, None);
             }
             other => panic!("expected a job frame, got {other:?}"),
         }
@@ -607,10 +757,11 @@ mod tests {
     #[test]
     fn a_job_survives_a_round_trip_through_a_frame() {
         let payload = [0x02, 0x82, 0x82, 0x01, 0x61, 0x61, 0xa0];
-        let original = sample_job(&payload);
+        let mut original = sample_job(&payload);
+        original.metadata = Some(r#"{"trace_id":"abc"}"#.into());
 
         let (frame, read_payload) = round_trip(&SchedulerMessage::from(&original), &payload);
-        let rebuilt = frame.into_job(read_payload).expect("a job frame");
+        let rebuilt = frame.into_dispatch(read_payload).expect("a job frame").job;
 
         // Everything a task body can observe. The columns left out of the frame
         // are storage bookkeeping the executor never reads.
@@ -623,21 +774,42 @@ mod tests {
         assert_eq!(rebuilt.timeout_ms, original.timeout_ms);
         assert_eq!(rebuilt.namespace, original.namespace);
         assert_eq!(rebuilt.status, JobStatus::Running);
+        // Middleware reads it, and an executor cannot fetch the row itself.
+        assert_eq!(rebuilt.metadata, original.metadata);
+    }
+
+    #[test]
+    fn a_dispatch_carries_the_toggles_the_scheduler_resolved() {
+        let job = sample_job(b"x");
+        let disabled = vec!["tracing".to_string(), "app.mw.Audit".to_string()];
+
+        let mut buf = Vec::new();
+        FrameWriter::new(&mut buf)
+            .write_job_with(&job, disabled.clone())
+            .expect("write");
+        let (frame, payload) = FrameReader::new(buf.as_slice())
+            .read::<SchedulerMessage>()
+            .expect("read");
+
+        let dispatch = frame.into_dispatch(payload).expect("a job frame");
+        assert_eq!(dispatch.disabled_middleware, disabled);
+        assert_eq!(dispatch.job.task_name, "resize");
     }
 
     #[test]
     fn control_frames_describe_no_job() {
-        assert!(SchedulerMessage::Shutdown.into_job(vec![]).is_none());
+        assert!(SchedulerMessage::Shutdown.into_dispatch(vec![]).is_none());
         assert!(SchedulerMessage::Cancel {
             job_id: "job-1".into()
         }
-        .into_job(vec![])
+        .into_dispatch(vec![])
         .is_none());
         assert!(SchedulerMessage::HelloAck {
             scheduler_id: "s".into(),
             protocol_version: PROTOCOL_VERSION,
+            capabilities: Vec::new(),
         }
-        .into_job(vec![])
+        .into_dispatch(vec![])
         .is_none());
     }
 
@@ -769,10 +941,105 @@ mod tests {
             &SchedulerMessage::HelloAck {
                 scheduler_id: "scheduler-1".into(),
                 protocol_version: PROTOCOL_VERSION,
+                capabilities: vec![CAP_SIDE_CHANNEL.to_string()],
             },
             &[],
         );
-        assert!(matches!(ack, SchedulerMessage::HelloAck { .. }));
+        match ack {
+            SchedulerMessage::HelloAck { capabilities, .. } => {
+                assert_eq!(capabilities, [CAP_SIDE_CHANNEL])
+            }
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frames_from_a_peer_that_predates_the_side_channel_still_parse() {
+        // The exact bytes a scheduler and an executor built before these fields
+        // existed put on the wire. Optional additions are what let one side
+        // upgrade without the other, so this is the compatibility contract.
+        let legacy_ack = br#"{"type":"hello_ack","scheduler_id":"s","protocol_version":1}
+"#;
+        match FrameReader::new(&legacy_ack[..])
+            .read::<SchedulerMessage>()
+            .expect("a legacy hello_ack must still parse")
+            .0
+        {
+            SchedulerMessage::HelloAck { capabilities, .. } => assert!(
+                capabilities.is_empty(),
+                "an ack with no list advertises nothing, so no new frame is ever sent"
+            ),
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+
+        let legacy_job = br#"{"type":"job","id":"j","task_name":"t","payload_len":0,"retry_count":0,"max_retries":3,"queue":"default","timeout_ms":0,"namespace":null}
+"#;
+        let (frame, payload) = FrameReader::new(&legacy_job[..])
+            .read::<SchedulerMessage>()
+            .expect("a legacy job frame must still parse");
+        let dispatch = frame.into_dispatch(payload).expect("a job frame");
+        assert!(dispatch.disabled_middleware.is_empty());
+        assert_eq!(dispatch.job.metadata, None);
+    }
+
+    #[test]
+    fn side_channel_frames_round_trip_and_are_never_results() {
+        let (progress, payload) = round_trip(
+            &ExecutorMessage::Progress {
+                job_id: "job-1".into(),
+                progress: 42,
+            },
+            &[],
+        );
+        assert!(matches!(
+            &progress,
+            ExecutorMessage::Progress { job_id, progress } if job_id == "job-1" && *progress == 42
+        ));
+        assert!(
+            progress.into_job_result(payload).is_none(),
+            "progress must never consume a job's one outcome"
+        );
+
+        // A published partial: level `result`, no message, value in `extra`.
+        let (frame, payload) =
+            ExecutorMessage::task_log("job-1", "resize", "result", "", Some(r#"{"step":3}"#));
+        let (frame, payload) = round_trip(&frame, &payload);
+        match &frame {
+            ExecutorMessage::TaskLog {
+                job_id,
+                task_name,
+                level,
+                message,
+                extra_len,
+            } => {
+                assert_eq!(job_id, "job-1");
+                assert_eq!(task_name, "resize");
+                assert_eq!(level, "result");
+                assert!(message.is_empty());
+                assert_eq!(*extra_len, Some(payload.len()));
+                assert_eq!(payload, br#"{"step":3}"#);
+            }
+            other => panic!("expected a task_log frame, got {other:?}"),
+        }
+        assert!(frame.into_job_result(payload).is_none());
+    }
+
+    #[test]
+    fn a_log_without_extra_is_distinct_from_one_with_empty_extra() {
+        for (label, extra, expected) in [
+            ("no extra", None, None),
+            ("empty extra", Some(""), Some(0)),
+            ("some extra", Some("{}"), Some(2)),
+        ] {
+            let (frame, payload) = ExecutorMessage::task_log("j", "t", "info", "hi", extra);
+            let (frame, _) = round_trip(&frame, &payload);
+            match frame {
+                ExecutorMessage::TaskLog { extra_len, .. } => {
+                    assert_eq!(extra_len, expected, "{label} must survive the round trip")
+                }
+                other => panic!("expected a task_log frame for {label}, got {other:?}"),
+            }
+        }
     }
 
     fn hello_with_token(token: Option<&str>) -> ExecutorMessage {
@@ -957,7 +1224,7 @@ mod tests {
     #[test]
     fn oversized_payload_is_rejected_before_allocating() {
         let header = format!(
-            r#"{{"type":"job","id":"j","task_name":"t","payload_len":{},"retry_count":0,"max_retries":0,"queue":"q","timeout_ms":0,"namespace":null}}"#,
+            r#"{{"type":"job","id":"j","task_name":"t","payload_len":{},"retry_count":0,"max_retries":0,"queue":"q","timeout_ms":0,"namespace":null,"disabled_middleware":[],"metadata":null}}"#,
             MAX_PAYLOAD_BYTES + 1
         );
         let mut buf = header.into_bytes();
