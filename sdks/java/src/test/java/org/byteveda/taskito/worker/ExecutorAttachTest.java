@@ -17,11 +17,18 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.byteveda.taskito.JobContext;
+import org.byteveda.taskito.middleware.Middleware;
+import org.byteveda.taskito.middleware.TaskContext;
 import org.byteveda.taskito.task.Task;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -62,13 +69,26 @@ class ExecutorAttachTest {
         private final CountDownLatch connected = new CountDownLatch(1);
         private final AtomicReference<@Nullable Socket> socket = new AtomicReference<>();
         private final AtomicReference<@Nullable JsonNode> hello = new AtomicReference<>();
-        private final Deque<JsonNode> results = new ArrayDeque<>();
+        private final Deque<Frame> results = new ArrayDeque<>();
         private final boolean refuse;
+
+        /**
+         * What this scheduler promises to do on the executor's behalf. Empty by
+         * default — a scheduler built before the side-channel existed, which is
+         * the compatibility case worth defaulting to.
+         */
+        private final List<String> capabilities;
+
         private @Nullable InputStream in;
         private @Nullable OutputStream out;
 
         FakeScheduler(boolean refuse) throws IOException {
+            this(refuse, List.of());
+        }
+
+        FakeScheduler(boolean refuse, List<String> capabilities) throws IOException {
             this.refuse = refuse;
+            this.capabilities = capabilities;
             this.server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
             this.accepting = new Thread(this::accept, "fake-scheduler");
             this.accepting.setDaemon(true);
@@ -85,8 +105,8 @@ class ExecutorAttachTest {
                 socket.set(client);
                 in = client.getInputStream();
                 out = client.getOutputStream();
-                JsonNode frame = readFrame();
-                hello.set(frame);
+                Frame frame = readFrame();
+                hello.set(frame == null ? null : frame.header());
                 if (refuse) {
                     client.close();
                 } else {
@@ -96,7 +116,9 @@ class ExecutorAttachTest {
                             "scheduler_id",
                             "fake-scheduler",
                             "protocol_version",
-                            PROTOCOL_VERSION));
+                            PROTOCOL_VERSION,
+                            "capabilities",
+                            capabilities));
                 }
                 connected.countDown();
             } catch (IOException e) {
@@ -104,8 +126,15 @@ class ExecutorAttachTest {
             }
         }
 
+        /** A frame header and the blob that followed it. */
+        record Frame(JsonNode header, byte[] payload) {
+            String type() {
+                return header.path("type").asText("");
+            }
+        }
+
         /** Read one frame: a JSON header line, then exactly the payload it declares. */
-        private @Nullable JsonNode readFrame() throws IOException {
+        private @Nullable Frame readFrame() throws IOException {
             InputStream stream = in;
             if (stream == null) {
                 return null;
@@ -120,10 +149,8 @@ class ExecutorAttachTest {
             }
             JsonNode node = JSON.readTree(header.toString(StandardCharsets.UTF_8));
             int declared = declaredPayloadLength(node);
-            if (declared > 0) {
-                stream.readNBytes(declared);
-            }
-            return node;
+            byte[] payload = declared > 0 ? stream.readNBytes(declared) : new byte[0];
+            return new Frame(node, payload);
         }
 
         private static int declaredPayloadLength(JsonNode header) {
@@ -133,6 +160,12 @@ class ExecutorAttachTest {
             }
             if (type.equals("success")) {
                 JsonNode len = header.get("result_len");
+                return len == null || len.isNull() ? 0 : len.asInt(0);
+            }
+            if (type.equals("task_log")) {
+                // A published partial can be arbitrarily large, so `extra` rides
+                // as the frame's blob rather than inside the header.
+                JsonNode len = header.get("extra_len");
                 return len == null || len.isNull() ? 0 : len.asInt(0);
             }
             return 0;
@@ -156,45 +189,72 @@ class ExecutorAttachTest {
         }
 
         void sendJob(String id, String taskName, byte[] payload) throws IOException {
+            sendJob(id, taskName, payload, List.of(), null);
+        }
+
+        void sendJob(
+                String id,
+                String taskName,
+                byte[] payload,
+                List<String> disabledMiddleware,
+                @Nullable String metadataJson)
+                throws IOException {
             OutputStream stream = out;
             if (stream == null) {
                 return;
             }
-            Map<String, Object> header = Map.of(
-                    "type",
-                    "job",
-                    "id",
-                    id,
-                    "task_name",
-                    taskName,
-                    "payload_len",
-                    payload.length,
-                    "retry_count",
-                    0,
-                    "max_retries",
-                    3,
-                    "queue",
-                    "default",
-                    "timeout_ms",
-                    30_000);
+            Map<String, Object> header = new LinkedHashMap<>();
+            header.put("type", "job");
+            header.put("id", id);
+            header.put("task_name", taskName);
+            header.put("payload_len", payload.length);
+            header.put("retry_count", 0);
+            header.put("max_retries", 3);
+            header.put("queue", "default");
+            header.put("timeout_ms", 30_000);
+            // Resolved by the scheduler, because an executor has no storage of
+            // its own to read the settings or the job row from.
+            header.put("disabled_middleware", disabledMiddleware);
+            header.put("metadata", metadataJson);
             stream.write(JSON.writeValueAsBytes(header));
             stream.write('\n');
             stream.write(payload);
             stream.flush();
         }
 
+        /**
+         * Every side-channel frame a job produced, plus its result.
+         *
+         * <p>The result is ordered behind them on one connection, so its arrival
+         * is what proves the collection is complete rather than merely early.
+         */
+        List<Frame> collectUntilResult() throws IOException {
+            List<Frame> collected = new ArrayList<>();
+            for (; ; ) {
+                Frame frame = nextFrame();
+                collected.add(frame);
+                if (!frame.type().equals("progress") && !frame.type().equals("task_log")) {
+                    return collected;
+                }
+            }
+        }
+
         /** The next frame that is not a heartbeat. */
         JsonNode nextResult() throws IOException {
+            return nextFrame().header();
+        }
+
+        Frame nextFrame() throws IOException {
             long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SETTLE_MS);
             while (System.nanoTime() < deadline) {
                 if (!results.isEmpty()) {
                     return results.removeFirst();
                 }
-                JsonNode frame = readFrame();
+                Frame frame = readFrame();
                 if (frame == null) {
                     break;
                 }
-                if (!frame.path("type").asText("").equals("heartbeat")) {
+                if (!frame.type().equals("heartbeat")) {
                     return frame;
                 }
             }
@@ -224,6 +284,19 @@ class ExecutorAttachTest {
     private static Executor.Builder greeter() {
         Task<String> greet = Task.of("greet", String.class);
         return Executor.builder().register(Handler.of(greet, (String who) -> "hello " + who));
+    }
+
+    /** A handler that uses the job-scoped conveniences needing storage in a worker. */
+    private static Executor.Builder reporter() {
+        Task<String> report = Task.of("report", String.class);
+        return Executor.builder().register(Handler.of(report, (String ignored) -> {
+            JobContext job = JobContext.current();
+            job.setProgress(50);
+            job.log("halfway");
+            job.publish(Map.of("stage", "halfway"));
+            job.setProgress(100);
+            return "reported";
+        }));
     }
 
     @Test
@@ -259,6 +332,109 @@ class ExecutorAttachTest {
         JsonNode result = fake.nextResult();
         assertEquals("success", result.path("type").asText());
         assertEquals("job-1", result.path("job_id").asText());
+    }
+
+    @Test
+    @Timeout(60)
+    void sendsProgressAndLogsToASchedulerThatAdvertisedTheSideChannel() throws Exception {
+        // The whole point of #589: a task on an executor is not silently poorer
+        // than the same task on an in-process worker.
+        FakeScheduler fake = new FakeScheduler(false, List.of("side_channel"));
+        scheduler = fake;
+
+        attach(reporter(), fake.port());
+        fake.awaitHello();
+        fake.sendJob("job-1", "report", JSON.writeValueAsBytes("x"));
+
+        List<FakeScheduler.Frame> frames = fake.collectUntilResult();
+        assertEquals("success", frames.get(frames.size() - 1).type());
+
+        List<Integer> progress = frames.stream()
+                .filter(frame -> frame.type().equals("progress"))
+                .map(frame -> frame.header().path("progress").asInt())
+                .toList();
+        assertFalse(progress.isEmpty(), "the task's progress must reach the scheduler");
+        assertEquals(100, progress.get(progress.size() - 1));
+
+        FakeScheduler.Frame partial = frames.stream()
+                .filter(frame -> frame.header().path("level").asText("").equals("result"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("the published partial never arrived"));
+        assertEquals("job-1", partial.header().path("job_id").asText());
+        assertEquals("report", partial.header().path("task_name").asText());
+        assertEquals("halfway", JSON.readTree(partial.payload()).path("stage").asText());
+    }
+
+    @Test
+    @Timeout(60)
+    void sendsNothingToASchedulerThatAdvertisedNoSideChannel() throws Exception {
+        // The negotiation path: an executor must never write a frame its peer
+        // could not parse, so it degrades to dropping instead.
+        FakeScheduler fake = new FakeScheduler(false);
+        scheduler = fake;
+
+        attach(reporter(), fake.port());
+        fake.awaitHello();
+        fake.sendJob("job-1", "report", JSON.writeValueAsBytes("x"));
+
+        List<FakeScheduler.Frame> frames = fake.collectUntilResult();
+        assertEquals(1, frames.size(), "only the result may cross the wire");
+        assertEquals("success", frames.get(0).type());
+    }
+
+    @Test
+    @Timeout(60)
+    void skipsAMiddlewareTheDispatchSaysIsDisabled() throws Exception {
+        // A dashboard toggle has to reach a process that cannot read settings,
+        // so it rides the job frame instead.
+        FakeScheduler fake = new FakeScheduler(false);
+        scheduler = fake;
+
+        List<String> ran = new CopyOnWriteArrayList<>();
+        Middleware recorder = new Middleware() {
+            @Override
+            public void before(TaskContext context) {
+                ran.add("recorder");
+            }
+        };
+        attach(greeter().middleware(List.of(recorder)), fake.port());
+        fake.awaitHello();
+
+        fake.sendJob("job-1", "greet", JSON.writeValueAsBytes("ada"));
+        assertEquals("success", fake.nextResult().path("type").asText());
+        assertEquals(List.of("recorder"), ran);
+
+        fake.sendJob(
+                "job-2",
+                "greet",
+                JSON.writeValueAsBytes("bob"),
+                List.of(recorder.getClass().getName()),
+                null);
+        assertEquals("success", fake.nextResult().path("type").asText());
+        assertEquals(List.of("recorder"), ran, "a middleware disabled on the dispatch must not run");
+    }
+
+    @Test
+    @Timeout(60)
+    void middlewareReadsMetadataOffTheDispatch() throws Exception {
+        // An executor cannot fetch the job row, so metadata rides the frame or
+        // middleware sees an empty map.
+        FakeScheduler fake = new FakeScheduler(false);
+        scheduler = fake;
+
+        AtomicReference<@Nullable Object> seen = new AtomicReference<>();
+        Middleware reader = new Middleware() {
+            @Override
+            public void before(TaskContext context) {
+                seen.set(context.job().metadata().get("trace_id"));
+            }
+        };
+        attach(greeter().middleware(List.of(reader)), fake.port());
+        fake.awaitHello();
+
+        fake.sendJob("job-1", "greet", JSON.writeValueAsBytes("ada"), List.of(), "{\"trace_id\":\"abc\"}");
+        assertEquals("success", fake.nextResult().path("type").asText());
+        assertEquals("abc", seen.get());
     }
 
     @Test
