@@ -896,3 +896,32 @@ fn a_side_channel_frame_never_settles_the_job_it_names() {
         assert_eq!(kind(&expect_result(results)), "success");
     });
 }
+
+#[test]
+fn an_empty_extra_is_stored_as_empty_rather_than_absent() {
+    // The frame keeps `Some(0)` and `None` apart, so the row has to as well: an
+    // `extra` of `""` that lands as NULL is data the sender did send.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"payload"))
+            .expect("send job");
+        executor.expect_dispatch();
+
+        executor.report_log("job-1", "resize", "info", "empty", Some(""));
+        executor.report_log("job-1", "resize", "info", "absent", None);
+
+        wait_until(
+            || sink.logs().len() == 2,
+            "both log lines were never applied",
+        );
+        let logs = sink.logs();
+        assert_eq!(logs[0].extra.as_deref(), Some(""));
+        assert_eq!(logs[1].extra, None);
+
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}

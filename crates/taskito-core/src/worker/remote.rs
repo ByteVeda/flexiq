@@ -921,9 +921,13 @@ impl Shared {
                 level,
                 message: text,
                 task_name: _,
-                extra_len: _,
+                extra_len,
             } => {
-                self.apply_task_log(executor, &job_id, &level, &text, payload);
+                // `extra_len` is what says whether there was a blob at all: an
+                // `extra` of `""` and no `extra` both arrive as an empty
+                // payload, and only one of them should store NULL.
+                let extra = extra_len.map(|_| payload);
+                self.apply_task_log(executor, &job_id, &level, &text, extra);
                 return;
             }
             other => other,
@@ -978,27 +982,24 @@ impl Shared {
         job_id: &str,
         level: &str,
         message: &str,
-        extra: Vec<u8>,
+        extra: Option<Vec<u8>>,
     ) {
         let Some((pump, dispatched)) = self.side_channel_for(executor, job_id, "task log") else {
             return;
         };
         // The blob is whatever the SDK encoded; storage takes it as a string,
         // so a non-UTF-8 payload is a broken sender rather than data to store.
-        let extra = match extra.is_empty() {
-            true => None,
-            false => match String::from_utf8(extra) {
-                Ok(extra) => Some(extra),
-                Err(_) => {
-                    log::warn!(
-                        "[taskito] executor {} sent a task log for job {job_id} whose extra blob \
-                         is not UTF-8; dropping the blob",
-                        executor.id
-                    );
-                    None
-                }
-            },
-        };
+        let extra = extra.and_then(|blob| match String::from_utf8(blob) {
+            Ok(extra) => Some(extra),
+            Err(_) => {
+                log::warn!(
+                    "[taskito] executor {} sent a task log for job {job_id} whose extra blob is \
+                     not UTF-8; dropping the blob",
+                    executor.id
+                );
+                None
+            }
+        });
         pump.log(LogLine {
             job_id: job_id.to_string(),
             task_name: dispatched.task_name,
