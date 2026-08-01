@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { DETACHED_ENV } from "../../detached";
 import { loadApp } from "../load-app";
 import { positiveIntFlag } from "../parse";
 
@@ -26,6 +27,10 @@ export function registerExecutor(program: Command): void {
     .option("--connect-timeout <ms>", "how long to wait for the connection")
     .option("--drain-timeout <ms>", "how long a drain waits for in-flight jobs")
     .action(async (appPath: string, options: ExecutorOptions) => {
+      // Set before the app is imported: building a Queue is what opens storage,
+      // and an executor must not.
+      process.env[DETACHED_ENV] = "1";
+
       const app = await loadApp(appPath);
       // The token is read from the environment inside `runExecutor`, never as a
       // flag: in argv it would show up in `ps` output and shell history.

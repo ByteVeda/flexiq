@@ -29,6 +29,7 @@ export {
   type Role,
   serveDashboard,
 } from "./dashboard";
+export { DetachedStorageError } from "./detached";
 export {
   CryptoError,
   EnqueueSkippedError,

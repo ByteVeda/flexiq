@@ -8,6 +8,7 @@ import {
   type QueueOverride,
   type TaskOverride,
 } from "./dashboard/stores";
+import { createDetachedNative, isDetached } from "./detached";
 import {
   EnqueueSkippedError,
   InterceptionError,
@@ -189,7 +190,10 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private workflowTracker?: WorkflowTracker;
 
   constructor(options: QueueOptions = {}) {
-    this.native = JsQueue.open(toOpenOptions(options));
+    // An executor imports this app only to find its handlers; connecting here
+    // would put the database credentials back in the app image that the attach
+    // split exists to keep them out of.
+    this.native = isDetached() ? createDetachedNative() : JsQueue.open(toOpenOptions(options));
     const chain = options.codec === undefined ? [] : [options.codec].flat();
     const baseSerializer = options.serializer ?? new JsonSerializer();
     this.serializer =
@@ -219,7 +223,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** The shared workflow tracker, or `undefined` on addons without workflows. */
   private trackerIfSupported(): WorkflowTracker | undefined {
-    if (typeof this.native.markWorkflowNodeResult !== "function") {
+    // Workflow tracking is storage-backed, so a detached executor has none —
+    // answered here rather than by probing the stand-in, which would throw.
+    if (isDetached() || typeof this.native.markWorkflowNodeResult !== "function") {
       return undefined;
     }
     this.workflowTracker ??= new WorkflowTracker(
