@@ -17,7 +17,7 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 use taskito_core::worker::{
     AttachAddress, CancelSignals, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
-    ExecutorSession, WorkerDispatcher,
+    ExecutorSession, ExecutorSideChannel, WorkerDispatcher,
 };
 
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
@@ -60,6 +60,9 @@ pub struct JsExecutor {
     /// Cancels delivered as protocol frames. The JS side polls this instead of
     /// a storage flag, which a detached executor does not have.
     cancels: Arc<CancelSignals>,
+    /// Progress, task logs and toggles — the storage-shaped operations the
+    /// scheduler performs on this executor's behalf.
+    side_channel: ExecutorSideChannel,
     scheduler_id: String,
     executor_id: String,
     peer: String,
@@ -98,6 +101,52 @@ impl JsExecutor {
     #[napi]
     pub fn is_cancel_requested(&self, job_id: String) -> bool {
         self.cancels.is_cancelled(&job_id)
+    }
+
+    /// Whether the scheduler applies progress and task logs on our behalf.
+    ///
+    /// False against a scheduler with no storage configured for it, or one
+    /// built before the side-channel existed. The methods below are no-ops
+    /// either way; this exists so the shell can say so once rather than
+    /// silently dropping a task's progress bar.
+    #[napi]
+    pub fn supports_side_channel(&self) -> bool {
+        self.side_channel.is_supported()
+    }
+
+    /// Report a running job's progress (0-100).
+    ///
+    /// An executor has no storage of its own, so this travels to the scheduler
+    /// instead. Fire-and-forget: it never blocks the calling task and never
+    /// fails its job.
+    #[napi]
+    pub fn report_progress(&self, job_id: String, progress: i32) {
+        self.side_channel.report_progress(&job_id, progress);
+    }
+
+    /// Write one structured log line for a running job. A published partial is
+    /// this at level `result`, with the value as `extra`.
+    #[napi]
+    pub fn write_task_log(
+        &self,
+        job_id: String,
+        task_name: String,
+        level: String,
+        message: String,
+        extra: Option<String>,
+    ) {
+        self.side_channel
+            .write_task_log(&job_id, &task_name, &level, &message, extra.as_deref());
+    }
+
+    /// Middleware the operator has disabled for a running job's task.
+    ///
+    /// Resolved by the scheduler at dispatch and carried on the job frame, so
+    /// a dashboard toggle is honoured without the settings read this process
+    /// has no storage to perform.
+    #[napi]
+    pub fn disabled_middleware(&self, job_id: String) -> Vec<String> {
+        self.side_channel.disabled_middleware(&job_id)
     }
 
     /// Resolve once the scheduler ends the session — a `shutdown` frame, or the
@@ -217,6 +266,7 @@ pub async fn start_executor(
         Ok(JsExecutor {
             executor_id: handle.executor_id().to_string(),
             session: handle.session(),
+            side_channel: handle.side_channel(),
             cancels,
             handle: Arc::new(Mutex::new(Some(handle))),
             scheduler_id,
