@@ -12,7 +12,8 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { type Executor, Queue } from "../../src/index";
+import { DETACHED_ENV } from "../../src/detached";
+import { currentJob, DetachedStorageError, type Executor, Queue } from "../../src/index";
 
 /** Frame-format version this build speaks; mirrored from the core. */
 const PROTOCOL_VERSION = 1;
@@ -514,3 +515,105 @@ function restoreEnv(name: string, previous: string | undefined): void {
     process.env[name] = previous;
   }
 }
+
+it("opens no storage", async () => {
+  // The point of the attach split: app code without database credentials.
+  // Pointed at a Postgres DSN nothing is listening on — a Queue that connected
+  // could not even be constructed.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("echo", (value: string) => `echo:${value}`);
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+
+    // And it still runs jobs.
+    scheduler.sendJob("job-1", "echo", payloadFor(queue, ["detached"]));
+    const frame = await scheduler.nextResult();
+    expect(frame.header.type).toBe("success");
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("degrades progress and publish rather than failing the job", async () => {
+  // Losing the progress bar is a degradation; failing the job over it would be
+  // a regression for anyone moving a worker to an executor.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("reports", async () => {
+      const job = currentJob();
+      job?.setProgress(50);
+      job?.publish({ stage: "halfway" });
+      job?.setProgress(100);
+      return "reported";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "reports", payloadFor(queue, []));
+
+    const frame = await scheduler.nextResult();
+    expect(frame.header.type).toBe("success");
+    expect(frame.header.job_id).toBe("job-1");
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("refuses a storage operation instead of silently dropping it", async () => {
+  // An enqueue that quietly vanished would be worse than one that threw.
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("echo", (value: string) => value);
+    expect(() => queue.enqueue("echo", ["x"])).toThrow(DetachedStorageError);
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("aborts a running handler when a cancel frame arrives", async () => {
+  // A detached executor has no storage flag to poll, so the cancel has to reach
+  // the handler's AbortSignal from the frame the scheduler sent.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    let started = false;
+    queue.task("slow", async () => {
+      started = true;
+      const job = currentJob();
+      for (let i = 0; i < 400; i += 1) {
+        if (job?.signal.aborted) {
+          throw new Error("cancelled");
+        }
+        await sleep(25);
+      }
+      return "never";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "slow", payloadFor(queue, []));
+
+    const deadline = Date.now() + SETTLE_MS;
+    while (!started && Date.now() < deadline) {
+      await sleep(10);
+    }
+    scheduler.send({ type: "cancel", job_id: "job-1" });
+
+    const frame = await scheduler.nextResult();
+    // `cancelled`, not `failure`: the handler observed the signal and threw,
+    // and the native side reclassified that throw as the cancellation it was.
+    // Both halves of the frame-driven cancel path in one assertion.
+    expect(frame.header.type).toBe("cancelled");
+    expect(frame.header.job_id).toBe("job-1");
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
