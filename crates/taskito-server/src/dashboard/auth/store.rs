@@ -268,9 +268,26 @@ fn edit_users<R>(
     mut mutate: impl FnMut(&mut BTreeMap<String, User>) -> R,
 ) -> Result<R> {
     kv::update(storage, USERS_KEY, |rows: &mut Map<String, Value>| {
-        let mut users = parse_users(rows);
+        let before = parse_users(rows);
+        let mut users = before.clone();
         let outcome = mutate(&mut users);
-        *rows = encode_users(&users);
+
+        // Edited per user rather than by replacing the document. A row this
+        // build cannot parse never reaches `users`, so writing the whole map
+        // back would delete it — and deleting the last row that `count_users`
+        // can see reopens the setup flow, which is an authentication bypass.
+        for (username, user) in &users {
+            if let Ok(value) = serde_json::to_value(user) {
+                rows.insert(username.clone(), value);
+            }
+        }
+        // Only rows this build could read are removable; anything it skipped is
+        // not this edit's to delete.
+        for username in before.keys() {
+            if !users.contains_key(username) {
+                rows.remove(username);
+            }
+        }
         outcome
     })
 }
@@ -296,18 +313,6 @@ fn parse_users(rows: &Map<String, Value>) -> BTreeMap<String, User> {
                 }
             },
         )
-        .collect()
-}
-
-/// Encode users back into stored rows.
-fn encode_users(users: &BTreeMap<String, User>) -> Map<String, Value> {
-    users
-        .iter()
-        .filter_map(|(username, user)| {
-            serde_json::to_value(user)
-                .ok()
-                .map(|value| (username.clone(), value))
-        })
         .collect()
 }
 
@@ -361,6 +366,35 @@ mod tests {
             count_users(&storage).expect("storage"),
             1,
             "an unreadable row must not reopen setup"
+        );
+    }
+
+    #[test]
+    fn an_edit_leaves_a_row_this_build_cannot_read() {
+        // `edit_users` used to replace the whole document with only the rows it
+        // could parse, so one create deleted every unreadable neighbour. If the
+        // deleted row was the last one `count_users` could see, setup reopened.
+        let storage = storage();
+        kv::write(
+            &storage,
+            USERS_KEY,
+            &serde_json::json!({ "legacy": { "unexpected": true } }),
+        )
+        .expect("seed a foreign row");
+
+        create_user(&storage, "ops", "supersecret", Role::Admin)
+            .expect("storage")
+            .expect("created");
+
+        let rows: Map<String, Value> = kv::read(&storage, USERS_KEY).expect("storage");
+        assert!(
+            rows.contains_key("legacy"),
+            "an edit to a neighbour must not delete an unreadable row: {rows:?}"
+        );
+        assert_eq!(
+            count_users(&storage).expect("storage"),
+            2,
+            "both rows still count toward keeping setup closed"
         );
     }
 
