@@ -287,7 +287,7 @@ def payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
 
 def decode_result(task_name: str, payload: bytes) -> Any:
     """Decode a success frame's blob with the task's own serializer."""
-    from attach_app import queue  # type: ignore[import-not-found]
+    from attach_app import queue
 
     return queue._get_serializer(task_name).loads(payload)
 
