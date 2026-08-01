@@ -311,18 +311,42 @@ public final class Cli {
                 // and strand in-flight jobs for the reaper. Signal, then wait
                 // for the main thread to finish close().
                 Thread main = Thread.currentThread();
-                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                Thread hook = new Thread(() -> {
                     executor.stop();
                     try {
                         main.join(TimeUnit.SECONDS.toMillis(DRAIN_WAIT_SECONDS));
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                }));
-                executor.awaitSession();
+                });
+                Runtime.getRuntime().addShutdownHook(hook);
+                try {
+                    executor.awaitSession();
+                } finally {
+                    // Dropped before the normal exit path reaches it. `main`
+                    // calls `System.exit`, which runs hooks while the main
+                    // thread is still inside `Runtime.exit` — so a hook left
+                    // registered would wait out the whole drain budget for a
+                    // join that cannot complete, then call `stop()` on an
+                    // already-closed control.
+                    dropHook(hook);
+                }
             }
             System.out.println("taskito executor detached");
             return 0;
+        }
+
+        /**
+         * Unregister the drain hook, tolerating the one case that cannot: the
+         * JVM is already shutting down, which means the hook is running and has
+         * the drain in hand.
+         */
+        private static void dropHook(Thread hook) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (IllegalStateException alreadyShuttingDown) {
+                // Nothing to undo — the hook is doing its job right now.
+            }
         }
 
         /** Slots from the flag, then the env, then one. */
