@@ -10,12 +10,19 @@ import org.byteveda.taskito.spi.WorkerControl;
  * <p>The mirror of {@link JniWorkerControl}, with the same locking contract:
  * every call holds the read lock, {@code close()} takes the write lock so it
  * waits out in-flight calls, and later calls throw instead of touching freed
- * native memory.
+ * native memory. {@link #awaitSession()} is the one exception — it parks for as
+ * long as the session lasts, so it counts itself instead of holding the lock.
  */
 public final class JniExecutorControl implements WorkerControl {
     private final long handle;
     private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
     private boolean closed; // guarded by stateLock
+
+    /** Monitor for {@link #waiting}, held only for the count. */
+    private final Object waiters = new Object();
+
+    /** Threads inside the native session wait; the handle is freed at zero. */
+    private int waiting; // guarded by waiters
 
     public JniExecutorControl(long handle) {
         this.handle = handle;
@@ -88,15 +95,28 @@ public final class JniExecutorControl implements WorkerControl {
     /**
      * Block until the scheduler ends the session.
      *
-     * <p>Holds the read lock for the whole wait, which is what keeps {@code close}
-     * from freeing the handle out from under a parked thread — {@code close} takes
-     * the write lock and so queues behind it.
+     * <p>The read lock is released before the native wait rather than held across
+     * it. {@link ReentrantReadWriteLock} blocks a new reader once a writer is
+     * queued, so a parked waiter holding the lock would leave a concurrent
+     * {@code stop()} stuck behind a {@code close()} that is itself waiting on the
+     * park — and only {@code stop()} could have ended it. The handle stays alive
+     * instead by counting waiters, which {@code close} drains before freeing.
      */
     public void awaitSession() {
         withOpenHandle(() -> {
-            NativeExecutor.awaitSession(handle);
+            synchronized (waiters) {
+                waiting++;
+            }
             return null;
         });
+        try {
+            NativeExecutor.awaitSession(handle);
+        } finally {
+            synchronized (waiters) {
+                waiting--;
+                waiters.notifyAll();
+            }
+        }
     }
 
     /** Idempotent: drains and frees the native handle exactly once. */
@@ -104,12 +124,32 @@ public final class JniExecutorControl implements WorkerControl {
     public void close() {
         stateLock.writeLock().lock();
         try {
-            if (!closed) {
-                closed = true;
-                NativeExecutor.close(handle);
+            if (closed) {
+                return;
             }
+            closed = true;
         } finally {
             stateLock.writeLock().unlock();
+        }
+
+        // Ends the session so anyone parked in `awaitSession` returns, then waits
+        // them out: the handle must not be freed while a native call still holds
+        // it. Interrupts are deferred rather than obeyed — leaving early would
+        // free the handle under a parked thread.
+        NativeExecutor.stop(handle);
+        boolean interrupted = false;
+        synchronized (waiters) {
+            while (waiting > 0) {
+                try {
+                    waiters.wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        NativeExecutor.close(handle);
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 }
