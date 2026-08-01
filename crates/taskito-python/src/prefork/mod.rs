@@ -309,10 +309,15 @@ fn dispatch_job(
     // Carried on to the child, which is where the task body — and so the
     // middleware chain — actually runs. Empty under an in-process worker,
     // whose children read the toggle list from storage themselves.
-    let disabled = side_channel
+    //
+    // Cloned out of the slot before it is used, as `relay_side_channel` does:
+    // the relay takes locks of its own, and this module holds exactly one at a
+    // time.
+    let relay = side_channel
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .as_ref()
+        .clone();
+    let disabled = relay
         .map(|relay| relay.disabled_middleware(&job.id))
         .unwrap_or_default();
 
