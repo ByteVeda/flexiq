@@ -23,8 +23,13 @@ tasks.withType<JavaCompile>().configureEach {
     options.release.set(17)
     // Error Prone is carried only for NullAway; every other check stays off so the
     // build fails on real nullness regressions and nothing else.
+    //
+    // `enabled.set(...)`, never `isEnabled = ...`: `ErrorProneOptions` has no
+    // `isEnabled` member, so that assignment resolves against the *outer*
+    // receiver — the JavaCompile task — and silently disables the compile
+    // task itself rather than Error Prone.
     options.errorprone {
-        isEnabled = false
+        enabled.set(false)
     }
 }
 
@@ -35,7 +40,7 @@ tasks.withType<JavaCompile>().configureEach {
 // nulls to assert the error paths, so they stay out.
 tasks.named<JavaCompile>("compileJava") {
     options.errorprone {
-        isEnabled = true
+        enabled.set(true)
         disableAllChecks.set(true)
         check("NullAway", CheckSeverity.ERROR)
         option("NullAway:OnlyNullMarked", "true")
