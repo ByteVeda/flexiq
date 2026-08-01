@@ -14,6 +14,12 @@ doing nothing, because an enqueue that quietly vanished would be worse than one
 that raised. Reads are the exception: ``None`` is what a queue with no such row
 returns anyway, and ``Queue.__init__`` performs some.
 
+The same split shows up in the job a handler receives. A dispatch frame carries
+what running the task needs, so ``created_at``, ``scheduled_at``, ``priority``,
+``metadata``, ``unique_key`` and ``notes`` arrive as zeros and ``None`` on an
+executor where an in-process worker would show the stored values. A task that
+needs them wants a worker, not an executor.
+
 Set by ``taskito executor`` before it imports the app, and inherited by the
 prefork children it spawns. Internal: applications should not set it.
 """

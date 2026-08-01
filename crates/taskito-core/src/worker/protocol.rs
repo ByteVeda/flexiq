@@ -250,6 +250,15 @@ impl SchedulerMessage {
     /// dedup key, archived result — take their defaults rather than being put
     /// on the wire. `status` is [`JobStatus::Running`] because that is what the
     /// job is by the time a frame describing it has been dispatched.
+    ///
+    /// Those defaults are not purely internal: the Node and Python SDKs build
+    /// their handler-visible job objects straight from this `Job`, so a task
+    /// reading `created_at`, `scheduled_at`, `priority`, `metadata`,
+    /// `unique_key` or `notes` sees zeros and nulls on an attached executor
+    /// where an in-process worker would show the stored values. Carrying them
+    /// would mean widening the frame for fields no dispatch decision uses, so
+    /// the difference is documented rather than papered over — see the
+    /// `detached` module in each SDK for the other side of the same trade.
     pub fn into_job(self, payload: Vec<u8>) -> Option<Job> {
         match self {
             Self::HelloAck { .. } | Self::Cancel { .. } | Self::Shutdown => None,
