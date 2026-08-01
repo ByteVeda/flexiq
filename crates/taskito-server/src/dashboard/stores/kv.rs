@@ -54,11 +54,17 @@ where
     for _ in 0..MAX_ATTEMPTS {
         let stored = storage.get_setting(key)?;
         let mut document: T = parse(key, stored.as_deref());
+        // Compared against the document as parsed, not against the raw stored
+        // string: on a missing key the raw is `None` while the encoding is the
+        // default (`[]`), so comparing to the raw would treat "changed nothing"
+        // as a change and write an empty row — which is what a delete for an
+        // unknown id used to do.
+        let before = serde_json::to_string(&document)?;
         let outcome = mutate(&mut document);
         let encoded = serde_json::to_string(&document)?;
         // A mutation that changed nothing needs no write — which is also what
         // keeps a lookup that matched no row from touching the document.
-        if stored.as_deref() == Some(encoded.as_str()) {
+        if encoded == before {
             return Ok(outcome);
         }
         if storage.set_setting_if(key, stored.as_deref(), &encoded)? {
@@ -96,4 +102,71 @@ fn parse<T: DeserializeOwned + Default>(key: &str, raw: Option<&str>) -> T {
         );
         T::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use taskito_core::storage::sqlite::SqliteStorage;
+
+    fn storage() -> SqliteStorage {
+        SqliteStorage::in_memory().expect("in-memory sqlite")
+    }
+
+    #[test]
+    fn a_no_op_mutation_on_a_missing_key_writes_nothing() {
+        // The skip used to compare the new encoding against the *raw* stored
+        // string. On a missing key that is `None` while the encoding is the
+        // default `[]`, so a mutation that changed nothing still wrote a row —
+        // which is how deleting an unknown webhook id created an empty one.
+        let storage = storage();
+
+        let found: bool = update(&storage, "missing", |names: &mut Vec<String>| {
+            let before = names.len();
+            names.retain(|name| name != "absent");
+            names.len() != before
+        })
+        .expect("update");
+
+        assert!(!found, "nothing matched");
+        assert_eq!(
+            storage.get_setting("missing").expect("read back"),
+            None,
+            "a mutation that changed nothing must leave no row"
+        );
+    }
+
+    #[test]
+    fn a_no_op_mutation_on_an_existing_key_leaves_it_alone() {
+        let storage = storage();
+        write(&storage, "present", &vec!["keep".to_string()]).expect("seed");
+
+        update(&storage, "present", |names: &mut Vec<String>| {
+            names.retain(|name| name != "absent");
+        })
+        .expect("update");
+
+        assert_eq!(
+            storage
+                .get_setting("present")
+                .expect("read back")
+                .as_deref(),
+            Some(r#"["keep"]"#)
+        );
+    }
+
+    #[test]
+    fn a_real_mutation_still_writes() {
+        let storage = storage();
+
+        update(&storage, "list", |names: &mut Vec<String>| {
+            names.push("added".to_string());
+        })
+        .expect("update");
+
+        assert_eq!(
+            storage.get_setting("list").expect("read back").as_deref(),
+            Some(r#"["added"]"#)
+        );
+    }
 }
