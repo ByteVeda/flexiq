@@ -16,7 +16,7 @@ import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { type Executor, Queue } from "../../src/index";
+import { currentJob, type Executor, Queue } from "../../src/index";
 
 const SERVER_BIN = process.env.TASKITO_SERVER_BIN;
 const SETTLE_MS = 60_000;
@@ -139,6 +139,65 @@ describe.skipIf(!SERVER_BIN)("against a real taskito-server", () => {
       async () => Boolean(queue.getJob(String(jobId))?.error?.includes("deliberate failure")),
       "the failure never reached storage",
     );
+  }, 120_000);
+
+  it("puts progress and published partials into storage via the scheduler", async () => {
+    // The done-when for #589, against the binary an operator actually runs:
+    // this process holds no database credentials, so these rows can only have
+    // reached storage through the scheduler.
+    const { port, dbPath } = await startScheduler();
+    const queue = new Queue({ dbPath });
+    queue.task("reports", async () => {
+      const job = currentJob();
+      job?.setProgress(50);
+      job?.publish({ stage: "halfway" });
+      job?.setProgress(100);
+      return "reported";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${port}` });
+    await sleep(1000);
+    const jobId = String(queue.enqueue("reports", []));
+
+    // The side-channel is fire-and-forget, so the last progress value and the
+    // partial may land just after the result. Making the job's completion a
+    // barrier for them would put a database write between a task and its own
+    // result, which is exactly what an executor exists to avoid.
+    await waitFor(async () => queue.getJob(jobId)?.progress === 100, "progress never reached 100");
+    await waitFor(
+      async () => queue.taskLogs(jobId).some((entry) => entry.level === "result"),
+      "the published partial never reached storage",
+    );
+
+    const partial = queue.taskLogs(jobId).find((entry) => entry.level === "result");
+    expect(JSON.parse(String(partial?.extra))).toEqual({ stage: "halfway" });
+  }, 120_000);
+
+  it("honours a dashboard middleware toggle on an attached executor", async () => {
+    const { port, dbPath } = await startScheduler();
+    const queue = new Queue({ dbPath });
+    const ran: string[] = [];
+    queue.use({ name: "recorder", before: () => void ran.push("recorder") });
+    queue.task("echo", (value: string) => `echo:${value}`);
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${port}` });
+    await sleep(1000);
+
+    const first = String(queue.enqueue("echo", ["a"]));
+    await waitFor(async () => queue.getJob(first)?.status === "complete", "the first job hung");
+    expect(ran).toEqual(["recorder"]);
+
+    queue.disableMiddlewareForTask("echo", "recorder");
+    // The scheduler resolves the list per dispatch behind a short cache, so a
+    // toggle takes effect within it rather than instantly. Each probe is judged
+    // against the count before it ran, since an earlier probe that predates the
+    // cache expiry legitimately still fires the middleware.
+    await waitFor(async () => {
+      const before = ran.length;
+      const jobId = String(queue.enqueue("echo", ["b"]));
+      await waitFor(async () => queue.getJob(jobId)?.status === "complete", "a probe job hung");
+      return ran.length === before;
+    }, "a middleware disabled in the dashboard still ran on the executor");
   }, 120_000);
 
   it("refuses an attach with the wrong token", async () => {
