@@ -902,6 +902,10 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
         shared.executor_id,
         job.id
     );
+    // This job reports here instead of through `send_result`, so the entry
+    // `accept_job` recorded before it knew the job would be declined has to be
+    // released on this path too.
+    shared.forget_toggles(&job.id);
     let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Failure {
         job_id: job.id.clone(),
         error: format!("executor did not run '{}': {reason}", job.task_name),

@@ -799,6 +799,33 @@ fn a_job_arriving_after_the_drain_is_declined_retryably() {
 }
 
 #[test]
+fn a_declined_job_releases_the_toggle_list_it_arrived_with() {
+    // The list is recorded before the executor knows the job will be declined,
+    // and a decline reports outside the result path that normally releases it.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+    let side_channel = handle.side_channel();
+    handle.stop();
+    scheduler.expect_heartbeat(0);
+
+    scheduler.send_job_with("job-late", "resize", b"", vec!["tracing".to_string()]);
+    assert!(matches!(
+        scheduler.expect_result(),
+        ExecutorMessage::Failure { .. }
+    ));
+
+    let deadline = Instant::now() + SETTLE;
+    while !side_channel.disabled_middleware("job-late").is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "a declined job left its toggle list behind"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_cancel_for_an_unknown_job_is_harmless() {
     // Cancels race completion by nature; one for a job that already finished
     // must not desync the stream or take the executor down.
