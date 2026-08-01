@@ -7,13 +7,23 @@ import importlib
 import os
 import signal as sig
 import sys
+import threading
 import time
 
+from taskito._taskito import Executor as _Executor
 from taskito.app import Queue
 from taskito.autoscale import AutoscaleConfig, serve_autoscaler
 from taskito.dashboard import serve_dashboard
+from taskito.detached import DETACHED_ENV
 from taskito.log_config import configure as configure_logging
 from taskito.scaler import serve_scaler
+
+# How long the executor's main loop blocks between signal checks. Short enough
+# that Ctrl-C feels immediate, long enough not to spin.
+_EXECUTOR_POLL_MS = 200
+
+# One job at a time unless asked otherwise: each slot is a whole interpreter.
+_EXECUTOR_DEFAULT_SLOTS = 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -47,6 +57,40 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["thread", "prefork"],
         default="thread",
         help="Worker pool: 'thread' (default) or 'prefork' for true CPU parallelism",
+    )
+
+    # executor subcommand
+    exec_parser = subparsers.add_parser(
+        "executor",
+        help="Run tasks for a detached scheduler instead of polling storage",
+        description=(
+            "Attach to a taskito-server scheduler and run its jobs in this process. "
+            "Needs no database credentials: everything a task needs arrives on the wire."
+        ),
+    )
+    exec_parser.add_argument(
+        "--app",
+        required=True,
+        help="Python path to the Queue instance (e.g., 'myapp.tasks:queue')",
+    )
+    exec_parser.add_argument(
+        "--attach",
+        default=None,
+        help=(
+            "Scheduler address: host:port, :port, or unix:/run/taskito.sock "
+            "(default: $TASKITO_ATTACH)"
+        ),
+    )
+    exec_parser.add_argument(
+        "--slots",
+        type=int,
+        default=None,
+        help=("Jobs to run concurrently, one prefork child each (default: $TASKITO_SLOTS, or 1)"),
+    )
+    exec_parser.add_argument(
+        "--executor-id",
+        default=None,
+        help="Identity announced to the scheduler (default: generated per process)",
     )
 
     # dashboard subcommand
@@ -219,6 +263,8 @@ def main() -> None:
 
     if args.command == "worker":
         run_worker(args)
+    elif args.command == "executor":
+        run_executor(args)
     elif args.command == "dashboard":
         run_dashboard(args)
     elif args.command == "info":
@@ -291,6 +337,96 @@ def run_worker(args: argparse.Namespace) -> None:
         queue._drain_timeout = args.drain_timeout
     queues = args.queues.split(",") if args.queues else None
     queue.run_worker(queues=queues, pool=args.pool, app=args.app)
+
+
+def run_executor(args: argparse.Namespace) -> None:
+    """Attach to a detached scheduler and run its jobs in this process.
+
+    The inverse of ``run_worker``: instead of polling storage for work, the
+    executor dials a scheduler that already holds the database connection and
+    runs whatever it is sent. Only the transport differs — jobs execute on the
+    same prefork pool, one child per slot.
+    """
+    address = args.attach or os.environ.get("TASKITO_ATTACH")
+    if not address:
+        print(
+            "Error: --attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7749",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    slots = _executor_slots(args.slots)
+
+    # Set before the app is imported: building a Queue is what opens storage,
+    # and an executor must not. Inherited by the prefork children, which import
+    # the same app module in their own interpreters.
+    os.environ[DETACHED_ENV] = "1"
+
+    queue = _load_queue(args.app)
+    tasks = sorted(queue._task_registry)
+
+    try:
+        executor = _Executor(
+            address,
+            args.app,
+            tasks,
+            slots,
+            # Env only, never a flag: a token in argv is visible in `ps` output
+            # and lands in shell history.
+            os.environ.get("TASKITO_ATTACH_TOKEN"),
+            args.executor_id,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(
+        f"taskito executor {executor.executor_id} attached to "
+        f"{executor.scheduler_id} at {executor.peer} "
+        f"({slots} slot(s), {len(tasks)} task(s)) — Ctrl-C to stop"
+    )
+
+    stopping = threading.Event()
+
+    def request_stop(signum: int, frame: object) -> None:
+        # Returns immediately; the drain runs on the executor's own threads.
+        stopping.set()
+        executor.stop()
+
+    sig.signal(sig.SIGTERM, request_stop)
+    sig.signal(sig.SIGINT, request_stop)
+
+    # Polled rather than blocked on: a Python signal handler only runs when the
+    # main thread holds the GIL, which it cannot do inside a blocking call.
+    while not stopping.is_set():
+        if executor.wait(_EXECUTOR_POLL_MS):
+            break
+
+    executor.shutdown()
+    print("taskito executor detached")
+
+
+def _executor_slots(flag: int | None) -> int:
+    """Resolve the slot count from the flag, then the env, then the default."""
+    if flag is not None:
+        value = flag
+    else:
+        raw = os.environ.get("TASKITO_SLOTS")
+        if raw is None:
+            return _EXECUTOR_DEFAULT_SLOTS
+        try:
+            value = int(raw)
+        except ValueError:
+            print(
+                f"Error: TASKITO_SLOTS must be an integer, got '{raw}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if value < 1:
+        print(f"Error: slots must be at least 1, got {value}", file=sys.stderr)
+        sys.exit(1)
+    return value
 
 
 def run_dashboard(args: argparse.Namespace) -> None:

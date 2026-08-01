@@ -1,7 +1,5 @@
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
-import type { Worker } from "../../index";
+import { loadApp } from "../load-app";
 import { positiveIntFlag } from "../parse";
 
 /** Grace period for in-flight results to drain after a stop signal. */
@@ -10,11 +8,6 @@ const SHUTDOWN_GRACE_MS = 200;
 interface RunOptions {
   queues?: string;
   batchSize?: string;
-}
-
-/** The minimal surface `run` needs from a user's app module. */
-interface WorkerApp {
-  runWorker(options?: { queues?: string[]; batchSize?: number }): Worker;
 }
 
 export function registerRun(program: Command): void {
@@ -49,14 +42,4 @@ export function registerRun(program: Command): void {
       process.once("SIGTERM", stop);
       await new Promise<never>(() => {});
     });
-}
-
-/** Import the user's app module and return its configured queue. */
-async function loadApp(appPath: string): Promise<WorkerApp> {
-  const module = (await import(pathToFileURL(resolve(appPath)).href)) as Record<string, unknown>;
-  const candidate = module.default ?? module.queue;
-  if (!candidate || typeof (candidate as WorkerApp).runWorker !== "function") {
-    throw new Error(`module "${appPath}" must export a Queue (default export or \`queue\`)`);
-  }
-  return candidate as WorkerApp;
 }

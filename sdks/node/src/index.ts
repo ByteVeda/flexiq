@@ -29,6 +29,7 @@ export {
   type Role,
   serveDashboard,
 } from "./dashboard";
+export { DetachedStorageError } from "./detached";
 export {
   CryptoError,
   EnqueueSkippedError,
@@ -69,6 +70,7 @@ export {
   type WorkerUnhealthyEvent,
   type WorkflowEvent,
 } from "./events";
+export { Executor, type ExecutorRunOptions } from "./executor";
 export {
   checkHealth,
   checkReadiness,

@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::auth::Secret;
-use crate::job::Job;
+use crate::job::{Job, JobStatus};
 use crate::scheduler::JobResult;
 
 /// Frame format version. Both sides announce it in the handshake; a mismatch
@@ -241,7 +241,132 @@ impl From<&Job> for SchedulerMessage {
     }
 }
 
+impl SchedulerMessage {
+    /// Rebuild the [`Job`] a dispatch frame describes. `None` for control
+    /// frames (`hello_ack`, `cancel`, `shutdown`).
+    ///
+    /// The inverse of [`SchedulerMessage::from`]. A frame carries only what
+    /// running a task needs, so the columns an executor never reads — timing,
+    /// dedup key, archived result — take their defaults rather than being put
+    /// on the wire. `status` is [`JobStatus::Running`] because that is what the
+    /// job is by the time a frame describing it has been dispatched.
+    ///
+    /// Those defaults are not purely internal: the Node and Python SDKs build
+    /// their handler-visible job objects straight from this `Job`, so a task
+    /// reading `created_at`, `scheduled_at`, `priority`, `metadata`,
+    /// `unique_key` or `notes` sees zeros and nulls on an attached executor
+    /// where an in-process worker would show the stored values. Carrying them
+    /// would mean widening the frame for fields no dispatch decision uses, so
+    /// the difference is documented rather than papered over — see the
+    /// `detached` module in each SDK for the other side of the same trade.
+    pub fn into_job(self, payload: Vec<u8>) -> Option<Job> {
+        match self {
+            Self::HelloAck { .. } | Self::Cancel { .. } | Self::Shutdown => None,
+            Self::Job {
+                id,
+                task_name,
+                retry_count,
+                max_retries,
+                queue,
+                timeout_ms,
+                namespace,
+                payload_len: _,
+            } => Some(Job {
+                id,
+                queue,
+                task_name,
+                payload,
+                status: JobStatus::Running,
+                priority: 0,
+                created_at: 0,
+                scheduled_at: 0,
+                started_at: None,
+                completed_at: None,
+                retry_count,
+                max_retries,
+                result: None,
+                error: None,
+                timeout_ms,
+                unique_key: None,
+                progress: None,
+                metadata: None,
+                notes: None,
+                cancel_requested: false,
+                expires_at: None,
+                result_ttl_ms: None,
+                namespace,
+                has_deps: false,
+            }),
+        }
+    }
+}
+
 impl ExecutorMessage {
+    /// Build the result frame and payload for a finished job.
+    ///
+    /// The inverse of [`ExecutorMessage::into_job_result`]. A success carries
+    /// its serialized result as the frame's blob, so the payload is returned
+    /// alongside the header rather than inside it.
+    pub fn from_job_result(result: JobResult) -> (Self, Vec<u8>) {
+        match result {
+            JobResult::Success {
+                job_id,
+                result,
+                task_name,
+                wall_time_ns,
+            } => {
+                // `Some(vec![])` is an empty result and `None` is no result, so
+                // the length is read off the `Option` itself — deriving it from
+                // the flattened payload would collapse the two.
+                let result_len = result.as_ref().map(Vec::len);
+                let payload = result.unwrap_or_default();
+                (
+                    Self::Success {
+                        job_id,
+                        result_len,
+                        task_name,
+                        wall_time_ns,
+                    },
+                    payload,
+                )
+            }
+            JobResult::Failure {
+                job_id,
+                error,
+                retry_count,
+                max_retries,
+                task_name,
+                wall_time_ns,
+                should_retry,
+                timed_out,
+            } => (
+                Self::Failure {
+                    job_id,
+                    error,
+                    retry_count,
+                    max_retries,
+                    task_name,
+                    wall_time_ns,
+                    should_retry,
+                    timed_out,
+                },
+                Vec::new(),
+            ),
+            JobResult::Cancelled {
+                job_id,
+                task_name,
+                wall_time_ns,
+            } => (
+                Self::Cancelled {
+                    job_id,
+                    task_name,
+                    wall_time_ns,
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
     /// Convert a result frame plus its payload into a [`JobResult`]. `None` for
     /// non-result frames (`hello`, `heartbeat`).
     pub fn into_job_result(self, payload: Vec<u8>) -> Option<JobResult> {
@@ -477,6 +602,138 @@ mod tests {
             }
             other => panic!("expected a job frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_job_survives_a_round_trip_through_a_frame() {
+        let payload = [0x02, 0x82, 0x82, 0x01, 0x61, 0x61, 0xa0];
+        let original = sample_job(&payload);
+
+        let (frame, read_payload) = round_trip(&SchedulerMessage::from(&original), &payload);
+        let rebuilt = frame.into_job(read_payload).expect("a job frame");
+
+        // Everything a task body can observe. The columns left out of the frame
+        // are storage bookkeeping the executor never reads.
+        assert_eq!(rebuilt.id, original.id);
+        assert_eq!(rebuilt.queue, original.queue);
+        assert_eq!(rebuilt.task_name, original.task_name);
+        assert_eq!(rebuilt.payload, original.payload);
+        assert_eq!(rebuilt.retry_count, original.retry_count);
+        assert_eq!(rebuilt.max_retries, original.max_retries);
+        assert_eq!(rebuilt.timeout_ms, original.timeout_ms);
+        assert_eq!(rebuilt.namespace, original.namespace);
+        assert_eq!(rebuilt.status, JobStatus::Running);
+    }
+
+    #[test]
+    fn control_frames_describe_no_job() {
+        assert!(SchedulerMessage::Shutdown.into_job(vec![]).is_none());
+        assert!(SchedulerMessage::Cancel {
+            job_id: "job-1".into()
+        }
+        .into_job(vec![])
+        .is_none());
+        assert!(SchedulerMessage::HelloAck {
+            scheduler_id: "s".into(),
+            protocol_version: PROTOCOL_VERSION,
+        }
+        .into_job(vec![])
+        .is_none());
+    }
+
+    #[test]
+    fn a_result_survives_a_round_trip_through_a_frame() {
+        for (label, original) in [
+            (
+                "a result",
+                JobResult::Success {
+                    job_id: "job-1".into(),
+                    result: Some(b"out".to_vec()),
+                    task_name: "resize".into(),
+                    wall_time_ns: 42,
+                },
+            ),
+            (
+                "an empty result",
+                JobResult::Success {
+                    job_id: "job-1".into(),
+                    result: Some(Vec::new()),
+                    task_name: "resize".into(),
+                    wall_time_ns: 42,
+                },
+            ),
+            (
+                "no result",
+                JobResult::Success {
+                    job_id: "job-1".into(),
+                    result: None,
+                    task_name: "resize".into(),
+                    wall_time_ns: 42,
+                },
+            ),
+        ] {
+            let JobResult::Success { result: before, .. } = &original else {
+                unreachable!("the table holds successes only")
+            };
+            let expected = before.clone();
+
+            let (frame, payload) = ExecutorMessage::from_job_result(original);
+            let (frame, payload) = round_trip(&frame, &payload);
+
+            match frame.into_job_result(payload) {
+                Some(JobResult::Success { result, .. }) => {
+                    assert_eq!(result, expected, "{label} must survive the round trip")
+                }
+                _ => panic!("expected a success for {label}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_failure_round_trips_with_its_verdict_intact() {
+        let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Failure {
+            job_id: "job-1".into(),
+            error: "boom".into(),
+            retry_count: 2,
+            max_retries: 5,
+            task_name: "resize".into(),
+            wall_time_ns: 7,
+            should_retry: false,
+            timed_out: true,
+        });
+        let (frame, payload) = round_trip(&frame, &payload);
+
+        match frame.into_job_result(payload) {
+            Some(JobResult::Failure {
+                error,
+                retry_count,
+                max_retries,
+                should_retry,
+                timed_out,
+                ..
+            }) => {
+                assert_eq!(error, "boom");
+                assert_eq!(retry_count, 2);
+                assert_eq!(max_retries, 5);
+                assert!(!should_retry, "only the executor can judge retryability");
+                assert!(timed_out);
+            }
+            _ => panic!("expected a failure"),
+        }
+    }
+
+    #[test]
+    fn a_cancellation_round_trips() {
+        let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Cancelled {
+            job_id: "job-1".into(),
+            task_name: "resize".into(),
+            wall_time_ns: 9,
+        });
+        let (frame, payload) = round_trip(&frame, &payload);
+        assert!(matches!(
+            frame.into_job_result(payload),
+            Some(JobResult::Cancelled { job_id, .. }) if job_id == "job-1"
+        ));
     }
 
     #[test]

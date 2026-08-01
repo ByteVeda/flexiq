@@ -12,6 +12,7 @@ mod backend;
 mod convert;
 mod dispatcher;
 mod error;
+mod executor;
 mod ffi;
 mod ffi_c;
 mod handle;

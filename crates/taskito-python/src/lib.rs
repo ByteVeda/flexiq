@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 #[cfg(not(feature = "native-async"))]
 mod async_worker;
+mod executor;
 #[cfg(feature = "native-async")]
 mod native_async;
 mod prefork;
@@ -51,6 +52,7 @@ fn _taskito(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQueue>()?;
     m.add_class::<PyJob>()?;
     m.add_class::<PyTaskConfig>()?;
+    m.add_class::<executor::PyExecutor>()?;
     #[cfg(feature = "native-async")]
     {
         m.add_class::<native_async::PyResultSender>()?;

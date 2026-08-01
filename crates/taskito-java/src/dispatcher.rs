@@ -17,8 +17,8 @@ use crossbeam_channel::Sender;
 use jni::objects::{GlobalRef, JValue};
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
-use taskito_core::worker::WorkerDispatcher;
-use taskito_core::{Storage, StorageBackend};
+use taskito_core::worker::{CancelSignals, WorkerDispatcher};
+use taskito_core::StorageBackend;
 use tokio::sync::oneshot;
 
 use crate::jvm;
@@ -63,7 +63,9 @@ impl Registry {
 pub struct JavaDispatcher {
     callbacks: GlobalRef,
     registry: Arc<Registry>,
-    storage: StorageBackend,
+    /// Where a cancel comes from: the storage flag for a worker, the scheduler's
+    /// `cancel` frame for an attached executor, which has no storage at all.
+    cancels: Arc<CancelSignals>,
 }
 
 impl JavaDispatcher {
@@ -71,7 +73,17 @@ impl JavaDispatcher {
         Self {
             callbacks,
             registry,
-            storage,
+            cancels: Arc::new(CancelSignals::from_storage(storage)),
+        }
+    }
+
+    /// A dispatcher with no storage, for an attached executor. Cancels arrive
+    /// only through [`WorkerDispatcher::notify_cancel`].
+    pub fn detached(callbacks: GlobalRef, registry: Arc<Registry>) -> Self {
+        Self {
+            callbacks,
+            registry,
+            cancels: Arc::new(CancelSignals::detached()),
         }
     }
 }
@@ -86,23 +98,31 @@ impl WorkerDispatcher for JavaDispatcher {
         while let Some(job) = job_rx.recv().await {
             let callbacks = self.callbacks.clone();
             let registry = self.registry.clone();
-            let storage = self.storage.clone();
+            let cancels = self.cancels.clone();
             let result_tx = result_tx.clone();
             tokio::spawn(async move {
-                let result = run_one(&callbacks, &registry, &storage, job).await;
+                let job_id = job.id.clone();
+                let result = run_one(&callbacks, &registry, &cancels, job).await;
+                // Release the cancel record now the job has reported, so a
+                // long-lived process does not accumulate ids.
+                cancels.forget(&job_id);
                 let _ = result_tx.send(result);
             });
         }
     }
 
     fn shutdown(&self) {}
+
+    fn notify_cancel(&self, job_id: &str) {
+        self.cancels.signal(job_id);
+    }
 }
 
 /// Submit one job to Java, await its completion, and translate to a [`JobResult`].
 async fn run_one(
     callbacks: &GlobalRef,
     registry: &Registry,
-    storage: &StorageBackend,
+    cancels: &CancelSignals,
     job: Job,
 ) -> JobResult {
     let started = Instant::now();
@@ -139,7 +159,7 @@ async fn run_one(
         Ok(TaskOutcome::Cancelled) => cancelled(job, wall),
         Ok(TaskOutcome::Failure(error, retryable)) => {
             // A failure on a cancel-requested job is a cancellation, not a fault.
-            if storage.is_cancel_requested(&job.id).unwrap_or(false) {
+            if cancels.is_cancelled(&job.id) {
                 cancelled(job, wall)
             } else {
                 failure(job, error, wall, false, retryable)

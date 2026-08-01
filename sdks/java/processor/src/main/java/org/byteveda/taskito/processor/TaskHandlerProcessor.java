@@ -3,6 +3,7 @@ package org.byteveda.taskito.processor;
 import java.io.IOException;
 import java.io.Writer;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -20,7 +21,9 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.tools.Diagnostic;
+import javax.tools.FileObject;
 import javax.tools.JavaFileObject;
+import javax.tools.StandardLocation;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -28,10 +31,19 @@ import org.jspecify.annotations.Nullable;
  * companion holding a typed {@code Task} constant per handler plus a static
  * {@code bind(Worker.Builder, <Class>)}. Reads the annotation structurally, so it
  * needs no dependency on the runtime module.
+ *
+ * <p>When the annotated class is top-level with an accessible no-arg constructor,
+ * the companion also gets a nested {@code Provider} class and is listed in
+ * {@code META-INF/services}, which is what lets {@code taskito executor} find
+ * handlers on the classpath with no user {@code main}.
  */
 @SupportedAnnotationTypes(TaskHandlerProcessor.ANNOTATION)
 public final class TaskHandlerProcessor extends AbstractProcessor {
     static final String ANNOTATION = "org.byteveda.taskito.annotation.TaskHandler";
+
+    /** Service the generated providers are registered under, for {@link java.util.ServiceLoader}. */
+    static final String SERVICE = "org.byteveda.taskito.worker.HandlerRegistryProvider";
+
     static final String RESOURCE = "org.byteveda.taskito.annotation.Resource";
     static final String COMPRESSED = "org.byteveda.taskito.annotation.Compressed";
     static final String ENCRYPTED = "org.byteveda.taskito.annotation.Encrypted";
@@ -42,6 +54,15 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
     public SourceVersion getSupportedSourceVersion() {
         return SourceVersion.latestSupported();
     }
+
+    /**
+     * Companions that can be service-loaded, accumulated across rounds.
+     *
+     * <p>The service file has to be written once, in the final round: the Filer
+     * rejects reopening a resource it has already created, so a per-round write
+     * would fail as soon as generated code triggered a second round.
+     */
+    private final Set<String> providers = new LinkedHashSet<>();
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
@@ -63,7 +84,70 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
             byClass.computeIfAbsent(owner, key -> new java.util.ArrayList<>()).add(method);
         }
         byClass.forEach(this::generate);
+        if (roundEnv.processingOver()) {
+            writeServiceFile();
+        }
         return true;
+    }
+
+    /**
+     * List the generated companions in {@code META-INF/services} so
+     * {@code ServiceLoader.load(HandlerRegistryProvider.class)} finds them.
+     */
+    private void writeServiceFile() {
+        if (providers.isEmpty()) {
+            return;
+        }
+        try {
+            FileObject file = processingEnv
+                    .getFiler()
+                    .createResource(StandardLocation.CLASS_OUTPUT, "", "META-INF/services/" + SERVICE);
+            try (Writer writer = file.openWriter()) {
+                for (String provider : providers) {
+                    writer.write(provider);
+                    writer.write("\n");
+                }
+            }
+        } catch (IOException e) {
+            processingEnv
+                    .getMessager()
+                    .printMessage(
+                            Diagnostic.Kind.ERROR,
+                            "failed to write META-INF/services/" + SERVICE + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Whether {@code owner} can be built by {@link java.util.ServiceLoader} — a
+     * top-level, non-abstract type with an accessible no-arg constructor.
+     *
+     * <p>A class with only injected dependencies cannot be, and only the user's
+     * own code knows how to build it; that stays the explicit
+     * {@code register(...)} path.
+     *
+     * <p>Every nested owner is excluded, static ones included: the companion is
+     * written at package level and names the handler by its simple name, which
+     * does not resolve for an {@code Outer.Inner}.
+     */
+    private boolean isServiceLoadable(TypeElement owner) {
+        if (owner.getModifiers().contains(Modifier.ABSTRACT)
+                || owner.getNestingKind().isNested()) {
+            return false;
+        }
+        boolean declaresAny = false;
+        for (Element enclosed : owner.getEnclosedElements()) {
+            if (enclosed.getKind() != ElementKind.CONSTRUCTOR) {
+                continue;
+            }
+            declaresAny = true;
+            ExecutableElement constructor = (ExecutableElement) enclosed;
+            if (constructor.getParameters().isEmpty()
+                    && !constructor.getModifiers().contains(Modifier.PRIVATE)) {
+                return true;
+            }
+        }
+        // No declared constructor at all means the implicit public no-arg one.
+        return !declaresAny;
     }
 
     private boolean validate(ExecutableElement method) {
@@ -114,6 +198,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
                 .append("import org.byteveda.taskito.task.Task;\n")
                 .append("import org.byteveda.taskito.worker.Handler;\n")
                 .append("import org.byteveda.taskito.worker.HandlerRegistry;\n")
+                .append("import org.byteveda.taskito.worker.HandlerRegistryProvider;\n")
                 .append("import org.byteveda.taskito.worker.Worker;\n")
                 .append(anyResources ? "import org.byteveda.taskito.resources.Resources;\n" : "")
                 .append("\n")
@@ -172,7 +257,34 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
                     .append(")");
             out.append(i + 1 < methods.size() ? ",\n" : ");\n");
         }
-        out.append("    }\n}\n");
+        out.append("    }\n");
+
+        // The ServiceLoader entry point. On the classpath a listed class must be
+        // a subtype of the service with a public no-arg constructor — the static
+        // `provider()` form only applies to modules — so this is a real nested
+        // implementation rather than a factory method on the companion.
+        if (isServiceLoadable(owner)) {
+            out.append("\n    /** Discovered by {@code taskito executor} via ServiceLoader. */\n")
+                    .append("    public static final class Provider implements HandlerRegistryProvider {\n")
+                    .append("        public Provider() {}\n\n")
+                    .append("        @Override\n")
+                    .append("        public HandlerRegistry registry() {\n            return handlers(new ")
+                    .append(ownerSimple)
+                    .append("());\n        }\n    }\n");
+            // Binary name: ServiceLoader resolves the nested class by `$` form.
+            providers.add(qualified + "$Provider");
+        } else {
+            processingEnv
+                    .getMessager()
+                    .printMessage(
+                            Diagnostic.Kind.NOTE,
+                            ownerSimple
+                                    + " is not a top-level type with an accessible no-arg constructor, so it"
+                                    + " cannot be discovered by `taskito executor`; register its handlers"
+                                    + " explicitly with " + companion + ".handlers(impl)",
+                            owner);
+        }
+        out.append("}\n");
 
         write(owner, qualified, out.toString());
     }

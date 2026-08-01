@@ -6,18 +6,18 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
-use super::auth::Secret;
-use super::protocol::{
+use taskito_core::job::{now_millis, Job, JobStatus, NewJob};
+use taskito_core::scheduler::{JobResult, SchedulerConfig};
+use taskito_core::storage::sqlite::SqliteStorage;
+use taskito_core::storage::{Storage, StorageBackend};
+use taskito_core::worker::auth::Secret;
+use taskito_core::worker::protocol::{
     ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
 };
-use super::remote::{AttachError, RemoteConfig, RemoteDispatcher};
-use super::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
-use super::WorkerDispatcher;
-use crate::job::{now_millis, Job, JobStatus, NewJob};
-use crate::scheduler::{JobResult, SchedulerConfig};
-use crate::storage::sqlite::SqliteStorage;
-use crate::storage::{Storage, StorageBackend};
-use crate::worker::Worker;
+use taskito_core::worker::remote::{AttachError, RemoteConfig, RemoteDispatcher};
+use taskito_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
+use taskito_core::worker::Worker;
+use taskito_core::worker::WorkerDispatcher;
 
 const SETTLE: Duration = Duration::from_secs(5);
 

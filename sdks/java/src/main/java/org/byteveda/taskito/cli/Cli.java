@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.dashboard.DashboardServer;
 import org.byteveda.taskito.model.DeadJob;
@@ -29,7 +30,8 @@ import picocli.CommandLine.ParentCommand;
             Cli.Pause.class,
             Cli.Resume.class,
             Cli.Dlq.class,
-            Cli.Dashboard.class
+            Cli.Dashboard.class,
+            Cli.Executor.class
         })
 public final class Cli {
     static final ObjectMapper JSON = new ObjectMapper();
@@ -249,6 +251,147 @@ public final class Cli {
                     return queue.deleteDead(id) ? 0 : 1;
                 }
             }
+        }
+    }
+
+    @Command(name = "executor", description = "Run tasks for a detached scheduler instead of polling storage.")
+    static final class Executor implements Callable<Integer> {
+        /** How long a shutdown hook waits for the drain before letting the JVM go. */
+        private static final int DRAIN_WAIT_SECONDS = 40;
+
+        @CommandLine.Spec
+        CommandLine.Model.CommandSpec spec;
+
+        @Option(
+                names = "--attach",
+                description = "Scheduler address: host:port, :port, or unix:/path (env: TASKITO_ATTACH).")
+        @Nullable
+        String attach;
+
+        @Option(names = "--slots", description = "Jobs to run concurrently (env: TASKITO_SLOTS).")
+        @Nullable
+        Integer slots;
+
+        @Option(names = "--executor-id", description = "Identity announced to the scheduler.")
+        @Nullable
+        String executorId;
+
+        @Override
+        public Integer call() throws Exception {
+            String address = attach != null ? attach : System.getenv("TASKITO_ATTACH");
+            if (address == null || address.isBlank()) {
+                System.err.println("--attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7749");
+                return 1;
+            }
+
+            int slotCount = resolveSlots();
+            org.byteveda.taskito.worker.Executor.Builder builder = org.byteveda.taskito.worker.Executor.builder()
+                    // Handlers come from META-INF/services, so no application
+                    // code has to run to register them.
+                    .discover()
+                    .attach(address)
+                    .slots(slotCount)
+                    // Env only, never a flag: a token in argv is visible in `ps`
+                    // output and lands in shell history.
+                    .token(envOrNull("TASKITO_ATTACH_TOKEN"))
+                    .executorId(executorId);
+
+            if (builder.tasks().isEmpty()) {
+                System.err.println("no handlers found on the classpath. Annotate methods with @TaskHandler and "
+                        + "make sure the annotation processor ran, or register them from your own main.");
+                return 1;
+            }
+
+            try (org.byteveda.taskito.worker.Executor executor = builder.start()) {
+                System.out.printf(
+                        "taskito executor %s attached to %s at %s (%d slot(s), %d task(s)) — Ctrl-C to stop%n",
+                        executor.executorId(),
+                        executor.schedulerId(),
+                        executor.peer(),
+                        slotCount,
+                        builder.tasks().size());
+                // A shutdown hook does not hold the JVM open, so stopping alone
+                // would let the process exit while the drain was still running
+                // and strand in-flight jobs for the reaper. Signal, then wait
+                // for the main thread to finish close().
+                Thread main = Thread.currentThread();
+                Thread hook = new Thread(() -> {
+                    executor.stop();
+                    try {
+                        main.join(TimeUnit.SECONDS.toMillis(DRAIN_WAIT_SECONDS));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                Runtime.getRuntime().addShutdownHook(hook);
+                try {
+                    executor.awaitSession();
+                } finally {
+                    // Dropped before the normal exit path reaches it. `main`
+                    // calls `System.exit`, which runs hooks while the main
+                    // thread is still inside `Runtime.exit` — so a hook left
+                    // registered would wait out the whole drain budget for a
+                    // join that cannot complete, then call `stop()` on an
+                    // already-closed control.
+                    dropHook(hook);
+                }
+            }
+            System.out.println("taskito executor detached");
+            return 0;
+        }
+
+        /**
+         * Unregister the drain hook, tolerating the one case that cannot: the
+         * JVM is already shutting down, which means the hook is running and has
+         * the drain in hand.
+         */
+        private static void dropHook(Thread hook) {
+            try {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            } catch (IllegalStateException alreadyShuttingDown) {
+                // Nothing to undo — the hook is doing its job right now.
+            }
+        }
+
+        /**
+         * An environment value, or null when unset <em>or blank</em>. Compose
+         * files and container runtimes set empty strings freely, and an empty
+         * token must read as "no token" rather than be presented as one.
+         */
+        private static @Nullable String envOrNull(String name) {
+            String value = System.getenv(name);
+            return value == null || value.isBlank() ? null : value;
+        }
+
+        /** Slots from the flag, then the env, then one. */
+        private int resolveSlots() {
+            if (slots != null) {
+                return atLeastOne(slots, "--slots");
+            }
+            String raw = System.getenv("TASKITO_SLOTS");
+            if (raw == null || raw.isBlank()) {
+                return 1;
+            }
+            int parsed;
+            try {
+                parsed = Integer.parseInt(raw.trim());
+            } catch (NumberFormatException e) {
+                throw new CommandLine.ParameterException(
+                        spec.commandLine(), "TASKITO_SLOTS must be an integer, got '" + raw + "'");
+            }
+            return atLeastOne(parsed, "TASKITO_SLOTS");
+        }
+
+        /**
+         * Reject a count the executor would silently clamp, so the banner cannot
+         * announce a concurrency the executor does not run with.
+         */
+        private int atLeastOne(int value, String source) {
+            if (value < 1) {
+                throw new CommandLine.ParameterException(
+                        spec.commandLine(), source + " must be at least 1, got " + value);
+            }
+            return value;
         }
     }
 

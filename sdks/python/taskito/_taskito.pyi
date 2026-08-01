@@ -571,6 +571,58 @@ class PyResultSender:
         wall_time_ns: int,
     ) -> bool: ...
 
+class Executor:
+    """A running attachment to a detached scheduler.
+
+    Constructing one performs the handshake, so a bad token or an unreachable
+    scheduler raises here rather than after the pool has been built. Jobs run on
+    the prefork pool — one child per slot.
+    """
+
+    def __init__(
+        self,
+        address: str,
+        app_path: str,
+        tasks: list[str],
+        slots: int,
+        token: str | None = None,
+        executor_id: str | None = None,
+    ) -> None: ...
+    @property
+    def scheduler_id(self) -> str:
+        """Identity the scheduler announced when it accepted this attach."""
+        ...
+
+    @property
+    def executor_id(self) -> str:
+        """Identity this executor attached under."""
+        ...
+
+    @property
+    def peer(self) -> str:
+        """Peer label of the scheduler connection."""
+        ...
+
+    def is_running(self) -> bool:
+        """Whether the scheduler session is still open."""
+        ...
+
+    def wait(self, timeout_ms: int) -> bool:
+        """Block up to `timeout_ms`, returning whether the session has ended.
+
+        Loop on this rather than blocking indefinitely: each return hands the
+        GIL back, which is the only moment a pending signal handler can run.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Stop accepting work and finish what is in flight. Returns at once."""
+        ...
+
+    def shutdown(self) -> None:
+        """Drain in-flight work, disconnect, and join. Idempotent."""
+        ...
+
 def _init_rust_logging() -> None:
     """Activate the Rust → Python `logging` bridge (idempotent)."""
     ...

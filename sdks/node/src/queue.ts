@@ -8,6 +8,7 @@ import {
   type QueueOverride,
   type TaskOverride,
 } from "./dashboard/stores";
+import { createDetachedNative, isDetached } from "./detached";
 import {
   EnqueueSkippedError,
   InterceptionError,
@@ -24,6 +25,7 @@ import {
   TaskitoError,
 } from "./errors";
 import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
+import { Executor, type ExecutorRunOptions } from "./executor";
 import {
   type Interception,
   type InterceptionAnalysis,
@@ -181,6 +183,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly resources = new ResourceRuntime();
   /** Workers started from this queue and not yet stopped — the shutdown set. */
   private readonly liveWorkers = new Set<Worker>();
+  private readonly liveExecutors = new Set<Executor>();
   private readonly webhookManager: WebhookManager;
   /** Built lazily — its constructor throws on addons lacking the `workflows` feature. */
   private workflowManager?: WorkflowManager;
@@ -188,7 +191,10 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private workflowTracker?: WorkflowTracker;
 
   constructor(options: QueueOptions = {}) {
-    this.native = JsQueue.open(toOpenOptions(options));
+    // An executor imports this app only to find its handlers; connecting here
+    // would put the database credentials back in the app image that the attach
+    // split exists to keep them out of.
+    this.native = isDetached() ? createDetachedNative() : JsQueue.open(toOpenOptions(options));
     const chain = options.codec === undefined ? [] : [options.codec].flat();
     const baseSerializer = options.serializer ?? new JsonSerializer();
     this.serializer =
@@ -218,7 +224,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** The shared workflow tracker, or `undefined` on addons without workflows. */
   private trackerIfSupported(): WorkflowTracker | undefined {
-    if (typeof this.native.markWorkflowNodeResult !== "function") {
+    // Workflow tracking is storage-backed, so a detached executor has none —
+    // answered here rather than by probing the stand-in, which would throw.
+    if (isDetached() || typeof this.native.markWorkflowNodeResult !== "function") {
       return undefined;
     }
     this.workflowTracker ??= new WorkflowTracker(
@@ -1643,17 +1651,50 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   }
 
   /**
-   * Stop every worker started from this queue — the programmatic equivalent of
-   * SIGINT/SIGTERM. Dispatch halts at once and the promise resolves once
-   * worker-scoped resources are disposed. Handlers already mid-flight are not
-   * awaited: like {@link Worker.stop}, this stops dispatch rather than draining
-   * the invocations in progress.
+   * Attach to a detached scheduler and run its jobs in this process.
    *
-   * A no-op when no worker is running, and safe alongside a direct
-   * {@link Worker.stop} — stopping twice does nothing the second time.
+   * The inverse of {@link Queue.runWorker}: the scheduler holds the database
+   * connection and dispatches over a socket, so this process runs task bodies
+   * without polling storage itself. Hold the returned {@link Executor}.
+   */
+  async runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
+    const disables = new MiddlewareDisableStore(this.native);
+    const executor: Executor = await Executor.start(this.native, {
+      onStopped: () => this.liveExecutors.delete(executor),
+      tasks: this.tasks,
+      serializer: this.serializer,
+      codecs: this.codecs,
+      middlewareFor: (taskName) => {
+        const disabled = disables.getFor(taskName);
+        return disabled.length === 0
+          ? this.middleware
+          : this.middleware.filter((mw, index) => !disabled.includes(middlewareKey(mw, index)));
+      },
+      emitter: this.emitter,
+      resources: this.resources,
+      run: options,
+    });
+    this.liveExecutors.add(executor);
+    return executor;
+  }
+
+  /**
+   * Stop every worker and executor started from this queue — the programmatic
+   * equivalent of SIGINT/SIGTERM. Dispatch halts at once and the promise
+   * resolves once worker-scoped resources are disposed. Handlers already
+   * mid-flight are not awaited: like {@link Worker.stop}, this stops dispatch
+   * rather than draining the invocations in progress. An executor is the
+   * exception — {@link Executor.stop} drains before it disconnects.
+   *
+   * A no-op when nothing is running, and safe alongside a direct
+   * {@link Worker.stop} or {@link Executor.stop} — stopping twice does nothing
+   * the second time.
    */
   async shutdown(): Promise<void> {
-    await Promise.all([...this.liveWorkers].map((worker) => worker.stop()));
+    await Promise.all([
+      ...[...this.liveWorkers].map((worker) => worker.stop()),
+      ...[...this.liveExecutors].map((executor) => executor.stop()),
+    ]);
   }
 }
 

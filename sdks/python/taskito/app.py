@@ -24,12 +24,13 @@ import os
 from collections import Counter
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from taskito._taskito import PyQueue
 from taskito.async_support.mixins import AsyncQueueMixin
 from taskito.batching import BatchAccumulator, BatchConfig
 from taskito.codecs import CodecSerializer, PayloadCodec
+from taskito.detached import DetachedNative, is_detached
 from taskito.enums import StorageBackend, coerce_enum
 from taskito.events import EventBus, EventType
 from taskito.exceptions import QueueFullError, SerializationError
@@ -250,32 +251,44 @@ class Queue(
         if isinstance(backend, StorageBackend):
             backend = backend.value
 
-        if backend == "sqlite":
+        # An executor imports this app only to find its handlers; opening
+        # storage here would put the database credentials back in the app image
+        # that the attach split exists to keep them out of.
+        detached = is_detached()
+
+        if backend == "sqlite" and not detached:
             # Ensure parent directory exists for SQLite
             db_dir = os.path.dirname(db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
 
-        self._inner = PyQueue(
-            db_path=db_path,
-            workers=workers,
-            default_retry=default_retry,
-            default_timeout=default_timeout,
-            default_priority=default_priority,
-            result_ttl=result_ttl,
-            backend=backend,
-            db_url=db_url,
-            schema=schema,
-            pool_size=pool_size,
-            scheduler_poll_interval_ms=scheduler_poll_interval_ms,
-            scheduler_reap_interval=scheduler_reap_interval,
-            scheduler_cleanup_interval=scheduler_cleanup_interval,
-            scheduler_batch_size=scheduler_batch_size,
-            namespace=namespace,
-            push_dispatch=push_dispatch,
-            dlq_auto_retry_delay=dlq_auto_retry_delay,
-            dlq_auto_retry_max=dlq_auto_retry_max,
-            retention=retention._as_map() if retention is not None else None,
+        # `cast`, not a union: the stand-in answers the job-scoped calls a task
+        # makes and raises on the rest, so widening the type would force all ~140
+        # storage call sites to handle a case only an executor ever sees.
+        self._inner: PyQueue = (
+            cast("PyQueue", DetachedNative())
+            if detached
+            else PyQueue(
+                db_path=db_path,
+                workers=workers,
+                default_retry=default_retry,
+                default_timeout=default_timeout,
+                default_priority=default_priority,
+                result_ttl=result_ttl,
+                backend=backend,
+                db_url=db_url,
+                schema=schema,
+                pool_size=pool_size,
+                scheduler_poll_interval_ms=scheduler_poll_interval_ms,
+                scheduler_reap_interval=scheduler_reap_interval,
+                scheduler_cleanup_interval=scheduler_cleanup_interval,
+                scheduler_batch_size=scheduler_batch_size,
+                namespace=namespace,
+                push_dispatch=push_dispatch,
+                dlq_auto_retry_delay=dlq_auto_retry_delay,
+                dlq_auto_retry_max=dlq_auto_retry_max,
+                retention=retention._as_map() if retention is not None else None,
+            )
         )
         self._backend = backend
         self._namespace = namespace
