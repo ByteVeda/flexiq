@@ -1223,7 +1223,10 @@ public final class InMemoryQueueBackend implements QueueBackend {
                     long token = seq.incrementAndGet();
                     inFlight.put(token, job.id);
                     dispatchedAt.put(token, System.nanoTime());
-                    bridge.onJob(token, job.id, job.taskName, job.payload);
+                    // Nulls, like a worker's dispatch: this backend *is* the
+                    // storage, so the bridge reads metadata and toggles from it
+                    // rather than being handed them.
+                    bridge.onJob(token, job.id, job.taskName, job.payload, null, null);
                 }
                 sleep();
             }

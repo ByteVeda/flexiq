@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
-use jni::objects::{GlobalRef, JValue};
+use jni::objects::{GlobalRef, JObject, JValue};
 use taskito_core::job::Job;
 use taskito_core::scheduler::JobResult;
-use taskito_core::worker::{CancelSignals, WorkerDispatcher};
+use taskito_core::worker::{CancelSignals, ExecutorSideChannel, WorkerDispatcher};
 use taskito_core::StorageBackend;
 use tokio::sync::oneshot;
 
@@ -66,6 +66,12 @@ pub struct JavaDispatcher {
     /// Where a cancel comes from: the storage flag for a worker, the scheduler's
     /// `cancel` frame for an attached executor, which has no storage at all.
     cancels: Arc<CancelSignals>,
+    /// Reads the toggle list the scheduler attached to each dispatch. `None`
+    /// for a worker, which has storage and reads the live list itself.
+    ///
+    /// Behind a lock because the handle only exists once the handshake has
+    /// completed, and `run` may already be going by then.
+    side_channel: Mutex<Option<ExecutorSideChannel>>,
 }
 
 impl JavaDispatcher {
@@ -74,6 +80,7 @@ impl JavaDispatcher {
             callbacks,
             registry,
             cancels: Arc::new(CancelSignals::from_storage(storage)),
+            side_channel: Mutex::new(None),
         }
     }
 
@@ -84,7 +91,32 @@ impl JavaDispatcher {
             callbacks,
             registry,
             cancels: Arc::new(CancelSignals::detached()),
+            side_channel: Mutex::new(None),
         }
+    }
+
+    /// Read each dispatch's toggle list from `side_channel`.
+    ///
+    /// Installed after the attach, which is the earliest the handle exists.
+    pub fn set_side_channel(&self, side_channel: ExecutorSideChannel) {
+        *self
+            .side_channel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(side_channel);
+    }
+
+    /// Middleware the scheduler resolved as disabled for `job_id`, as a JSON
+    /// array — the shape the Java side already parses a stored list from.
+    ///
+    /// `None` for a worker, whose bridge reads the live list from storage.
+    fn disabled_middleware(&self, job_id: &str) -> Option<String> {
+        let disabled = self
+            .side_channel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()?
+            .disabled_middleware(job_id);
+        serde_json::to_string(&disabled).ok()
     }
 }
 
@@ -100,9 +132,12 @@ impl WorkerDispatcher for JavaDispatcher {
             let registry = self.registry.clone();
             let cancels = self.cancels.clone();
             let result_tx = result_tx.clone();
+            // Resolved here, on the dispatch path, rather than inside the task:
+            // it is the toggle list this job was dispatched with.
+            let disabled = self.disabled_middleware(&job.id);
             tokio::spawn(async move {
                 let job_id = job.id.clone();
-                let result = run_one(&callbacks, &registry, &cancels, job).await;
+                let result = run_one(&callbacks, &registry, &cancels, job, disabled).await;
                 // Release the cancel record now the job has reported, so a
                 // long-lived process does not accumulate ids.
                 cancels.forget(&job_id);
@@ -124,11 +159,12 @@ async fn run_one(
     registry: &Registry,
     cancels: &CancelSignals,
     job: Job,
+    disabled_middleware: Option<String>,
 ) -> JobResult {
     let started = Instant::now();
     let (token, rx) = registry.register();
 
-    if let Err(err) = submit_to_java(callbacks, token, &job) {
+    if let Err(err) = submit_to_java(callbacks, token, &job, disabled_middleware.as_deref()) {
         registry.forget(token);
         return failure(job, err, started.elapsed().as_nanos() as i64, false, true);
     }
@@ -178,7 +214,12 @@ async fn run_one(
 
 /// Invoke `WorkerBridge.onJob` on an attached thread. Local refs are freed when
 /// the per-call attachment guard drops.
-fn submit_to_java(callbacks: &GlobalRef, token: u64, job: &Job) -> Result<(), String> {
+fn submit_to_java(
+    callbacks: &GlobalRef,
+    token: u64,
+    job: &Job,
+    disabled_middleware: Option<&str>,
+) -> Result<(), String> {
     let vm = jvm::vm();
     let mut env = vm
         .attach_current_thread()
@@ -188,18 +229,25 @@ fn submit_to_java(callbacks: &GlobalRef, token: u64, job: &Job) -> Result<(), St
     let payload = env
         .byte_array_from_slice(&job.payload)
         .map_err(|e| e.to_string())?;
+    // Both nullable, and both carried rather than looked up: an executor has no
+    // storage to read the job row or the toggle list from, and a worker's
+    // bridge ignores them in favour of the live values.
+    let metadata = optional_string(&mut env, job.metadata.as_deref())?;
+    let disabled = optional_string(&mut env, disabled_middleware)?;
     // An `Err(JavaException)` leaves the exception pending on the attached
     // thread; clear it before returning so the thread isn't poisoned for the
     // next call.
     if let Err(e) = env.call_method(
         callbacks,
         "onJob",
-        "(JLjava/lang/String;Ljava/lang/String;[B)V",
+        "(JLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;)V",
         &[
             JValue::Long(token as i64),
             JValue::Object(&job_id),
             JValue::Object(&task_name),
             JValue::Object(&payload),
+            JValue::Object(&metadata),
+            JValue::Object(&disabled),
         ],
     ) {
         let _ = env.exception_clear();
@@ -210,6 +258,22 @@ fn submit_to_java(callbacks: &GlobalRef, token: u64, job: &Job) -> Result<(), St
         return Err("WorkerBridge.onJob threw".to_string());
     }
     Ok(())
+}
+
+/// A Java `String`, or `null` when there is nothing to pass.
+///
+/// `JObject::null()` is what an absent value has to be: an empty string would
+/// read on the Java side as "present but empty", which is a different answer.
+fn optional_string<'local>(
+    env: &mut jni::JNIEnv<'local>,
+    value: Option<&str>,
+) -> Result<JObject<'local>, String> {
+    match value {
+        Some(value) => Ok(JObject::from(
+            env.new_string(value).map_err(|e| e.to_string())?,
+        )),
+        None => Ok(JObject::null()),
+    }
 }
 
 fn cancelled(job: Job, wall_time_ns: i64) -> JobResult {
