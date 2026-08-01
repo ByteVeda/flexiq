@@ -9,7 +9,7 @@ pub mod upkeep;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use taskito_core::{RemoteConfig, RemoteDispatcher};
+use taskito_core::{RemoteConfig, RemoteDispatcher, StorageSideChannel};
 
 use crate::config::dashboard::{AuthMode, DashboardConfig};
 use crate::config::{backend, Config};
@@ -38,6 +38,10 @@ pub fn run(config: Config) -> Result<()> {
     let dispatcher = config.attach.as_ref().map(|attach| {
         RemoteDispatcher::new(RemoteConfig {
             auth_token: attach.token.clone(),
+            // This process holds the connection an executor deliberately does
+            // not, so it is the one that applies its progress and task logs and
+            // resolves its middleware toggles.
+            side_channel: Some(Arc::new(StorageSideChannel::new(backend.storage.clone()))),
             ..RemoteConfig::default()
         })
     });
