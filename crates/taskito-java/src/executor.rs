@@ -13,19 +13,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
-use jni::sys::{jboolean, jlong, JNI_FALSE};
+use jni::sys::{jboolean, jint, jlong, JNI_FALSE};
 use jni::JNIEnv;
 use serde::Deserialize;
 
 use taskito_core::worker::{
     AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    WorkerDispatcher,
+    ExecutorSideChannel, WorkerDispatcher,
 };
 
 use crate::convert::parse_json;
 use crate::dispatcher::{JavaDispatcher, Registry, TaskOutcome};
 use crate::error::BindingError;
-use crate::ffi::{guard, new_string, read_bytes, read_string};
+use crate::ffi::{guard, new_string, read_bytes, read_optional_string, read_string};
 use crate::handle::{self, into_handle};
 
 /// How an executor attaches. Durations are milliseconds, matching the Java API.
@@ -60,6 +60,9 @@ pub struct AttachedHandle {
     session: ExecutorSession,
     /// Resolves the tokens handed to Java, so a handler can complete its job.
     registry: Arc<Registry>,
+    /// Progress and task logs — the storage-shaped writes the scheduler
+    /// performs on this executor's behalf.
+    side_channel: ExecutorSideChannel,
     scheduler_id: String,
     executor_id: String,
     peer: String,
@@ -123,13 +126,16 @@ fn attach(options: ExecutorOptions, callbacks: GlobalRef) -> Result<AttachedHand
     let peer = client.peer().to_string();
 
     let registry = Arc::new(Registry::default());
-    let pool: Arc<dyn WorkerDispatcher> =
-        Arc::new(JavaDispatcher::detached(callbacks, registry.clone()));
-    let handle = client.spawn(pool);
+    let pool = Arc::new(JavaDispatcher::detached(callbacks, registry.clone()));
+    let handle = client.spawn(pool.clone() as Arc<dyn WorkerDispatcher>);
+    // Installed after the handshake, which is the earliest it exists. The
+    // dispatcher reads each job's toggle list through it.
+    pool.set_side_channel(handle.side_channel());
 
     Ok(AttachedHandle {
         executor_id: handle.executor_id().to_string(),
         session: handle.session(),
+        side_channel: handle.side_channel(),
         handle: Some(handle),
         registry,
         scheduler_id,
@@ -287,6 +293,59 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeExecutor_awaitSe
         // soon as this returns.
         let session = executor.session.clone();
         session.wait();
+        Ok(())
+    })
+}
+
+/// `void reportProgress(long handle, String jobId, int progress)`.
+///
+/// An executor has no storage of its own, so this travels to the scheduler,
+/// which applies it. Fire-and-forget: it never blocks the calling task.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeExecutor_reportProgress<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    job_id: JString<'local>,
+    progress: jint,
+) {
+    guard(&mut env, (), |env| {
+        let executor = unsafe { borrow(handle) };
+        let job_id = read_string(env, &job_id)?;
+        executor.side_channel.report_progress(&job_id, progress);
+        Ok(())
+    })
+}
+
+/// `void writeTaskLog(long handle, String jobId, String taskName, String level,
+/// String message, String extra)` — `extra` may be null.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeExecutor_writeTaskLog<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    job_id: JString<'local>,
+    task_name: JString<'local>,
+    level: JString<'local>,
+    message: JString<'local>,
+    extra: JString<'local>,
+) {
+    guard(&mut env, (), |env| {
+        let executor = unsafe { borrow(handle) };
+        let job_id = read_string(env, &job_id)?;
+        let task_name = read_string(env, &task_name)?;
+        let level = read_string(env, &level)?;
+        let message = read_string(env, &message)?;
+        // Absent and empty are different: a published partial with no value is
+        // not the same as one whose value is the empty string.
+        let extra = read_optional_string(env, &extra)?;
+        executor.side_channel.write_task_log(
+            &job_id,
+            &task_name,
+            &level,
+            &message,
+            extra.as_deref(),
+        );
         Ok(())
     })
 }
