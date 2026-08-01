@@ -103,6 +103,8 @@ export class Worker {
     // every invocation (live toggles); task/queue overrides apply here, at
     // worker startup.
     const disables = new MiddlewareDisableStore(queue);
+    // The job id is unused here: a worker has storage, so it reads the live
+    // toggle list by task name rather than taking one off the dispatch.
     const middlewareFor = (taskName: string): readonly Middleware[] => {
       const disabled = disables.getFor(taskName);
       if (disabled.length === 0) {

@@ -21,8 +21,15 @@ export interface TaskCallbackDeps {
   serializer: Serializer;
   /** Named codec registry for per-task payload decode (see `TaskOptions.codecs`). */
   codecs?: ReadonlyMap<string, PayloadCodec>;
-  /** The middleware chain for a task, after dashboard disables are applied. */
-  middlewareFor: (taskName: string) => readonly Middleware[];
+  /**
+   * The middleware chain for a task, after dashboard disables are applied.
+   *
+   * Takes the job id because an attached executor resolves disables per
+   * dispatch — the scheduler attaches the list to the job frame, since the
+   * executor has no settings store to read it from. A worker ignores it and
+   * reads storage by task name.
+   */
+  middlewareFor: (taskName: string, jobId: string) => readonly Middleware[];
   emitter: Emitter;
   resources: ResourceRuntime;
   /** Backs progress, published partials, and the cancel-flag poll. */
@@ -35,6 +42,21 @@ export interface TaskCallbackDeps {
    * the native state those land in.
    */
   isCancelled?: (jobId: string) => boolean;
+  /**
+   * Overrides where a task's progress goes.
+   *
+   * Same reason as {@link isCancelled}: an executor has no storage, so it
+   * sends progress to the scheduler, which applies it.
+   */
+  setProgress?: (jobId: string, progress: number) => void;
+  /** Overrides where a task's log lines and published partials go. */
+  writeTaskLog?: (
+    jobId: string,
+    taskName: string,
+    level: string,
+    message: string,
+    extra?: string,
+  ) => void;
 }
 
 /**
@@ -49,6 +71,13 @@ export function createTaskCallback(
 ): (invocation: JsTaskInvocation) => Promise<JsTaskOutcome> {
   const { tasks, serializer, codecs, middlewareFor, emitter, resources, queue } = deps;
   const isCancelled = deps.isCancelled ?? ((jobId: string) => queue.isCancelRequested(jobId));
+  const setProgress =
+    deps.setProgress ??
+    ((jobId: string, progress: number) => queue.updateProgress(jobId, progress));
+  const writeTaskLog =
+    deps.writeTaskLog ??
+    ((jobId: string, taskName: string, level: string, message: string, extra?: string) =>
+      queue.writeTaskLog(jobId, taskName, level, message, extra));
 
   return async (invocation: JsTaskInvocation): Promise<JsTaskOutcome> => {
     // Built-in workflow cache-return: echo the single (cached) arg as the result.
@@ -74,16 +103,16 @@ export function createTaskCallback(
     // Resolve the middleware chain BEFORE allocating the cancel poller and
     // task scope — it reads storage and may throw, and nothing would clean
     // those up yet.
-    const chain = middlewareFor(invocation.taskName);
+    const chain = middlewareFor(invocation.taskName, invocation.id);
 
     // Cooperative cancel signal + job context exposed to the handler.
     const controller = new AbortController();
     const context: JobContext = {
       jobId: invocation.id,
       signal: controller.signal,
-      setProgress: (progress) => queue.updateProgress(invocation.id, progress),
+      setProgress: (progress) => setProgress(invocation.id, progress),
       publish: (value) =>
-        queue.writeTaskLog(invocation.id, invocation.taskName, "result", "", JSON.stringify(value)),
+        writeTaskLog(invocation.id, invocation.taskName, "result", "", JSON.stringify(value)),
     };
     const poller = setInterval(() => {
       try {
