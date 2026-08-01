@@ -49,9 +49,17 @@ export function registerExecutor(program: Command): void {
 
       // `stop()` drains in-flight work and disconnects; it is memoized, so the
       // signal path and a scheduler-initiated shutdown cannot tear down twice.
-      const stop = async () => {
-        await executor.stop();
-        process.exit(0);
+      // The handler cannot be `async`: nothing awaits what a signal listener
+      // returns, so a rejected `stop()` would surface as an unhandled rejection
+      // and abort the process mid-drain instead of finishing it.
+      const stop = (): void => {
+        executor.stop().then(
+          () => process.exit(0),
+          (error: unknown) => {
+            process.stderr.write(`taskito executor failed to stop cleanly: ${String(error)}\n`);
+            process.exit(1);
+          },
+        );
       };
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
