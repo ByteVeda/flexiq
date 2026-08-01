@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use taskito_core::worker::registry::TaskError;
-use taskito_core::worker::runner::Worker;
 use taskito_core::job::{now_millis, Job, JobStatus, NewJob};
 use taskito_core::resilience::retry::RetryPolicy;
 use taskito_core::scheduler::TaskConfig;
 use taskito_core::storage::sqlite::SqliteStorage;
 use taskito_core::storage::{Storage, StorageBackend};
+use taskito_core::worker::registry::TaskError;
+use taskito_core::worker::runner::Worker;
 
 fn test_backend() -> StorageBackend {
     StorageBackend::Sqlite(SqliteStorage::in_memory().expect("in-memory sqlite"))

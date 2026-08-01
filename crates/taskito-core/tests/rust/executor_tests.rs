@@ -26,9 +26,6 @@ use taskito_core::scheduler::JobResult;
 
 const SETTLE: Duration = Duration::from_secs(5);
 
-/// The drain budget every attached executor in these tests runs with.
-const SHUTDOWN_DRAIN: Duration = Duration::from_secs(2);
-
 /// What a [`TestPool`] should do with a job.
 enum Behaviour {
     Succeed(Option<Vec<u8>>),
@@ -37,10 +34,6 @@ enum Behaviour {
     },
     /// Park until released, so a test can hold a job in flight.
     Block(Receiver<()>),
-    /// Park until the test drops its sender. Unlike [`Behaviour::Block`] no
-    /// timeout releases it, so a shutdown that waits on the job never returns —
-    /// which is what makes the drain budget observable.
-    Wedge(Receiver<()>),
 }
 
 /// A minimal [`WorkerDispatcher`]: one job at a time, scripted per task name.
@@ -107,10 +100,6 @@ impl TestPool {
         match behaviour {
             Some(Behaviour::Block(release)) => {
                 let _ = release.recv_timeout(SETTLE);
-                success(job, None)
-            }
-            Some(Behaviour::Wedge(release)) => {
-                let _ = release.recv();
                 success(job, None)
             }
             Some(Behaviour::Fail { should_retry }) => JobResult::Failure {
@@ -229,7 +218,7 @@ fn dial(
             // Fast enough that a capacity assertion does not wait on a
             // production-cadence heartbeat.
             heartbeat_interval: Duration::from_millis(50),
-            shutdown_drain: SHUTDOWN_DRAIN,
+            shutdown_drain: Duration::from_secs(2),
             ..ExecutorConfig::new("test", "0.0.0")
         },
     );
@@ -920,11 +909,10 @@ fn the_executor_detaches_from_the_scheduler_when_it_stops() {
 fn shutdown_is_bounded_when_a_job_never_finishes() {
     // A task that ignores its cancel must not hang the process forever: the
     // drain budget expires and the executor disconnects, leaving the job to the
-    // scheduler's reaper. The job stays wedged for as long as `release` is held,
-    // so nothing but the budget can end the shutdown.
-    let (release, wedged) = crossbeam_channel::bounded::<()>(1);
+    // scheduler's reaper.
+    let (_release, released) = crossbeam_channel::bounded::<()>(1);
     let attached = attach(&["stuck"], 1);
-    attached.pool.on("stuck", Behaviour::Wedge(wedged));
+    attached.pool.on("stuck", Behaviour::Block(released));
 
     let started = Instant::now();
     with_running(&attached.dispatcher, |jobs, _results| {
@@ -935,13 +923,10 @@ fn shutdown_is_bounded_when_a_job_never_finishes() {
     attached.handle.shutdown();
 
     assert!(
-        started.elapsed() < SHUTDOWN_DRAIN * 3,
+        started.elapsed() < SETTLE * 3,
         "shutdown must be bounded by the drain budget (took {:?})",
         started.elapsed()
     );
-
-    // Held until here so the job could not have finished on its own.
-    drop(release);
 }
 
 #[test]

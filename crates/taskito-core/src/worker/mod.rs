@@ -50,10 +50,3 @@ pub trait WorkerDispatcher: Send + Sync {
     /// storage.
     fn notify_cancel(&self, _job_id: &str) {}
 }
-
-#[cfg(test)]
-mod executor_tests;
-#[cfg(test)]
-mod remote_tests;
-#[cfg(test)]
-mod tests;
