@@ -2,10 +2,11 @@
 //! socket is bound. A `FakeExecutor` plays the far end of the connection.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use taskito_core::job::{now_millis, Job, JobStatus, NewJob};
 use taskito_core::scheduler::{JobResult, SchedulerConfig};
@@ -940,4 +941,98 @@ fn dropping_a_dispatcher_that_never_ran_stops_the_drain_thread() {
         1,
         "the drain thread outlived the dispatcher that started it"
     );
+}
+
+/// A [`SideChannel`] whose settings read parks until the test releases it,
+/// standing in for a slow settings backend.
+struct ParkingSink {
+    entered: Sender<()>,
+    release: Receiver<()>,
+}
+
+impl SideChannel for ParkingSink {
+    fn update_progress(&self, _job_id: &str, _progress: i32) {}
+
+    fn write_task_log(
+        &self,
+        _job_id: &str,
+        _task_name: &str,
+        _level: &str,
+        _message: &str,
+        _extra: Option<&str>,
+        _namespace: Option<&str>,
+    ) {
+    }
+
+    fn disabled_middleware(&self, _task_name: &str) -> Vec<String> {
+        let _ = self.entered.try_send(());
+        // Returns as soon as the test drops its sender. Bounded rather than
+        // waiting forever so a regression fails the assertion below instead of
+        // wedging the runtime this parks on.
+        let _ = self.release.recv_timeout(SETTLE * 2);
+        vec!["tracing".to_string()]
+    }
+}
+
+#[test]
+fn resolving_toggles_does_not_stall_the_runtime_the_scheduler_shares() {
+    let (entered_tx, entered_rx) = crossbeam_channel::bounded(1);
+    let (release_tx, release_rx) = crossbeam_channel::bounded::<()>(0);
+    let dispatcher = RemoteDispatcher::new(RemoteConfig {
+        scheduler_id: "scheduler-test".to_string(),
+        placement_timeout: Duration::from_secs(5),
+        shutdown_drain: Duration::from_millis(200),
+        side_channel: Some(Arc::new(ParkingSink {
+            entered: entered_tx,
+            release: release_rx,
+        })),
+        ..RemoteConfig::default()
+    });
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 1).expect("attach");
+
+    // One worker thread, so anything that blocks on it blocks the scheduler
+    // task too — the constraint `drain_and_close` documents.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (job_tx, job_rx) = tokio::sync::mpsc::channel(4);
+    let (result_tx, result_rx) = crossbeam_channel::bounded(4);
+    let running = {
+        let dispatcher = dispatcher.clone();
+        runtime.spawn(async move { dispatcher.run(job_rx, result_tx).await })
+    };
+
+    job_tx
+        .blocking_send(make_job("job-1", "resize", b"payload"))
+        .expect("send job");
+    entered_rx
+        .recv_timeout(SETTLE)
+        .expect("the toggle read never started");
+
+    // The read is parked. Had it been running on the worker thread, nothing
+    // else on this runtime could make progress.
+    let ran = Arc::new(AtomicBool::new(false));
+    runtime.spawn({
+        let ran = Arc::clone(&ran);
+        async move { ran.store(true, Ordering::SeqCst) }
+    });
+    wait_until(
+        || ran.load(Ordering::SeqCst),
+        "a parked settings read starved the runtime",
+    );
+
+    drop(release_tx);
+    let (_, disabled) = executor.expect_dispatch();
+    assert_eq!(
+        disabled,
+        ["tracing"],
+        "the resolved list must still reach the dispatch"
+    );
+
+    executor.succeed("job-1", "resize", None);
+    assert_eq!(kind(&expect_result(&result_rx)), "success");
+    drop(job_tx);
+    runtime.block_on(async { running.await.expect("run loop") });
 }

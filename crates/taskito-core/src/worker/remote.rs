@@ -739,7 +739,8 @@ impl Shared {
 
             let reason = match self.try_acquire(&job.task_name) {
                 Placement::Ready(executor) => {
-                    self.dispatch_to(&executor, job);
+                    let disabled = self.resolve_toggles(&job.task_name).await;
+                    self.dispatch_to(&executor, job, disabled);
                     return;
                 }
                 Placement::Saturated => "every executor advertising it is busy",
@@ -792,6 +793,31 @@ impl Shared {
         }
     }
 
+    /// Resolve the middleware a dispatch should carry, off the runtime thread.
+    ///
+    /// Resolved by the scheduler rather than read by the executor: it has no
+    /// storage to read from. On a cache miss that is a settings read, and
+    /// `place` runs on the runtime the scheduler task shares — the same
+    /// constraint `drain_and_close` documents — so a slow settings backend must
+    /// not be able to stall it. The pump's cache means most dispatches answer
+    /// from memory and never reach the blocking pool.
+    async fn resolve_toggles(&self, task_name: &str) -> Vec<String> {
+        let Some(pump) = self.side_channel.as_ref() else {
+            return Vec::new();
+        };
+        let sink = Arc::clone(&pump.sink);
+        let task_name = task_name.to_string();
+        tokio::task::spawn_blocking(move || sink.disabled_middleware(&task_name))
+            .await
+            .unwrap_or_else(|error| {
+                log::warn!(
+                    "[taskito] resolving the middleware disable list panicked ({error}); \
+                     dispatching with none disabled"
+                );
+                Vec::new()
+            })
+    }
+
     /// Send a reserved job to its executor.
     ///
     /// Registers the job before writing so a fast executor cannot return a
@@ -799,7 +825,7 @@ impl Shared {
     /// means the connection is gone: the slot is released, the executor is
     /// dropped, and the job is left to the scheduler's reaper — the same
     /// recovery path a mid-job executor crash takes.
-    fn dispatch_to(&self, executor: &Arc<Executor>, job: Job) {
+    fn dispatch_to(&self, executor: &Arc<Executor>, job: Job, disabled: Vec<String>) {
         executor.in_flight.lock().unwrap_or_else(recover).insert(
             job.id.clone(),
             InFlight {
@@ -807,13 +833,6 @@ impl Shared {
                 namespace: job.namespace.clone(),
             },
         );
-
-        // Resolved here rather than read by the executor: it has no storage to
-        // read from, and the scheduler is already touching the row.
-        let disabled = match &self.side_channel {
-            Some(pump) => pump.sink.disabled_middleware(&job.task_name),
-            None => Vec::new(),
-        };
 
         let write = executor
             .writer
