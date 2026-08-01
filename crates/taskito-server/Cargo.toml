@@ -42,7 +42,7 @@ sha2 = "0.10"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 hmac = "0.12"
 thiserror = { workspace = true }
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Same parser reqwest uses, so the SSRF guard and the request agree on the host.
 url = "2"
