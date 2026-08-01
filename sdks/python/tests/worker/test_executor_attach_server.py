@@ -241,11 +241,15 @@ def test_a_dashboard_toggle_reaches_an_attached_executor(
         # a toggle takes effect within it rather than instantly.
         deadline = time.monotonic() + SETTLE
         while time.monotonic() < deadline:
+            # Each wait gets what is left of the outer budget rather than a
+            # fresh `SETTLE`, or one slow attempt would spend the whole thing
+            # and leave no room for the retry this loop exists to make.
+            remaining = max(deadline - time.monotonic(), 0.1)
             job_id = enqueue(db_path, MIDDLEWARED)
-            wait_for_status(db_path, job_id, "complete")
+            wait_for_status(db_path, job_id, "complete", timeout=remaining)
             toggled = queue.get_job(job_id)
             assert toggled is not None
-            if toggled.result(timeout=SETTLE) == "":
+            if toggled.result(timeout=remaining) == "":
                 return
             time.sleep(0.5)
         raise AssertionError("a middleware disabled in the dashboard still ran on the executor")
