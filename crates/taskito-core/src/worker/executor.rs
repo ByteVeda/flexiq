@@ -399,12 +399,19 @@ impl ExecutorHandle {
         }
 
         self.shared.link.connection.close();
-        for thread in self.threads.drain(..) {
-            if thread.join().is_err() {
-                log::error!(
-                    "[taskito] an executor thread panicked during shutdown of {}",
-                    self.shared.executor_id
-                );
+        // Joining is only safe once the results are out. A task that ignores
+        // its cancel keeps the pool's `run` from returning, so its thread never
+        // exits — joining it would hang the very shutdown it was asked to
+        // bound. Those threads are dropped instead, and the process is free to
+        // exit.
+        if self.shared.results_flushed.load(Ordering::Acquire) {
+            for thread in self.threads.drain(..) {
+                if thread.join().is_err() {
+                    log::error!(
+                        "[taskito] an executor thread panicked during shutdown of {}",
+                        self.shared.executor_id
+                    );
+                }
             }
         }
         log::info!("[taskito] executor {} detached", self.shared.executor_id);
