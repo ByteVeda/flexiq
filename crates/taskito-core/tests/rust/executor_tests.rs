@@ -20,7 +20,8 @@ use taskito_core::worker::executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
 };
 use taskito_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
+    PROTOCOL_VERSION,
 };
 use taskito_core::worker::remote::{RemoteConfig, RemoteDispatcher};
 use taskito_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
@@ -250,8 +251,19 @@ struct FakeScheduler {
 }
 
 impl FakeScheduler {
-    /// Handshake with an executor and return both ends live.
+    /// Handshake with an executor and return both ends live, advertising
+    /// nothing optional.
     fn attach(tasks: &[&str], slots: u32) -> (Self, ExecutorHandle, Arc<TestPool>) {
+        Self::attach_with(tasks, slots, Vec::new())
+    }
+
+    /// Handshake advertising `capabilities`, so a test can drive both sides of
+    /// the negotiation.
+    fn attach_with(
+        tasks: &[&str],
+        slots: u32,
+        capabilities: Vec<String>,
+    ) -> (Self, ExecutorHandle, Arc<TestPool>) {
         let (scheduler_end, executor_end) = MemoryTransport::pair();
 
         // `connect` blocks on the ack, so the scheduler side runs concurrently.
@@ -272,6 +284,7 @@ impl FakeScheduler {
                 .write_header(&SchedulerMessage::HelloAck {
                     scheduler_id: "scheduler-fake".to_string(),
                     protocol_version: PROTOCOL_VERSION,
+                    capabilities,
                 })
                 .expect("send ack");
             scheduler
@@ -297,6 +310,16 @@ impl FakeScheduler {
     }
 
     fn send_job(&mut self, id: &str, task_name: &str, payload: &[u8]) {
+        self.send_job_with(id, task_name, payload, Vec::new());
+    }
+
+    fn send_job_with(
+        &mut self,
+        id: &str,
+        task_name: &str,
+        payload: &[u8],
+        disabled_middleware: Vec<String>,
+    ) {
         self.writer
             .write(
                 &SchedulerMessage::Job {
@@ -308,6 +331,8 @@ impl FakeScheduler {
                     queue: "default".to_string(),
                     timeout_ms: 30_000,
                     namespace: None,
+                    disabled_middleware,
+                    metadata: None,
                 },
                 payload,
             )
@@ -985,4 +1010,165 @@ fn wait_timeout_reports_a_session_that_is_still_open() {
     assert!(attached.handle.is_running());
 
     attached.handle.shutdown();
+}
+
+// ── Side-channel negotiation ────────────────────────────────────────
+
+/// The frames a scheduler that advertised the side-channel receives.
+fn drain_side_channel(
+    scheduler: &mut FakeScheduler,
+    want: usize,
+) -> Vec<(ExecutorMessage, Vec<u8>)> {
+    let deadline = Instant::now() + SETTLE;
+    let mut seen = Vec::new();
+    while seen.len() < want {
+        assert!(
+            Instant::now() < deadline,
+            "only {} of {want} side-channel frame(s) arrived",
+            seen.len()
+        );
+        let frame = scheduler.next_frame();
+        if !matches!(frame.0, ExecutorMessage::Heartbeat { .. }) {
+            seen.push(frame);
+        }
+    }
+    seen
+}
+
+#[test]
+fn progress_and_logs_reach_a_scheduler_that_advertised_the_side_channel() {
+    let (mut scheduler, handle, _pool) =
+        FakeScheduler::attach_with(&["resize"], 1, vec![CAP_SIDE_CHANNEL.to_string()]);
+    let side_channel = handle.side_channel();
+    assert!(side_channel.is_supported());
+
+    side_channel.report_progress("job-1", 42);
+    side_channel.write_task_log("job-1", "resize", "info", "halfway", None);
+    side_channel.write_task_log("job-1", "resize", "result", "", Some(r#"{"step":3}"#));
+
+    let mut progress = None;
+    let mut logs = Vec::new();
+    for (frame, payload) in drain_side_channel(&mut scheduler, 3) {
+        match frame {
+            ExecutorMessage::Progress {
+                job_id,
+                progress: p,
+            } => progress = Some((job_id, p)),
+            ExecutorMessage::TaskLog { level, message, .. } => logs.push((level, message, payload)),
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+
+    assert_eq!(progress, Some(("job-1".to_string(), 42)));
+    assert!(logs.contains(&("info".to_string(), "halfway".to_string(), Vec::new())));
+    assert!(logs.contains(&(
+        "result".to_string(),
+        String::new(),
+        br#"{"step":3}"#.to_vec()
+    )));
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_scheduler_that_advertised_nothing_is_never_sent_a_side_channel_frame() {
+    // The negotiation path: an executor built with the side-channel attached to
+    // a scheduler built without it must degrade to dropping, not to writing a
+    // frame the peer would fail to parse.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+    let side_channel = handle.side_channel();
+    assert!(!side_channel.is_supported());
+
+    side_channel.report_progress("job-1", 42);
+    side_channel.write_task_log("job-1", "resize", "info", "halfway", None);
+
+    // A job round-trip is the proof: it can only be read once every frame ahead
+    // of it has been, so a leaked progress frame would surface here.
+    scheduler.send_job("job-1", "resize", b"payload");
+    assert!(matches!(
+        scheduler.expect_result(),
+        ExecutorMessage::Success { job_id, .. } if job_id == "job-1"
+    ));
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_flood_of_progress_neither_blocks_the_task_nor_grows_without_bound() {
+    // A progress-reporting loop is the shape that would otherwise stall a task
+    // on the socket. Progress is idempotent-latest, so a backlog collapses.
+    let (mut scheduler, handle, _pool) =
+        FakeScheduler::attach_with(&["resize"], 1, vec![CAP_SIDE_CHANNEL.to_string()]);
+    let side_channel = handle.side_channel();
+
+    let flooding = Instant::now();
+    for percent in 0..10_000 {
+        side_channel.report_progress("job-1", percent % 101);
+    }
+    assert!(
+        flooding.elapsed() < SETTLE,
+        "reporting progress must never park the task on the scheduler"
+    );
+
+    // Whatever coalescing did, the reader is still in sync and the newest value
+    // is what eventually lands.
+    let deadline = Instant::now() + SETTLE;
+    let mut latest = None;
+    while latest != Some(9_999 % 101) {
+        assert!(Instant::now() < deadline, "the last progress never arrived");
+        if let ExecutorMessage::Progress { progress, .. } = scheduler.next_frame().0 {
+            latest = Some(progress);
+        }
+    }
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_dispatched_toggle_list_is_readable_until_the_job_reports() {
+    let (mut scheduler, handle, pool) = FakeScheduler::attach(&["resize"], 1);
+    let side_channel = handle.side_channel();
+    assert!(
+        side_channel.disabled_middleware("job-1").is_empty(),
+        "an undispatched job has nothing disabled"
+    );
+
+    // Held in flight so the list can be observed while the task is running,
+    // which is the only window a handler could read it in.
+    let (release, held) = crossbeam_channel::bounded(1);
+    pool.on("resize", Behaviour::Block(held));
+    scheduler.send_job_with(
+        "job-1",
+        "resize",
+        b"payload",
+        vec!["tracing".to_string(), "app.mw.Audit".to_string()],
+    );
+
+    let deadline = Instant::now() + SETTLE;
+    while side_channel.disabled_middleware("job-1").is_empty() {
+        assert!(Instant::now() < deadline, "the toggle list never arrived");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        side_channel.disabled_middleware("job-1"),
+        ["tracing", "app.mw.Audit"]
+    );
+
+    // Released once the job reports, or the map would grow for the life of the
+    // process.
+    let _ = release.send(());
+    assert!(matches!(
+        scheduler.expect_result(),
+        ExecutorMessage::Success { .. }
+    ));
+    let deadline = Instant::now() + SETTLE;
+    while !side_channel.disabled_middleware("job-1").is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the toggle list was never released"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    handle.shutdown();
 }
