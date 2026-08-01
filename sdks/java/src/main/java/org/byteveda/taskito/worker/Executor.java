@@ -307,11 +307,20 @@ public final class Executor implements AutoCloseable {
                 throw e;
             }
             JniExecutorControl control = new JniExecutorControl(handle);
-            bridge.bind(control);
-            emitter.emit(new WorkerEvent(EventName.WORKER_STARTED, List.of()));
-            // Lease worker resources only after the attach succeeded, so a
-            // refused handshake leaks nothing.
-            resources.acquireWorker();
+            try {
+                bridge.bind(control);
+                emitter.emit(new WorkerEvent(EventName.WORKER_STARTED, List.of()));
+                // Lease worker resources only after the attach succeeded, so a
+                // refused handshake leaks nothing.
+                resources.acquireWorker();
+            } catch (RuntimeException e) {
+                // The attach already succeeded, so the socket, the reader thread
+                // and the native handle are live; a throwing listener or
+                // resource factory must not strand them for the process's life.
+                control.close();
+                pool.shutdownNow();
+                throw e;
+            }
             return new Executor(control, pool, resources, emitter);
         }
 
