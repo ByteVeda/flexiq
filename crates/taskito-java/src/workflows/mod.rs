@@ -424,7 +424,7 @@ fn mark_node_result(
     skip_cascade: bool,
 ) -> Result<Option<String>, BindingError> {
     let wf = queue.workflow_store()?;
-    let job = match queue.storage.get_job(job_id, None)? {
+    let job = match queue.storage.get_job(job_id, queue.namespace.as_deref())? {
         Some(j) => j,
         None => return Ok(None),
     };
@@ -536,7 +536,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_cancel
                 }
                 WorkflowNodeStatus::Running => {
                     if let Some(job_id) = &node.job_id {
-                        let _ = queue.storage.request_cancel(job_id, None);
+                        let _ = queue
+                            .storage
+                            .request_cancel(job_id, queue.namespace.as_deref());
                     }
                 }
                 _ => {}
@@ -678,7 +680,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_workfl
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let job_id = read_string(env, &job_id)?;
-        let job = match queue.storage.get_job(&job_id, None)? {
+        let job = match queue.storage.get_job(&job_id, queue.namespace.as_deref())? {
             Some(j) => j,
             None => return Ok(std::ptr::null_mut()),
         };

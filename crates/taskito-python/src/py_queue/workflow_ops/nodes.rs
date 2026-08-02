@@ -51,7 +51,10 @@ impl PyQueue {
         }
 
         let outcome: CoreResult<Outcome> = py.detach(|| {
-            let job = match self.storage.get_job(&job_id_owned, None)? {
+            let job = match self
+                .storage
+                .get_job(&job_id_owned, self.namespace.as_deref())?
+            {
                 Some(j) => j,
                 None => return Ok(Outcome::NotFound),
             };
