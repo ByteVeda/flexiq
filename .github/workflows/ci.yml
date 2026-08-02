@@ -33,6 +33,7 @@ jobs:
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
       server: ${{ steps.decide.outputs.server }}
+      chart: ${{ steps.decide.outputs.chart }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -85,6 +86,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci-server-image.yml'
+            # Template rendering only — seconds, and independent of the image.
+            chart:
+              - 'deploy/helm/**'
+              - '.github/workflows/ci-chart.yml'
 
       - name: Decide which suites run
         id: decide
@@ -97,6 +102,7 @@ jobs:
           NODE: ${{ steps.filter.outputs.node }}
           JAVA: ${{ steps.filter.outputs.java }}
           SERVER: ${{ steps.filter.outputs.server }}
+          CHART: ${{ steps.filter.outputs.chart }}
         run: |
           decide() {
             if [ "$FORCE" = "true" ] || [ "$2" = "true" ]; then
@@ -110,6 +116,7 @@ jobs:
           decide node "$NODE"
           decide java "$JAVA"
           decide server "$SERVER"
+          decide chart "$CHART"
 
   versions:
     name: Version consistency
@@ -152,10 +159,16 @@ jobs:
     if: needs.changes.outputs.server == 'true'
     uses: ./.github/workflows/ci-server-image.yml
 
+  chart:
+    name: Chart
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
+    uses: ./.github/workflows/ci-chart.yml
+
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, server-image]
+    needs: [changes, versions, rust, python, node, java, server-image, chart]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed

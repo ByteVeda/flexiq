@@ -40,6 +40,18 @@ const MIRRORS = [
     pattern: /^(    __version__ = ")(.+?)(")$/m,
     label: "Python source-tree fallback",
   },
+  {
+    file: "deploy/helm/taskito-server/Chart.yaml",
+    pattern: /^(version: )(.+)()$/m,
+    label: "Helm chart",
+  },
+  {
+    file: "deploy/helm/taskito-server/Chart.yaml",
+    // The chart only ever ships the image built from the same commit, so
+    // appVersion tracks the workspace rather than lagging it.
+    pattern: /^(appVersion: ")(.+?)(")$/m,
+    label: "Helm chart appVersion",
+  },
 ];
 
 // Install snippets a reader copies verbatim. The version repeats within a file,
