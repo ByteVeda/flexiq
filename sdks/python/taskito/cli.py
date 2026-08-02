@@ -350,7 +350,7 @@ def run_executor(args: argparse.Namespace) -> None:
     address = args.attach or os.environ.get("TASKITO_ATTACH")
     if not address:
         print(
-            "Error: --attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7749",
+            "Error: --attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7777",
             file=sys.stderr,
         )
         sys.exit(1)

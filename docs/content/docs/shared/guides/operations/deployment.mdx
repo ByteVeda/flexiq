@@ -497,6 +497,376 @@ spec:
 
 </SdkOnly>
 
+## Attached executors
+
+Every deployment above runs the scheduler *inside* the worker, so the worker
+process both imports your app and holds the database credentials. An **attached
+executor** splits those apart: `taskito-server` owns storage, claiming, retries,
+the dead-letter queue and retention; your app container runs `taskito executor`,
+which dials the scheduler and runs whatever it is sent. The app image needs no
+database credentials and no inbound port.
+
+See <SdkLink to="guides/operations/executor">Attached executors</SdkLink> for the
+model, the handshake and what a task can do on one. This section is the
+deployment shape.
+
+### When the split is worth it
+
+Not for disk. Two containers built from the same image share layers, so the
+Docker deployments above already pull a large app image once per node. What
+layer sharing does **not** fix:
+
+- **Resident RAM.** A worker built from the app image is a second interpreter or
+  JVM, a second copy of every import, and a second copy of whatever the process
+  loads at startup — model weights, caches, embeddings. That cost is per
+  replica, not per node, and layer sharing never touches it.
+- **Cold start.** Autoscaling on queue depth (see
+  <SdkLink to="guides/operations/keda">KEDA</SdkLink>) starts worker pods on
+  demand, and a node that has not seen the image pays the whole pull before the
+  first job runs.
+
+An executor removes both: the process is already running and already warm, and
+the only new image is the scheduler's — a static binary on distroless, identical
+for every deployment.
+
+If your app image is small, keep the in-process worker. The split buys nothing
+and costs you a second moving part.
+
+### Compose
+
+The scheduler is the only new service. It is SDK-independent — the same image
+schedules for any app:
+
+```yaml
+services:
+  scheduler:
+    image: ghcr.io/byteveda/taskito-server:0.21.0
+    environment:
+      TASKITO_DSN: postgresql://taskito:secret@postgres:5432/myapp
+      TASKITO_LISTEN: 0.0.0.0:7777
+      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?generate with openssl rand -base64 32}
+      TASKITO_DASHBOARD: 0.0.0.0:8080
+      TASKITO_DASHBOARD_AUTH: session
+    ports:
+      - "8080:8080" # dashboard only — 7777 stays on the compose network
+    depends_on:
+      - postgres # the service from Postgres deployment below
+```
+
+The executor service is your existing app image with a different command — no
+new build, no new registry pull:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: taskito executor --app myapp:queue
+    environment:
+      TASKITO_ATTACH: scheduler:7777
+      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
+      TASKITO_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: node_modules/.bin/taskito executor ./app.js
+    environment:
+      TASKITO_ATTACH: scheduler:7777
+      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
+      TASKITO_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: java --enable-native-access=ALL-UNNAMED -cp app.jar org.byteveda.taskito.cli.Cli executor
+    environment:
+      TASKITO_ATTACH: scheduler:7777
+      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
+      TASKITO_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+</CodeTabs>
+
+`TASKITO_SLOTS` is how many jobs the executor runs at once. There is no
+`TASKITO_DSN` here — that is the point.
+
+<Callout type="info" title="restart is what reconnects">
+  An executor dials once and exits when the session ends, so a scheduler restart
+  takes its executors down with it. `restart: unless-stopped` brings them back.
+  `depends_on` only orders container *starts* — it doesn't wait for the listener
+  to bind, so the first attach may fail and be retried by the same restart loop.
+</Callout>
+
+### Kubernetes
+
+Run the executor as a sidecar **in the app pod, from the app image**. The image
+is already on the node for the app container, so the sidecar adds a process, not
+a pull.
+
+#### Same pod, over a Unix socket
+
+The scheduler runs as a native sidecar next to the app and the executor attaches
+over a socket on a shared `emptyDir` — no port, no Service, no token, and no
+network hop:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    spec:
+      # The socket is created 0777 masked by the binding process's umask — 0755
+      # under the usual 022 — and connect(2) needs write permission on it. Under
+      # any umask that clears group and other write, that leaves the owning uid
+      # as the only caller who can attach, so both containers run as the same
+      # one. This is the whole access boundary for a Unix-socket attach.
+      # Overriding the scheduler image's own uid (65532) is safe: the binary is
+      # static and needs no passwd entry.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      volumes:
+        - name: attach
+          emptyDir: {}
+      initContainers:
+        # A native sidecar (Kubernetes 1.29+): starts before the app containers,
+        # keeps running beside them, and restarts on its own.
+        - name: scheduler
+          image: ghcr.io/byteveda/taskito-server:0.21.0
+          restartPolicy: Always
+          env:
+            - name: TASKITO_DSN
+              valueFrom:
+                secretKeyRef: { name: taskito, key: dsn }
+            - name: TASKITO_LISTEN
+              value: unix:/run/taskito/attach.sock
+          volumeMounts:
+            - name: attach
+              mountPath: /run/taskito
+      containers:
+        - name: app
+          image: myapp:1.4.2 # unchanged
+        - name: executor
+          image: myapp:1.4.2 # the same image — already pulled for `app`
+          # command: required — see below. Leave it out and this container runs
+          # the app image's default entrypoint, a second app that never attaches.
+          env:
+            - name: TASKITO_ATTACH
+              value: unix:/run/taskito/attach.sock
+            - name: TASKITO_SLOTS
+              value: "4"
+          volumeMounts:
+            - name: attach
+              mountPath: /run/taskito
+```
+
+The executor's command:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+command: ["taskito", "executor", "--app", "myapp:queue"]
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+command: ["node_modules/.bin/taskito", "executor", "./app.js"]
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+command:
+  [
+    "java",
+    "--enable-native-access=ALL-UNNAMED",
+    "-cp",
+    "app.jar",
+    "org.byteveda.taskito.cli.Cli",
+    "executor",
+  ]
+```
+
+Handlers come from `META-INF/services`, so no application `main` runs to
+register them.
+
+  </Tab>
+</CodeTabs>
+
+This puts one scheduler in every replica, each holding its own database
+connection. They coordinate through storage, so duplicate execution isn't a
+risk: a job is claimed by exactly one, retention sweeps under a lease only one
+holds at a time, and a dead worker's in-flight jobs are rescued by exactly one
+survivor. The connection count is what to watch — set `TASKITO_MAINTENANCE=off`
+on the sidecars and keep retention on a single separate replica if the sweeps
+are the part you'd rather not multiply. On Kubernetes older than 1.29, drop
+`initContainers` and run the scheduler as an ordinary container: startup
+ordering is then unenforced, and the executor's restart loop settles it.
+
+The sidecar above serves no HTTP, so there is nothing to probe — see the note
+after the next example for what that costs and how to get probes back.
+
+#### One scheduler, over TCP
+
+When you'd rather hold one database connection and scale executors
+independently, give the scheduler its own Deployment and Service:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskito-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskito-scheduler
+  template:
+    metadata:
+      labels:
+        app: taskito-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: ghcr.io/byteveda/taskito-server:0.21.0
+          env:
+            - name: TASKITO_DSN
+              valueFrom:
+                secretKeyRef: { name: taskito, key: dsn }
+            - name: TASKITO_LISTEN
+              value: 0.0.0.0:7777
+            - name: TASKITO_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: taskito, key: attach-token }
+            - name: TASKITO_DASHBOARD
+              value: 0.0.0.0:8080
+            - name: TASKITO_DASHBOARD_AUTH
+              value: session
+          ports:
+            - { name: attach, containerPort: 7777 }
+            - { name: dashboard, containerPort: 8080 }
+          # /health, not /readiness, on both: session auth gates /readiness and
+          # a kubelet probe carries no credential. See the note below to trade
+          # this for a real storage check.
+          livenessProbe:
+            httpGet: { path: /health, port: dashboard }
+          readinessProbe:
+            httpGet: { path: /health, port: dashboard }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskito-scheduler
+spec:
+  selector:
+    app: taskito-scheduler
+  ports:
+    - { name: attach, port: 7777, targetPort: attach }
+```
+
+Executors then set `TASKITO_ATTACH: taskito-scheduler:7777` and read
+`TASKITO_ATTACH_TOKEN` from the same Secret. Everything else about the sidecar
+is unchanged. The Service publishes `attach` and nothing else — give the
+dashboard its own Service or Ingress when you want it reachable, so the port
+that dispatches code and the port people browse are never the same object.
+
+<Callout type="warn" title="/readiness is gated the moment the dashboard is">
+  `/health` is never gated — it reports that the process is up, and nothing
+  more. `/readiness` is the one that checks storage, and it is open **only**
+  when the dashboard runs unauthenticated with no metrics token set. With
+  `TASKITO_DASHBOARD_AUTH=session` above, or with
+  `TASKITO_DASHBOARD_METRICS_TOKEN` set, a bare probe gets `401` and the pod
+  never goes Ready — which is why the manifest probes `/health` twice.
+
+  To probe it for real, set `TASKITO_DASHBOARD_METRICS_TOKEN` and send
+  `Authorization: Bearer <token>` from the probe. Probe headers are literal
+  strings in the manifest, so render the token in with Helm or kustomize rather
+  than committing it. On an attach deployment `/readiness` reports
+  `workers: none` — executors are not workers — and still answers 200.
+
+  Both routes are dashboard routes, so any probing needs `TASKITO_DASHBOARD`
+  set. A listener-only server has no HTTP port, and a `tcpSocket` probe on the
+  attach port is the fallback.
+</Callout>
+
+### Security requirements
+
+The attach port dispatches code. These are requirements, not options:
+
+- **A routable bind needs a token.** `TASKITO_LISTEN` on anything but loopback
+  refuses to start without `TASKITO_ATTACH_TOKEN`, and a token under 16
+  characters is rejected. Generate it with `openssl rand -base64 32`.
+- **The token comes from the environment, never `argv`.** No SDK offers a flag
+  for it — a secret in `argv` shows up in `ps` output and shell history. Mount it
+  from a Secret or a compose `.env`, not a `command:` line.
+- **Off loopback, terminate mTLS in front of the listener.** The token is a
+  bearer credential, not transport security. `taskito-server` does not terminate
+  TLS itself, and setting `TASKITO_LISTEN_TLS_CERT`/`TASKITO_LISTEN_TLS_KEY`
+  fails at startup rather than being quietly ignored — a deployment can't come up
+  believing it is encrypted when it isn't.
+- **Never publish the attach port.** Keep it on the pod or compose network. The
+  compose example maps `8080` and not `7777`; the Service exposes `attach` inside
+  the cluster and nothing to a LoadBalancer.
+- **For a Unix socket, the filesystem is the boundary.** Which means the uid on
+  both containers is the access control — set `runAsUser` explicitly rather than
+  inheriting one image's default and hoping it matches.
+
+### Staying with a worker
+
+If the split isn't worth it for you but cold start is, the complementary fix is
+lazy image pulling — [SOCI](https://github.com/awslabs/soci-snapshotter) or
+[eStargz](https://github.com/containerd/stargz-snapshotter), depending on your
+runtime. Both let a container start before the image is fully pulled, so a
+scale-up doesn't block on the last layer. Note the scope: it fixes the pull, not
+the second resident interpreter or JVM. Combining it with a conventional worker
+is the smaller change; an executor is the one that reclaims the RAM.
+
+### What it costs
+
+- **CPU-heavy tasks compete with request latency.** The executor shares a
+  container with your app, so a task that saturates a core is a task that
+  saturates a core your request handler wanted. Cap `TASKITO_SLOTS`, or run a
+  second replica set from the same image with the HTTP server off — you still
+  pay one image, and the two sets scale independently.
+- **A network hop per job.** Every dispatch and every result crosses a socket. A
+  job that runs for a second doesn't notice; a job that runs for a millisecond
+  spends most of its life in the transport. A Unix socket shrinks the hop but
+  doesn't remove the framing — attach is the wrong tool for microsecond-scale
+  tasks, and an in-process worker is the right one.
+- **A second moving part.** The scheduler is a process to deploy, upgrade and
+  watch. It upgrades independently of its executors (the handshake negotiates
+  capabilities rather than demanding matching versions), but it is still one more
+  thing in the diagram.
+
 ## WAL mode and backups
 
 taskito uses SQLite in WAL (write-ahead logging) mode for concurrent
@@ -1268,3 +1638,6 @@ against separate storage.
       an unset namespace addresses all of them
 - [ ] Put the dashboard behind TLS and enable auth — it serves openly by default
       (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" />)
+- [ ] Running [attached executors](#attached-executors)? Keep the attach port off
+      the host network, set `TASKITO_ATTACH_TOKEN` for any bind but loopback, and
+      terminate mTLS in front of it
