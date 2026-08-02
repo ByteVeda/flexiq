@@ -640,9 +640,11 @@ metadata:
 spec:
   template:
     spec:
-      # The socket is created with the binding process's umask (mode 0755), and
-      # connect(2) needs write permission on it — so both containers run as the
-      # same uid. This is the whole access boundary for a Unix-socket attach.
+      # The socket is created 0777 masked by the binding process's umask — 0755
+      # under the usual 022 — and connect(2) needs write permission on it. Under
+      # any umask that clears group and other write, that leaves the owning uid
+      # as the only caller who can attach, so both containers run as the same
+      # one. This is the whole access boundary for a Unix-socket attach.
       # Overriding the scheduler image's own uid (65532) is safe: the binary is
       # static and needs no passwd entry.
       securityContext:
