@@ -116,13 +116,23 @@ pub fn spawn(
     }
 }
 
+/// Owner and group may connect; nobody else. `bind` would otherwise leave the
+/// socket at `0777 & ~umask` — 0755 under the usual 022, which denies *write*
+/// to the group and so admits only the binding uid, since `connect(2)` needs
+/// write permission. A sidecar rarely shares a uid with the app container but
+/// can always be given a shared group (`fsGroup`), so the group bit is what
+/// makes a same-pod attach configurable at all. `other` is dropped outright:
+/// under a lax umask 0777 would let anything on the host attach.
+#[cfg(unix)]
+const SOCKET_MODE: u32 = 0o660;
+
 /// Bind a Unix socket, clearing a stale file left behind by a crashed process.
 /// A path that still has a live listener behind it is left alone — that is a
 /// misconfiguration, not stale state.
 #[cfg(unix)]
 fn bind_unix(path: &Path) -> Result<UnixListener> {
-    match UnixListener::bind(path) {
-        Ok(listener) => Ok(listener),
+    let listener = match UnixListener::bind(path) {
+        Ok(listener) => listener,
         Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
             if std::os::unix::net::UnixStream::connect(path).is_ok() {
                 anyhow::bail!("another process is already listening on {}", path.display());
@@ -130,11 +140,38 @@ fn bind_unix(path: &Path) -> Result<UnixListener> {
             std::fs::remove_file(path).with_context(|| {
                 format!("failed to remove the stale socket at {}", path.display())
             })?;
-            UnixListener::bind(path).with_context(|| format!("failed to bind {}", path.display()))
+            UnixListener::bind(path)
+                .with_context(|| format!("failed to bind {}", path.display()))?
         }
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to bind the attach listener on {}", path.display())),
-    }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed to bind the attach listener on {}", path.display())
+            })
+        }
+    };
+    restrict_socket(path)?;
+    Ok(listener)
+}
+
+/// Narrow a freshly bound socket to `SOCKET_MODE`.
+///
+/// Applied after `bind`, which is the only option: `UnixListener::bind` binds
+/// and listens in one call, so there is no pre-listen moment to chmod in. The
+/// window is harmless in the direction that matters — the umask-derived mode is
+/// never *more* permissive than this for `group`, so no peer gains access
+/// before the chmod that would not have had it after.
+#[cfg(unix)]
+fn restrict_socket(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(SOCKET_MODE)).with_context(
+        || {
+            format!(
+                "failed to set mode {SOCKET_MODE:o} on the attach socket at {}",
+                path.display()
+            )
+        },
+    )
 }
 
 /// Poll `accept` until shutdown, attaching each connection on its own thread.
@@ -215,4 +252,50 @@ fn spawn_handshake(
             }
         })
         .expect("spawning a handshake thread cannot fail with a valid name")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A unique socket path under the temp dir, removed if a prior run left one.
+    fn socket_path(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "taskito-attach-{label}-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path)
+            .expect("the socket must exist")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[test]
+    fn a_bound_socket_admits_the_group_and_nobody_else() {
+        let path = socket_path("mode");
+        let _listener = bind_unix(&path).expect("bind");
+        // Not the umask-derived 0755: the group needs write to connect(2), and
+        // `other` must not have it under any umask.
+        assert_eq!(mode_of(&path), SOCKET_MODE);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn replacing_a_stale_socket_restores_the_mode() {
+        let path = socket_path("stale");
+        // A socket file with no listener behind it, as a crash would leave.
+        drop(UnixListener::bind(&path).expect("first bind"));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).expect("loosen");
+
+        let _listener = bind_unix(&path).expect("rebind over the stale socket");
+        assert_eq!(mode_of(&path), SOCKET_MODE);
+        let _ = std::fs::remove_file(&path);
+    }
 }
