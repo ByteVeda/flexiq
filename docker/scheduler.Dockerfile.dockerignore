@@ -1,0 +1,17 @@
+# Build context for docker/scheduler.Dockerfile. BuildKit reads the
+# `<dockerfile>.dockerignore` sitting next to the Dockerfile, so the repo root
+# stays free of a global ignore file.
+#
+# Kept: crates/, Cargo.toml, Cargo.lock, dashboard/ sources. Everything else is
+# either a build output or belongs to an SDK the server does not compile.
+.git/
+target/
+**/node_modules/
+**/__pycache__/
+**/.venv/
+dashboard/dist/
+docs/
+junk/
+sdks/java/
+sdks/node/
+sdks/python/

@@ -92,6 +92,11 @@ function guards() {
       pattern: /^version = "/m,
       hint: 'use `dynamic = ["version"]` so maturin reads Cargo.toml',
     },
+    {
+      file: "docker/scheduler.Dockerfile",
+      pattern: /^ARG VERSION=\d/m,
+      hint: "keep the `dev` default — releases pass `--build-arg VERSION=$(node scripts/version.mjs --current)`",
+    },
     ...["", "spring/", "processor/", "test-support/", "graalvm-smoke/"].map(
       (project) => ({
         file: `sdks/java/${project}build.gradle.kts`,

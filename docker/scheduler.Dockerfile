@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1
+
+# taskito-server with no language runtime: one static musl binary on distroless,
+# so the same image schedules for apps written in any SDK. glibc/musl variants
+# would be indistinguishable here — nothing in the image links libc.
+#
+#   docker build -f docker/scheduler.Dockerfile -t taskito-server .
+#
+# Releases additionally pass `--build-arg VERSION=$(node scripts/version.mjs
+# --current)` for the OCI label, and build one architecture per native runner
+# before merging the two into a manifest list — see publish-server.yml. The
+# binary's own `--version` always comes from the workspace Cargo.toml.
+
+# --- dashboard ---------------------------------------------------------------
+# The SPA is embedded into the binary at compile time
+# (crates/taskito-server/build.rs), so it has to exist before cargo runs.
+FROM node:22-alpine AS dashboard
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+WORKDIR /src/dashboard
+# Manifest first: dependency installs then survive every source-only edit.
+COPY dashboard/package.json dashboard/pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile
+COPY dashboard/ ./
+RUN pnpm exec tsr generate && pnpm exec vite build --outDir dist --emptyOutDir
+
+# --- binary ------------------------------------------------------------------
+# Alpine builds musl natively on both architectures, so the static binary needs
+# no cross toolchain — each publish runner compiles for its own platform.
+FROM rust:1-alpine AS builder
+# build-base: the C toolchain the bundled SQLite, libpq and OpenSSL sources
+# need. perl + linux-headers: OpenSSL's configure. git: the dagron-core git
+# dependency of taskito-workflows.
+RUN apk add --no-cache build-base perl linux-headers pkgconfig git
+# Cargo's downloader hits "HTTP2 framing layer" errors often enough to fail a
+# release build; the CI workflows pin the same two settings.
+ENV CARGO_HTTP_MULTIPLEXING=false \
+    CARGO_NET_RETRY=10
+WORKDIR /src
+COPY . .
+COPY --from=dashboard /src/dashboard/dist ./dashboard/dist
+# Postgres and Redis are compiled in so one image covers every backend; the DSN
+# picks at runtime. The binary is copied out of the cache mount because cache
+# mounts are not part of the resulting layer, and the PT_INTERP check fails the
+# build rather than the container: distroless/static ships no dynamic loader.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    TASKITO_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
+    cargo build --release --locked -p taskito-server --features postgres,redis \
+    && cp target/release/taskito-server /taskito-server \
+    && if readelf -l /taskito-server | grep -q INTERP; then \
+         echo "taskito-server is dynamically linked — distroless/static cannot run it" >&2; \
+         exit 1; \
+       fi
+
+# --- image -------------------------------------------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+# Overridden per release; a literal here would outrank scripts/version.mjs,
+# which is why `--check` guards against one.
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="taskito-server" \
+      org.opencontainers.image.description="Taskito scheduler, executor attach listener, and dashboard" \
+      org.opencontainers.image.source="https://github.com/ByteVeda/taskito" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}"
+COPY --from=builder /taskito-server /usr/local/bin/taskito-server
+# Attach listener and dashboard. Both stay off until TASKITO_LISTEN /
+# TASKITO_DASHBOARD are set, so this documents the ports rather than opening them.
+EXPOSE 7777 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/taskito-server"]

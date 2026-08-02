@@ -39,14 +39,33 @@ cargo build -p taskito-server --features postgres
 cargo build -p taskito-server --features redis
 ```
 
+## Container image
+
+`docker/scheduler.Dockerfile` builds a distroless image around a static binary —
+no libc, no interpreter, nothing to match against the app's runtime — for
+`linux/amd64` and `linux/arm64`. Postgres and Redis are compiled in, so one
+image covers every backend and the DSN picks at runtime.
+
+```bash
+docker build -f docker/scheduler.Dockerfile -t taskito-server .
+docker run --rm -p 7777:7777 \
+  -e TASKITO_DSN=postgres://user:pass@host/db \
+  -e TASKITO_LISTEN=0.0.0.0:7777 \
+  -e TASKITO_ATTACH_TOKEN="$ATTACH_TOKEN" \
+  taskito-server
+```
+
+Releases publish the same build as a multiarch manifest at
+`ghcr.io/byteveda/taskito-server:<version>`.
+
 ## Behaviour worth knowing
 
 - **The scheduler starts on the first attach.** With no executor attached there
   is nothing to dispatch to, and claiming jobs anyway would fail them retryably
   once placement timed out.
-- **The attach listener is loopback-only.** An attach connection dispatches
-  code, and the handshake does not carry a credential yet, so a non-loopback
-  bind refuses to start. Reach it over a Unix socket or the pod network.
+- **The attach listener defaults to loopback.** An attach connection dispatches
+  code, so a non-loopback bind refuses to start unless `TASKITO_ATTACH_TOKEN`
+  is set. A Unix socket skips the check — the filesystem is the boundary.
 - **An unauthenticated dashboard may not be reachable off-host** unless
   `TASKITO_ALLOW_INSECURE=1` says so deliberately.
 - **The dashboard SPA is embedded at build time** when one has been built
