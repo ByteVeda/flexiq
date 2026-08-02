@@ -139,6 +139,7 @@ def resize(path: str) -> str:
 queue.task("resize", async (path: string) => {
   const job = currentJob();
   job?.setProgress(50);
+  job?.log("halfway");
   job?.publish({ stage: "halfway" });
   return "done";
 });

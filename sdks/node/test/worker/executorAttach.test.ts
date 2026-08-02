@@ -705,6 +705,36 @@ it("sends the queue's own progress and log writes to the scheduler", async () =>
   }
 });
 
+it("writes a structured log line from the job context", async () => {
+  // `publish` was the only route to a task log before this; a plain log line
+  // had nowhere to go on an executor at all.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["side_channel"];
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("logs", () => {
+      currentJob()?.log("halfway", "warning", { step: 2 });
+      return "logged";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "logs", payloadFor(queue, []));
+
+    const { result, sideChannel } = await scheduler.collectUntilResult();
+    expect(result.header.type).toBe("success");
+
+    const logged = sideChannel.find((frame) => frame.header.type === "task_log");
+    expect(logged?.header.level).toBe("warning");
+    expect(logged?.header.message).toBe("halfway");
+    expect(logged?.header.job_id).toBe("job-1");
+    expect(JSON.parse(logged?.payload.toString() ?? "")).toEqual({ step: 2 });
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
 it("skips a middleware the dispatch says is disabled", async () => {
   // A dashboard toggle has to reach a process that cannot read settings, so it
   // rides the job frame instead.

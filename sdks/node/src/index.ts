@@ -11,7 +11,7 @@ export {
   WorkerProcessManager,
 } from "./autoscale";
 export { Batcher, type BatcherOptions } from "./batching";
-export { currentJob, type JobContext } from "./context";
+export { currentJob, type JobContext, type TaskLogWriteLevel } from "./context";
 export {
   AuthStore,
   bootstrapAdminFromEnv,
