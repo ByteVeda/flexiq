@@ -10,16 +10,19 @@ scheduler, announces the tasks it can run, and executes whatever it is sent.
 
 The app image needs no database credentials and no inbound port.
 
-```
-┌────────────────────────┐         ┌──────────────────────────────┐
-│ taskito-server         │◀────────│ app container (unchanged)    │
-│ scheduler + dashboard  │  dial   │  <app entrypoint>            │
-│ retry / DLQ / breaker  │  out    │  + taskito executor          │
-│ retention / reaper     │────────▶│                              │
-└────────────────────────┘  jobs   └──────────────────────────────┘
-            │
-        storage (source of truth)
-```
+<Mermaid
+  chart={`flowchart LR
+    subgraph app["app container — unchanged"]
+      direction TB
+      entry["your app entrypoint"]:::skipped
+      exec["taskito executor"]:::success
+    end
+    server["taskito-server<br/>scheduler · dashboard · retention"]:::active
+    store[("storage<br/>source of truth")]:::terminal
+    exec -- "dials out" --> server
+    server -- "jobs" --> exec
+    server --- store`}
+/>
 
 <Callout type="info" title="This is opt-in">
   An in-process worker stays the default and the simplest deployment. Reach for
