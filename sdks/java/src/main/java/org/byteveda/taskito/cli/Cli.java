@@ -280,7 +280,7 @@ public final class Cli {
         public Integer call() throws Exception {
             String address = attach != null ? attach : System.getenv("TASKITO_ATTACH");
             if (address == null || address.isBlank()) {
-                System.err.println("--attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7749");
+                System.err.println("--attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7777");
                 return 1;
             }
 

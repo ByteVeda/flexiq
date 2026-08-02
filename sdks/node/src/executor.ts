@@ -90,7 +90,7 @@ export class Executor {
     const address = run?.attach ?? process.env.TASKITO_ATTACH;
     if (!address) {
       throw new Error(
-        "no scheduler address: pass `attach` or set TASKITO_ATTACH (e.g. scheduler:7749)",
+        "no scheduler address: pass `attach` or set TASKITO_ATTACH (e.g. scheduler:7777)",
       );
     }
     const advertised = [...(run?.tasks ?? tasks.keys())];

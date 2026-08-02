@@ -37,7 +37,7 @@ import org.jspecify.annotations.Nullable;
  * <pre>{@code
  * try (Executor executor = Executor.builder()
  *         .discover()                 // handlers from META-INF/services
- *         .attach("scheduler:7749")
+ *         .attach("scheduler:7777")
  *         .slots(4)
  *         .start()) {
  *     executor.awaitSession();        // until the scheduler shuts down
@@ -281,7 +281,7 @@ public final class Executor implements AutoCloseable {
         public Executor start() {
             if (address == null || address.isBlank()) {
                 throw new IllegalStateException(
-                        "no scheduler address: call attach(...) or set TASKITO_ATTACH (e.g. scheduler:7749)");
+                        "no scheduler address: call attach(...) or set TASKITO_ATTACH (e.g. scheduler:7777)");
             }
             if (handlers.isEmpty()) {
                 // The scheduler only dispatches task names an executor

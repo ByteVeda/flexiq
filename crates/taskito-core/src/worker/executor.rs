@@ -16,7 +16,7 @@
 //! # use std::sync::Arc;
 //! # use taskito_core::worker::{ExecutorClient, ExecutorConfig, TcpTransport, WorkerDispatcher};
 //! # fn run(dispatcher: Arc<dyn WorkerDispatcher>) -> Result<(), Box<dyn std::error::Error>> {
-//! let stream = std::net::TcpStream::connect("scheduler:7749")?;
+//! let stream = std::net::TcpStream::connect("scheduler:7777")?;
 //! let client = ExecutorClient::connect(
 //!     Box::new(TcpTransport::new(stream)?),
 //!     ExecutorConfig {
