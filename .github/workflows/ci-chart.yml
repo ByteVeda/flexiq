@@ -28,7 +28,7 @@ jobs:
           version: v3.16.4
 
       - name: Lint
-        run: helm lint "$CHART" --set storage.dsn=sqlite:///data/taskito.db --set attach.token="$TOKEN"
+        run: helm lint "$CHART" --set storage.dsn=postgres://taskito:secret@db:5432/app --set attach.token="$TOKEN"
 
       - name: Every role combination renders
         run: |
@@ -38,11 +38,11 @@ jobs:
             helm template t "$CHART" "$@" >/dev/null
             echo "::endgroup::"
           }
-          render --set storage.dsn=x --set attach.token="$TOKEN"
-          render --set storage.dsn=x --set attach.token="$TOKEN" --set webhook.enabled=true
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN"
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" --set webhook.enabled=true
           render --set attach.enabled=false --set dashboard.enabled=false --set webhook.enabled=true
           render --set storage.existingSecret=s --set attach.existingSecret=s
-          render --set storage.dsn=x --set attach.enabled=false --set dashboard.ingress.enabled=true
+          render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.ingress.enabled=true
 
       - name: Invalid combinations are refused, not rendered
         run: |
@@ -56,11 +56,11 @@ jobs:
             echo "refused: $label"
           }
           refuses "no roles enabled" --set attach.enabled=false --set dashboard.enabled=false
-          refuses "attach without a token" --set storage.dsn=x
-          refuses "a guessable token" --set storage.dsn=x --set attach.token=short
+          refuses "attach without a token" --set storage.dsn=postgres://u:p@db/x
+          refuses "a guessable token" --set storage.dsn=postgres://u:p@db/x --set attach.token=short
           refuses "a scheduler without a DSN" --set attach.token="$TOKEN"
           refuses "an unacknowledged open dashboard" \
-            --set storage.dsn=x --set attach.enabled=false --set dashboard.auth=off
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.auth=off
 
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that

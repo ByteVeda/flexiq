@@ -19,6 +19,18 @@ guard in crates/taskito-server/src/config.
 {{- end -}}
 
 {{/*
+SQLite is a local file with one writer. This chart mounts no volume for it, so
+the database would live on the container filesystem and vanish with the pod —
+and a second replica would not see the first one's jobs at all.
+*/}}
+{{- if .Values.storage.dsn -}}
+{{- $dsn := .Values.storage.dsn -}}
+{{- if not (or (hasPrefix "postgres://" $dsn) (hasPrefix "postgresql://" $dsn) (hasPrefix "redis://" $dsn) (hasPrefix "rediss://" $dsn)) -}}
+{{- fail "taskito-server: storage.dsn does not name Postgres or Redis. A SQLite database is a local file this chart mounts no volume for — it would be lost with the pod, and a second replica would not share it. Use postgres:// or redis:// on a cluster." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The attach port binds 0.0.0.0 so executors in other pods can reach it, and an
 attach connection dispatches code — the server refuses that bind without a
 token.

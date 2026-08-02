@@ -24,6 +24,11 @@ tasks, so the app image needs no DSN and no inbound port.
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
 
+Storage must be Postgres or Redis. SQLite is a local file with a single writer,
+this chart mounts no volume for it, and a second replica would not see the first
+one's jobs; the chart refuses the DSN rather than shipping a database that
+disappears with the pod.
+
 The chart refuses to render on combinations the server would reject at boot: an
 attach listener with no token, an unauthenticated dashboard without
 `dashboard.allowInsecure`, cert-manager without the CRDs. The failure names the
