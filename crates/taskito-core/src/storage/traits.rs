@@ -18,8 +18,16 @@ pub trait Storage: Send + Sync + Clone {
     // ── Job operations ──────────────────────────────────────────────
 
     /// Insert a new job and return it.
+    ///
+    /// Every id in `depends_on` must name a live-or-completed job in the same
+    /// namespace; anything else — missing, dead, cancelled, or belonging to
+    /// another namespace — fails with `DependencyNotFound`. A cross-namespace
+    /// edge is refused rather than filtered so one tenant's failure can never
+    /// cascade into another's queue.
     fn enqueue(&self, new_job: NewJob) -> Result<Job>;
-    /// Insert multiple jobs in a single transaction.
+    /// Insert multiple jobs in a single transaction. Dependencies are validated
+    /// as in [`enqueue`](Self::enqueue), except that an id may also name
+    /// another job in the same batch.
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;
     /// Enqueue with `unique_key` deduplication: returns the existing active
     /// job when a duplicate is found instead of inserting.
@@ -106,9 +114,10 @@ pub trait Storage: Send + Sync + Clone {
     /// Cancel every pending job that depends, directly or transitively, on
     /// `failed_job_id`.
     ///
-    /// Dependents outside `namespace` are left alone. Dependencies are not
-    /// required to share a namespace, so without the filter a cancel in one
-    /// namespace could archive another's pending job.
+    /// Dependents outside `namespace` are left alone. Every edge written since
+    /// the boundary was enforced is intra-namespace, so this only bites on
+    /// older data — but a cancel must not archive another tenant's job because
+    /// of an edge it should never have been allowed to create.
     fn cascade_cancel(
         &self,
         failed_job_id: &str,
@@ -116,9 +125,15 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<()>;
     /// Ids of the jobs `job_id` depends on.
-    fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>>;
-    /// Ids of the jobs that depend on `job_id`.
-    fn get_dependents(&self, job_id: &str) -> Result<Vec<String>>;
+    ///
+    /// A dependency may not cross namespaces — [`enqueue`](Self::enqueue) and
+    /// its variants reject one that would — so the edge list carries the
+    /// anchor job's scope. A job in another namespace reports no edges, like
+    /// an unknown id.
+    fn get_dependencies(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>>;
+    /// Ids of the jobs that depend on `job_id`. Scoped by the anchor job, like
+    /// [`get_dependencies`](Self::get_dependencies).
+    fn get_dependents(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>>;
     /// Update a running job's progress (0-100). A job in another namespace is
     /// left alone.
     fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()>;

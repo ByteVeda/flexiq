@@ -520,14 +520,14 @@ impl PyQueue {
     /// Get the IDs of jobs that a given job depends on.
     pub fn get_dependencies(&self, job_id: &str) -> PyResult<Vec<String>> {
         self.storage
-            .get_dependencies(job_id)
+            .get_dependencies(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Get the IDs of jobs that depend on a given job.
     pub fn get_dependents(&self, job_id: &str) -> PyResult<Vec<String>> {
         self.storage
-            .get_dependents(job_id)
+            .get_dependents(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 

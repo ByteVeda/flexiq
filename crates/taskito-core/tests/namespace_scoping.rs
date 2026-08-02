@@ -5,6 +5,7 @@
 //! totals — and must not be able to act on their ids. `None` stays unscoped,
 //! matching `list_jobs`, so a single-tenant deployment is unaffected.
 
+use taskito_core::error::QueueError;
 use taskito_core::job::{now_millis, JobStatus, NewJob};
 use taskito_core::SqliteStorage;
 
@@ -420,36 +421,144 @@ fn job_errors_and_logs_are_scoped_by_their_job() {
 }
 
 #[test]
-fn a_cascade_cancel_stops_at_the_namespace_boundary() {
-    // Dependencies are not required to share a namespace, so without the filter
-    // a cancel in one namespace archives another's pending job.
+fn a_cascade_cancel_reaches_every_dependent_it_can_see() {
+    // Every edge is intra-namespace (see the enqueue tests below), so a cascade
+    // scoped to one namespace still reaches its whole subgraph. The namespace
+    // filter on the cancel itself remains as a guard for edges written before
+    // the boundary was enforced.
     let storage = storage();
     let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
-
-    let mut dependent = job_in(Some(TENANT_B), "dependent");
-    dependent.depends_on = vec![root.id.clone()];
-    let dependent = storage.enqueue(dependent).unwrap();
 
     let mut sibling = job_in(Some(TENANT_A), "sibling");
     sibling.depends_on = vec![root.id.clone()];
     let sibling = storage.enqueue(sibling).unwrap();
 
+    // A job in another namespace with no edge to `root` must be untouched.
+    let bystander = storage
+        .enqueue(job_in(Some(TENANT_B), "bystander"))
+        .unwrap();
+
     assert!(storage.cancel_job(&root.id, Some(TENANT_A)).unwrap());
 
     assert_eq!(
+        storage.get_job(&sibling.id, None).unwrap().unwrap().status,
+        JobStatus::Cancelled,
+        "a dependent in the same namespace must cascade"
+    );
+    assert_eq!(
         storage
-            .get_job(&dependent.id, None)
+            .get_job(&bystander.id, None)
             .unwrap()
             .unwrap()
             .status,
         JobStatus::Pending,
-        "a dependent in another namespace must be left alone"
+        "an unrelated job in another namespace must be left alone"
+    );
+}
+
+#[test]
+fn a_dependency_may_not_cross_the_namespace_boundary() {
+    // Rejected rather than filtered: the edge would let one tenant's failure
+    // cascade into another's queue, and `cascade_cancel` refuses to cross it
+    // anyway. It reports as an ordinary missing dependency so the caller
+    // learns nothing about ids outside its own namespace.
+    let storage = storage();
+    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
+
+    let mut foreign = job_in(Some(TENANT_B), "foreign");
+    foreign.depends_on = vec![root.id.clone()];
+    assert!(matches!(
+        storage.enqueue(foreign),
+        Err(QueueError::DependencyNotFound(_))
+    ));
+
+    // The unique-keyed and batch paths agree with the single enqueue.
+    let mut foreign_unique = job_in(Some(TENANT_B), "foreign-unique");
+    foreign_unique.depends_on = vec![root.id.clone()];
+    foreign_unique.unique_key = Some("foreign-unique".to_string());
+    assert!(matches!(
+        storage.enqueue_unique(foreign_unique),
+        Err(QueueError::DependencyNotFound(_))
+    ));
+
+    let mut foreign_batch = job_in(Some(TENANT_B), "foreign-batch");
+    foreign_batch.depends_on = vec![root.id.clone()];
+    assert!(matches!(
+        storage.enqueue_batch(vec![foreign_batch]),
+        Err(QueueError::DependencyNotFound(_))
+    ));
+
+    // An unscoped job may not depend on a namespaced one either — "no
+    // namespace" is its own tenancy group, not a wildcard.
+    let mut unscoped = job_in(None, "unscoped");
+    unscoped.depends_on = vec![root.id];
+    assert!(matches!(
+        storage.enqueue(unscoped),
+        Err(QueueError::DependencyNotFound(_))
+    ));
+}
+
+#[test]
+fn dependency_edges_are_scoped_by_their_anchor_job() {
+    // The edge rows carry no namespace of their own; the anchor job's
+    // visibility is what gates the list.
+    let storage = storage();
+    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
+
+    let mut child = job_in(Some(TENANT_A), "child");
+    child.depends_on = vec![root.id.clone()];
+    let child = storage.enqueue(child).unwrap();
+
+    assert_eq!(
+        storage.get_dependents(&root.id, Some(TENANT_A)).unwrap(),
+        vec![child.id.clone()]
     );
     assert_eq!(
-        storage.get_job(&sibling.id, None).unwrap().unwrap().status,
-        JobStatus::Cancelled,
-        "a dependent in the same namespace must still cascade"
+        storage.get_dependencies(&child.id, Some(TENANT_A)).unwrap(),
+        vec![root.id.clone()]
     );
+
+    assert!(storage
+        .get_dependents(&root.id, Some(TENANT_B))
+        .unwrap()
+        .is_empty());
+    assert!(storage
+        .get_dependencies(&child.id, Some(TENANT_B))
+        .unwrap()
+        .is_empty());
+
+    // Unscoped still sees the whole graph.
+    assert_eq!(storage.get_dependents(&root.id, None).unwrap().len(), 1);
+}
+
+#[test]
+fn a_batched_job_still_waits_for_its_dependencies() {
+    // `enqueue_batch` used to write `has_deps` without the matching
+    // `job_dependencies` rows, so a batched job dispatched immediately and ran
+    // ahead of the dependency it was supposed to wait for.
+    let storage = storage();
+    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
+
+    let mut child = job_in(Some(TENANT_A), "child");
+    child.depends_on = vec![root.id.clone()];
+    let created = storage.enqueue_batch(vec![child]).unwrap();
+    let child_id = created[0].id.clone();
+
+    assert_eq!(
+        storage.get_dependencies(&child_id, Some(TENANT_A)).unwrap(),
+        vec![root.id.clone()]
+    );
+
+    // `root` is the only dequeueable job until it completes.
+    let first = storage
+        .dequeue("default", now_millis(), Some(TENANT_A))
+        .unwrap()
+        .expect("root is ready");
+    assert_eq!(first.id, root.id);
+    assert!(storage
+        .dequeue("default", now_millis(), Some(TENANT_A))
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -503,33 +612,4 @@ fn a_scheduler_never_reaps_another_namespaces_job() {
         .unwrap()
         .iter()
         .any(|(job, _)| job.id == b_id));
-}
-
-#[test]
-fn a_dependency_edge_across_the_boundary_is_not_disclosed() {
-    // The DAG walks in every shell push an edge per dependency id before the
-    // adjacent job is looked up. Scoping only `get_job` skips the foreign
-    // *node* but still ships its id in an edge, so the walks keep an edge only
-    // once both endpoints resolved. This locks the storage half of that: the
-    // edge lists are id-only, and the id of a job in another namespace must not
-    // resolve to anything a scoped caller can see.
-    let storage = storage();
-    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
-
-    let mut foreign = job_in(Some(TENANT_B), "foreign");
-    foreign.depends_on = vec![root.id.clone()];
-    let foreign = storage.enqueue(foreign).unwrap();
-
-    // The raw edge read is deliberately unscoped — it is an id list with no
-    // namespace of its own — so the id *is* reachable...
-    assert!(storage
-        .get_dependents(&root.id)
-        .unwrap()
-        .contains(&foreign.id));
-
-    // ...and the scoped node lookup is what makes it undisclosable.
-    assert!(storage
-        .get_job(&foreign.id, Some(TENANT_A))
-        .unwrap()
-        .is_none());
 }

@@ -390,7 +390,7 @@ mod tests {
             let a_job_id = nodes[0].job_id.clone().expect("node a has a job");
             let b_job_id = nodes[1].job_id.clone().expect("node b has a job");
 
-            let b_deps = queue.storage.get_dependencies(&b_job_id).unwrap();
+            let b_deps = queue.storage.get_dependencies(&b_job_id, None).unwrap();
             assert_eq!(b_deps, vec![a_job_id]);
 
             let run = wf.get_workflow_run(&handle.run_id).unwrap().unwrap();
@@ -434,7 +434,7 @@ mod tests {
             assert_eq!(a.status, WorkflowNodeStatus::Pending);
 
             let b_job_id = b.job_id.clone().expect("non-deferred node enqueues a job");
-            let b_deps = queue.storage.get_dependencies(&b_job_id).unwrap();
+            let b_deps = queue.storage.get_dependencies(&b_job_id, None).unwrap();
             assert!(
                 b_deps.is_empty(),
                 "successor must drop the deferred predecessor from depends_on"

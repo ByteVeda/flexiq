@@ -312,9 +312,10 @@ impl RedisStorage {
     /// Cancel every pending job that depends, directly or transitively, on
     /// `failed_job_id`.
     ///
-    /// Dependents outside `namespace` are left alone: a dependency is not
-    /// required to share a namespace with its dependent, so without the filter
-    /// a cancel in one namespace could archive another's job.
+    /// Dependents outside `namespace` are left alone. Every edge written since
+    /// the boundary was enforced is intra-namespace, so this only bites on older
+    /// data — but a cancel must not archive another tenant's job because of an
+    /// edge it should never have had.
     pub fn cascade_cancel(
         &self,
         failed_job_id: &str,
@@ -332,7 +333,10 @@ impl RedisStorage {
             let current_id = queue[idx].clone();
             idx += 1;
 
-            let dependents = self.get_dependents(&current_id)?;
+            // Unscoped walk: the cancel itself is filtered per job below, and
+            // the root is already archived by the time this runs, so gating
+            // the traversal on the anchor's visibility would cut it short.
+            let dependents = self.get_dependents(&current_id, None)?;
             for dep_id in dependents {
                 if visited.insert(dep_id.clone()) {
                     queue.push(dep_id);
@@ -366,15 +370,28 @@ impl RedisStorage {
     }
 
     /// Ids of the jobs `job_id` depends on.
-    pub fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>> {
+    ///
+    /// The edge sets carry no namespace of their own and a dependency may not
+    /// cross namespaces, so the scope comes from the anchor job: one in
+    /// another namespace reports no edges, like an unknown id.
+    pub fn get_dependencies(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>> {
+        if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+            return Ok(Vec::new());
+        }
+
         let mut conn = self.conn()?;
         let key = self.key(&["job", job_id, "depends_on"]);
         let ids: Vec<String> = conn.smembers(&key).map_err(map_err)?;
         Ok(ids)
     }
 
-    /// Ids of the jobs that depend on `job_id`.
-    pub fn get_dependents(&self, job_id: &str) -> Result<Vec<String>> {
+    /// Ids of the jobs that depend on `job_id`. Scoped by the anchor job, like
+    /// [`get_dependencies`](Self::get_dependencies).
+    pub fn get_dependents(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>> {
+        if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+            return Ok(Vec::new());
+        }
+
         let mut conn = self.conn()?;
         let key = self.key(&["job", job_id, "dependents"]);
         let ids: Vec<String> = conn.smembers(&key).map_err(map_err)?;

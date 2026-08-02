@@ -793,10 +793,10 @@ fn test_enqueue_with_dependency() {
     dep_job.depends_on = vec![job_a.id.clone()];
     let job_b = storage.enqueue(dep_job).unwrap();
 
-    let deps = storage.get_dependencies(&job_b.id).unwrap();
+    let deps = storage.get_dependencies(&job_b.id, None).unwrap();
     assert_eq!(deps, vec![job_a.id.clone()]);
 
-    let dependents = storage.get_dependents(&job_a.id).unwrap();
+    let dependents = storage.get_dependents(&job_a.id, None).unwrap();
     assert_eq!(dependents, vec![job_b.id]);
 }
 

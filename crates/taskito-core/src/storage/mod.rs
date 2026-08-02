@@ -552,11 +552,19 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<()> {
                 self.cascade_cancel(failed_job_id, reason, namespace)
             }
-            fn get_dependencies(&self, job_id: &str) -> $crate::error::Result<Vec<String>> {
-                self.get_dependencies(job_id)
+            fn get_dependencies(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<String>> {
+                self.get_dependencies(job_id, namespace)
             }
-            fn get_dependents(&self, job_id: &str) -> $crate::error::Result<Vec<String>> {
-                self.get_dependents(job_id)
+            fn get_dependents(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<String>> {
+                self.get_dependents(job_id, namespace)
             }
             fn update_progress(
                 &self,
@@ -1420,11 +1428,11 @@ impl Storage for StorageBackend {
     ) -> Result<()> {
         delegate!(self, cascade_cancel, failed_job_id, reason, namespace)
     }
-    fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>> {
-        delegate!(self, get_dependencies, job_id)
+    fn get_dependencies(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>> {
+        delegate!(self, get_dependencies, job_id, namespace)
     }
-    fn get_dependents(&self, job_id: &str) -> Result<Vec<String>> {
-        delegate!(self, get_dependents, job_id)
+    fn get_dependents(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>> {
+        delegate!(self, get_dependents, job_id, namespace)
     }
     fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()> {
         delegate!(self, update_progress, id, progress, namespace)

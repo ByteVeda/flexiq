@@ -227,11 +227,11 @@ fn build_dag(
         visible.insert(job_id.clone());
         nodes.push(dto::job(&job));
 
-        for dependency in storage.get_dependencies(&job_id)? {
+        for dependency in storage.get_dependencies(&job_id, namespace)? {
             edges.push((dependency.clone(), job_id.clone()));
             pending.push(dependency);
         }
-        for dependent in storage.get_dependents(&job_id)? {
+        for dependent in storage.get_dependents(&job_id, namespace)? {
             edges.push((job_id.clone(), dependent.clone()));
             pending.push(dependent);
         }
