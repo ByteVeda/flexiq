@@ -38,8 +38,11 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from taskito.dashboard.kv import update
 
 if TYPE_CHECKING:
     from taskito.app import Queue
@@ -141,21 +144,33 @@ class DeliveryStore:
     def _key(self, subscription_id: str) -> str:
         return DELIVERY_PREFIX + subscription_id
 
-    def _load(self, subscription_id: str) -> list[dict[str, Any]]:
-        raw = self._queue.get_setting(self._key(subscription_id))
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("delivery log for %s is corrupt; resetting", subscription_id)
-            return []
-        return data if isinstance(data, list) else []
+    def _decoder(self, subscription_id: str) -> Callable[[str | None], list[dict[str, Any]]]:
+        def decode(raw: str | None) -> list[dict[str, Any]]:
+            if not raw:
+                return []
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning("delivery log for %s is corrupt; resetting", subscription_id)
+                return []
+            return data if isinstance(data, list) else []
 
-    def _save(self, subscription_id: str, rows: list[dict[str, Any]]) -> None:
-        self._queue.set_setting(
+        return decode
+
+    def _load(self, subscription_id: str) -> list[dict[str, Any]]:
+        return self._decoder(subscription_id)(self._queue.get_setting(self._key(subscription_id)))
+
+    def _update(
+        self,
+        subscription_id: str,
+        mutate: Callable[[list[dict[str, Any]]], None],
+    ) -> None:
+        """Apply ``mutate`` to one webhook's log without losing a concurrent append."""
+        update(
+            self._queue,
             self._key(subscription_id),
-            json.dumps(rows, separators=(",", ":")),
+            self._decoder(subscription_id),
+            mutate,
         )
 
     # ── Public API ─────────────────────────────────────────────
@@ -193,11 +208,13 @@ class DeliveryStore:
             created_at=now,
             completed_at=now if status is not DeliveryStatus.PENDING else None,
         )
-        rows = self._load(subscription_id)
-        rows.append(asdict(record))
-        if len(rows) > self._max:
-            rows = rows[-self._max :]
-        self._save(subscription_id, rows)
+
+        def append_and_trim(rows: list[dict[str, Any]]) -> None:
+            rows.append(asdict(record))
+            if len(rows) > self._max:
+                del rows[: len(rows) - self._max]
+
+        self._update(subscription_id, append_and_trim)
         return record
 
     def list_for(

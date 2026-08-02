@@ -25,8 +25,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
+
+from taskito.dashboard.kv import update
 
 if TYPE_CHECKING:
     from taskito.app import Queue
@@ -208,6 +211,43 @@ class OverridesStore:
     def __init__(self, queue: Queue) -> None:
         self._queue = queue
 
+    def _merge(
+        self,
+        key: str,
+        fields: dict[str, Any],
+        normalise: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Patch ``fields`` into the override at ``key`` without losing a concurrent edit.
+
+        ``normalise`` reduces a stored row to the fields the override actually
+        carries, so an unrecognised key never survives a round trip. A ``None``
+        value clears its field rather than storing a null.
+        """
+
+        def patch(row: dict[str, Any]) -> dict[str, Any]:
+            merged = normalise(row)
+            for name, value in fields.items():
+                if value is None:
+                    merged.pop(name, None)
+                else:
+                    merged[name] = value
+            merged["updated_at"] = _now()
+            row.clear()
+            row.update(merged)
+            return merged
+
+        return update(self._queue, key, _parse_json, patch)
+
+    @staticmethod
+    def _overridden_fields(row: dict[str, Any], view: Any, identity: str) -> dict[str, Any]:
+        """The set fields of a decoded override, minus its identity and timestamp."""
+        if not row:
+            return {}
+        fields = {name: value for name, value in asdict(view).items() if value is not None}
+        fields.pop(identity, None)
+        fields.pop("updated_at", None)
+        return fields
+
     # ── Tasks ──────────────────────────────────────────────────
 
     def list_tasks(self) -> dict[str, TaskOverride]:
@@ -230,19 +270,13 @@ class OverridesStore:
         _validate_task_fields(fields)
         if not task_name:
             raise ValueError("task_name must not be empty")
-        existing = self.get_task(task_name)
-        merged: dict[str, Any] = {}
-        if existing is not None:
-            merged.update({k: v for k, v in asdict(existing).items() if v is not None})
-            merged.pop("task_name", None)
-            merged.pop("updated_at", None)
-        for k, v in fields.items():
-            if v is None:
-                merged.pop(k, None)
-            else:
-                merged[k] = v
-        merged["updated_at"] = _now()
-        self._queue.set_setting(TASK_PREFIX + task_name, json.dumps(merged, separators=(",", ":")))
+        merged = self._merge(
+            TASK_PREFIX + task_name,
+            fields,
+            lambda row: self._overridden_fields(
+                row, self._row_to_task(task_name, row), "task_name"
+            ),
+        )
         return self._row_to_task(task_name, merged)
 
     def clear_task(self, task_name: str) -> bool:
@@ -283,20 +317,12 @@ class OverridesStore:
         _validate_queue_fields(fields)
         if not queue_name:
             raise ValueError("queue_name must not be empty")
-        existing = self.get_queue(queue_name)
-        merged: dict[str, Any] = {}
-        if existing is not None:
-            merged.update({k: v for k, v in asdict(existing).items() if v is not None})
-            merged.pop("queue_name", None)
-            merged.pop("updated_at", None)
-        for k, v in fields.items():
-            if v is None:
-                merged.pop(k, None)
-            else:
-                merged[k] = v
-        merged["updated_at"] = _now()
-        self._queue.set_setting(
-            QUEUE_PREFIX + queue_name, json.dumps(merged, separators=(",", ":"))
+        merged = self._merge(
+            QUEUE_PREFIX + queue_name,
+            fields,
+            lambda row: self._overridden_fields(
+                row, self._row_to_queue(queue_name, row), "queue_name"
+            ),
         )
         return self._row_to_queue(queue_name, merged)
 

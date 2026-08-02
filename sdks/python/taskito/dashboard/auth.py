@@ -26,9 +26,11 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
+from taskito.dashboard.kv import update
 from taskito.enums import coerce_enum
 
 if TYPE_CHECKING:
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("taskito.dashboard.auth")
+
+_Outcome = TypeVar("_Outcome")
 
 # ── Storage keys ───────────────────────────────────────────────────────
 
@@ -226,8 +230,8 @@ class AuthStore:
 
     # ── Users ──────────────────────────────────────────────────────
 
-    def _load_users(self) -> dict[str, dict[str, object]]:
-        raw = self._queue.get_setting(USERS_KEY)
+    @staticmethod
+    def _decode_users(raw: str | None) -> dict[str, dict[str, object]]:
         if not raw:
             return {}
         try:
@@ -237,8 +241,18 @@ class AuthStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _save_users(self, users: dict[str, dict[str, object]]) -> None:
-        self._queue.set_setting(USERS_KEY, json.dumps(users, separators=(",", ":")))
+    def _load_users(self) -> dict[str, dict[str, object]]:
+        return self._decode_users(self._queue.get_setting(USERS_KEY))
+
+    def _update_users(
+        self, mutate: Callable[[dict[str, dict[str, object]]], _Outcome]
+    ) -> _Outcome:
+        """Apply ``mutate`` to the user table without losing a concurrent edit.
+
+        All of them live in one JSON document, so an unconditional write would
+        drop a user another dashboard replica had just created.
+        """
+        return update(self._queue, USERS_KEY, self._decode_users, mutate)
 
     def count_users(self) -> int:
         return len(self._load_users())
@@ -254,39 +268,43 @@ class AuthStore:
         _validate_username(username)
         _validate_password(password)
         validated_role = _validate_role(role)
-        users = self._load_users()
-        if username in users:
-            raise ValueError(f"user '{username}' already exists")
-        now_ms = int(time.time() * 1000)
-        users[username] = {
+        # Hashed once, outside the mutation: PBKDF2 is the expensive part and a
+        # retry must not redo it (nor produce a different salt each attempt).
+        row: dict[str, object] = {
             "password_hash": hash_password(password),
             "role": validated_role,
-            "created_at": now_ms,
+            "created_at": int(time.time() * 1000),
             "last_login_at": None,
         }
-        self._save_users(users)
-        return self._row_to_user(username, users[username])
+
+        def insert(users: dict[str, dict[str, object]]) -> None:
+            if username in users:
+                raise ValueError(f"user '{username}' already exists")
+            users[username] = row
+
+        self._update_users(insert)
+        return self._row_to_user(username, row)
 
     def update_password(self, username: str, new_password: str) -> None:
         _validate_password(new_password)
-        users = self._load_users()
-        if username not in users:
-            raise ValueError(f"user '{username}' does not exist")
-        users[username]["password_hash"] = hash_password(new_password)
-        self._save_users(users)
+        password_hash = hash_password(new_password)
+
+        def rehash(users: dict[str, dict[str, object]]) -> None:
+            if username not in users:
+                raise ValueError(f"user '{username}' does not exist")
+            users[username]["password_hash"] = password_hash
+
+        self._update_users(rehash)
 
     def delete_user(self, username: str) -> bool:
-        users = self._load_users()
-        if username not in users:
-            return False
-        del users[username]
-        self._save_users(users)
-        return True
+        def drop(users: dict[str, dict[str, object]]) -> bool:
+            return users.pop(username, None) is not None
+
+        return self._update_users(drop)
 
     def authenticate(self, username: str, password: str) -> User | None:
         """Return the user iff username+password match; updates last_login_at."""
-        users = self._load_users()
-        row = users.get(username)
+        row = self._load_users().get(username)
         if not row:
             # Run a dummy verify against a fixed hash to keep timing constant
             # for unknown vs. known usernames.
@@ -294,9 +312,18 @@ class AuthStore:
             return None
         if not verify_password(password, str(row["password_hash"])):
             return None
-        row["last_login_at"] = int(time.time() * 1000)
-        users[username] = row
-        self._save_users(users)
+        # Stamped conditionally, and only on the row as it stands now: a user
+        # deleted between the read and the stamp stays deleted rather than
+        # being resurrected by writing the whole document back.
+        now_ms = int(time.time() * 1000)
+
+        def stamp(users: dict[str, dict[str, object]]) -> None:
+            current = users.get(username)
+            if current is not None:
+                current["last_login_at"] = now_ms
+
+        self._update_users(stamp)
+        row["last_login_at"] = now_ms
         return self._row_to_user(username, row)
 
     @staticmethod
@@ -335,34 +362,35 @@ class AuthStore:
         from the latest provider claims.
         """
         username = f"{slot}:{subject}"
-        users = self._load_users()
-        existing = users.get(username)
-        if existing is not None:
-            if email and existing.get("email") != email:
-                existing["email"] = email
-            if name and existing.get("display_name") != name:
-                existing["display_name"] = name
-            existing["last_login_at"] = int(time.time() * 1000)
-            users[username] = existing
-            self._save_users(users)
-            return self._row_to_user(username, existing)
-
+        now_ms = int(time.time() * 1000)
         role = _oauth_bootstrap_role(
             email=email,
             email_verified=email_verified,
             admin_emails=admin_emails,
         )
-        now_ms = int(time.time() * 1000)
-        users[username] = {
-            "password_hash": f"{OAUTH_PASSWORD_HASH_PREFIX}{slot}",
-            "role": role,
-            "created_at": now_ms,
-            "last_login_at": now_ms,
-            "email": email,
-            "display_name": name,
-        }
-        self._save_users(users)
-        return self._row_to_user(username, users[username])
+
+        def upsert(users: dict[str, dict[str, object]]) -> dict[str, object]:
+            existing = users.get(username)
+            if existing is not None:
+                if email and existing.get("email") != email:
+                    existing["email"] = email
+                if name and existing.get("display_name") != name:
+                    existing["display_name"] = name
+                existing["last_login_at"] = now_ms
+                return existing
+            # `role` is only consulted here, on first sight: a later login must
+            # not re-derive it and undo an administrator's change.
+            users[username] = {
+                "password_hash": f"{OAUTH_PASSWORD_HASH_PREFIX}{slot}",
+                "role": role,
+                "created_at": now_ms,
+                "last_login_at": now_ms,
+                "email": email,
+                "display_name": name,
+            }
+            return users[username]
+
+        return self._row_to_user(username, self._update_users(upsert))
 
     # ── Sessions ───────────────────────────────────────────────────
 
