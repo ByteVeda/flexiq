@@ -1,0 +1,59 @@
+name: CI Server Image
+
+# Reusable workflow: builds docker/scheduler.Dockerfile on both published
+# architectures — each on a native runner, since a Rust build under QEMU takes
+# the better part of an hour — and asserts the binary reports the version
+# scripts/version.mjs declares. Called by ci.yml when the image's inputs change.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Read the declared version
+        id: version
+        run: printf 'version=%s\n' "$(node scripts/version.mjs --current)" >> "$GITHUB_OUTPUT"
+
+      # Same cache scope as publish-server.yml: a release build then starts from
+      # whatever master has already compiled.
+      - name: Build ${{ matrix.platform }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/scheduler.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          tags: taskito-server:ci
+          load: true
+          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-image-${{ matrix.arch }}
+
+      - name: Binary reports the declared version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          reported="$(docker run --rm taskito-server:ci --version)"
+          if [ "$reported" != "taskito-server ${VERSION}" ]; then
+            echo "::error::Image reports '${reported}', expected 'taskito-server ${VERSION}'"
+            exit 1
+          fi

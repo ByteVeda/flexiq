@@ -32,6 +32,7 @@ jobs:
       python: ${{ steps.decide.outputs.python }}
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
+      server: ${{ steps.decide.outputs.server }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -73,6 +74,17 @@ jobs:
               - '.github/actions/setup-java/**'
               - 'sdks/java/**'
               - '.github/workflows/ci-java.yml'
+            # Deliberately not `*shared`: the image build is two from-scratch
+            # Rust compiles, and an engine-crate change that breaks the server
+            # already turns the Rust suite red. What only this suite covers is
+            # the Dockerfile and the SPA it embeds.
+            server:
+              - 'crates/taskito-server/**'
+              - 'dashboard/**'
+              - 'docker/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci-server-image.yml'
 
       - name: Decide which suites run
         id: decide
@@ -84,6 +96,7 @@ jobs:
           PYTHON: ${{ steps.filter.outputs.python }}
           NODE: ${{ steps.filter.outputs.node }}
           JAVA: ${{ steps.filter.outputs.java }}
+          SERVER: ${{ steps.filter.outputs.server }}
         run: |
           decide() {
             if [ "$FORCE" = "true" ] || [ "$2" = "true" ]; then
@@ -96,6 +109,7 @@ jobs:
           decide python "$PYTHON"
           decide node "$NODE"
           decide java "$JAVA"
+          decide server "$SERVER"
 
   versions:
     name: Version consistency
@@ -132,10 +146,16 @@ jobs:
     if: needs.changes.outputs.java == 'true'
     uses: ./.github/workflows/ci-java.yml
 
+  server-image:
+    name: Server image
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    uses: ./.github/workflows/ci-server-image.yml
+
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java]
+    needs: [changes, versions, rust, python, node, java, server-image]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed
