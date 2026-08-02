@@ -178,8 +178,14 @@ public final class AuthStore {
             Optional<Map<String, Object>> existing = userRow(users, username);
             if (existing.isPresent()) {
                 Map<String, Object> found = existing.get();
-                found.put("email", email);
-                found.put("display_name", name);
+                // Only refresh what the provider actually sent: a later login
+                // whose token omits these claims must not blank the profile.
+                if (email != null && !email.isBlank()) {
+                    found.put("email", email);
+                }
+                if (name != null && !name.isBlank()) {
+                    found.put("display_name", name);
+                }
                 found.put("last_login_at", now);
                 return found;
             }
