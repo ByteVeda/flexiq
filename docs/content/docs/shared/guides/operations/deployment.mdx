@@ -1219,6 +1219,39 @@ handlers rather than assuming generic numbers transfer.
 
 </SdkOnly>
 
+## Namespaces as a tenancy boundary
+
+A namespace scopes everything a deployment can see and act on. Set it once, on
+the queue, and every worker, dashboard and admin call inherits it:
+
+<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>Taskito.builder().namespace("tenant-a")</code>} />
+
+The boundary holds in both directions:
+
+- **Listings and totals** — jobs, dead letters, logs, metrics, the archive and
+  every aggregate report only that namespace's rows.
+- **Ids** — a job id from another namespace reads as missing and mutating it has
+  no effect, so a caller learns nothing about ids outside its own.
+- **Recovery** — timeouts, dead-worker reaps and per-task concurrency counts stay
+  inside the namespace, so one tenant's backlog never consumes another's budget
+  or gets retried by the wrong scheduler.
+
+Leaving the namespace unset (the default) addresses **every** namespace. That is
+what a single-tenant deployment wants, and what an operator console pointed at
+the whole cluster wants — but it means an unscoped process is not confined by
+this boundary. Scope the ones that should be.
+
+<Callout type="warn" title="Not an authorization boundary">
+  A namespace confines a correctly-configured process; it does not authenticate
+  one. Anything holding the database credentials can open an unscoped queue and
+  read every namespace. Isolation between untrusted tenants needs separate
+  databases or separate credentials, not just separate namespaces.
+</Callout>
+
+Workflow runs are the exception: they carry no namespace of their own, so a run
+id reaches its run from any scope. Keep workflows within one tenant, or run them
+against separate storage.
+
 ## Checklist
 
 - [ ] Use an absolute path for the SQLite file
@@ -1231,5 +1264,7 @@ handlers rather than assuming generic numbers transfer.
       (<SdkSwap python={<code>SIGINT</code>} node={<><code>SIGINT</code>/<code>SIGTERM</code>, mind the fixed 200ms CLI grace</>} java={<><code>SIGTERM</code> via a shutdown hook</>} />)
 - [ ] Set up failure hooks or monitoring for alerting
 - [ ] Back up the database using `sqlite3 .backup` (not file copy), or `pg_dump` for Postgres
+- [ ] Set a namespace on every process that should be confined to one tenant —
+      an unset namespace addresses all of them
 - [ ] Put the dashboard behind TLS and enable auth — it serves openly by default
       (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" />)
