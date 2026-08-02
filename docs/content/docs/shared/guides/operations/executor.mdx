@@ -101,6 +101,19 @@ The attach port dispatches code, so the defaults are strict:
 - Use a Unix socket (`unix:/run/taskito.sock`) for a same-pod sidecar; it needs
   no token because the filesystem permissions are the boundary.
 
+<Callout type="warn">
+The token is a bearer credential, not transport security. It proves who is
+attaching; it does not encrypt or integrity-protect the frames, and those frames
+carry task payloads on a port that dispatches code. On anything but loopback or
+a Unix socket, terminate mTLS in a proxy in front of the listener and treat the
+token as the second factor.
+
+`taskito-server` does not terminate TLS itself. Setting
+`TASKITO_LISTEN_TLS_CERT` or `TASKITO_LISTEN_TLS_KEY` fails at startup rather
+than being ignored, so a deployment cannot come up believing it is encrypted
+when it is not.
+</Callout>
+
 ## What a task can do on an executor
 
 A task body behaves the same as it does on an in-process worker. Progress, log
@@ -182,4 +195,4 @@ which capabilities it negotiated at attach.
 |---|---|
 | CPU-heavy tasks compete with request latency in the app container | Cap `--slots`; or run a second replica set from the same image with the HTTP server off |
 | A network hop per job | Use a Unix socket for same-pod sidecars; attach is a poor fit for microsecond-scale tasks |
-| The attach port dispatches code | Token or mTLS, and never a permissive default |
+| The attach port dispatches code | A Unix socket where the peer is same-pod; off loopback, proxy-terminated mTLS *and* the token, never the token alone |
