@@ -1,0 +1,227 @@
+name: Publish server image
+
+# Publishes the taskito-server container image to GHCR. Each architecture is
+# built on its own native runner — a Rust build under QEMU takes the better part
+# of an hour — and the two are merged into a manifest list at the end, so
+# `docker pull` resolves the right one automatically.
+#
+# The image carries no language runtime, so one tag serves apps written against
+# any SDK; there is nothing here to fan out per interpreter version.
+
+on:
+  push:
+    tags:
+      # Server-image releases use a `server-v` tag namespace, distinct from
+      # Python (`v*`), Node (`node-v*`) and Java (`java-v*`).
+      - "server-v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.21.0)"
+        required: true
+        type: string
+      dry-run:
+        description: "Build and smoke-test only — skip the GHCR push and tagging"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # GHCR requires a lowercase path, and `github.repository_owner` is `ByteVeda`.
+  IMAGE: ghcr.io/byteveda/taskito-server
+
+jobs:
+  preflight:
+    name: Preflight checks
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag_exists: ${{ steps.tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Resolve version
+        id: resolve
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#server-v}"
+          else
+            version="${VERSION_INPUT#v}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format: ${version}"
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version matches codebase
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node scripts/version.mjs --check
+          repo_version="$(node scripts/version.mjs --current)"
+          if [ "$repo_version" != "$VERSION" ]; then
+            echo "::error::Resolved ${VERSION} but the repo declares ${repo_version}"
+            exit 1
+          fi
+
+      # An existing tag at the current commit means a previous manual run got
+      # past the tag push but failed later — treat it as a rerun. A tag pointing
+      # elsewhere is a real conflict.
+      - name: Check remote tag state
+        id: tag
+        if: github.event_name != 'push'
+        run: |
+          version="${{ steps.resolve.outputs.version }}"
+          remote_sha="$(git ls-remote --tags origin "refs/tags/server-v${version}" | awk '{print $1}')"
+          if [ -z "$remote_sha" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif [ "$remote_sha" = "$(git rev-parse HEAD)" ]; then
+            echo "::notice::Tag server-v${version} already at this commit — treating as rerun"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Tag server-v${version} exists on remote at ${remote_sha}, not HEAD"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      TAG: ${{ needs.preflight.outputs.version }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ !inputs.dry-run }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Loaded into the local daemon first so the smoke test runs before
+      # anything reaches the registry.
+      - name: Build ${{ matrix.platform }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/scheduler.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ env.VERSION }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          load: true
+          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-image-${{ matrix.arch }}
+
+      # The binary derives its version from the workspace Cargo.toml, so this
+      # catches an image built from the wrong commit as well as a bad --build-arg.
+      - name: Smoke-test the image
+        run: |
+          set -euo pipefail
+          reported="$(docker run --rm "${IMAGE}:${TAG}" --version)"
+          if [ "$reported" != "taskito-server ${VERSION}" ]; then
+            echo "::error::Image reports '${reported}', expected 'taskito-server ${VERSION}'"
+            exit 1
+          fi
+          label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${IMAGE}:${TAG}")"
+          if [ "$label" != "$VERSION" ]; then
+            echo "::error::Image label declares '${label}', expected '${VERSION}'"
+            exit 1
+          fi
+
+      - name: Push the per-architecture tag
+        if: ${{ !inputs.dry-run }}
+        run: docker push "${IMAGE}:${TAG}"
+
+  manifest:
+    name: Publish multiarch manifest
+    needs: [preflight, build]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tag + release
+      packages: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      TAG_EXISTS: ${{ needs.preflight.outputs.tag_exists }}
+    steps:
+      # No persisted credentials: only the tag push needs git auth, and it gets
+      # the token explicitly.
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # The per-architecture tags stay in the registry as the manifest's
+      # members; `:VERSION` and `:latest` are the addresses anyone pulls.
+      - name: Merge the architectures into one manifest
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+
+      - name: Verify both architectures resolve
+        run: |
+          set -euo pipefail
+          manifest="$(docker buildx imagetools inspect --raw "${IMAGE}:${VERSION}")"
+          echo "$manifest"
+          for arch in amd64 arm64; do
+            if ! jq -e --arg arch "$arch" \
+              'any(.manifests[]?.platform; .os == "linux" and .architecture == $arch)' \
+              <<<"$manifest" >/dev/null; then
+              echo "::error::${IMAGE}:${VERSION} has no linux/${arch} entry"
+              exit 1
+            fi
+          done
+
+      - name: Create git tag
+        if: github.event_name != 'push' && env.TAG_EXISTS != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag "server-v${VERSION}"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            push origin "server-v${VERSION}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "server-v${VERSION}" >/dev/null 2>&1; then
+            echo "::notice::Release server-v${VERSION} already exists — skipping"
+          else
+            gh release create "server-v${VERSION}" \
+              --title "taskito-server v${VERSION}" \
+              --generate-notes
+          fi
