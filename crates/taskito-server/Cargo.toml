@@ -46,6 +46,8 @@ jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Same parser reqwest uses, so the SSRF guard and the request agree on the host.
 url = "2"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

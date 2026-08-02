@@ -8,6 +8,7 @@
 pub mod backend;
 pub mod dashboard;
 pub mod listen;
+pub mod webhook;
 
 use std::collections::HashMap;
 
@@ -15,6 +16,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::config::dashboard::DashboardConfig;
 use crate::config::listen::AttachConfig;
+use crate::config::webhook::WebhookConfig;
 
 /// Environment variables as a lookup map.
 pub type Env = HashMap<String, String>;
@@ -22,8 +24,9 @@ pub type Env = HashMap<String, String>;
 /// Fully validated server configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Storage connection string.
-    pub dsn: String,
+    /// Storage connection string. `None` only in a webhook-only deployment,
+    /// which reads no jobs and so needs no database.
+    pub dsn: Option<String>,
     /// Explicit backend name, when the DSN scheme is not enough.
     pub backend: Option<String>,
     /// Tenant namespace the scheduler is scoped to.
@@ -40,6 +43,9 @@ pub struct Config {
     pub attach: Option<AttachConfig>,
     /// Where the dashboard listens. `None` disables it.
     pub dashboard: Option<DashboardConfig>,
+    /// Where the sidecar-injecting admission webhook listens. `None` disables
+    /// it.
+    pub webhook: Option<WebhookConfig>,
 }
 
 impl Config {
@@ -50,12 +56,10 @@ impl Config {
 
     /// Read and validate configuration from an explicit map.
     pub fn from_map(env: &Env) -> Result<Self> {
-        let dsn = value(env, "TASKITO_DSN")
-            .context("TASKITO_DSN is required — the storage connection string")?;
         let allow_insecure = flag(env, "TASKITO_ALLOW_INSECURE", false);
 
         let config = Self {
-            dsn,
+            dsn: value(env, "TASKITO_DSN"),
             backend: value(env, "TASKITO_BACKEND"),
             namespace: value(env, "TASKITO_NAMESPACE"),
             queues: queues(env),
@@ -63,15 +67,32 @@ impl Config {
             maintenance: flag(env, "TASKITO_MAINTENANCE", true),
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
+            webhook: webhook::from_env(env)?,
         };
 
-        if config.attach.is_none() && config.dashboard.is_none() {
+        if config.attach.is_none() && config.dashboard.is_none() && config.webhook.is_none() {
             bail!(
                 "nothing to run: set TASKITO_LISTEN (executor attach), \
-                 TASKITO_DASHBOARD (dashboard), or both"
+                 TASKITO_DASHBOARD (dashboard), TASKITO_WEBHOOK_LISTEN (sidecar \
+                 injection), or any combination"
+            );
+        }
+        // The webhook is the one role that touches no storage — it rewrites pod
+        // specs and never reads a job — so it alone may run without a DSN.
+        if config.dsn.is_none() && (config.attach.is_some() || config.dashboard.is_some()) {
+            bail!(
+                "TASKITO_DSN is required — the storage connection string. Only a \
+                 webhook-only deployment (TASKITO_WEBHOOK_LISTEN alone) can omit it."
             );
         }
         Ok(config)
+    }
+
+    /// The DSN, for the roles that cannot run without one.
+    pub fn require_dsn(&self) -> Result<&str> {
+        self.dsn
+            .as_deref()
+            .context("TASKITO_DSN is required — the storage connection string")
     }
 }
 
@@ -144,6 +165,13 @@ mod tests {
     #[test]
     fn dsn_is_required() {
         let error = Config::from_map(&env(&[("TASKITO_DASHBOARD", "127.0.0.1:8080")]))
+            .expect_err("must reject a missing DSN");
+        assert!(error.to_string().contains("TASKITO_DSN"));
+    }
+
+    #[test]
+    fn an_attach_listener_still_needs_a_dsn() {
+        let error = Config::from_map(&env(&[("TASKITO_LISTEN", "127.0.0.1:7777")]))
             .expect_err("must reject a missing DSN");
         assert!(error.to_string().contains("TASKITO_DSN"));
     }

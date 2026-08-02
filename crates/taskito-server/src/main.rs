@@ -27,8 +27,13 @@ Configuration (environment only):
   TASKITO_DASHBOARD_ASSETS       serve the SPA from this directory
   TASKITO_DASHBOARD_METRICS_TOKEN  bearer token for /metrics and /readiness
   TASKITO_ALLOW_INSECURE         1 to allow an unauthenticated off-host dashboard
+  TASKITO_WEBHOOK_LISTEN         admission webhook address for executor sidecar
+                                 injection, e.g. 0.0.0.0:9443 (default: off)
+  TASKITO_WEBHOOK_TLS_CERT       PEM chain the webhook serves; required with it
+  TASKITO_WEBHOOK_TLS_KEY        PEM key for that chain; required with it
 
-At least one of TASKITO_LISTEN or TASKITO_DASHBOARD must be set.";
+At least one of TASKITO_LISTEN, TASKITO_DASHBOARD or TASKITO_WEBHOOK_LISTEN must
+be set. TASKITO_DSN is required for all but a webhook-only deployment.";
 
 #[derive(Parser)]
 #[command(
