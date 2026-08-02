@@ -41,7 +41,10 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       tag_exists: ${{ steps.tag.outputs.exists }}
     steps:
+      # The tag probe below reads a public remote, so it needs no credential.
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Resolve version
         id: resolve
@@ -110,7 +113,10 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       TAG: ${{ needs.preflight.outputs.version }}-${{ matrix.arch }}
     steps:
+      # Registry auth comes from the login step below; git is not used again.
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@v3
 

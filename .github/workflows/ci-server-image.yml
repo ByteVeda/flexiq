@@ -25,7 +25,11 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
+      # Nothing here talks to git after the checkout, so the token has no reason
+      # to sit in .git/config for the length of a Docker build.
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@v3
 
