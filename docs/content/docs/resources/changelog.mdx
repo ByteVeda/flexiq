@@ -38,6 +38,11 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **`taskito-server` ships as a container image.** `docker/scheduler.Dockerfile` builds a
+  distroless image around a static binary — no libc and no interpreter, with Postgres and Redis
+  compiled in — published as a `linux/amd64` + `linux/arm64` manifest at
+  `ghcr.io/byteveda/taskito-server`. One image schedules for apps written against any SDK, so the
+  fat application image no longer has to be duplicated for a worker deployment.
 - **Java operator admin surface.** `taskito.requeueJob(id)` forces a stuck `running` job back to
   `pending` and releases its execution claim, preserving the retry budget — the only recovery path
   for a job that neither the timeout reaper nor orphan recovery will touch (use it only once the
