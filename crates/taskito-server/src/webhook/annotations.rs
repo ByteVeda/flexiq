@@ -97,7 +97,7 @@ pub fn parse(annotations: &BTreeMap<String, String>) -> Result<Option<InjectionS
         token: parse_token(annotations),
         socket_volume,
         inherit_env: !matches!(
-            optional(annotations, INHERIT_ENV).as_deref(),
+            boolean(annotations, INHERIT_ENV).as_deref(),
             Some("false") | Some("0") | Some("no") | Some("off")
         ),
     }))
@@ -106,9 +106,18 @@ pub fn parse(annotations: &BTreeMap<String, String>) -> Result<Option<InjectionS
 /// Whether `taskito.dev/inject` reads as true.
 fn opted_in(annotations: &BTreeMap<String, String>) -> bool {
     matches!(
-        optional(annotations, INJECT).as_deref(),
+        boolean(annotations, INJECT).as_deref(),
         Some("true") | Some("1") | Some("yes") | Some("on")
     )
+}
+
+/// A boolean-ish annotation, lowercased.
+///
+/// `"True"` is what a templating tool emits from a real boolean, and reading it
+/// as "not opted in" would skip the sidecar silently — the exact failure this
+/// module exists to avoid.
+fn boolean(annotations: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    optional(annotations, key).map(|value| value.to_ascii_lowercase())
 }
 
 /// A set annotation, trimmed, with an empty value reading as unset — pod
@@ -313,6 +322,30 @@ mod tests {
     fn inheriting_the_environment_can_be_turned_off() {
         let mut pairs = minimal();
         pairs.push((INHERIT_ENV, "false"));
+        let spec = parse(&annotations(&pairs))
+            .expect("valid")
+            .expect("opted in");
+        assert!(!spec.inherit_env);
+    }
+
+    #[test]
+    fn a_capitalised_boolean_still_opts_in() {
+        // What a templating tool emits from a real YAML boolean. Reading it as
+        // "not opted in" would skip the sidecar without a word.
+        for value in ["True", "TRUE", "Yes", "On"] {
+            let mut pairs = minimal();
+            pairs[0] = (INJECT, value);
+            assert!(
+                parse(&annotations(&pairs)).expect("valid").is_some(),
+                "{value} must opt in"
+            );
+        }
+    }
+
+    #[test]
+    fn a_capitalised_false_still_disables_inheritance() {
+        let mut pairs = minimal();
+        pairs.push((INHERIT_ENV, "False"));
         let spec = parse(&annotations(&pairs))
             .expect("valid")
             .expect("opted in");
