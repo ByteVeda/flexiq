@@ -18,6 +18,22 @@ public interface SettingsAccess extends ConditionalSettings {
 
     void setSetting(String key, String value);
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Defaults to a <b>non-atomic</b> read-compare-write, so a store written
+     * before this method existed keeps compiling and behaves as it did. See
+     * {@link org.byteveda.taskito.spi.QueueBackend#setSettingIf}.
+     */
+    @Override
+    default boolean setSettingIf(String key, Optional<String> expected, String value) {
+        if (!getSetting(key).equals(expected)) {
+            return false;
+        }
+        setSetting(key, value);
+        return true;
+    }
+
     /** @return whether a row existed. */
     boolean deleteSetting(String key);
 
