@@ -30,6 +30,8 @@ pub struct DashboardConfig {
     pub assets_dir: Option<PathBuf>,
     /// Bearer token accepted on `/metrics` and `/readiness`.
     pub metrics_token: Option<String>,
+    /// Whether `/readiness` answers without a credential.
+    pub public_readiness: bool,
     /// Whether session cookies carry `Secure`.
     pub secure_cookies: bool,
     /// First admin to create on start, as `(username, password)`.
@@ -64,6 +66,12 @@ pub fn from_env(env: &Env, allow_insecure: bool) -> Result<Option<DashboardConfi
         auth,
         assets_dir: value(env, "TASKITO_DASHBOARD_ASSETS").map(PathBuf::from),
         metrics_token: value(env, "TASKITO_DASHBOARD_METRICS_TOKEN"),
+        // Opt-in, because it publishes a little state — whether storage answers
+        // and how many workers are registered — to anything that can reach the
+        // port. An orchestrator probe carries no credential and cannot be given
+        // one (probe headers are literal strings in a manifest), so the choice
+        // is this or a readiness check that never runs.
+        public_readiness: flag(env, "TASKITO_DASHBOARD_PUBLIC_READINESS", false),
         secure_cookies: !flag(env, "TASKITO_DASHBOARD_INSECURE_COOKIES", false),
         admin_bootstrap: admin_bootstrap(env),
         // Only meaningful with sessions: there is nothing to log in to
@@ -116,6 +124,23 @@ mod tests {
             .iter()
             .map(|(key, val)| (key.to_string(), val.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn readiness_is_gated_unless_a_deployment_opts_out() {
+        let base = [("TASKITO_DASHBOARD", "127.0.0.1:8080")];
+        let config = from_env(&env(&base), false)
+            .expect("valid")
+            .expect("configured");
+        assert!(!config.public_readiness);
+
+        let opted_out = from_env(
+            &env(&[base[0], ("TASKITO_DASHBOARD_PUBLIC_READINESS", "1")]),
+            false,
+        )
+        .expect("valid")
+        .expect("configured");
+        assert!(opted_out.public_readiness);
     }
 
     #[test]

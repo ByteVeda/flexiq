@@ -122,12 +122,20 @@ rolls the Deployment.
 
 ## Probes
 
-`/health` is never gated and is what both probes use. `/readiness` is the one
-that checks storage, but it answers `401` whenever the dashboard authenticates
-or `dashboard.metricsToken` is set — and a kubelet probe carries no credential.
-To probe it for real, set `dashboard.metricsToken` and add an `Authorization:
-Bearer` header to the probe through `podAnnotations`-driven tooling or a
-post-render patch; Kubernetes takes probe headers only as literal strings.
+Liveness uses `/health`, which is never gated and reports only that the process
+is up. Readiness uses `/readiness`, which checks that storage answers.
+
+`/readiness` is otherwise gated alongside `/metrics`, so a kubelet probe — which
+carries no credential, and cannot be given one, since a probe header is a
+literal string in the manifest — would get `401` and the pod would never go
+Ready. `dashboard.publicReadiness` (on by default) sets
+`TASKITO_DASHBOARD_PUBLIC_READINESS`, which answers that one route without a
+credential. `/metrics` stays gated either way.
+
+What that publishes to anything that can reach the port: whether storage
+answers, and how many workers are registered. Turn it off with
+`--set dashboard.publicReadiness=false` and readiness falls back to `/health`,
+which always passes while the process is alive.
 
 ## Multiple replicas
 

@@ -69,9 +69,16 @@ dashboard:
   existingSecret: ""
   existingSecretKeyUser: admin-user
   existingSecretKeyPassword: admin-password
-  # Bearer token gating /metrics and /readiness. Setting it means probes need
-  # the header — see the chart README.
+  # Bearer token gating /metrics. Also gates /readiness unless publicReadiness
+  # below is on.
   metricsToken: ""
+  # Answer /readiness without a credential, so the readiness probe can be the
+  # real storage check rather than the liveness stub. A kubelet probe carries no
+  # credential and a probe header is a literal string in the manifest, so the
+  # alternative is copying the token out of its Secret into the Deployment spec.
+  # What this publishes to anything that can reach the port: whether storage
+  # answers, and how many workers are registered.
+  publicReadiness: true
   service:
     type: ClusterIP
     annotations: {}

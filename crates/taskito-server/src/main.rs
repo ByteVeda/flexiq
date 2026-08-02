@@ -27,6 +27,9 @@ Configuration (environment only):
   TASKITO_DASHBOARD_AUTH         off | session (default: off)
   TASKITO_DASHBOARD_ASSETS       serve the SPA from this directory
   TASKITO_DASHBOARD_METRICS_TOKEN  bearer token for /metrics and /readiness
+  TASKITO_DASHBOARD_PUBLIC_READINESS  1 to answer /readiness without a
+                                 credential, for an orchestrator probe that
+                                 cannot carry one (/metrics stays gated)
   TASKITO_ALLOW_INSECURE         1 to allow an unauthenticated off-host dashboard
   TASKITO_WEBHOOK_LISTEN         admission webhook address for executor sidecar
                                  injection, e.g. 0.0.0.0:9443 (default: off)

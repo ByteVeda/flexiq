@@ -119,6 +119,9 @@ pub fn dashboard_state_for(
             auth,
             assets_dir: None,
             metrics_token: None,
+            // Production's default: readiness is gated with everything else
+            // unless a deployment opts out.
+            public_readiness: false,
             secure_cookies: false,
             admin_bootstrap: None,
             oauth: None,

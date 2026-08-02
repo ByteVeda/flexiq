@@ -21,12 +21,21 @@ pub async fn health() -> Json<Value> {
 }
 
 /// Readiness: storage answers and the worker registry is reachable.
+///
+/// Gated like `/metrics` unless `TASKITO_DASHBOARD_PUBLIC_READINESS` says
+/// otherwise. That switch exists because the caller is an orchestrator probe:
+/// it carries no credential, and a Kubernetes probe header is a literal string
+/// in the manifest, so authenticating it would mean copying the token out of
+/// its Secret and into a Deployment spec. Publishing whether storage answers is
+/// the smaller leak.
 pub async fn readiness(
     State(state): State<SharedState>,
     Extension(context): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
-    require_probe_access(&state, &headers, &context)?;
+    if !state.config.public_readiness {
+        require_probe_access(&state, &headers, &context)?;
+    }
 
     let mut checks = serde_json::Map::new();
     let mut ready = true;

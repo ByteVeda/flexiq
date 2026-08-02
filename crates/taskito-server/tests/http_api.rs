@@ -5,6 +5,8 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use taskito_core::{now_millis, NewJob, Storage};
@@ -48,6 +50,32 @@ async fn probes_answer_without_credentials_in_open_mode() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], json!("ready"));
     assert_eq!(body["checks"]["storage"], json!("ok"));
+}
+
+#[tokio::test]
+async fn session_auth_gates_readiness_until_a_deployment_opts_out() {
+    let storage = temp_storage("http-readiness-gate");
+
+    // The default an orchestrator probe walks into: authenticated dashboard, no
+    // credential on the probe, so the pod would never report Ready.
+    let mut state = dashboard_state(&storage, AuthMode::Session);
+    let (status, _, _) = call(&state, get("/readiness")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Opted out: readiness answers, and it is the real storage check rather
+    // than the liveness stub.
+    {
+        let state = Arc::get_mut(&mut state).expect("sole owner before any request clones it");
+        state.config.public_readiness = true;
+    }
+    let (status, _, body) = call(&state, get("/readiness")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["checks"]["storage"], json!("ok"));
+
+    // /metrics stays gated — the switch is scoped to the probe, not to every
+    // unauthenticated reader.
+    let (status, _, _) = call(&state, get("/metrics")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

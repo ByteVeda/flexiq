@@ -109,6 +109,13 @@ underlying Rust crates are released together, in lock-step.
 
 ### Fixed
 
+- **A readiness probe that can actually run.** `/readiness` is gated alongside `/metrics`, so a
+  Kubernetes probe — which carries no credential, and cannot be given one, since a probe header is
+  a literal string in the manifest — got `401` and the pod never went Ready.
+  `TASKITO_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a credential; `/metrics`
+  stays gated. The Helm chart sets it by default and probes `/readiness`; turn it off and readiness
+  falls back to `/health`.
+
 - **The attach socket admits a shared group.** `bind` left it at the umask-derived `0755`, which
   denies the group *write* — and `connect(2)` needs write — so only the binding uid could attach.
   It is now chmodded to `0660`, which is what makes a same-pod attach configurable: two containers
