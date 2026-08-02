@@ -35,7 +35,7 @@ flags. At minimum it needs a DSN and an attach address:
 
 ```bash
 TASKITO_DSN=postgres://user:pass@db/taskito \
-TASKITO_LISTEN=0.0.0.0:7749 \
+TASKITO_LISTEN=0.0.0.0:7777 \
 TASKITO_ATTACH_TOKEN=$(openssl rand -hex 32) \
 taskito-server
 ```
@@ -50,7 +50,7 @@ placement timeout elapsed — a retry storm against an idle deployment.
   <Tab sdk="python">
 
 ```bash
-TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH=scheduler:7777 \
 TASKITO_ATTACH_TOKEN=... \
 taskito executor --app myapp:queue --slots 4
 ```
@@ -59,7 +59,7 @@ taskito executor --app myapp:queue --slots 4
   <Tab sdk="node">
 
 ```bash
-TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH=scheduler:7777 \
 TASKITO_ATTACH_TOKEN=... \
 taskito executor ./app.js --slots 4
 ```
@@ -68,7 +68,7 @@ taskito executor ./app.js --slots 4
   <Tab sdk="java">
 
 ```bash
-TASKITO_ATTACH=scheduler:7749 \
+TASKITO_ATTACH=scheduler:7777 \
 TASKITO_ATTACH_TOKEN=... \
 java -cp app.jar org.byteveda.taskito.cli.Cli executor --slots 4
 ```
