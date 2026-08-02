@@ -12,6 +12,7 @@ import {
   INTEGRATIONS,
   USE_CASES,
 } from "@/lib/landing-content";
+import { VERSION } from "@/lib/version";
 
 function Icon({ d, rect }: { d: string; rect?: boolean }) {
   return (
@@ -373,11 +374,16 @@ export function Integrations() {
   );
 }
 
-function InstallPill({ cmd }: { cmd: string }) {
+/**
+ * `prompt` is the shell `$` by default. Pass `""` for something copied into a
+ * build file rather than run — a Gradle coordinate under a `$` would read as a
+ * command that does not exist.
+ */
+function InstallPill({ cmd, prompt = "$" }: { cmd: string; prompt?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="install-pill">
-      <span className="pf">$</span>
+      {prompt ? <span className="pf">{prompt}</span> : null}
       {cmd}
       <button
         type="button"
@@ -412,7 +418,10 @@ export function CTA() {
         <div className="install-row">
           <InstallPill cmd="pip install taskito" />
           <InstallPill cmd="pnpm add @byteveda/taskito" />
-          <InstallPill cmd="org.byteveda:taskito" />
+          <InstallPill
+            cmd={`implementation("org.byteveda:taskito:${VERSION}")`}
+            prompt=""
+          />
         </div>
         <div className="btns">
           <Link className="btn pri" to={`/${sdk}/getting-started/quickstart`}>
