@@ -3,7 +3,7 @@
 // eviction at the per-webhook cap, following the cross-SDK row layout
 // (snake_case fields, Unix-ms timestamps).
 
-import { type SettingsStore, updateSetting } from "../settingsKv";
+import { SettingConflictError, type SettingsStore, updateSetting } from "../settingsKv";
 import { createLogger } from "../utils";
 import type { Delivery, DeliveryStatus } from "./types";
 
@@ -72,20 +72,35 @@ export class DeliveryLog {
    *
    * Written conditionally: two deliveries settling at once would otherwise each
    * append to the list they read and the later write would drop the other.
+   *
+   * Unlike the admin documents, this key is written once per delivery, so
+   * sustained contention is plausible rather than a fault. A log row is
+   * diagnostic — losing one must not fail the delivery it describes — so an
+   * exhausted retry is logged and dropped rather than propagated.
    */
   record(delivery: Delivery): void {
     const row = toRow(delivery);
-    updateSetting(
-      this.native,
-      this.key(delivery.webhookId),
-      this.decoder(delivery.webhookId),
-      (rows) => {
-        rows.push(row);
-        if (rows.length > this.maxPerWebhook) {
-          rows.splice(0, rows.length - this.maxPerWebhook);
-        }
-      },
-    );
+    try {
+      updateSetting(
+        this.native,
+        this.key(delivery.webhookId),
+        this.decoder(delivery.webhookId),
+        (rows) => {
+          rows.push(row);
+          if (rows.length > this.maxPerWebhook) {
+            rows.splice(0, rows.length - this.maxPerWebhook);
+          }
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof SettingConflictError)) {
+        throw error;
+      }
+      log.warn(
+        () =>
+          `dropped the delivery log row for subscription ${delivery.webhookId}: the log was rewritten by another writer on every attempt`,
+      );
+    }
   }
 
   /** Recent deliveries, newest first, optionally filtered and paginated. */

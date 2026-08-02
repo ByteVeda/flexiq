@@ -42,7 +42,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from taskito.dashboard.kv import update
+from taskito.dashboard.kv import SettingConflictError, update
 
 if TYPE_CHECKING:
     from taskito.app import Queue
@@ -214,7 +214,18 @@ class DeliveryStore:
             if len(rows) > self._max:
                 del rows[: len(rows) - self._max]
 
-        self._update(subscription_id, append_and_trim)
+        # Unlike the admin documents, this key is written once per delivery, so
+        # sustained contention is plausible rather than a fault. A log row is
+        # diagnostic — losing one must not fail the delivery it describes — so
+        # an exhausted retry is logged and dropped rather than raised.
+        try:
+            self._update(subscription_id, append_and_trim)
+        except SettingConflictError:
+            logger.warning(
+                "dropped the delivery log row for subscription %s; "
+                "the log was rewritten by another writer on every attempt",
+                subscription_id,
+            )
         return record
 
     def list_for(

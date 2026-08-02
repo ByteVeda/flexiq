@@ -6,8 +6,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.byteveda.taskito.Taskito;
+import org.byteveda.taskito.errors.SettingConflictException;
 import org.byteveda.taskito.errors.WebhookException;
 import org.byteveda.taskito.internal.SettingsDocument;
+import org.byteveda.taskito.logging.TaskitoLogger;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -21,6 +23,7 @@ import org.jspecify.annotations.Nullable;
  */
 final class DeliveryStore {
     static final String KEY_PREFIX = "webhooks:deliveries:";
+    private static final TaskitoLogger LOG = TaskitoLogger.create("webhooks");
     private static final int MAX_PER_WEBHOOK = 200;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final SettingsDocument.Codec<List<Delivery>> CODEC =
@@ -37,15 +40,25 @@ final class DeliveryStore {
      *
      * <p>Written conditionally: two deliveries settling at once would otherwise
      * each append to the list they read and the later write would drop the other.
+     *
+     * <p>Unlike the admin documents, this key is written once per delivery, so
+     * sustained contention is plausible rather than a fault. A log row is
+     * diagnostic — losing one must not fail the delivery it describes — so an
+     * exhausted retry is logged and dropped rather than propagated.
      */
     void record(Delivery delivery) {
-        SettingsDocument.update(queue, KEY_PREFIX + delivery.subscriptionId(), CODEC, rows -> {
-            rows.add(delivery);
-            if (rows.size() > MAX_PER_WEBHOOK) {
-                rows.subList(0, rows.size() - MAX_PER_WEBHOOK).clear();
-            }
-            return rows;
-        });
+        try {
+            SettingsDocument.update(queue, KEY_PREFIX + delivery.subscriptionId(), CODEC, rows -> {
+                rows.add(delivery);
+                if (rows.size() > MAX_PER_WEBHOOK) {
+                    rows.subList(0, rows.size() - MAX_PER_WEBHOOK).clear();
+                }
+                return rows;
+            });
+        } catch (SettingConflictException e) {
+            LOG.warn("dropped the delivery log row for subscription " + delivery.subscriptionId()
+                    + ": the log was rewritten by another writer on every attempt");
+        }
     }
 
     /** Newest-first, optionally filtered by status/event, then paged. */
