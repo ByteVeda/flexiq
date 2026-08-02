@@ -49,11 +49,12 @@ impl NodeDispatcher {
     pub fn new(
         callback: TaskCallback,
         storage: StorageBackend,
+        namespace: Option<String>,
         concurrency: Option<usize>,
     ) -> Self {
         Self::with_cancels(
             callback,
-            Arc::new(CancelSignals::from_storage(storage)),
+            Arc::new(CancelSignals::from_storage(storage, namespace)),
             concurrency,
         )
     }

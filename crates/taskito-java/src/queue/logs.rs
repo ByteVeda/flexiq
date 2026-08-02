@@ -51,7 +51,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_getTaskLog
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        let logs = queue.storage.get_task_logs(&id)?;
+        let logs = queue
+            .storage
+            .get_task_logs(&id, queue.namespace.as_deref())?;
         let views: Vec<LogView> = logs.iter().map(LogView::from).collect();
         new_string(env, to_json(&views)?)
     })
@@ -72,7 +74,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_getTaskLog
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
         let after = read_optional_string(env, &after_id)?;
-        let logs = queue.storage.get_task_logs_after(&id, after.as_deref())?;
+        let logs =
+            queue
+                .storage
+                .get_task_logs_after(&id, after.as_deref(), queue.namespace.as_deref())?;
         let views: Vec<LogView> = logs.iter().map(LogView::from).collect();
         new_string(env, to_json(&views)?)
     })

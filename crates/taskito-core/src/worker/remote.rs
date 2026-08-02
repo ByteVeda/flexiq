@@ -334,8 +334,10 @@ struct LogLine {
 /// oldest with a counter, the trade every log shipper makes.
 struct SideChannelPump {
     sink: Arc<dyn SideChannel>,
-    /// Job id → newest progress not yet applied.
-    pending_progress: Mutex<HashMap<String, i32>>,
+    /// Job id → newest progress not yet applied, with the namespace it was
+    /// dispatched in — a side-channel frame carries only the job id, and the
+    /// write has to be scoped like every other id-addressed one.
+    pending_progress: Mutex<HashMap<String, (i32, Option<String>)>>,
     /// Held across a progress write, so settling a job cannot conclude there is
     /// nothing left to do while the drain is still mid-write on its value.
     /// Always taken before `pending_progress`, never the other way round.
@@ -387,11 +389,11 @@ impl SideChannelPump {
     ///
     /// The value lands in the map before the wake-up, so a full wake channel
     /// loses nothing: the flush that is already pending will pick this value up.
-    fn progress(&self, job_id: &str, progress: i32) {
+    fn progress(&self, job_id: &str, progress: i32, namespace: Option<String>) {
         self.pending_progress
             .lock()
             .unwrap_or_else(recover)
-            .insert(job_id.to_string(), progress);
+            .insert(job_id.to_string(), (progress, namespace));
         let _ = self.progress_wake.try_send(());
     }
 
@@ -431,8 +433,9 @@ impl SideChannelPump {
             .lock()
             .unwrap_or_else(recover)
             .remove(job_id);
-        if let Some(progress) = pending {
-            self.sink.update_progress(job_id, progress);
+        if let Some((progress, namespace)) = pending {
+            self.sink
+                .update_progress(job_id, progress, namespace.as_deref());
         }
     }
 
@@ -440,8 +443,9 @@ impl SideChannelPump {
     fn flush_progress(&self) {
         let _applying = self.applying_progress.lock().unwrap_or_else(recover);
         let batch = std::mem::take(&mut *self.pending_progress.lock().unwrap_or_else(recover));
-        for (job_id, progress) in batch {
-            self.sink.update_progress(&job_id, progress);
+        for (job_id, (progress, namespace)) in batch {
+            self.sink
+                .update_progress(&job_id, progress, namespace.as_deref());
         }
     }
 
@@ -1049,10 +1053,10 @@ impl Shared {
 
     /// Record progress an executor reported for a job it is running.
     fn apply_progress(&self, executor: &Arc<Executor>, job_id: &str, progress: i32) {
-        let Some((pump, _)) = self.side_channel_for(executor, job_id, "progress") else {
+        let Some((pump, dispatched)) = self.side_channel_for(executor, job_id, "progress") else {
             return;
         };
-        pump.progress(job_id, progress);
+        pump.progress(job_id, progress, dispatched.namespace);
     }
 
     /// Record a log line — or a published partial — an executor reported.

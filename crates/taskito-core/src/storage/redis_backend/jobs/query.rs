@@ -155,12 +155,16 @@ impl RedisStorage {
     }
 
     /// Fetch a job by id, blobs included — live jobs first, then the archive.
-    pub fn get_job(&self, id: &str) -> Result<Option<Job>> {
+    ///
+    /// A job in another namespace reads as missing.
+    pub fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>> {
         let mut conn = self.conn()?;
-        match self.load_job(&mut conn, id)? {
-            Some(job) => Ok(Some(job)),
-            None => self.load_archived_job(&mut conn, id),
-        }
+        let found = match self.load_job(&mut conn, id)? {
+            Some(job) => Some(job),
+            None => self.load_archived_job(&mut conn, id)?,
+        };
+        Ok(found
+            .filter(|job| namespace.is_none_or(|scope| job.namespace.as_deref() == Some(scope))))
     }
 
     /// Global queue statistics: live counts plus terminal counts from the
@@ -262,11 +266,31 @@ impl RedisStorage {
         })
     }
 
-    /// Count running jobs for a specific task name (for per-task concurrency limiting).
-    pub fn count_running_by_task(&self, task_name: &str) -> Result<i64> {
+    /// Count running jobs for a specific task name (for per-task concurrency
+    /// limiting). Scoped, so a job elsewhere never consumes this scheduler's
+    /// budget.
+    ///
+    /// The unscoped count is a server-side `SINTERCARD`; a scoped one has no
+    /// namespace index to intersect with, so it loads the candidate set and
+    /// filters — the same trade `stats(Some(..))` already makes here.
+    pub fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64> {
         let mut conn = self.conn()?;
         let by_task_key = self.key(&["jobs", "by_task", task_name]);
-        self.count_in_status(&mut conn, &by_task_key, JobStatus::Running)
+        let Some(scope) = namespace else {
+            return self.count_in_status(&mut conn, &by_task_key, JobStatus::Running);
+        };
+
+        let status_key = self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]);
+        let running_ids: Vec<String> = redis::cmd("SINTER")
+            .arg(&by_task_key)
+            .arg(&status_key)
+            .query(&mut conn)
+            .map_err(map_err)?;
+        let jobs = self.load_live_jobs(&mut conn, &running_ids)?;
+        Ok(jobs
+            .iter()
+            .filter(|job| job.namespace.as_deref() == Some(scope))
+            .count() as i64)
     }
 
     /// Count pending jobs on a queue (for the `max_pending` admission cap).

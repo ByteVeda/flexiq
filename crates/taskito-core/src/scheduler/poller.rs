@@ -519,7 +519,9 @@ impl Scheduler {
         if let Some(&n) = counts.task_running.get(task_name) {
             return Ok(n);
         }
-        let n = self.storage.count_running_by_task(task_name)?;
+        let n = self
+            .storage
+            .count_running_by_task(task_name, self.namespace.as_deref())?;
         counts.task_running.insert(task_name.to_string(), n);
         Ok(n)
     }

@@ -100,7 +100,9 @@ impl Scheduler {
         if let Err(e) = self.storage.purge_execution_claims(claim_cutoff) {
             warn!("purge_execution_claims error: {e}");
         }
-        let stale_jobs = self.storage.reap_stale_jobs(now)?;
+        let stale_jobs = self
+            .storage
+            .reap_stale_jobs(now, self.namespace.as_deref())?;
 
         for job in stale_jobs {
             let error = format!("job timed out after {}ms", job.timeout_ms);
@@ -138,7 +140,10 @@ impl Scheduler {
         let mut live = self.storage.list_live_worker_ids(dead_worker_cutoff(now))?;
         live.push(self.claim_owner.clone());
 
-        for (job, dead_owner) in self.storage.reap_orphaned_jobs(&live, now)? {
+        for (job, dead_owner) in
+            self.storage
+                .reap_orphaned_jobs(&live, now, self.namespace.as_deref())?
+        {
             // Atomic election: only the survivor that wins the claim transfer
             // requeues the job, so concurrent schedulers can't double-retry it.
             match self

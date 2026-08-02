@@ -81,7 +81,7 @@ macro_rules! impl_diesel_dead_letter_ops {
 
                 // Cascade cancel dependents (opens its own connection, so the
                 // archive transaction above must already be committed).
-                self.cascade_cancel(&job_id, "dependency failed")?;
+                self.cascade_cancel(&job_id, "dependency failed", job.namespace.as_deref())?;
 
                 Ok(())
             }

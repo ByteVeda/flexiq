@@ -186,8 +186,11 @@ impl JsQueue {
         let limit = non_negative(limit.unwrap_or(DEFAULT_LIMIT), "limit")?;
         let offset = non_negative(offset.unwrap_or(0), "offset")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let jobs = storage.list_archived(limit, offset).map_err(to_napi_err)?;
+            let jobs = storage
+                .list_archived(limit, offset, namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(jobs.into_iter().map(job_to_js).collect())
         })
         .await
@@ -276,10 +279,11 @@ impl JsQueue {
     ) -> Result<JsJobPage> {
         let limit = non_negative(limit.unwrap_or(DEFAULT_LIMIT), "limit")?;
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let cursor = parse_cursor(after.as_deref())?;
             let jobs = storage
-                .list_archived_after(limit, cursor)
+                .list_archived_after(limit, cursor, namespace.as_deref())
                 .map_err(to_napi_err)?;
             Ok(job_page(jobs, limit, true))
         })
@@ -291,8 +295,11 @@ impl JsQueue {
     #[napi]
     pub async fn get_job_errors(&self, job_id: String) -> Result<Vec<JsJobError>> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
-            let errors = storage.get_job_errors(&job_id).map_err(to_napi_err)?;
+            let errors = storage
+                .get_job_errors(&job_id, namespace.as_deref())
+                .map_err(to_napi_err)?;
             Ok(errors.into_iter().map(job_error_to_js).collect())
         })
         .await
@@ -372,6 +379,7 @@ impl JsQueue {
     #[napi]
     pub async fn job_dag(&self, job_id: String) -> Result<JsJobDag> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let mut visited: HashSet<String> = HashSet::new();
             // Both endpoints of an edge report it (dependencies from one
@@ -384,7 +392,10 @@ impl JsQueue {
                 if !visited.insert(current.clone()) {
                     continue;
                 }
-                let Some(job) = storage.get_job(&current).map_err(to_napi_err)? else {
+                let Some(job) = storage
+                    .get_job(&current, namespace.as_deref())
+                    .map_err(to_napi_err)?
+                else {
                     continue;
                 };
                 nodes.push(job_to_js(job));

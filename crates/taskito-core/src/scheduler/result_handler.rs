@@ -68,7 +68,7 @@ impl Scheduler {
 
                 // One fetch serves both the queue-context lookup and any
                 // subsequent DLQ move — there's no path that needs two reads.
-                let job = self.storage.get_job(&job_id)?;
+                let job = self.storage.get_job(&job_id, self.namespace.as_deref())?;
                 let queue = job.as_ref().map(|j| j.queue.clone()).unwrap_or_default();
 
                 let move_to_dlq =
@@ -158,7 +158,10 @@ impl Scheduler {
                     error!("failed to clear execution claim for job {job_id}: {e}");
                 }
                 // Mark as cancelled, no retry
-                if let Err(e) = self.storage.mark_cancelled(&job_id) {
+                if let Err(e) = self
+                    .storage
+                    .mark_cancelled(&job_id, self.namespace.as_deref())
+                {
                     error!("failed to mark job {job_id} as cancelled: {e}");
                 }
                 if let Err(e) = self.storage.record_metric(
@@ -173,7 +176,7 @@ impl Scheduler {
                 }
                 let queue = self
                     .storage
-                    .get_job(&job_id)?
+                    .get_job(&job_id, self.namespace.as_deref())?
                     .as_ref()
                     .map(|j| j.queue.clone())
                     .unwrap_or_default();

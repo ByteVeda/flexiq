@@ -580,7 +580,7 @@ mod tests {
                 fetch_node(wf, &run_id, "p").status,
                 WorkflowNodeStatus::Skipped,
             );
-            let job = queue.storage.get_job(&job_id).unwrap().unwrap();
+            let job = queue.storage.get_job(&job_id, None).unwrap().unwrap();
             assert_eq!(job.status.wire_name(), "Cancelled");
         });
     }

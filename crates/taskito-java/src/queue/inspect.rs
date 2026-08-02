@@ -207,7 +207,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_listArchiv
             .as_deref()
             .map(taskito_core::storage::cursor::decode_cursor)
             .transpose()?;
-        let jobs = queue.storage.list_archived_after(limit, cursor)?;
+        let jobs = queue
+            .storage
+            .list_archived_after(limit, cursor, queue.namespace.as_deref())?;
         // Archived rows always carry `completed_at`; the fallback keeps the key
         // non-null for a row written before it was set.
         let next_cursor = taskito_core::storage::cursor::next_cursor(&jobs, limit, |j| {
@@ -232,7 +234,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobErrors<
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        let errors = queue.storage.get_job_errors(&id)?;
+        let errors = queue
+            .storage
+            .get_job_errors(&id, queue.namespace.as_deref())?;
         let views: Vec<JobErrorView> = errors.iter().map(JobErrorView::from).collect();
         new_string(env, to_json(&views)?)
     })
@@ -317,7 +321,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
             if !visited.insert(current.clone()) {
                 continue;
             }
-            let Some(job) = queue.storage.get_job(&current)? else {
+            let Some(job) = queue
+                .storage
+                .get_job(&current, queue.namespace.as_deref())?
+            else {
                 continue;
             };
             jobs.push(job);

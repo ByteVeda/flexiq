@@ -35,14 +35,21 @@ macro_rules! impl_diesel_log_ops {
                 Ok(())
             }
 
-            /// Get logs for a specific job.
+            /// Get logs for a specific job. A job in another namespace reports
+            /// no lines, like an unknown id.
             pub fn get_task_logs(
                 &self,
                 job_id: &str,
+                namespace: Option<&str>,
             ) -> Result<Vec<$crate::storage::records::TaskLogEntry>> {
                 let mut conn = self.conn()?;
-                let rows = task_logs::table
+                let mut query = task_logs::table
                     .filter(task_logs::job_id.eq(job_id))
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(task_logs::namespace.eq(ns));
+                }
+                let rows = query
                     .order(task_logs::logged_at.asc())
                     .select(TaskLogRow::as_select())
                     .load::<TaskLogRow>(&mut conn)?;
@@ -50,15 +57,20 @@ macro_rules! impl_diesel_log_ops {
             }
 
             /// Logs for a job with id strictly after `after_id` (cursor scan).
+            /// Scoped like `get_task_logs`.
             pub fn get_task_logs_after(
                 &self,
                 job_id: &str,
                 after_id: Option<&str>,
+                namespace: Option<&str>,
             ) -> Result<Vec<$crate::storage::records::TaskLogEntry>> {
                 let mut conn = self.conn()?;
                 let mut query = task_logs::table
                     .filter(task_logs::job_id.eq(job_id))
                     .into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(task_logs::namespace.eq(ns));
+                }
                 if let Some(cursor) = after_id {
                     query = query.filter(task_logs::id.gt(cursor.to_string()));
                 }

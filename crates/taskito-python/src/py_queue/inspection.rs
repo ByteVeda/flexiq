@@ -301,7 +301,7 @@ impl PyQueue {
     pub fn get_job_errors(&self, job_id: &str) -> PyResult<Vec<Py<PyAny>>> {
         let errors = self
             .storage
-            .get_job_errors(job_id)
+            .get_job_errors(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {
@@ -357,7 +357,7 @@ impl PyQueue {
     pub fn replay_job(&self, job_id: &str) -> PyResult<String> {
         let original = self
             .storage
-            .get_job(job_id)
+            .get_job(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
             .ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err(format!("Job not found: {job_id}"))
@@ -448,7 +448,7 @@ impl PyQueue {
     pub fn get_task_logs(&self, job_id: &str) -> PyResult<Vec<Py<PyAny>>> {
         let rows = self
             .storage
-            .get_task_logs(job_id)
+            .get_task_logs(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         Python::attach(|py| {

@@ -39,7 +39,7 @@ fn make_job(task_name: &str, payload: &[u8], max_retries: i32) -> NewJob {
 fn wait_for_status(storage: &StorageBackend, job_id: &str, wanted: JobStatus) -> Job {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Some(job) = storage.get_job(job_id).expect("get_job") {
+        if let Some(job) = storage.get_job(job_id, None).expect("get_job") {
             if job.status == wanted {
                 return job;
             }

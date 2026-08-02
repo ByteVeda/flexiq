@@ -129,7 +129,7 @@ fn a_job_from_another_namespace_cannot_be_cancelled() {
         "cancelling across the boundary must report the same as an unknown id"
     );
     assert_eq!(
-        storage.get_job(&job.id).unwrap().unwrap().status,
+        storage.get_job(&job.id, None).unwrap().unwrap().status,
         JobStatus::Pending
     );
 
@@ -257,4 +257,250 @@ fn a_row_written_before_namespaces_is_invisible_to_a_scoped_read() {
         1
     );
     assert_eq!(storage.get_metrics(None, 0, None).unwrap().len(), 1);
+}
+
+// ── The id-addressed surface (#597) ────────────────────────────────────
+//
+// A caller scoped to A, holding a valid id from B, must get not-found from
+// every read and no effect from every mutation.
+
+/// One `Running` job per namespace, claimed by `owner`, as `(a_id, b_id)`.
+fn running_one_each(storage: &SqliteStorage, owner: &str) -> (String, String) {
+    let mut ids = Vec::new();
+    for tenant in [TENANT_A, TENANT_B] {
+        storage.enqueue(job_in(Some(tenant), "work")).unwrap();
+        let job = storage
+            .dequeue("default", now_millis(), Some(tenant))
+            .unwrap()
+            .expect("a job to claim");
+        storage.claim_execution(&job.id, owner).unwrap();
+        ids.push(job.id);
+    }
+    (ids[0].clone(), ids[1].clone())
+}
+
+#[test]
+fn a_job_from_another_namespace_reads_as_missing() {
+    let storage = storage();
+    let job = storage.enqueue(job_in(Some(TENANT_A), "work")).unwrap();
+
+    assert!(storage.get_job(&job.id, Some(TENANT_B)).unwrap().is_none());
+    assert!(storage.get_job(&job.id, Some(TENANT_A)).unwrap().is_some());
+    assert!(storage.get_job(&job.id, None).unwrap().is_some());
+}
+
+#[test]
+fn an_archived_job_from_another_namespace_reads_as_missing() {
+    // `get_job` falls back to `archived_jobs`, which needs the same filter as
+    // the live table or a terminal job stays readable across the boundary.
+    let storage = storage();
+    let job = storage.enqueue(job_in(Some(TENANT_A), "work")).unwrap();
+    storage.cancel_job(&job.id, Some(TENANT_A)).unwrap();
+
+    assert!(storage.get_job(&job.id, Some(TENANT_B)).unwrap().is_none());
+    assert!(storage.get_job(&job.id, Some(TENANT_A)).unwrap().is_some());
+}
+
+#[test]
+fn archived_listings_are_scoped() {
+    let storage = storage();
+    for tenant in [TENANT_A, TENANT_B] {
+        let job = storage.enqueue(job_in(Some(tenant), "work")).unwrap();
+        storage.cancel_job(&job.id, Some(tenant)).unwrap();
+    }
+
+    let scoped = storage.list_archived(10, 0, Some(TENANT_A)).unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].namespace.as_deref(), Some(TENANT_A));
+
+    assert_eq!(storage.list_archived(10, 0, None).unwrap().len(), 2);
+
+    let keyset = storage
+        .list_archived_after(10, None, Some(TENANT_A))
+        .unwrap();
+    assert_eq!(keyset.len(), 1);
+    assert_eq!(keyset[0].namespace.as_deref(), Some(TENANT_A));
+    assert_eq!(
+        storage.list_archived_after(10, None, None).unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn a_running_job_from_another_namespace_cannot_be_cancel_requested() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    assert!(!storage.request_cancel(&a_id, Some(TENANT_B)).unwrap());
+    assert!(!storage.is_cancel_requested(&a_id, Some(TENANT_B)).unwrap());
+
+    assert!(storage.request_cancel(&a_id, Some(TENANT_A)).unwrap());
+    assert!(storage.is_cancel_requested(&a_id, Some(TENANT_A)).unwrap());
+    // The flag is real, so a cross-namespace reader denying it is the filter
+    // at work rather than the flag never having been set.
+    assert!(!storage.is_cancel_requested(&a_id, Some(TENANT_B)).unwrap());
+}
+
+#[test]
+fn a_running_job_from_another_namespace_cannot_be_marked_cancelled() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    storage.mark_cancelled(&a_id, Some(TENANT_B)).unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().status,
+        JobStatus::Running,
+        "a cross-namespace mark must leave the job running"
+    );
+
+    storage.mark_cancelled(&a_id, Some(TENANT_A)).unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().status,
+        JobStatus::Cancelled
+    );
+}
+
+#[test]
+fn progress_cannot_be_written_across_the_boundary() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    assert!(
+        storage.update_progress(&a_id, 50, Some(TENANT_B)).is_err(),
+        "a cross-namespace write must report the same as an unknown id"
+    );
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().progress,
+        None
+    );
+
+    storage.update_progress(&a_id, 50, Some(TENANT_A)).unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().progress,
+        Some(50)
+    );
+}
+
+#[test]
+fn job_errors_and_logs_are_scoped_by_their_job() {
+    let storage = storage();
+    let job = storage.enqueue(job_in(Some(TENANT_A), "work")).unwrap();
+    storage.record_error(&job.id, 1, "boom").unwrap();
+    storage
+        .write_task_log(&job.id, "work", "INFO", "hello", None, Some(TENANT_A))
+        .unwrap();
+
+    assert!(storage
+        .get_job_errors(&job.id, Some(TENANT_B))
+        .unwrap()
+        .is_empty());
+    assert!(storage
+        .get_task_logs(&job.id, Some(TENANT_B))
+        .unwrap()
+        .is_empty());
+    assert!(storage
+        .get_task_logs_after(&job.id, None, Some(TENANT_B))
+        .unwrap()
+        .is_empty());
+
+    assert_eq!(
+        storage
+            .get_job_errors(&job.id, Some(TENANT_A))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .get_task_logs(&job.id, Some(TENANT_A))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_cascade_cancel_stops_at_the_namespace_boundary() {
+    // Dependencies are not required to share a namespace, so without the filter
+    // a cancel in one namespace archives another's pending job.
+    let storage = storage();
+    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
+
+    let mut dependent = job_in(Some(TENANT_B), "dependent");
+    dependent.depends_on = vec![root.id.clone()];
+    let dependent = storage.enqueue(dependent).unwrap();
+
+    let mut sibling = job_in(Some(TENANT_A), "sibling");
+    sibling.depends_on = vec![root.id.clone()];
+    let sibling = storage.enqueue(sibling).unwrap();
+
+    assert!(storage.cancel_job(&root.id, Some(TENANT_A)).unwrap());
+
+    assert_eq!(
+        storage
+            .get_job(&dependent.id, None)
+            .unwrap()
+            .unwrap()
+            .status,
+        JobStatus::Pending,
+        "a dependent in another namespace must be left alone"
+    );
+    assert_eq!(
+        storage.get_job(&sibling.id, None).unwrap().unwrap().status,
+        JobStatus::Cancelled,
+        "a dependent in the same namespace must still cascade"
+    );
+}
+
+#[test]
+fn the_per_task_concurrency_count_is_scoped() {
+    // An unscoped count lets a job elsewhere consume this scheduler's
+    // `max_concurrent` budget and reschedule a job that should have run.
+    let storage = storage();
+    running_one_each(&storage, "worker-1");
+
+    assert_eq!(
+        storage
+            .count_running_by_task("work", Some(TENANT_A))
+            .unwrap(),
+        1
+    );
+    assert_eq!(storage.count_running_by_task("work", None).unwrap(), 2);
+}
+
+#[test]
+fn a_scheduler_never_reaps_another_namespaces_job() {
+    // The recovery paths write through `handle_result`, which records the
+    // outcome under the *scheduler's* namespace — so reaping across the
+    // boundary both steals the job and misfiles its metric.
+    let storage = storage();
+    let (a_id, b_id) = running_one_each(&storage, "dead-worker");
+    let past_every_timeout = now_millis() + 1_000_000;
+
+    let stale_for_a = storage
+        .reap_stale_jobs(past_every_timeout, Some(TENANT_A))
+        .unwrap();
+    assert_eq!(stale_for_a.len(), 1);
+    assert_eq!(stale_for_a[0].id, a_id);
+
+    let orphans_for_a = storage
+        .reap_orphaned_jobs(&["live-worker".to_string()], now_millis(), Some(TENANT_A))
+        .unwrap();
+    assert_eq!(orphans_for_a.len(), 1);
+    assert_eq!(orphans_for_a[0].0.id, a_id);
+
+    // Unscoped still sweeps the cluster, so a single-tenant deployment and the
+    // dead-worker reaper are unaffected.
+    assert_eq!(
+        storage
+            .reap_stale_jobs(past_every_timeout, None)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(storage
+        .reap_orphaned_jobs(&["live-worker".to_string()], now_millis(), None)
+        .unwrap()
+        .iter()
+        .any(|(job, _)| job.id == b_id));
 }

@@ -54,13 +54,13 @@ impl DataSource for DbSource {
     }
 
     fn job_detail(&self, id: &str) -> Result<Option<JobDetail>> {
-        let Some(job) = self.be.storage.get_job(id)? else {
+        let Some(job) = self.be.storage.get_job(id, None)? else {
             return Ok(None);
         };
         let errors = self
             .be
             .storage
-            .get_job_errors(id)?
+            .get_job_errors(id, None)?
             .into_iter()
             .map(|e| JobErrorEntry {
                 attempt: e.attempt,
@@ -71,7 +71,7 @@ impl DataSource for DbSource {
         let logs = self
             .be
             .storage
-            .get_task_logs(id)?
+            .get_task_logs(id, None)?
             .into_iter()
             .map(|l| LogEntry {
                 level: l.level,
@@ -167,7 +167,7 @@ impl DataSource for DbSource {
         if self.be.storage.cancel_job(id, None)? {
             return Ok(true);
         }
-        Ok(self.be.storage.request_cancel(id)?)
+        Ok(self.be.storage.request_cancel(id, None)?)
     }
 
     fn replay(&self, id: &str) -> Result<String> {
@@ -176,7 +176,7 @@ impl DataSource for DbSource {
         let job = self
             .be
             .storage
-            .get_job(id)?
+            .get_job(id, None)?
             .ok_or_else(|| anyhow!("job {id} not found"))?;
         let original_error = job.error.clone();
         // id is a UUID, so it needs no JSON escaping.

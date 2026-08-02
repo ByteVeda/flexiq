@@ -123,7 +123,7 @@ impl RedisStorage {
         // (skipped when a racer had already archived it).
         drop(conn);
         if dead_lettered {
-            self.cascade_cancel(&job.id, "dependency failed")?;
+            self.cascade_cancel(&job.id, "dependency failed", job.namespace.as_deref())?;
         }
 
         Ok(())

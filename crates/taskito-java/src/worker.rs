@@ -93,6 +93,7 @@ fn start_worker(
 
     let registry = Arc::new(Registry::default());
     let dispatcher_storage = storage.clone();
+    let dispatcher_namespace = namespace.clone();
     let lifecycle_storage = storage.clone();
     let queues_csv = queues.join(",");
     let worker_id = format!("java-{}", uuid::Uuid::now_v7());
@@ -182,7 +183,12 @@ fn start_worker(
     });
 
     // Dispatcher loop: submit each job to Java, report results.
-    let dispatcher = JavaDispatcher::new(callbacks.clone(), registry.clone(), dispatcher_storage);
+    let dispatcher = JavaDispatcher::new(
+        callbacks.clone(),
+        registry.clone(),
+        dispatcher_storage,
+        dispatcher_namespace,
+    );
     runtime.spawn(async move {
         dispatcher.run(job_rx, result_tx).await;
     });

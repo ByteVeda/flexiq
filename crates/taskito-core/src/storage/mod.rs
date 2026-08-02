@@ -523,21 +523,34 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<bool> {
                 self.cancel_job(id, namespace)
             }
-            fn request_cancel(&self, id: &str) -> $crate::error::Result<bool> {
-                self.request_cancel(id)
+            fn request_cancel(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.request_cancel(id, namespace)
             }
-            fn is_cancel_requested(&self, id: &str) -> $crate::error::Result<bool> {
-                self.is_cancel_requested(id)
+            fn is_cancel_requested(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<bool> {
+                self.is_cancel_requested(id, namespace)
             }
-            fn mark_cancelled(&self, id: &str) -> $crate::error::Result<()> {
-                self.mark_cancelled(id)
+            fn mark_cancelled(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.mark_cancelled(id, namespace)
             }
             fn cascade_cancel(
                 &self,
                 failed_job_id: &str,
                 reason: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.cascade_cancel(failed_job_id, reason)
+                self.cascade_cancel(failed_job_id, reason, namespace)
             }
             fn get_dependencies(&self, job_id: &str) -> $crate::error::Result<Vec<String>> {
                 self.get_dependencies(job_id)
@@ -545,8 +558,13 @@ macro_rules! impl_storage {
             fn get_dependents(&self, job_id: &str) -> $crate::error::Result<Vec<String>> {
                 self.get_dependents(job_id)
             }
-            fn update_progress(&self, id: &str, progress: i32) -> $crate::error::Result<()> {
-                self.update_progress(id, progress)
+            fn update_progress(
+                &self,
+                id: &str,
+                progress: i32,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.update_progress(id, progress, namespace)
             }
             fn list_jobs(
                 &self,
@@ -570,8 +588,12 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.list_jobs_after(status, queue_name, task_name, limit, after, namespace)
             }
-            fn get_job(&self, id: &str) -> $crate::error::Result<Option<$crate::job::Job>> {
-                self.get_job(id)
+            fn get_job(
+                &self,
+                id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Option<$crate::job::Job>> {
+                self.get_job(id, namespace)
             }
             fn stats(
                 &self,
@@ -595,15 +617,20 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<u64> {
                 self.purge_completed_with_ttl(global_cutoff_ms)
             }
-            fn reap_stale_jobs(&self, now: i64) -> $crate::error::Result<Vec<$crate::job::Job>> {
-                self.reap_stale_jobs(now)
+            fn reap_stale_jobs(
+                &self,
+                now: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<$crate::job::Job>> {
+                self.reap_stale_jobs(now, namespace)
             }
             fn reap_orphaned_jobs(
                 &self,
                 live_owner_ids: &[String],
                 now: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<($crate::job::Job, String)>> {
-                self.reap_orphaned_jobs(live_owner_ids, now)
+                self.reap_orphaned_jobs(live_owner_ids, now, namespace)
             }
             fn record_error(
                 &self,
@@ -616,8 +643,9 @@ macro_rules! impl_storage {
             fn get_job_errors(
                 &self,
                 job_id: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::JobError>> {
-                self.get_job_errors(job_id)
+                self.get_job_errors(job_id, namespace)
             }
             fn purge_job_errors(&self, older_than_ms: i64) -> $crate::error::Result<u64> {
                 self.purge_job_errors(older_than_ms)
@@ -935,15 +963,17 @@ macro_rules! impl_storage {
             fn get_task_logs(
                 &self,
                 job_id: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::TaskLogEntry>> {
-                self.get_task_logs(job_id)
+                self.get_task_logs(job_id, namespace)
             }
             fn get_task_logs_after(
                 &self,
                 job_id: &str,
                 after_id: Option<&str>,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::storage::records::TaskLogEntry>> {
-                self.get_task_logs_after(job_id, after_id)
+                self.get_task_logs_after(job_id, after_id, namespace)
             }
             fn query_task_logs(
                 &self,
@@ -1048,15 +1078,17 @@ macro_rules! impl_storage {
                 &self,
                 limit: i64,
                 offset: i64,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
-                self.list_archived(limit, offset)
+                self.list_archived(limit, offset, namespace)
             }
             fn list_archived_after(
                 &self,
                 limit: i64,
                 after: Option<(i64, &str)>,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
-                self.list_archived_after(limit, after)
+                self.list_archived_after(limit, after, namespace)
             }
             fn acquire_lock(
                 &self,
@@ -1124,8 +1156,9 @@ macro_rules! impl_storage {
             fn count_running_by_task(
                 &self,
                 task_name: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<i64> {
-                self.count_running_by_task(task_name)
+                self.count_running_by_task(task_name, namespace)
             }
             fn count_pending_by_queue(
                 &self,
@@ -1370,17 +1403,22 @@ impl Storage for StorageBackend {
     fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         delegate!(self, cancel_job, id, namespace)
     }
-    fn request_cancel(&self, id: &str) -> Result<bool> {
-        delegate!(self, request_cancel, id)
+    fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, request_cancel, id, namespace)
     }
-    fn is_cancel_requested(&self, id: &str) -> Result<bool> {
-        delegate!(self, is_cancel_requested, id)
+    fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        delegate!(self, is_cancel_requested, id, namespace)
     }
-    fn mark_cancelled(&self, id: &str) -> Result<()> {
-        delegate!(self, mark_cancelled, id)
+    fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, mark_cancelled, id, namespace)
     }
-    fn cascade_cancel(&self, failed_job_id: &str, reason: &str) -> Result<()> {
-        delegate!(self, cascade_cancel, failed_job_id, reason)
+    fn cascade_cancel(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        delegate!(self, cascade_cancel, failed_job_id, reason, namespace)
     }
     fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>> {
         delegate!(self, get_dependencies, job_id)
@@ -1388,8 +1426,8 @@ impl Storage for StorageBackend {
     fn get_dependents(&self, job_id: &str) -> Result<Vec<String>> {
         delegate!(self, get_dependents, job_id)
     }
-    fn update_progress(&self, id: &str, progress: i32) -> Result<()> {
-        delegate!(self, update_progress, id, progress)
+    fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, update_progress, id, progress, namespace)
     }
     fn list_jobs(
         &self,
@@ -1422,8 +1460,8 @@ impl Storage for StorageBackend {
             namespace
         )
     }
-    fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        delegate!(self, get_job, id)
+    fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>> {
+        delegate!(self, get_job, id, namespace)
     }
     fn stats(&self, namespace: Option<&str>) -> Result<QueueStats> {
         delegate!(self, stats, namespace)
@@ -1437,21 +1475,26 @@ impl Storage for StorageBackend {
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64> {
         delegate!(self, purge_completed_with_ttl, global_cutoff_ms)
     }
-    fn reap_stale_jobs(&self, now: i64) -> Result<Vec<Job>> {
-        delegate!(self, reap_stale_jobs, now)
+    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
+        delegate!(self, reap_stale_jobs, now, namespace)
     }
     fn reap_orphaned_jobs(
         &self,
         live_owner_ids: &[String],
         now: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<(Job, String)>> {
-        delegate!(self, reap_orphaned_jobs, live_owner_ids, now)
+        delegate!(self, reap_orphaned_jobs, live_owner_ids, now, namespace)
     }
     fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()> {
         delegate!(self, record_error, job_id, attempt, error)
     }
-    fn get_job_errors(&self, job_id: &str) -> Result<Vec<records::JobError>> {
-        delegate!(self, get_job_errors, job_id)
+    fn get_job_errors(
+        &self,
+        job_id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<records::JobError>> {
+        delegate!(self, get_job_errors, job_id, namespace)
     }
     fn purge_job_errors(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_job_errors, older_than_ms)
@@ -1718,15 +1761,20 @@ impl Storage for StorageBackend {
             namespace
         )
     }
-    fn get_task_logs(&self, job_id: &str) -> Result<Vec<records::TaskLogEntry>> {
-        delegate!(self, get_task_logs, job_id)
+    fn get_task_logs(
+        &self,
+        job_id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<records::TaskLogEntry>> {
+        delegate!(self, get_task_logs, job_id, namespace)
     }
     fn get_task_logs_after(
         &self,
         job_id: &str,
         after_id: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<Vec<records::TaskLogEntry>> {
-        delegate!(self, get_task_logs_after, job_id, after_id)
+        delegate!(self, get_task_logs_after, job_id, after_id, namespace)
     }
     fn query_task_logs(
         &self,
@@ -1826,11 +1874,16 @@ impl Storage for StorageBackend {
     fn archive_old_jobs(&self, cutoff_ms: i64) -> Result<u64> {
         delegate!(self, archive_old_jobs, cutoff_ms)
     }
-    fn list_archived(&self, limit: i64, offset: i64) -> Result<Vec<Job>> {
-        delegate!(self, list_archived, limit, offset)
+    fn list_archived(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
+        delegate!(self, list_archived, limit, offset, namespace)
     }
-    fn list_archived_after(&self, limit: i64, after: Option<(i64, &str)>) -> Result<Vec<Job>> {
-        delegate!(self, list_archived_after, limit, after)
+    fn list_archived_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<Job>> {
+        delegate!(self, list_archived_after, limit, after, namespace)
     }
     fn acquire_lock(&self, lock_name: &str, owner_id: &str, ttl_ms: i64) -> Result<bool> {
         delegate!(self, acquire_lock, lock_name, owner_id, ttl_ms)
@@ -1867,8 +1920,8 @@ impl Storage for StorageBackend {
     ) -> Result<bool> {
         delegate!(self, reclaim_execution, job_id, expected_owner, new_owner)
     }
-    fn count_running_by_task(&self, task_name: &str) -> Result<i64> {
-        delegate!(self, count_running_by_task, task_name)
+    fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64> {
+        delegate!(self, count_running_by_task, task_name, namespace)
     }
     fn count_pending_by_queue(&self, queue_name: &str) -> Result<i64> {
         delegate!(self, count_pending_by_queue, queue_name)

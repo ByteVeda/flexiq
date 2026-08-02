@@ -51,7 +51,7 @@ impl PyQueue {
         }
 
         let outcome: CoreResult<Outcome> = py.detach(|| {
-            let job = match self.storage.get_job(&job_id_owned)? {
+            let job = match self.storage.get_job(&job_id_owned, None)? {
                 Some(j) => j,
                 None => return Ok(Outcome::NotFound),
             };
@@ -388,7 +388,7 @@ mod tests {
                 fetch_node(wf, &run_id, "pending").status,
                 WorkflowNodeStatus::Skipped,
             );
-            let pending = queue.storage.get_job(&pending_job).unwrap().unwrap();
+            let pending = queue.storage.get_job(&pending_job, None).unwrap().unwrap();
             assert_eq!(pending.status.wire_name(), "Cancelled");
         });
     }
@@ -428,7 +428,7 @@ mod tests {
                 WorkflowNodeStatus::Pending,
                 "skip_cascade must leave pending siblings untouched",
             );
-            let pending = queue.storage.get_job(&pending_job).unwrap().unwrap();
+            let pending = queue.storage.get_job(&pending_job, None).unwrap().unwrap();
             assert_ne!(pending.status.wire_name(), "Cancelled");
         });
     }
@@ -582,7 +582,7 @@ mod tests {
                 fetch_node(wf, &run_id, "skipped").status,
                 WorkflowNodeStatus::Skipped,
             );
-            let job = queue.storage.get_job(&job_id).unwrap().unwrap();
+            let job = queue.storage.get_job(&job_id, None).unwrap().unwrap();
             assert_eq!(job.status.wire_name(), "Cancelled");
         });
     }

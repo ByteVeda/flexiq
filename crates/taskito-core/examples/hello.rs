@@ -33,7 +33,7 @@ fn wait_until_completed(storage: &StorageBackend, job_id: &str) -> Job {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let job = storage
-            .get_job(job_id)
+            .get_job(job_id, None)
             .expect("get_job")
             .expect("job exists");
         if job.status == JobStatus::Complete {

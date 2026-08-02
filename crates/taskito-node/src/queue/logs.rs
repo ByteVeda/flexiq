@@ -37,7 +37,10 @@ impl JsQueue {
     /// All task-log entries for a job, oldest first.
     #[napi]
     pub fn get_task_logs(&self, job_id: String) -> Result<Vec<JsTaskLog>> {
-        let rows = self.storage.get_task_logs(&job_id).map_err(to_napi_err)?;
+        let rows = self
+            .storage
+            .get_task_logs(&job_id, self.namespace.as_deref())
+            .map_err(to_napi_err)?;
         Ok(rows.into_iter().map(log_to_js).collect())
     }
 
@@ -51,7 +54,7 @@ impl JsQueue {
     ) -> Result<Vec<JsTaskLog>> {
         let rows = self
             .storage
-            .get_task_logs_after(&job_id, after_id.as_deref())
+            .get_task_logs_after(&job_id, after_id.as_deref(), self.namespace.as_deref())
             .map_err(to_napi_err)?;
         Ok(rows.into_iter().map(log_to_js).collect())
     }

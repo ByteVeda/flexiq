@@ -67,9 +67,12 @@ pub async fn detail(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let job = on_storage(&state, move |storage| storage.get_job(&job_id))
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
+    let namespace = state.namespace.clone();
+    let job = on_storage(&state, move |storage| {
+        storage.get_job(&job_id, namespace.as_deref())
+    })
+    .await?
+    .ok_or_else(|| ApiError::NotFound("Job not found".to_string()))?;
     Ok(Json(dto::job(&job)))
 }
 
@@ -78,7 +81,11 @@ pub async fn errors(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let errors = on_storage(&state, move |storage| storage.get_job_errors(&job_id)).await?;
+    let namespace = state.namespace.clone();
+    let errors = on_storage(&state, move |storage| {
+        storage.get_job_errors(&job_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(Value::Array(
         errors.iter().map(dto::job_error).collect(),
     )))
@@ -89,7 +96,11 @@ pub async fn logs(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let logs = on_storage(&state, move |storage| storage.get_task_logs(&job_id)).await?;
+    let namespace = state.namespace.clone();
+    let logs = on_storage(&state, move |storage| {
+        storage.get_task_logs(&job_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(Value::Array(logs.iter().map(dto::task_log).collect())))
 }
 
@@ -109,7 +120,11 @@ pub async fn dag(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let graph = on_storage(&state, move |storage| build_dag(storage, &job_id)).await?;
+    let namespace = state.namespace.clone();
+    let graph = on_storage(&state, move |storage| {
+        build_dag(storage, &job_id, namespace.as_deref())
+    })
+    .await?;
     Ok(Json(graph))
 }
 
@@ -131,7 +146,11 @@ pub async fn replay(
     State(state): State<SharedState>,
     Path(job_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let replay_id = on_storage(&state, move |storage| replay_job(storage, &job_id)).await??;
+    let namespace = state.namespace.clone();
+    let replay_id = on_storage(&state, move |storage| {
+        replay_job(storage, &job_id, namespace.as_deref())
+    })
+    .await??;
     Ok(Json(json!({ "replay_job_id": replay_id })))
 }
 
@@ -140,8 +159,12 @@ pub async fn replay(
 /// The copy deliberately drops the unique key, dependencies, and expiry: it is
 /// a fresh attempt at the same work, not a resurrection of the original's
 /// scheduling constraints.
-fn replay_job(storage: &impl Storage, job_id: &str) -> taskito_core::Result<ApiResult<String>> {
-    let Some(original) = storage.get_job(job_id)? else {
+fn replay_job(
+    storage: &impl Storage,
+    job_id: &str,
+    namespace: Option<&str>,
+) -> taskito_core::Result<ApiResult<String>> {
+    let Some(original) = storage.get_job(job_id, namespace)? else {
         return Ok(Err(ApiError::NotFound("Job not found".to_string())));
     };
 
@@ -182,7 +205,11 @@ fn replay_job(storage: &impl Storage, job_id: &str) -> taskito_core::Result<ApiR
 ///
 /// Iterative rather than recursive: a long dependency chain is operator data,
 /// and blowing the stack on it would take the whole dashboard down.
-fn build_dag(storage: &impl Storage, root: &str) -> taskito_core::Result<Value> {
+fn build_dag(
+    storage: &impl Storage,
+    root: &str,
+    namespace: Option<&str>,
+) -> taskito_core::Result<Value> {
     let mut visited = std::collections::HashSet::new();
     let mut pending = vec![root.to_string()];
     let mut nodes = Vec::new();
@@ -192,7 +219,7 @@ fn build_dag(storage: &impl Storage, root: &str) -> taskito_core::Result<Value> 
         if !visited.insert(job_id.clone()) {
             continue;
         }
-        let Some(job) = storage.get_job(&job_id)? else {
+        let Some(job) = storage.get_job(&job_id, namespace)? else {
             continue;
         };
         nodes.push(dto::job(&job));

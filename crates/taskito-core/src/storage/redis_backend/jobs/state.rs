@@ -81,7 +81,7 @@ impl RedisStorage {
         for c in completions {
             // Read before the archive move so the job's namespace is still
             // reachable; it is the only namespace this batch knows.
-            let namespace = self.get_job(&c.job_id)?.and_then(|job| job.namespace);
+            let namespace = self.get_job(&c.job_id, None)?.and_then(|job| job.namespace);
             self.complete(&c.job_id, c.result.clone())?;
             self.complete_execution(&c.job_id)?;
             self.record_metric(
@@ -160,7 +160,7 @@ impl RedisStorage {
     /// missing or not `Running`.
     pub fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool> {
         let mut conn = self.conn()?;
-        let mut job = match self.get_job(id)? {
+        let mut job = match self.get_job(id, None)? {
             Some(j) => j,
             None => return Ok(false),
         };
@@ -215,15 +215,12 @@ impl RedisStorage {
     /// learns nothing about ids outside its own namespace.
     pub fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
-        let job = match self.get_job(id)? {
+        let job = match self.get_job(id, namespace)? {
             Some(j) => j,
             None => return Ok(false),
         };
 
         if job.status != JobStatus::Pending {
-            return Ok(false);
-        }
-        if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
             return Ok(false);
         }
 
@@ -238,16 +235,17 @@ impl RedisStorage {
 
         // Cascade cancel dependents
         drop(conn);
-        self.cascade_cancel(id, "dependency cancelled")?;
+        self.cascade_cancel(id, "dependency cancelled", namespace)?;
 
         Ok(true)
     }
 
     /// Set the cancel-requested flag on a `Running` job — the task must poll
-    /// for it. Returns `false` when no running job matched.
-    pub fn request_cancel(&self, id: &str) -> Result<bool> {
+    /// for it. Returns `false` when no running job matched, which is also the
+    /// answer for a job in another namespace.
+    pub fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
         let mut conn = self.conn()?;
-        let mut job = match self.get_job(id)? {
+        let mut job = match self.get_job(id, namespace)? {
             Some(j) => j,
             None => return Ok(false),
         };
@@ -277,8 +275,12 @@ impl RedisStorage {
         Ok(applied == 1)
     }
 
-    /// Whether cancellation has been requested for a job.
-    pub fn is_cancel_requested(&self, id: &str) -> Result<bool> {
+    /// Whether cancellation has been requested for a job. A job in another
+    /// namespace reports `false`, like an unknown id.
+    pub fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
+        if namespace.is_some() && self.get_job(id, namespace)?.is_none() {
+            return Ok(false);
+        }
         let mut conn = self.conn()?;
         let cancel_set = self.key(&["jobs", "cancel_requested"]);
         let is_member: bool = conn.sismember(&cancel_set, id).map_err(map_err)?;
@@ -286,9 +288,13 @@ impl RedisStorage {
     }
 
     /// Archive a live job as `Cancelled` after a cancel request was observed.
-    pub fn mark_cancelled(&self, id: &str) -> Result<()> {
+    /// A job in another namespace is left alone.
+    pub fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
         let mut conn = self.conn()?;
         let mut job = self.get_job_required(id)?;
+        if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
+            return Ok(());
+        }
         let old_status = job.status;
 
         job.status = JobStatus::Cancelled;
@@ -305,7 +311,16 @@ impl RedisStorage {
 
     /// Cancel every pending job that depends, directly or transitively, on
     /// `failed_job_id`.
-    pub fn cascade_cancel(&self, failed_job_id: &str, reason: &str) -> Result<()> {
+    ///
+    /// Dependents outside `namespace` are left alone: a dependency is not
+    /// required to share a namespace with its dependent, so without the filter
+    /// a cancel in one namespace could archive another's job.
+    pub fn cascade_cancel(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<()> {
         let now = now_millis();
 
         let mut queue: Vec<String> = vec![failed_job_id.to_string()];
@@ -332,7 +347,7 @@ impl RedisStorage {
 
         let error_msg = format!("{reason}: {failed_job_id}");
         for dep_id in &queue {
-            if let Some(mut job) = self.get_job(dep_id)? {
+            if let Some(mut job) = self.get_job(dep_id, namespace)? {
                 if job.status == JobStatus::Pending {
                     let mut conn = self.conn()?;
                     let old_status = job.status;
@@ -367,7 +382,9 @@ impl RedisStorage {
     }
 
     /// Update a live (not yet archived) job's progress (0-100).
-    pub fn update_progress(&self, id: &str, progress: i32) -> Result<()> {
+    ///
+    /// A job in another namespace reports `JobNotFound`, like an unknown id.
+    pub fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()> {
         if !(0..=100).contains(&progress) {
             return Err(QueueError::Other(
                 "progress must be between 0 and 100".into(),
@@ -375,6 +392,9 @@ impl RedisStorage {
         }
         let mut conn = self.conn()?;
         let mut job = self.get_job_required(id)?;
+        if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
+            return Err(QueueError::JobNotFound(id.to_string()));
+        }
         job.progress = Some(progress);
         let job_json = serde_json::to_string(&job)?;
         let job_key = self.key(&["job", id]);

@@ -5,13 +5,23 @@
 macro_rules! impl_diesel_archival_ops {
     ($storage_type:ty) => {
         impl $storage_type {
-            /// List archived jobs with pagination.
-            pub fn list_archived(&self, limit: i64, offset: i64) -> Result<Vec<Job>> {
+            /// List archived jobs with pagination. `namespace` of `None`
+            /// returns every namespace, matching `list_jobs`.
+            pub fn list_archived(
+                &self,
+                limit: i64,
+                offset: i64,
+                namespace: Option<&str>,
+            ) -> Result<Vec<Job>> {
                 let mut conn = self.conn()?;
 
                 // Narrow projection: archive listings never render the
                 // arg/result blobs, so leave them on TOAST/overflow pages.
-                let rows: Vec<NarrowArchivedJobRow> = archived_jobs::table
+                let mut query = archived_jobs::table.into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(archived_jobs::namespace.eq(ns));
+                }
+                let rows: Vec<NarrowArchivedJobRow> = query
                     .order(archived_jobs::completed_at.desc())
                     .limit(limit)
                     .offset(offset)
@@ -29,6 +39,7 @@ macro_rules! impl_diesel_archival_ops {
                 &self,
                 limit: i64,
                 after: Option<(i64, &str)>,
+                namespace: Option<&str>,
             ) -> Result<Vec<Job>> {
                 if limit <= 0 {
                     return Ok(Vec::new());
@@ -38,6 +49,10 @@ macro_rules! impl_diesel_archival_ops {
                 let mut query = archived_jobs::table
                     .into_boxed()
                     .order((archived_jobs::completed_at.desc(), archived_jobs::id.desc()));
+
+                if let Some(ns) = namespace {
+                    query = query.filter(archived_jobs::namespace.eq(ns));
+                }
 
                 if let Some((cursor_completed_at, cursor_id)) = after {
                     let cursor_id = cursor_id.to_string();

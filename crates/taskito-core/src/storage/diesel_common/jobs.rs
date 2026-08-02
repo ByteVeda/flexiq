@@ -1000,19 +1000,26 @@ macro_rules! impl_diesel_job_ops {
                 })?;
 
                 if archived {
-                    self.cascade_cancel(id, "dependency cancelled")?;
+                    self.cascade_cancel(id, "dependency cancelled", namespace)?;
                 }
 
                 Ok(archived)
             }
 
             /// Request cancellation of a running job. The task must check for this.
-            pub fn request_cancel(&self, id: &str) -> Result<bool> {
+            ///
+            /// A job in another namespace reports `false`, like an unknown id.
+            pub fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
                 let mut conn = self.conn()?;
 
-                let affected = diesel::update(jobs::table)
+                let mut update = diesel::update(jobs::table)
                     .filter(jobs::id.eq(id))
                     .filter(jobs::status.eq(JobStatus::Running as i32))
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    update = update.filter(jobs::namespace.eq(ns));
+                }
+                let affected = update
                     .set(jobs::cancel_requested.eq(1))
                     .execute(&mut conn)?;
 
@@ -1020,21 +1027,30 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Check if cancellation has been requested for a job.
-            pub fn is_cancel_requested(&self, id: &str) -> Result<bool> {
+            ///
+            /// A job in another namespace reports `false`, like an unknown id.
+            pub fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool> {
                 let mut conn = self.conn()?;
 
-                let val: Option<i32> = jobs::table
+                let row: Option<(i32, Option<String>)> = jobs::table
                     .find(id)
-                    .select(jobs::cancel_requested)
+                    .select((jobs::cancel_requested, jobs::namespace))
                     .first(&mut conn)
                     .optional()?;
 
-                Ok(val.unwrap_or(0) != 0)
+                Ok(match row {
+                    Some((flag, row_ns)) => {
+                        Self::job_in_namespace(row_ns.as_deref(), namespace) && flag != 0
+                    }
+                    None => false,
+                })
             }
 
             /// Mark a job as cancelled (used when a running job detects
             /// cancellation). The job moves from `jobs` into `archived_jobs`.
-            pub fn mark_cancelled(&self, id: &str) -> Result<()> {
+            ///
+            /// A job in another namespace is left alone.
+            pub fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()> {
                 let now = now_millis();
 
                 self.write_transaction(|conn| {
@@ -1048,6 +1064,10 @@ macro_rules! impl_diesel_job_ops {
                         None => return Ok(()),
                     };
 
+                    if !Self::job_in_namespace(row.namespace.as_deref(), namespace) {
+                        return Ok(());
+                    }
+
                     row.status = JobStatus::Cancelled as i32;
                     row.completed_at = Some(now);
                     row.error = Some("cancelled by request".to_string());
@@ -1056,9 +1076,24 @@ macro_rules! impl_diesel_job_ops {
                 })
             }
 
+            /// Whether a row's namespace is visible to a caller scoped to
+            /// `caller`. An unscoped caller sees every namespace.
+            fn job_in_namespace(row: Option<&str>, caller: Option<&str>) -> bool {
+                caller.is_none_or(|scope| row == Some(scope))
+            }
+
             /// Cascade-cancel all pending jobs that depend (directly or transitively)
             /// on the given job. Uses BFS to handle deep chains.
-            pub fn cascade_cancel(&self, failed_job_id: &str, reason: &str) -> Result<()> {
+            ///
+            /// Dependents outside `namespace` are left alone: a dependency is not
+            /// required to share a namespace with its dependent, so without the
+            /// filter a cancel in one namespace could archive another's job.
+            pub fn cascade_cancel(
+                &self,
+                failed_job_id: &str,
+                reason: &str,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let mut conn = self.conn()?;
                 let now = now_millis();
 
@@ -1094,11 +1129,14 @@ macro_rules! impl_diesel_job_ops {
                 if !queue.is_empty() {
                     let error_msg = format!("{reason}: {failed_job_id}");
                     self.write_transaction(|conn| {
-                        let rows: Vec<JobRow> = jobs::table
+                        let mut select = jobs::table
                             .filter(jobs::id.eq_any(&queue))
                             .filter(jobs::status.eq(JobStatus::Pending as i32))
-                            .select(JobRow::as_select())
-                            .load(conn)?;
+                            .into_boxed();
+                        if let Some(ns) = namespace {
+                            select = select.filter(jobs::namespace.eq(ns));
+                        }
+                        let rows: Vec<JobRow> = select.select(JobRow::as_select()).load(conn)?;
 
                         for mut row in rows {
                             row.status = JobStatus::Cancelled as i32;
@@ -1134,7 +1172,14 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Update progress for a running job (0-100).
-            pub fn update_progress(&self, id: &str, progress: i32) -> Result<()> {
+            ///
+            /// A job in another namespace reports `JobNotFound`, like an unknown id.
+            pub fn update_progress(
+                &self,
+                id: &str,
+                progress: i32,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 if !(0..=100).contains(&progress) {
                     return Err(QueueError::Other(
                         "progress must be between 0 and 100".into(),
@@ -1142,10 +1187,13 @@ macro_rules! impl_diesel_job_ops {
                 }
                 let mut conn = self.conn()?;
 
-                let affected = diesel::update(jobs::table)
+                let mut update = diesel::update(jobs::table)
                     .filter(jobs::id.eq(id))
-                    .set(jobs::progress.eq(progress))
-                    .execute(&mut conn)?;
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    update = update.filter(jobs::namespace.eq(ns));
+                }
+                let affected = update.set(jobs::progress.eq(progress)).execute(&mut conn)?;
 
                 if affected == 0 {
                     return Err(QueueError::JobNotFound(id.to_string()));
@@ -1199,7 +1247,9 @@ macro_rules! impl_diesel_job_ops {
 
             /// Get a job by ID. Checks the live `jobs` table first, then falls
             /// back to `archived_jobs` for terminal jobs.
-            pub fn get_job(&self, id: &str) -> Result<Option<Job>> {
+            ///
+            /// A job in another namespace reads as missing.
+            pub fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>> {
                 let mut conn = self.conn()?;
 
                 let row: Option<JobRow> = jobs::table
@@ -1209,6 +1259,9 @@ macro_rules! impl_diesel_job_ops {
                     .optional()?;
 
                 if let Some(jobrow) = row {
+                    if !Self::job_in_namespace(jobrow.namespace.as_deref(), namespace) {
+                        return Ok(None);
+                    }
                     return Ok(Some(Job::from(jobrow)));
                 }
 
@@ -1218,7 +1271,9 @@ macro_rules! impl_diesel_job_ops {
                     .first(&mut conn)
                     .optional()?;
 
-                Ok(archived.map(Job::from))
+                Ok(archived
+                    .filter(|row| Self::job_in_namespace(row.namespace.as_deref(), namespace))
+                    .map(Job::from))
             }
 
             /// Get queue statistics. Pending/Running counts come from the live
@@ -1886,7 +1941,10 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Find stale running jobs that exceeded their timeout.
-            pub fn reap_stale_jobs(&self, now: i64) -> Result<Vec<Job>> {
+            ///
+            /// Scoped to `namespace`, so a scheduler never times out another
+            /// namespace's job and records the outcome under its own.
+            pub fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
                 let mut conn = self.conn()?;
 
                 // Push the `started_at + timeout_ms < now` deadline into SQL so
@@ -1894,12 +1952,16 @@ macro_rules! impl_diesel_job_ops {
                 // job. The narrow row skips the payload/result blobs entirely —
                 // reaping only needs the timeout arithmetic plus id/task/queue,
                 // so the assembled Job carries an empty payload.
-                let rows: Vec<NarrowJobRow> = jobs::table
+                let mut query = jobs::table
                     .filter(jobs::status.eq(JobStatus::Running as i32))
                     .filter(jobs::started_at.is_not_null())
                     .filter((jobs::started_at.assume_not_null() + jobs::timeout_ms).lt(now))
-                    .select(NarrowJobRow::as_select())
-                    .load(&mut conn)?;
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(jobs::namespace.eq(ns));
+                }
+                let rows: Vec<NarrowJobRow> =
+                    query.select(NarrowJobRow::as_select()).load(&mut conn)?;
 
                 Ok(rows
                     .into_iter()
@@ -1916,6 +1978,7 @@ macro_rules! impl_diesel_job_ops {
                 &self,
                 live_owner_ids: &[String],
                 _now: i64,
+                namespace: Option<&str>,
             ) -> Result<Vec<(Job, String)>> {
                 // Defensive: never treat every claim as orphaned. The caller
                 // always includes its own owner, so this is unreachable in
@@ -1942,11 +2005,15 @@ macro_rules! impl_diesel_job_ops {
                     orphan_claims.into_iter().collect();
 
                 // Of those, the ones still Running (blob-free narrow row).
-                let rows: Vec<NarrowJobRow> = jobs::table
+                let mut query = jobs::table
                     .filter(jobs::id.eq_any(&job_ids))
                     .filter(jobs::status.eq(JobStatus::Running as i32))
-                    .select(NarrowJobRow::as_select())
-                    .load(&mut conn)?;
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(jobs::namespace.eq(ns));
+                }
+                let rows: Vec<NarrowJobRow> =
+                    query.select(NarrowJobRow::as_select()).load(&mut conn)?;
 
                 Ok(rows
                     .into_iter()
@@ -1979,10 +2046,20 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Get all errors for a job, ordered by attempt.
+            ///
+            /// `job_errors` carries no namespace of its own, so the scope comes
+            /// from the job the rows belong to; one in another namespace reports
+            /// no errors, like an unknown id. Resolved before the connection is
+            /// taken — a single-connection pool would deadlock on the second.
             pub fn get_job_errors(
                 &self,
                 job_id: &str,
+                namespace: Option<&str>,
             ) -> Result<Vec<$crate::storage::records::JobError>> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(Vec::new());
+                }
+
                 let mut conn = self.conn()?;
 
                 let rows = job_errors::table
@@ -2081,14 +2158,21 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Count running jobs for a specific task name (for per-task concurrency limiting).
-            pub fn count_running_by_task(&self, task_name: &str) -> Result<i64> {
+            pub fn count_running_by_task(
+                &self,
+                task_name: &str,
+                namespace: Option<&str>,
+            ) -> Result<i64> {
                 let mut conn = self.conn()?;
 
-                let count: i64 = jobs::table
+                let mut query = jobs::table
                     .filter(jobs::task_name.eq(task_name))
                     .filter(jobs::status.eq(JobStatus::Running as i32))
-                    .count()
-                    .get_result(&mut conn)?;
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    query = query.filter(jobs::namespace.eq(ns));
+                }
+                let count: i64 = query.count().get_result(&mut conn)?;
 
                 Ok(count)
             }

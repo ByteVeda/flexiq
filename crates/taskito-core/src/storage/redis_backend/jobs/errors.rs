@@ -31,7 +31,13 @@ impl RedisStorage {
     }
 
     /// All recorded errors for a job, ordered by attempt.
-    pub fn get_job_errors(&self, job_id: &str) -> Result<Vec<JobError>> {
+    ///
+    /// The error list carries no namespace of its own, so the scope comes from
+    /// the job the rows belong to; one in another namespace reports no errors.
+    pub fn get_job_errors(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobError>> {
+        if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+            return Ok(Vec::new());
+        }
         let mut conn = self.conn()?;
         let errors_key = self.key(&["job_errors", job_id]);
         let entries: Vec<String> = conn.lrange(&errors_key, 0, -1).map_err(map_err)?;

@@ -45,7 +45,7 @@ fn an_attached_executor_runs_a_queued_job() {
 
     poll_until(Duration::from_secs(10), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.status == JobStatus::Complete
         )
     })
@@ -75,7 +75,7 @@ fn a_failure_on_the_executor_is_retried() {
 
     poll_until(Duration::from_secs(15), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.status == JobStatus::Complete
         )
     })
@@ -121,7 +121,7 @@ fn a_bad_token_is_refused_before_any_job_reaches_it() {
 
     poll_until(Duration::from_secs(10), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.status == JobStatus::Complete
         )
     })
@@ -404,18 +404,22 @@ fn an_executor_reports_progress_and_logs_through_the_scheduler() {
 
     poll_until(Duration::from_secs(10), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.progress == Some(50)
         )
     })
     .expect("the executor's progress must reach storage");
 
     poll_until(Duration::from_secs(10), || {
-        storage.get_task_logs(&job.id).expect("read the logs").len() == 2
+        storage
+            .get_task_logs(&job.id, None)
+            .expect("read the logs")
+            .len()
+            == 2
     })
     .expect("the executor's task logs must reach storage");
 
-    let logs = storage.get_task_logs(&job.id).expect("read the logs");
+    let logs = storage.get_task_logs(&job.id, None).expect("read the logs");
     let info = logs
         .iter()
         .find(|entry| entry.level == "info")
@@ -434,7 +438,7 @@ fn an_executor_reports_progress_and_logs_through_the_scheduler() {
     executor.succeed(&dispatched);
     poll_until(Duration::from_secs(10), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.status == JobStatus::Complete
         )
     })
@@ -473,7 +477,7 @@ fn a_dashboard_toggle_rides_the_dispatch_frame() {
     executor.succeed(&(job.id.clone(), job.task_name.clone(), job.retry_count));
     poll_until(Duration::from_secs(10), || {
         matches!(
-            storage.get_job(&job.id).expect("read the job back"),
+            storage.get_job(&job.id, None).expect("read the job back"),
             Some(ref current) if current.status == JobStatus::Complete
         )
     })

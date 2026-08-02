@@ -202,7 +202,7 @@ impl JsQueue {
     ) -> Result<Option<JsWorkflowAdvance>> {
         let skip_cascade = skip_cascade.unwrap_or(false);
         let wf = self.workflow_store()?;
-        let job = match self.storage.get_job(&job_id).map_err(to_napi_err)? {
+        let job = match self.storage.get_job(&job_id, None).map_err(to_napi_err)? {
             Some(j) => j,
             None => return Ok(None),
         };
@@ -362,7 +362,7 @@ impl JsQueue {
     /// the tracker classify any worker outcome without an in-memory job→run map.
     #[napi]
     pub fn workflow_node_for_job(&self, job_id: String) -> Result<Option<JsWorkflowNodeRef>> {
-        let Some(job) = self.storage.get_job(&job_id).map_err(to_napi_err)? else {
+        let Some(job) = self.storage.get_job(&job_id, None).map_err(to_napi_err)? else {
             return Ok(None);
         };
         Ok(parse_workflow_metadata(job.metadata.as_deref())
@@ -738,7 +738,7 @@ impl JsQueue {
     /// a rollback outcome advances the saga rather than the forward run.
     #[napi]
     pub fn compensation_node_for_job(&self, job_id: String) -> Result<Option<JsWorkflowNodeRef>> {
-        let Some(job) = self.storage.get_job(&job_id).map_err(to_napi_err)? else {
+        let Some(job) = self.storage.get_job(&job_id, None).map_err(to_napi_err)? else {
             return Ok(None);
         };
         Ok(parse_compensation_metadata(job.metadata.as_deref())

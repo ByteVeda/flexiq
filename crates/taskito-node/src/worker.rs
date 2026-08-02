@@ -110,6 +110,7 @@ pub fn start_worker(
     // The dispatcher reads cancel flags, and the lifecycle loop registers/heartbeats
     // — both need their own storage handle before `storage` moves into the scheduler.
     let dispatcher_storage = storage.clone();
+    let dispatcher_namespace = namespace.clone();
     let lifecycle_storage = storage.clone();
     let queues_csv = queues.join(",");
     let worker_id = format!("node-{}", uuid::Uuid::now_v7());
@@ -217,7 +218,12 @@ pub fn start_worker(
     }
 
     // Dispatcher loop: execute each job in JS, report results on `result_tx`.
-    let dispatcher = NodeDispatcher::new(callback, dispatcher_storage, concurrency);
+    let dispatcher = NodeDispatcher::new(
+        callback,
+        dispatcher_storage,
+        dispatcher_namespace,
+        concurrency,
+    );
     spawn(async move {
         dispatcher.run(job_rx, result_tx).await;
     });

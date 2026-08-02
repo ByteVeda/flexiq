@@ -482,7 +482,7 @@ impl PyQueue {
     pub fn get_job(&self, job_id: &str) -> PyResult<Option<PyJob>> {
         let job = self
             .storage
-            .get_job(job_id)
+            .get_job(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(job.map(PyJob::from))
     }
@@ -502,7 +502,7 @@ impl PyQueue {
     pub fn request_cancel(&self, job_id: &str) -> PyResult<bool> {
         let requested = self
             .storage
-            .request_cancel(job_id)
+            .request_cancel(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         if requested {
             self.notify_dispatcher_cancel(job_id);
@@ -513,7 +513,7 @@ impl PyQueue {
     /// Check if cancellation has been requested for a job.
     pub fn is_cancel_requested(&self, job_id: &str) -> PyResult<bool> {
         self.storage
-            .is_cancel_requested(job_id)
+            .is_cancel_requested(job_id, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -539,7 +539,7 @@ impl PyQueue {
             ));
         }
         self.storage
-            .update_progress(job_id, progress)
+            .update_progress(job_id, progress, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -759,7 +759,7 @@ impl PyQueue {
         }
         let jobs = self
             .storage
-            .list_archived(limit, offset)
+            .list_archived(limit, offset, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(jobs.into_iter().map(PyJob::from).collect())
     }
@@ -783,7 +783,7 @@ impl PyQueue {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let jobs = self
             .storage
-            .list_archived_after(limit, cursor)
+            .list_archived_after(limit, cursor, self.namespace.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         // Archived rows always have `completed_at`; fall back to created_at.
         let next = next_cursor(&jobs, limit, |j| {
