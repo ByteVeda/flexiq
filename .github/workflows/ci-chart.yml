@@ -1,0 +1,107 @@
+name: CI Chart
+
+# Reusable workflow: lints the Helm chart, renders every role combination, and
+# asserts the guarantees a broken template would silently drop — above all that
+# the webhook's caBundle signs the certificate the pod serves. Called by ci.yml
+# when the chart changes.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/helm/taskito-server
+      # Long enough to clear the server's own 16-character floor.
+      TOKEN: 0123456789abcdef0123
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint
+        run: helm lint "$CHART" --set storage.dsn=postgres://taskito:secret@db:5432/app --set attach.token="$TOKEN"
+
+      - name: Every role combination renders
+        run: |
+          set -euo pipefail
+          render() {
+            echo "::group::helm template $*"
+            helm template t "$CHART" "$@" >/dev/null
+            echo "::endgroup::"
+          }
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN"
+          render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" --set webhook.enabled=true
+          render --set attach.enabled=false --set dashboard.enabled=false --set webhook.enabled=true
+          render --set storage.existingSecret=s --set attach.existingSecret=s
+          render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.ingress.enabled=true
+
+      - name: Invalid combinations are refused, not rendered
+        run: |
+          set -uo pipefail
+          refuses() {
+            local label="$1"; shift
+            if helm template t "$CHART" "$@" >/dev/null 2>&1; then
+              echo "::error::$label rendered but should have been refused"
+              exit 1
+            fi
+            echo "refused: $label"
+          }
+          refuses "no roles enabled" --set attach.enabled=false --set dashboard.enabled=false
+          refuses "attach without a token" --set storage.dsn=postgres://u:p@db/x
+          refuses "a guessable token" --set storage.dsn=postgres://u:p@db/x --set attach.token=short
+          refuses "a scheduler without a DSN" --set attach.token="$TOKEN"
+          refuses "an unacknowledged open dashboard" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.auth=off
+
+      # The regression this exists for: `genCA` is random, so a helper called
+      # once per template would hand the MutatingWebhookConfiguration a CA that
+      # does not sign the certificate the pod serves — and every admission call
+      # would fail TLS verification, in a way nothing but a live cluster shows.
+      - name: The webhook caBundle signs the served certificate
+        run: |
+          set -euo pipefail
+          helm template t "$CHART" \
+            --set attach.enabled=false --set dashboard.enabled=false \
+            --set webhook.enabled=true > rendered.yaml
+          python3 - <<'PY'
+          import base64, pathlib, re, subprocess, sys
+
+          rendered = pathlib.Path("rendered.yaml").read_text()
+          def field(name):
+              match = re.search(rf"{re.escape(name)}: (\S+)", rendered)
+              if not match:
+                  sys.exit(f"{name} is missing from the rendered chart")
+              return match.group(1)
+
+          if field("ca.crt") != field("caBundle"):
+              sys.exit("caBundle does not match the Secret's ca.crt")
+
+          pathlib.Path("ca.pem").write_bytes(base64.b64decode(field("ca.crt")))
+          pathlib.Path("leaf.pem").write_bytes(base64.b64decode(field("tls.crt")))
+          verify = subprocess.run(
+              ["openssl", "verify", "-CAfile", "ca.pem", "leaf.pem"],
+              capture_output=True, text=True,
+          )
+          if verify.returncode != 0:
+              sys.exit(f"the CA does not sign the leaf: {verify.stderr.strip()}")
+
+          sans = subprocess.run(
+              ["openssl", "x509", "-in", "leaf.pem", "-noout", "-ext", "subjectAltName"],
+              capture_output=True, text=True,
+          ).stdout
+          # The API server dials the Service DNS name, so that is what has to be
+          # in the certificate.
+          if "t-taskito-server-webhook.default.svc" not in sans:
+              sys.exit(f"the certificate does not cover the Service DNS name: {sans}")
+
+          print("caBundle matches, the CA signs the leaf, and the SANs cover the Service")
+          PY

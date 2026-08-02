@@ -30,24 +30,31 @@ fn prepare_auth(storage: &taskito_core::StorageBackend, config: &DashboardConfig
 
 /// Run until SIGINT/SIGTERM, then drain and exit.
 pub fn run(config: Config) -> Result<()> {
-    let backend = backend::open(&config.dsn, config.backend.as_deref())?;
+    // A webhook-only deployment rewrites pod specs and reads no jobs, so it
+    // opens no storage. Config validation has already established that every
+    // other role came with a DSN.
+    let backend = match &config.dsn {
+        Some(dsn) => Some(backend::open(dsn, config.backend.as_deref())?),
+        None => None,
+    };
     let shutdown = Shutdown::default();
 
     // The dispatcher exists only when executors can reach us; without a
     // listener there is nothing to dispatch to and the scheduler stays off.
-    let dispatcher = config.attach.as_ref().map(|attach| {
-        RemoteDispatcher::new(RemoteConfig {
+    let dispatcher = match (&config.attach, &backend) {
+        (Some(attach), Some(backend)) => Some(RemoteDispatcher::new(RemoteConfig {
             auth_token: attach.token.clone(),
             // This process holds the connection an executor deliberately does
             // not, so it is the one that applies its progress and task logs and
             // resolves its middleware toggles.
             side_channel: Some(Arc::new(StorageSideChannel::new(backend.storage.clone()))),
             ..RemoteConfig::default()
-        })
-    });
+        })),
+        _ => None,
+    };
 
-    let supervisor = dispatcher.as_ref().map(|dispatcher| {
-        Arc::new(SchedulerSupervisor::new(
+    let supervisor = match (&dispatcher, &backend) {
+        (Some(dispatcher), Some(backend)) => Some(Arc::new(SchedulerSupervisor::new(
             backend.storage.clone(),
             dispatcher.clone(),
             SchedulerSettings {
@@ -56,8 +63,9 @@ pub fn run(config: Config) -> Result<()> {
                 workers: config.workers,
                 maintenance: config.maintenance,
             },
-        ))
-    });
+        ))),
+        _ => None,
+    };
 
     let attach_listener = match (config.attach.clone(), &dispatcher, &supervisor) {
         (Some(attach), Some(dispatcher), Some(supervisor)) => Some(listener::spawn(
@@ -76,11 +84,12 @@ pub fn run(config: Config) -> Result<()> {
 
     // Expired sessions and abandoned logins are swept on a cadence, not just
     // at boot: a server that never restarts would otherwise accumulate them.
-    let upkeep = config
-        .dashboard
-        .as_ref()
-        .filter(|dashboard| dashboard.auth == AuthMode::Session)
-        .map(|_| upkeep::spawn(backend.storage.clone(), shutdown.clone()));
+    let upkeep = match (&config.dashboard, &backend) {
+        (Some(dashboard), Some(backend)) if dashboard.auth == AuthMode::Session => {
+            Some(upkeep::spawn(backend.storage.clone(), shutdown.clone()))
+        }
+        _ => None,
+    };
 
     let served = runtime.block_on(async {
         let signals = tokio::spawn({
@@ -92,8 +101,8 @@ pub fn run(config: Config) -> Result<()> {
             }
         });
 
-        let result = match &config.dashboard {
-            Some(dashboard_config) => {
+        let dashboard = match (&config.dashboard, &backend) {
+            (Some(dashboard_config), Some(backend)) => {
                 prepare_auth(&backend.storage, dashboard_config);
                 let state = Arc::new(AppState {
                     storage: backend.storage.clone(),
@@ -111,11 +120,25 @@ pub fn run(config: Config) -> Result<()> {
                     maintenance: config.maintenance,
                     login_throttle: Default::default(),
                 });
-                crate::dashboard::serve(state, shutdown.clone()).await
+                Some(crate::dashboard::serve(state, shutdown.clone()))
             }
+            _ => None,
+        };
+        let webhook = config
+            .webhook
+            .clone()
+            .map(|webhook| crate::webhook::serve(webhook, shutdown.clone()));
+
+        // Both servers run to shutdown; whichever fails first takes the other
+        // with it, because a half-started deployment should exit rather than
+        // linger with one role silently missing.
+        let result = match (dashboard, webhook) {
+            (Some(dashboard), Some(webhook)) => tokio::try_join!(dashboard, webhook).map(|_| ()),
+            (Some(dashboard), None) => dashboard.await,
+            (None, Some(webhook)) => webhook.await,
             // Listener-only deployment: nothing to serve, just wait to be told
             // to stop.
-            None => {
+            (None, None) => {
                 shutdown.wait().await;
                 Ok(())
             }

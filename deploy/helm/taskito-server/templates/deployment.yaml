@@ -1,0 +1,207 @@
+{{- include "taskito-server.validate" . -}}
+{{- $fullname := include "taskito-server.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "taskito-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "taskito-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # A rotated certificate only takes effect on a restart, because the
+        # server reads the PEM files once at boot.
+        {{- if .Values.webhook.enabled }}
+        checksum/webhook-tls: {{ include "taskito-server.webhookCert" . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "taskito-server.serviceAccountName" . }}
+      {{- with .Values.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- if .Values.storage.existingSecret }}
+            - name: TASKITO_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.existingSecret }}
+                  key: {{ .Values.storage.existingSecretKey }}
+            {{- else if .Values.storage.dsn }}
+            - name: TASKITO_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "taskito-server.secretName" . }}
+                  key: dsn
+            {{- end }}
+            {{- with .Values.storage.backend }}
+            - name: TASKITO_BACKEND
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.namespace }}
+            - name: TASKITO_NAMESPACE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TASKITO_QUEUES
+              value: {{ join "," .Values.queues | quote }}
+            {{- with .Values.workers }}
+            - name: TASKITO_WORKERS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TASKITO_MAINTENANCE
+              value: {{ ternary "on" "off" .Values.maintenance | quote }}
+            {{- if .Values.attach.enabled }}
+            - name: TASKITO_LISTEN
+              value: "0.0.0.0:{{ .Values.attach.port }}"
+            {{- if .Values.attach.existingSecret }}
+            - name: TASKITO_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.attach.existingSecret }}
+                  key: {{ .Values.attach.existingSecretKey }}
+            {{- else if .Values.attach.token }}
+            - name: TASKITO_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "taskito-server.secretName" . }}
+                  key: attach-token
+            {{- end }}
+            {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            - name: TASKITO_DASHBOARD
+              value: "0.0.0.0:{{ .Values.dashboard.port }}"
+            - name: TASKITO_DASHBOARD_AUTH
+              value: {{ .Values.dashboard.auth | quote }}
+            {{- if .Values.dashboard.allowInsecure }}
+            - name: TASKITO_ALLOW_INSECURE
+              value: "1"
+            {{- end }}
+            {{- if .Values.dashboard.existingSecret }}
+            - name: TASKITO_DASHBOARD_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.existingSecret }}
+                  key: {{ .Values.dashboard.existingSecretKeyUser }}
+            - name: TASKITO_DASHBOARD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.existingSecret }}
+                  key: {{ .Values.dashboard.existingSecretKeyPassword }}
+            {{- else if .Values.dashboard.adminPassword }}
+            - name: TASKITO_DASHBOARD_ADMIN_USER
+              value: {{ .Values.dashboard.adminUser | quote }}
+            - name: TASKITO_DASHBOARD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "taskito-server.secretName" . }}
+                  key: admin-password
+            {{- end }}
+            {{- if .Values.dashboard.metricsToken }}
+            - name: TASKITO_DASHBOARD_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "taskito-server.secretName" . }}
+                  key: metrics-token
+            {{- end }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: TASKITO_WEBHOOK_LISTEN
+              value: "0.0.0.0:{{ .Values.webhook.port }}"
+            - name: TASKITO_WEBHOOK_TLS_CERT
+              value: /etc/taskito/webhook-tls/tls.crt
+            - name: TASKITO_WEBHOOK_TLS_KEY
+              value: /etc/taskito/webhook-tls/tls.key
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            {{- if .Values.attach.enabled }}
+            - name: attach
+              containerPort: {{ .Values.attach.port }}
+            {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            - name: dashboard
+              containerPort: {{ .Values.dashboard.port }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+            {{- end }}
+          # One probe per type is all Kubernetes takes, and one is all this needs:
+          # every role is a listener in the *same* process, and a bind that fails
+          # takes the process down rather than leaving it half-served. So the
+          # probe only has to prove the process is alive — any enabled listener
+          # answers that. The dashboard's plaintext /health is preferred simply
+          # because it is the cheapest to check; the attach port has no HTTP, so
+          # a TCP connect stands in.
+          #
+          # /health is also the only route that is never gated. /readiness checks
+          # storage but answers 401 whenever the dashboard authenticates, and a
+          # kubelet probe carries no credential — see the chart README.
+          {{- if .Values.dashboard.enabled }}
+          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "dashboard") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else if .Values.webhook.enabled }}
+          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "webhook" "scheme" "HTTPS") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else }}
+          {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-tls
+              mountPath: /etc/taskito/webhook-tls
+              readOnly: true
+          {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-tls
+          secret:
+            secretName: {{ include "taskito-server.webhookSecretName" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
