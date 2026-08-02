@@ -1,0 +1,95 @@
+{{- if .Values.webhook.enabled }}
+{{- $fullname := include "taskito-server.fullname" . -}}
+{{- $service := printf "%s-webhook" $fullname -}}
+{{- if .Values.webhook.certManager.enabled }}
+{{- if not .Values.webhook.certManager.issuerRef }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-webhook
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-webhook
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "taskito-server.webhookSecretName" . }}
+  dnsNames:
+    - {{ printf "%s.%s.svc" $service .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" $service .Release.Namespace }}
+  issuerRef:
+    {{- if .Values.webhook.certManager.issuerRef }}
+    {{- toYaml .Values.webhook.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ $fullname }}-webhook
+    kind: Issuer
+    {{- end }}
+{{- else }}
+{{- $cert := include "taskito-server.webhookCert" . | fromYaml }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "taskito-server.webhookSecretName" . }}
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  # Kept alongside the pair so `helm upgrade` can read the CA back out and leave
+  # the caBundle below pointing at a certificate that is still being served.
+  ca.crt: {{ $cert.caCert }}
+  tls.crt: {{ $cert.tlsCert }}
+  tls.key: {{ $cert.tlsKey }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-webhook" .Release.Namespace $fullname }}
+  {{- end }}
+webhooks:
+  - name: executor-injector.taskito.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Ignore by default: an injector that is down or wedged must not stop every
+    # pod in the cluster from being created. Switch to Fail once a workload
+    # genuinely depends on the sidecar being there.
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    # CREATE only. A sidecar cannot be added to a running pod, and answering
+    # UPDATE would just be work the API server throws away.
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    {{- with .Values.webhook.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.webhook.objectSelector }}
+    objectSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    clientConfig:
+      service:
+        name: {{ $service }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+      {{- if not .Values.webhook.certManager.enabled }}
+      {{- $cert := include "taskito-server.webhookCert" . | fromYaml }}
+      caBundle: {{ $cert.caCert }}
+      {{- end }}
+{{- end }}

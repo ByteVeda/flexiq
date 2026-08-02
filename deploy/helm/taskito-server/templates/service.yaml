@@ -1,0 +1,64 @@
+{{- $fullname := include "taskito-server.fullname" . -}}
+{{- if .Values.attach.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  # Its own Service, never merged with the dashboard's: the port that dispatches
+  # code and the port people browse should not be one object an Ingress or a
+  # LoadBalancer annotation can widen by accident.
+  name: {{ $fullname }}-attach
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+  {{- with .Values.attach.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: attach
+      port: {{ .Values.attach.port }}
+      targetPort: attach
+{{- end }}
+{{- if .Values.dashboard.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-dashboard
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+  {{- with .Values.dashboard.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.dashboard.service.type }}
+  selector:
+    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dashboard
+      port: {{ .Values.dashboard.port }}
+      targetPort: dashboard
+{{- end }}
+{{- if .Values.webhook.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # The name is baked into the certificate's SANs, so changing it means
+  # regenerating the Secret.
+  name: {{ $fullname }}-webhook
+  labels:
+    {{- include "taskito-server.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: webhook
+{{- end }}
