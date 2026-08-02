@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { AuthStore } from "../../src/dashboard/auth/store";
+import { AuthStore, USERS_KEY } from "../../src/dashboard/auth/store";
 import { MiddlewareDisableStore } from "../../src/dashboard/stores/middlewareDisables";
 import { OverridesStore } from "../../src/dashboard/stores/overrides";
 import { Queue } from "../../src/index";
@@ -29,8 +29,14 @@ beforeEach(() => {
   reads = 0;
 });
 
-/** A queue proxy that lets another writer in right after each settings read. */
-function racing<T extends object>(target: T, ...interlopers: (() => unknown)[]): T {
+/**
+ * A queue proxy that lets another writer in right after each settings read.
+ *
+ * The proxied `getSetting` is synchronous, so an interloper must be too — an
+ * async one would resolve *after* the contender's write and stop landing in the
+ * window this is testing. Anything asynchronous belongs outside the interloper.
+ */
+function racing<T extends object>(target: T, ...interlopers: (() => void)[]): T {
   return new Proxy(target, {
     get(source, property, receiver) {
       if (property !== "getSetting") {
@@ -147,7 +153,18 @@ describe("the retry helper", () => {
 describe("the stores", () => {
   it("keeps both users created concurrently", async () => {
     const quiet = new AuthStore(queue);
-    const contender = new AuthStore(racing(queue, () => quiet.createUser("first", "password123")));
+    // Built up front so the interloper's write is synchronous: `createUser`
+    // awaits PBKDF2 before writing, which would land it after the contender.
+    await quiet.createUser("first", "password123");
+    const seeded = queue.getSetting(USERS_KEY);
+    expect(seeded).not.toBeNull();
+    queue.deleteSetting(USERS_KEY);
+
+    const contender = new AuthStore(
+      racing(queue, () => {
+        queue.setSetting(USERS_KEY, seeded as string);
+      }),
+    );
 
     await contender.createUser("second", "password123");
 
