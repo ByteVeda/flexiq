@@ -253,6 +253,31 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_setSetting
     })
 }
 
+/// `boolean setSettingIf(long handle, String key, String expectedOrNull, String value)` —
+/// writes only if the key still holds `expectedOrNull`, where `null` means it
+/// must be unset. Returns false when another writer got there first.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_setSettingIf<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    key: JString<'local>,
+    expected: JString<'local>,
+    value: JString<'local>,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let key = read_string(env, &key)?;
+        let expected = read_optional_string(env, &expected)?;
+        let value = read_string(env, &value)?;
+        Ok(super::to_jboolean(queue.storage.set_setting_if(
+            &key,
+            expected.as_deref(),
+            &value,
+        )?))
+    })
+}
+
 /// `boolean deleteSetting(long handle, String key)`.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_deleteSetting<'local>(
