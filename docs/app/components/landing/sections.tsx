@@ -12,6 +12,7 @@ import {
   INTEGRATIONS,
   USE_CASES,
 } from "@/lib/landing-content";
+import { VERSION } from "@/lib/version";
 
 function Icon({ d, rect }: { d: string; rect?: boolean }) {
   return (
@@ -140,7 +141,7 @@ export function HowItWorks() {
               to result
             </>
           }
-          lead="Your Python or Node code enqueues a job. The Rust scheduler hands it to a worker. The result lands back in the shared store — same core, same queue, no broker in the middle."
+          lead="Your application code enqueues a job. The Rust scheduler hands it to a worker. The result lands back in the shared store — same core, same queue, no broker in the middle, whichever SDK you called it from."
         />
         <div className="diagram reveal">
           <div className="flowdiag">
@@ -373,11 +374,16 @@ export function Integrations() {
   );
 }
 
-function InstallPill({ cmd }: { cmd: string }) {
+/**
+ * `prompt` is the shell `$` by default. Pass `""` for something copied into a
+ * build file rather than run — a Gradle coordinate under a `$` would read as a
+ * command that does not exist.
+ */
+function InstallPill({ cmd, prompt = "$" }: { cmd: string; prompt?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="install-pill">
-      <span className="pf">$</span>
+      {prompt ? <span className="pf">{prompt}</span> : null}
       {cmd}
       <button
         type="button"
@@ -406,12 +412,16 @@ export function CTA() {
         <h2>Five minutes from install to your first job.</h2>
         <p>
           The quickstart walks you through defining a task, enqueuing it, and
-          watching the worker run it — in Python or Node, no Redis, no broker,
-          no config.
+          watching the worker run it — in the SDK you already use, no Redis, no
+          broker, no config.
         </p>
         <div className="install-row">
           <InstallPill cmd="pip install taskito" />
           <InstallPill cmd="pnpm add @byteveda/taskito" />
+          <InstallPill
+            cmd={`implementation("org.byteveda:taskito:${VERSION}")`}
+            prompt=""
+          />
         </div>
         <div className="btns">
           <Link className="btn pri" to={`/${sdk}/getting-started/quickstart`}>
