@@ -260,12 +260,22 @@ export class WebhookStore {
     return updateSetting(this.native, SUBSCRIPTIONS_KEY, decodeRows, mutate);
   }
 
+  /**
+   * Replace the canonical list with `webhooks`, conditionally.
+   *
+   * Only the legacy fold calls this — it is the one write that reshapes the
+   * whole list rather than patching a row — and it still goes through the
+   * compare-and-set so a subscription another replica added mid-migration is
+   * not dropped by it.
+   */
   private save(webhooks: Webhook[]): void {
-    const rows = webhooks.map((webhook) => ({
-      ...this.unmodelled.get(webhook.id),
-      ...encode(webhook),
-    }));
-    this.native.setSetting(SUBSCRIPTIONS_KEY, JSON.stringify(rows));
+    this.updateRows((rows) => {
+      const replacement = webhooks.map((webhook) => ({
+        ...this.unmodelled.get(webhook.id),
+        ...encode(webhook),
+      }));
+      rows.splice(0, rows.length, ...replacement);
+    });
   }
 
   /**

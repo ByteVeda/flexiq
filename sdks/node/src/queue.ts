@@ -1415,7 +1415,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * `null` means the key must be unset. Returns false when another writer got
    * there first, so a caller that read the value it is deriving `value` from
    * can re-read and retry instead of overwriting an edit it never saw. See
-   * `dashboard/stores/kv`.
+   * `settingsKv`.
    */
   setSettingIf(key: string, expected: string | null, value: string): boolean {
     return this.native.setSettingIf(key, expected, value);
