@@ -673,7 +673,8 @@ spec:
           image: myapp:1.4.2 # unchanged
         - name: executor
           image: myapp:1.4.2 # the same image — already pulled for `app`
-          command: [] # see below
+          # command: required — see below. Leave it out and this container runs
+          # the app image's default entrypoint, a second app that never attaches.
           env:
             - name: TASKITO_ATTACH
               value: unix:/run/taskito/attach.sock
