@@ -45,7 +45,7 @@ impl QueueHandle {
         if let Some(wf) = self.workflow_storage.get() {
             return Ok(wf.clone()); // another thread won the race while we waited
         }
-        let wf = build_workflow_storage(&self.storage)?;
+        let wf = build_workflow_storage(&self.storage, self.namespace.clone())?;
         let _ = self.workflow_storage.set(wf.clone());
         Ok(wf)
     }
@@ -55,20 +55,21 @@ impl QueueHandle {
 #[cfg(feature = "workflows")]
 fn build_workflow_storage(
     storage: &StorageBackend,
+    namespace: Option<String>,
 ) -> Result<taskito_workflows::WorkflowStorageBackend, BindingError> {
     use taskito_workflows::{WorkflowSqliteStorage, WorkflowStorageBackend};
     let wf = match storage {
         StorageBackend::Sqlite(s) => {
-            WorkflowStorageBackend::Sqlite(WorkflowSqliteStorage::new(s.clone())?)
+            WorkflowStorageBackend::Sqlite(WorkflowSqliteStorage::new(s.clone(), namespace)?)
         }
         #[cfg(feature = "postgres")]
         StorageBackend::Postgres(s) => WorkflowStorageBackend::Postgres(
-            taskito_workflows::WorkflowPostgresStorage::new(s.clone())?,
+            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)?,
         ),
         #[cfg(feature = "redis")]
-        StorageBackend::Redis(s) => {
-            WorkflowStorageBackend::Redis(taskito_workflows::WorkflowRedisStorage::new(s.clone())?)
-        }
+        StorageBackend::Redis(s) => WorkflowStorageBackend::Redis(
+            taskito_workflows::WorkflowRedisStorage::new(s.clone(), namespace)?,
+        ),
     };
     Ok(wf)
 }

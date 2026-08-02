@@ -716,7 +716,7 @@ fn sqlite_storage_contract() {
     use taskito_workflows::WorkflowSqliteStorage;
 
     let base = SqliteStorage::in_memory().unwrap();
-    let s = WorkflowSqliteStorage::new(base).unwrap();
+    let s = WorkflowSqliteStorage::new(base, None).unwrap();
     run_contract(&s);
 }
 
@@ -737,7 +737,7 @@ fn postgres_storage_contract() {
     // workflow rows from a prior run can't bleed across.
     let schema = format!("wf_contract_{}", uuid::Uuid::now_v7().simple());
     let base = PostgresStorage::with_schema(&url, &schema).unwrap();
-    let s = WorkflowPostgresStorage::new(base).unwrap();
+    let s = WorkflowPostgresStorage::new(base, None).unwrap();
     run_contract(&s);
 }
 
@@ -757,6 +757,6 @@ fn redis_storage_contract() {
     // Use a unique prefix per run to isolate keys.
     let prefix = format!("wf_contract_{}:", uuid::Uuid::now_v7().simple());
     let base = RedisStorage::with_prefix(&url, &prefix).unwrap();
-    let s = WorkflowRedisStorage::new(base).unwrap();
+    let s = WorkflowRedisStorage::new(base, None).unwrap();
     run_contract(&s);
 }

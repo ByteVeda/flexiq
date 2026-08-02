@@ -1703,6 +1703,10 @@ The boundary holds in both directions:
 - **Recovery** — timeouts, dead-worker reaps and per-task concurrency counts stay
   inside the namespace, so one tenant's backlog never consumes another's budget
   or gets retried by the wrong scheduler.
+- **Workflows** — a run belongs to the namespace whose queue started it, and its
+  nodes inherit that. A run id from another namespace reads as missing.
+- **Dependencies** — a job may only depend on one in its own namespace; an
+  attempt to cross reports the dependency as not found.
 
 Leaving the namespace unset (the default) addresses **every** namespace. That is
 what a single-tenant deployment wants, and what an operator console pointed at
@@ -1716,9 +1720,9 @@ this boundary. Scope the ones that should be.
   databases or separate credentials, not just separate namespaces.
 </Callout>
 
-Workflow runs are the exception: they carry no namespace of their own, so a run
-id reaches its run from any scope. Keep workflows within one tenant, or run them
-against separate storage.
+Runs created before the namespace column existed carry none, so a scoped process
+does not see them — the same trade every other pre-namespace row makes. An
+unscoped console still does.
 
 ## Checklist
 

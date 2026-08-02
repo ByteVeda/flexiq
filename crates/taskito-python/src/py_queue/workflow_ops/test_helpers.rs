@@ -31,7 +31,7 @@ use crate::py_queue::PyQueue;
 pub(crate) fn make_storages() -> (StorageBackend, WorkflowStorageBackend) {
     let sql = SqliteStorage::in_memory().unwrap();
     let backend = StorageBackend::Sqlite(sql.clone());
-    let wf = WorkflowSqliteStorage::new(sql).unwrap();
+    let wf = WorkflowSqliteStorage::new(sql, None).unwrap();
     (backend, WorkflowStorageBackend::Sqlite(wf))
 }
 

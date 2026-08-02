@@ -810,7 +810,7 @@ impl JsQueue {
         if let Some(wf) = self.workflow_storage.get() {
             return Ok(wf.clone());
         }
-        let wf = build_workflow_storage(&self.storage)?;
+        let wf = build_workflow_storage(&self.storage, self.namespace.clone())?;
         // If another thread raced us, either handle wraps the same pool.
         let _ = self.workflow_storage.set(wf.clone());
         Ok(wf)
@@ -818,19 +818,26 @@ impl JsQueue {
 }
 
 /// Construct the workflow storage matching the queue's core backend.
-fn build_workflow_storage(storage: &StorageBackend) -> Result<WorkflowStorageBackend> {
+fn build_workflow_storage(
+    storage: &StorageBackend,
+    namespace: Option<String>,
+) -> Result<WorkflowStorageBackend> {
     let wf = match storage {
-        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone())
+        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone(), namespace)
             .map(WorkflowStorageBackend::Sqlite)
             .map_err(to_napi_err)?,
         #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => taskito_workflows::WorkflowPostgresStorage::new(s.clone())
-            .map(WorkflowStorageBackend::Postgres)
-            .map_err(to_napi_err)?,
+        StorageBackend::Postgres(s) => {
+            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)
+                .map(WorkflowStorageBackend::Postgres)
+                .map_err(to_napi_err)?
+        }
         #[cfg(feature = "redis")]
-        StorageBackend::Redis(s) => taskito_workflows::WorkflowRedisStorage::new(s.clone())
-            .map(WorkflowStorageBackend::Redis)
-            .map_err(to_napi_err)?,
+        StorageBackend::Redis(s) => {
+            taskito_workflows::WorkflowRedisStorage::new(s.clone(), namespace)
+                .map(WorkflowStorageBackend::Redis)
+                .map_err(to_napi_err)?
+        }
     };
     Ok(wf)
 }

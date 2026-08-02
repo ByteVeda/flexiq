@@ -34,7 +34,11 @@ pub fn run(config: Config) -> Result<()> {
     // opens no storage. Config validation has already established that every
     // other role came with a DSN.
     let backend = match &config.dsn {
-        Some(dsn) => Some(backend::open(dsn, config.backend.as_deref())?),
+        Some(dsn) => Some(backend::open(
+            dsn,
+            config.backend.as_deref(),
+            config.namespace.clone(),
+        )?),
         None => None,
     };
     let shutdown = Shutdown::default();

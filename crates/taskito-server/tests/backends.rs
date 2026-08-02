@@ -30,7 +30,7 @@ use taskito_server::dashboard::static_assets::StaticAssets;
 /// Open the backend named by `variable`, or `None` when it is not configured.
 fn backend_state(variable: &str) -> Option<(SharedState, String)> {
     let dsn = std::env::var(variable).ok().filter(|dsn| !dsn.is_empty())?;
-    let opened = backend::open(&dsn, None).unwrap_or_else(|error| {
+    let opened = backend::open(&dsn, None, None).unwrap_or_else(|error| {
         // The DSN is not interpolated — it carries credentials.
         panic!("{variable} is set but the backend could not be opened: {error}")
     });

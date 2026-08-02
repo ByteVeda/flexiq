@@ -42,15 +42,17 @@ pub(super) fn workflow_storage(queue: &PyQueue) -> PyResult<WorkflowStorageBacke
         return Ok(wf.clone());
     }
     let wf = match &queue.storage {
-        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone())
+        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone(), queue.namespace.clone())
             .map(WorkflowStorageBackend::Sqlite)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
         #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => WorkflowPostgresStorage::new(s.clone())
-            .map(WorkflowStorageBackend::Postgres)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+        StorageBackend::Postgres(s) => {
+            WorkflowPostgresStorage::new(s.clone(), queue.namespace.clone())
+                .map(WorkflowStorageBackend::Postgres)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        }
         #[cfg(feature = "redis")]
-        StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone())
+        StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone(), queue.namespace.clone())
             .map(WorkflowStorageBackend::Redis)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
     };

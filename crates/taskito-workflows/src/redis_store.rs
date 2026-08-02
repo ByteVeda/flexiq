@@ -6,7 +6,9 @@
 //!   `dag_data` (binary), `step_metadata` (JSON), `created_at`).
 //! - `wf:def:by_name:{name}` (ZSET, score=version, member=id) — index for
 //!   `get_workflow_definition(name, version=None)` (highest version wins).
-//! - `wf:run:{id}` (HASH) — run fields.
+//! - `wf:run:{id}` (HASH) — run fields, including the `namespace` the owning
+//!   store stamped. The run indexes below are *not* partitioned by it, so a
+//!   scoped store filters after loading rather than seeking.
 //! - `wf:runs:all` (ZSET, score=created_at, member=id) — unfiltered list.
 //! - `wf:runs:by_state:{state}` (ZSET, score=created_at, member=id) — state filter.
 //! - `wf:runs:by_def:{definition_id}` (ZSET, score=created_at, member=id).
@@ -103,6 +105,9 @@ pub struct WorkflowRedisStorage {
     pub(crate) inner: RedisStorage,
     /// Full prefix used by core, ending with `':'`. We add `"wf:"` on top.
     prefix: String,
+    /// Tenant every run this store creates is stamped with, and the only one
+    /// it can read or mutate. `None` addresses every namespace.
+    namespace: Option<String>,
 }
 
 impl WorkflowRedisStorage {
@@ -111,9 +116,13 @@ impl WorkflowRedisStorage {
     /// Redis has no "schema" or "migrations" — the key layout is implicit.
     /// A round-trip `PING` happens inside `RedisStorage::new`, so by the time
     /// we receive it the connection is known good.
-    pub fn new(inner: RedisStorage) -> Result<Self> {
+    pub fn new(inner: RedisStorage, namespace: Option<String>) -> Result<Self> {
         let prefix = inner.prefix().to_string();
-        Ok(Self { inner, prefix })
+        Ok(Self {
+            inner,
+            prefix,
+            namespace,
+        })
     }
 
     /// Access the underlying `RedisStorage`.
@@ -125,6 +134,23 @@ impl WorkflowRedisStorage {
         self.inner
             .conn()
             .map_err(|e| QueueError::Other(format!("redis conn: {e}")))
+    }
+
+    /// Whether `run_id` is outside this store's namespace, in which case the
+    /// caller must be answered as if the run did not exist.
+    ///
+    /// The node hashes carry no namespace of their own — a node is reachable
+    /// only through its run — so every node operation gates on this. An
+    /// unscoped store addresses every namespace and skips the round trip.
+    fn run_out_of_scope(&self, run_id: &str) -> Result<bool> {
+        let Some(ns) = self.namespace.as_deref() else {
+            return Ok(false);
+        };
+        let mut conn = self.conn()?;
+        let stored: Option<String> = conn
+            .hget(k_run(&self.prefix, run_id), "namespace")
+            .map_err(into_other)?;
+        Ok(stored.as_deref() != Some(ns))
     }
 }
 
@@ -402,6 +428,11 @@ impl WorkflowStorage for WorkflowRedisStorage {
         if let Some(n) = &run.parent_node_name {
             pipe.hset(&key, "parent_node_name", n);
         }
+        // Stamped from the store, not the caller: a run must land in the
+        // tenant whose queue created it.
+        if let Some(ns) = &self.namespace {
+            pipe.hset(&key, "namespace", ns);
+        }
         pipe.hset(&key, "created_at", run.created_at);
         pipe.zadd(&all, &run.id, run.created_at);
         pipe.zadd(&by_state, &run.id, run.created_at);
@@ -419,6 +450,14 @@ impl WorkflowStorage for WorkflowRedisStorage {
         if map.is_empty() {
             return Ok(None);
         }
+        // Filtered off the hash already in hand rather than via
+        // `run_out_of_scope`, which would repeat the read.
+        if let Some(ns) = self.namespace.as_deref() {
+            let stored = val_to_opt_string(map.get("namespace").unwrap_or(&Value::Nil))?;
+            if stored.as_deref() != Some(ns) {
+                return Ok(None);
+            }
+        }
         Ok(Some(map_to_run(map)?))
     }
 
@@ -428,6 +467,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         state: WorkflowState,
         error: Option<&str>,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_run(&self.prefix, run_id);
 
@@ -457,6 +499,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn set_workflow_run_started(&self, run_id: &str, started_at: i64) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_run(&self.prefix, run_id);
         let created_at: Option<i64> = conn.hget(&key, "created_at").map_err(into_other)?;
@@ -477,6 +522,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn set_workflow_run_completed(&self, run_id: &str, completed_at: i64) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_run(&self.prefix, run_id);
         conn.hset::<_, _, _, ()>(&key, "completed_at", completed_at)
@@ -514,15 +562,24 @@ impl WorkflowStorage for WorkflowRedisStorage {
             (None, None) => k_runs_all(&self.prefix),
         };
 
-        // ZREVRANGE for newest-first ordering (matches Diesel impl).
-        let start = offset;
-        let stop = if limit <= 0 { -1 } else { offset + limit - 1 };
+        // ZREVRANGE for newest-first ordering (matches Diesel impl). The index
+        // is not namespace-partitioned, so a scoped store cannot page in Redis
+        // — it ranges the whole index and applies the window after filtering,
+        // or the page comes back short. Unscoped keeps the server-side window.
+        let scoped = self.namespace.is_some();
+        let (start, stop) = if scoped {
+            (0, -1)
+        } else {
+            (offset, if limit <= 0 { -1 } else { offset + limit - 1 })
+        };
         let candidate_ids: Vec<String> = conn
             .zrevrange(&index_key, start as isize, stop as isize)
             .map_err(into_other)?;
 
         let mut runs = Vec::with_capacity(candidate_ids.len());
         for id in candidate_ids {
+            // `get_workflow_run` is namespace-filtered, so a foreign run drops
+            // out here as if the id were unknown.
             if let Some(run) = self.get_workflow_run(&id)? {
                 // If both filters set, the definition index already constrained
                 // the candidates; apply state filter in-memory.
@@ -533,6 +590,16 @@ impl WorkflowStorage for WorkflowRedisStorage {
                 }
                 runs.push(run);
             }
+        }
+
+        if scoped {
+            let skip = offset.max(0) as usize;
+            let take = if limit <= 0 {
+                usize::MAX
+            } else {
+                limit as usize
+            };
+            return Ok(runs.into_iter().skip(skip).take(take).collect());
         }
         Ok(runs)
     }
@@ -597,12 +664,19 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn create_workflow_node(&self, node: &WorkflowNode) -> Result<()> {
+        if self.run_out_of_scope(&node.run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         write_node_pipeline(&self.prefix, node, &mut conn)
     }
 
     fn create_workflow_nodes_batch(&self, nodes: &[WorkflowNode]) -> Result<()> {
-        if nodes.is_empty() {
+        let Some(first) = nodes.first() else {
+            return Ok(());
+        };
+        // Every node in a batch belongs to one run, so one guard covers it.
+        if self.run_out_of_scope(&first.run_id)? {
             return Ok(());
         }
         let mut conn = self.conn()?;
@@ -654,6 +728,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn get_workflow_node(&self, run_id: &str, node_name: &str) -> Result<Option<WorkflowNode>> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(None);
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         let raw: Value = conn.hgetall(&key).map_err(into_other)?;
@@ -665,6 +742,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn get_workflow_nodes(&self, run_id: &str) -> Result<Vec<WorkflowNode>> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(Vec::new());
+        }
         let mut conn = self.conn()?;
         let names: Vec<String> = conn
             .smembers(k_run_nodes(&self.prefix, run_id))
@@ -693,6 +773,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         node_name: &str,
         status: WorkflowNodeStatus,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         conn.hset::<_, _, _, ()>(&key, "status", status.as_str())
@@ -701,6 +784,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn set_workflow_node_job(&self, run_id: &str, node_name: &str, job_id: &str) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         conn.hset::<_, _, _, ()>(&key, "job_id", job_id)
@@ -714,6 +800,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         node_name: &str,
         started_at: i64,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
@@ -732,6 +821,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         completed_at: i64,
         result_hash: Option<&str>,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         let mut pipe = redis::pipe();
@@ -746,6 +838,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn set_workflow_node_error(&self, run_id: &str, node_name: &str, error: &str) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
@@ -768,6 +863,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         node_name: &str,
         count: i32,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
@@ -797,6 +895,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         error: Option<&str>,
         completed_at: i64,
     ) -> Result<bool> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(false);
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         let succeeded_arg = if succeeded { "1" } else { "0" };
@@ -845,6 +946,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         compensation_job_id: &str,
         started_at: i64,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
@@ -863,6 +967,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         node_name: &str,
         completed_at: i64,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
@@ -881,6 +988,9 @@ impl WorkflowStorage for WorkflowRedisStorage {
         error: &str,
         completed_at: i64,
     ) -> Result<()> {
+        if self.run_out_of_scope(run_id)? {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let key = k_node(&self.prefix, run_id, node_name);
         redis::pipe()
