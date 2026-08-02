@@ -28,12 +28,22 @@ Sidecar injection is on. Annotate a pod template:
     metadata:
       annotations:
         taskito.dev/inject: "true"
-        taskito.dev/attach: "{{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
         taskito.dev/command: "<the command that runs an executor in your image>"
         taskito.dev/slots: "4"
+{{- if .Values.attach.enabled }}
+        taskito.dev/attach: "{{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
 {{- if or .Values.attach.token .Values.attach.existingSecret }}
         taskito.dev/token-secret: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecret }}{{ else }}{{ include "taskito-server.secretName" . }}{{ end }}"
         taskito.dev/token-key: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecretKey }}{{ else }}attach-token{{ end }}"
+{{- end }}
+{{- else }}
+        # This release runs no attach listener, so point these at the scheduler
+        # that does — another release, or one outside the cluster — along with
+        # the Secret holding its token. An address with nothing behind it
+        # injects sidecars that can never connect.
+        taskito.dev/attach: "<scheduler host:port>"
+        taskito.dev/token-secret: "<secret holding its attach token>"
+        taskito.dev/token-key: "<key within it>"
 {{- end }}
 
 The sidecar reuses the pod's own image, so nothing new is pulled.

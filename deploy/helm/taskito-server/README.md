@@ -36,7 +36,9 @@ value to change.
 
 ## Sidecar injection
 
-With `webhook.enabled=true`, annotating a pod template is all it takes:
+With `webhook.enabled=true`, annotating a pod template is all it takes. This
+example points at the attach listener the same release runs, so it assumes
+`attach.enabled=true` (the default):
 
 ```yaml
 metadata:
@@ -47,6 +49,28 @@ metadata:
     taskito.dev/slots: "4"
     taskito.dev/token-secret: "taskito-taskito-server-config"
     taskito.dev/token-key: "attach-token"
+```
+
+An injector can also run on its own — no listener, no dashboard, no database —
+alongside schedulers deployed elsewhere:
+
+```bash
+helm install taskito-injector ./deploy/helm/taskito-server \
+  --set attach.enabled=false --set dashboard.enabled=false \
+  --set webhook.enabled=true
+```
+
+Annotations then name whichever scheduler the workload should reach, and the
+Secret holding its token:
+
+```yaml
+metadata:
+  annotations:
+    taskito.dev/inject: "true"
+    taskito.dev/attach: "taskito-eu.platform.svc:7777"
+    taskito.dev/command: "taskito executor --app myapp:queue"
+    taskito.dev/token-secret: "taskito-eu-attach"
+    taskito.dev/token-key: "token"
 ```
 
 The injected container reuses **the pod's own image reference**, so the image is
