@@ -75,11 +75,16 @@ pub struct JavaDispatcher {
 }
 
 impl JavaDispatcher {
-    pub fn new(callbacks: GlobalRef, registry: Arc<Registry>, storage: StorageBackend) -> Self {
+    pub fn new(
+        callbacks: GlobalRef,
+        registry: Arc<Registry>,
+        storage: StorageBackend,
+        namespace: Option<String>,
+    ) -> Self {
         Self {
             callbacks,
             registry,
-            cancels: Arc::new(CancelSignals::from_storage(storage)),
+            cancels: Arc::new(CancelSignals::from_storage(storage, namespace)),
             side_channel: Mutex::new(None),
         }
     }

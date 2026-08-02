@@ -34,7 +34,7 @@ const DISABLE_CACHE_TTL: Duration = Duration::from_secs(5);
 /// failure is logged and dropped rather than propagated to the job.
 pub trait SideChannel: Send + Sync + 'static {
     /// Record a running job's progress (0-100).
-    fn update_progress(&self, job_id: &str, progress: i32);
+    fn update_progress(&self, job_id: &str, progress: i32, namespace: Option<&str>);
 
     /// Append one structured log line. `extra` is pre-encoded JSON; a published
     /// partial arrives here as level `result`.
@@ -112,7 +112,7 @@ fn recover<T>(poisoned: PoisonError<T>) -> T {
 }
 
 impl SideChannel for StorageSideChannel {
-    fn update_progress(&self, job_id: &str, progress: i32) {
+    fn update_progress(&self, job_id: &str, progress: i32, namespace: Option<&str>) {
         // Checked here rather than left to storage: the in-process SDK paths
         // reject or clamp before they ever call storage, so an attached
         // executor's value is the one that would otherwise reach it unchecked
@@ -124,7 +124,7 @@ impl SideChannel for StorageSideChannel {
             );
             return;
         }
-        if let Err(error) = self.storage.update_progress(job_id, progress) {
+        if let Err(error) = self.storage.update_progress(job_id, progress, namespace) {
             log::warn!("[taskito] could not record progress for job {job_id}: {error}");
         }
     }
@@ -210,11 +210,15 @@ mod tests {
         let channel = channel();
         let job_id = enqueued(&channel);
 
-        channel.update_progress(&job_id, 40);
-        channel.update_progress(&job_id, 101);
-        channel.update_progress(&job_id, -1);
+        channel.update_progress(&job_id, 40, None);
+        channel.update_progress(&job_id, 101, None);
+        channel.update_progress(&job_id, -1, None);
 
-        let job = channel.storage.get_job(&job_id).expect("get").expect("job");
+        let job = channel
+            .storage
+            .get_job(&job_id, None)
+            .expect("get")
+            .expect("job");
         assert_eq!(
             job.progress,
             Some(40),

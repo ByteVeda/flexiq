@@ -94,21 +94,34 @@ pub trait Storage: Send + Sync + Clone {
     /// nothing about ids outside it. `None` addresses every namespace.
     fn cancel_job(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Set the cancel-requested flag on a `Running` job — the task must poll
-    /// for it. Returns `false` when no running job matched.
-    fn request_cancel(&self, id: &str) -> Result<bool>;
-    /// Whether cancellation has been requested for a job.
-    fn is_cancel_requested(&self, id: &str) -> Result<bool>;
+    /// for it. Returns `false` when no running job matched, which is also the
+    /// answer for a job in another namespace.
+    fn request_cancel(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
+    /// Whether cancellation has been requested for a job. A job in another
+    /// namespace reports `false`, like an unknown id.
+    fn is_cancel_requested(&self, id: &str, namespace: Option<&str>) -> Result<bool>;
     /// Archive a running job as `Cancelled` after it observed a cancel request.
-    fn mark_cancelled(&self, id: &str) -> Result<()>;
+    /// A job in another namespace is left alone.
+    fn mark_cancelled(&self, id: &str, namespace: Option<&str>) -> Result<()>;
     /// Cancel every pending job that depends, directly or transitively, on
     /// `failed_job_id`.
-    fn cascade_cancel(&self, failed_job_id: &str, reason: &str) -> Result<()>;
+    ///
+    /// Dependents outside `namespace` are left alone. Dependencies are not
+    /// required to share a namespace, so without the filter a cancel in one
+    /// namespace could archive another's pending job.
+    fn cascade_cancel(
+        &self,
+        failed_job_id: &str,
+        reason: &str,
+        namespace: Option<&str>,
+    ) -> Result<()>;
     /// Ids of the jobs `job_id` depends on.
     fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>>;
     /// Ids of the jobs that depend on `job_id`.
     fn get_dependents(&self, job_id: &str) -> Result<Vec<String>>;
-    /// Update a running job's progress (0-100).
-    fn update_progress(&self, id: &str, progress: i32) -> Result<()>;
+    /// Update a running job's progress (0-100). A job in another namespace is
+    /// left alone.
+    fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()>;
     /// List jobs by filter. Rows are **blob-free** on every backend: the
     /// `payload`/`result` blobs come back empty (Diesel selects a narrow
     /// projection; Redis strips them post-load). Fetch the full job — blobs
@@ -146,8 +159,8 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<Vec<Job>>;
     /// Fetch a job by id, blobs included — live `jobs` first, then
-    /// `archived_jobs`.
-    fn get_job(&self, id: &str) -> Result<Option<Job>>;
+    /// `archived_jobs`. A job in another namespace reads as missing.
+    fn get_job(&self, id: &str, namespace: Option<&str>) -> Result<Option<Job>>;
     /// Global queue statistics: live counts from `jobs`, terminal counts from
     /// `archived_jobs`.
     /// `namespace` of `None` counts every namespace, matching `list_jobs`.
@@ -167,17 +180,24 @@ pub trait Storage: Send + Sync + Clone {
     /// status on all backends.
     fn purge_completed_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
     /// Running jobs that exceeded their timeout, for the scheduler to fail or
-    /// retry.
-    fn reap_stale_jobs(&self, now: i64) -> Result<Vec<Job>>;
+    /// retry. Scoped so a scheduler never times out another namespace's job and
+    /// then records the outcome under its own.
+    fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>>;
     /// Running jobs whose execution-claim owner is not in `live_owner_ids` (the
     /// worker that claimed them has died). Read-only — paired with the dead
-    /// owner so the caller can atomically reclaim before requeuing.
-    fn reap_orphaned_jobs(&self, live_owner_ids: &[String], now: i64)
-        -> Result<Vec<(Job, String)>>;
+    /// owner so the caller can atomically reclaim before requeuing. Scoped like
+    /// [`Storage::reap_stale_jobs`].
+    fn reap_orphaned_jobs(
+        &self,
+        live_owner_ids: &[String],
+        now: i64,
+        namespace: Option<&str>,
+    ) -> Result<Vec<(Job, String)>>;
     /// Record one failed attempt's error for a job.
     fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()>;
-    /// All recorded errors for a job, ordered by attempt.
-    fn get_job_errors(&self, job_id: &str) -> Result<Vec<JobError>>;
+    /// All recorded errors for a job, ordered by attempt. A job in another
+    /// namespace reports no errors, like an unknown id.
+    fn get_job_errors(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobError>>;
     /// Purge error records older than the cutoff. Returns the count removed.
     fn purge_job_errors(&self, older_than_ms: i64) -> Result<u64>;
 
@@ -407,14 +427,17 @@ pub trait Storage: Send + Sync + Clone {
         extra: Option<&str>,
         namespace: Option<&str>,
     ) -> Result<()>;
-    /// All log lines for a job, in emission order.
-    fn get_task_logs(&self, job_id: &str) -> Result<Vec<TaskLogEntry>>;
+    /// All log lines for a job, in emission order. A job in another namespace
+    /// reports no lines, like an unknown id.
+    fn get_task_logs(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<TaskLogEntry>>;
     /// Logs for a job with id strictly after `after_id` (UUIDv7 ids are
     /// time-ordered, so the id doubles as a stream cursor). `None` = all.
+    /// Scoped like [`Storage::get_task_logs`].
     fn get_task_logs_after(
         &self,
         job_id: &str,
         after_id: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<Vec<TaskLogEntry>>;
     /// Log lines across jobs, filtered by task name and/or level, newest
     /// since `since_ms`, bounded by `limit`.
@@ -503,10 +526,16 @@ pub trait Storage: Send + Sync + Clone {
     /// jobs are archived immediately by `fail()`, never by this sweep.
     fn archive_old_jobs(&self, cutoff_ms: i64) -> Result<u64>;
     /// Archived jobs, newest first, paginated. Rows are blob-free.
-    fn list_archived(&self, limit: i64, offset: i64) -> Result<Vec<Job>>;
+    /// `namespace` of `None` returns every namespace, matching `list_jobs`.
+    fn list_archived(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<Job>>;
     /// Keyset-paginated `list_archived`, ordered by `(completed_at, id)`
     /// descending. See [`Storage::list_jobs_after`] for the cursor contract.
-    fn list_archived_after(&self, limit: i64, after: Option<(i64, &str)>) -> Result<Vec<Job>>;
+    fn list_archived_after(
+        &self,
+        limit: i64,
+        after: Option<(i64, &str)>,
+        namespace: Option<&str>,
+    ) -> Result<Vec<Job>>;
 
     // ── Distributed locking ────────────────────────────────────
 
@@ -551,7 +580,8 @@ pub trait Storage: Send + Sync + Clone {
     // ── Per-task concurrency ──────────────────────────────────────
 
     /// Running-job count for a task — the per-task concurrency-cap primitive.
-    fn count_running_by_task(&self, task_name: &str) -> Result<i64>;
+    /// Scoped, so a job elsewhere never consumes this scheduler's budget.
+    fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64>;
 
     // ── Per-queue stats ──────────────────────────────────────────
 

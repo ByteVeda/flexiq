@@ -18,6 +18,9 @@ use crate::storage::{Storage, StorageBackend};
 pub struct CancelSignals {
     /// Present only for a dispatcher running inside a worker.
     storage: Option<StorageBackend>,
+    /// The namespace the worker serves, so a storage read cannot answer for a
+    /// job id belonging to another one.
+    namespace: Option<String>,
     /// Ids delivered out of band. Kept until the job reports, so a cancel that
     /// races a job's start still fires rather than being missed.
     signalled: Mutex<HashSet<String>>,
@@ -25,9 +28,10 @@ pub struct CancelSignals {
 
 impl CancelSignals {
     /// Read cancels from storage, and from `notify_cancel` when it is called.
-    pub fn from_storage(storage: StorageBackend) -> Self {
+    pub fn from_storage(storage: StorageBackend, namespace: Option<String>) -> Self {
         Self {
             storage: Some(storage),
+            namespace,
             signalled: Mutex::new(HashSet::new()),
         }
     }
@@ -36,6 +40,7 @@ impl CancelSignals {
     pub fn detached() -> Self {
         Self {
             storage: None,
+            namespace: None,
             signalled: Mutex::new(HashSet::new()),
         }
     }
@@ -53,9 +58,11 @@ impl CancelSignals {
         if self.lock().contains(job_id) {
             return true;
         }
-        self.storage
-            .as_ref()
-            .is_some_and(|storage| storage.is_cancel_requested(job_id).unwrap_or(false))
+        self.storage.as_ref().is_some_and(|storage| {
+            storage
+                .is_cancel_requested(job_id, self.namespace.as_deref())
+                .unwrap_or(false)
+        })
     }
 
     /// Drop the record for a finished job, so the set cannot grow for the life
@@ -136,10 +143,12 @@ mod tests {
             .expect("the enqueued job");
         assert_eq!(running.id, job.id);
 
-        let signals = CancelSignals::from_storage(storage.clone());
+        let signals = CancelSignals::from_storage(storage.clone(), None);
         assert!(!signals.is_cancelled(&job.id));
 
-        assert!(storage.request_cancel(&job.id).expect("request cancel"));
+        assert!(storage
+            .request_cancel(&job.id, None)
+            .expect("request cancel"));
         assert!(signals.is_cancelled(&job.id));
     }
 }

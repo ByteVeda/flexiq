@@ -113,9 +113,10 @@ impl JsQueue {
     #[napi]
     pub async fn replay_job(&self, job_id: String) -> Result<String> {
         let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
         spawn_blocking(move || {
             let original = storage
-                .get_job(&job_id)
+                .get_job(&job_id, namespace.as_deref())
                 .map_err(to_napi_err)?
                 .ok_or_else(|| invalid_arg(format!("Job not found: {job_id}")))?;
             let new_job = NewJob {

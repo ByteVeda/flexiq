@@ -353,8 +353,8 @@ impl RedisStorage {
     }
 
     /// Running jobs that exceeded their timeout, for the scheduler to fail or
-    /// retry.
-    pub fn reap_stale_jobs(&self, now: i64) -> Result<Vec<Job>> {
+    /// retry. Scoped so a scheduler never times out another namespace's job.
+    pub fn reap_stale_jobs(&self, now: i64, namespace: Option<&str>) -> Result<Vec<Job>> {
         let mut conn = self.conn()?;
         let status_key = self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]);
         let job_ids: Vec<String> = conn.smembers(&status_key).map_err(map_err)?;
@@ -362,6 +362,9 @@ impl RedisStorage {
         let mut stale = Vec::new();
         for id in &job_ids {
             if let Some(job) = self.load_job(&mut conn, id)? {
+                if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
+                    continue;
+                }
                 if let Some(started) = job.started_at {
                     let timed_out = match started.checked_add(job.timeout_ms) {
                         Some(deadline) => deadline < now,
@@ -384,6 +387,7 @@ impl RedisStorage {
         &self,
         live_owner_ids: &[String],
         _now: i64,
+        namespace: Option<&str>,
     ) -> Result<Vec<(Job, String)>> {
         if live_owner_ids.is_empty() {
             return Ok(Vec::new());
@@ -410,6 +414,9 @@ impl RedisStorage {
                 continue;
             }
             if let Some(job) = self.load_job(&mut conn, id)? {
+                if namespace.is_some_and(|scope| job.namespace.as_deref() != Some(scope)) {
+                    continue;
+                }
                 if job.status == JobStatus::Running {
                     orphaned.push((job, owner));
                 }

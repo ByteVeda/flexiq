@@ -77,7 +77,12 @@ impl RedisStorage {
 
     /// All log lines for a job, in chronological (UUIDv7 id) order;
     /// same-millisecond lines have no guaranteed emission order.
-    pub fn get_task_logs(&self, job_id: &str) -> Result<Vec<TaskLogEntry>> {
+    /// A job in another namespace reports no lines, like an unknown id.
+    pub fn get_task_logs(
+        &self,
+        job_id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<TaskLogEntry>> {
         let mut conn = self.conn()?;
         let by_job_key = self.key(&["logs", "by_job", job_id]);
 
@@ -91,6 +96,9 @@ impl RedisStorage {
             let data: Option<String> = conn.get(&log_key).map_err(map_err)?;
             if let Some(d) = data {
                 let entry: LogEntry = serde_json::from_str(&d)?;
+                if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+                    continue;
+                }
                 rows.push(TaskLogEntry::from(entry));
             }
         }
@@ -101,10 +109,12 @@ impl RedisStorage {
     }
 
     /// Logs for a job with id strictly after `after_id` (cursor scan).
+    /// Scoped like `get_task_logs`.
     pub fn get_task_logs_after(
         &self,
         job_id: &str,
         after_id: Option<&str>,
+        namespace: Option<&str>,
     ) -> Result<Vec<TaskLogEntry>> {
         let mut conn = self.conn()?;
         let by_job_key = self.key(&["logs", "by_job", job_id]);
@@ -124,6 +134,9 @@ impl RedisStorage {
             let data: Option<String> = conn.get(&log_key).map_err(map_err)?;
             if let Some(d) = data {
                 let entry: LogEntry = serde_json::from_str(&d)?;
+                if namespace.is_some_and(|scope| entry.namespace.as_deref() != Some(scope)) {
+                    continue;
+                }
                 rows.push(TaskLogEntry::from(entry));
             }
         }

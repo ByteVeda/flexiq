@@ -216,7 +216,7 @@ pub unsafe extern "C" fn taskito_ffi_get_result(
         let id = read_string(job_ptr, job_len)?;
         let result = queue
             .storage
-            .get_job(&id)
+            .get_job(&id, queue.namespace.as_deref())
             .map_err(|e| e.to_string())?
             .and_then(|job| job.result);
         Ok::<Option<Vec<u8>>, String>(result)

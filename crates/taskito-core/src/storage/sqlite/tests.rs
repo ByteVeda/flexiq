@@ -30,7 +30,7 @@ fn test_enqueue_and_get() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("test_task")).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.task_name, "test_task");
     assert_eq!(fetched.status, JobStatus::Pending);
 }
@@ -42,7 +42,7 @@ fn test_notes_round_trip() {
     new_job.notes = Some(r#"{"customer_id":"cus_abc","tier":"gold"}"#.to_string());
 
     let job = storage.enqueue(new_job).unwrap();
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(
         fetched.notes.as_deref(),
         Some(r#"{"customer_id":"cus_abc","tier":"gold"}"#)
@@ -50,7 +50,7 @@ fn test_notes_round_trip() {
 
     // Absence round-trips as None.
     let plain = storage.enqueue(make_job("plain_task")).unwrap();
-    let plain_fetched = storage.get_job(&plain.id).unwrap().unwrap();
+    let plain_fetched = storage.get_job(&plain.id, None).unwrap().unwrap();
     assert!(plain_fetched.notes.is_none());
 }
 
@@ -73,7 +73,7 @@ fn test_notes_survive_dlq_round_trip() {
     assert_eq!(entry.notes.as_deref(), Some(r#"{"customer_id":"cus_xyz"}"#));
 
     let new_id = storage.retry_dead(&entry.id, None).expect("retry_dead");
-    let retried = storage.get_job(&new_id).unwrap().unwrap();
+    let retried = storage.get_job(&new_id, None).unwrap().unwrap();
     assert_eq!(
         retried.notes.as_deref(),
         Some(r#"{"customer_id":"cus_xyz"}"#)
@@ -101,7 +101,7 @@ fn test_metadata_survives_dlq_round_trip() {
     assert_eq!(entry.metadata.as_deref(), Some(r#"{"user_id":"u1"}"#));
 
     let new_id = storage.retry_dead(&entry.id, None).expect("retry_dead");
-    let retried = storage.get_job(&new_id).unwrap().unwrap();
+    let retried = storage.get_job(&new_id, None).unwrap().unwrap();
     let meta: serde_json::Value =
         serde_json::from_str(retried.metadata.as_deref().expect("metadata")).unwrap();
     assert_eq!(
@@ -298,7 +298,7 @@ fn test_complete() {
 
     storage.complete(&job.id, Some(vec![42])).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Complete);
     assert_eq!(fetched.result, Some(vec![42]));
 }
@@ -312,7 +312,7 @@ fn test_fail_and_retry() {
         .unwrap();
 
     storage.fail(&job.id, "something broke").unwrap();
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Failed);
     assert_eq!(fetched.error.as_deref(), Some("something broke"));
 }
@@ -328,7 +328,7 @@ fn test_retry_reschedule() {
     let future = now_millis() + 5000;
     storage.retry(&job.id, future).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
     assert_eq!(fetched.retry_count, 1);
     assert_eq!(fetched.scheduled_at, future);
@@ -347,7 +347,7 @@ fn test_reschedule_preserves_retry_count() {
     let future = now_millis() + 5000;
     storage.reschedule(&job.id, future).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
     assert_eq!(fetched.scheduled_at, future);
     assert_eq!(
@@ -360,7 +360,7 @@ fn test_reschedule_preserves_retry_count() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
     storage.reschedule(&job.id, future + 1000).unwrap();
-    let again = storage.get_job(&job.id).unwrap().unwrap();
+    let again = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(again.retry_count, 0);
 
     // Unknown id is reported, matching retry().
@@ -377,13 +377,13 @@ fn test_dead_letter_queue() {
 
     storage
         .move_to_dlq(
-            &storage.get_job(&job.id).unwrap().unwrap(),
+            &storage.get_job(&job.id, None).unwrap().unwrap(),
             "max retries exceeded",
             None,
         )
         .unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Dead);
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -399,7 +399,7 @@ fn test_retry_dead() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
 
-    let running_job = storage.get_job(&job.id).unwrap().unwrap();
+    let running_job = storage.get_job(&job.id, None).unwrap().unwrap();
     storage
         .move_to_dlq(&running_job, "fatal error", None)
         .unwrap();
@@ -407,7 +407,7 @@ fn test_retry_dead() {
     let dead = storage.list_dead(10, 0, None).unwrap();
     let new_id = storage.retry_dead(&dead[0].id, None).unwrap();
 
-    let new_job = storage.get_job(&new_id).unwrap().unwrap();
+    let new_job = storage.get_job(&new_id, None).unwrap().unwrap();
     assert_eq!(new_job.status, JobStatus::Pending);
     assert_eq!(new_job.task_name, "retry_dead_task");
 
@@ -564,7 +564,7 @@ fn test_cancel_job() {
 
     assert!(storage.cancel_job(&job.id, None).unwrap());
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Cancelled);
 
     // Cancelling again should return false
@@ -662,7 +662,7 @@ fn test_enqueue_unique_after_dup_completes() {
         "freed unique key must yield a new job, not dedup to A"
     );
     assert!(
-        storage.get_job(&b.id).unwrap().is_some(),
+        storage.get_job(&b.id, None).unwrap().is_some(),
         "returned job must actually be persisted (no phantom)"
     );
 }
@@ -693,7 +693,7 @@ fn test_record_and_get_job_errors() {
     storage.record_error(&job.id, 0, "first failure").unwrap();
     storage.record_error(&job.id, 1, "second failure").unwrap();
 
-    let errors = storage.get_job_errors(&job.id).unwrap();
+    let errors = storage.get_job_errors(&job.id, None).unwrap();
     assert_eq!(errors.len(), 2);
     assert_eq!(errors[0].attempt, 0);
     assert_eq!(errors[0].error, "first failure");
@@ -706,7 +706,7 @@ fn test_job_errors_empty_for_success() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("ok_task")).unwrap();
 
-    let errors = storage.get_job_errors(&job.id).unwrap();
+    let errors = storage.get_job_errors(&job.id, None).unwrap();
     assert!(errors.is_empty());
 }
 
@@ -719,7 +719,7 @@ fn test_purge_job_errors() {
     let purged = storage.purge_job_errors(now_millis() + 10_000).unwrap();
     assert_eq!(purged, 1);
 
-    let errors = storage.get_job_errors(&job.id).unwrap();
+    let errors = storage.get_job_errors(&job.id, None).unwrap();
     assert!(errors.is_empty());
 }
 
@@ -735,7 +735,7 @@ fn test_purge_job_errors_drains_across_batches() {
 
     let purged = storage.purge_job_errors(now_millis() + 10_000).unwrap();
     assert_eq!(purged, 550, "batched purge must drain every error row");
-    assert!(storage.get_job_errors(&job.id).unwrap().is_empty());
+    assert!(storage.get_job_errors(&job.id, None).unwrap().is_empty());
 }
 
 #[test]
@@ -765,7 +765,7 @@ fn test_purge_task_logs_drains_across_batches() {
 
     let purged = storage.purge_task_logs(now_millis() + 10_000).unwrap();
     assert_eq!(purged, 550, "batched purge must drain every log row");
-    assert!(storage.get_task_logs(&job.id).unwrap().is_empty());
+    assert!(storage.get_task_logs(&job.id, None).unwrap().is_empty());
 }
 
 #[test]
@@ -773,12 +773,12 @@ fn test_progress_tracking() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("progress_task")).unwrap();
 
-    storage.update_progress(&job.id, 50).unwrap();
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    storage.update_progress(&job.id, 50, None).unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.progress, Some(50));
 
-    storage.update_progress(&job.id, 100).unwrap();
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    storage.update_progress(&job.id, 100, None).unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.progress, Some(100));
 }
 
@@ -838,10 +838,10 @@ fn test_cascade_cancel_on_job_cancel() {
 
     storage.cancel_job(&job_a.id, None).unwrap();
 
-    let b = storage.get_job(&job_b.id).unwrap().unwrap();
+    let b = storage.get_job(&job_b.id, None).unwrap().unwrap();
     assert_eq!(b.status, JobStatus::Cancelled);
 
-    let c = storage.get_job(&job_c.id).unwrap().unwrap();
+    let c = storage.get_job(&job_c.id, None).unwrap().unwrap();
     assert_eq!(c.status, JobStatus::Cancelled);
 }
 
@@ -856,10 +856,10 @@ fn test_cascade_cancel_on_dlq() {
 
     let now = now_millis() + 1000;
     storage.dequeue("default", now, None).unwrap();
-    let running = storage.get_job(&job_a.id).unwrap().unwrap();
+    let running = storage.get_job(&job_a.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "fatal error", None).unwrap();
 
-    let b = storage.get_job(&job_b.id).unwrap().unwrap();
+    let b = storage.get_job(&job_b.id, None).unwrap().unwrap();
     assert_eq!(b.status, JobStatus::Cancelled);
     assert!(b.error.unwrap().contains("dependency failed"));
 }
@@ -951,21 +951,24 @@ fn test_count_running_by_task() {
     storage.enqueue(make_job("task_b")).unwrap();
 
     // No running jobs yet
-    assert_eq!(storage.count_running_by_task("task_a").unwrap(), 0);
+    assert_eq!(storage.count_running_by_task("task_a", None).unwrap(), 0);
 
     let now = now_millis() + 1000;
     // Dequeue one task_a (becomes running)
     storage.dequeue("default", now, None).unwrap().unwrap();
 
-    assert_eq!(storage.count_running_by_task("task_a").unwrap(), 1);
-    assert_eq!(storage.count_running_by_task("task_b").unwrap(), 0);
+    assert_eq!(storage.count_running_by_task("task_a", None).unwrap(), 1);
+    assert_eq!(storage.count_running_by_task("task_b", None).unwrap(), 0);
 
     // Dequeue second task_a
     storage.dequeue("default", now, None).unwrap().unwrap();
-    assert_eq!(storage.count_running_by_task("task_a").unwrap(), 2);
+    assert_eq!(storage.count_running_by_task("task_a", None).unwrap(), 2);
 
     // Nonexistent task should return 0
-    assert_eq!(storage.count_running_by_task("no_such_task").unwrap(), 0);
+    assert_eq!(
+        storage.count_running_by_task("no_such_task", None).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -1102,7 +1105,7 @@ fn test_reap_stale_jobs_only_returns_expired() {
     storage.dequeue("default", t0, None).unwrap();
 
     // Well past the short job's deadline (t0 + 1) but before the long one's.
-    let stale = storage.reap_stale_jobs(t0 + 1_000).unwrap();
+    let stale = storage.reap_stale_jobs(t0 + 1_000, None).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].task_name, "short_timeout");
 }
@@ -1180,8 +1183,8 @@ fn test_purge_completed_respects_per_job_ttl() {
     // global_cutoff = 0 so only the per-job TTL path can match.
     storage.purge_completed_with_ttl(Some(0)).unwrap();
 
-    assert!(storage.get_job(&expired.id).unwrap().is_none());
-    assert!(storage.get_job(&kept.id).unwrap().is_some());
+    assert!(storage.get_job(&expired.id, None).unwrap().is_none());
+    assert!(storage.get_job(&kept.id, None).unwrap().is_some());
 }
 
 #[test]
@@ -1193,7 +1196,7 @@ fn test_purge_completed_with_ttl_covers_non_complete_statuses() {
 
     let job = storage.enqueue(make_job("dead_archived")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "boom", None).unwrap();
 
     // The archived row is now status Dead. A future cutoff must delete it —
@@ -1202,7 +1205,7 @@ fn test_purge_completed_with_ttl_covers_non_complete_statuses() {
         .purge_completed_with_ttl(Some(now + 10_000))
         .unwrap();
     assert_eq!(removed, 1, "the Dead archived row must be purged");
-    assert!(storage.get_job(&job.id).unwrap().is_none());
+    assert!(storage.get_job(&job.id, None).unwrap().is_none());
 }
 
 #[test]
@@ -1224,7 +1227,7 @@ fn test_purge_completed_drains_across_batches() {
 
     let removed = storage.purge_completed(now_millis() + 10_000).unwrap();
     assert_eq!(removed, 550, "batched purge must drain every completed row");
-    assert!(storage.list_archived(1000, 0).unwrap().is_empty());
+    assert!(storage.list_archived(1000, 0, None).unwrap().is_empty());
 }
 
 #[test]
@@ -1297,7 +1300,7 @@ fn test_get_job_finds_archived() {
         .unwrap();
     storage.complete(&job.id, Some(vec![1])).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.id, job.id);
     assert_eq!(fetched.status, JobStatus::Complete);
     assert_eq!(fetched.result, Some(vec![1]));
@@ -1367,7 +1370,7 @@ fn test_fail_and_cancel_archive_immediately() {
     assert_eq!(jobs_row_count(&storage, &failed.id), 0);
     assert_eq!(archived_row_count(&storage, &failed.id), 1);
     assert_eq!(
-        storage.get_job(&failed.id).unwrap().unwrap().status,
+        storage.get_job(&failed.id, None).unwrap().unwrap().status,
         JobStatus::Failed
     );
 
@@ -1377,7 +1380,11 @@ fn test_fail_and_cancel_archive_immediately() {
     assert_eq!(jobs_row_count(&storage, &cancelled.id), 0);
     assert_eq!(archived_row_count(&storage, &cancelled.id), 1);
     assert_eq!(
-        storage.get_job(&cancelled.id).unwrap().unwrap().status,
+        storage
+            .get_job(&cancelled.id, None)
+            .unwrap()
+            .unwrap()
+            .status,
         JobStatus::Cancelled
     );
 }
@@ -1391,7 +1398,7 @@ fn test_enqueue_stores_payload_inline() {
     nj.payload = vec![9, 8, 7, 6];
     let job = storage.enqueue(nj).unwrap();
 
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.payload, vec![9, 8, 7, 6]);
     assert_eq!(fetched.status, JobStatus::Pending);
 }
@@ -1451,7 +1458,7 @@ fn test_dequeue_batch_archives_expired() {
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, fresh_job.id);
     assert_eq!(jobs_row_count(&storage, &expired_job.id), 0);
-    let fetched = storage.get_job(&expired_job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&expired_job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Cancelled);
 }
 
@@ -1466,7 +1473,7 @@ fn test_complete_archives_job() {
     // Completing archives the job: the live row is gone; payload+result are
     // preserved inline in `archived_jobs`.
     assert_eq!(jobs_row_count(&storage, &job.id), 0);
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Complete);
     assert_eq!(fetched.result, Some(vec![5, 5, 5]));
 }
@@ -1481,7 +1488,7 @@ fn test_get_job_returns_payload_and_result() {
     storage.complete(&job.id, Some(vec![8, 13])).unwrap();
 
     // After archival, get_job reads payload + result from `archived_jobs`.
-    let fetched = storage.get_job(&job.id).unwrap().unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.payload, vec![1, 1, 2, 3, 5]);
     assert_eq!(fetched.result, Some(vec![8, 13]));
 }
@@ -1495,7 +1502,7 @@ fn test_cancel_pending_archives_job() {
     assert!(storage.cancel_job(&job.id, None).unwrap());
     assert_eq!(jobs_row_count(&storage, &job.id), 0);
     assert_eq!(
-        storage.get_job(&job.id).unwrap().unwrap().status,
+        storage.get_job(&job.id, None).unwrap().unwrap().status,
         JobStatus::Cancelled
     );
 }
@@ -1546,7 +1553,7 @@ fn test_delete_dead_existing() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "err", None).unwrap();
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -1570,7 +1577,7 @@ fn test_purge_dead_with_ttl_global() {
     // Create a DLQ entry with no per-entry TTL
     let job = storage.enqueue(make_job("ttl_global")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "err", None).unwrap();
 
     // Cutoff in the future purges it
@@ -1588,7 +1595,7 @@ fn test_purge_dead_with_ttl_per_entry() {
     new_job.result_ttl_ms = Some(1); // 1ms TTL
     let job = storage.enqueue(new_job).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "err", None).unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1622,13 +1629,13 @@ fn test_count_expired_rows_matches_purge_exactly() {
     // dead_letter: 1 no-TTL + 1 per-entry-expired.
     let d1 = storage.enqueue(make_job("dr_dead")).unwrap();
     storage.dequeue(q, now + 1000, None).unwrap();
-    let r1 = storage.get_job(&d1.id).unwrap().unwrap();
+    let r1 = storage.get_job(&d1.id, None).unwrap().unwrap();
     storage.move_to_dlq(&r1, "boom", None).unwrap();
     let mut ndj = make_job("dr_dead_ttl");
     ndj.result_ttl_ms = Some(1);
     let d2 = storage.enqueue(ndj).unwrap();
     storage.dequeue(q, now + 1000, None).unwrap();
-    let r2 = storage.get_job(&d2.id).unwrap().unwrap();
+    let r2 = storage.get_job(&d2.id, None).unwrap().unwrap();
     storage.move_to_dlq(&r2, "boom", None).unwrap();
 
     // Side tables: 3 logs, 2 metrics, 1 error.
@@ -1719,7 +1726,7 @@ fn test_purge_dead_drains_across_batches() {
     for _ in 0..550 {
         let job = storage.enqueue(make_job("dead_batch")).unwrap();
         storage.dequeue("default", now + 1000, None).unwrap();
-        let running = storage.get_job(&job.id).unwrap().unwrap();
+        let running = storage.get_job(&job.id, None).unwrap().unwrap();
         storage.move_to_dlq(&running, "boom", None).unwrap();
     }
 
@@ -1735,7 +1742,7 @@ fn test_purge_dead_with_ttl_drains_across_batches() {
     for _ in 0..550 {
         let job = storage.enqueue(make_job("dead_ttl_batch")).unwrap();
         storage.dequeue("default", now + 1000, None).unwrap();
-        let running = storage.get_job(&job.id).unwrap().unwrap();
+        let running = storage.get_job(&job.id, None).unwrap().unwrap();
         storage.move_to_dlq(&running, "boom", None).unwrap();
     }
 
@@ -1753,7 +1760,7 @@ fn test_list_dead_for_retry() {
 
     let job = storage.enqueue(make_job("retry_cand")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "err", None).unwrap();
 
     let qs = [String::from("default")];
@@ -1784,7 +1791,7 @@ fn test_dlq_retry_count_round_trip() {
     // Enqueue → dequeue → DLQ (count=0) → retry → dequeue → DLQ (count=1)
     let job = storage.enqueue(make_job("count_rt")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
-    let running = storage.get_job(&job.id).unwrap().unwrap();
+    let running = storage.get_job(&job.id, None).unwrap().unwrap();
     storage.move_to_dlq(&running, "err1", None).unwrap();
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -1792,7 +1799,7 @@ fn test_dlq_retry_count_round_trip() {
 
     let new_id = storage.retry_dead(&dead[0].id, None).unwrap();
     storage.dequeue("default", now + 2000, None).unwrap();
-    let running2 = storage.get_job(&new_id).unwrap().unwrap();
+    let running2 = storage.get_job(&new_id, None).unwrap().unwrap();
     storage.move_to_dlq(&running2, "err2", None).unwrap();
 
     let dead2 = storage.list_dead(10, 0, None).unwrap();

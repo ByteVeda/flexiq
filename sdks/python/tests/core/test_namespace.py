@@ -116,3 +116,35 @@ def test_namespace_preserved_in_job_result(tmp_path: Path) -> None:
     assert result == "hi world"
 
     queue._inner.request_shutdown()
+
+
+def test_namespace_scopes_the_id_addressed_surface(tmp_path: Path) -> None:
+    """A job id from another namespace reads as missing and cannot be mutated.
+
+    The namespace is a tenancy boundary, so a caller scoped to one must learn
+    nothing about ids outside it — not through a read, and not through the
+    effect of a write.
+    """
+    db = str(tmp_path / "test.db")
+    q_a = Queue(db_path=db, namespace="ns-a")
+    q_b = Queue(db_path=db, namespace="ns-b")
+    unscoped = Queue(db_path=db)
+
+    @q_a.task()
+    def task_x() -> None:
+        pass
+
+    job = task_x.delay()
+
+    assert q_a.get_job(job.id) is not None
+    assert q_b.get_job(job.id) is None
+    assert unscoped.get_job(job.id) is not None
+
+    assert not q_b.cancel_job(job.id)
+    assert not q_b.cancel_running_job(job.id)
+    assert q_a.get_job(job.id) is not None, "the cross-namespace cancels must not have landed"
+
+    assert q_b.job_errors(job.id) == []
+    assert q_b.task_logs(job.id) == []
+
+    assert q_a.cancel_job(job.id), "the owning namespace still cancels"

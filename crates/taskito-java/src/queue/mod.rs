@@ -141,7 +141,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_getJob<'lo
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        match queue.storage.get_job(&id)? {
+        match queue.storage.get_job(&id, queue.namespace.as_deref())? {
             Some(job) => new_string(
                 env,
                 crate::convert::to_json(&crate::convert::JobView::from(&job))?,
@@ -163,7 +163,11 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_getResult<
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        match queue.storage.get_job(&id)?.and_then(|job| job.result) {
+        match queue
+            .storage
+            .get_job(&id, queue.namespace.as_deref())?
+            .and_then(|job| job.result)
+        {
             Some(bytes) => new_bytes(env, &bytes),
             None => Ok(std::ptr::null_mut()),
         }
@@ -199,7 +203,11 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_requestCan
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        Ok(to_jboolean(queue.storage.request_cancel(&id)?))
+        Ok(to_jboolean(
+            queue
+                .storage
+                .request_cancel(&id, queue.namespace.as_deref())?,
+        ))
     })
 }
 
@@ -214,7 +222,11 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_isCancelRe
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        Ok(to_jboolean(queue.storage.is_cancel_requested(&id)?))
+        Ok(to_jboolean(
+            queue
+                .storage
+                .is_cancel_requested(&id, queue.namespace.as_deref())?,
+        ))
     })
 }
 
@@ -230,7 +242,9 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_setProgres
     guard(&mut env, (), |env| {
         let queue = unsafe { borrow_queue(handle) };
         let id = read_string(env, &job_id)?;
-        queue.storage.update_progress(&id, progress.clamp(0, 100))?;
+        queue
+            .storage
+            .update_progress(&id, progress.clamp(0, 100), queue.namespace.as_deref())?;
         Ok(())
     })
 }

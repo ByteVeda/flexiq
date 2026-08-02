@@ -105,7 +105,10 @@ impl JsQueue {
     /// Fetch a job by id, or `null` if no such job exists.
     #[napi]
     pub fn get_job(&self, id: String) -> Result<Option<JsJob>> {
-        let job = self.storage.get_job(&id).map_err(to_napi_err)?;
+        let job = self
+            .storage
+            .get_job(&id, self.namespace.as_deref())
+            .map_err(to_napi_err)?;
         Ok(job.map(job_to_js))
     }
 
@@ -121,20 +124,24 @@ impl JsQueue {
     /// there is no such running job.
     #[napi]
     pub fn request_cancel(&self, id: String) -> Result<bool> {
-        self.storage.request_cancel(&id).map_err(to_napi_err)
+        self.storage
+            .request_cancel(&id, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Whether cancellation has been requested for a job.
     #[napi]
     pub fn is_cancel_requested(&self, id: String) -> Result<bool> {
-        self.storage.is_cancel_requested(&id).map_err(to_napi_err)
+        self.storage
+            .is_cancel_requested(&id, self.namespace.as_deref())
+            .map_err(to_napi_err)
     }
 
     /// Update a running job's progress (0–100), for observability.
     #[napi]
     pub fn update_progress(&self, id: String, progress: i32) -> Result<()> {
         self.storage
-            .update_progress(&id, progress.clamp(0, 100))
+            .update_progress(&id, progress.clamp(0, 100), self.namespace.as_deref())
             .map_err(to_napi_err)
     }
 

@@ -374,7 +374,7 @@ mod tests {
                 )
                 .unwrap();
 
-            let job = queue.storage.get_job(&job_id).unwrap().unwrap();
+            let job = queue.storage.get_job(&job_id, None).unwrap().unwrap();
             assert_eq!(job.task_name, "task_deferred");
             assert!(job
                 .metadata

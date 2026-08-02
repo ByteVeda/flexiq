@@ -381,7 +381,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_replayJob<
         let id = read_string(env, &job_id)?;
         let original = queue
             .storage
-            .get_job(&id)?
+            .get_job(&id, queue.namespace.as_deref())?
             .ok_or_else(|| BindingError::new(format!("Job not found: {id}")))?;
         let new_job = NewJob {
             queue: original.queue.clone(),

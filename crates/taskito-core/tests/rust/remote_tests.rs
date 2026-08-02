@@ -522,7 +522,7 @@ fn a_dropped_executor_leaves_its_job_for_the_scheduler_to_recover() {
     wait_until(
         || {
             storage
-                .get_job(&job.id)
+                .get_job(&job.id, None)
                 .expect("get_job")
                 .is_some_and(|recovered| recovered.retry_count > 0)
         },
@@ -661,7 +661,7 @@ impl RecordingSink {
 }
 
 impl SideChannel for RecordingSink {
-    fn update_progress(&self, job_id: &str, progress: i32) {
+    fn update_progress(&self, job_id: &str, progress: i32, _namespace: Option<&str>) {
         let delay = *self.progress_delay.lock().expect("progress delay");
         if !delay.is_zero() {
             std::thread::sleep(delay);
@@ -992,7 +992,7 @@ struct ParkingSink {
 }
 
 impl SideChannel for ParkingSink {
-    fn update_progress(&self, _job_id: &str, _progress: i32) {}
+    fn update_progress(&self, _job_id: &str, _progress: i32, _namespace: Option<&str>) {}
 
     fn write_task_log(
         &self,

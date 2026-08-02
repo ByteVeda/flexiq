@@ -901,7 +901,7 @@ mod tests {
         let (tx, _rx) = make_channel(16);
         let mut counters = TickCounters::default();
         scheduler.tick(&tx, &mut counters);
-        scheduler.storage.get_job(&job.id).unwrap().unwrap()
+        scheduler.storage.get_job(&job.id, None).unwrap().unwrap()
     }
 
     #[test]
@@ -919,7 +919,7 @@ mod tests {
             })
             .unwrap();
 
-        let completed = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let completed = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(completed.status, JobStatus::Complete);
         assert_eq!(completed.result, Some(vec![42]));
     }
@@ -1097,7 +1097,7 @@ mod tests {
 
         // Both successes are archived Complete; their claim rows are cleared.
         for job in [&s0, &s1] {
-            let done = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+            let done = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
             assert_eq!(done.status, JobStatus::Complete);
         }
         let claims = scheduler
@@ -1142,7 +1142,7 @@ mod tests {
             })
             .unwrap();
 
-        let retried = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let retried = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(retried.status, JobStatus::Pending);
         assert_eq!(retried.retry_count, 1);
     }
@@ -1207,7 +1207,7 @@ mod tests {
             })
             .unwrap();
 
-        let dead = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let dead = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(dead.status, JobStatus::Dead);
 
         let dlq = scheduler.storage.list_dead(10, 0, None).unwrap();
@@ -1233,7 +1233,7 @@ mod tests {
             })
             .unwrap();
 
-        let dead = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let dead = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(dead.status, JobStatus::Dead);
     }
 
@@ -1250,7 +1250,7 @@ mod tests {
             })
             .unwrap();
 
-        let cancelled = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let cancelled = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(cancelled.status, JobStatus::Cancelled);
     }
 
@@ -1913,7 +1913,7 @@ mod tests {
         let mut counters = TickCounters::default();
         scheduler.tick(&tx, &mut counters);
 
-        let after = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let after = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(
             after.status,
             JobStatus::Pending,
@@ -1948,7 +1948,7 @@ mod tests {
         let mut counters = TickCounters::default();
         scheduler.tick(&tx, &mut counters);
 
-        let after = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let after = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(after.status, JobStatus::Pending);
         assert_eq!(
             after.scheduled_at, job.scheduled_at,
@@ -2005,7 +2005,7 @@ mod tests {
         // Reap should find and handle it
         scheduler.reap_stale().unwrap();
 
-        let reaped = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let reaped = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         // It should be rescheduled for retry (retry_count < max_retries)
         assert_eq!(reaped.status, JobStatus::Pending);
         assert_eq!(reaped.retry_count, 1);
@@ -2051,7 +2051,7 @@ mod tests {
 
         scheduler.reap_stale().unwrap();
 
-        let recovered = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let recovered = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(recovered.status, JobStatus::Pending);
         assert_eq!(recovered.retry_count, 1);
         // The orphaned claim was reclaimed then cleared on requeue.
@@ -2218,7 +2218,7 @@ mod tests {
 
         scheduler.reap_stale().unwrap();
 
-        let still = scheduler.storage.get_job(&job.id).unwrap().unwrap();
+        let still = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(still.status, JobStatus::Running);
         assert_eq!(still.retry_count, 0);
     }
@@ -2309,7 +2309,7 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         // Job should be purged
-        let fetched = scheduler.storage.get_job(&job.id).unwrap();
+        let fetched = scheduler.storage.get_job(&job.id, None).unwrap();
         assert!(fetched.is_none());
     }
 
@@ -2347,7 +2347,7 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         assert!(
-            scheduler.storage.get_job(&job.id).unwrap().is_some(),
+            scheduler.storage.get_job(&job.id, None).unwrap().is_some(),
             "a non-leader must not purge"
         );
     }
@@ -2470,11 +2470,15 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         assert!(
-            scheduler.storage.get_job(&job.id).unwrap().is_none(),
+            scheduler.storage.get_job(&job.id, None).unwrap().is_none(),
             "archived_jobs has a 1ms window, so the job must be purged"
         );
         assert!(
-            !scheduler.storage.get_task_logs(&job.id).unwrap().is_empty(),
+            !scheduler
+                .storage
+                .get_task_logs(&job.id, None)
+                .unwrap()
+                .is_empty(),
             "task_logs has no window, so the log must survive the archive purge"
         );
     }
@@ -2672,7 +2676,7 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         assert!(
-            scheduler.storage.get_job(&job.id).unwrap().is_some(),
+            scheduler.storage.get_job(&job.id, None).unwrap().is_some(),
             "a negative result_ttl must not purge a job that just completed"
         );
     }
@@ -2710,11 +2714,15 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         assert!(
-            scheduler.storage.get_job(&job.id).unwrap().is_some(),
+            scheduler.storage.get_job(&job.id, None).unwrap().is_some(),
             "archived_jobs has no window, so the completed job must survive"
         );
         assert!(
-            scheduler.storage.get_task_logs(&job.id).unwrap().is_empty(),
+            scheduler
+                .storage
+                .get_task_logs(&job.id, None)
+                .unwrap()
+                .is_empty(),
             "task_logs has a 1ms window, so its rows must be purged"
         );
     }
@@ -2744,7 +2752,7 @@ mod tests {
         scheduler.auto_cleanup().unwrap();
 
         assert!(
-            scheduler.storage.get_job(&job.id).unwrap().is_none(),
+            scheduler.storage.get_job(&job.id, None).unwrap().is_none(),
             "per-job result_ttl must be purged even without a global result_ttl"
         );
     }
