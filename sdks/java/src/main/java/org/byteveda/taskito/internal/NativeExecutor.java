@@ -1,5 +1,7 @@
 package org.byteveda.taskito.internal;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * JNI surface for an executor attached to a detached scheduler.
  *
@@ -22,6 +24,18 @@ public final class NativeExecutor {
     public static native void failJob(long handle, long token, String error, boolean retryable);
 
     public static native void cancelJob(long handle, long token);
+
+    /**
+     * Report a running job's progress (0-100) to the scheduler.
+     *
+     * <p>An executor holds no database credentials, so the scheduler applies
+     * this on its behalf. Fire-and-forget: it neither blocks nor fails.
+     */
+    public static native void reportProgress(long handle, String jobId, int progress);
+
+    /** Write one structured log line; {@code extra} may be null. */
+    public static native void writeTaskLog(
+            long handle, String jobId, String taskName, String level, String message, @Nullable String extra);
 
     /** Identity the scheduler announced when it accepted the attach. */
     public static native String schedulerId(long handle);

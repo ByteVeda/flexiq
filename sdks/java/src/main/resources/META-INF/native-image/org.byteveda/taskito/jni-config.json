@@ -8,6 +8,6 @@
 },
 {
   "name":"org.byteveda.taskito.worker.WorkerDispatchBridge",
-  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
+  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
 }
 ]

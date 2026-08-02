@@ -3,6 +3,7 @@ package org.byteveda.taskito.internal;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import org.byteveda.taskito.spi.WorkerControl;
+import org.jspecify.annotations.Nullable;
 
 /**
  * JNI-backed {@link WorkerControl} over an attached-executor handle.
@@ -60,6 +61,22 @@ public final class JniExecutorControl implements WorkerControl {
     public void cancelJob(long token) {
         withOpenHandle(() -> {
             NativeExecutor.cancelJob(handle, token);
+            return null;
+        });
+    }
+
+    @Override
+    public void reportProgress(String jobId, int progress) {
+        withOpenHandle(() -> {
+            NativeExecutor.reportProgress(handle, jobId, progress);
+            return null;
+        });
+    }
+
+    @Override
+    public void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra) {
+        withOpenHandle(() -> {
+            NativeExecutor.writeTaskLog(handle, jobId, taskName, level, message, extra);
             return null;
         });
     }
