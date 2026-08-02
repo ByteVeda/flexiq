@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.byteveda.taskito.dashboard.store.SettingsAccess;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.byteveda.taskito.internal.SettingsDocument;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -34,6 +35,9 @@ public final class AuthStore {
     private static final int USERNAME_MAX_LEN = 64;
     private static final int PASSWORD_MIN_LEN = 8;
     private static final int PASSWORD_MAX_LEN = 256;
+
+    private static final SettingsDocument.Codec<Map<String, Object>> USERS_CODEC =
+            SettingsDocument.codec(AuthStore::decodeUsers, Json::toString);
 
     private final SettingsAccess settings;
 
@@ -64,10 +68,8 @@ public final class AuthStore {
 
     /**
      * Create a password user (default role {@code admin}). Mutations of the
-     * shared {@code auth:users} blob are {@code synchronized} so concurrent
-     * requests in this process can't lose an update; the KV store has no
-     * cross-process CAS, so a second writer in another process is still a
-     * theoretical race (bounded to first-run setup, which is single-shot).
+     * shared {@code auth:users} blob are {@code synchronized} against writers in
+     * this process and compare-and-set against writers in another.
      */
     public synchronized User createUser(String username, String password, String role) {
         return createUser(username, password, parseRole(role));
@@ -83,19 +85,21 @@ public final class AuthStore {
         if (rawUsers().containsKey(username)) {
             throw DashboardError.badRequest("user already exists");
         }
+        // Hashed outside the conditional write: PBKDF2 is the expensive part and
+        // a retry must not redo it (nor produce a different salt each attempt).
         String hash = PasswordHasher.hash(password);
-        Map<String, Object> users = rawUsers();
-        if (users.containsKey(username)) {
-            throw DashboardError.badRequest("user already exists");
-        }
         long now = nowMillis();
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("password_hash", hash);
         row.put("role", role.wire());
         row.put("created_at", now);
         row.put("last_login_at", null);
-        users.put(username, row);
-        saveUsers(users);
+        updateUsers(users -> {
+            if (users.containsKey(username)) {
+                throw DashboardError.badRequest("user already exists");
+            }
+            return users.put(username, row);
+        });
         return new User(username, hash, role.wire(), now, null, null, null);
     }
 
@@ -121,37 +125,27 @@ public final class AuthStore {
     /** Change a user's password and revoke their existing sessions. */
     public synchronized void updatePassword(String username, String newPassword) {
         validatePassword(newPassword);
-        Map<String, Object> users = rawUsers();
-        Object rowObj = users.get(username);
-        if (!(rowObj instanceof Map)) {
-            throw DashboardError.badRequest("not_authenticated");
-        }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> row = (Map<String, Object>) rowObj;
-        row.put("password_hash", PasswordHasher.hash(newPassword));
-        saveUsers(users);
+        String hash = PasswordHasher.hash(newPassword);
+        updateUsers(users -> userRow(users, username)
+                .orElseThrow(() -> DashboardError.badRequest("not_authenticated"))
+                .put("password_hash", hash));
         // A password change must not leave stolen/older sessions valid.
         deleteSessionsForUser(username);
     }
 
     public synchronized void deleteUser(String username) {
-        Map<String, Object> users = rawUsers();
-        if (users.remove(username) != null) {
-            saveUsers(users);
-        }
+        updateUsers(users -> users.remove(username) != null);
         deleteSessionsForUser(username);
     }
 
     private synchronized User touchLastLogin(User user) {
         long now = nowMillis();
-        Map<String, Object> users = rawUsers();
-        Object rowObj = users.get(user.username());
-        if (rowObj instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> row = (Map<String, Object>) rowObj;
-            row.put("last_login_at", now);
-            saveUsers(users);
-        }
+        // Stamped only on the row as it stands now: a user deleted between the
+        // password check and the stamp stays deleted rather than being
+        // resurrected by writing the whole document back.
+        updateUsers(users -> userRow(users, user.username())
+                .map(row -> row.put("last_login_at", now) != null)
+                .orElse(false));
         return new User(
                 user.username(),
                 user.passwordHash(),
@@ -178,27 +172,35 @@ public final class AuthStore {
             boolean emailVerified,
             List<String> adminEmails) {
         String username = slot + ":" + subject;
-        Map<String, Object> users = rawUsers();
-        Optional<Map<String, Object>> existing = userRow(users, username);
-        if (existing.isPresent()) {
-            Map<String, Object> row = existing.get();
-            row.put("email", email);
-            row.put("display_name", name);
-            row.put("last_login_at", nowMillis());
-            saveUsers(users);
-            return toUser(username, row);
-        }
-        Role role = oauthBootstrapRole(email, emailVerified, adminEmails);
         long now = nowMillis();
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("password_hash", PasswordHasher.oauthSentinel(slot));
-        row.put("role", role.wire());
-        row.put("created_at", now);
-        row.put("last_login_at", now);
-        row.put("email", email);
-        row.put("display_name", name);
-        users.put(username, row);
-        saveUsers(users);
+        Role role = oauthBootstrapRole(email, emailVerified, adminEmails);
+        Map<String, Object> row = updateUsers(users -> {
+            Optional<Map<String, Object>> existing = userRow(users, username);
+            if (existing.isPresent()) {
+                Map<String, Object> found = existing.get();
+                // Only refresh what the provider actually sent: a later login
+                // whose token omits these claims must not blank the profile.
+                if (email != null && !email.isBlank()) {
+                    found.put("email", email);
+                }
+                if (name != null && !name.isBlank()) {
+                    found.put("display_name", name);
+                }
+                found.put("last_login_at", now);
+                return found;
+            }
+            // `role` is only consulted here, on first sight: a later login must
+            // not re-derive it and undo an administrator's change.
+            Map<String, Object> fresh = new LinkedHashMap<>();
+            fresh.put("password_hash", PasswordHasher.oauthSentinel(slot));
+            fresh.put("role", role.wire());
+            fresh.put("created_at", now);
+            fresh.put("last_login_at", now);
+            fresh.put("email", email);
+            fresh.put("display_name", name);
+            users.put(username, fresh);
+            return fresh;
+        });
         return toUser(username, row);
     }
 
@@ -352,8 +354,7 @@ public final class AuthStore {
 
     // ---- helpers -----------------------------------------------------------
 
-    private Map<String, Object> rawUsers() {
-        Optional<String> raw = settings.getSetting(USERS_KEY);
+    private static Map<String, Object> decodeUsers(Optional<String> raw) {
         if (raw.isEmpty()) {
             return new LinkedHashMap<>();
         }
@@ -361,8 +362,19 @@ public final class AuthStore {
         return parsed != null ? parsed : new LinkedHashMap<>();
     }
 
-    private void saveUsers(Map<String, Object> users) {
-        settings.setSetting(USERS_KEY, Json.toString(users));
+    private Map<String, Object> rawUsers() {
+        return decodeUsers(settings.getSetting(USERS_KEY));
+    }
+
+    /**
+     * Apply {@code mutate} to the user table without losing a concurrent edit.
+     *
+     * <p>All of them live in one JSON document, so an unconditional write would
+     * drop a user another dashboard replica had just created. {@code
+     * synchronized} covers writers in this process; this covers the rest.
+     */
+    private <R> R updateUsers(SettingsDocument.Mutation<Map<String, Object>, R> mutate) {
+        return SettingsDocument.update(settings, USERS_KEY, USERS_CODEC, mutate);
     }
 
     private static User toUser(String username, Map<String, Object> row) {

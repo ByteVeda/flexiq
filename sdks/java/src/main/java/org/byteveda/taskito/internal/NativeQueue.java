@@ -100,6 +100,14 @@ public final class NativeQueue {
 
     public static native void setSetting(long handle, String key, String value);
 
+    /**
+     * Writes only if the key still holds {@code expectedOrNull}, where
+     * {@code null} means it must be unset.
+     *
+     * @return false when another writer got there first.
+     */
+    public static native boolean setSettingIf(long handle, String key, @Nullable String expectedOrNull, String value);
+
     public static native boolean deleteSetting(long handle, String key);
 
     public static native String listSettings(long handle);

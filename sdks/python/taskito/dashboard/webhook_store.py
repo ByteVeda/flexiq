@@ -21,8 +21,11 @@ import logging
 import secrets
 import time
 import uuid
-from dataclasses import asdict, dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field, fields, replace
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from taskito.dashboard.kv import update
 
 if TYPE_CHECKING:
     from taskito.app import Queue
@@ -32,6 +35,8 @@ SUBSCRIPTIONS_KEY = "webhooks:subscriptions"
 SECRET_BYTES = 32
 
 logger = logging.getLogger("taskito.dashboard.webhooks")
+
+_Outcome = TypeVar("_Outcome")
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,16 @@ def generate_secret() -> str:
     return secrets.token_urlsafe(SECRET_BYTES)
 
 
+#: The keys :class:`WebhookSubscription` round-trips. Anything else in a stored
+#: row was written by a runtime that models more than this one does.
+_MODELLED_FIELDS = frozenset(f.name for f in fields(WebhookSubscription))
+
+
+def _unmodelled_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """The keys of a stored row this runtime does not model."""
+    return {key: value for key, value in row.items() if key not in _MODELLED_FIELDS}
+
+
 class WebhookSubscriptionStore:
     """CRUD for webhook subscriptions backed by ``Queue``'s settings store."""
 
@@ -82,8 +97,8 @@ class WebhookSubscriptionStore:
 
     # ── Internal load/save ───────────────────────────────────────
 
-    def _load_raw(self) -> list[dict[str, Any]]:
-        raw = self._queue.get_setting(SUBSCRIPTIONS_KEY)
+    @staticmethod
+    def _decode(raw: str | None) -> list[dict[str, Any]]:
         if not raw:
             return []
         try:
@@ -93,8 +108,12 @@ class WebhookSubscriptionStore:
             return []
         return data if isinstance(data, list) else []
 
-    def _save_raw(self, items: list[dict[str, Any]]) -> None:
-        self._queue.set_setting(SUBSCRIPTIONS_KEY, json.dumps(items, separators=(",", ":")))
+    def _load_raw(self) -> list[dict[str, Any]]:
+        return self._decode(self._queue.get_setting(SUBSCRIPTIONS_KEY))
+
+    def _update(self, mutate: Callable[[list[dict[str, Any]]], _Outcome]) -> _Outcome:
+        """Apply ``mutate`` to the subscription list without losing a concurrent edit."""
+        return update(self._queue, SUBSCRIPTIONS_KEY, self._decode, mutate)
 
     @staticmethod
     def _row_to_subscription(row: dict[str, Any]) -> WebhookSubscription:
@@ -155,9 +174,7 @@ class WebhookSubscriptionStore:
             created_at=now,
             updated_at=now,
         )
-        rows = self._load_raw()
-        rows.append(asdict(sub))
-        self._save_raw(rows)
+        self._update(lambda rows: rows.append(asdict(sub)))
         return sub
 
     def update(self, subscription_id: str, **changes: Any) -> WebhookSubscription:
@@ -165,37 +182,45 @@ class WebhookSubscriptionStore:
 
         Raises ``KeyError`` if the subscription does not exist.
         """
-        rows = self._load_raw()
-        for idx, row in enumerate(rows):
-            if row.get("id") != subscription_id:
-                continue
-            existing = self._row_to_subscription(row)
-            allowed = {
-                "url",
-                "events",
-                "task_filter",
-                "headers",
-                "secret",
-                "max_retries",
-                "timeout_seconds",
-                "retry_backoff",
-                "enabled",
-                "description",
-            }
-            patch = {k: v for k, v in changes.items() if k in allowed}
-            updated = replace(existing, updated_at=_now(), **patch)
-            rows[idx] = asdict(updated)
-            self._save_raw(rows)
-            return updated
-        raise KeyError(subscription_id)
+
+        def patch_row(rows: list[dict[str, Any]]) -> WebhookSubscription:
+            for idx, row in enumerate(rows):
+                if row.get("id") != subscription_id:
+                    continue
+                existing = self._row_to_subscription(row)
+                allowed = {
+                    "url",
+                    "events",
+                    "task_filter",
+                    "headers",
+                    "secret",
+                    "max_retries",
+                    "timeout_seconds",
+                    "retry_backoff",
+                    "enabled",
+                    "description",
+                }
+                patch = {k: v for k, v in changes.items() if k in allowed}
+                updated = replace(existing, updated_at=_now(), **patch)
+                # Fields this runtime does not model are carried over from the
+                # row as it stands now: another SDK against the same backend may
+                # have written keys this build has never heard of, and rebuilding
+                # the row from the dataclass alone would drop them.
+                rows[idx] = {**_unmodelled_fields(row), **asdict(updated)}
+                return updated
+            raise KeyError(subscription_id)
+
+        return self._update(patch_row)
 
     def delete(self, subscription_id: str) -> bool:
-        rows = self._load_raw()
-        remaining = [r for r in rows if r.get("id") != subscription_id]
-        if len(remaining) == len(rows):
-            return False
-        self._save_raw(remaining)
-        return True
+        def drop_row(rows: list[dict[str, Any]]) -> bool:
+            remaining = [r for r in rows if r.get("id") != subscription_id]
+            if len(remaining) == len(rows):
+                return False
+            rows[:] = remaining
+            return True
+
+        return self._update(drop_row)
 
     def rotate_secret(self, subscription_id: str) -> str:
         """Generate a fresh secret for a subscription. Returns the new value."""

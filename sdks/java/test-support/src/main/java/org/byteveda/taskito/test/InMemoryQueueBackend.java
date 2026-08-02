@@ -455,6 +455,15 @@ public final class InMemoryQueueBackend implements QueueBackend {
     }
 
     @Override
+    public synchronized boolean setSettingIf(String key, Optional<String> expected, String value) {
+        if (!Optional.ofNullable(settings.get(key)).equals(expected)) {
+            return false;
+        }
+        settings.put(key, value);
+        return true;
+    }
+
+    @Override
     public boolean deleteSetting(String key) {
         return settings.remove(key) != null;
     }

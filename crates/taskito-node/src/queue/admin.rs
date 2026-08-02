@@ -235,6 +235,22 @@ impl JsQueue {
         self.storage.set_setting(&key, &value).map_err(to_napi_err)
     }
 
+    /// Write a key/value setting only if it still holds `expected`, where
+    /// `null`/`undefined` means the key must be unset. Returns false when
+    /// another writer got there first, so a read-modify-write caller can
+    /// re-read and retry instead of overwriting the edit it never saw.
+    #[napi]
+    pub fn set_setting_if(
+        &self,
+        key: String,
+        expected: Option<String>,
+        value: String,
+    ) -> Result<bool> {
+        self.storage
+            .set_setting_if(&key, expected.as_deref(), &value)
+            .map_err(to_napi_err)
+    }
+
     /// Delete a setting. Returns false if it didn't exist.
     #[napi]
     pub fn delete_setting(&self, key: String) -> Result<bool> {

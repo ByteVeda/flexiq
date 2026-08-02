@@ -1409,6 +1409,18 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     this.native.setSetting(key, value);
   }
 
+  /**
+   * Write a dashboard settings key only if it still holds `expected`.
+   *
+   * `null` means the key must be unset. Returns false when another writer got
+   * there first, so a caller that read the value it is deriving `value` from
+   * can re-read and retry instead of overwriting an edit it never saw. See
+   * `settingsKv`.
+   */
+  setSettingIf(key: string, expected: string | null, value: string): boolean {
+    return this.native.setSettingIf(key, expected, value);
+  }
+
   /** Delete a dashboard settings key. Returns false if it didn't exist. */
   deleteSetting(key: string): boolean {
     return this.native.deleteSetting(key);

@@ -662,6 +662,17 @@ impl PyQueue {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Set a dashboard setting only if it still holds ``expected``, where
+    /// ``None`` means the key must be unset. Returns ``False`` when another
+    /// writer got there first, so a read-modify-write caller can re-read and
+    /// retry instead of overwriting the edit it never saw.
+    #[pyo3(signature = (key, expected, value))]
+    pub fn set_setting_if(&self, key: &str, expected: Option<&str>, value: &str) -> PyResult<bool> {
+        self.storage
+            .set_setting_if(key, expected, value)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Delete a dashboard setting. Returns ``True`` if the key existed.
     pub fn delete_setting(&self, key: &str) -> PyResult<bool> {
         self.storage

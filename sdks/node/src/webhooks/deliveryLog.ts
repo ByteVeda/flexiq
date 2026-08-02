@@ -3,7 +3,7 @@
 // eviction at the per-webhook cap, following the cross-SDK row layout
 // (snake_case fields, Unix-ms timestamps).
 
-import type { NativeQueue } from "../native";
+import { SettingConflictError, type SettingsStore, updateSetting } from "../settingsKv";
 import { createLogger } from "../utils";
 import type { Delivery, DeliveryStatus } from "./types";
 
@@ -40,7 +40,7 @@ export interface DeliveryFilters {
 /** List/append delivery records keyed by subscription id. */
 export class DeliveryLog {
   constructor(
-    private readonly native: NativeQueue,
+    private readonly native: SettingsStore,
     private readonly maxPerWebhook = DEFAULT_MAX_PER_WEBHOOK,
   ) {}
 
@@ -48,26 +48,59 @@ export class DeliveryLog {
     return DELIVERY_PREFIX + subscriptionId;
   }
 
-  private load(subscriptionId: string): DeliveryRow[] {
-    const raw = this.native.getSetting(this.key(subscriptionId));
-    if (!raw) {
-      return [];
-    }
-    try {
-      const data = JSON.parse(raw);
-      return Array.isArray(data) ? data : [];
-    } catch {
-      log.warn(() => `delivery log for ${subscriptionId} is corrupt; resetting`);
-      return [];
-    }
+  private decoder(subscriptionId: string): (raw: string | null) => DeliveryRow[] {
+    return (raw) => {
+      if (!raw) {
+        return [];
+      }
+      try {
+        const data = JSON.parse(raw);
+        return Array.isArray(data) ? data : [];
+      } catch {
+        log.warn(() => `delivery log for ${subscriptionId} is corrupt; resetting`);
+        return [];
+      }
+    };
   }
 
-  /** Append a delivery row, trimming to the per-webhook cap. */
+  private load(subscriptionId: string): DeliveryRow[] {
+    return this.decoder(subscriptionId)(this.native.getSetting(this.key(subscriptionId)));
+  }
+
+  /**
+   * Append a delivery row, trimming to the per-webhook cap.
+   *
+   * Written conditionally: two deliveries settling at once would otherwise each
+   * append to the list they read and the later write would drop the other.
+   *
+   * Unlike the admin documents, this key is written once per delivery, so
+   * sustained contention is plausible rather than a fault. A log row is
+   * diagnostic — losing one must not fail the delivery it describes — so an
+   * exhausted retry is logged and dropped rather than propagated.
+   */
   record(delivery: Delivery): void {
-    const rows = this.load(delivery.webhookId);
-    rows.push(toRow(delivery));
-    const trimmed = rows.length > this.maxPerWebhook ? rows.slice(-this.maxPerWebhook) : rows;
-    this.native.setSetting(this.key(delivery.webhookId), JSON.stringify(trimmed));
+    const row = toRow(delivery);
+    try {
+      updateSetting(
+        this.native,
+        this.key(delivery.webhookId),
+        this.decoder(delivery.webhookId),
+        (rows) => {
+          rows.push(row);
+          if (rows.length > this.maxPerWebhook) {
+            rows.splice(0, rows.length - this.maxPerWebhook);
+          }
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof SettingConflictError)) {
+        throw error;
+      }
+      log.warn(
+        () =>
+          `dropped the delivery log row for subscription ${delivery.webhookId}: the log was rewritten by another writer on every attempt`,
+      );
+    }
   }
 
   /** Recent deliveries, newest first, optionally filtered and paginated. */

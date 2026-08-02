@@ -14,6 +14,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from taskito.dashboard.kv import update
+
 if TYPE_CHECKING:
     from taskito.app import Queue
 
@@ -65,24 +67,30 @@ class MiddlewareDisableStore:
         return mw_name in self.get_for(task_name)
 
     def set_disabled(self, task_name: str, mw_name: str, disabled: bool) -> list[str]:
-        """Flip a middleware on/off for a task and return the new disable list."""
+        """Flip a middleware on/off for a task and return the new disable list.
+
+        An emptied list leaves a ``[]`` row rather than deleting it. Deleting sat
+        outside the compare-and-set, so a concurrent writer's entry could be
+        added between the swap and the delete and then removed by it — the very
+        lost update the compare-and-set exists to prevent. Nothing reads the
+        difference: :meth:`get_for` parses ``[]`` as "nothing disabled",
+        :meth:`list_all` filters empty lists out, and the key sits under a
+        reserved prefix, so the generic settings view does not show it either.
+        """
         if not task_name:
             raise ValueError("task_name must not be empty")
         if not mw_name:
             raise ValueError("mw_name must not be empty")
-        current = self.get_for(task_name)
-        if disabled:
-            if mw_name not in current:
-                current.append(mw_name)
-        else:
-            current = [n for n in current if n != mw_name]
-        if current:
-            self._queue.set_setting(
-                self._key(task_name), json.dumps(current, separators=(",", ":"))
-            )
-        else:
-            self._queue.delete_setting(self._key(task_name))
-        return current
+
+        def toggle(names: list[str]) -> list[str]:
+            if disabled:
+                if mw_name not in names:
+                    names.append(mw_name)
+            else:
+                names[:] = [name for name in names if name != mw_name]
+            return list(names)
+
+        return update(self._queue, self._key(task_name), _parse, toggle)
 
     def clear_for(self, task_name: str) -> bool:
         return self._queue.delete_setting(self._key(task_name))

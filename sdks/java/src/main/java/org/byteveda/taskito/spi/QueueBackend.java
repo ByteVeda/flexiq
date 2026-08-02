@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
  * return a JSON collection never return {@code null}; nullable scalars are
  * returned as {@link Optional}.
  */
-public interface QueueBackend extends AutoCloseable {
+public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     // ── Producer ────────────────────────────────────────────────────
 
     /** Enqueue one job; {@code optionsJson} is a single {@code EnqueueOptions} object. */
@@ -132,9 +132,25 @@ public interface QueueBackend extends AutoCloseable {
 
     String listPausedQueuesJson();
 
-    Optional<String> getSetting(String key);
-
     void setSetting(String key, String value);
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Defaults to a <b>non-atomic</b> read-compare-write over
+     * {@link #getSetting} and {@link #setSetting}, so a backend written before
+     * this method existed keeps compiling and behaves exactly as it did — a
+     * concurrent writer between the read and the write is still lost. Override
+     * it with whatever your storage can do atomically.
+     */
+    @Override
+    default boolean setSettingIf(String key, Optional<String> expected, String value) {
+        if (!getSetting(key).equals(expected)) {
+            return false;
+        }
+        setSetting(key, value);
+        return true;
+    }
 
     boolean deleteSetting(String key);
 

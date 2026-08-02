@@ -233,6 +233,11 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public boolean setSettingIf(String key, Optional<String> expected, String value) {
+        return withOpenHandle(() -> NativeQueue.setSettingIf(handle, key, expected.orElse(null), value));
+    }
+
+    @Override
     public boolean deleteSetting(String key) {
         return withOpenHandle(() -> NativeQueue.deleteSetting(handle, key));
     }

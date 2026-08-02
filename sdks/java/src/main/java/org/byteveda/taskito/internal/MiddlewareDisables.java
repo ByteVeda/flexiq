@@ -2,6 +2,7 @@ package org.byteveda.taskito.internal;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.byteveda.taskito.logging.TaskitoLogger;
@@ -78,24 +79,31 @@ public final class MiddlewareDisables {
         return middleware.stream().filter(m -> !disabled.contains(nameOf(m))).toList();
     }
 
+    /**
+     * A stored disable list as a mutable list; empty when unset or unreadable.
+     *
+     * <p>A corrupt list must not stop the job — run every middleware, which is
+     * the same behaviour as having no list at all.
+     */
+    public static List<String> decode(Optional<String> raw) {
+        if (raw.isEmpty()) {
+            return new ArrayList<>();
+        }
+        try {
+            List<String> names = JSON.readValue(raw.get(), NAMES);
+            return names == null ? new ArrayList<>() : new ArrayList<>(names);
+        } catch (Exception e) {
+            LOG.warn("middleware disable list is not valid JSON; treating as empty");
+            return new ArrayList<>();
+        }
+    }
+
     /** Names disabled for {@code taskName}; empty when none are, or the list is unreadable. */
     public List<String> disabledFor(String taskName) {
         if (backend == null) {
             return List.of();
         }
-        Optional<String> raw = backend.getSetting(key(taskName));
-        if (raw.isEmpty()) {
-            return List.of();
-        }
-        try {
-            List<String> names = JSON.readValue(raw.get(), NAMES);
-            return names == null ? List.of() : names;
-        } catch (Exception e) {
-            // A corrupt list must not stop the job — run every middleware, which
-            // is the same behaviour as having no list at all.
-            LOG.warn("middleware disable list for " + taskName + " is not valid JSON; treating as empty");
-            return List.of();
-        }
+        return List.copyOf(decode(backend.getSetting(key(taskName))));
     }
 
     /**

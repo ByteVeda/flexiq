@@ -66,6 +66,7 @@ import org.byteveda.taskito.serialization.CodecSerializer;
 import org.byteveda.taskito.serialization.JsonSerializer;
 import org.byteveda.taskito.serialization.PayloadCodec;
 import org.byteveda.taskito.serialization.Serializer;
+import org.byteveda.taskito.spi.ConditionalSettings;
 import org.byteveda.taskito.spi.QueueBackend;
 import org.byteveda.taskito.task.EnqueueOptions;
 import org.byteveda.taskito.task.Task;
@@ -83,7 +84,7 @@ import org.jspecify.annotations.Nullable;
  * {@link #builder()}. Operations scoped to a single named queue (pause/resume)
  * live on the {@link Queue} handle returned by {@link #queue(String)}.
  */
-public interface Taskito extends AutoCloseable {
+public interface Taskito extends AutoCloseable, ConditionalSettings {
 
     /** Begin configuring a client. */
     static Builder builder() {
@@ -385,8 +386,6 @@ public interface Taskito extends AutoCloseable {
 
     /** The names of every currently paused queue. */
     List<String> listPausedQueues();
-
-    Optional<String> getSetting(String key);
 
     void setSetting(String key, String value);
 

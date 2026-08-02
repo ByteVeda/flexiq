@@ -10,6 +10,7 @@
 // worker until it restarts (queue `paused` propagates live via pause/resume).
 
 import type { TaskConfigInput } from "../../native";
+import { type SettingsStore, updateSetting } from "../../settingsKv";
 import { createLogger } from "../../utils";
 import { ValidationError } from "../errors";
 
@@ -19,12 +20,7 @@ const QUEUE_PREFIX = "overrides:queue:";
 const log = createLogger("dashboard");
 
 /** The settings-KV surface both `Queue` and the native handle satisfy. */
-export interface SettingsAccess {
-  getSetting(key: string): string | null;
-  setSetting(key: string, value: string): void;
-  deleteSetting(key: string): boolean;
-  listSettings(): Record<string, string>;
-}
+export type SettingsAccess = SettingsStore;
 
 /** Fields an operator may override per task (cross-SDK field names). */
 export const TASK_OVERRIDE_FIELDS = new Set([
@@ -175,9 +171,7 @@ export class OverridesStore {
     if (!taskName) {
       throw new ValidationError("task_name must not be empty");
     }
-    const merged = this.mergeRow(this.settings.getSetting(TASK_PREFIX + taskName), fields);
-    this.settings.setSetting(TASK_PREFIX + taskName, JSON.stringify(merged));
-    return rowToTask(taskName, merged);
+    return rowToTask(taskName, this.mergeRow(TASK_PREFIX + taskName, fields));
   }
 
   clearTask(taskName: string): boolean {
@@ -207,30 +201,27 @@ export class OverridesStore {
     if (!queueName) {
       throw new ValidationError("queue_name must not be empty");
     }
-    const merged = this.mergeRow(this.settings.getSetting(QUEUE_PREFIX + queueName), fields);
-    this.settings.setSetting(QUEUE_PREFIX + queueName, JSON.stringify(merged));
-    return rowToQueue(queueName, merged);
+    return rowToQueue(queueName, this.mergeRow(QUEUE_PREFIX + queueName, fields));
   }
 
   clearQueue(queueName: string): boolean {
     return this.settings.deleteSetting(QUEUE_PREFIX + queueName);
   }
 
-  private mergeRow(
-    existingRaw: string | null,
-    fields: Record<string, unknown>,
-  ): Record<string, unknown> {
-    const merged = parseJsonObject(existingRaw);
-    delete merged.updated_at;
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === null || value === undefined) {
-        delete merged[key];
-      } else {
-        merged[key] = value;
+  /** Patch `fields` into the override at `key` without losing a concurrent edit. */
+  private mergeRow(key: string, fields: Record<string, unknown>): Record<string, unknown> {
+    return updateSetting(this.settings, key, parseJsonObject, (merged) => {
+      delete merged.updated_at;
+      for (const [name, value] of Object.entries(fields)) {
+        if (value === null || value === undefined) {
+          delete merged[name];
+        } else {
+          merged[name] = value;
+        }
       }
-    }
-    merged.updated_at = Date.now();
-    return merged;
+      merged.updated_at = Date.now();
+      return { ...merged };
+    });
   }
 }
 

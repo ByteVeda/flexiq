@@ -25,6 +25,16 @@ class QueueSettingsMixin:
         """Insert or update a setting."""
         self._inner.set_setting(key, value)
 
+    def set_setting_if(self, key: str, expected: str | None, value: str) -> bool:
+        """Write ``key`` only if it still holds ``expected``.
+
+        ``expected`` of ``None`` means the key must be unset. Returns ``False``
+        when another writer got there first, so a caller that read the value it
+        is deriving ``value`` from can re-read and retry instead of overwriting
+        an edit it never saw. See :mod:`taskito.dashboard.kv`.
+        """
+        return self._inner.set_setting_if(key, expected, value)  # type: ignore[no-any-return]
+
     def delete_setting(self, key: str) -> bool:
         """Delete a setting. Returns ``True`` if the key existed."""
         return self._inner.delete_setting(key)  # type: ignore[no-any-return]

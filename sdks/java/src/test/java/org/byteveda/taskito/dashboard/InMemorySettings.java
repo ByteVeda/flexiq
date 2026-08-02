@@ -21,6 +21,15 @@ public final class InMemorySettings implements SettingsAccess {
     }
 
     @Override
+    public boolean setSettingIf(String key, Optional<String> expected, String value) {
+        if (!Optional.ofNullable(map.get(key)).equals(expected)) {
+            return false;
+        }
+        map.put(key, value);
+        return true;
+    }
+
+    @Override
     public boolean deleteSetting(String key) {
         return map.remove(key) != null;
     }
