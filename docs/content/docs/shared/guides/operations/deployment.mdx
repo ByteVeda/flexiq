@@ -640,16 +640,13 @@ metadata:
 spec:
   template:
     spec:
-      # The socket is created 0777 masked by the binding process's umask — 0755
-      # under the usual 022 — and connect(2) needs write permission on it. Under
-      # any umask that clears group and other write, that leaves the owning uid
-      # as the only caller who can attach, so both containers run as the same
-      # one. This is the whole access boundary for a Unix-socket attach.
-      # Overriding the scheduler image's own uid (65532) is safe: the binary is
-      # static and needs no passwd entry.
+      # The scheduler chmods the socket to 0660, and connect(2) needs write
+      # permission on it — so the two containers have to share a *group*, not a
+      # uid. fsGroup gives them one and makes the emptyDir setgid, so the socket
+      # inherits it. This is the whole access boundary for a Unix-socket attach:
+      # nothing outside the group can connect, and nothing else is checked.
       securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
+        fsGroup: 65532
       volumes:
         - name: attach
           emptyDir: {}
@@ -818,6 +815,104 @@ that dispatches code and the port people browse are never the same object.
   attach port is the fallback.
 </Callout>
 
+#### With Helm
+
+Both shapes above are what the chart renders, so on Kubernetes you can skip the
+manifests:
+
+```bash
+helm install taskito ./deploy/helm/taskito-server \
+  --set storage.dsn='postgres://taskito:secret@postgres:5432/myapp' \
+  --set attach.token="$(openssl rand -base64 32)"
+```
+
+The chart refuses to render the mistakes this page warns about — an attach
+listener with no token, a guessable one, an unauthenticated dashboard — and the
+error names the value to change rather than leaving you a `CrashLoopBackOff` to
+diagnose. See the chart's README for every value.
+
+#### Injecting the sidecar automatically
+
+Adding an executor to a workload is two edits: a container and its environment.
+The chart's admission webhook turns both into annotations, so a workload opts in
+without a manifest change beyond its own metadata:
+
+```bash
+helm upgrade taskito ./deploy/helm/taskito-server --reuse-values \
+  --set webhook.enabled=true
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    metadata:
+      annotations:
+        taskito.dev/inject: "true"
+        taskito.dev/attach: "taskito-taskito-server-attach.default.svc:7777"
+        taskito.dev/slots: "4"
+        taskito.dev/token-secret: "taskito-taskito-server-config"
+        taskito.dev/token-key: "attach-token"
+        # The one thing the injector cannot infer: what runs an executor inside
+        # your image.
+        taskito.dev/command: <see below>
+    spec:
+      containers:
+        - name: app
+          image: myapp:1.4.2 # untouched
+```
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+taskito.dev/command: "taskito executor --app myapp:queue"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+taskito.dev/command: "node_modules/.bin/taskito executor ./app.js"
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+# A JSON array, because one of these arguments would otherwise split on its
+# spaces. The bare form is fine when none of them contain any.
+taskito.dev/command: '["java","--enable-native-access=ALL-UNNAMED","-cp","app.jar","org.byteveda.taskito.cli.Cli","executor"]'
+```
+
+  </Tab>
+</CodeTabs>
+
+The injected container reuses **the pod's own image reference**, so the image is
+already on the node and nothing new is pulled — the same reason the sidecar in
+the manifests above repeats `myapp:1.4.2`, now without you writing it twice. It
+also inherits the app container's `env` and `envFrom`, so a handler that reads
+the same configuration the app does keeps working; `taskito.dev/inherit-env:
+"false"` turns that off.
+
+Worth knowing before you rely on it:
+
+- **A pod that opts in and gets an annotation wrong is rejected**, with the
+  annotation named in the `kubectl` error. Admitting it would produce a
+  deployment that looks healthy and never runs a job.
+- **Injection is idempotent.** A pod that already carries a `taskito-executor`
+  container is admitted untouched — a second sidecar would silently double its
+  slots.
+- **`failurePolicy` defaults to `Ignore`**, so an injector that is down or wedged
+  cannot stop pod creation across the cluster. Move it to `Fail` once a workload
+  genuinely depends on being injected, and accept that trade.
+- **A `unix:` address needs `taskito.dev/socket-volume`** naming the volume that
+  carries the socket; the sidecar cannot reach a path it has not mounted, and the
+  webhook rejects the pod rather than letting it crash-loop on `ENOENT`.
+
 ### Security requirements
 
 The attach port dispatches code. These are requirements, not options:
@@ -836,9 +931,9 @@ The attach port dispatches code. These are requirements, not options:
 - **Never publish the attach port.** Keep it on the pod or compose network. The
   compose example maps `8080` and not `7777`; the Service exposes `attach` inside
   the cluster and nothing to a LoadBalancer.
-- **For a Unix socket, the filesystem is the boundary.** Which means the uid on
-  both containers is the access control — set `runAsUser` explicitly rather than
-  inheriting one image's default and hoping it matches.
+- **For a Unix socket, the filesystem is the boundary.** The scheduler chmods it
+  to `0660`, so the shared **group** is the access control — set `fsGroup`
+  explicitly rather than inheriting one image's default and hoping it matches.
 
 ### Staying with a worker
 

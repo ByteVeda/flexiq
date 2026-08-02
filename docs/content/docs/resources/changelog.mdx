@@ -38,6 +38,14 @@ underlying Rust crates are released together, in lock-step.
 
 ### Added
 
+- **A Helm chart for `taskito-server`, with annotation-driven sidecar injection.**
+  `deploy/helm/taskito-server` installs the scheduler, dashboard and injector as one release, and
+  refuses to render the combinations the server rejects at boot — an attach listener with no token,
+  an unauthenticated dashboard — naming the value to fix instead of leaving a `CrashLoopBackOff`.
+  With `webhook.enabled=true`, annotating a pod with `taskito.dev/inject` adds an executor sidecar
+  built from **the pod's own image**, so nothing new is pulled and the pattern works for any
+  language. The webhook serves a chart-generated certificate by default, or cert-manager's.
+
 - **`taskito-server` ships as a container image.** `docker/scheduler.Dockerfile` builds a
   distroless image around a static binary — no libc and no interpreter, with Postgres and Redis
   compiled in — published as a `linux/amd64` + `linux/arm64` manifest at
@@ -107,6 +115,11 @@ underlying Rust crates are released together, in lock-step.
   four names keep matching, and job-outcome bodies gain `duration_ms`.
 
 ### Fixed
+
+- **The attach socket admits a shared group.** `bind` left it at the umask-derived `0755`, which
+  denies the group *write* — and `connect(2)` needs write — so only the binding uid could attach.
+  It is now chmodded to `0660`, which is what makes a same-pod attach configurable: two containers
+  can be given a shared `fsGroup`, where matching uids is rarely practical.
 
 - **Node `worker.stop()` is awaitable.** It now returns a promise that resolves once
   worker-scoped resources have been disposed, instead of firing that teardown and returning.
