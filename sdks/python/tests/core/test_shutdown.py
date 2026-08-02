@@ -44,21 +44,35 @@ def test_graceful_shutdown_completes_inflight(queue: Queue, poll_until: PollUnti
     assert fetched.status == "complete"
 
 
-def test_shutdown_stops_worker(queue: Queue) -> None:
+def test_shutdown_stops_worker(queue: Queue, poll_until: PollUntil) -> None:
     """queue.shutdown() causes run_worker to return."""
+    started = threading.Event()
 
     @queue.task()
     def noop() -> None:
-        pass
+        started.set()
+
+    job = noop.delay()
 
     worker_thread = threading.Thread(target=queue.run_worker, daemon=True)
     worker_thread.start()
 
-    # Tiny grace window so the worker reaches its poll loop before shutdown.
-    time.sleep(0.1)
+    # A job the worker actually ran, rather than a fixed grace window: reaching
+    # the poll loop takes far longer than 100ms on a loaded runner, and a
+    # shutdown that lands before it does leaves this waiting on a worker that
+    # never saw the request.
+    poll_until(
+        lambda: (
+            started.is_set()
+            and (j := queue.get_job(job.id)) is not None
+            and j.status == "complete"
+        ),
+        timeout=30,
+        message="the worker never reached its poll loop",
+    )
     queue.shutdown()
 
-    worker_thread.join(timeout=10)
+    worker_thread.join(timeout=30)
     assert not worker_thread.is_alive()
 
 

@@ -43,7 +43,14 @@ export interface ExecutorStartParams {
   tasks: ReadonlyMap<string, RegisteredTask>;
   serializer: Serializer;
   codecs?: ReadonlyMap<string, PayloadCodec>;
-  middlewareFor: (taskName: string) => readonly Middleware[];
+  /**
+   * The middleware chain for a task, minus `disabled`.
+   *
+   * Takes the disable list rather than reading one: an executor has no
+   * settings store, so the scheduler resolves it and attaches it to each
+   * dispatch.
+   */
+  middlewareFor: (taskName: string, disabled: readonly string[]) => readonly Middleware[];
   emitter: Emitter;
   resources: ResourceRuntime;
   run?: ExecutorRunOptions;
@@ -87,19 +94,40 @@ export class Executor {
     // The executor does not exist yet, and the callback it needs must already
     // be able to reach it — a cancel frame lands in native state that a running
     // handler polls. Resolved through this holder, assigned once the attach
-    // succeeds; until then nothing is running, so nothing can be cancelled.
+    // succeeds.
+    //
+    // The native attach starts its job loop before this promise resolves, so
+    // the scheduler can dispatch into that window. An invocation waits for the
+    // holder to be filled rather than reading it empty, which would run a
+    // middleware the dispatch said was disabled and drop the job's progress.
     let attached: NativeExecutor | undefined;
+    let markAttached: () => void = () => {};
+    const attachedReady = new Promise<void>((resolve) => {
+      markAttached = resolve;
+    });
 
-    const taskCallback = createTaskCallback({
+    const invoke = createTaskCallback({
       tasks,
       serializer,
       codecs,
-      middlewareFor,
+      // Every one of these reaches for the executor rather than for storage,
+      // which this process deliberately has none of: the scheduler holds the
+      // connection and does the work on its behalf.
+      middlewareFor: (taskName, jobId) =>
+        middlewareFor(taskName, attached?.disabledMiddleware(jobId) ?? []),
       emitter,
       resources,
       queue,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
+      setProgress: (jobId, progress) => attached?.reportProgress(jobId, progress),
+      writeTaskLog: (jobId, taskName, level, message, extra) =>
+        attached?.writeTaskLog(jobId, taskName, level, message, extra),
     });
+
+    const taskCallback: typeof invoke = async (invocation) => {
+      await attachedReady;
+      return invoke(invocation);
+    };
 
     const native = await startNativeExecutor(taskCallback, {
       address,
@@ -115,6 +143,7 @@ export class Executor {
     });
 
     attached = native;
+    markAttached();
     try {
       // Only lease the resource runtime once the attach actually succeeded, so a
       // refused handshake leaks nothing.

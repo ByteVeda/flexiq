@@ -54,6 +54,10 @@ class FakeScheduler {
   hello?: Record<string, unknown>;
   /** Set when the handshake should be refused rather than acked. */
   refuse = false;
+  /** Optional behaviours this scheduler advertises in its `hello_ack`. */
+  capabilities: readonly string[] = [];
+  /** Run immediately after the ack, to dispatch into the attach window. */
+  afterAck?: () => void;
 
   private constructor(server: Server, port: number, connected: Promise<void>) {
     this.server = server;
@@ -117,7 +121,12 @@ class FakeScheduler {
             schedulerId: undefined,
             scheduler_id: "fake-scheduler",
             protocol_version: PROTOCOL_VERSION,
+            // Whatever this scheduler promises to do on the executor's behalf.
+            // Empty by default: that is a scheduler built before the
+            // side-channel existed, and the case worth defaulting to.
+            capabilities: this.capabilities,
           });
+          this.afterAck?.();
         } else {
           this.socket?.destroy();
         }
@@ -142,7 +151,12 @@ class FakeScheduler {
     id: string,
     taskName: string,
     payload: Buffer,
-    options?: { retryCount?: number; maxRetries?: number; timeoutMs?: number },
+    options?: {
+      retryCount?: number;
+      maxRetries?: number;
+      timeoutMs?: number;
+      disabledMiddleware?: readonly string[];
+    },
   ): void {
     this.send(
       {
@@ -155,9 +169,31 @@ class FakeScheduler {
         queue: "default",
         timeout_ms: options?.timeoutMs ?? 30_000,
         namespace: null,
+        // Resolved by the scheduler, because an executor has no settings store
+        // of its own to read the toggle list from.
+        disabled_middleware: options?.disabledMiddleware ?? [],
+        metadata: null,
       },
       payload,
     );
+  }
+
+  /**
+   * Every side-channel frame a job produced, plus its result.
+   *
+   * The result is ordered behind them on one connection, so its arrival is
+   * what proves the collection is complete rather than merely early.
+   */
+  async collectUntilResult(): Promise<{ result: Frame; sideChannel: Frame[] }> {
+    const sideChannel: Frame[] = [];
+    for (;;) {
+      const frame = await this.nextResult();
+      if (frame.header.type === "progress" || frame.header.type === "task_log") {
+        sideChannel.push(frame);
+        continue;
+      }
+      return { result: frame, sideChannel };
+    }
   }
 
   /** Wait for the executor's `hello` to arrive. */
@@ -224,6 +260,11 @@ function declaredPayloadLength(header: Record<string, unknown>): number {
   if (header.type === "success") {
     return typeof header.result_len === "number" ? header.result_len : 0;
   }
+  if (header.type === "task_log") {
+    // A published partial can be arbitrarily large, so `extra` rides as the
+    // frame's blob rather than inside the header.
+    return typeof header.extra_len === "number" ? header.extra_len : 0;
+  }
   return 0;
 }
 
@@ -233,6 +274,15 @@ function sleep(ms: number): Promise<void> {
 
 function newQueue(): Queue {
   return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-exec-")), "q.db") });
+}
+
+/** Uses the job-scoped conveniences that need storage in a worker. */
+async function reportingHandler(): Promise<string> {
+  const job = currentJob();
+  job?.setProgress(50);
+  job?.publish({ stage: "halfway" });
+  job?.setProgress(100);
+  return "reported";
 }
 
 /** Encode a call the way the enqueue path does. */
@@ -539,27 +589,112 @@ it("opens no storage", async () => {
 });
 
 it("degrades progress and publish rather than failing the job", async () => {
-  // Losing the progress bar is a degradation; failing the job over it would be
-  // a regression for anyone moving a worker to an executor.
+  // This scheduler advertises no side-channel — an older `taskito-server` —
+  // so the executor sends nothing it could not parse. Losing the progress bar
+  // is a degradation; failing the job over it would be a regression for anyone
+  // moving a worker to an executor.
   scheduler = await FakeScheduler.listen();
   process.env[DETACHED_ENV] = "1";
   try {
     const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
-    queue.task("reports", async () => {
-      const job = currentJob();
-      job?.setProgress(50);
-      job?.publish({ stage: "halfway" });
-      job?.setProgress(100);
-      return "reported";
-    });
+    queue.task("reports", reportingHandler);
 
     executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
     await scheduler.attached();
     scheduler.sendJob("job-1", "reports", payloadFor(queue, []));
 
-    const frame = await scheduler.nextResult();
-    expect(frame.header.type).toBe("success");
-    expect(frame.header.job_id).toBe("job-1");
+    const { result, sideChannel } = await scheduler.collectUntilResult();
+    expect(result.header.type).toBe("success");
+    expect(result.header.job_id).toBe("job-1");
+    expect(sideChannel).toEqual([]);
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("sends progress and logs to a scheduler that advertised the side-channel", async () => {
+  // The whole point of #589: a task on an executor is not silently poorer than
+  // the same task on an in-process worker.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["side_channel"];
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("reports", reportingHandler);
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "reports", payloadFor(queue, []));
+
+    const { result, sideChannel } = await scheduler.collectUntilResult();
+    expect(result.header.type).toBe("success");
+
+    const progress = sideChannel
+      .filter((frame) => frame.header.type === "progress")
+      .map((frame) => frame.header.progress);
+    expect(progress.at(-1)).toBe(100);
+
+    const partial = sideChannel.find((frame) => frame.header.level === "result");
+    expect(partial).toBeDefined();
+    expect(partial?.header.job_id).toBe("job-1");
+    expect(partial?.header.task_name).toBe("reports");
+    expect(JSON.parse(partial?.payload.toString() ?? "")).toEqual({ stage: "halfway" });
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("skips a middleware the dispatch says is disabled", async () => {
+  // A dashboard toggle has to reach a process that cannot read settings, so it
+  // rides the job frame instead.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const ran: string[] = [];
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.use({ name: "recorder", before: () => void ran.push("recorder") });
+    queue.task("echo", (value: string) => `echo:${value}`);
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+
+    scheduler.sendJob("job-1", "echo", payloadFor(queue, ["a"]));
+    expect((await scheduler.nextResult()).header.type).toBe("success");
+    expect(ran).toEqual(["recorder"]);
+
+    scheduler.sendJob("job-2", "echo", payloadFor(queue, ["b"]), {
+      disabledMiddleware: ["recorder"],
+    });
+    expect((await scheduler.nextResult()).header.type).toBe("success");
+    expect(ran).toEqual(["recorder"]);
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("honours the toggles on a job dispatched in the same tick as the ack", async () => {
+  // The earliest a scheduler can dispatch: the job frame follows the ack with
+  // nothing in between. The native attach starts its job loop before
+  // `runExecutor` resolves, so an invocation here can outrun the holder the
+  // callback reads the executor from — and reading it empty would run a
+  // middleware the dispatch said was disabled.
+  scheduler = await FakeScheduler.listen();
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const ran: string[] = [];
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.use({ name: "recorder", before: () => void ran.push("recorder") });
+    queue.task("echo", (value: string) => `echo:${value}`);
+
+    const payload = payloadFor(queue, ["a"]);
+    scheduler.afterAck = () => {
+      scheduler?.sendJob("job-1", "echo", payload, { disabledMiddleware: ["recorder"] });
+    };
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+
+    expect((await scheduler.nextResult()).header.type).toBe("success");
+    expect(ran).toEqual([]);
   } finally {
     delete process.env[DETACHED_ENV];
   }

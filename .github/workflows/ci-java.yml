@@ -55,6 +55,9 @@ jobs:
         with:
           java-version: ${{ matrix.java }}
 
+      - name: Provision Gradle
+        uses: ./.github/actions/provision-gradle
+
       # Stage the prebuilt .so where copyNative expects it, so no Rust is needed.
       - name: Download the cdylib
         uses: actions/download-artifact@v8
@@ -100,6 +103,9 @@ jobs:
       - name: Set up Java + Gradle
         uses: ./.github/actions/setup-java
 
+      - name: Provision Gradle
+        uses: ./.github/actions/provision-gradle
+
       # bash so `./gradlew` runs uniformly on the Windows runner too.
       - name: Build and test the Java SDK
         working-directory: sdks/java
@@ -127,6 +133,9 @@ jobs:
           java-version: "21"
           distribution: graalvm
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Provision Gradle
+        uses: ./.github/actions/provision-gradle
 
       - name: Build and run the native image from shipped metadata
         working-directory: sdks/java

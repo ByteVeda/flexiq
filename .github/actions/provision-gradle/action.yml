@@ -1,0 +1,24 @@
+name: Provision Gradle
+description: >-
+  Downloads the Gradle distribution the wrapper pins, retrying transient network
+  failures. The wrapper fetches it on first use and gives up on the first error,
+  so a reset connection to services.gradle.org fails the build before any code
+  has run. Doing it in its own step keeps that retry off the real invocation,
+  which would otherwise re-run the build to recover a download.
+
+runs:
+  using: composite
+  steps:
+    - name: Download the pinned Gradle distribution
+      working-directory: sdks/java
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          if ./gradlew --version --no-daemon; then
+            exit 0
+          fi
+          echo "::warning::Gradle provisioning attempt ${attempt} failed; retrying"
+          sleep $((attempt * 10))
+        done
+        echo "::error::could not download the Gradle distribution after 3 attempts"
+        exit 1
