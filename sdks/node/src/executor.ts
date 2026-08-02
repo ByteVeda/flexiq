@@ -1,4 +1,4 @@
-import { clearSink, installSink } from "./detached";
+import { clearSink, type ExecutorSink, installSink } from "./detached";
 import type { Emitter } from "./events";
 import type { Middleware } from "./middleware";
 import {
@@ -70,6 +70,9 @@ export class Executor {
 
   private constructor(
     private readonly native: NativeExecutor,
+    /** The detached stand-in this attach answers for, and whose sink it holds. */
+    private readonly queue: NativeQueue,
+    private readonly sink: ExecutorSink,
     private readonly resources: ResourceRuntime,
     private readonly emitter: Emitter,
     private readonly onStopped?: () => void,
@@ -150,13 +153,15 @@ export class Executor {
     });
 
     attached = native;
-    // Before `markAttached`, so the first invocation through the gate already
-    // has somewhere to report to.
-    installSink({
+    const sink: ExecutorSink = {
       updateProgress: (jobId, progress) => native.reportProgress(jobId, progress),
       writeTaskLog: (jobId, taskName, level, message, extra) =>
         native.writeTaskLog(jobId, taskName, level, message, extra),
-    });
+    };
+    // Before `markAttached`, so the first invocation through the gate already
+    // has somewhere to report to. Scoped to `queue`, so a second executor in
+    // this process routes its own writes and neither steals the other's.
+    installSink(queue, sink);
     if (!native.supportsSideChannel()) {
       log.warn(
         () =>
@@ -180,7 +185,7 @@ export class Executor {
       throw error;
     }
 
-    return new Executor(native, resources, emitter, onStopped);
+    return new Executor(native, queue, sink, resources, emitter, onStopped);
   }
 
   /** Identity the scheduler announced when it accepted this attach. */
@@ -228,7 +233,8 @@ export class Executor {
     } finally {
       // The sink frames to a session that is over; leaving it installed would
       // turn a late report into a silent no-op instead of the warning it is.
-      clearSink();
+      // Only this attach's own — another executor may have taken the slot since.
+      clearSink(this.queue, this.sink);
       try {
         await this.resources.teardownWorker();
       } catch (error) {

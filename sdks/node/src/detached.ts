@@ -34,17 +34,39 @@ export interface ExecutorSink {
   ): void;
 }
 
-/** Installed by {@link Executor} once it has attached. */
-let sink: ExecutorSink | undefined;
-
-/** Route this process's progress and task logs through `next`. @internal */
-export function installSink(next: ExecutorSink): void {
-  sink = next;
+/** The sink a single detached stand-in routes through, once one has attached. */
+interface SinkHolder {
+  current?: ExecutorSink;
 }
 
-/** Stop routing writes, so they degrade to a warning again. @internal */
-export function clearSink(): void {
-  sink = undefined;
+/**
+ * Each detached stand-in's sink, keyed by the stand-in itself.
+ *
+ * Per queue rather than per process: two executors can attach from one process,
+ * and a single module-level slot gave the last attach the first executor's
+ * writes, then silenced whichever was still running when either one stopped.
+ */
+const sinks = new WeakMap<object, SinkHolder>();
+
+/** Route this detached queue's progress and task logs through `next`. @internal */
+export function installSink(queue: NativeQueue, next: ExecutorSink): void {
+  const holder = sinks.get(queue);
+  if (holder) {
+    holder.current = next;
+  }
+}
+
+/**
+ * Stop routing `installed`'s writes, so they degrade to a warning again.
+ *
+ * A no-op once something else holds the slot: an executor shutting down must
+ * not disconnect the one that replaced it. @internal
+ */
+export function clearSink(queue: NativeQueue, installed: ExecutorSink): void {
+  const holder = sinks.get(queue);
+  if (holder?.current === installed) {
+    holder.current = undefined;
+  }
 }
 
 /** An executor was asked for something only a database could answer. */
@@ -87,9 +109,10 @@ const RUNTIME_PROBES = new Set([
  * no side-channel — they degrade to one warning rather than throwing, because a
  * task that only wanted to report progress must not fail for running detached.
  */
-function degraded(warnOnce: (what: string) => void): Record<string, unknown> {
+function degraded(warnOnce: (what: string) => void, holder: SinkHolder): Record<string, unknown> {
   return {
     updateProgress(jobId: string, progress: number): void {
+      const sink = holder.current;
       if (!sink) {
         warnOnce("setProgress");
         return;
@@ -103,6 +126,7 @@ function degraded(warnOnce: (what: string) => void): Record<string, unknown> {
       message: string,
       extra?: string,
     ): void {
+      const sink = holder.current;
       if (!sink) {
         warnOnce("log/publish");
         return;
@@ -156,7 +180,8 @@ export function createDetachedNative(): NativeQueue {
     }
   };
 
-  const supported = degraded(warnOnce);
+  const holder: SinkHolder = {};
+  const supported = degraded(warnOnce, holder);
   const proxy = new Proxy(supported, {
     get(target, property): unknown {
       if (typeof property !== "string") {
@@ -184,5 +209,9 @@ export function createDetachedNative(): NativeQueue {
   // The stand-in answers the calls a running task makes and throws on the rest,
   // so a union type would force every storage call site to handle a case only
   // an executor ever sees.
-  return proxy as unknown as NativeQueue;
+  const native = proxy as unknown as NativeQueue;
+  // Keyed by the stand-in the executor is handed, which is this one: that is how
+  // an attach finds the queue whose writes it is answering for.
+  sinks.set(native, holder);
+  return native;
 }
