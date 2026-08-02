@@ -312,6 +312,16 @@ macro_rules! impl_workflow_diesel_ops {
                 &self,
                 run: &$crate::WorkflowRun,
             ) -> ::taskito_core::error::Result<()> {
+                // A sub-workflow may only hang off a parent this store can
+                // see. Without the check a scoped caller indexes a child under
+                // another tenant's run.
+                if let Some(parent) = run.parent_run_id.as_deref() {
+                    if self.run_out_of_scope(parent)? {
+                        return Err(::taskito_core::error::QueueError::Other(format!(
+                            "parent workflow run not found: {parent}"
+                        )));
+                    }
+                }
                 let mut conn = self.inner.conn()?;
                 // The namespace is the store's, not the caller's: a run must
                 // land in the tenant whose queue created it, and nothing
@@ -618,10 +628,14 @@ macro_rules! impl_workflow_diesel_ops {
                 &self,
                 nodes: &[$crate::WorkflowNode],
             ) -> ::taskito_core::error::Result<()> {
-                // Every node in a batch belongs to one run, so one guard covers
-                // the batch — and an empty batch has no run to check.
-                if let Some(first) = nodes.first() {
-                    if self.run_out_of_scope(&first.run_id)? {
+                // Checked per distinct run, not just the first node: a mixed
+                // batch would otherwise smuggle a foreign node in behind an
+                // in-scope one, in the same transaction.
+                let mut checked = ::std::collections::HashSet::new();
+                for node in nodes {
+                    if checked.insert(node.run_id.as_str())
+                        && self.run_out_of_scope(&node.run_id)?
+                    {
                         return Ok(());
                     }
                 }

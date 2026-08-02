@@ -427,6 +427,7 @@ impl JsQueue {
             )));
         }
         let wf = self.workflow_store()?;
+        require_visible_run(&wf, &run_id)?;
         let now = now_millis();
         let count = child_names.len() as i32;
 
@@ -495,6 +496,7 @@ impl JsQueue {
         priority: i32,
     ) -> Result<String> {
         let wf = self.workflow_store()?;
+        require_visible_run(&wf, &run_id)?;
         let new_job = NewJob {
             queue,
             task_name,
@@ -711,6 +713,7 @@ impl JsQueue {
         priority: i32,
     ) -> Result<String> {
         let wf = self.workflow_store()?;
+        require_visible_run(&wf, &run_id)?;
         let now = now_millis();
         let new_job = NewJob {
             queue,
@@ -814,6 +817,19 @@ impl JsQueue {
         // If another thread raced us, either handle wraps the same pool.
         let _ = self.workflow_storage.set(wf.clone());
         Ok(wf)
+    }
+}
+
+/// Refuse a `run_id` this queue's namespace cannot see.
+///
+/// The fan-out, deferred and compensation paths enqueue the job *before*
+/// binding it to its node. A scoped bind against a foreign run has no effect,
+/// which would leave the job running untracked — so refuse before anything is
+/// enqueued rather than after.
+fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<()> {
+    match wf.get_workflow_run(run_id).map_err(to_napi_err)? {
+        Some(_) => Ok(()),
+        None => Err(reason(format!("workflow run not found: {run_id}"))),
     }
 }
 

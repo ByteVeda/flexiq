@@ -397,6 +397,28 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn create_workflow_run(&self, run: &WorkflowRun) -> Result<()> {
+        // A sub-workflow may only hang off a parent this store can see, and an
+        // id already taken by a foreign run must not be overwritten — Redis
+        // HSET has no primary key to refuse it the way the Diesel INSERT does.
+        if let Some(parent) = run.parent_run_id.as_deref() {
+            if self.run_out_of_scope(parent)? {
+                return Err(QueueError::Other(format!(
+                    "parent workflow run not found: {parent}"
+                )));
+            }
+        }
+        if self.namespace.is_some() && self.run_out_of_scope(&run.id)? {
+            let mut probe = self.conn()?;
+            let exists: bool = probe
+                .exists(k_run(&self.prefix, &run.id))
+                .map_err(into_other)?;
+            if exists {
+                return Err(QueueError::Other(format!(
+                    "workflow run id already taken: {}",
+                    run.id
+                )));
+            }
+        }
         let mut conn = self.conn()?;
         let key = k_run(&self.prefix, &run.id);
         let all = k_runs_all(&self.prefix);
@@ -672,12 +694,14 @@ impl WorkflowStorage for WorkflowRedisStorage {
     }
 
     fn create_workflow_nodes_batch(&self, nodes: &[WorkflowNode]) -> Result<()> {
-        let Some(first) = nodes.first() else {
-            return Ok(());
-        };
-        // Every node in a batch belongs to one run, so one guard covers it.
-        if self.run_out_of_scope(&first.run_id)? {
-            return Ok(());
+        // Checked per distinct run, not just the first node: a mixed batch
+        // would otherwise smuggle a foreign node in behind an in-scope one, in
+        // the same atomic pipeline.
+        let mut checked = std::collections::HashSet::new();
+        for node in nodes {
+            if checked.insert(node.run_id.as_str()) && self.run_out_of_scope(&node.run_id)? {
+                return Ok(());
+            }
         }
         let mut conn = self.conn()?;
         let mut pipe = redis::pipe();

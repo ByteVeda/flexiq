@@ -258,3 +258,37 @@ fn a_run_written_before_namespaces_is_invisible_to_a_scoped_store() {
     assert!(unscoped.get_workflow_run(&run_id).unwrap().is_some());
     assert!(a.get_workflow_run(&run_id).unwrap().is_none());
 }
+
+#[test]
+fn a_sub_workflow_may_not_hang_off_a_foreign_parent() {
+    // The child would otherwise be indexed under another tenant's run.
+    let (a, b, _) = stores();
+    let parent_id = seed_run(&a, "wf_foreign_parent");
+
+    let definition = make_definition("wf_foreign_child");
+    b.create_workflow_definition(&definition).unwrap();
+    let mut child = make_run(&definition.id);
+    child.parent_run_id = Some(parent_id.clone());
+    child.parent_node_name = Some("a".to_string());
+
+    assert!(
+        b.create_workflow_run(&child).is_err(),
+        "a parent outside the store's namespace must be refused"
+    );
+    assert!(b.get_workflow_run(&child.id).unwrap().is_none());
+}
+
+#[test]
+fn a_mixed_run_node_batch_is_refused_whole() {
+    // Guarding only the first node would let a foreign one ride along in the
+    // same transaction.
+    let (a, b, unscoped) = stores();
+    let mine = seed_run(&b, "wf_batch_mine");
+    let foreign = seed_run(&a, "wf_batch_foreign");
+
+    b.create_workflow_nodes_batch(&[make_node(&mine, "ok"), make_node(&foreign, "smuggled")])
+        .expect("no error, no effect");
+
+    assert!(unscoped.get_workflow_nodes(&foreign).unwrap().is_empty());
+    assert!(unscoped.get_workflow_nodes(&mine).unwrap().is_empty());
+}

@@ -741,6 +741,20 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_expand
     })
 }
 
+/// Refuse a `run_id` this queue's namespace cannot see.
+///
+/// The fan-out and deferred paths enqueue the job *before* binding it to its
+/// node. A scoped bind against a foreign run has no effect, which would leave
+/// the job running untracked — so refuse before anything is enqueued.
+fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<(), BindingError> {
+    match wf.get_workflow_run(run_id)? {
+        Some(_) => Ok(()),
+        None => Err(BindingError::new(format!(
+            "workflow run not found: {run_id}"
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn expand_fan_out(
     queue: &QueueHandle,
@@ -766,6 +780,7 @@ fn expand_fan_out(
         )));
     }
     let wf = queue.workflow_store()?;
+    require_visible_run(&wf, run_id)?;
     let now = now_millis();
     let count = child_names.len() as i32;
     if count == 0 {
@@ -893,6 +908,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeWorkflows_create
         let task = read_string(env, &task_name)?;
         let queue_name = read_string(env, &queue)?;
         let wf = q.workflow_store()?;
+        require_visible_run(&wf, &run_id)?;
         let job = q.storage.enqueue(NewJob {
             queue: queue_name,
             task_name: task,

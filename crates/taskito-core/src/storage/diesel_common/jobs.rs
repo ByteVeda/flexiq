@@ -287,17 +287,26 @@ macro_rules! impl_diesel_job_ops {
                     .collect();
 
                 self.write_transaction(|conn| {
-                    // Ids of the jobs being created here, so an edge onto
-                    // another member of the same batch resolves instead of
-                    // reading as a missing dependency. Matches the Redis batch
-                    // path. Built inside the closure so it does not outlive the
-                    // borrow of `jobs` the closure ends by moving.
-                    let batch_ids: std::collections::HashSet<&str> =
-                        jobs.iter().map(|job| job.id.as_str()).collect();
+                    // Namespace of every job being created here, so an edge onto
+                    // another member of the same batch resolves against a row
+                    // that is not written yet. It carries the namespace rather
+                    // than just the id: skipping the row lookup must not also
+                    // skip the boundary check. Matches the Redis batch path.
+                    // Built inside the closure so it does not outlive the borrow
+                    // of `jobs` the closure ends by moving.
+                    let batch_ns: std::collections::HashMap<&str, Option<&str>> = jobs
+                        .iter()
+                        .map(|job| (job.id.as_str(), job.namespace.as_deref()))
+                        .collect();
 
                     for (job, depends_on) in jobs.iter().zip(&dep_lists) {
                         for dep_id in depends_on {
-                            if batch_ids.contains(dep_id.as_str()) {
+                            if let Some(&dep_ns) = batch_ns.get(dep_id.as_str()) {
+                                if dep_ns != job.namespace.as_deref() {
+                                    return Err(QueueError::Storage(
+                                        diesel::result::Error::RollbackTransaction,
+                                    ));
+                                }
                                 continue;
                             }
                             Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;

@@ -726,11 +726,12 @@ fn an_execution_claim_is_not_released_across_the_namespace_boundary() {
 
     storage.complete_execution(&a_id, Some(TENANT_B)).unwrap();
     assert!(
-        !storage
+        storage
             .reap_orphaned_jobs(&["other-worker".to_string()], now_millis(), None)
             .unwrap()
-            .is_empty(),
-        "the claim must still be there to be reaped"
+            .iter()
+            .any(|(job, _)| job.id == a_id),
+        "a_id's own claim must still be there to be reaped"
     );
 
     storage.complete_execution(&a_id, Some(TENANT_A)).unwrap();

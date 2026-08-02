@@ -19,18 +19,23 @@ impl RedisStorage {
     /// missing dependency so a scoped caller learns nothing about ids outside
     /// its own namespace.
     ///
-    /// `skip` short-circuits intra-batch dependencies for `enqueue_batch`,
-    /// where some dep ids point at jobs being created in the same call.
+    /// `batch` short-circuits intra-batch dependencies for `enqueue_batch`,
+    /// where some dep ids point at jobs being created in the same call. It maps
+    /// each id to its namespace rather than being a bare id set: skipping the
+    /// not-yet-written row must not also skip the boundary check.
     fn validate_dep_ids(
         &self,
         conn: &mut redis::Connection,
         dep_ids: &[String],
         namespace: Option<&str>,
-        skip: Option<&std::collections::HashSet<&str>>,
+        batch: Option<&std::collections::HashMap<&str, Option<&str>>>,
     ) -> Result<()> {
         const DEP_MISSING: &str = "dependency not found or already dead/cancelled";
         for dep_id in dep_ids {
-            if skip.is_some_and(|s| s.contains(dep_id.as_str())) {
+            if let Some(&dep_ns) = batch.and_then(|b| b.get(dep_id.as_str())) {
+                if dep_ns != namespace {
+                    return Err(QueueError::DependencyNotFound(DEP_MISSING.to_string()));
+                }
                 continue;
             }
             // A live dep is read from `job:<id>`; a terminal dep has been
@@ -110,16 +115,18 @@ impl RedisStorage {
         let jobs: Vec<Job> = new_jobs.into_iter().map(|nj| nj.into_job()).collect();
         let mut conn = self.conn()?;
 
-        // Collect batch job IDs for intra-batch dependency resolution
-        let batch_ids: std::collections::HashSet<&str> =
-            jobs.iter().map(|j| j.id.as_str()).collect();
+        // Namespace per batch job, for intra-batch dependency resolution.
+        let batch_ns: std::collections::HashMap<&str, Option<&str>> = jobs
+            .iter()
+            .map(|j| (j.id.as_str(), j.namespace.as_deref()))
+            .collect();
 
         for (job, depends_on) in jobs.iter().zip(&dep_lists) {
             self.validate_dep_ids(
                 &mut conn,
                 depends_on,
                 job.namespace.as_deref(),
-                Some(&batch_ids),
+                Some(&batch_ns),
             )?;
         }
 
