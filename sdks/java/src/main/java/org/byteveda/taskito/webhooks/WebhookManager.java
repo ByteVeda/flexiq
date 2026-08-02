@@ -117,9 +117,7 @@ public final class WebhookManager implements Middleware {
                 spec.description,
                 now,
                 now);
-        List<Webhook> all = store.load();
-        all.add(hook);
-        store.save(all);
+        store.update(all -> all.add(hook));
         cached = null;
         return hook;
     }
@@ -138,19 +136,21 @@ public final class WebhookManager implements Middleware {
      * (possibly new) URL. Empty if no such webhook exists.
      */
     public synchronized Optional<Webhook> update(String id, WebhookUpdate updates) {
-        List<Webhook> all = store.load();
-        for (int i = 0; i < all.size(); i++) {
-            Webhook current = all.get(i);
-            if (!current.id.equals(id)) {
-                continue;
+        Optional<Webhook> merged = store.update(all -> {
+            for (int i = 0; i < all.size(); i++) {
+                Webhook current = all.get(i);
+                if (current.id.equals(id)) {
+                    Webhook patched = applyUpdate(current, updates);
+                    all.set(i, patched);
+                    return Optional.of(patched);
+                }
             }
-            Webhook merged = applyUpdate(current, updates);
-            all.set(i, merged);
-            store.save(all);
+            return Optional.<Webhook>empty();
+        });
+        if (merged.isPresent()) {
             cached = null;
-            return Optional.of(merged);
         }
-        return Optional.empty();
+        return merged;
     }
 
     /**
@@ -162,10 +162,8 @@ public final class WebhookManager implements Middleware {
     }
 
     public synchronized boolean delete(String id) {
-        List<Webhook> all = store.load();
-        boolean removed = all.removeIf(hook -> hook.id.equals(id));
+        boolean removed = store.update(all -> all.removeIf(hook -> hook.id.equals(id)));
         if (removed) {
-            store.save(all);
             deliveryStore.deleteFor(id);
             cached = null;
         }

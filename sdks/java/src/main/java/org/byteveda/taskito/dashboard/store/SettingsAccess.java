@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.internal.NativeQueue;
+import org.byteveda.taskito.spi.ConditionalSettings;
 
 /**
  * Narrow view of the {@code dashboard_settings} KV store — the single
@@ -13,9 +14,7 @@ import org.byteveda.taskito.internal.NativeQueue;
  * needed. Decoupling the stores from {@link Taskito} keeps them unit-testable
  * against an in-memory map.
  */
-public interface SettingsAccess {
-
-    Optional<String> getSetting(String key);
+public interface SettingsAccess extends ConditionalSettings {
 
     void setSetting(String key, String value);
 
@@ -45,6 +44,11 @@ public interface SettingsAccess {
             @Override
             public void setSetting(String key, String value) {
                 queue.setSetting(key, value);
+            }
+
+            @Override
+            public boolean setSettingIf(String key, Optional<String> expected, String value) {
+                return queue.setSettingIf(key, expected, value);
             }
 
             @Override

@@ -38,6 +38,7 @@ import org.byteveda.taskito.interception.InterceptionAnalysis;
 import org.byteveda.taskito.interception.Interceptor;
 import org.byteveda.taskito.internal.IdempotencyKeys;
 import org.byteveda.taskito.internal.MiddlewareDisables;
+import org.byteveda.taskito.internal.SettingsDocument;
 import org.byteveda.taskito.locks.Lock;
 import org.byteveda.taskito.locks.LockInfo;
 import org.byteveda.taskito.middleware.EnqueueContext;
@@ -828,6 +829,11 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     }
 
     @Override
+    public boolean setSettingIf(String key, Optional<String> expected, String value) {
+        return backend.setSettingIf(key, expected, value);
+    }
+
+    @Override
     public boolean deleteSetting(String key) {
         return backend.deleteSetting(key);
     }
@@ -1508,19 +1514,35 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
 
     @Override
     public void disableMiddleware(String taskName, String middlewareName) {
-        List<String> disabled = new ArrayList<>(listDisabledMiddleware(taskName));
-        if (!disabled.contains(middlewareName)) {
-            disabled.add(middlewareName);
-            backend.setSetting(MiddlewareDisables.key(taskName), encode(disabled));
-        }
+        toggleMiddleware(taskName, middlewareName, true);
     }
 
     @Override
     public void enableMiddleware(String taskName, String middlewareName) {
-        List<String> disabled = new ArrayList<>(listDisabledMiddleware(taskName));
-        if (disabled.remove(middlewareName)) {
-            backend.setSetting(MiddlewareDisables.key(taskName), encode(disabled));
-        }
+        toggleMiddleware(taskName, middlewareName, false);
+    }
+
+    /**
+     * Flip one middleware for a task. Written conditionally: the whole list
+     * lives under one key, so a read-then-write would drop another writer's
+     * toggle. An emptied list leaves a {@code []} row, which every reader
+     * already treats as "nothing disabled".
+     */
+    private void toggleMiddleware(String taskName, String middlewareName, boolean disabled) {
+        SettingsDocument.update(
+                backend,
+                MiddlewareDisables.key(taskName),
+                SettingsDocument.codec(MiddlewareDisables::decode, DefaultTaskito::encode),
+                names -> {
+                    if (disabled) {
+                        if (!names.contains(middlewareName)) {
+                            names.add(middlewareName);
+                        }
+                    } else {
+                        names.remove(middlewareName);
+                    }
+                    return names;
+                });
     }
 
     @Override

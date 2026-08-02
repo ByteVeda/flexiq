@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.errors.WebhookException;
+import org.byteveda.taskito.internal.SettingsDocument;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -22,6 +23,8 @@ final class DeliveryStore {
     static final String KEY_PREFIX = "webhooks:deliveries:";
     private static final int MAX_PER_WEBHOOK = 200;
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final SettingsDocument.Codec<List<Delivery>> CODEC =
+            SettingsDocument.codec(DeliveryStore::decode, DeliveryStore::encode);
 
     private final Taskito queue;
 
@@ -29,14 +32,20 @@ final class DeliveryStore {
         this.queue = queue;
     }
 
-    /** Append {@code delivery} to its subscription's log, trimming to the cap. */
+    /**
+     * Append {@code delivery} to its subscription's log, trimming to the cap.
+     *
+     * <p>Written conditionally: two deliveries settling at once would otherwise
+     * each append to the list they read and the later write would drop the other.
+     */
     void record(Delivery delivery) {
-        List<Delivery> rows = load(delivery.subscriptionId());
-        rows.add(delivery);
-        if (rows.size() > MAX_PER_WEBHOOK) {
-            rows = new ArrayList<>(rows.subList(rows.size() - MAX_PER_WEBHOOK, rows.size()));
-        }
-        save(delivery.subscriptionId(), rows);
+        SettingsDocument.update(queue, KEY_PREFIX + delivery.subscriptionId(), CODEC, rows -> {
+            rows.add(delivery);
+            if (rows.size() > MAX_PER_WEBHOOK) {
+                rows.subList(0, rows.size() - MAX_PER_WEBHOOK).clear();
+            }
+            return rows;
+        });
     }
 
     /** Newest-first, optionally filtered by status/event, then paged. */
@@ -71,14 +80,16 @@ final class DeliveryStore {
     }
 
     private List<Delivery> load(String subscriptionId) {
-        return queue.getSetting(KEY_PREFIX + subscriptionId)
-                .map(DeliveryStore::parse)
-                .orElseGet(ArrayList::new);
+        return decode(queue.getSetting(KEY_PREFIX + subscriptionId));
     }
 
-    private void save(String subscriptionId, List<Delivery> rows) {
+    private static List<Delivery> decode(Optional<String> raw) {
+        return raw.map(DeliveryStore::parse).orElseGet(ArrayList::new);
+    }
+
+    private static String encode(List<Delivery> rows) {
         try {
-            queue.setSetting(KEY_PREFIX + subscriptionId, JSON.writeValueAsString(rows));
+            return JSON.writeValueAsString(rows);
         } catch (Exception e) {
             throw new WebhookException("failed to persist webhook deliveries", e);
         }

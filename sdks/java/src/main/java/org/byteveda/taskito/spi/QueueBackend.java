@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
  * return a JSON collection never return {@code null}; nullable scalars are
  * returned as {@link Optional}.
  */
-public interface QueueBackend extends AutoCloseable {
+public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     // ── Producer ────────────────────────────────────────────────────
 
     /** Enqueue one job; {@code optionsJson} is a single {@code EnqueueOptions} object. */
@@ -131,8 +131,6 @@ public interface QueueBackend extends AutoCloseable {
     void resumeQueue(String queue);
 
     String listPausedQueuesJson();
-
-    Optional<String> getSetting(String key);
 
     void setSetting(String key, String value);
 

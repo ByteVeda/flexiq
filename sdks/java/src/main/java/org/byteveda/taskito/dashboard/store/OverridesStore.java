@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import org.byteveda.taskito.dashboard.support.DashboardError;
 import org.byteveda.taskito.dashboard.support.Json;
+import org.byteveda.taskito.internal.SettingsDocument;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -21,6 +22,9 @@ public final class OverridesStore {
     private static final List<String> TASK_FIELDS =
             List.of("rate_limit", "max_concurrent", "max_retries", "retry_backoff", "timeout", "priority", "paused");
     private static final List<String> QUEUE_FIELDS = List.of("rate_limit", "max_concurrent", "paused");
+
+    private static final SettingsDocument.Codec<Map<String, Object>> ROW_CODEC =
+            SettingsDocument.codec(OverridesStore::decodeRow, Json::toString);
 
     private final SettingsAccess settings;
 
@@ -76,38 +80,44 @@ public final class OverridesStore {
         return settings.getSetting(key).map(Json::parseMap).orElse(null);
     }
 
+    private static Map<String, Object> decodeRow(java.util.Optional<String> raw) {
+        Map<String, Object> parsed = raw.map(Json::parseMap).orElse(null);
+        return parsed != null ? new LinkedHashMap<>(parsed) : new LinkedHashMap<>();
+    }
+
+    /** Patch {@code patch} into the override at {@code key} without losing a concurrent edit. */
     private Map<String, Object> put(
             String key, String nameKey, String name, List<String> fields, Map<String, Object> patch) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        Map<String, Object> existing = read(key);
-        if (existing != null) {
+        return SettingsDocument.update(settings, key, ROW_CODEC, stored -> {
+            Map<String, Object> values = new LinkedHashMap<>();
             for (String field : fields) {
-                if (existing.get(field) != null) {
-                    values.put(field, existing.get(field));
+                if (stored.get(field) != null) {
+                    values.put(field, stored.get(field));
                 }
             }
-        }
-        for (Map.Entry<String, Object> entry : patch.entrySet()) {
-            String field = entry.getKey();
-            if (!fields.contains(field)) {
-                throw DashboardError.badRequest("unknown override field: " + field);
+            for (Map.Entry<String, Object> entry : patch.entrySet()) {
+                String field = entry.getKey();
+                if (!fields.contains(field)) {
+                    throw DashboardError.badRequest("unknown override field: " + field);
+                }
+                Object value = entry.getValue();
+                validate(field, value);
+                if (value == null) {
+                    values.remove(field);
+                } else {
+                    values.put(field, value);
+                }
             }
-            Object value = entry.getValue();
-            validate(field, value);
-            if (value == null) {
-                values.remove(field);
-            } else {
-                values.put(field, value);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put(nameKey, name);
+            for (String field : fields) {
+                row.put(field, field.equals("paused") ? Boolean.TRUE.equals(values.get("paused")) : values.get(field));
             }
-        }
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put(nameKey, name);
-        for (String field : fields) {
-            row.put(field, field.equals("paused") ? Boolean.TRUE.equals(values.get("paused")) : values.get(field));
-        }
-        row.put("updated_at", System.currentTimeMillis());
-        settings.setSetting(key, Json.toString(row));
-        return row;
+            row.put("updated_at", System.currentTimeMillis());
+            stored.clear();
+            stored.putAll(row);
+            return row;
+        });
     }
 
     private static void validate(String field, Object value) {
