@@ -150,12 +150,12 @@ export const FEATURES: IconCard[] = [
     icon: "M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3",
     rect: true,
     title: "Rust-powered",
-    body: "The scheduler, dispatcher, and storage engine are all Rust. Tokio runtime, OS-thread worker pool; thin PyO3 and napi-rs boundaries keep Python and Node overhead negligible.",
+    body: "The scheduler, dispatcher, and storage engine are all Rust. Tokio runtime, OS-thread worker pool; thin PyO3, napi-rs and JNI boundaries keep per-SDK overhead negligible.",
   },
   {
     icon: "M22 12h-4l-3 9L9 3l-3 9H2",
-    title: "One core, two SDKs",
-    body: "First-class <b>Python</b> and <b>Node.js</b> clients are peers over the same Rust core and store — enqueue in one runtime, run workers in the other. Zero cross-language dependency.",
+    title: "One core, native SDKs",
+    body: "First-class <b>Python</b>, <b>Node.js</b> and <b>Java</b> clients are peers over the same Rust core and store — enqueue in one runtime, run workers in another. Zero cross-language dependency.",
   },
   {
     icon: "M6 3v12M18 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM15 6a9 9 0 0 0-9 9",

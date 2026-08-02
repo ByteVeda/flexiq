@@ -78,8 +78,8 @@ export function Footer() {
             </span>
           </span>
           <p>
-            Rust-powered, brokerless task queue for Python and Node.js. No
-            Redis, no RabbitMQ.
+            A Rust-powered task queue with native SDKs. One engine, no broker
+            required — just SQLite, Postgres, or Redis.
           </p>
         </div>
         {COLS.map((col) => (
