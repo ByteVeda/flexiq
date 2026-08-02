@@ -2,10 +2,13 @@
 //!
 //! Kubernetes speaks to a mutating webhook over HTTPS and no other way, so
 //! unlike the dashboard there is no plaintext mode to fall back to: a bind
-//! without a key pair is rejected rather than served in the clear. The files
-//! are read at startup and again on every accepted connection is *not* the
-//! model — a rotated certificate needs a restart, which is what the chart's
-//! checksum annotation triggers.
+//! without a key pair is rejected rather than served in the clear.
+//!
+//! The pair is loaded at startup and then re-read whenever the files change on
+//! disk, because cert-manager renews a Secret in place: the pod keeps running,
+//! the mounted files are swapped underneath it, and a server that read them
+//! once would serve an expired certificate until something restarted it. See
+//! [`crate::webhook::serve`] for the watch.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

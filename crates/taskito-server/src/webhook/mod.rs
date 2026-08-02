@@ -42,6 +42,11 @@ pub fn router(config: Arc<WebhookConfig>) -> Router {
         .with_state(config)
 }
 
+/// How often the mounted key pair is checked for a renewal. A kubelet takes up
+/// to a minute to project an updated Secret anyway, so polling faster would
+/// only burn syscalls.
+const CERT_POLL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Serve until `shutdown` fires.
 pub async fn serve(config: WebhookConfig, shutdown: Shutdown) -> Result<()> {
     // rustls 0.23 refuses to build a config until a provider is installed, and
@@ -62,6 +67,13 @@ pub async fn serve(config: WebhookConfig, shutdown: Shutdown) -> Result<()> {
     let bind = config.bind;
     log::info!("[taskito] admission webhook on https://{bind}{MUTATE_PATH}");
 
+    tokio::spawn(watch_certificate(
+        tls.clone(),
+        config.cert.clone(),
+        config.key.clone(),
+        shutdown.clone(),
+    ));
+
     let handle = axum_server::Handle::new();
     tokio::spawn({
         let handle = handle.clone();
@@ -81,6 +93,57 @@ pub async fn serve(config: WebhookConfig, shutdown: Shutdown) -> Result<()> {
         .await
         .with_context(|| format!("the admission webhook on {bind} stopped"))?;
     Ok(())
+}
+
+/// Re-read the key pair whenever it changes on disk.
+///
+/// cert-manager renews a Secret in place. The kubelet swaps the projected files
+/// under a running pod, so without this the server would keep presenting the
+/// certificate it read at boot until something restarted it — and the API
+/// server would start refusing the connection the moment the old one expired.
+///
+/// Content, not mtime: a projected Secret is a symlink dance whose timestamps
+/// move for reasons unrelated to the bytes, and reloading rustls needlessly is
+/// worse than reading two small files.
+async fn watch_certificate(
+    tls: RustlsConfig,
+    cert: std::path::PathBuf,
+    key: std::path::PathBuf,
+    shutdown: Shutdown,
+) {
+    let mut current = read_pair(&cert, &key).await;
+    loop {
+        tokio::select! {
+            _ = shutdown.wait() => return,
+            _ = tokio::time::sleep(CERT_POLL) => {}
+        }
+
+        let latest = read_pair(&cert, &key).await;
+        // `None` is a read failure — mid-swap, most likely. Keep serving what
+        // we have and look again next tick.
+        if latest.is_none() || latest == current {
+            continue;
+        }
+
+        match tls.reload_from_pem_file(&cert, &key).await {
+            Ok(()) => {
+                log::info!("[taskito] reloaded the webhook certificate");
+                current = latest;
+            }
+            // Left on the previous pair, which still works until it expires.
+            Err(error) => log::error!(
+                "the webhook certificate at {} changed but could not be loaded: {error}",
+                cert.display()
+            ),
+        }
+    }
+}
+
+/// The two files' bytes, or `None` if either could not be read.
+async fn read_pair(cert: &std::path::Path, key: &std::path::Path) -> Option<(Vec<u8>, Vec<u8>)> {
+    let cert = tokio::fs::read(cert).await.ok()?;
+    let key = tokio::fs::read(key).await.ok()?;
+    Some((cert, key))
 }
 
 /// Answer one `AdmissionReview`.
