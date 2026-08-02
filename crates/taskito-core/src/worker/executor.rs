@@ -380,6 +380,17 @@ impl ExecutorSideChannel {
         self.shared.side_channel
     }
 
+    /// Task log lines shed since this executor attached, because they were
+    /// produced faster than they could be framed.
+    ///
+    /// Progress has no equivalent: it coalesces, so a backlog collapses instead
+    /// of losing anything. Exposed because "the log line I wrote is not in the
+    /// dashboard" is otherwise indistinguishable from a bug, and an SDK can
+    /// surface this as the backpressure signal it is.
+    pub fn dropped_task_logs(&self) -> u64 {
+        self.shared.dropped_logs.load(Ordering::Relaxed)
+    }
+
     /// Middleware the operator has disabled for a running job's task.
     ///
     /// Resolved by the scheduler at dispatch and carried on the job frame, so
