@@ -22,7 +22,7 @@ import secrets
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from taskito.dashboard.kv import update
@@ -77,6 +77,16 @@ def _now() -> int:
 def generate_secret() -> str:
     """Return a fresh URL-safe webhook signing secret."""
     return secrets.token_urlsafe(SECRET_BYTES)
+
+
+#: The keys :class:`WebhookSubscription` round-trips. Anything else in a stored
+#: row was written by a runtime that models more than this one does.
+_MODELLED_FIELDS = frozenset(f.name for f in fields(WebhookSubscription))
+
+
+def _unmodelled_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """The keys of a stored row this runtime does not model."""
+    return {key: value for key, value in row.items() if key not in _MODELLED_FIELDS}
 
 
 class WebhookSubscriptionStore:
@@ -192,7 +202,11 @@ class WebhookSubscriptionStore:
                 }
                 patch = {k: v for k, v in changes.items() if k in allowed}
                 updated = replace(existing, updated_at=_now(), **patch)
-                rows[idx] = asdict(updated)
+                # Fields this runtime does not model are carried over from the
+                # row as it stands now: another SDK against the same backend may
+                # have written keys this build has never heard of, and rebuilding
+                # the row from the dataclass alone would drop them.
+                rows[idx] = {**_unmodelled_fields(row), **asdict(updated)}
                 return updated
             raise KeyError(subscription_id)
 
