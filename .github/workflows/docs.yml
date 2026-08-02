@@ -52,6 +52,11 @@ jobs:
       - name: Content parity
         run: pnpm check:parity
 
+      # Charts render client-side, so `build` succeeds around a broken one and
+      # the page ships with a hole. This is the only step that would notice.
+      - name: Diagrams parse
+        run: pnpm check:diagrams
+
       - name: Build
         env:
           DOCS_BASE_PATH: /taskito
