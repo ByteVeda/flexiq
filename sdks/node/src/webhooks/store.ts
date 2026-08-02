@@ -1,5 +1,5 @@
 import type { EventName } from "../events";
-import type { NativeQueue } from "../native";
+import { type SettingsStore, updateSetting } from "../settingsKv";
 import { createLogger } from "../utils";
 import type { Webhook } from "./types";
 
@@ -146,6 +146,32 @@ function decodeLegacy(raw: string): Webhook | undefined {
   };
 }
 
+/** The stored rows, still raw: a row this build cannot decode stays in the list. */
+function decodeRows(raw: string | null): Record<string, unknown>[] {
+  if (!raw) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    log.warn(() => `${SUBSCRIPTIONS_KEY} is not valid JSON; treating as empty`);
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter(
+    (row): row is Record<string, unknown> =>
+      !!row && typeof row === "object" && !Array.isArray(row),
+  );
+}
+
+/** The fields of a stored row this runtime does not model. */
+function unmodelledFields(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(row).filter(([field]) => !ROW_FIELDS.has(field)));
+}
+
 /** Persists webhook subscriptions in the shared key/value store. */
 export class WebhookStore {
   /** Legacy records are folded in once per process, on first read. */
@@ -157,7 +183,7 @@ export class WebhookStore {
    */
   private readonly unmodelled = new Map<string, Record<string, unknown>>();
 
-  constructor(private readonly native: NativeQueue) {}
+  constructor(private readonly native: SettingsStore) {}
 
   list(): Webhook[] {
     return this.load();
@@ -169,24 +195,31 @@ export class WebhookStore {
 
   /** Insert or replace a subscription, preserving list order. */
   put(webhook: Webhook): void {
-    const webhooks = this.load();
-    const index = webhooks.findIndex((existing) => existing.id === webhook.id);
-    if (index === -1) {
-      webhooks.push(webhook);
-    } else {
-      webhooks[index] = webhook;
-    }
-    this.save(webhooks);
+    this.load(); // folds in any legacy records before the write
+    const encoded = encode(webhook);
+    this.updateRows((rows) => {
+      const index = rows.findIndex((row) => text(row.id) === webhook.id);
+      const existing = rows[index];
+      if (existing === undefined) {
+        rows.push({ ...this.unmodelled.get(webhook.id), ...encoded });
+      } else {
+        // Fields this runtime does not model are carried over from the row as
+        // it stands *now*, not from the snapshot this call started with.
+        rows[index] = { ...unmodelledFields(existing), ...encoded };
+      }
+    });
   }
 
   delete(id: string): boolean {
-    const webhooks = this.load();
-    const remaining = webhooks.filter((webhook) => webhook.id !== id);
-    if (remaining.length === webhooks.length) {
-      return false;
-    }
-    this.save(remaining);
-    return true;
+    this.load();
+    return this.updateRows((rows) => {
+      const index = rows.findIndex((row) => text(row.id) === id);
+      if (index === -1) {
+        return false;
+      }
+      rows.splice(index, 1);
+      return true;
+    });
   }
 
   private load(): Webhook[] {
@@ -195,41 +228,36 @@ export class WebhookStore {
   }
 
   private readCanonical(): Webhook[] {
-    const raw = this.native.getSetting(SUBSCRIPTIONS_KEY);
-    if (!raw) {
-      return [];
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      log.warn(() => `${SUBSCRIPTIONS_KEY} is not valid JSON; treating as empty`);
-      return [];
-    }
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
     const webhooks: Webhook[] = [];
-    for (const row of parsed) {
+    for (const row of decodeRows(this.native.getSetting(SUBSCRIPTIONS_KEY))) {
       const webhook = decode(row);
       if (!webhook) {
         continue;
       }
-      this.rememberUnmodelled(webhook.id, row as Record<string, unknown>);
+      this.rememberUnmodelled(webhook.id, row);
       webhooks.push(webhook);
     }
     return webhooks;
   }
 
   private rememberUnmodelled(id: string, row: Record<string, unknown>): void {
-    const extra = Object.fromEntries(
-      Object.entries(row).filter(([field]) => !ROW_FIELDS.has(field)),
-    );
+    const extra = unmodelledFields(row);
     if (Object.keys(extra).length > 0) {
       this.unmodelled.set(id, extra);
     } else {
       this.unmodelled.delete(id);
     }
+  }
+
+  /**
+   * Apply `mutate` to the stored rows without losing a concurrent edit.
+   *
+   * Edited as raw rows rather than decoded webhooks: the whole list lives under
+   * one key, so a read-then-write would drop another replica's subscription,
+   * and staying raw means a row this build cannot decode survives the write.
+   */
+  private updateRows<Outcome>(mutate: (rows: Record<string, unknown>[]) => Outcome): Outcome {
+    return updateSetting(this.native, SUBSCRIPTIONS_KEY, decodeRows, mutate);
   }
 
   private save(webhooks: Webhook[]): void {

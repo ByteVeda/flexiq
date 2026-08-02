@@ -4,6 +4,7 @@
 // a worker restart.
 
 import type { Middleware } from "../../middleware";
+import { updateSetting } from "../../settingsKv";
 import { createLogger } from "../../utils";
 import { ValidationError } from "../errors";
 import type { SettingsAccess } from "./overrides";
@@ -65,7 +66,17 @@ export class MiddlewareDisableStore {
     return parse(this.settings.getSetting(this.key(taskName)));
   }
 
-  /** Flip a middleware on/off for a task; returns the new disable list. */
+  /**
+   * Flip a middleware on/off for a task; returns the new disable list.
+   *
+   * An emptied list leaves a `[]` row rather than deleting it. Deleting sat
+   * outside the compare-and-set, so a concurrent writer's entry could be added
+   * between the swap and the delete and then removed by it — the very lost
+   * update the compare-and-set exists to prevent. Nothing reads the difference:
+   * {@link getFor} parses `[]` as "nothing disabled", {@link listAll} filters
+   * empty lists out, and the key sits under a reserved prefix, so the generic
+   * settings view does not show it either.
+   */
   setDisabled(taskName: string, middlewareName: string, disabled: boolean): string[] {
     if (!taskName) {
       throw new ValidationError("task_name must not be empty");
@@ -73,20 +84,17 @@ export class MiddlewareDisableStore {
     if (!middlewareName) {
       throw new ValidationError("middleware name must not be empty");
     }
-    let current = this.getFor(taskName);
-    if (disabled) {
-      if (!current.includes(middlewareName)) {
-        current.push(middlewareName);
+    return updateSetting(this.settings, this.key(taskName), parse, (names) => {
+      const already = names.includes(middlewareName);
+      if (disabled) {
+        if (!already) {
+          names.push(middlewareName);
+        }
+      } else {
+        names.splice(0, names.length, ...names.filter((n) => n !== middlewareName));
       }
-    } else {
-      current = current.filter((n) => n !== middlewareName);
-    }
-    if (current.length > 0) {
-      this.settings.setSetting(this.key(taskName), JSON.stringify(current));
-    } else {
-      this.settings.deleteSetting(this.key(taskName));
-    }
-    return current;
+      return [...names];
+    });
   }
 
   clearFor(taskName: string): boolean {

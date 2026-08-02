@@ -14,6 +14,7 @@
 import { pbkdf2 as pbkdf2Cb, randomBytes, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { Queue } from "../../index";
+import { updateSetting } from "../../settingsKv";
 import { createLogger } from "../../utils";
 import { ValidationError } from "../errors";
 
@@ -207,8 +208,7 @@ export class AuthStore {
 
   // ── Users ─────────────────────────────────────────────────────────
 
-  private loadUsers(): Record<string, UserRow> {
-    const raw = this.queue.getSetting(USERS_KEY);
+  private static decodeUsers(raw: string | null): Record<string, UserRow> {
     if (!raw) {
       return {};
     }
@@ -221,8 +221,18 @@ export class AuthStore {
     }
   }
 
-  private saveUsers(users: Record<string, UserRow>): void {
-    this.queue.setSetting(USERS_KEY, JSON.stringify(users));
+  private loadUsers(): Record<string, UserRow> {
+    return AuthStore.decodeUsers(this.queue.getSetting(USERS_KEY));
+  }
+
+  /**
+   * Apply `mutate` to the user table without losing a concurrent edit.
+   *
+   * All of them live in one JSON document, so an unconditional write would drop
+   * a user another dashboard replica had just created.
+   */
+  private updateUsers<Outcome>(mutate: (users: Record<string, UserRow>) => Outcome): Outcome {
+    return updateSetting(this.queue, USERS_KEY, AuthStore.decodeUsers, mutate);
   }
 
   countUsers(): number {
@@ -249,43 +259,46 @@ export class AuthStore {
     if (this.loadUsers()[username]) {
       throw new ValidationError(`user '${username}' already exists`);
     }
-    // Hash BEFORE the load-check-save so no await sits between reading the
-    // user table and writing it back — a concurrent create (e.g. racing
-    // first-run setup requests) can no longer be clobbered by a stale
-    // snapshot taken before the slow PBKDF2 step.
-    const passwordHash = await hashPassword(password);
-    const users = this.loadUsers();
-    if (users[username]) {
-      throw new ValidationError(`user '${username}' already exists`);
-    }
-    users[username] = {
-      password_hash: passwordHash,
+    // Hashed outside the conditional write: PBKDF2 is the expensive part and a
+    // retry must not redo it (nor produce a different salt each attempt).
+    const row: UserRow = {
+      password_hash: await hashPassword(password),
       role,
       created_at: Date.now(),
       last_login_at: null,
     };
-    this.saveUsers(users);
-    return rowToUser(username, users[username]);
+    this.updateUsers((users) => {
+      if (users[username]) {
+        throw new ValidationError(`user '${username}' already exists`);
+      }
+      users[username] = row;
+    });
+    return rowToUser(username, row);
   }
 
   async updatePassword(username: string, newPassword: string): Promise<void> {
     validatePassword(newPassword);
-    const users = this.loadUsers();
-    const row = users[username];
-    if (!row) {
-      throw new ValidationError(`user '${username}' does not exist`);
-    }
-    row.password_hash = await hashPassword(newPassword);
-    this.saveUsers(users);
+    const passwordHash = await hashPassword(newPassword);
+    this.updateUsers((users) => {
+      const row = users[username];
+      if (!row) {
+        throw new ValidationError(`user '${username}' does not exist`);
+      }
+      row.password_hash = passwordHash;
+    });
   }
 
   deleteUser(username: string): boolean {
-    const users = this.loadUsers();
-    if (!users[username]) {
+    const removed = this.updateUsers((users) => {
+      if (!users[username]) {
+        return false;
+      }
+      delete users[username];
+      return true;
+    });
+    if (!removed) {
       return false;
     }
-    delete users[username];
-    this.saveUsers(users);
     // Revoke live sessions so a deleted account stops authorizing now,
     // not at session expiry.
     this.deleteSessionsForUser(username);
@@ -319,8 +332,17 @@ export class AuthStore {
     if (!(await verifyPassword(password, row.password_hash))) {
       return undefined;
     }
-    row.last_login_at = Date.now();
-    this.saveUsers(users);
+    // Stamped conditionally, and only on the row as it stands now: a user
+    // deleted between the read and the stamp stays deleted rather than being
+    // resurrected by writing the whole document back.
+    const stampedAt = Date.now();
+    this.updateUsers((current) => {
+      const live = current[username];
+      if (live) {
+        live.last_login_at = stampedAt;
+      }
+    });
+    row.last_login_at = stampedAt;
     return rowToUser(username, row);
   }
 
@@ -340,35 +362,37 @@ export class AuthStore {
     adminEmails?: readonly string[];
   }): DashboardUser {
     const username = `${options.slot}:${options.subject}`;
-    const users = this.loadUsers();
-    const existing = users[username];
-    if (existing) {
-      if (options.email && existing.email !== options.email) {
-        existing.email = options.email;
-      }
-      if (options.name && existing.display_name !== options.name) {
-        existing.display_name = options.name;
-      }
-      existing.last_login_at = Date.now();
-      this.saveUsers(users);
-      return rowToUser(username, existing);
-    }
+    const now = Date.now();
     const role = oauthBootstrapRole({
       email: options.email,
       emailVerified: options.emailVerified,
       adminEmails: options.adminEmails ?? [],
     });
-    const now = Date.now();
-    users[username] = {
-      password_hash: `${OAUTH_PASSWORD_HASH_PREFIX}${options.slot}`,
-      role,
-      created_at: now,
-      last_login_at: now,
-      email: options.email,
-      display_name: options.name,
-    };
-    this.saveUsers(users);
-    return rowToUser(username, users[username]);
+    const row = this.updateUsers((users) => {
+      const existing = users[username];
+      if (existing) {
+        if (options.email && existing.email !== options.email) {
+          existing.email = options.email;
+        }
+        if (options.name && existing.display_name !== options.name) {
+          existing.display_name = options.name;
+        }
+        existing.last_login_at = now;
+        return existing;
+      }
+      // `role` is only consulted here, on first sight: a later login must not
+      // re-derive it and undo an administrator's change.
+      users[username] = {
+        password_hash: `${OAUTH_PASSWORD_HASH_PREFIX}${options.slot}`,
+        role,
+        created_at: now,
+        last_login_at: now,
+        email: options.email,
+        display_name: options.name,
+      };
+      return users[username];
+    });
+    return rowToUser(username, row);
   }
 
   // ── Sessions ──────────────────────────────────────────────────────
