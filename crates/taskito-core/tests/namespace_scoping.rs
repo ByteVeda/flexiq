@@ -504,3 +504,32 @@ fn a_scheduler_never_reaps_another_namespaces_job() {
         .iter()
         .any(|(job, _)| job.id == b_id));
 }
+
+#[test]
+fn a_dependency_edge_across_the_boundary_is_not_disclosed() {
+    // The DAG walks in every shell push an edge per dependency id before the
+    // adjacent job is looked up. Scoping only `get_job` skips the foreign
+    // *node* but still ships its id in an edge, so the walks keep an edge only
+    // once both endpoints resolved. This locks the storage half of that: the
+    // edge lists are id-only, and the id of a job in another namespace must not
+    // resolve to anything a scoped caller can see.
+    let storage = storage();
+    let root = storage.enqueue(job_in(Some(TENANT_A), "root")).unwrap();
+
+    let mut foreign = job_in(Some(TENANT_B), "foreign");
+    foreign.depends_on = vec![root.id.clone()];
+    let foreign = storage.enqueue(foreign).unwrap();
+
+    // The raw edge read is deliberately unscoped — it is an id list with no
+    // namespace of its own — so the id *is* reachable...
+    assert!(storage
+        .get_dependents(&root.id)
+        .unwrap()
+        .contains(&foreign.id));
+
+    // ...and the scoped node lookup is what makes it undisclosable.
+    assert!(storage
+        .get_job(&foreign.id, Some(TENANT_A))
+        .unwrap()
+        .is_none());
+}

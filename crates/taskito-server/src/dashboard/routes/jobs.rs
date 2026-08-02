@@ -213,7 +213,9 @@ fn build_dag(
     let mut visited = std::collections::HashSet::new();
     let mut pending = vec![root.to_string()];
     let mut nodes = Vec::new();
-    let mut edges = Vec::new();
+    let mut edges: Vec<(String, String)> = Vec::new();
+    // An edge is queued as a candidate and kept only once BOTH endpoints resolved to a visible job: the edge lists are id-only, so pushing one before the adjacent node is looked up leaks a foreign job id into a scoped caller's graph even though its node is skipped.
+    let mut visible = std::collections::HashSet::new();
 
     while let Some(job_id) = pending.pop() {
         if !visited.insert(job_id.clone()) {
@@ -222,18 +224,24 @@ fn build_dag(
         let Some(job) = storage.get_job(&job_id, namespace)? else {
             continue;
         };
+        visible.insert(job_id.clone());
         nodes.push(dto::job(&job));
 
         for dependency in storage.get_dependencies(&job_id)? {
-            edges.push(json!({ "from": dependency, "to": job_id }));
+            edges.push((dependency.clone(), job_id.clone()));
             pending.push(dependency);
         }
         for dependent in storage.get_dependents(&job_id)? {
-            edges.push(json!({ "from": job_id, "to": dependent }));
+            edges.push((job_id.clone(), dependent.clone()));
             pending.push(dependent);
         }
     }
 
+    let edges: Vec<Value> = edges
+        .into_iter()
+        .filter(|(from, to)| visible.contains(from) && visible.contains(to))
+        .map(|(from, to)| json!({ "from": from, "to": to }))
+        .collect();
     Ok(json!({ "nodes": nodes, "edges": edges }))
 }
 

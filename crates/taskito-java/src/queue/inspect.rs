@@ -316,6 +316,8 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
         // Keep the jobs alive so the borrowing `JobView`s can be built at the end.
         let mut jobs: Vec<Job> = Vec::new();
         let mut edges: Vec<DagEdgeView> = Vec::new();
+        // An edge is queued as a candidate and kept only once BOTH endpoints resolved to a visible job: the edge lists are id-only, so pushing one before the adjacent node is looked up leaks a foreign job id into a scoped caller's graph even though its node is skipped.
+        let mut visible: HashSet<String> = HashSet::new();
         let mut pending = vec![start];
         while let Some(current) = pending.pop() {
             if !visited.insert(current.clone()) {
@@ -327,6 +329,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
             else {
                 continue;
             };
+            visible.insert(current.clone());
             jobs.push(job);
             for dep_id in queue.storage.get_dependencies(&current)? {
                 if seen_edges.insert((dep_id.clone(), current.clone())) {
@@ -347,6 +350,7 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
                 pending.push(dep_id);
             }
         }
+        edges.retain(|edge| visible.contains(&edge.from) && visible.contains(&edge.to));
         let nodes: Vec<JobView> = jobs.iter().map(JobView::from).collect();
         new_string(env, to_json(&JobDagView { nodes, edges })?)
     })

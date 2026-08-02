@@ -387,6 +387,8 @@ impl JsQueue {
             let mut seen_edges: HashSet<(String, String)> = HashSet::new();
             let mut nodes = Vec::new();
             let mut edges = Vec::new();
+            // An edge is queued as a candidate and kept only once BOTH endpoints resolved to a visible job: the edge lists are id-only, so pushing one before the adjacent node is looked up leaks a foreign job id into a scoped caller's graph even though its node is skipped.
+            let mut visible: HashSet<String> = HashSet::new();
             let mut pending = vec![job_id];
             while let Some(current) = pending.pop() {
                 if !visited.insert(current.clone()) {
@@ -398,6 +400,7 @@ impl JsQueue {
                 else {
                     continue;
                 };
+                visible.insert(current.clone());
                 nodes.push(job_to_js(job));
                 for dep_id in storage.get_dependencies(&current).map_err(to_napi_err)? {
                     if seen_edges.insert((dep_id.clone(), current.clone())) {
@@ -418,6 +421,9 @@ impl JsQueue {
                     pending.push(dep_id);
                 }
             }
+            edges.retain(|edge: &JsDagEdge| {
+                visible.contains(&edge.from) && visible.contains(&edge.to)
+            });
             Ok(JsJobDag { nodes, edges })
         })
         .await
