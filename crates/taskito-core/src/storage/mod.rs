@@ -495,20 +495,27 @@ macro_rules! impl_storage {
                 &self,
                 id: &str,
                 result_bytes: Option<Vec<u8>>,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.complete(id, result_bytes)
+                self.complete(id, result_bytes, namespace)
             }
             fn complete_batch(
                 &self,
                 completions: &[$crate::job::JobCompletion],
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.complete_batch(completions)
+                self.complete_batch(completions, namespace)
             }
             fn fail(&self, id: &str, error: &str) -> $crate::error::Result<()> {
                 self.fail(id, error)
             }
-            fn retry(&self, id: &str, next_scheduled_at: i64) -> $crate::error::Result<()> {
-                self.retry(id, next_scheduled_at)
+            fn retry(
+                &self,
+                id: &str,
+                next_scheduled_at: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.retry(id, next_scheduled_at, namespace)
             }
             fn reschedule(&self, id: &str, next_scheduled_at: i64) -> $crate::error::Result<()> {
                 self.reschedule(id, next_scheduled_at)
@@ -645,8 +652,9 @@ macro_rules! impl_storage {
                 job_id: &str,
                 attempt: i32,
                 error: &str,
+                namespace: Option<&str>,
             ) -> $crate::error::Result<()> {
-                self.record_error(job_id, attempt, error)
+                self.record_error(job_id, attempt, error, namespace)
             }
             fn get_job_errors(
                 &self,
@@ -1144,8 +1152,12 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<bool>> {
                 self.claim_execution_batch(job_ids, worker_id)
             }
-            fn complete_execution(&self, job_id: &str) -> $crate::error::Result<()> {
-                self.complete_execution(job_id)
+            fn complete_execution(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.complete_execution(job_id, namespace)
             }
             fn purge_execution_claims(
                 &self,
@@ -1390,17 +1402,26 @@ impl Storage for StorageBackend {
             orders
         )
     }
-    fn complete(&self, id: &str, result_bytes: Option<Vec<u8>>) -> Result<()> {
-        delegate!(self, complete, id, result_bytes)
+    fn complete(
+        &self,
+        id: &str,
+        result_bytes: Option<Vec<u8>>,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        delegate!(self, complete, id, result_bytes, namespace)
     }
-    fn complete_batch(&self, completions: &[crate::job::JobCompletion]) -> Result<()> {
-        delegate!(self, complete_batch, completions)
+    fn complete_batch(
+        &self,
+        completions: &[crate::job::JobCompletion],
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        delegate!(self, complete_batch, completions, namespace)
     }
     fn fail(&self, id: &str, error: &str) -> Result<()> {
         delegate!(self, fail, id, error)
     }
-    fn retry(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
-        delegate!(self, retry, id, next_scheduled_at)
+    fn retry(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, retry, id, next_scheduled_at, namespace)
     }
     fn reschedule(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
         delegate!(self, reschedule, id, next_scheduled_at)
@@ -1494,8 +1515,14 @@ impl Storage for StorageBackend {
     ) -> Result<Vec<(Job, String)>> {
         delegate!(self, reap_orphaned_jobs, live_owner_ids, now, namespace)
     }
-    fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()> {
-        delegate!(self, record_error, job_id, attempt, error)
+    fn record_error(
+        &self,
+        job_id: &str,
+        attempt: i32,
+        error: &str,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        delegate!(self, record_error, job_id, attempt, error, namespace)
     }
     fn get_job_errors(
         &self,
@@ -1914,8 +1941,8 @@ impl Storage for StorageBackend {
     fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>> {
         delegate!(self, claim_execution_batch, job_ids, worker_id)
     }
-    fn complete_execution(&self, job_id: &str) -> Result<()> {
-        delegate!(self, complete_execution, job_id)
+    fn complete_execution(&self, job_id: &str, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, complete_execution, job_id, namespace)
     }
     fn purge_execution_claims(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_execution_claims, older_than_ms)

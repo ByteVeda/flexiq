@@ -43,11 +43,19 @@ impl Scheduler {
                 timed_out,
             } => {
                 // Clear execution claim so it can be retried
-                if let Err(e) = self.storage.complete_execution(&job_id) {
+                if let Err(e) = self
+                    .storage
+                    .complete_execution(&job_id, self.namespace.as_deref())
+                {
                     log::error!("failed to clear execution claim for job {job_id}: {e}");
                 }
 
-                if let Err(e) = self.storage.record_error(&job_id, retry_count, &error) {
+                if let Err(e) = self.storage.record_error(
+                    &job_id,
+                    retry_count,
+                    &error,
+                    self.namespace.as_deref(),
+                ) {
                     log::error!("failed to record error for job {job_id}: {e}");
                 }
 
@@ -124,7 +132,8 @@ impl Scheduler {
                         });
                     }
                     let next_at = policy.next_retry_at(retry_count);
-                    self.storage.retry(&job_id, next_at)?;
+                    self.storage
+                        .retry(&job_id, next_at, self.namespace.as_deref())?;
                     #[cfg(feature = "push-dispatch")]
                     self.signal_scheduled(next_at);
                     Ok(ResultOutcome::Retry {
@@ -154,7 +163,10 @@ impl Scheduler {
                 wall_time_ns,
             } => {
                 // Clear execution claim
-                if let Err(e) = self.storage.complete_execution(&job_id) {
+                if let Err(e) = self
+                    .storage
+                    .complete_execution(&job_id, self.namespace.as_deref())
+                {
                     error!("failed to clear execution claim for job {job_id}: {e}");
                 }
                 // Mark as cancelled, no retry
@@ -234,7 +246,10 @@ impl Scheduler {
         }
 
         if !completions.is_empty() {
-            match self.storage.complete_batch(&completions) {
+            match self
+                .storage
+                .complete_batch(&completions, self.namespace.as_deref())
+            {
                 Ok(()) => {
                     for (&idx, c) in success_idx.iter().zip(&completions) {
                         if let Err(e) = self.circuit_breaker.record_success(&c.task_name) {
@@ -267,10 +282,14 @@ impl Scheduler {
     /// single-result path and by [`Self::handle_results`]' per-job fallback so
     /// the success-finalize logic lives in exactly one place.
     fn finalize_success(&self, c: &JobCompletion) -> Result<ResultOutcome> {
-        self.storage.complete(&c.job_id, c.result.clone())?;
+        self.storage
+            .complete(&c.job_id, c.result.clone(), self.namespace.as_deref())?;
 
         // Clear execution claim
-        if let Err(e) = self.storage.complete_execution(&c.job_id) {
+        if let Err(e) = self
+            .storage
+            .complete_execution(&c.job_id, self.namespace.as_deref())
+        {
             error!("failed to clear execution claim for job {}: {e}", c.job_id);
         }
 

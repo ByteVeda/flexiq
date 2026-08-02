@@ -69,7 +69,17 @@ macro_rules! impl_diesel_lock_ops {
             }
 
             /// Remove the execution claim for a completed job.
-            pub fn complete_execution(&self, job_id: &str) -> Result<()> {
+            ///
+            /// `execution_claims` has no namespace column, so the scope comes
+            /// from the claimed job. A claim on a job in another namespace is
+            /// left in place — releasing it would hand that tenant's job back
+            /// to this one's poller. Resolved before the connection is taken:
+            /// a single-connection pool would deadlock on the second.
+            pub fn complete_execution(&self, job_id: &str, namespace: Option<&str>) -> Result<()> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(());
+                }
+
                 let mut conn = self.conn()?;
 
                 diesel::delete(execution_claims::table.filter(execution_claims::job_id.eq(job_id)))

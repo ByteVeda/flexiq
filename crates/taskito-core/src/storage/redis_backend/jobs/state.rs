@@ -48,9 +48,16 @@ const REQUEUE_STUCK_IF_RUNNING: &str = r#"
 
 impl RedisStorage {
     /// Mark a job completed with its result, moving it into the archive.
-    pub fn complete(&self, id: &str, result_bytes: Option<Vec<u8>>) -> Result<()> {
+    ///
+    /// A job in another namespace reports `JobNotFound`, like an unknown id.
+    pub fn complete(
+        &self,
+        id: &str,
+        result_bytes: Option<Vec<u8>>,
+        namespace: Option<&str>,
+    ) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required_in(id, namespace)?;
 
         if job.status != JobStatus::Running {
             return Err(QueueError::JobNotFound(id.to_string()));
@@ -77,20 +84,27 @@ impl RedisStorage {
     /// to coalesce (each job's archive spans several keys), so this loops the
     /// single-job path — the batching win is in the Diesel backends. If any job
     /// is not `Running`, its `complete` errors and the caller falls back.
-    pub fn complete_batch(&self, completions: &[crate::job::JobCompletion]) -> Result<()> {
+    pub fn complete_batch(
+        &self,
+        completions: &[crate::job::JobCompletion],
+        namespace: Option<&str>,
+    ) -> Result<()> {
         for c in completions {
-            // Read before the archive move so the job's namespace is still
-            // reachable; it is the only namespace this batch knows.
-            let namespace = self.get_job(&c.job_id, None)?.and_then(|job| job.namespace);
-            self.complete(&c.job_id, c.result.clone())?;
-            self.complete_execution(&c.job_id)?;
+            // Read before the archive move so the job's own namespace is still
+            // reachable — an unscoped caller has no other source for it, and
+            // the metric must be filed under the job's tenant either way.
+            let job_namespace = self
+                .get_job(&c.job_id, namespace)?
+                .and_then(|job| job.namespace);
+            self.complete(&c.job_id, c.result.clone(), namespace)?;
+            self.complete_execution(&c.job_id, namespace)?;
             self.record_metric(
                 &c.task_name,
                 &c.job_id,
                 c.wall_time_ns,
                 0,
                 true,
-                namespace.as_deref(),
+                job_namespace.as_deref(),
             )?;
         }
         Ok(())
@@ -116,9 +130,11 @@ impl RedisStorage {
 
     /// Re-schedule a job for retry at `next_scheduled_at` (Unix milliseconds),
     /// incrementing its `retry_count`.
-    pub fn retry(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
+    ///
+    /// A job in another namespace reports `JobNotFound`, like an unknown id.
+    pub fn retry(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required_in(id, namespace)?;
         let old_status = job.status;
 
         job.status = JobStatus::Pending;

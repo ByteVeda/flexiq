@@ -386,7 +386,7 @@ fn progress_cannot_be_written_across_the_boundary() {
 fn job_errors_and_logs_are_scoped_by_their_job() {
     let storage = storage();
     let job = storage.enqueue(job_in(Some(TENANT_A), "work")).unwrap();
-    storage.record_error(&job.id, 1, "boom").unwrap();
+    storage.record_error(&job.id, 1, "boom", None).unwrap();
     storage
         .write_task_log(&job.id, "work", "INFO", "hello", None, Some(TENANT_A))
         .unwrap();
@@ -612,4 +612,131 @@ fn a_scheduler_never_reaps_another_namespaces_job() {
         .unwrap()
         .iter()
         .any(|(job, _)| job.id == b_id));
+}
+
+// ── Result-path mutations ────────────────────────────────────────────────
+//
+// These run from `handle_result`, off the scheduler's own result stream, so
+// every id on the path came out of a namespace-scoped `dequeue`. The scoping
+// here is defence-in-depth against a scheduler bug rather than a reachable
+// boundary crossing — but a scheduler must never be able to finish, retry or
+// annotate another tenant's job under its own namespace.
+
+#[test]
+fn a_running_job_from_another_namespace_cannot_be_completed() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    assert!(matches!(
+        storage.complete(&a_id, Some(vec![1]), Some(TENANT_B)),
+        Err(QueueError::JobNotFound(_))
+    ));
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().status,
+        JobStatus::Running,
+        "the refused completion must not have half-applied"
+    );
+
+    storage
+        .complete(&a_id, Some(vec![1]), Some(TENANT_A))
+        .unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().status,
+        JobStatus::Complete
+    );
+}
+
+#[test]
+fn a_batch_completion_stops_at_the_namespace_boundary() {
+    use taskito_core::job::JobCompletion;
+
+    let storage = storage();
+    let (a_id, b_id) = running_one_each(&storage, "worker-1");
+
+    let completion = |job_id: &str| JobCompletion {
+        job_id: job_id.to_string(),
+        result: None,
+        task_name: "work".to_string(),
+        wall_time_ns: 1,
+    };
+
+    // One foreign entry fails the whole batch — the caller falls back to the
+    // per-job path, which refuses the foreign job on its own.
+    assert!(matches!(
+        storage.complete_batch(&[completion(&a_id), completion(&b_id)], Some(TENANT_A)),
+        Err(QueueError::JobNotFound(_))
+    ));
+    assert_eq!(
+        storage.get_job(&b_id, None).unwrap().unwrap().status,
+        JobStatus::Running
+    );
+
+    storage
+        .complete_batch(&[completion(&a_id)], Some(TENANT_A))
+        .unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().status,
+        JobStatus::Complete
+    );
+}
+
+#[test]
+fn a_job_from_another_namespace_cannot_be_retried() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+    let later = now_millis() + 60_000;
+
+    assert!(matches!(
+        storage.retry(&a_id, later, Some(TENANT_B)),
+        Err(QueueError::JobNotFound(_))
+    ));
+    let untouched = storage.get_job(&a_id, None).unwrap().unwrap();
+    assert_eq!(untouched.status, JobStatus::Running);
+    assert_eq!(untouched.retry_count, 0);
+
+    storage.retry(&a_id, later, Some(TENANT_A)).unwrap();
+    assert_eq!(
+        storage.get_job(&a_id, None).unwrap().unwrap().retry_count,
+        1
+    );
+}
+
+#[test]
+fn an_error_is_not_recorded_across_the_namespace_boundary() {
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    storage
+        .record_error(&a_id, 0, "boom", Some(TENANT_B))
+        .unwrap();
+    assert!(storage.get_job_errors(&a_id, None).unwrap().is_empty());
+
+    storage
+        .record_error(&a_id, 0, "boom", Some(TENANT_A))
+        .unwrap();
+    assert_eq!(storage.get_job_errors(&a_id, None).unwrap().len(), 1);
+}
+
+#[test]
+fn an_execution_claim_is_not_released_across_the_namespace_boundary() {
+    // Releasing another namespace's claim would hand its job back to this
+    // scheduler's poller while the real owner is still running it.
+    let storage = storage();
+    let (a_id, _) = running_one_each(&storage, "worker-1");
+
+    storage.complete_execution(&a_id, Some(TENANT_B)).unwrap();
+    assert!(
+        !storage
+            .reap_orphaned_jobs(&["other-worker".to_string()], now_millis(), None)
+            .unwrap()
+            .is_empty(),
+        "the claim must still be there to be reaped"
+    );
+
+    storage.complete_execution(&a_id, Some(TENANT_A)).unwrap();
+    assert!(storage
+        .reap_orphaned_jobs(&["other-worker".to_string()], now_millis(), None)
+        .unwrap()
+        .iter()
+        .all(|(job, _)| job.id != a_id));
 }

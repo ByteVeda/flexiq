@@ -849,20 +849,31 @@ macro_rules! impl_diesel_job_ops {
 
             /// Mark a job as complete with the given result. The job moves from
             /// `jobs` into `archived_jobs` in a single transaction.
-            pub fn complete(&self, id: &str, result_bytes: Option<Vec<u8>>) -> Result<()> {
+            ///
+            /// A job in another namespace reports `JobNotFound`, like an
+            /// unknown id — the filter rides on the same row lookup the
+            /// archive move needs, so there is no window between check and act.
+            pub fn complete(
+                &self,
+                id: &str,
+                result_bytes: Option<Vec<u8>>,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let now = now_millis();
 
                 self.write_transaction(|conn| {
-                    let mut row: JobRow = match jobs::table
+                    let mut select = jobs::table
                         .find(id)
                         .filter(jobs::status.eq(JobStatus::Running as i32))
-                        .select(JobRow::as_select())
-                        .first(conn)
-                        .optional()?
-                    {
-                        Some(row) => row,
-                        None => return Err(QueueError::JobNotFound(id.to_string())),
-                    };
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        select = select.filter(jobs::namespace.eq(ns));
+                    }
+                    let mut row: JobRow =
+                        match select.select(JobRow::as_select()).first(conn).optional()? {
+                            Some(row) => row,
+                            None => return Err(QueueError::JobNotFound(id.to_string())),
+                        };
 
                     row.status = JobStatus::Complete as i32;
                     row.completed_at = Some(now);
@@ -878,8 +889,13 @@ macro_rules! impl_diesel_job_ops {
             /// metric — but coalesces what were three writes × N jobs across N
             /// transactions into a single commit (one fsync). If any job is not
             /// `Running` the whole batch rolls back with `JobNotFound`, so the
-            /// caller can fall back to per-job handling.
-            pub fn complete_batch(&self, completions: &[$crate::job::JobCompletion]) -> Result<()> {
+            /// caller can fall back to per-job handling. A job in another
+            /// namespace is `JobNotFound` like any other non-`Running` row.
+            pub fn complete_batch(
+                &self,
+                completions: &[$crate::job::JobCompletion],
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 if completions.is_empty() {
                     return Ok(());
                 }
@@ -887,16 +903,18 @@ macro_rules! impl_diesel_job_ops {
 
                 self.write_transaction(|conn| {
                     for c in completions {
-                        let mut row: JobRow = match jobs::table
+                        let mut select = jobs::table
                             .find(&c.job_id)
                             .filter(jobs::status.eq(JobStatus::Running as i32))
-                            .select(JobRow::as_select())
-                            .first(conn)
-                            .optional()?
-                        {
-                            Some(row) => row,
-                            None => return Err(QueueError::JobNotFound(c.job_id.clone())),
-                        };
+                            .into_boxed();
+                        if let Some(ns) = namespace {
+                            select = select.filter(jobs::namespace.eq(ns));
+                        }
+                        let mut row: JobRow =
+                            match select.select(JobRow::as_select()).first(conn).optional()? {
+                                Some(row) => row,
+                                None => return Err(QueueError::JobNotFound(c.job_id.clone())),
+                            };
 
                         row.status = JobStatus::Complete as i32;
                         row.completed_at = Some(now);
@@ -954,11 +972,24 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Re-schedule a job for retry.
-            pub fn retry(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
+            ///
+            /// A job in another namespace matches no rows and reports
+            /// `JobNotFound`, like an unknown id.
+            pub fn retry(
+                &self,
+                id: &str,
+                next_scheduled_at: i64,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let mut conn = self.conn()?;
 
-                let affected = diesel::update(jobs::table)
+                let mut update = diesel::update(jobs::table)
                     .filter(jobs::id.eq(id))
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    update = update.filter(jobs::namespace.eq(ns));
+                }
+                let affected = update
                     .set((
                         jobs::status.eq(JobStatus::Pending as i32),
                         jobs::scheduled_at.eq(next_scheduled_at),
@@ -2111,7 +2142,25 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Record an error for a job attempt.
-            pub fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()> {
+            ///
+            /// `job_errors` has no namespace column, so unlike the other
+            /// result-path mutations the scope cannot ride on the write itself
+            /// — it comes from the job the row belongs to, exactly as
+            /// [`get_job_errors`](Self::get_job_errors) reads it back. An
+            /// attempt against a job in another namespace records nothing.
+            /// Resolved before the connection is taken: a single-connection
+            /// pool would deadlock on the second.
+            pub fn record_error(
+                &self,
+                job_id: &str,
+                attempt: i32,
+                error: &str,
+                namespace: Option<&str>,
+            ) -> Result<()> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(());
+                }
+
                 let mut conn = self.conn()?;
                 let id = uuid::Uuid::now_v7().to_string();
                 let now = now_millis();
