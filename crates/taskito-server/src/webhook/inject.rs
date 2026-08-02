@@ -156,6 +156,16 @@ fn socket_dir(attach: &str) -> Result<String> {
             annotations::ATTACH
         );
     }
+    // A socket directly under `/` would mount the volume over the container's
+    // root, hiding the very binary the sidecar was told to run.
+    if parent == std::path::Path::new("/") {
+        bail!(
+            "{}={attach} puts the socket at the filesystem root, and mounting a volume \
+             at / would hide the image's own files. Put it in a directory, e.g. \
+             unix:/run/taskito/attach.sock",
+            annotations::ATTACH
+        );
+    }
     Ok(parent.to_string_lossy().into_owned())
 }
 
@@ -371,6 +381,17 @@ mod tests {
             sidecar(&ops)["volumeMounts"],
             json!([{ "name": "attach", "mountPath": "/run/taskito" }])
         );
+    }
+
+    #[test]
+    fn a_socket_at_the_filesystem_root_is_rejected() {
+        let mut annotations = opted_in();
+        annotations[ATTACH] = json!("unix:/attach.sock");
+        annotations[crate::webhook::annotations::SOCKET_VOLUME] = json!("attach");
+        // Mounting at / would shadow the image, so the sidecar could not even
+        // start the command it was given.
+        let error = patch_for(&pod(annotations, app_container())).expect_err("must reject");
+        assert!(error.to_string().contains("filesystem root"));
     }
 
     #[test]
