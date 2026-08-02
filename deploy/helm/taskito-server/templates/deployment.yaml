@@ -149,29 +149,29 @@ spec:
             - name: webhook
               containerPort: {{ .Values.webhook.port }}
             {{- end }}
-          {{- if .Values.dashboard.enabled }}
-          # /health is the only route that is never gated. /readiness checks
+          # One probe per type is all Kubernetes takes, and one is all this needs:
+          # every role is a listener in the *same* process, and a bind that fails
+          # takes the process down rather than leaving it half-served. So the
+          # probe only has to prove the process is alive — any enabled listener
+          # answers that. The dashboard's plaintext /health is preferred simply
+          # because it is the cheapest to check; the attach port has no HTTP, so
+          # a TCP connect stands in.
+          #
+          # /health is also the only route that is never gated. /readiness checks
           # storage but answers 401 whenever the dashboard authenticates, and a
           # kubelet probe carries no credential — see the chart README.
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: dashboard
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: dashboard
+          {{- if .Values.dashboard.enabled }}
+          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "dashboard") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
           {{- else if .Values.webhook.enabled }}
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: webhook
-              scheme: HTTPS
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: webhook
-              scheme: HTTPS
+          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "webhook" "scheme" "HTTPS") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else }}
+          {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
           {{- end }}
           {{- with .Values.resources }}
           resources:
