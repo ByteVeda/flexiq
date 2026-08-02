@@ -11,7 +11,8 @@ use taskito_server::runtime;
 /// no flags to document instead.
 const ENV_HELP: &str = "\
 Configuration (environment only):
-  TASKITO_DSN                    storage connection string (required)
+  TASKITO_DSN                    storage connection string (required, except for
+                                 a webhook-only deployment)
   TASKITO_BACKEND                sqlite | postgres | redis (default: from the DSN)
   TASKITO_NAMESPACE              tenant namespace scoping the scheduler and
                                  every dashboard view (unset = all namespaces)
