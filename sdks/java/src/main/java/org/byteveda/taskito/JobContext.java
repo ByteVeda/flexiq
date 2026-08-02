@@ -3,6 +3,7 @@ package org.byteveda.taskito;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.byteveda.taskito.internal.ScopeContext;
 import org.byteveda.taskito.logging.TaskitoLogger;
+import org.byteveda.taskito.model.TaskLogLevel;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -34,7 +35,7 @@ public final class JobContext {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Level a published partial is stored at, so {@code stream()} can find it. */
-    private static final String RESULT_LEVEL = "result";
+    private static final String RESULT_LEVEL = TaskLogLevel.RESULT.wire();
 
     private static final ScopeContext<JobContext> ACTIVE = new ScopeContext<>();
 
@@ -99,12 +100,23 @@ public final class JobContext {
 
     /** Write an {@code info} log line against this job. */
     public void log(String message) {
-        log("info", message, null);
+        log(TaskLogLevel.INFO, message, null);
     }
 
-    /** Write a log line at {@code level}, optionally with a pre-encoded JSON {@code extra}. */
-    public void log(String level, String message, @Nullable String extra) {
-        sink.writeTaskLog(jobId, taskName, level, message, extra);
+    /** Write a log line at {@code level}. */
+    public void log(TaskLogLevel level, String message) {
+        log(level, message, null);
+    }
+
+    /**
+     * Write a log line at {@code level}, optionally with a pre-encoded JSON {@code extra}.
+     *
+     * <p>The level is the enum rather than its wire string, matching
+     * {@link Taskito#writeTaskLog(String, String, TaskLogLevel, String, String)} — the
+     * string-typed form there is deprecated, so there is no reason to introduce another.
+     */
+    public void log(TaskLogLevel level, String message, @Nullable String extra) {
+        sink.writeTaskLog(jobId, taskName, level.wire(), message, extra);
     }
 
     /**
