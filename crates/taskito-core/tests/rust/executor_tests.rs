@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender};
+use serde::{Deserialize, Serialize};
 
 use taskito_core::job::{Job, JobStatus};
 use taskito_core::scheduler::JobResult;
@@ -20,8 +21,8 @@ use taskito_core::worker::executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
 };
 use taskito_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    ExecutorMessage, Frame, FrameReader, FrameWriter, ProtocolError, SchedulerMessage,
+    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 use taskito_core::worker::remote::{RemoteConfig, RemoteDispatcher};
 use taskito_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
@@ -240,6 +241,35 @@ fn dial(
     connected
 }
 
+/// A frame from a peer released after this build: a type tag with no variant
+/// behind it, plus the payload length that makes it skippable.
+#[derive(Debug, Serialize, Deserialize)]
+struct FutureFrame {
+    #[serde(rename = "type")]
+    frame_type: String,
+    payload_len: usize,
+}
+
+impl FutureFrame {
+    fn new(frame_type: &str, payload: &[u8]) -> Self {
+        Self {
+            frame_type: frame_type.to_string(),
+            payload_len: payload.len(),
+        }
+    }
+}
+
+impl Frame for FutureFrame {
+    fn payload_len(&self) -> usize {
+        self.payload_len
+    }
+
+    /// Never: the whole point of this frame is that the peer cannot name it.
+    fn is_known_type(_tag: &str) -> bool {
+        false
+    }
+}
+
 /// The scheduler end of the wire, hand-driven.
 ///
 /// [`RemoteDispatcher`] is the right peer for most of these tests, but it is
@@ -313,6 +343,13 @@ impl FakeScheduler {
         self.send_job_with(id, task_name, payload, Vec::new());
     }
 
+    /// Write a frame type no executor built today can name.
+    fn send_future_frame(&mut self, frame_type: &str, payload: &[u8]) {
+        self.writer
+            .write(&FutureFrame::new(frame_type, payload), payload)
+            .expect("send a future frame");
+    }
+
     fn send_job_with(
         &mut self,
         id: &str,
@@ -369,6 +406,74 @@ impl FakeScheduler {
 
     fn next_frame(&mut self) -> (ExecutorMessage, Vec<u8>) {
         self.reader.read::<ExecutorMessage>().expect("read a frame")
+    }
+}
+
+/// The executor end of the wire, hand-driven.
+///
+/// The mirror of [`FakeScheduler`], and needed for the same reason:
+/// [`ExecutorClient`] only ever writes frames this build knows, so proving a
+/// scheduler survives one it does not takes a peer that writes anything.
+struct FakeExecutor {
+    reader: FrameReader<ReadHalf>,
+    writer: FrameWriter<WriteHalf>,
+}
+
+impl FakeExecutor {
+    /// Handshake with a real [`RemoteDispatcher`], leaving both ends live.
+    fn attach(dispatcher: &RemoteDispatcher, tasks: &[&str], slots: u32) -> Self {
+        let (scheduler_end, executor_end) = MemoryTransport::pair();
+        let accepting = {
+            let dispatcher = dispatcher.clone();
+            thread::spawn(move || dispatcher.attach(Box::new(scheduler_end)))
+        };
+
+        let (read, write, _connection) = Box::new(executor_end).split().expect("split");
+        let mut executor = Self {
+            reader: FrameReader::new(read),
+            writer: FrameWriter::new(write),
+        };
+        executor
+            .writer
+            .write_header(&ExecutorMessage::Hello {
+                executor_id: "exec-fake".to_string(),
+                sdk: "test".to_string(),
+                version: "0.0.0".to_string(),
+                tasks: tasks.iter().map(|task| (*task).to_string()).collect(),
+                slots,
+                protocol_version: PROTOCOL_VERSION,
+                token: None,
+            })
+            .expect("send hello");
+        match executor.reader.read::<SchedulerMessage>().expect("ack").0 {
+            SchedulerMessage::HelloAck { .. } => {}
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+        accepting.join().expect("attach thread").expect("attach");
+        executor
+    }
+
+    /// Write a frame type no scheduler built today can name.
+    fn send_future_frame(&mut self, frame_type: &str, payload: &[u8]) {
+        self.writer
+            .write(&FutureFrame::new(frame_type, payload), payload)
+            .expect("send a future frame");
+    }
+
+    /// Read the next dispatch, answering it with a success.
+    fn run_next_job(&mut self) {
+        let job_id = match self.reader.read::<SchedulerMessage>().expect("read").0 {
+            SchedulerMessage::Job { id, .. } => id,
+            other => panic!("expected a job, got {other:?}"),
+        };
+        self.writer
+            .write_header(&ExecutorMessage::Success {
+                job_id,
+                result_len: None,
+                task_name: "resize".to_string(),
+                wall_time_ns: 1,
+            })
+            .expect("send success");
     }
 }
 
@@ -1149,6 +1254,51 @@ fn a_flood_of_progress_neither_blocks_the_task_nor_grows_without_bound() {
     }
 
     handle.shutdown();
+}
+
+#[test]
+fn a_frame_from_a_newer_scheduler_is_ignored_rather_than_ending_the_session() {
+    // An executor released before the scheduler must not treat a frame it has
+    // no variant for as a fatal desync: ending the session there would fail
+    // every job in flight over a frame this build never needed.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+
+    scheduler.send_future_frame("prefetch", b"payload-it-cannot-read");
+
+    // A job behind the unknown frame is the proof: it can only be read once the
+    // skip consumed exactly the right number of bytes.
+    scheduler.send_job("job-1", "resize", b"payload");
+    assert!(matches!(
+        scheduler.expect_result(),
+        ExecutorMessage::Success { job_id, .. } if job_id == "job-1"
+    ));
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_frame_from_a_newer_executor_is_ignored_rather_than_abandoning_the_attach() {
+    // The same tolerance on the scheduler's reader. Dropping the attach here
+    // would deregister a live executor and leave its in-flight jobs for the
+    // reaper — a slow, visible failure caused by a frame nobody needed.
+    let dispatcher = scheduler(None);
+    let mut executor = FakeExecutor::attach(&dispatcher, &["resize"], 1);
+
+    executor.send_future_frame("telemetry", b"payload-it-cannot-read");
+
+    with_running(&dispatcher, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b"in"))
+            .expect("send job");
+        executor.run_next_job();
+        assert!(matches!(expect_result(results), JobResult::Success { .. }));
+        // Asserted while the dispatcher is still running: its own shutdown
+        // deregisters every executor, so afterwards this proves nothing.
+        assert_eq!(
+            dispatcher.executors().len(),
+            1,
+            "the executor must still be attached"
+        );
+    });
 }
 
 #[test]

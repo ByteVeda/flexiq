@@ -189,6 +189,13 @@ or task-log frames, and those calls become no-ops (logged once). Everything else
 — dispatch, results, retries, cancellation — is unaffected. The executor logs
 which capabilities it negotiated at attach.
 
+Skew in the other direction is covered too. A frame type the receiving side has
+never heard of is logged once and skipped rather than treated as a corrupt
+stream: a header declares its own payload length, so the reader stays aligned on
+the next frame. That holds both ways, so neither an older scheduler nor an older
+executor drops a live session — and its in-flight jobs — over a frame it did not
+need.
+
 ## Trade-offs
 
 | Cost | Mitigation |

@@ -116,12 +116,14 @@ bytes of the section above, unchanged. `MAX_HEADER_BYTES` (64 KiB) and
 
 | Frame | Direction | Payload |
 |---|---|---|
-| `hello` | executor → scheduler | `{executor_id, sdk, version, tasks[], slots, protocol_version}` |
-| `hello_ack` | scheduler → executor | `{scheduler_id, protocol_version}` |
+| `hello` | executor → scheduler | `{executor_id, sdk, version, tasks[], slots, protocol_version, token?}` |
+| `hello_ack` | scheduler → executor | `{scheduler_id, protocol_version, capabilities[]}` |
 | `heartbeat` | executor → scheduler | `{free_slots}` |
-| `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace}` + blob |
+| `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace, disabled_middleware[], metadata}` + blob |
 | `cancel` | scheduler → executor | `{job_id}` |
 | `shutdown` | scheduler → executor | — |
+| `progress` | executor → scheduler | `{job_id, progress}` |
+| `task_log` | executor → scheduler | `{job_id, task_name, level, message, extra_len}` + blob |
 | `success` | executor → scheduler | `{job_id, result_len, task_name, wall_time_ns}` + blob |
 | `failure` | executor → scheduler | `{job_id, error, retry_count, max_retries, task_name, wall_time_ns, should_retry, timed_out}` |
 | `cancelled` | executor → scheduler | `{job_id, task_name, wall_time_ns}` |
@@ -132,9 +134,27 @@ Rules:
   is never silently downgraded. The scheduler sends `hello_ack` even when it is
   rejecting, so both ends can log both versions.
 - `result_len: null` means the task returned nothing; `0` means it returned an
-  empty value. They are distinct.
+  empty value. They are distinct. `extra_len` follows the same rule.
 - `should_retry` is the executor's decision — only it can see the exception. The
   core never inspects one.
+- **Optional behaviour is negotiated, not versioned.** `capabilities` lists what
+  the scheduler will do on an executor's behalf; `side_channel` means it applies
+  `progress` and `task_log` frames to storage. An executor sends neither frame
+  unless it was advertised. Adding one never bumps `protocol_version`, which
+  would force scheduler and executors to upgrade together.
+- **An unknown frame type is skipped, not fatal.** A reader that cannot name a
+  frame reads its declared payload length, discards that many bytes, logs once
+  and continues — the stream stays aligned, and a session keeps its in-flight
+  jobs. A frame type whose name *is* known but whose header will not parse stays
+  an error: that is a desync, not a newer peer.
+- **A new frame type must declare its payload length as `payload_len`.** It is
+  the only field a peer that predates the frame can find. `result_len` and
+  `extra_len` predate this rule and are read as equivalents.
+- `progress` and `task_log` are fire-and-forget: they carry no reply, never
+  settle a job, and a scheduler drops one naming a job the sender is not
+  running. `progress` is 0–100; a value outside that range is never written —
+  SDK boundaries clamp where they can, and the scheduler drops what still
+  reaches it rather than failing the job over a progress report.
 
 ## Task errors (structured, cross-SDK)
 When a task raises, the shell reports the failure as a **canonical JSON object**

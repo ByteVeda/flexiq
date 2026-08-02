@@ -30,7 +30,7 @@
 //! # }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -41,8 +41,8 @@ use tokio::sync::mpsc::error::TrySendError;
 
 use super::auth::Secret;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError, SchedulerMessage,
+    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
@@ -806,19 +806,34 @@ fn spawn_reader(
     thread::Builder::new()
         .name("taskito-executor-reader".to_string())
         .spawn(move || {
+            // Once per type per session: a newer scheduler may send the frame we
+            // cannot read on every dispatch.
+            let mut reported_unknown: HashSet<String> = HashSet::new();
             loop {
-                match reader.read::<SchedulerMessage>() {
-                    Ok((SchedulerMessage::Shutdown, _)) => {
+                match reader.read_or_skip::<SchedulerMessage>() {
+                    Ok(Incoming::Known(SchedulerMessage::Shutdown, _)) => {
                         log::info!(
                             "[taskito] scheduler asked executor {} to shut down",
                             shared.executor_id
                         );
                         break;
                     }
-                    Ok((SchedulerMessage::Cancel { job_id }, _)) => {
+                    Ok(Incoming::Known(SchedulerMessage::Cancel { job_id }, _)) => {
                         dispatcher.notify_cancel(&job_id);
                     }
-                    Ok((frame, payload)) => accept_job(&shared, frame, payload),
+                    Ok(Incoming::Known(frame, payload)) => accept_job(&shared, frame, payload),
+                    // A frame from a scheduler newer than this executor. The
+                    // session is otherwise fine, and ending it would fail every
+                    // job in flight over a frame this build never needed.
+                    Ok(Incoming::Unknown { frame_type }) => {
+                        if reported_unknown.insert(frame_type.clone()) {
+                            log::warn!(
+                                "[taskito] scheduler sent a '{frame_type}' frame executor {} does \
+                                 not know; ignoring it (upgrade the executor to use it)",
+                                shared.executor_id
+                            );
+                        }
+                    }
                     Err(ProtocolError::Eof) => {
                         log::info!(
                             "[taskito] scheduler closed the connection to executor {}",

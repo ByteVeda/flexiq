@@ -12,6 +12,14 @@
 //! wire *are* the wire-envelope bytes of `BINDING_CONTRACT.md`. Headers stay
 //! JSON so every SDK can write an executor with its standard library alone.
 //! The same format serves a pipe (prefork's stdio children) and a socket.
+//!
+//! Because a header declares its own payload length, a peer can skip a frame
+//! type it has never heard of and stay aligned — see
+//! [`FrameReader::read_or_skip`], which is how a live session survives the far
+//! side being upgraded first. That only holds while the length stays findable
+//! without knowing the frame's shape: **a frame type added from here on must
+//! declare its payload length in a field named `payload_len`**. The two frames
+//! that predate the rule (`success`, `task_log`) are aliased into it.
 
 use std::io::{BufRead, BufWriter, Read, Write};
 
@@ -276,6 +284,13 @@ pub enum ExecutorMessage {
 pub trait Frame: Serialize + DeserializeOwned {
     /// Bytes of payload that follow this header; zero for frames carrying none.
     fn payload_len(&self) -> usize;
+
+    /// Whether `tag` names a frame type this build can parse.
+    ///
+    /// Tells a frame from a *newer* peer, which is safe to skip, from a corrupt
+    /// one of a type we do know — a real disagreement that must not be papered
+    /// over, because skipping it would silently lose a dispatch or a result.
+    fn is_known_type(tag: &str) -> bool;
 }
 
 impl Frame for SchedulerMessage {
@@ -284,6 +299,10 @@ impl Frame for SchedulerMessage {
             Self::Job { payload_len, .. } => *payload_len,
             _ => 0,
         }
+    }
+
+    fn is_known_type(tag: &str) -> bool {
+        matches!(tag, "hello_ack" | "job" | "cancel" | "shutdown")
     }
 }
 
@@ -295,6 +314,47 @@ impl Frame for ExecutorMessage {
             _ => 0,
         }
     }
+
+    fn is_known_type(tag: &str) -> bool {
+        matches!(
+            tag,
+            "hello" | "heartbeat" | "progress" | "task_log" | "success" | "failure" | "cancelled"
+        )
+    }
+}
+
+/// One frame off the wire, which the reader may not be able to name.
+///
+/// Returned by [`FrameReader::read_or_skip`], the tolerant read a live session
+/// uses. The handshake keeps the strict [`FrameReader::read`]: a peer that
+/// cannot say hello has nothing to offer, so there is nothing to be tolerant of.
+#[derive(Debug)]
+pub enum Incoming<F> {
+    /// A frame this build understands, with its payload.
+    Known(F, Vec<u8>),
+    /// A frame type this build does not know. Its payload has already been
+    /// consumed, so the stream is still aligned on a frame boundary.
+    Unknown {
+        /// The `type` tag the peer sent, for the log line that reports it.
+        frame_type: String,
+    },
+}
+
+/// The two things a frame this build cannot name must still yield: what it is,
+/// and how many payload bytes follow it.
+///
+/// The length is what makes an unknown frame skippable rather than fatal, so
+/// **any frame type added from now on must declare its payload length as
+/// `payload_len`** — a peer released before it has nothing else to go on. The
+/// two names that predate the rule, `result_len` (`success`) and `extra_len`
+/// (`task_log`), are aliased so a later frame modelled on either still skips
+/// cleanly rather than desyncing the wire.
+#[derive(Debug, Deserialize)]
+struct FramePreamble {
+    #[serde(rename = "type")]
+    frame_type: String,
+    #[serde(default, alias = "result_len", alias = "extra_len")]
+    payload_len: Option<usize>,
 }
 
 impl From<&Job> for SchedulerMessage {
@@ -631,8 +691,51 @@ impl<R: BufRead> FrameReader<R> {
     pub fn read<F: Frame>(&mut self) -> Result<(F, Vec<u8>), ProtocolError> {
         let header = self.read_header_line()?;
         let frame: F = serde_json::from_slice(&header)?;
+        let payload = self.read_payload(frame.payload_len())?;
+        Ok((frame, payload))
+    }
 
-        let len = frame.payload_len();
+    /// Read one frame, skipping past a type this build does not know.
+    ///
+    /// Scheduler and executor are released independently — that decoupling is
+    /// the whole reason an attach exists — so a frame type added on the far side
+    /// must degrade to "ignored". [`FrameReader::read`] would surface it as a
+    /// parse error, and the only thing a reader loop can do with one is drop the
+    /// connection, abandoning every job in flight to the reaper.
+    ///
+    /// Skipping is possible because a header declares its own payload length,
+    /// which the preamble reads without knowing the frame's shape. A *known*
+    /// type that fails to parse is still an error: that is a disagreement about
+    /// a frame we both claim to speak, not a newer peer.
+    pub fn read_or_skip<F: Frame>(&mut self) -> Result<Incoming<F>, ProtocolError> {
+        let header = self.read_header_line()?;
+        // Typed first, so a known frame pays nothing for the tolerance: the
+        // preamble is parsed only once this build has failed to name the frame.
+        let typed = match serde_json::from_slice::<F>(&header) {
+            Ok(frame) => {
+                let payload = self.read_payload(frame.payload_len())?;
+                return Ok(Incoming::Known(frame, payload));
+            }
+            Err(error) => error,
+        };
+
+        match serde_json::from_slice::<FramePreamble>(&header) {
+            // Not even a type tag: report the typed failure, which names what
+            // was expected. Nothing here says how far to skip, either.
+            Err(_) => Err(typed.into()),
+            Ok(preamble) if F::is_known_type(&preamble.frame_type) => Err(typed.into()),
+            Ok(preamble) => {
+                self.read_payload(preamble.payload_len.unwrap_or(0))?;
+                Ok(Incoming::Unknown {
+                    frame_type: preamble.frame_type,
+                })
+            }
+        }
+    }
+
+    /// Read exactly `len` payload bytes, capped so a corrupt length field cannot
+    /// allocate without bound.
+    fn read_payload(&mut self, len: usize) -> Result<Vec<u8>, ProtocolError> {
         if len > MAX_PAYLOAD_BYTES {
             return Err(ProtocolError::PayloadTooLarge { len });
         }
@@ -640,7 +743,7 @@ impl<R: BufRead> FrameReader<R> {
         if len > 0 {
             self.inner.read_exact(&mut payload)?;
         }
-        Ok((frame, payload))
+        Ok(payload)
     }
 
     /// Read through the header's newline, capped so a peer that never sends one
@@ -1264,6 +1367,139 @@ mod tests {
         let buf = b"not json\n";
         assert!(matches!(
             FrameReader::new(&buf[..]).read::<ExecutorMessage>(),
+            Err(ProtocolError::Json(_))
+        ));
+    }
+
+    /// The `type` tag a frame actually serializes to.
+    fn wire_type<F: Frame>(frame: &F) -> String {
+        let value: serde_json::Value = serde_json::to_value(frame).expect("serialize");
+        value["type"].as_str().expect("a type tag").to_string()
+    }
+
+    #[test]
+    fn every_frame_reports_its_own_wire_type_as_known() {
+        // `is_known_type` is what separates "a peer newer than us" from "a frame
+        // we should have been able to read". A tag missing from it would make a
+        // real desync look like forward compatibility and skip a job's result.
+        for frame in [
+            SchedulerMessage::HelloAck {
+                scheduler_id: "s".into(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: vec![],
+            },
+            SchedulerMessage::from(&sample_job(b"")),
+            SchedulerMessage::Cancel {
+                job_id: "job-1".into(),
+            },
+            SchedulerMessage::Shutdown,
+        ] {
+            let tag = wire_type(&frame);
+            assert!(
+                SchedulerMessage::is_known_type(&tag),
+                "'{tag}' serializes but is not listed as known"
+            );
+        }
+
+        for frame in [
+            hello_with_token(None),
+            ExecutorMessage::Heartbeat { free_slots: 1 },
+            ExecutorMessage::Progress {
+                job_id: "job-1".into(),
+                progress: 10,
+            },
+            ExecutorMessage::task_log("job-1", "t", "info", "m", None).0,
+            ExecutorMessage::Success {
+                job_id: "job-1".into(),
+                result_len: None,
+                task_name: "t".into(),
+                wall_time_ns: 1,
+            },
+            ExecutorMessage::Failure {
+                job_id: "job-1".into(),
+                error: "e".into(),
+                retry_count: 0,
+                max_retries: 3,
+                task_name: "t".into(),
+                wall_time_ns: 1,
+                should_retry: true,
+                timed_out: false,
+            },
+            ExecutorMessage::Cancelled {
+                job_id: "job-1".into(),
+                task_name: "t".into(),
+                wall_time_ns: 1,
+            },
+        ] {
+            let tag = wire_type(&frame);
+            assert!(
+                ExecutorMessage::is_known_type(&tag),
+                "'{tag}' serializes but is not listed as known"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_frame_is_skipped_and_the_next_one_still_reads() {
+        // The forward-compatibility contract: a peer released after this build
+        // can send frames it does not know, and the stream stays aligned.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"{\"type\":\"telemetry\",\"payload_len\":5}\nabcde");
+        FrameWriter::new(&mut buf)
+            .write_header(&ExecutorMessage::Heartbeat { free_slots: 2 })
+            .expect("write");
+
+        let mut reader = FrameReader::new(buf.as_slice());
+        match reader.read_or_skip::<ExecutorMessage>().expect("skip") {
+            Incoming::Unknown { frame_type } => assert_eq!(frame_type, "telemetry"),
+            Incoming::Known(frame, _) => panic!("unexpectedly parsed {frame:?}"),
+        }
+        assert!(matches!(
+            reader.read_or_skip::<ExecutorMessage>().expect("read"),
+            Incoming::Known(ExecutorMessage::Heartbeat { free_slots: 2 }, _)
+        ));
+    }
+
+    #[test]
+    fn an_unknown_frame_declaring_a_legacy_length_field_is_still_skipped() {
+        // `success` and `task_log` predate the `payload_len` rule, so a later
+        // frame modelled on either would name its blob `result_len`/`extra_len`.
+        // Honouring both is what keeps that copy-paste from desyncing the wire.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"{\"type\":\"partial\",\"extra_len\":2}\nhi");
+        FrameWriter::new(&mut buf)
+            .write_header(&ExecutorMessage::Heartbeat { free_slots: 1 })
+            .expect("write");
+
+        let mut reader = FrameReader::new(buf.as_slice());
+        assert!(matches!(
+            reader.read_or_skip::<ExecutorMessage>().expect("skip"),
+            Incoming::Unknown { .. }
+        ));
+        assert!(matches!(
+            reader.read_or_skip::<ExecutorMessage>().expect("read"),
+            Incoming::Known(ExecutorMessage::Heartbeat { free_slots: 1 }, _)
+        ));
+    }
+
+    #[test]
+    fn a_known_frame_type_that_will_not_parse_is_still_an_error() {
+        // Skipping this would silently drop a dispatch. Only an *unrecognised*
+        // type is forward compatibility; a broken `job` is a disagreement.
+        let buf = b"{\"type\":\"job\",\"id\":\"job-1\"}\n";
+        assert!(matches!(
+            FrameReader::new(&buf[..]).read_or_skip::<SchedulerMessage>(),
+            Err(ProtocolError::Json(_))
+        ));
+    }
+
+    #[test]
+    fn a_header_without_a_type_tag_is_an_error_rather_than_a_skip() {
+        // Nothing here says how far to skip, so pretending otherwise would
+        // desync the stream on the very next read.
+        let buf = b"{\"payload_len\":4}\n";
+        assert!(matches!(
+            FrameReader::new(&buf[..]).read_or_skip::<ExecutorMessage>(),
             Err(ProtocolError::Json(_))
         ));
     }
