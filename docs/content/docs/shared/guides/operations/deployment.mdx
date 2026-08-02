@@ -768,16 +768,17 @@ spec:
               value: 0.0.0.0:8080
             - name: TASKITO_DASHBOARD_AUTH
               value: session
+            - name: TASKITO_DASHBOARD_PUBLIC_READINESS
+              value: "1"
           ports:
             - { name: attach, containerPort: 7777 }
             - { name: dashboard, containerPort: 8080 }
-          # /health, not /readiness, on both: session auth gates /readiness and
-          # a kubelet probe carries no credential. See the note below to trade
-          # this for a real storage check.
           livenessProbe:
             httpGet: { path: /health, port: dashboard }
           readinessProbe:
-            httpGet: { path: /health, port: dashboard }
+            # Needs TASKITO_DASHBOARD_PUBLIC_READINESS above; without it this
+            # route 401s at a credential-less probe and the pod never goes Ready.
+            httpGet: { path: /readiness, port: dashboard }
 ---
 apiVersion: v1
 kind: Service
@@ -796,23 +797,25 @@ is unchanged. The Service publishes `attach` and nothing else — give the
 dashboard its own Service or Ingress when you want it reachable, so the port
 that dispatches code and the port people browse are never the same object.
 
-<Callout type="warn" title="/readiness is gated the moment the dashboard is">
-  `/health` is never gated — it reports that the process is up, and nothing
-  more. `/readiness` is the one that checks storage, and it is open **only**
-  when the dashboard runs unauthenticated with no metrics token set. With
-  `TASKITO_DASHBOARD_AUTH=session` above, or with
-  `TASKITO_DASHBOARD_METRICS_TOKEN` set, a bare probe gets `401` and the pod
-  never goes Ready — which is why the manifest probes `/health` twice.
+<Callout type="warn" title="/readiness is gated unless you say otherwise">
+  `/health` is never gated, and reports only that the process is up — which
+  makes it a liveness probe and nothing more. `/readiness` is the one that
+  checks storage, and it is gated alongside `/metrics`: with
+  `TASKITO_DASHBOARD_AUTH=session`, or with `TASKITO_DASHBOARD_METRICS_TOKEN`
+  set, a bare probe gets `401` and the pod never goes Ready.
 
-  To probe it for real, set `TASKITO_DASHBOARD_METRICS_TOKEN` and send
-  `Authorization: Bearer <token>` from the probe. Probe headers are literal
-  strings in the manifest, so render the token in with Helm or kustomize rather
-  than committing it. On an attach deployment `/readiness` reports
-  `workers: none` — executors are not workers — and still answers 200.
+  A kubelet probe carries no credential and cannot be given one — a probe header
+  is a literal string in the manifest, so authenticating it would mean copying
+  the token out of its Secret into the Deployment spec.
+  `TASKITO_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a
+  credential instead; `/metrics` stays gated. What it publishes to anything that
+  can reach the port is whether storage answers and how many workers are
+  registered. Leave it off and probe `/health` for both if that is too much.
 
-  Both routes are dashboard routes, so any probing needs `TASKITO_DASHBOARD`
-  set. A listener-only server has no HTTP port, and a `tcpSocket` probe on the
-  attach port is the fallback.
+  On an attach deployment `/readiness` reports `workers: none` — executors are
+  not workers — and still answers 200. Both routes are dashboard routes, so any
+  probing needs `TASKITO_DASHBOARD` set; a listener-only server has no HTTP
+  port, and a `tcpSocket` probe on the attach port is the fallback.
 </Callout>
 
 #### With Helm

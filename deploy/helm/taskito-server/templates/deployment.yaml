@@ -124,6 +124,10 @@ spec:
                   name: {{ include "taskito-server.secretName" . }}
                   key: metrics-token
             {{- end }}
+            {{- if .Values.dashboard.publicReadiness }}
+            - name: TASKITO_DASHBOARD_PUBLIC_READINESS
+              value: "1"
+            {{- end }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: TASKITO_WEBHOOK_LISTEN
@@ -149,21 +153,24 @@ spec:
             - name: webhook
               containerPort: {{ .Values.webhook.port }}
             {{- end }}
-          # One probe per type is all Kubernetes takes, and one is all this needs:
-          # every role is a listener in the *same* process, and a bind that fails
-          # takes the process down rather than leaving it half-served. So the
-          # probe only has to prove the process is alive — any enabled listener
-          # answers that. The dashboard's plaintext /health is preferred simply
-          # because it is the cheapest to check; the attach port has no HTTP, so
-          # a TCP connect stands in.
+          # Liveness and readiness answer different questions, so they differ
+          # where they can. Liveness is "is the process there" — /health, the one
+          # route that is never gated. Readiness is "can it serve" — /readiness,
+          # which checks storage, but only answers a bare probe when
+          # publicReadiness is on; otherwise it 401s and the pod never goes
+          # Ready, so it falls back to /health.
           #
-          # /health is also the only route that is never gated. /readiness checks
-          # storage but answers 401 whenever the dashboard authenticates, and a
-          # kubelet probe carries no credential — see the chart README.
+          # One probe per type is all Kubernetes takes, and one is all liveness
+          # needs: every role is a listener in the *same* process, and a bind
+          # that fails takes the process down rather than leaving it
+          # half-served. The attach port has no HTTP, so a TCP connect stands in.
           {{- if .Values.dashboard.enabled }}
-          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "dashboard") }}
-          livenessProbe: {{- toYaml $probe | nindent 12 }}
-          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /health, port: dashboard }
+          readinessProbe:
+            httpGet:
+              path: {{ ternary "/readiness" "/health" .Values.dashboard.publicReadiness }}
+              port: dashboard
           {{- else if .Values.webhook.enabled }}
           {{- $probe := dict "httpGet" (dict "path" "/health" "port" "webhook" "scheme" "HTTPS") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}

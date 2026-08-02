@@ -62,6 +62,33 @@ jobs:
           refuses "an unacknowledged open dashboard" \
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.auth=off
 
+      # A readiness probe that 401s leaves the pod NotReady forever, and the
+      # only thing distinguishing the two cases is one env var reaching the
+      # container alongside the path the probe uses.
+      - name: Readiness probes what the server will actually answer
+        run: |
+          set -euo pipefail
+          probe() {
+            helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
+              --set attach.token="$TOKEN" "$@" \
+              | python3 -c '
+          import sys, yaml
+          for doc in yaml.safe_load_all(sys.stdin):
+              if not doc or doc.get("kind") != "Deployment":
+                  continue
+              container = doc["spec"]["template"]["spec"]["containers"][0]
+              env = {e["name"] for e in container.get("env", [])}
+              print(container["readinessProbe"]["httpGet"]["path"],
+                    "TASKITO_DASHBOARD_PUBLIC_READINESS" in env)
+          '
+          }
+          on="$(probe)"
+          off="$(probe --set dashboard.publicReadiness=false)"
+          echo "default: $on"
+          echo "opted out: $off"
+          [ "$on" = "/readiness True" ] || { echo "::error::default must probe /readiness with the env var set"; exit 1; }
+          [ "$off" = "/health False" ] || { echo "::error::opting out must fall back to /health"; exit 1; }
+
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that
       # does not sign the certificate the pod serves — and every admission call
