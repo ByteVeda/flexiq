@@ -111,8 +111,18 @@ export function createTaskCallback(
       jobId: invocation.id,
       signal: controller.signal,
       setProgress: (progress) => setProgress(invocation.id, progress),
+      log: (message, level = "info", extra) =>
+        writeTaskLog(
+          invocation.id,
+          invocation.taskName,
+          level,
+          message,
+          extra === undefined ? undefined : encodeExtra(extra),
+        ),
+      // A published partial is a task log at level `result`, which is what lets
+      // `queue.stream` pick it out of ordinary logs.
       publish: (value) =>
-        writeTaskLog(invocation.id, invocation.taskName, "result", "", JSON.stringify(value)),
+        writeTaskLog(invocation.id, invocation.taskName, "result", "", encodeExtra(value)),
     };
     const poller = setInterval(() => {
       try {
@@ -181,6 +191,21 @@ export function createTaskCallback(
       }
     }
   };
+}
+
+/**
+ * Encode a structured `extra` blob for a task log.
+ *
+ * Falls back to the value's string form rather than throwing: a circular
+ * reference in a log line must not fail the task that wrote it, and a
+ * best-effort rendering is more use than a lost entry.
+ */
+function encodeExtra(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /** Whether a task's `retryOn` predicate accepts this failure. */

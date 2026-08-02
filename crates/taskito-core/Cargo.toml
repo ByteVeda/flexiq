@@ -40,6 +40,10 @@ redis = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Hand-rolled wire frames in the executor-attach tests: a frame type this build
+# has no variant for is exactly what the forward-compatibility path is about, so
+# the test has to be able to serialize one.
+serde = { workspace = true }
 # Raw connection access in the Redis contract tests, to set up race-window
 # state and assert on internal index keys. Only used by `#[cfg(feature = "redis")]`
 # tests; harmless when the feature is off.

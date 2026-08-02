@@ -285,6 +285,29 @@ async function reportingHandler(): Promise<string> {
   return "reported";
 }
 
+/** The queue's job-scoped writes, which on an executor have no storage behind them. */
+interface JobScopedWrites {
+  updateProgress(jobId: string, progress: number): void;
+  writeTaskLog(
+    jobId: string,
+    taskName: string,
+    level: string,
+    message: string,
+    extra?: string,
+  ): void;
+}
+
+/**
+ * Reach the queue's native handle.
+ *
+ * Private on purpose, and the seam under test on purpose: this is what a task
+ * uses when it goes through the queue rather than `currentJob()`, and on an
+ * executor it has to reach the scheduler just the same.
+ */
+function nativeOf(queue: Queue): JobScopedWrites {
+  return (queue as unknown as { native: JobScopedWrites }).native;
+}
+
 /** Encode a call the way the enqueue path does. */
 function payloadFor(queue: Queue, args: unknown[]): Buffer {
   // biome-ignore lint/complexity/useLiteralKeys: reaching the internal serializer
@@ -639,6 +662,74 @@ it("sends progress and logs to a scheduler that advertised the side-channel", as
     expect(partial?.header.job_id).toBe("job-1");
     expect(partial?.header.task_name).toBe("reports");
     expect(JSON.parse(partial?.payload.toString() ?? "")).toEqual({ stage: "halfway" });
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("sends the queue's own progress and log writes to the scheduler", async () => {
+  // The other seam: a task that reaches the queue directly rather than through
+  // `currentJob()`. On an executor that shim has no storage behind it, and
+  // warning-and-dropping there would make the same call silently poorer than
+  // the context one.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["side_channel"];
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("reports", () => {
+      const native = nativeOf(queue);
+      native.updateProgress("job-1", 25);
+      native.writeTaskLog("job-1", "reports", "warning", "from the queue", '{"via":"queue"}');
+      return "reported";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "reports", payloadFor(queue, []));
+
+    const { result, sideChannel } = await scheduler.collectUntilResult();
+    expect(result.header.type).toBe("success");
+
+    const progress = sideChannel
+      .filter((frame) => frame.header.type === "progress")
+      .map((frame) => frame.header.progress);
+    expect(progress).toContain(25);
+
+    const logged = sideChannel.find((frame) => frame.header.level === "warning");
+    expect(logged?.header.message).toBe("from the queue");
+    expect(logged?.header.task_name).toBe("reports");
+    expect(JSON.parse(logged?.payload.toString() ?? "")).toEqual({ via: "queue" });
+  } finally {
+    delete process.env[DETACHED_ENV];
+  }
+});
+
+it("writes a structured log line from the job context", async () => {
+  // `publish` was the only route to a task log before this; a plain log line
+  // had nowhere to go on an executor at all.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["side_channel"];
+  process.env[DETACHED_ENV] = "1";
+  try {
+    const queue = new Queue({ backend: "postgres", dsn: "postgres://x:y@127.0.0.1:1/absent" });
+    queue.task("logs", () => {
+      currentJob()?.log("halfway", "warning", { step: 2 });
+      return "logged";
+    });
+
+    executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+    await scheduler.attached();
+    scheduler.sendJob("job-1", "logs", payloadFor(queue, []));
+
+    const { result, sideChannel } = await scheduler.collectUntilResult();
+    expect(result.header.type).toBe("success");
+
+    const logged = sideChannel.find((frame) => frame.header.type === "task_log");
+    expect(logged?.header.level).toBe("warning");
+    expect(logged?.header.message).toBe("halfway");
+    expect(logged?.header.job_id).toBe("job-1");
+    expect(JSON.parse(logged?.payload.toString() ?? "")).toEqual({ step: 2 });
   } finally {
     delete process.env[DETACHED_ENV];
   }

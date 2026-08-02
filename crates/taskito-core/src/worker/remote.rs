@@ -16,8 +16,8 @@ use tokio::sync::Notify;
 
 use super::auth::Secret;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError, SchedulerMessage,
+    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 use super::side_channel::SideChannel;
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
@@ -926,13 +926,34 @@ impl Shared {
         thread::Builder::new()
             .name(format!("taskito-executor-{}", executor.id))
             .spawn(move || {
+                // Reported once per type per connection: a newer executor may
+                // send the frame we cannot read on every job, and a warning per
+                // frame would bury the one that explains the upgrade.
+                let mut reported_unknown: HashSet<String> = HashSet::new();
                 loop {
-                    match reader.read::<ExecutorMessage>() {
-                        Ok((message, payload)) => {
+                    match reader.read_or_skip::<ExecutorMessage>() {
+                        Ok(Incoming::Known(message, payload)) => {
                             executor
                                 .last_seen_ms
                                 .store(self.elapsed_ms(), Ordering::Relaxed);
                             self.handle_frame(&executor, message, payload);
+                        }
+                        // A frame from an executor newer than this scheduler.
+                        // Skipped, not fatal: the peer is plainly alive, and
+                        // dropping the attach would abandon its in-flight jobs
+                        // to the reaper over a frame nobody needed.
+                        Ok(Incoming::Unknown { frame_type }) => {
+                            executor
+                                .last_seen_ms
+                                .store(self.elapsed_ms(), Ordering::Relaxed);
+                            if reported_unknown.insert(frame_type.clone()) {
+                                log::warn!(
+                                    "[taskito] executor {} sent a '{frame_type}' frame this \
+                                     scheduler does not know; ignoring it (upgrade the scheduler \
+                                     to use it)",
+                                    executor.id
+                                );
+                            }
                         }
                         Err(ProtocolError::Eof) => {
                             log::info!("[taskito] executor {} disconnected", executor.id);

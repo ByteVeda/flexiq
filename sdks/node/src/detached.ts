@@ -15,6 +15,60 @@ export function isDetached(): boolean {
   return process.env[DETACHED_ENV] === "1";
 }
 
+/**
+ * Where an executor's storage-shaped writes go instead of a database.
+ *
+ * Implemented over the attached executor handle, which frames each call to the
+ * scheduler — the side that still holds the connection. Both methods are
+ * fire-and-forget: a task reporting progress must not be able to fail, or
+ * block, because of what is happening at the far end.
+ */
+export interface ExecutorSink {
+  updateProgress(jobId: string, progress: number): void;
+  writeTaskLog(
+    jobId: string,
+    taskName: string,
+    level: string,
+    message: string,
+    extra?: string,
+  ): void;
+}
+
+/** The sink a single detached stand-in routes through, once one has attached. */
+interface SinkHolder {
+  current?: ExecutorSink;
+}
+
+/**
+ * Each detached stand-in's sink, keyed by the stand-in itself.
+ *
+ * Per queue rather than per process: two executors can attach from one process,
+ * and a single module-level slot gave the last attach the first executor's
+ * writes, then silenced whichever was still running when either one stopped.
+ */
+const sinks = new WeakMap<object, SinkHolder>();
+
+/** Route this detached queue's progress and task logs through `next`. @internal */
+export function installSink(queue: NativeQueue, next: ExecutorSink): void {
+  const holder = sinks.get(queue);
+  if (holder) {
+    holder.current = next;
+  }
+}
+
+/**
+ * Stop routing `installed`'s writes, so they degrade to a warning again.
+ *
+ * A no-op once something else holds the slot: an executor shutting down must
+ * not disconnect the one that replaced it. @internal
+ */
+export function clearSink(queue: NativeQueue, installed: ExecutorSink): void {
+  const holder = sinks.get(queue);
+  if (holder?.current === installed) {
+    holder.current = undefined;
+  }
+}
+
 /** An executor was asked for something only a database could answer. */
 export class DetachedStorageError extends Error {
   constructor(operation: string) {
@@ -48,17 +102,36 @@ const RUNTIME_PROBES = new Set([
  * The native queue's job-scoped conveniences, degraded.
  *
  * Reads answer empty, because that is exactly what a queue with no such row
- * returns and callers already handle it. Progress and task logs are dropped
- * with one warning rather than throwing: a task that only wanted to report
- * progress must not fail because it happens to be running detached.
+ * returns and callers already handle it. Progress and task logs are forwarded
+ * to the installed {@link ExecutorSink}: the executor has no storage, but the
+ * scheduler does, and it applies them on this process's behalf. Without a sink
+ * — an app imported outside `taskito executor`, or a scheduler that advertised
+ * no side-channel — they degrade to one warning rather than throwing, because a
+ * task that only wanted to report progress must not fail for running detached.
  */
-function degraded(warnOnce: (what: string) => void): Record<string, unknown> {
+function degraded(warnOnce: (what: string) => void, holder: SinkHolder): Record<string, unknown> {
   return {
-    updateProgress(): void {
-      warnOnce("setProgress");
+    updateProgress(jobId: string, progress: number): void {
+      const sink = holder.current;
+      if (!sink) {
+        warnOnce("setProgress");
+        return;
+      }
+      sink.updateProgress(jobId, progress);
     },
-    writeTaskLog(): void {
-      warnOnce("publish");
+    writeTaskLog(
+      jobId: string,
+      taskName: string,
+      level: string,
+      message: string,
+      extra?: string,
+    ): void {
+      const sink = holder.current;
+      if (!sink) {
+        warnOnce("log/publish");
+        return;
+      }
+      sink.writeTaskLog(jobId, taskName, level, message, extra);
     },
     // A cancel reaches an executor as a protocol frame; the executor overrides
     // this check with its own native state (see `Executor.start`).
@@ -101,13 +174,14 @@ export function createDetachedNative(): NativeQueue {
       warned.add(what);
       log.warn(
         () =>
-          `${what} is unavailable on an attached executor, which has no storage; ignoring. ` +
-          "Run an in-process worker if you need it.",
+          `${what} is unavailable on an attached executor with no side-channel to the ` +
+          "scheduler; ignoring. Run an in-process worker if you need it.",
       );
     }
   };
 
-  const supported = degraded(warnOnce);
+  const holder: SinkHolder = {};
+  const supported = degraded(warnOnce, holder);
   const proxy = new Proxy(supported, {
     get(target, property): unknown {
       if (typeof property !== "string") {
@@ -135,5 +209,9 @@ export function createDetachedNative(): NativeQueue {
   // The stand-in answers the calls a running task makes and throws on the rest,
   // so a union type would force every storage call site to handle a case only
   // an executor ever sees.
-  return proxy as unknown as NativeQueue;
+  const native = proxy as unknown as NativeQueue;
+  // Keyed by the stand-in the executor is handed, which is this one: that is how
+  // an attach finds the queue whose writes it is answering for.
+  sinks.set(native, holder);
+  return native;
 }
