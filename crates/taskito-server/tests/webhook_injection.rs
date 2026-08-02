@@ -157,7 +157,24 @@ async fn re_admitting_an_injected_pod_adds_nothing() {
 }
 
 #[tokio::test]
-async fn a_body_that_is_not_an_admission_review_is_rejected() {
+async fn a_body_that_is_not_json_is_rejected() {
+    // Every field on the envelope is optional, so only malformed JSON reaches
+    // the parse-error branch — valid JSON of the wrong shape does not.
+    let request = Request::builder()
+        .method("POST")
+        .uri(MUTATE_PATH)
+        .header("content-type", "application/json")
+        .body(Body::from("{ this is not json"))
+        .expect("valid request");
+    let response = router(config())
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_review_with_no_request_is_rejected() {
     let (status, _) = review(json!({ "nonsense": true })).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
