@@ -1093,11 +1093,16 @@ fn test_reap_stale_jobs_only_returns_expired() {
     let storage = test_storage();
     let t0 = now_millis();
 
+    // Pin both jobs to t0 rather than the wall clock make_job defaults to: a
+    // millisecond ticking over between t0 and the enqueue would leave
+    // `scheduled_at > t0`, and the dequeues below would claim nothing.
     let mut short = make_job("short_timeout");
     short.timeout_ms = 1;
+    short.scheduled_at = t0;
     storage.enqueue(short).unwrap();
     let mut long = make_job("long_timeout");
     long.timeout_ms = 300_000;
+    long.scheduled_at = t0;
     storage.enqueue(long).unwrap();
 
     // Run both: started_at = t0 for each.
