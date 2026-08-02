@@ -774,10 +774,13 @@ spec:
           ports:
             - { name: attach, containerPort: 7777 }
             - { name: dashboard, containerPort: 8080 }
+          # /health, not /readiness, on both: session auth gates /readiness and
+          # a kubelet probe carries no credential. See the note below to trade
+          # this for a real storage check.
           livenessProbe:
             httpGet: { path: /health, port: dashboard }
           readinessProbe:
-            httpGet: { path: /readiness, port: dashboard }
+            httpGet: { path: /health, port: dashboard }
 ---
 apiVersion: v1
 kind: Service
@@ -796,14 +799,23 @@ is unchanged. The Service publishes `attach` and nothing else — give the
 dashboard its own Service or Ingress when you want it reachable, so the port
 that dispatches code and the port people browse are never the same object.
 
-<Callout type="info" title="The probes live on the dashboard port">
-  `/health` and `/readiness` are dashboard routes, so probing needs
-  `TASKITO_DASHBOARD` set — a listener-only server has no HTTP port to probe,
-  and a `tcpSocket` probe on the attach port is the fallback. If you set
-  `TASKITO_DASHBOARD_METRICS_TOKEN`, `/readiness` starts requiring that bearer
-  token; probe `/health` only, or pass the header. `/readiness` reports
-  `workers: none` on an attach deployment — executors are not workers — and
-  still answers 200.
+<Callout type="warn" title="/readiness is gated the moment the dashboard is">
+  `/health` is never gated — it reports that the process is up, and nothing
+  more. `/readiness` is the one that checks storage, and it is open **only**
+  when the dashboard runs unauthenticated with no metrics token set. With
+  `TASKITO_DASHBOARD_AUTH=session` above, or with
+  `TASKITO_DASHBOARD_METRICS_TOKEN` set, a bare probe gets `401` and the pod
+  never goes Ready — which is why the manifest probes `/health` twice.
+
+  To probe it for real, set `TASKITO_DASHBOARD_METRICS_TOKEN` and send
+  `Authorization: Bearer <token>` from the probe. Probe headers are literal
+  strings in the manifest, so render the token in with Helm or kustomize rather
+  than committing it. On an attach deployment `/readiness` reports
+  `workers: none` — executors are not workers — and still answers 200.
+
+  Both routes are dashboard routes, so any probing needs `TASKITO_DASHBOARD`
+  set. A listener-only server has no HTTP port, and a `tcpSocket` probe on the
+  attach port is the fallback.
 </Callout>
 
 ### Security requirements
