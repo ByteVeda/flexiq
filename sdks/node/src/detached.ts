@@ -15,6 +15,38 @@ export function isDetached(): boolean {
   return process.env[DETACHED_ENV] === "1";
 }
 
+/**
+ * Where an executor's storage-shaped writes go instead of a database.
+ *
+ * Implemented over the attached executor handle, which frames each call to the
+ * scheduler — the side that still holds the connection. Both methods are
+ * fire-and-forget: a task reporting progress must not be able to fail, or
+ * block, because of what is happening at the far end.
+ */
+export interface ExecutorSink {
+  updateProgress(jobId: string, progress: number): void;
+  writeTaskLog(
+    jobId: string,
+    taskName: string,
+    level: string,
+    message: string,
+    extra?: string,
+  ): void;
+}
+
+/** Installed by {@link Executor} once it has attached. */
+let sink: ExecutorSink | undefined;
+
+/** Route this process's progress and task logs through `next`. @internal */
+export function installSink(next: ExecutorSink): void {
+  sink = next;
+}
+
+/** Stop routing writes, so they degrade to a warning again. @internal */
+export function clearSink(): void {
+  sink = undefined;
+}
+
 /** An executor was asked for something only a database could answer. */
 export class DetachedStorageError extends Error {
   constructor(operation: string) {
@@ -48,17 +80,34 @@ const RUNTIME_PROBES = new Set([
  * The native queue's job-scoped conveniences, degraded.
  *
  * Reads answer empty, because that is exactly what a queue with no such row
- * returns and callers already handle it. Progress and task logs are dropped
- * with one warning rather than throwing: a task that only wanted to report
- * progress must not fail because it happens to be running detached.
+ * returns and callers already handle it. Progress and task logs are forwarded
+ * to the installed {@link ExecutorSink}: the executor has no storage, but the
+ * scheduler does, and it applies them on this process's behalf. Without a sink
+ * — an app imported outside `taskito executor`, or a scheduler that advertised
+ * no side-channel — they degrade to one warning rather than throwing, because a
+ * task that only wanted to report progress must not fail for running detached.
  */
 function degraded(warnOnce: (what: string) => void): Record<string, unknown> {
   return {
-    updateProgress(): void {
-      warnOnce("setProgress");
+    updateProgress(jobId: string, progress: number): void {
+      if (!sink) {
+        warnOnce("setProgress");
+        return;
+      }
+      sink.updateProgress(jobId, progress);
     },
-    writeTaskLog(): void {
-      warnOnce("publish");
+    writeTaskLog(
+      jobId: string,
+      taskName: string,
+      level: string,
+      message: string,
+      extra?: string,
+    ): void {
+      if (!sink) {
+        warnOnce("log/publish");
+        return;
+      }
+      sink.writeTaskLog(jobId, taskName, level, message, extra);
     },
     // A cancel reaches an executor as a protocol frame; the executor overrides
     // this check with its own native state (see `Executor.start`).
@@ -101,8 +150,8 @@ export function createDetachedNative(): NativeQueue {
       warned.add(what);
       log.warn(
         () =>
-          `${what} is unavailable on an attached executor, which has no storage; ignoring. ` +
-          "Run an in-process worker if you need it.",
+          `${what} is unavailable on an attached executor with no side-channel to the ` +
+          "scheduler; ignoring. Run an in-process worker if you need it.",
       );
     }
   };

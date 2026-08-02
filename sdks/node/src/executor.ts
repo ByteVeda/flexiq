@@ -1,3 +1,4 @@
+import { clearSink, installSink } from "./detached";
 import type { Emitter } from "./events";
 import type { Middleware } from "./middleware";
 import {
@@ -119,6 +120,12 @@ export class Executor {
       resources,
       queue,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
+      // Overridden rather than left to `queue`, which is only the detached
+      // stand-in when this process is a `taskito executor`. An executor started
+      // from a process that *does* have storage would otherwise write progress
+      // into its own database, where the job it names does not exist — the row
+      // belongs to the scheduler. `queue`'s own route to the scheduler is the
+      // sink installed below, for app code that calls the queue directly.
       setProgress: (jobId, progress) => attached?.reportProgress(jobId, progress),
       writeTaskLog: (jobId, taskName, level, message, extra) =>
         attached?.writeTaskLog(jobId, taskName, level, message, extra),
@@ -143,6 +150,20 @@ export class Executor {
     });
 
     attached = native;
+    // Before `markAttached`, so the first invocation through the gate already
+    // has somewhere to report to.
+    installSink({
+      updateProgress: (jobId, progress) => native.reportProgress(jobId, progress),
+      writeTaskLog: (jobId, taskName, level, message, extra) =>
+        native.writeTaskLog(jobId, taskName, level, message, extra),
+    });
+    if (!native.supportsSideChannel()) {
+      log.warn(
+        () =>
+          `scheduler ${native.schedulerId} applies no progress or task logs on this executor's ` +
+          "behalf; they will be dropped. Upgrade the scheduler to keep them.",
+      );
+    }
     markAttached();
     try {
       // Only lease the resource runtime once the attach actually succeeded, so a
@@ -205,6 +226,9 @@ export class Executor {
     try {
       await this.native.shutdown();
     } finally {
+      // The sink frames to a session that is over; leaving it installed would
+      // turn a late report into a silent no-op instead of the warning it is.
+      clearSink();
       try {
         await this.resources.teardownWorker();
       } catch (error) {
