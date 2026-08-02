@@ -28,6 +28,10 @@ The app image needs no database credentials and no inbound port.
   weights resident twice, and a multi-gigabyte image pull on every scale-up.
 </Callout>
 
+For the deployment shape — a Compose stack, a Kubernetes sidecar over a shared
+Unix socket, and the security requirements that go with the attach port — see
+<SdkLink to="guides/operations/deployment#attached-executors">Deployment</SdkLink>.
+
 ## Running the scheduler
 
 `taskito-server` is configured entirely through the environment — there are no
