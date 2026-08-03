@@ -22,19 +22,37 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
     permissions:
       security-events: write
       actions: read
       contents: read
+    # The Rust extractor resolves the workspace through Cargo, so it inherits
+    # the registry-fetch flakiness every other Rust job works around. No-ops for
+    # the source-only languages.
+    env:
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
     strategy:
       fail-fast: false
       matrix:
         include:
           - language: python
             build-mode: none
+            timeout: 30
           - language: javascript-typescript
             build-mode: none
+            timeout: 30
+          # Rust builds its database without compiling — `none` went GA for Rust
+          # in CodeQL 2.23.3 and is what default setup uses. The extractor still
+          # runs Cargo to resolve the workspace, and enables *all* features by
+          # default, so `postgres`, `redis`, `workflows` and `mesh` are covered
+          # by this one entry rather than a job per backend. Extraction walks the
+          # whole dependency graph, so it needs more headroom than the two
+          # source-only languages.
+          - language: rust
+            build-mode: none
+            timeout: 45
     steps:
       - uses: actions/checkout@v7.0.1
 
