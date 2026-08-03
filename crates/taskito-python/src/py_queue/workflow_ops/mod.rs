@@ -42,15 +42,17 @@ pub(super) fn workflow_storage(queue: &PyQueue) -> PyResult<WorkflowStorageBacke
         return Ok(wf.clone());
     }
     let wf = match &queue.storage {
-        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone())
+        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone(), queue.namespace.clone())
             .map(WorkflowStorageBackend::Sqlite)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
         #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => WorkflowPostgresStorage::new(s.clone())
-            .map(WorkflowStorageBackend::Postgres)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+        StorageBackend::Postgres(s) => {
+            WorkflowPostgresStorage::new(s.clone(), queue.namespace.clone())
+                .map(WorkflowStorageBackend::Postgres)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        }
         #[cfg(feature = "redis")]
-        StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone())
+        StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone(), queue.namespace.clone())
             .map(WorkflowStorageBackend::Redis)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
     };
@@ -58,6 +60,20 @@ pub(super) fn workflow_storage(queue: &PyQueue) -> PyResult<WorkflowStorageBacke
     // handle is equivalent because the underlying pool is shared.
     let _ = queue.workflow_storage.set(wf.clone());
     Ok(wf)
+}
+
+/// Refuse a `run_id` this queue's namespace cannot see.
+///
+/// The fan-out and deferred paths enqueue the job *before* binding it to its
+/// node. A scoped bind against a foreign run has no effect, which would leave
+/// the job running untracked — so refuse before anything is enqueued.
+pub(super) fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> CoreResult<()> {
+    if wf.get_workflow_run(run_id)?.is_none() {
+        return Err(taskito_core::error::QueueError::Other(format!(
+            "workflow run not found: {run_id}"
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn parse_step_metadata(json: &str) -> PyResult<HashMap<String, StepMetadata>> {

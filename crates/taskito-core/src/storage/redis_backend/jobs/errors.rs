@@ -9,7 +9,22 @@ use crate::storage::redis_backend::{map_err, RedisStorage};
 
 impl RedisStorage {
     /// Record one failed attempt's error for a job.
-    pub fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()> {
+    ///
+    /// The error list carries no namespace of its own, so the scope comes from
+    /// the job the rows belong to, exactly as
+    /// [`get_job_errors`](Self::get_job_errors) reads it back. An attempt
+    /// against a job in another namespace records nothing.
+    pub fn record_error(
+        &self,
+        job_id: &str,
+        attempt: i32,
+        error: &str,
+        namespace: Option<&str>,
+    ) -> Result<()> {
+        if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+            return Ok(());
+        }
+
         let mut conn = self.conn()?;
         let id = uuid::Uuid::now_v7().to_string();
         let now = now_millis();

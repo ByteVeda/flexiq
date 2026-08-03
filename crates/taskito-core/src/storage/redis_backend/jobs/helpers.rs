@@ -62,6 +62,19 @@ impl RedisStorage {
             .ok_or_else(|| QueueError::JobNotFound(id.to_string()))
     }
 
+    /// [`get_job_required`](Self::get_job_required) confined to `namespace`.
+    ///
+    /// A job outside it reports `JobNotFound`, like an unknown id. The check
+    /// rides on the load the mutation already does, so it costs no extra round
+    /// trip. `None` addresses every namespace.
+    pub(super) fn get_job_required_in(&self, id: &str, namespace: Option<&str>) -> Result<Job> {
+        let job = self.get_job_required(id)?;
+        if namespace.is_some() && job.namespace.as_deref() != namespace {
+            return Err(QueueError::JobNotFound(id.to_string()));
+        }
+        Ok(job)
+    }
+
     /// Save job JSON and move between status sets.
     pub(in crate::storage::redis_backend) fn save_job_and_move_status(
         &self,

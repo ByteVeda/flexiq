@@ -296,7 +296,7 @@ fn test_complete() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
 
-    storage.complete(&job.id, Some(vec![42])).unwrap();
+    storage.complete(&job.id, Some(vec![42]), None).unwrap();
 
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Complete);
@@ -326,7 +326,7 @@ fn test_retry_reschedule() {
         .unwrap();
 
     let future = now_millis() + 5000;
-    storage.retry(&job.id, future).unwrap();
+    storage.retry(&job.id, future, None).unwrap();
 
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
@@ -651,7 +651,7 @@ fn test_enqueue_unique_after_dup_completes() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    storage.complete(&a.id, None).unwrap();
+    storage.complete(&a.id, None, None).unwrap();
 
     let mut b = make_job("unique_reuse");
     b.unique_key = Some("uk-reuse".to_string());
@@ -690,8 +690,12 @@ fn test_record_and_get_job_errors() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("error_task")).unwrap();
 
-    storage.record_error(&job.id, 0, "first failure").unwrap();
-    storage.record_error(&job.id, 1, "second failure").unwrap();
+    storage
+        .record_error(&job.id, 0, "first failure", None)
+        .unwrap();
+    storage
+        .record_error(&job.id, 1, "second failure", None)
+        .unwrap();
 
     let errors = storage.get_job_errors(&job.id, None).unwrap();
     assert_eq!(errors.len(), 2);
@@ -715,7 +719,7 @@ fn test_purge_job_errors() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("purge_err_task")).unwrap();
 
-    storage.record_error(&job.id, 0, "old error").unwrap();
+    storage.record_error(&job.id, 0, "old error", None).unwrap();
     let purged = storage.purge_job_errors(now_millis() + 10_000).unwrap();
     assert_eq!(purged, 1);
 
@@ -730,7 +734,9 @@ fn test_purge_job_errors_drains_across_batches() {
     let storage = test_storage();
     let job = storage.enqueue(make_job("purge_err_batch")).unwrap();
     for attempt in 0..550 {
-        storage.record_error(&job.id, attempt, "boom").unwrap();
+        storage
+            .record_error(&job.id, attempt, "boom", None)
+            .unwrap();
     }
 
     let purged = storage.purge_job_errors(now_millis() + 10_000).unwrap();
@@ -793,10 +799,10 @@ fn test_enqueue_with_dependency() {
     dep_job.depends_on = vec![job_a.id.clone()];
     let job_b = storage.enqueue(dep_job).unwrap();
 
-    let deps = storage.get_dependencies(&job_b.id).unwrap();
+    let deps = storage.get_dependencies(&job_b.id, None).unwrap();
     assert_eq!(deps, vec![job_a.id.clone()]);
 
-    let dependents = storage.get_dependents(&job_a.id).unwrap();
+    let dependents = storage.get_dependents(&job_a.id, None).unwrap();
     assert_eq!(dependents, vec![job_b.id]);
 }
 
@@ -817,7 +823,7 @@ fn test_dequeue_blocks_on_unmet_dependency() {
     let none = storage.dequeue("default", now, None).unwrap();
     assert!(none.is_none());
 
-    storage.complete(&job_a.id, None).unwrap();
+    storage.complete(&job_a.id, None, None).unwrap();
 
     let dequeued = storage.dequeue("default", now, None).unwrap().unwrap();
     assert_eq!(dequeued.task_name, "dependent_task");
@@ -1140,7 +1146,7 @@ fn test_has_deps_flag_gates_dequeue() {
 
     // Complete the dependency, then the child becomes dequeueable.
     storage.dequeue("qt", t0, None).unwrap();
-    storage.complete(&target.id, None).unwrap();
+    storage.complete(&target.id, None, None).unwrap();
     let got = storage.dequeue("q2", t0, None).unwrap();
     assert_eq!(got.map(|j| j.id), Some(child.id));
 }
@@ -1179,8 +1185,8 @@ fn test_purge_completed_respects_per_job_ttl() {
     let now = now_millis();
     storage.dequeue("qa", now, None).unwrap();
     storage.dequeue("qb", now, None).unwrap();
-    storage.complete(&expired.id, None).unwrap();
-    storage.complete(&kept.id, None).unwrap();
+    storage.complete(&expired.id, None, None).unwrap();
+    storage.complete(&kept.id, None, None).unwrap();
 
     // Ensure the 1ms TTL has elapsed relative to purge's `now`.
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1227,7 +1233,7 @@ fn test_purge_completed_drains_across_batches() {
             .dequeue("default", now + 1000, None)
             .unwrap()
             .unwrap();
-        storage.complete(&job.id, None).unwrap();
+        storage.complete(&job.id, None, None).unwrap();
     }
 
     let removed = storage.purge_completed(now_millis() + 10_000).unwrap();
@@ -1289,7 +1295,7 @@ fn test_complete_moves_to_archived_immediately() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
 
-    storage.complete(&job.id, Some(vec![7])).unwrap();
+    storage.complete(&job.id, Some(vec![7]), None).unwrap();
 
     // Gone from the live table, present in the archive.
     assert_eq!(jobs_row_count(&storage, &job.id), 0);
@@ -1303,7 +1309,7 @@ fn test_get_job_finds_archived() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    storage.complete(&job.id, Some(vec![1])).unwrap();
+    storage.complete(&job.id, Some(vec![1]), None).unwrap();
 
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.id, job.id);
@@ -1321,7 +1327,7 @@ fn test_stats_counts_archived_terminals() {
         storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        storage.complete(&job.id, None).unwrap();
+        storage.complete(&job.id, None, None).unwrap();
     }
     storage.enqueue(make_job("still_pending")).unwrap();
     let running = storage.enqueue(make_job("running")).unwrap();
@@ -1343,7 +1349,7 @@ fn test_list_jobs_terminal_status_reads_archive() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    storage.complete(&job.id, None).unwrap();
+    storage.complete(&job.id, None, None).unwrap();
 
     // Filtering by a terminal status returns the archived row.
     let complete = storage
@@ -1473,7 +1479,9 @@ fn test_complete_archives_job() {
     let job = storage.enqueue(make_job("complete_inline")).unwrap();
     storage.dequeue("default", now_millis(), None).unwrap();
 
-    storage.complete(&job.id, Some(vec![5, 5, 5])).unwrap();
+    storage
+        .complete(&job.id, Some(vec![5, 5, 5]), None)
+        .unwrap();
 
     // Completing archives the job: the live row is gone; payload+result are
     // preserved inline in `archived_jobs`.
@@ -1490,7 +1498,7 @@ fn test_get_job_returns_payload_and_result() {
     nj.payload = vec![1, 1, 2, 3, 5];
     let job = storage.enqueue(nj).unwrap();
     storage.dequeue("default", now_millis(), None).unwrap();
-    storage.complete(&job.id, Some(vec![8, 13])).unwrap();
+    storage.complete(&job.id, Some(vec![8, 13]), None).unwrap();
 
     // After archival, get_job reads payload + result from `archived_jobs`.
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
@@ -1623,13 +1631,13 @@ fn test_count_expired_rows_matches_purge_exactly() {
     for i in 0..2u8 {
         let job = storage.enqueue(make_job("dr_arch")).unwrap();
         storage.dequeue(q, now + 1000, None).unwrap();
-        storage.complete(&job.id, Some(vec![i])).unwrap();
+        storage.complete(&job.id, Some(vec![i]), None).unwrap();
     }
     let mut nj = make_job("dr_arch_ttl");
     nj.result_ttl_ms = Some(1);
     let ttl_job = storage.enqueue(nj).unwrap();
     storage.dequeue(q, now + 1000, None).unwrap();
-    storage.complete(&ttl_job.id, Some(vec![9])).unwrap();
+    storage.complete(&ttl_job.id, Some(vec![9]), None).unwrap();
 
     // dead_letter: 1 no-TTL + 1 per-entry-expired.
     let d1 = storage.enqueue(make_job("dr_dead")).unwrap();
@@ -1656,7 +1664,7 @@ fn test_count_expired_rows_matches_purge_exactly() {
     storage
         .record_metric("dr_metric", &side.id, 11, 21, true, None)
         .unwrap();
-    storage.record_error(&side.id, 0, "e0").unwrap();
+    storage.record_error(&side.id, 0, "e0", None).unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(5));
 

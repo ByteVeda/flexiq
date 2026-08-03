@@ -18,8 +18,16 @@ pub trait Storage: Send + Sync + Clone {
     // ── Job operations ──────────────────────────────────────────────
 
     /// Insert a new job and return it.
+    ///
+    /// Every id in `depends_on` must name a live-or-completed job in the same
+    /// namespace; anything else — missing, dead, cancelled, or belonging to
+    /// another namespace — fails with `DependencyNotFound`. A cross-namespace
+    /// edge is refused rather than filtered so one tenant's failure can never
+    /// cascade into another's queue.
     fn enqueue(&self, new_job: NewJob) -> Result<Job>;
-    /// Insert multiple jobs in a single transaction.
+    /// Insert multiple jobs in a single transaction. Dependencies are validated
+    /// as in [`enqueue`](Self::enqueue), except that an id may also name
+    /// another job in the same batch.
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;
     /// Enqueue with `unique_key` deduplication: returns the existing active
     /// job when a duplicate is found instead of inserting.
@@ -61,20 +69,32 @@ pub trait Storage: Send + Sync + Clone {
         orders: &std::collections::HashMap<String, DispatchOrder>,
     ) -> Result<Vec<Job>>;
     /// Mark a job completed with its result, moving it from `jobs` into
-    /// `archived_jobs` in one transaction.
-    fn complete(&self, id: &str, result_bytes: Option<Vec<u8>>) -> Result<()>;
+    /// `archived_jobs` in one transaction. A job in another namespace reports
+    /// `JobNotFound`, like an unknown id.
+    fn complete(
+        &self,
+        id: &str,
+        result_bytes: Option<Vec<u8>>,
+        namespace: Option<&str>,
+    ) -> Result<()>;
 
     /// Persist many successful completions at once. Each entry archives the
     /// completed job, clears its execution claim, and records its metric — the
     /// Diesel backends do so in one transaction. See [`JobCompletion`].
+    /// `namespace` scopes every entry, as in [`complete`](Self::complete).
     ///
     /// [`JobCompletion`]: crate::job::JobCompletion
-    fn complete_batch(&self, completions: &[crate::job::JobCompletion]) -> Result<()>;
+    fn complete_batch(
+        &self,
+        completions: &[crate::job::JobCompletion],
+        namespace: Option<&str>,
+    ) -> Result<()>;
     /// Mark a job terminally failed, moving it from `jobs` into `archived_jobs`.
     fn fail(&self, id: &str, error: &str) -> Result<()>;
     /// Re-schedule a job for retry at `next_scheduled_at`, incrementing its
-    /// `retry_count`.
-    fn retry(&self, id: &str, next_scheduled_at: i64) -> Result<()>;
+    /// `retry_count`. A job in another namespace reports `JobNotFound`, like
+    /// an unknown id.
+    fn retry(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()>;
     /// Re-schedule a job back to `Pending` **without** consuming its retry
     /// budget. Used for soft-gate reschedules (rate limit, circuit breaker,
     /// concurrency cap, channel backpressure) where the job never executed,
@@ -106,9 +126,10 @@ pub trait Storage: Send + Sync + Clone {
     /// Cancel every pending job that depends, directly or transitively, on
     /// `failed_job_id`.
     ///
-    /// Dependents outside `namespace` are left alone. Dependencies are not
-    /// required to share a namespace, so without the filter a cancel in one
-    /// namespace could archive another's pending job.
+    /// Dependents outside `namespace` are left alone. Every edge written since
+    /// the boundary was enforced is intra-namespace, so this only bites on
+    /// older data — but a cancel must not archive another tenant's job because
+    /// of an edge it should never have been allowed to create.
     fn cascade_cancel(
         &self,
         failed_job_id: &str,
@@ -116,9 +137,15 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<()>;
     /// Ids of the jobs `job_id` depends on.
-    fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>>;
-    /// Ids of the jobs that depend on `job_id`.
-    fn get_dependents(&self, job_id: &str) -> Result<Vec<String>>;
+    ///
+    /// A dependency may not cross namespaces — [`enqueue`](Self::enqueue) and
+    /// its variants reject one that would — so the edge list carries the
+    /// anchor job's scope. A job in another namespace reports no edges, like
+    /// an unknown id.
+    fn get_dependencies(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>>;
+    /// Ids of the jobs that depend on `job_id`. Scoped by the anchor job, like
+    /// [`get_dependencies`](Self::get_dependencies).
+    fn get_dependents(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<String>>;
     /// Update a running job's progress (0-100). A job in another namespace is
     /// left alone.
     fn update_progress(&self, id: &str, progress: i32, namespace: Option<&str>) -> Result<()>;
@@ -194,7 +221,13 @@ pub trait Storage: Send + Sync + Clone {
         namespace: Option<&str>,
     ) -> Result<Vec<(Job, String)>>;
     /// Record one failed attempt's error for a job.
-    fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()>;
+    fn record_error(
+        &self,
+        job_id: &str,
+        attempt: i32,
+        error: &str,
+        namespace: Option<&str>,
+    ) -> Result<()>;
     /// All recorded errors for a job, ordered by attempt. A job in another
     /// namespace reports no errors, like an unknown id.
     fn get_job_errors(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobError>>;
@@ -562,7 +595,7 @@ pub trait Storage: Send + Sync + Clone {
     /// claim, `false` if a claim already existed.
     fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>>;
     /// Remove the execution claim of a finished job.
-    fn complete_execution(&self, job_id: &str) -> Result<()>;
+    fn complete_execution(&self, job_id: &str, namespace: Option<&str>) -> Result<()>;
     /// Purge execution claims older than the cutoff. Returns the count
     /// removed.
     fn purge_execution_claims(&self, older_than_ms: i64) -> Result<u64>;

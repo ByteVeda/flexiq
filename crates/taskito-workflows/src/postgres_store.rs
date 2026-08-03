@@ -22,18 +22,26 @@ use crate::diesel_common::impl_workflow_diesel_ops;
 #[derive(Clone)]
 pub struct WorkflowPostgresStorage {
     pub(crate) inner: PostgresStorage,
+    pub(crate) namespace: Option<String>,
 }
 
 impl WorkflowPostgresStorage {
     /// Wrap an existing `PostgresStorage` and ensure workflow tables exist.
-    pub fn new(storage: PostgresStorage) -> Result<Self> {
+    ///
+    /// `namespace` is the tenant every run this store creates is stamped with,
+    /// and the only one it can read or mutate. `None` addresses every
+    /// namespace, matching an unscoped queue.
+    pub fn new(storage: PostgresStorage, namespace: Option<String>) -> Result<Self> {
         let mut conn = storage.conn()?;
         taskito_core::storage::migrate::run_postgres(
             &mut conn,
             "workflow_schema_migrations",
             &crate::migrations::all(),
         )?;
-        Ok(Self { inner: storage })
+        Ok(Self {
+            inner: storage,
+            namespace,
+        })
     }
 
     /// Access the underlying `PostgresStorage`.

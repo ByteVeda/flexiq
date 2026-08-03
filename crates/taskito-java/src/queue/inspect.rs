@@ -331,7 +331,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
             };
             visible.insert(current.clone());
             jobs.push(job);
-            for dep_id in queue.storage.get_dependencies(&current)? {
+            for dep_id in queue
+                .storage
+                .get_dependencies(&current, queue.namespace.as_deref())?
+            {
                 if seen_edges.insert((dep_id.clone(), current.clone())) {
                     edges.push(DagEdgeView {
                         from: dep_id.clone(),
@@ -340,7 +343,10 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_jobDag<'lo
                 }
                 pending.push(dep_id);
             }
-            for dep_id in queue.storage.get_dependents(&current)? {
+            for dep_id in queue
+                .storage
+                .get_dependents(&current, queue.namespace.as_deref())?
+            {
                 if seen_edges.insert((current.clone(), dep_id.clone())) {
                     edges.push(DagEdgeView {
                         from: current.clone(),

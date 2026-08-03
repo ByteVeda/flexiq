@@ -8,20 +8,34 @@ use crate::job::{Job, JobStatus, NewJob};
 use crate::storage::redis_backend::{map_err, RedisStorage};
 
 impl RedisStorage {
-    /// Validate that each `dep_id` references a job that exists and isn't
-    /// in `Dead` / `Cancelled` state.
+    /// Validate that each `dep_id` references a job that exists, shares
+    /// `namespace` with the job that depends on it, and isn't in `Dead` /
+    /// `Cancelled` state.
     ///
-    /// `skip` short-circuits intra-batch dependencies for `enqueue_batch`,
-    /// where some dep ids point at jobs being created in the same call.
+    /// A dependency across the namespace boundary is rejected rather than
+    /// filtered: the edge would let one tenant's failure cascade into
+    /// another's queue, and it can only ever be half-honoured —
+    /// `cascade_cancel` already refuses to cross. It reads as an ordinary
+    /// missing dependency so a scoped caller learns nothing about ids outside
+    /// its own namespace.
+    ///
+    /// `batch` short-circuits intra-batch dependencies for `enqueue_batch`,
+    /// where some dep ids point at jobs being created in the same call. It maps
+    /// each id to its namespace rather than being a bare id set: skipping the
+    /// not-yet-written row must not also skip the boundary check.
     fn validate_dep_ids(
         &self,
         conn: &mut redis::Connection,
         dep_ids: &[String],
-        skip: Option<&std::collections::HashSet<&str>>,
+        namespace: Option<&str>,
+        batch: Option<&std::collections::HashMap<&str, Option<&str>>>,
     ) -> Result<()> {
         const DEP_MISSING: &str = "dependency not found or already dead/cancelled";
         for dep_id in dep_ids {
-            if skip.is_some_and(|s| s.contains(dep_id.as_str())) {
+            if let Some(&dep_ns) = batch.and_then(|b| b.get(dep_id.as_str())) {
+                if dep_ns != namespace {
+                    return Err(QueueError::DependencyNotFound(DEP_MISSING.to_string()));
+                }
                 continue;
             }
             // A live dep is read from `job:<id>`; a terminal dep has been
@@ -32,11 +46,19 @@ impl RedisStorage {
             let dep_job: Job = match data {
                 Some(d) => serde_json::from_str(&d)?,
                 None => match self.load_archived_job(conn, dep_id)? {
-                    Some(archived) if archived.status == JobStatus::Complete => continue,
+                    Some(archived)
+                        if archived.status == JobStatus::Complete
+                            && archived.namespace.as_deref() == namespace =>
+                    {
+                        continue
+                    }
                     _ => return Err(QueueError::DependencyNotFound(DEP_MISSING.to_string())),
                 },
             };
-            if dep_job.status == JobStatus::Dead || dep_job.status == JobStatus::Cancelled {
+            if dep_job.status == JobStatus::Dead
+                || dep_job.status == JobStatus::Cancelled
+                || dep_job.namespace.as_deref() != namespace
+            {
                 return Err(QueueError::DependencyNotFound(DEP_MISSING.to_string()));
             }
         }
@@ -50,7 +72,7 @@ impl RedisStorage {
         let job = new_job.into_job();
         let mut conn = self.conn()?;
 
-        self.validate_dep_ids(&mut conn, &depends_on, None)?;
+        self.validate_dep_ids(&mut conn, &depends_on, job.namespace.as_deref(), None)?;
 
         let job_json = serde_json::to_string(&job)?;
         let job_key = self.key(&["job", &job.id]);
@@ -93,12 +115,19 @@ impl RedisStorage {
         let jobs: Vec<Job> = new_jobs.into_iter().map(|nj| nj.into_job()).collect();
         let mut conn = self.conn()?;
 
-        // Collect batch job IDs for intra-batch dependency resolution
-        let batch_ids: std::collections::HashSet<&str> =
-            jobs.iter().map(|j| j.id.as_str()).collect();
+        // Namespace per batch job, for intra-batch dependency resolution.
+        let batch_ns: std::collections::HashMap<&str, Option<&str>> = jobs
+            .iter()
+            .map(|j| (j.id.as_str(), j.namespace.as_deref()))
+            .collect();
 
-        for depends_on in &dep_lists {
-            self.validate_dep_ids(&mut conn, depends_on, Some(&batch_ids))?;
+        for (job, depends_on) in jobs.iter().zip(&dep_lists) {
+            self.validate_dep_ids(
+                &mut conn,
+                depends_on,
+                job.namespace.as_deref(),
+                Some(&batch_ns),
+            )?;
         }
 
         let pipe = &mut redis::pipe();
@@ -206,7 +235,7 @@ impl RedisStorage {
             let job = new_job.into_job();
             let job_json = serde_json::to_string(&job)?;
 
-            self.validate_dep_ids(&mut conn, &depends_on, None)?;
+            self.validate_dep_ids(&mut conn, &depends_on, job.namespace.as_deref(), None)?;
 
             // Store everything atomically via Lua. Active-status names are
             // passed via ARGV (positions 7-8) for the same reason as above —

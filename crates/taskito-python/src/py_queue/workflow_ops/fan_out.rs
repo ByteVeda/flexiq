@@ -8,7 +8,7 @@ use taskito_core::job::{now_millis, NewJob};
 use taskito_core::storage::Storage;
 use taskito_workflows::{WorkflowNode, WorkflowNodeStatus, WorkflowStorage};
 
-use crate::py_queue::workflow_ops::{build_metadata_json, workflow_storage};
+use crate::py_queue::workflow_ops::{build_metadata_json, require_visible_run, workflow_storage};
 use crate::py_queue::PyQueue;
 
 /// Maximum number of children a single fan-out may expand into. Guards against
@@ -61,6 +61,7 @@ impl PyQueue {
         let queue_owned = queue.to_string();
 
         let result: CoreResult<Vec<String>> = py.detach(|| {
+            require_visible_run(&wf_storage, &run_id_owned)?;
             let now = now_millis();
             let count = child_names.len() as i32;
 
@@ -154,6 +155,7 @@ impl PyQueue {
         let queue_owned = queue.to_string();
 
         let result: CoreResult<String> = py.detach(|| {
+            require_visible_run(&wf_storage, &run_id_owned)?;
             let now = now_millis();
             let new_job = NewJob {
                 queue: queue_owned,

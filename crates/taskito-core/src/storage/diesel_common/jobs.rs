@@ -133,14 +133,25 @@ macro_rules! impl_diesel_job_ops {
                 Ok(live_incomplete + archived_incomplete == 0)
             }
 
-            /// Validate that a dependency exists and is in an acceptable state.
+            /// Validate that a dependency exists, shares `namespace` with the
+            /// job that depends on it, and is in an acceptable state.
+            ///
             /// A live (pending/running) or archived-complete dependency is
-            /// accepted; a dead/cancelled/failed dependency or a missing one is
-            /// rejected via `RollbackTransaction`. Terminal deps live in
-            /// `archived_jobs`, so a missing live row falls back to the archive.
+            /// accepted; a dead/cancelled/failed dependency, a missing one, or
+            /// one in another namespace is rejected via `RollbackTransaction`.
+            /// Terminal deps live in `archived_jobs`, so a missing live row
+            /// falls back to the archive.
+            ///
+            /// A dependency across the namespace boundary is rejected rather
+            /// than filtered: the edge would let one tenant's failure cascade
+            /// into another's queue, and it can only ever be half-honoured —
+            /// `cascade_cancel` already refuses to cross. It reads as an
+            /// ordinary missing dependency so a scoped caller learns nothing
+            /// about ids outside its own namespace.
             fn validate_dependency(
                 conn: &mut $conn_type,
                 dep_id: &str,
+                namespace: Option<&str>,
             ) -> diesel::result::QueryResult<()> {
                 let dep: Option<JobRow> = jobs::table
                     .find(dep_id)
@@ -151,7 +162,8 @@ macro_rules! impl_diesel_job_ops {
                 match dep {
                     Some(d)
                         if d.status == JobStatus::Dead as i32
-                            || d.status == JobStatus::Cancelled as i32 =>
+                            || d.status == JobStatus::Cancelled as i32
+                            || d.namespace.as_deref() != namespace =>
                     {
                         Err(diesel::result::Error::RollbackTransaction)
                     }
@@ -164,7 +176,12 @@ macro_rules! impl_diesel_job_ops {
                             .optional()?;
 
                         match archived {
-                            Some(a) if a.status == JobStatus::Complete as i32 => Ok(()),
+                            Some(a)
+                                if a.status == JobStatus::Complete as i32
+                                    && a.namespace.as_deref() == namespace =>
+                            {
+                                Ok(())
+                            }
                             _ => Err(diesel::result::Error::RollbackTransaction),
                         }
                     }
@@ -177,11 +194,11 @@ macro_rules! impl_diesel_job_ops {
                 let job = new_job.into_job();
 
                 self.write_transaction(|conn| {
-                    // Validate dependencies exist and aren't dead/cancelled.
-                    // Terminal deps live in `archived_jobs`, so a missing live
-                    // row falls back to the archive.
+                    // Validate dependencies exist, share this job's namespace,
+                    // and aren't dead/cancelled. Terminal deps live in
+                    // `archived_jobs`, so a missing live row falls back there.
                     for dep_id in &depends_on {
-                        Self::validate_dependency(conn, dep_id)?;
+                        Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
                     }
 
                     // Attribute pub/sub deliveries to their subscription so
@@ -251,6 +268,12 @@ macro_rules! impl_diesel_job_ops {
                 // chunk size keeps the macro-generated code identical.
                 const BATCH_INSERT_CHUNK: usize = 50;
 
+                // Kept alongside the jobs: `into_job` drops `depends_on` into
+                // the `has_deps` flag, and a flag with no `job_dependencies`
+                // rows behind it reads as "no dependencies" at dequeue — the
+                // batch would dispatch immediately, ignoring its DAG.
+                let dep_lists: Vec<Vec<String>> =
+                    new_jobs.iter().map(|nj| nj.depends_on.clone()).collect();
                 let jobs: Vec<Job> = new_jobs.into_iter().map(|nj| nj.into_job()).collect();
 
                 // Pre-compute subscription attribution so the owned strings
@@ -264,6 +287,32 @@ macro_rules! impl_diesel_job_ops {
                     .collect();
 
                 self.write_transaction(|conn| {
+                    // Namespace of every job being created here, so an edge onto
+                    // another member of the same batch resolves against a row
+                    // that is not written yet. It carries the namespace rather
+                    // than just the id: skipping the row lookup must not also
+                    // skip the boundary check. Matches the Redis batch path.
+                    // Built inside the closure so it does not outlive the borrow
+                    // of `jobs` the closure ends by moving.
+                    let batch_ns: std::collections::HashMap<&str, Option<&str>> = jobs
+                        .iter()
+                        .map(|job| (job.id.as_str(), job.namespace.as_deref()))
+                        .collect();
+
+                    for (job, depends_on) in jobs.iter().zip(&dep_lists) {
+                        for dep_id in depends_on {
+                            if let Some(&dep_ns) = batch_ns.get(dep_id.as_str()) {
+                                if dep_ns != job.namespace.as_deref() {
+                                    return Err(QueueError::Storage(
+                                        diesel::result::Error::RollbackTransaction,
+                                    ));
+                                }
+                                continue;
+                            }
+                            Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
+                        }
+                    }
+
                     let rows: Vec<NewJobRow> = jobs
                         .iter()
                         .zip(&attribution)
@@ -299,7 +348,29 @@ macro_rules! impl_diesel_job_ops {
                             .values(chunk)
                             .execute(conn)?;
                     }
+
+                    for (job, depends_on) in jobs.iter().zip(&dep_lists) {
+                        for dep_id in depends_on {
+                            let dep_row = NewJobDependencyRow {
+                                id: &uuid::Uuid::now_v7().to_string(),
+                                job_id: &job.id,
+                                depends_on_job_id: dep_id,
+                            };
+                            diesel::insert_into(job_dependencies::table)
+                                .values(&dep_row)
+                                .execute(conn)?;
+                        }
+                    }
+
                     Ok(jobs)
+                })
+                .map_err(|e| match e {
+                    QueueError::Storage(diesel::result::Error::RollbackTransaction) => {
+                        QueueError::DependencyNotFound(
+                            "dependency not found or already dead/cancelled".to_string(),
+                        )
+                    }
+                    other => other,
                 })
             }
 
@@ -338,7 +409,7 @@ macro_rules! impl_diesel_job_ops {
                         // Validate dependencies exist and aren't dead/cancelled,
                         // matching `enqueue` (RollbackTransaction → DependencyNotFound).
                         for dep_id in &depends_on {
-                            Self::validate_dependency(conn, dep_id)?;
+                            Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
                         }
 
                         let (topic, subscription_name) =
@@ -476,7 +547,7 @@ macro_rules! impl_diesel_job_ops {
                             }
 
                             for dep_id in depends_on {
-                                Self::validate_dependency(conn, dep_id)?;
+                                Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
                             }
 
                             let row = NewJobRow {
@@ -787,20 +858,31 @@ macro_rules! impl_diesel_job_ops {
 
             /// Mark a job as complete with the given result. The job moves from
             /// `jobs` into `archived_jobs` in a single transaction.
-            pub fn complete(&self, id: &str, result_bytes: Option<Vec<u8>>) -> Result<()> {
+            ///
+            /// A job in another namespace reports `JobNotFound`, like an
+            /// unknown id — the filter rides on the same row lookup the
+            /// archive move needs, so there is no window between check and act.
+            pub fn complete(
+                &self,
+                id: &str,
+                result_bytes: Option<Vec<u8>>,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let now = now_millis();
 
                 self.write_transaction(|conn| {
-                    let mut row: JobRow = match jobs::table
+                    let mut select = jobs::table
                         .find(id)
                         .filter(jobs::status.eq(JobStatus::Running as i32))
-                        .select(JobRow::as_select())
-                        .first(conn)
-                        .optional()?
-                    {
-                        Some(row) => row,
-                        None => return Err(QueueError::JobNotFound(id.to_string())),
-                    };
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        select = select.filter(jobs::namespace.eq(ns));
+                    }
+                    let mut row: JobRow =
+                        match select.select(JobRow::as_select()).first(conn).optional()? {
+                            Some(row) => row,
+                            None => return Err(QueueError::JobNotFound(id.to_string())),
+                        };
 
                     row.status = JobStatus::Complete as i32;
                     row.completed_at = Some(now);
@@ -816,8 +898,13 @@ macro_rules! impl_diesel_job_ops {
             /// metric — but coalesces what were three writes × N jobs across N
             /// transactions into a single commit (one fsync). If any job is not
             /// `Running` the whole batch rolls back with `JobNotFound`, so the
-            /// caller can fall back to per-job handling.
-            pub fn complete_batch(&self, completions: &[$crate::job::JobCompletion]) -> Result<()> {
+            /// caller can fall back to per-job handling. A job in another
+            /// namespace is `JobNotFound` like any other non-`Running` row.
+            pub fn complete_batch(
+                &self,
+                completions: &[$crate::job::JobCompletion],
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 if completions.is_empty() {
                     return Ok(());
                 }
@@ -825,16 +912,18 @@ macro_rules! impl_diesel_job_ops {
 
                 self.write_transaction(|conn| {
                     for c in completions {
-                        let mut row: JobRow = match jobs::table
+                        let mut select = jobs::table
                             .find(&c.job_id)
                             .filter(jobs::status.eq(JobStatus::Running as i32))
-                            .select(JobRow::as_select())
-                            .first(conn)
-                            .optional()?
-                        {
-                            Some(row) => row,
-                            None => return Err(QueueError::JobNotFound(c.job_id.clone())),
-                        };
+                            .into_boxed();
+                        if let Some(ns) = namespace {
+                            select = select.filter(jobs::namespace.eq(ns));
+                        }
+                        let mut row: JobRow =
+                            match select.select(JobRow::as_select()).first(conn).optional()? {
+                                Some(row) => row,
+                                None => return Err(QueueError::JobNotFound(c.job_id.clone())),
+                            };
 
                         row.status = JobStatus::Complete as i32;
                         row.completed_at = Some(now);
@@ -892,11 +981,24 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Re-schedule a job for retry.
-            pub fn retry(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
+            ///
+            /// A job in another namespace matches no rows and reports
+            /// `JobNotFound`, like an unknown id.
+            pub fn retry(
+                &self,
+                id: &str,
+                next_scheduled_at: i64,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let mut conn = self.conn()?;
 
-                let affected = diesel::update(jobs::table)
+                let mut update = diesel::update(jobs::table)
                     .filter(jobs::id.eq(id))
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    update = update.filter(jobs::namespace.eq(ns));
+                }
+                let affected = update
                     .set((
                         jobs::status.eq(JobStatus::Pending as i32),
                         jobs::scheduled_at.eq(next_scheduled_at),
@@ -1085,9 +1187,10 @@ macro_rules! impl_diesel_job_ops {
             /// Cascade-cancel all pending jobs that depend (directly or transitively)
             /// on the given job. Uses BFS to handle deep chains.
             ///
-            /// Dependents outside `namespace` are left alone: a dependency is not
-            /// required to share a namespace with its dependent, so without the
-            /// filter a cancel in one namespace could archive another's job.
+            /// Dependents outside `namespace` are left alone. Every edge written
+            /// since the boundary was enforced is intra-namespace, so this only
+            /// bites on older data — but a cancel must not archive another
+            /// tenant's job because of an edge it should never have had.
             pub fn cascade_cancel(
                 &self,
                 failed_job_id: &str,
@@ -1152,7 +1255,21 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Get the IDs of jobs that a given job depends on.
-            pub fn get_dependencies(&self, job_id: &str) -> Result<Vec<String>> {
+            ///
+            /// `job_dependencies` carries no namespace of its own and a
+            /// dependency may not cross namespaces, so the scope comes from
+            /// the anchor job: one in another namespace reports no edges, like
+            /// an unknown id. Resolved before the connection is taken — a
+            /// single-connection pool would deadlock on the second.
+            pub fn get_dependencies(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> Result<Vec<String>> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(Vec::new());
+                }
+
                 let mut conn = self.conn()?;
                 let ids: Vec<String> = job_dependencies::table
                     .filter(job_dependencies::job_id.eq(job_id))
@@ -1161,8 +1278,17 @@ macro_rules! impl_diesel_job_ops {
                 Ok(ids)
             }
 
-            /// Get the IDs of jobs that depend on a given job.
-            pub fn get_dependents(&self, job_id: &str) -> Result<Vec<String>> {
+            /// Get the IDs of jobs that depend on a given job. Scoped by the
+            /// anchor job, like [`get_dependencies`](Self::get_dependencies).
+            pub fn get_dependents(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> Result<Vec<String>> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(Vec::new());
+                }
+
                 let mut conn = self.conn()?;
                 let ids: Vec<String> = job_dependencies::table
                     .filter(job_dependencies::depends_on_job_id.eq(job_id))
@@ -2025,7 +2151,25 @@ macro_rules! impl_diesel_job_ops {
             }
 
             /// Record an error for a job attempt.
-            pub fn record_error(&self, job_id: &str, attempt: i32, error: &str) -> Result<()> {
+            ///
+            /// `job_errors` has no namespace column, so unlike the other
+            /// result-path mutations the scope cannot ride on the write itself
+            /// — it comes from the job the row belongs to, exactly as
+            /// [`get_job_errors`](Self::get_job_errors) reads it back. An
+            /// attempt against a job in another namespace records nothing.
+            /// Resolved before the connection is taken: a single-connection
+            /// pool would deadlock on the second.
+            pub fn record_error(
+                &self,
+                job_id: &str,
+                attempt: i32,
+                error: &str,
+                namespace: Option<&str>,
+            ) -> Result<()> {
+                if namespace.is_some() && self.get_job(job_id, namespace)?.is_none() {
+                    return Ok(());
+                }
+
                 let mut conn = self.conn()?;
                 let id = uuid::Uuid::now_v7().to_string();
                 let now = now_millis();

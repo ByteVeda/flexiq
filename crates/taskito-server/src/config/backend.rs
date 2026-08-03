@@ -20,29 +20,31 @@ pub struct Backend {
 }
 
 /// Open the backend named by `dsn`. `hint` is `TASKITO_BACKEND` when set;
-/// otherwise the URL scheme decides.
-pub fn open(dsn: &str, hint: Option<&str>) -> Result<Backend> {
+/// otherwise the URL scheme decides. `namespace` is `TASKITO_NAMESPACE`: it
+/// scopes the workflow store the same way it already scopes the scheduler and
+/// every dashboard view.
+pub fn open(dsn: &str, hint: Option<&str>, namespace: Option<String>) -> Result<Backend> {
     match hint.map(str::to_ascii_lowercase).as_deref() {
-        Some("sqlite") => open_sqlite(dsn),
-        Some("postgres") | Some("postgresql") => open_postgres(dsn),
-        Some("redis") => open_redis(dsn),
+        Some("sqlite") => open_sqlite(dsn, namespace),
+        Some("postgres") | Some("postgresql") => open_postgres(dsn, namespace),
+        Some("redis") => open_redis(dsn, namespace),
         Some(other) => bail!("TASKITO_BACKEND must be sqlite, postgres, or redis, got '{other}'"),
-        None => open_by_scheme(dsn),
+        None => open_by_scheme(dsn, namespace),
     }
 }
 
-fn open_by_scheme(dsn: &str) -> Result<Backend> {
+fn open_by_scheme(dsn: &str, namespace: Option<String>) -> Result<Backend> {
     let lower = dsn.to_ascii_lowercase();
     if lower.starts_with("postgres://") || lower.starts_with("postgresql://") {
-        open_postgres(dsn)
+        open_postgres(dsn, namespace)
     } else if lower.starts_with("redis://") || lower.starts_with("rediss://") {
-        open_redis(dsn)
+        open_redis(dsn, namespace)
     } else {
-        open_sqlite(dsn)
+        open_sqlite(dsn, namespace)
     }
 }
 
-fn open_sqlite(dsn: &str) -> Result<Backend> {
+fn open_sqlite(dsn: &str, namespace: Option<String>) -> Result<Backend> {
     // Accept `sqlite:///abs/path`, `sqlite://:memory:`, a bare path, or `:memory:`.
     let path = dsn.strip_prefix("sqlite://").unwrap_or(dsn);
     if path.is_empty() {
@@ -50,7 +52,7 @@ fn open_sqlite(dsn: &str) -> Result<Backend> {
     }
     let storage = SqliteStorage::new(path)
         .with_context(|| format!("failed to open SQLite database at '{path}'"))?;
-    let workflows = WorkflowSqliteStorage::new(storage.clone())
+    let workflows = WorkflowSqliteStorage::new(storage.clone(), namespace)
         .context("failed to initialise workflow tables")?;
     Ok(Backend {
         storage: StorageBackend::Sqlite(storage),
@@ -59,13 +61,13 @@ fn open_sqlite(dsn: &str) -> Result<Backend> {
 }
 
 #[cfg(feature = "postgres")]
-fn open_postgres(dsn: &str) -> Result<Backend> {
+fn open_postgres(dsn: &str, namespace: Option<String>) -> Result<Backend> {
     use taskito_core::PostgresStorage;
     use taskito_workflows::WorkflowPostgresStorage;
 
     // Don't interpolate the DSN — it may embed credentials.
     let storage = PostgresStorage::new(dsn).context("failed to connect to Postgres")?;
-    let workflows = WorkflowPostgresStorage::new(storage.clone())
+    let workflows = WorkflowPostgresStorage::new(storage.clone(), namespace)
         .context("failed to initialise workflow tables")?;
     Ok(Backend {
         storage: StorageBackend::Postgres(storage),
@@ -74,18 +76,18 @@ fn open_postgres(dsn: &str) -> Result<Backend> {
 }
 
 #[cfg(not(feature = "postgres"))]
-fn open_postgres(_dsn: &str) -> Result<Backend> {
+fn open_postgres(_dsn: &str, _namespace: Option<String>) -> Result<Backend> {
     bail!("Postgres backend not compiled in — rebuild with `--features postgres`.")
 }
 
 #[cfg(feature = "redis")]
-fn open_redis(dsn: &str) -> Result<Backend> {
+fn open_redis(dsn: &str, namespace: Option<String>) -> Result<Backend> {
     use taskito_core::RedisStorage;
     use taskito_workflows::WorkflowRedisStorage;
 
     // Don't interpolate the DSN — it may embed credentials.
     let storage = RedisStorage::new(dsn).context("failed to connect to Redis")?;
-    let workflows = WorkflowRedisStorage::new(storage.clone())
+    let workflows = WorkflowRedisStorage::new(storage.clone(), namespace)
         .context("failed to initialise workflow store")?;
     Ok(Backend {
         storage: StorageBackend::Redis(storage),
@@ -94,7 +96,7 @@ fn open_redis(dsn: &str) -> Result<Backend> {
 }
 
 #[cfg(not(feature = "redis"))]
-fn open_redis(_dsn: &str) -> Result<Backend> {
+fn open_redis(_dsn: &str, _namespace: Option<String>) -> Result<Backend> {
     bail!("Redis backend not compiled in — rebuild with `--features redis`.")
 }
 
@@ -104,18 +106,20 @@ mod tests {
 
     #[test]
     fn an_unknown_backend_hint_is_rejected() {
-        let error = open(":memory:", Some("mysql")).err().expect("must reject");
+        let error = open(":memory:", Some("mysql"), None)
+            .err()
+            .expect("must reject");
         assert!(error.to_string().contains("TASKITO_BACKEND"));
     }
 
     #[test]
     fn an_empty_sqlite_path_is_rejected() {
-        let error = open("sqlite://", None).err().expect("must reject");
+        let error = open("sqlite://", None, None).err().expect("must reject");
         assert!(error.to_string().contains("empty SQLite path"));
     }
 
     #[test]
     fn a_memory_dsn_opens() {
-        open(":memory:", None).expect("in-memory SQLite opens");
+        open(":memory:", None, None).expect("in-memory SQLite opens");
     }
 }

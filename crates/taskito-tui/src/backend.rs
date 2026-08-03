@@ -42,7 +42,7 @@ fn open_sqlite(url: &str) -> Result<Backend> {
     // not a passive read-only open. See `--help` and the crate docs.
     let storage = SqliteStorage::new(path)
         .with_context(|| format!("failed to open SQLite database at '{path}'"))?;
-    let workflows = WorkflowSqliteStorage::new(storage.clone())
+    let workflows = WorkflowSqliteStorage::new(storage.clone(), None)
         .context("failed to initialise workflow tables")?;
     Ok(Backend {
         storage: StorageBackend::Sqlite(storage),
@@ -57,7 +57,7 @@ fn open_postgres(url: &str) -> Result<Backend> {
 
     // Don't interpolate the URL — it may embed credentials.
     let storage = PostgresStorage::new(url).context("failed to connect to Postgres")?;
-    let workflows = WorkflowPostgresStorage::new(storage.clone())
+    let workflows = WorkflowPostgresStorage::new(storage.clone(), None)
         .context("failed to initialise workflow tables")?;
     Ok(Backend {
         storage: StorageBackend::Postgres(storage),
@@ -77,7 +77,7 @@ fn open_redis(url: &str) -> Result<Backend> {
 
     // Don't interpolate the URL — it may embed credentials.
     let storage = RedisStorage::new(url).context("failed to connect to Redis")?;
-    let workflows = WorkflowRedisStorage::new(storage.clone())
+    let workflows = WorkflowRedisStorage::new(storage.clone(), None)
         .context("failed to initialise workflow store")?;
     Ok(Backend {
         storage: StorageBackend::Redis(storage),

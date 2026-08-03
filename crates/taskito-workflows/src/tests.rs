@@ -104,7 +104,7 @@ fn test_state_round_trip() {
 #[test]
 fn test_get_ready_nodes_diamond_dag() {
     let base = SqliteStorage::in_memory().unwrap();
-    let storage = WorkflowSqliteStorage::new(base).unwrap();
+    let storage = WorkflowSqliteStorage::new(base, None).unwrap();
 
     let dag_json = serde_json::json!({
         "nodes": [{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}],

@@ -547,7 +547,10 @@ impl Scheduler {
     /// already been written. Uses `reschedule` (not `retry`) so a job that
     /// never executed does not lose retry budget.
     fn rollback_claim_and_reschedule(&self, job_id: &str, next_at: i64) -> Result<()> {
-        if let Err(e) = self.storage.complete_execution(job_id) {
+        if let Err(e) = self
+            .storage
+            .complete_execution(job_id, self.namespace.as_deref())
+        {
             warn!("failed to clear execution claim during rollback for job {job_id}: {e}");
         }
         self.storage.reschedule(job_id, next_at)

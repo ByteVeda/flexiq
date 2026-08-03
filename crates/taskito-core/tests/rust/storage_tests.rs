@@ -93,7 +93,7 @@ fn test_complete(s: &impl Storage) {
     let q = "q-complete";
     let job = s.enqueue(make_job(q, "complete_task")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&job.id, Some(vec![42])).unwrap();
+    s.complete(&job.id, Some(vec![42]), None).unwrap();
 
     let fetched = s.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Complete);
@@ -117,7 +117,7 @@ fn test_retry(s: &impl Storage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
     let future = now_millis() + 5000;
-    s.retry(&job.id, future).unwrap();
+    s.retry(&job.id, future, None).unwrap();
 
     let fetched = s.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
@@ -187,7 +187,7 @@ fn test_stats_by_queue_and_task(s: &impl Storage) {
     assert_eq!(s.count_pending_by_queue(q).unwrap(), 1);
 
     // Complete one — running drops, completed rises.
-    s.complete(&d1.id, None).unwrap();
+    s.complete(&d1.id, None, None).unwrap();
     assert_eq!(s.count_running_by_task(task, None).unwrap(), 1);
     let st = s.stats_by_queue(q, None).unwrap();
     assert_eq!(st.pending, 1);
@@ -283,7 +283,7 @@ fn test_purge_retention_honors_per_entry_ttl(s: &impl Storage) {
     nj.result_ttl_ms = Some(1);
     let job = s.enqueue(nj).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&job.id, Some(vec![1])).unwrap();
+    s.complete(&job.id, Some(vec![1]), None).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(5));
 
     // Global cutoff None → only the per-entry TTL can purge this row.
@@ -300,8 +300,8 @@ fn test_purge_retention_keeps_job_errors(s: &impl Storage) {
     let q = "q-retain-errors";
     let job = s.enqueue(make_job(q, "retain_err")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.record_error(&job.id, 0, "boom").unwrap();
-    s.complete(&job.id, Some(vec![1])).unwrap();
+    s.record_error(&job.id, 0, "boom", None).unwrap();
+    s.complete(&job.id, Some(vec![1]), None).unwrap();
 
     s.purge_completed_with_ttl(Some(now_millis() + 10_000))
         .unwrap();
@@ -326,14 +326,14 @@ fn seed_purgeable_rows(s: &impl Storage, q: &str, now: i64) -> String {
     for i in 0..2u8 {
         let job = s.enqueue(make_job(q, "dr_arch")).unwrap();
         s.dequeue(q, now + 1000, None).unwrap();
-        s.complete(&job.id, Some(vec![i])).unwrap();
+        s.complete(&job.id, Some(vec![i]), None).unwrap();
     }
     // archived_jobs: one with a 1ms per-entry TTL (expires almost immediately).
     let mut nj = make_job(q, "dr_arch_ttl");
     nj.result_ttl_ms = Some(1);
     let ttl_job = s.enqueue(nj).unwrap();
     s.dequeue(q, now + 1000, None).unwrap();
-    s.complete(&ttl_job.id, Some(vec![9])).unwrap();
+    s.complete(&ttl_job.id, Some(vec![9]), None).unwrap();
 
     // dead_letter: one no-TTL.
     let d1 = s.enqueue(make_job(q, "dr_dead")).unwrap();
@@ -358,7 +358,7 @@ fn seed_purgeable_rows(s: &impl Storage, q: &str, now: i64) -> String {
         .unwrap();
     s.record_metric("dr_metric", &side.id, 11, 21, true, None)
         .unwrap();
-    s.record_error(&side.id, 0, "e0").unwrap();
+    s.record_error(&side.id, 0, "e0", None).unwrap();
 
     // Let the 1ms per-entry TTLs lapse so `now` classifies them expired.
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -538,8 +538,8 @@ fn test_progress_tracking(s: &impl Storage) {
 
 fn test_record_and_get_errors(s: &impl Storage) {
     let job = s.enqueue(make_job("q-errors", "error_task")).unwrap();
-    s.record_error(&job.id, 0, "first failure").unwrap();
-    s.record_error(&job.id, 1, "second failure").unwrap();
+    s.record_error(&job.id, 0, "first failure", None).unwrap();
+    s.record_error(&job.id, 1, "second failure", None).unwrap();
 
     let errors = s.get_job_errors(&job.id, None).unwrap();
     assert_eq!(errors.len(), 2);
@@ -631,8 +631,8 @@ fn test_execution_claims_purge(s: &impl Storage) {
     // The fresh claim must still be held.
     assert!(!s.claim_execution(fresh_job, worker).unwrap());
 
-    s.complete_execution(old_job).unwrap();
-    s.complete_execution(fresh_job).unwrap();
+    s.complete_execution(old_job, None).unwrap();
+    s.complete_execution(fresh_job, None).unwrap();
 }
 
 fn test_reap_stale_jobs(s: &impl Storage) {
@@ -651,7 +651,7 @@ fn test_reap_stale_jobs(s: &impl Storage) {
         "a running job past its timeout must be reaped"
     );
     // Clean up so this Running job doesn't bleed into later shared-instance tests.
-    s.complete(&job.id, None).unwrap();
+    s.complete(&job.id, None, None).unwrap();
 }
 
 fn test_reclaim_execution(s: &impl Storage) {
@@ -665,7 +665,7 @@ fn test_reclaim_execution(s: &impl Storage) {
     assert!(s.reclaim_execution(job, "rescuer", "rescuer2").unwrap());
     // No claim row → no-op.
     assert!(!s.reclaim_execution("no-such-claim", "x", "y").unwrap());
-    s.complete_execution(job).unwrap();
+    s.complete_execution(job, None).unwrap();
 
     // Owners may contain ':' (e.g. "host:pid"). The numeric timestamp suffix is
     // split off from the LAST ':', so the full owner must match — a truncated
@@ -679,7 +679,7 @@ fn test_reclaim_execution(s: &impl Storage) {
     assert!(s
         .reclaim_execution(colon_job, "host:42", "rescuer")
         .unwrap());
-    s.complete_execution(colon_job).unwrap();
+    s.complete_execution(colon_job, None).unwrap();
 }
 
 fn test_claim_execution_batch(s: &impl Storage) {
@@ -705,7 +705,7 @@ fn test_claim_execution_batch(s: &impl Storage) {
         .is_empty());
 
     for id in ["batch-claim-a", "batch-claim-c", pre] {
-        s.complete_execution(id).unwrap();
+        s.complete_execution(id, None).unwrap();
     }
 }
 
@@ -731,7 +731,7 @@ fn test_complete_batch(s: &impl Storage) {
             wall_time_ns: 42,
         })
         .collect();
-    s.complete_batch(&completions).unwrap();
+    s.complete_batch(&completions, None).unwrap();
 
     let claims = s.list_claims_by_worker("cb-worker").unwrap();
     for id in &ids {
@@ -745,7 +745,7 @@ fn test_complete_batch(s: &impl Storage) {
     assert_eq!(metrics.len(), 3, "one success metric per completed job");
 
     // Empty input is a no-op, not an error.
-    s.complete_batch(&[]).unwrap();
+    s.complete_batch(&[], None).unwrap();
 }
 
 fn test_requeue_stuck(s: &impl Storage) {
@@ -778,8 +778,8 @@ fn test_requeue_stuck(s: &impl Storage) {
     assert_eq!(redispatched.id, job.id);
 
     // Not-Running and missing jobs are a no-op `false`, never an error.
-    s.complete(&job.id, None).unwrap();
-    s.complete_execution(&job.id).unwrap();
+    s.complete(&job.id, None, None).unwrap();
+    s.complete_execution(&job.id, None).unwrap();
     assert!(
         !s.requeue_stuck(&job.id, t0).unwrap(),
         "completed jobs are not requeueable"
@@ -820,12 +820,12 @@ fn test_reap_orphaned_jobs(s: &impl Storage) {
         .is_empty());
 
     // Once the job leaves Running it is no longer orphaned.
-    s.complete(&job.id, None).unwrap();
+    s.complete(&job.id, None, None).unwrap();
     let after = s
         .reap_orphaned_jobs(&["other".to_string()], now_millis(), None)
         .unwrap();
     assert!(!after.iter().any(|(j, _)| j.id == job.id));
-    s.complete_execution(&job.id).unwrap();
+    s.complete_execution(&job.id, None).unwrap();
 
     // Owners containing ':' must be parsed whole (split on the LAST ':'), so a
     // truncated prefix is neither reported as the owner nor matched as live.
@@ -848,8 +848,8 @@ fn test_reap_orphaned_jobs(s: &impl Storage) {
         !cl.iter().any(|(j, _)| j.id == cjob.id),
         "the full colon-containing owner being live means not orphaned"
     );
-    s.complete(&cjob.id, None).unwrap();
-    s.complete_execution(&cjob.id).unwrap();
+    s.complete(&cjob.id, None, None).unwrap();
+    s.complete_execution(&cjob.id, None).unwrap();
 }
 
 fn test_dashboard_settings(s: &impl Storage) {
@@ -916,7 +916,7 @@ fn test_immediate_archival(s: &impl Storage) {
     // remain readable via get_job and surface in the per-queue terminal stats.
     let done = s.enqueue(make_job(q, "arch_done")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&done.id, Some(vec![9])).unwrap();
+    s.complete(&done.id, Some(vec![9]), None).unwrap();
 
     let failed = s.enqueue(make_job(q, "arch_fail")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
@@ -973,7 +973,7 @@ fn test_enqueue_dep_on_completed_archived_job(s: &impl Storage) {
     // Run A to completion — it now lives in `archived_jobs`, not `jobs`.
     let a = s.enqueue(make_job(q, "dep_parent_done")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&a.id, None).unwrap();
+    s.complete(&a.id, None, None).unwrap();
 
     // Enqueuing B with a completed (archived) dependency must succeed: the
     // existence check has to fall back to the archive.
@@ -1024,7 +1024,8 @@ fn test_payload_roundtrip(s: &impl Storage) {
     assert_eq!(dequeued.id, job.id);
     assert_eq!(dequeued.payload, vec![0xDE, 0xAD, 0xBE, 0xEF]);
 
-    s.complete(&job.id, Some(vec![0x01, 0x02, 0x03])).unwrap();
+    s.complete(&job.id, Some(vec![0x01, 0x02, 0x03]), None)
+        .unwrap();
 
     let fetched = s.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Complete);
@@ -1044,7 +1045,7 @@ fn test_archived_job_payload_resolves(s: &impl Storage) {
     let job = s.enqueue(nj).unwrap();
 
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&job.id, Some(vec![0x11, 0x22])).unwrap();
+    s.complete(&job.id, Some(vec![0x11, 0x22]), None).unwrap();
 
     // Detail lookup: the job now lives only in `archived_jobs`; the side-table
     // row is gone, yet `get_job` still resolves the full payload and result.
@@ -1918,7 +1919,7 @@ fn test_keyset_pagination_dlq_and_archive(s: &impl Storage) {
     for _ in 0..total {
         let job = s.enqueue(make_job(qa, "keyset_archive")).unwrap();
         s.dequeue(qa, now_millis() + 1000, None).unwrap();
-        s.complete(&job.id, None).unwrap();
+        s.complete(&job.id, None, None).unwrap();
         archived_job_ids.push(job.id);
     }
     let arch_ids = page_all_archived(s, 6);
@@ -2091,7 +2092,7 @@ fn redis_backfills_expiry_for_preupgrade_rows(s: &taskito_core::RedisStorage) {
     nj.result_ttl_ms = Some(1);
     let job = s.enqueue(nj).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&job.id, Some(vec![1])).unwrap();
+    s.complete(&job.id, Some(vec![1]), None).unwrap();
 
     let prefix = s.prefix();
     let mut conn = s.conn().unwrap();
@@ -2229,7 +2230,7 @@ fn redis_retry_keeps_job_dequeuable(s: &taskito_core::RedisStorage) {
     let job = s.enqueue(make_job(q, "retry_requeue")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
-    s.retry(&job.id, now_millis()).unwrap();
+    s.retry(&job.id, now_millis(), None).unwrap();
 
     let again = s.dequeue(q, now_millis() + 1000, None).unwrap();
     assert_eq!(
@@ -2258,7 +2259,7 @@ fn redis_complete_preserves_reused_unique_key(s: &taskito_core::RedisStorage) {
     let ukey = rkey(s, &["jobs", "unique", shared]);
     let _: () = conn.set(&ukey, "other-live-job-id").unwrap();
 
-    s.complete(&a.id, None).unwrap();
+    s.complete(&a.id, None, None).unwrap();
 
     let owner: Option<String> = conn.get(&ukey).unwrap();
     assert_eq!(
@@ -2288,7 +2289,7 @@ fn redis_update_progress_never_resurrects_archived(s: &taskito_core::RedisStorag
     );
 
     // After archival the job key is gone; a stale update must not resurrect it.
-    s.complete(&job.id, None).unwrap();
+    s.complete(&job.id, None, None).unwrap();
     assert!(matches!(
         s.update_progress(&job.id, 99, None),
         Err(taskito_core::error::QueueError::JobNotFound(_))
@@ -2347,7 +2348,7 @@ fn redis_move_to_dlq_skips_already_archived(s: &taskito_core::RedisStorage) {
     let running = s.get_job(&job.id, None).unwrap().unwrap();
 
     // A racer archives the job first (Complete).
-    s.complete(&job.id, None).unwrap();
+    s.complete(&job.id, None, None).unwrap();
     let before = s.list_dead(1000, 0, None).unwrap().len();
 
     // The stale move_to_dlq must be a no-op.
@@ -2376,7 +2377,7 @@ fn redis_mutators_reject_archived_jobs(s: &taskito_core::RedisStorage) {
     let cancelled = s.enqueue(make_job(q, "redis_archived_cancel")).unwrap();
     assert!(s.cancel_job(&cancelled.id, None).unwrap());
     assert!(matches!(
-        s.retry(&cancelled.id, now_millis()),
+        s.retry(&cancelled.id, now_millis(), None),
         Err(taskito_core::error::QueueError::JobNotFound(_))
     ));
     assert!(matches!(
@@ -2387,9 +2388,9 @@ fn redis_mutators_reject_archived_jobs(s: &taskito_core::RedisStorage) {
     // Complete a job → archived as Complete; the same guard applies.
     let done = s.enqueue(make_job(q, "redis_archived_done")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&done.id, None).unwrap();
+    s.complete(&done.id, None, None).unwrap();
     assert!(matches!(
-        s.retry(&done.id, now_millis()),
+        s.retry(&done.id, now_millis(), None),
         Err(taskito_core::error::QueueError::JobNotFound(_))
     ));
 }
@@ -2406,7 +2407,7 @@ fn redis_purge_preserves_reused_unique_key(s: &taskito_core::RedisStorage) {
     a_job.unique_key = Some(shared_key.to_string());
     let a = s.enqueue_unique(a_job).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    s.complete(&a.id, None).unwrap();
+    s.complete(&a.id, None, None).unwrap();
 
     // A new live job B reuses the freed unique key and owns the lock.
     let mut b_job = make_job(q, "unique_reuse_b");

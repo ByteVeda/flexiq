@@ -19,18 +19,26 @@ use crate::diesel_common::impl_workflow_diesel_ops;
 #[derive(Clone)]
 pub struct WorkflowSqliteStorage {
     pub(crate) inner: SqliteStorage,
+    pub(crate) namespace: Option<String>,
 }
 
 impl WorkflowSqliteStorage {
     /// Wrap an existing `SqliteStorage` and ensure workflow tables exist.
-    pub fn new(storage: SqliteStorage) -> Result<Self> {
+    ///
+    /// `namespace` is the tenant every run this store creates is stamped with,
+    /// and the only one it can read or mutate. `None` addresses every
+    /// namespace, matching an unscoped queue.
+    pub fn new(storage: SqliteStorage, namespace: Option<String>) -> Result<Self> {
         let mut conn = storage.conn()?;
         taskito_core::storage::migrate::run_sqlite(
             &mut conn,
             "workflow_schema_migrations",
             &crate::migrations::all(),
         )?;
-        Ok(Self { inner: storage })
+        Ok(Self {
+            inner: storage,
+            namespace,
+        })
     }
 
     /// Access the underlying `SqliteStorage`.

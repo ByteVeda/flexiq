@@ -91,11 +91,14 @@ pub fn dashboard_state_with_assets(
     assets: StaticAssets,
 ) -> SharedState {
     let workflows = WorkflowStorageBackend::Sqlite(
-        WorkflowSqliteStorage::new(match storage {
-            StorageBackend::Sqlite(sqlite) => sqlite.clone(),
-            #[allow(unreachable_patterns)]
-            _ => panic!("this constructor only builds SQLite state; use dashboard_state_for"),
-        })
+        WorkflowSqliteStorage::new(
+            match storage {
+                StorageBackend::Sqlite(sqlite) => sqlite.clone(),
+                #[allow(unreachable_patterns)]
+                _ => panic!("this constructor only builds SQLite state; use dashboard_state_for"),
+            },
+            None,
+        )
         .expect("workflow tables"),
     );
     dashboard_state_for(storage.clone(), workflows, auth, assets)

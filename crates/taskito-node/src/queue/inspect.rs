@@ -402,7 +402,10 @@ impl JsQueue {
                 };
                 visible.insert(current.clone());
                 nodes.push(job_to_js(job));
-                for dep_id in storage.get_dependencies(&current).map_err(to_napi_err)? {
+                for dep_id in storage
+                    .get_dependencies(&current, namespace.as_deref())
+                    .map_err(to_napi_err)?
+                {
                     if seen_edges.insert((dep_id.clone(), current.clone())) {
                         edges.push(JsDagEdge {
                             from: dep_id.clone(),
@@ -411,7 +414,10 @@ impl JsQueue {
                     }
                     pending.push(dep_id);
                 }
-                for dep_id in storage.get_dependents(&current).map_err(to_napi_err)? {
+                for dep_id in storage
+                    .get_dependents(&current, namespace.as_deref())
+                    .map_err(to_napi_err)?
+                {
                     if seen_edges.insert((current.clone(), dep_id.clone())) {
                         edges.push(JsDagEdge {
                             from: current.clone(),

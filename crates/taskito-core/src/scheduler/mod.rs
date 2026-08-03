@@ -2301,7 +2301,10 @@ mod tests {
             .storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
 
         // Wait for the TTL to expire
         std::thread::sleep(Duration::from_millis(10));
@@ -2330,7 +2333,10 @@ mod tests {
             .storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
         std::thread::sleep(Duration::from_millis(10));
 
         // A different owner takes the lock first; the scheduler's own owner
@@ -2464,7 +2470,10 @@ mod tests {
             .storage
             .write_task_log(&job.id, "keeps_logs", "INFO", "msg", None, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
         std::thread::sleep(Duration::from_millis(10));
 
         scheduler.auto_cleanup().unwrap();
@@ -2671,7 +2680,10 @@ mod tests {
             .storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
 
         scheduler.auto_cleanup().unwrap();
 
@@ -2708,7 +2720,10 @@ mod tests {
             .storage
             .write_task_log(&job.id, "keeps_archived", "INFO", "msg", None, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
         std::thread::sleep(Duration::from_millis(10));
 
         scheduler.auto_cleanup().unwrap();
@@ -2746,7 +2761,10 @@ mod tests {
             .storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        scheduler.storage.complete(&job.id, Some(vec![1])).unwrap();
+        scheduler
+            .storage
+            .complete(&job.id, Some(vec![1]), None)
+            .unwrap();
 
         std::thread::sleep(Duration::from_millis(10));
         scheduler.auto_cleanup().unwrap();
