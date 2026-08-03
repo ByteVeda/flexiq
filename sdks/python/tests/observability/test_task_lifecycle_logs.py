@@ -130,11 +130,8 @@ def test_cancelled_logged_at_info_for_task_cancelled(
     cancelled = _matching(caplog, _CANCELLED, stoppable.name, logging.INFO)
     assert len(cancelled) == 1, cancelled
 
-    # A cancel must not also log an error for this task — scoped for the same
-    # reason as above, so a stray worker's failure elsewhere cannot fail it.
-    errors = [
-        record.getMessage()
-        for record in _taskito_records(caplog)
-        if record.levelno == logging.ERROR and stoppable.name in record.getMessage()
-    ]
-    assert errors == []
+    # A cancel must not also log this task as raised. Matched on the `_RAISED`
+    # task-name capture rather than a substring, which would also fire on an
+    # unrelated task whose name merely contains this one's.
+    raised = _matching(caplog, _RAISED, stoppable.name, logging.ERROR)
+    assert raised == []
