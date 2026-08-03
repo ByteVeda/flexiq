@@ -39,7 +39,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = { workspace = true }
 base64 = "0.23"
 sha2 = "0.10"
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 hmac = "0.12"
 thiserror = { workspace = true }
 jsonwebtoken = "9"
