@@ -83,6 +83,27 @@ pub(crate) const RUN_IN_NAMESPACE: &str = "(CAST(? AS TEXT) IS NULL OR namespace
 /// [`RUN_IN_NAMESPACE`] for the queries that alias `workflow_runs` as `r`.
 pub(crate) const R_IN_NAMESPACE: &str = "(CAST(? AS TEXT) IS NULL OR r.namespace = ?)";
 
+/// Turn a node setter's affected-row count into a result.
+///
+/// A setter that touches no row has nothing to set: the node was never created,
+/// or the run is outside this store's namespace. Both answer `NodeNotFound`, so
+/// a scoped caller cannot tell them apart — and the shells' bind-then-cancel
+/// guards, which only fire on `Err`, stop leaving jobs running untracked.
+pub(crate) fn require_touched(
+    affected: usize,
+    run_id: &str,
+    node_name: &str,
+) -> taskito_core::error::Result<()> {
+    if affected == 0 {
+        return Err(crate::WorkflowError::NodeNotFound {
+            run_id: run_id.to_string(),
+            node_name: node_name.to_string(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Single-column `COUNT(*)` result, used by the run-visibility guard.
 #[derive(QueryableByName)]
 pub(crate) struct CountRow {
@@ -593,8 +614,10 @@ macro_rules! impl_workflow_diesel_ops {
                 &self,
                 node: &$crate::WorkflowNode,
             ) -> ::taskito_core::error::Result<()> {
+                // A create against a run this store cannot see would silently
+                // drop the node, so it reports the run missing instead.
                 if self.run_out_of_scope(&node.run_id)? {
-                    return Ok(());
+                    return Err($crate::WorkflowError::RunNotFound(node.run_id.clone()).into());
                 }
                 let mut conn = self.inner.conn()?;
                 ::diesel::sql_query(
@@ -636,7 +659,9 @@ macro_rules! impl_workflow_diesel_ops {
                     if checked.insert(node.run_id.as_str())
                         && self.run_out_of_scope(&node.run_id)?
                     {
-                        return Ok(());
+                        return Err(
+                            $crate::WorkflowError::RunNotFound(node.run_id.clone()).into()
+                        );
                     }
                 }
                 use ::diesel::connection::Connection;
@@ -729,17 +754,17 @@ macro_rules! impl_workflow_diesel_ops {
                 status: $crate::WorkflowNodeStatus,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET status = ? WHERE run_id = ? AND node_name = ?"),
                 )
                 .bind::<::diesel::sql_types::Text, _>(status.as_str())
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_job(
@@ -749,17 +774,17 @@ macro_rules! impl_workflow_diesel_ops {
                 job_id: &str,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET job_id = ? WHERE run_id = ? AND node_name = ?"),
                 )
                 .bind::<::diesel::sql_types::Text, _>(job_id)
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_started(
@@ -769,10 +794,10 @@ macro_rules! impl_workflow_diesel_ops {
                 started_at: i64,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET status = 'running', started_at = ?
                      WHERE run_id = ? AND node_name = ?"),
                 )
@@ -780,7 +805,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_completed(
@@ -791,10 +816,10 @@ macro_rules! impl_workflow_diesel_ops {
                 result_hash: Option<&str>,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET status = 'completed', completed_at = ?, result_hash = ?
                      WHERE run_id = ? AND node_name = ?"),
                 )
@@ -803,7 +828,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_error(
@@ -813,10 +838,10 @@ macro_rules! impl_workflow_diesel_ops {
                 error: &str,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET status = 'failed', error = ?
                      WHERE run_id = ? AND node_name = ?"),
                 )
@@ -824,7 +849,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_fan_out_count(
@@ -834,10 +859,10 @@ macro_rules! impl_workflow_diesel_ops {
                 count: i32,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET fan_out_count = ?, status = 'running'
                      WHERE run_id = ? AND node_name = ?"),
                 )
@@ -845,7 +870,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_running(
@@ -855,10 +880,10 @@ macro_rules! impl_workflow_diesel_ops {
                 started_at: i64,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes SET status = 'running', started_at = ?
                      WHERE run_id = ? AND node_name = ?"),
                 )
@@ -866,7 +891,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn finalize_fan_out_parent(
@@ -975,10 +1000,10 @@ macro_rules! impl_workflow_diesel_ops {
                 started_at: i64,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes
                        SET status = 'compensating',
                            compensation_job_id = ?,
@@ -990,7 +1015,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_compensated(
@@ -1000,10 +1025,10 @@ macro_rules! impl_workflow_diesel_ops {
                 completed_at: i64,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes
                        SET status = 'compensated',
                            compensation_completed_at = ?
@@ -1013,7 +1038,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
 
             fn set_workflow_node_compensation_failed(
@@ -1024,10 +1049,10 @@ macro_rules! impl_workflow_diesel_ops {
                 completed_at: i64,
             ) -> ::taskito_core::error::Result<()> {
                 if self.run_out_of_scope(run_id)? {
-                    return Ok(());
+                    return $crate::diesel_common::require_touched(0, run_id, node_name);
                 }
                 let mut conn = self.inner.conn()?;
-                ::diesel::sql_query(
+                let affected = ::diesel::sql_query(
                     &$prep_sql("UPDATE workflow_nodes
                        SET status = 'compensation_failed',
                            compensation_completed_at = ?,
@@ -1039,7 +1064,7 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(run_id)
                 .bind::<::diesel::sql_types::Text, _>(node_name)
                 .execute(&mut *conn)?;
-                Ok(())
+                $crate::diesel_common::require_touched(affected, run_id, node_name)
             }
         }
     };

@@ -675,6 +675,46 @@ fn case_get_child_workflow_runs(s: &impl WorkflowStorage) {
     assert_eq!(children[0].id, child_id);
 }
 
+/// A setter aimed at a node that was never created reports it, on every
+/// backend, and writes nothing on the way out.
+///
+/// Diesel used to touch zero rows and Redis used to mint a partial hash — both
+/// returning `Ok(())`, so the shells' bind-then-cancel guards never fired and
+/// the job ran untracked. The Redis half also left a hash that failed to decode
+/// on the next read.
+fn case_node_setter_reports_a_missing_node(s: &impl WorkflowStorage) {
+    let def = make_definition("missing_node_def");
+    s.create_workflow_definition(&def).unwrap();
+    let run = make_run(&def.id);
+    s.create_workflow_run(&run).unwrap();
+
+    assert!(s.set_workflow_node_job(&run.id, "ghost", "job-1").is_err());
+    assert!(s
+        .update_workflow_node_status(&run.id, "ghost", WorkflowNodeStatus::Running)
+        .is_err());
+    assert!(s.set_workflow_node_started(&run.id, "ghost", 1).is_err());
+    assert!(s
+        .set_workflow_node_completed(&run.id, "ghost", 2, None)
+        .is_err());
+    assert!(s.set_workflow_node_error(&run.id, "ghost", "boom").is_err());
+    assert!(s
+        .set_workflow_node_fan_out_count(&run.id, "ghost", 3)
+        .is_err());
+    assert!(s.set_workflow_node_running(&run.id, "ghost", 4).is_err());
+    assert!(s
+        .set_workflow_node_compensation_job(&run.id, "ghost", "job-2", 5)
+        .is_err());
+    assert!(s
+        .set_workflow_node_compensated(&run.id, "ghost", 6)
+        .is_err());
+    assert!(s
+        .set_workflow_node_compensation_failed(&run.id, "ghost", "boom", 7)
+        .is_err());
+
+    assert!(s.get_workflow_node(&run.id, "ghost").unwrap().is_none());
+    assert!(s.get_workflow_nodes(&run.id).unwrap().is_empty());
+}
+
 // ── Contract runner ────────────────────────────────────────────────────────
 
 fn run_contract(s: &impl WorkflowStorage) {
@@ -706,6 +746,7 @@ fn run_contract(s: &impl WorkflowStorage) {
     case_set_workflow_node_compensated(s);
     case_set_workflow_node_compensation_failed(s);
     case_get_child_workflow_runs(s);
+    case_node_setter_reports_a_missing_node(s);
 }
 
 // ── Per-backend entry points ──────────────────────────────────────────────

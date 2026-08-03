@@ -200,17 +200,20 @@ fn a_node_in_another_namespace_cannot_be_mutated() {
     a.create_workflow_node(&make_node(&run_id, "a"))
         .expect("node");
 
-    b.update_workflow_node_status(&run_id, "a", WorkflowNodeStatus::Failed)
-        .expect("no effect");
-    b.set_workflow_node_job(&run_id, "a", "job-from-b")
-        .expect("no effect");
-    b.set_workflow_node_completed(&run_id, "a", 333, Some("hash"))
-        .expect("no effect");
-    b.set_workflow_node_error(&run_id, "a", "boom")
-        .expect("no effect");
+    // A node setter reports not-found rather than claiming success — the same
+    // answer a node that was never created gets, so the boundary discloses
+    // nothing, and the shells' bind-then-cancel guards still fire.
+    assert!(b
+        .update_workflow_node_status(&run_id, "a", WorkflowNodeStatus::Failed)
+        .is_err());
+    assert!(b.set_workflow_node_job(&run_id, "a", "job-from-b").is_err());
+    assert!(b
+        .set_workflow_node_completed(&run_id, "a", 333, Some("hash"))
+        .is_err());
+    assert!(b.set_workflow_node_error(&run_id, "a", "boom").is_err());
     assert!(
         !b.finalize_fan_out_parent(&run_id, "a", true, None, 444)
-            .expect("no effect"),
+            .expect("a compare-and-swap reports untransitioned, not an error"),
         "a foreign fan-out parent must report untransitioned"
     );
 
@@ -223,11 +226,14 @@ fn a_node_in_another_namespace_cannot_be_mutated() {
     assert_eq!(node.error, None);
     assert_eq!(node.completed_at, None);
 
-    // A node created against a foreign run must not appear either.
-    b.create_workflow_node(&make_node(&run_id, "smuggled"))
-        .expect("no effect");
-    b.create_workflow_nodes_batch(&[make_node(&run_id, "smuggled-batch")])
-        .expect("no effect");
+    // A create against a foreign run reports the run missing rather than
+    // dropping the node on the floor.
+    assert!(b
+        .create_workflow_node(&make_node(&run_id, "smuggled"))
+        .is_err());
+    assert!(b
+        .create_workflow_nodes_batch(&[make_node(&run_id, "smuggled-batch")])
+        .is_err());
     assert_eq!(unscoped.get_workflow_nodes(&run_id).unwrap().len(), 1);
 }
 
@@ -286,9 +292,50 @@ fn a_mixed_run_node_batch_is_refused_whole() {
     let mine = seed_run(&b, "wf_batch_mine");
     let foreign = seed_run(&a, "wf_batch_foreign");
 
-    b.create_workflow_nodes_batch(&[make_node(&mine, "ok"), make_node(&foreign, "smuggled")])
-        .expect("no error, no effect");
+    assert!(
+        b.create_workflow_nodes_batch(&[make_node(&mine, "ok"), make_node(&foreign, "smuggled")])
+            .is_err(),
+        "a foreign run anywhere in the batch rejects the whole batch"
+    );
 
     assert!(unscoped.get_workflow_nodes(&foreign).unwrap().is_empty());
     assert!(unscoped.get_workflow_nodes(&mine).unwrap().is_empty());
+}
+
+#[test]
+fn a_setter_reports_a_node_that_was_never_created() {
+    // #615: the setters used to touch zero rows on Diesel and mint a partial
+    // hash on Redis, both returning `Ok(())`. The shells enqueue the job and
+    // *then* bind it, cancelling only on `Err` — a silent success left the job
+    // running with nothing tracking it.
+    let (a, _, _) = stores();
+    let run_id = seed_run(&a, "wf_missing_node");
+
+    assert!(a.set_workflow_node_job(&run_id, "ghost", "job-1").is_err());
+    assert!(a
+        .update_workflow_node_status(&run_id, "ghost", WorkflowNodeStatus::Running)
+        .is_err());
+    assert!(a.set_workflow_node_started(&run_id, "ghost", 1).is_err());
+    assert!(a
+        .set_workflow_node_completed(&run_id, "ghost", 2, None)
+        .is_err());
+    assert!(a.set_workflow_node_error(&run_id, "ghost", "boom").is_err());
+    assert!(a
+        .set_workflow_node_fan_out_count(&run_id, "ghost", 3)
+        .is_err());
+    assert!(a.set_workflow_node_running(&run_id, "ghost", 4).is_err());
+    assert!(a
+        .set_workflow_node_compensation_job(&run_id, "ghost", "job-2", 5)
+        .is_err());
+    assert!(a
+        .set_workflow_node_compensated(&run_id, "ghost", 6)
+        .is_err());
+    assert!(a
+        .set_workflow_node_compensation_failed(&run_id, "ghost", "boom", 7)
+        .is_err());
+
+    // Nothing was written on the way out — no half-built node to trip a
+    // later read.
+    assert!(a.get_workflow_node(&run_id, "ghost").unwrap().is_none());
+    assert!(a.get_workflow_nodes(&run_id).unwrap().is_empty());
 }
