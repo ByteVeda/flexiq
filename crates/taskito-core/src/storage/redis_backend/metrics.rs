@@ -1,7 +1,7 @@
 use redis::Commands;
 use serde::{Deserialize, Serialize};
 
-use super::{map_err, RedisStorage};
+use super::{map_err, RedisStorage, SCAN_BATCH};
 use crate::error::Result;
 use crate::job::now_millis;
 use crate::storage::records::{ReplayEntry, TaskMetric};
@@ -141,8 +141,6 @@ impl RedisStorage {
         Ok(rows)
     }
 
-    /// Purge metric records recorded at or before the cutoff (inclusive).
-    /// Returns the count removed.
     /// Count task-metric rows a purge would remove older than the cutoff,
     /// mirroring [`Self::purge_metrics`] without deleting. `metrics:all` is
     /// scored by `recorded_at`, so a `ZCOUNT` (inclusive of the cutoff, like the
@@ -160,32 +158,45 @@ impl RedisStorage {
     pub fn purge_metrics(&self, older_than_ms: i64) -> Result<u64> {
         let mut conn = self.conn()?;
         let all_key = self.key(&["metrics", "all"]);
+        let mut total = 0u64;
 
-        let ids: Vec<String> = conn
-            .zrangebyscore(&all_key, "-inf", older_than_ms as f64)
-            .map_err(map_err)?;
-
-        if ids.is_empty() {
-            return Ok(0);
-        }
-
-        let pipe = &mut redis::pipe();
-        for id in &ids {
-            let metric_key = self.key(&["metric", id]);
-            // Load to get task_name for by_task cleanup
-            let data: Option<String> = conn.get(&metric_key).map_err(map_err)?;
-            if let Some(d) = data {
-                if let Ok(entry) = serde_json::from_str::<MetricEntry>(&d) {
-                    let by_task_key = self.key(&["metrics", "by_task", &entry.task_name]);
-                    pipe.zrem(&by_task_key, id);
-                }
+        // Every id in the `-inf..=cutoff` window is expired and gets deleted, so
+        // re-reading the window drains old metrics in bounded batches rather than
+        // loading the whole below-cutoff set in one shot — a first sweep after a
+        // long retention gap would otherwise stall the maintenance tick.
+        loop {
+            let ids: Vec<String> = conn
+                .zrangebyscore_limit(&all_key, "-inf", older_than_ms as f64, 0, SCAN_BATCH)
+                .map_err(map_err)?;
+            if ids.is_empty() {
+                break;
             }
-            pipe.del(&metric_key);
-            pipe.zrem(&all_key, id);
-        }
-        pipe.query::<()>(&mut conn).map_err(map_err)?;
 
-        Ok(ids.len() as u64)
+            // One MGET for the batch: the row is read only to recover `task_name`
+            // for the `by_task` index, so a round trip per id is pure latency.
+            let metric_keys: Vec<String> = ids.iter().map(|id| self.key(&["metric", id])).collect();
+            let rows: Vec<Option<String>> = conn.mget(&metric_keys).map_err(map_err)?;
+
+            let pipe = &mut redis::pipe();
+            for ((id, metric_key), row) in ids.iter().zip(&metric_keys).zip(&rows) {
+                if let Some(data) = row {
+                    if let Ok(entry) = serde_json::from_str::<MetricEntry>(data) {
+                        let by_task_key = self.key(&["metrics", "by_task", &entry.task_name]);
+                        pipe.zrem(&by_task_key, id);
+                    }
+                }
+                pipe.del(metric_key);
+                pipe.zrem(&all_key, id);
+            }
+            pipe.query::<()>(&mut conn).map_err(map_err)?;
+
+            total += ids.len() as u64;
+            if (ids.len() as isize) < SCAN_BATCH {
+                break;
+            }
+        }
+
+        Ok(total)
     }
 
     /// Record a replay of a completed job, pairing original and replay

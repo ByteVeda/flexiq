@@ -321,30 +321,37 @@ fn test_purge_retention_keeps_job_errors(s: &impl Storage) {
 /// else the shared store already holds. Seeds: 2 no-TTL + 1 per-entry-expired
 /// archived jobs, 1 no-TTL + 1 per-entry-expired dead entries, 3 task logs,
 /// 2 metrics, 1 job error.
-fn seed_purgeable_rows(s: &impl Storage, q: &str, now: i64) -> String {
+fn seed_purgeable_rows(s: &impl Storage, q: &str) -> String {
+    // Each dequeue reads the clock itself rather than reusing the caller's `now`:
+    // `make_job` stamps `scheduled_at` at enqueue time, so a caller whose `now` is
+    // even a second stale (one `count_expired_rows` against a remote backend is
+    // enough) would leave every job below its own scheduled time and dequeue
+    // nothing, failing the `complete` that follows with `JobNotFound`.
+    let due = || now_millis() + 1000;
+
     // archived_jobs: two with no per-entry TTL.
     for i in 0..2u8 {
         let job = s.enqueue(make_job(q, "dr_arch")).unwrap();
-        s.dequeue(q, now + 1000, None).unwrap();
+        s.dequeue(q, due(), None).unwrap();
         s.complete(&job.id, Some(vec![i]), None).unwrap();
     }
     // archived_jobs: one with a 1ms per-entry TTL (expires almost immediately).
     let mut nj = make_job(q, "dr_arch_ttl");
     nj.result_ttl_ms = Some(1);
     let ttl_job = s.enqueue(nj).unwrap();
-    s.dequeue(q, now + 1000, None).unwrap();
+    s.dequeue(q, due(), None).unwrap();
     s.complete(&ttl_job.id, Some(vec![9]), None).unwrap();
 
     // dead_letter: one no-TTL.
     let d1 = s.enqueue(make_job(q, "dr_dead")).unwrap();
-    s.dequeue(q, now + 1000, None).unwrap();
+    s.dequeue(q, due(), None).unwrap();
     let running = s.get_job(&d1.id, None).unwrap().unwrap();
     s.move_to_dlq(&running, "boom", None).unwrap();
     // dead_letter: one per-entry TTL (carried from the job).
     let mut ndj = make_job(q, "dr_dead_ttl");
     ndj.result_ttl_ms = Some(1);
     let d2 = s.enqueue(ndj).unwrap();
-    s.dequeue(q, now + 1000, None).unwrap();
+    s.dequeue(q, due(), None).unwrap();
     let running2 = s.get_job(&d2.id, None).unwrap().unwrap();
     s.move_to_dlq(&running2, "boom", None).unwrap();
 
@@ -381,7 +388,7 @@ fn test_count_expired_rows_matches_seeded_rows(s: &impl Storage) {
     };
 
     let before = s.count_expired_rows(&cutoffs, now).unwrap();
-    seed_purgeable_rows(s, "q-dryrun-delta", now);
+    seed_purgeable_rows(s, "q-dryrun-delta");
     let after = s.count_expired_rows(&cutoffs, now_millis()).unwrap();
 
     // archived = 2 no-TTL + 1 per-entry completed, plus the 2 Dead rows the DLQ
@@ -405,7 +412,7 @@ fn test_count_expired_rows_none_cutoff_counts_per_entry_only(s: &impl Storage) {
     let none = RetentionCutoffs::default();
 
     let before = s.count_expired_rows(&none, now).unwrap();
-    seed_purgeable_rows(s, "q-dryrun-none", now);
+    seed_purgeable_rows(s, "q-dryrun-none");
     let after = s.count_expired_rows(&none, now_millis()).unwrap();
 
     // Per-entry archived rows: the completed per-entry job plus the per-entry
@@ -2079,6 +2086,7 @@ fn redis_storage_tests() {
     redis_purge_dead_drains_across_batches(&storage);
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
+    redis_purge_metrics_drains_across_batches(&storage);
 }
 
 /// A per-entry-TTL row archived before the `archived:expiry` index existed must
@@ -2174,6 +2182,42 @@ fn redis_purge_dead_drains_across_batches(s: &taskito_core::RedisStorage) {
     assert!(
         s.list_dead(10_000, 0, None).unwrap().is_empty(),
         "batched purge_dead must fully drain the DLQ"
+    );
+}
+
+/// S15: `purge_metrics` was the one retention purge that read its whole
+/// below-cutoff window in a single ZRANGEBYSCORE. Batching it must still drain
+/// more than one SCAN_BATCH (500) per call, and must keep clearing the
+/// `metrics:by_task` index for every batch — not just the first.
+#[cfg(feature = "redis")]
+fn redis_purge_metrics_drains_across_batches(s: &taskito_core::RedisStorage) {
+    let task = "purge_metrics_batch_task";
+    for i in 0..550 {
+        s.record_metric(task, &format!("job-{i}"), 10, 20, true, None)
+            .unwrap();
+    }
+
+    // Cutoff far in the future so every recorded metric is eligible.
+    let removed = s.purge_metrics(now_millis() + 3_600_000).unwrap();
+    assert!(
+        removed >= 550,
+        "batched purge_metrics must remove all >500 eligible rows, got {removed}"
+    );
+    assert!(
+        s.get_metrics(None, 0, None).unwrap().is_empty(),
+        "batched purge_metrics must fully drain the metric store"
+    );
+
+    // The blobs are gone either way; the by_task index is only cleaned from the
+    // row loaded per batch, so an unbatched second page would leave it populated.
+    let mut conn = s.conn().unwrap();
+    let remaining: i64 = redis::cmd("ZCARD")
+        .arg(rkey(s, &["metrics", "by_task", task]))
+        .query(&mut conn)
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "every batch must clear its by_task index entries"
     );
 }
 
