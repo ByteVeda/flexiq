@@ -91,14 +91,19 @@ def test_periodic_task_triggers(queue: Queue, poll_until: Any) -> None:
 
     worker_thread = threading.Thread(target=queue.run_worker, daemon=True)
     worker_thread.start()
+    try:
+        poll_until(
+            lambda: queue.stats()["completed"] >= 1,
+            timeout=30,
+            message="periodic task never triggered",
+        )
 
-    poll_until(
-        lambda: queue.stats()["completed"] >= 1,
-        timeout=30,
-        message="periodic task never triggered",
-    )
-
-    assert queue.stats()["completed"] >= 1
+        assert queue.stats()["completed"] >= 1
+    finally:
+        # A once-a-second schedule left running keeps firing for the rest of the
+        # session, and its lifecycle logs land in every later test's `caplog`.
+        queue.shutdown()
+        worker_thread.join(timeout=5)
 
 
 def test_list_periodic_reports_every_field(registered: Queue) -> None:

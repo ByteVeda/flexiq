@@ -6,7 +6,7 @@ resolver = "2"
 # release bumps `version` in exactly one place. `rust-version` is verified by
 # the CI msrv job; sea-query 1.x pins the floor at 1.88.
 [workspace.package]
-version = "0.21.0"
+version = "0.22.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ByteVeda/taskito"
