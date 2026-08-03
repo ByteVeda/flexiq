@@ -144,34 +144,20 @@ jobs:
         working-directory: sdks/node
         run: pnpm run build:native
 
-      # Linux builds run inside the napi-rs image for a low glibc / musl baseline.
-      # Checkout and this `docker run` execute on the host runner — JavaScript
-      # actions (checkout) can't run inside an Alpine container on arm64 runners,
-      # so the job has no `container:` and shells into the image here instead.
-      # perl is needed by vendored openssl-sys + pq-src (libpq) to build from source;
-      # --force overwrites the pnpm the image preinstalls (otherwise EEXIST).
+      # musl builds run inside the napi-rs image for its musl baseline. Checkout
+      # and this `docker run` execute on the host runner — JavaScript actions
+      # can't run inside an Alpine container on arm64 — so the job has no
+      # `container:` and shells into the image here instead. The build steps
+      # live in the script so they can be shellchecked and reproduced locally.
       - name: Build native addon in docker
         if: matrix.docker != ''
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/build" \
-            -w /build/sdks/node \
             -e CARGO_HTTP_MULTIPLEXING \
             -e CARGO_NET_RETRY \
             "${{ matrix.docker }}" \
-            sh -c '
-              set -e
-              if command -v apk >/dev/null; then
-                apk add --no-cache perl build-base
-              else
-                apt-get update && apt-get install -y perl
-              fi
-              # The image ships an old Rust (1.82); some deps need edition2024.
-              rustup update stable && rustup default stable
-              npm install -g pnpm@10.33.0 --force
-              pnpm install --frozen-lockfile
-              pnpm run build:native
-            '
+            sh /build/.github/scripts/build-node-native-musl.sh
 
       - name: Upload binding
         uses: actions/upload-artifact@v7
