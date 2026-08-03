@@ -21,6 +21,27 @@ def _taskito_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord
     return [r for r in caplog.records if r.name == "taskito"]
 
 
+def _matching(
+    caplog: pytest.LogCaptureFixture,
+    pattern: re.Pattern[str],
+    task_name: str,
+    level: int,
+) -> list[str]:
+    """Lifecycle messages this test's own task produced, at `level`.
+
+    Scoped by task name because ``caplog`` captures the whole process: any worker
+    another test left running logs onto the same ``taskito`` logger, and an
+    unscoped count then depends on test order and timing.
+    """
+    return [
+        message
+        for record in _taskito_records(caplog)
+        if record.levelno == level
+        for message in [record.getMessage()]
+        if (match := pattern.match(message)) is not None and match.group(1) == task_name
+    ]
+
+
 def test_safe_result_repr_truncates_long_values() -> None:
     long = "x" * (_MAX_RESULT_REPR * 2)
     rendered = _safe_result_repr(long)
@@ -66,15 +87,13 @@ def test_received_and_succeeded_logged_for_successful_task(
     caplog.set_level(logging.INFO, logger="taskito")
     assert _invoke_registered(queue, add.name, 2, 3) == 5
 
-    messages = [r.getMessage() for r in _taskito_records(caplog) if r.levelno == logging.INFO]
-    received = [m for m in messages if _RECEIVED.match(m)]
-    succeeded = [m for m in messages if _SUCCEEDED.match(m)]
+    received = _matching(caplog, _RECEIVED, add.name, logging.INFO)
+    succeeded = _matching(caplog, _SUCCEEDED, add.name, logging.INFO)
 
-    assert len(received) == 1, messages
-    assert len(succeeded) == 1, messages
+    assert len(received) == 1, received
+    assert len(succeeded) == 1, succeeded
     m = _SUCCEEDED.match(succeeded[0])
     assert m is not None
-    assert m.group(1) == add.name
     assert m.group(3) == "5"
 
 
@@ -89,13 +108,9 @@ def test_raised_logged_at_error_for_failing_task(
     with pytest.raises(ValueError):
         _invoke_registered(queue, boom.name)
 
-    raised = [
-        r
-        for r in _taskito_records(caplog)
-        if r.levelno == logging.ERROR and _RAISED.match(r.getMessage())
-    ]
-    assert len(raised) == 1
-    m = _RAISED.match(raised[0].getMessage())
+    raised = _matching(caplog, _RAISED, boom.name, logging.ERROR)
+    assert len(raised) == 1, raised
+    m = _RAISED.match(raised[0])
     assert m is not None
     assert m.group(3) == "ValueError"
     assert "bad input" in m.group(4)
@@ -112,9 +127,14 @@ def test_cancelled_logged_at_info_for_task_cancelled(
     with pytest.raises(TaskCancelledError):
         _invoke_registered(queue, stoppable.name)
 
-    cancel_records = [r for r in _taskito_records(caplog) if _CANCELLED.match(r.getMessage())]
-    assert len(cancel_records) == 1
-    assert cancel_records[0].levelno == logging.INFO
+    cancelled = _matching(caplog, _CANCELLED, stoppable.name, logging.INFO)
+    assert len(cancelled) == 1, cancelled
 
-    error_records = [r for r in _taskito_records(caplog) if r.levelno == logging.ERROR]
-    assert error_records == []
+    # A cancel must not also log an error for this task — scoped for the same
+    # reason as above, so a stray worker's failure elsewhere cannot fail it.
+    errors = [
+        record.getMessage()
+        for record in _taskito_records(caplog)
+        if record.levelno == logging.ERROR and stoppable.name in record.getMessage()
+    ]
+    assert errors == []
