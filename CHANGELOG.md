@@ -5,7 +5,13 @@ All notable changes to taskito are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). All SDKs (Python, Node, Java) and the
 underlying Rust crates are released together, in lock-step.
 
-## Unreleased
+## 0.22.0
+
+Attach and executor release. `taskito-server` becomes a standalone binary that schedules for an
+app written against any SDK, workers attach to it over a shared worker protocol, and an executor
+side-channel carries progress, logs and middleware toggles back. Namespace scoping is completed
+across the id-addressed storage APIs, and cross-SDK parity lands the operator admin surface,
+predicates, retry policy and the full event taxonomy in Node and Java.
 
 ### Changed
 
@@ -28,9 +34,24 @@ underlying Rust crates are released together, in lock-step.
   `status` filter (`DeliveryStatus`, Python). Same non-breaking contract — a string still works.
   Internally, Python's workflow tracker and saga orchestrator now compare node/run status against
   the enums rather than string literals.
+- **The Node native binding is built on napi 3.** An internal upgrade from napi 2 with no change
+  to the published API; the minimum supported Node version stays 20.
 
 ### Added
 
+- **`taskito-server`: a standalone scheduler, attach listener and dashboard.** One Rust binary
+  runs the scheduler loop and serves the dashboard for an app written against any SDK, so the fat
+  application image no longer has to be redeployed as a worker. Workers attach to it over a shared
+  worker protocol — a JSON header line plus raw payload bytes, one format for both the prefork
+  pipe and the attach socket — dispatched through a `RemoteDispatcher` in the core. Database
+  credentials stay in the server rather than the app image.
+- **A `taskito executor` subcommand in every SDK.** Python, Node and Java each ship an executor
+  that attaches to a running server, advertises the tasks it can run, and executes only those —
+  the process side of the attach topology above.
+- **An executor side-channel for progress, logs and middleware toggles.** An attached executor
+  reports `update_progress`, task logs, and middleware enable/disable back over the same
+  connection, so an attached worker is observable and controllable exactly like an in-process one.
+  Implemented in the core and wired through all three SDKs.
 - **A Helm chart for `taskito-server`, with annotation-driven sidecar injection.**
   `deploy/helm/taskito-server` installs the scheduler, dashboard and injector as one release, and
   refuses to render the combinations the server rejects at boot — an attach listener with no token,
@@ -96,16 +117,36 @@ underlying Rust crates are released together, in lock-step.
   `durationMs` on Node's, and `duration_ms` on Python's job event payloads. Java also gains
   `NodeSnapshot.durationMs()` / `compensationDurationMs()` and `TaskContext.elapsedMs()`.
 - **Full lifecycle event taxonomy in the Node and Java SDKs.** Both grow from the 4 job-outcome
-  events to the 26-event cross-SDK taxonomy: enqueue, per-attempt failure (`job.failed`), worker
+  events to the 29-event cross-SDK taxonomy: enqueue, per-attempt failure (`job.failed`), worker
   lifecycle, queue pause/resume, workflow submit/terminal/gate, saga compensation, and predicate
   rejection. Node types `queue.on()` per event name (`EventMap`); Java adds queue-level
   `taskito.onEvent(EventName, Consumer<TaskitoEvent>)` with typed event records alongside the
   unchanged worker-scoped `Worker.Builder.on(...)`. Webhooks can subscribe to every event name.
-  `predicate.cancelled` stays Python-only, and Python now emits the previously dormant
-  `workflow.submitted`.
+  `predicate.cancelled` is reserved in all three — subscribable, typed and webhook-matchable —
+  but only Python emits it: Node and Java gate at enqueue, where a terminal skip is
+  `predicate.skipped` because no job exists yet.
 - **Java webhook deliveries use the dotted wire names.** Bodies that previously said
   `"event": "success"` now say `"event": "job.completed"`; stored subscriptions with the legacy
   four names keep matching, and job-outcome bodies gain `duration_ms`.
+- **Retention dry-run.** `dry_run_retention()` reports what a purge would delete right now — per
+  table and in total, against the windows the elected cleaner actually published — so a window can
+  be sized before it deletes anything. The dashboard echoes those live windows rather than
+  guessing at the defaults.
+- **Retry predicates in the Node and Java SDKs.** A per-task `retryOn` classifies a thrown error:
+  return `false` and the job dead-letters immediately, whatever retry budget is left. One
+  predicate covers both directions — test for the errors worth retrying, or negate a test for the
+  permanent ones. Java can signal the same intent by exception type instead, via
+  `RetryableException` / `NonRetryableException`, so a domain hierarchy doubles as the policy.
+- **Push-dispatch in the Node and Java shells.** Both accept the `pushDispatch` option, so an
+  enqueue wakes the scheduler immediately instead of waiting out the poll interval.
+- **Node standalone health and readiness helpers.** Liveness and readiness checks that run without
+  the dashboard, for a worker deployment that serves no HTTP of its own.
+- **Python periodic-schedule catalog management.** `list_periodic()`, `delete_periodic(name)`,
+  `pause_periodic(name)` and `resume_periodic(name)` operate the cron catalog at runtime, so a
+  schedule can be suspended or dropped without a redeploy.
+- **Java classifier jars and GraalVM metadata.** Per-platform classifier artifacts publish
+  alongside the fat jar, and bundled reachability metadata makes the SDK usable from a
+  GraalVM native image.
 
 ### Fixed
 
@@ -131,6 +172,32 @@ underlying Rust crates are released together, in lock-step.
   threads that can still be running libpq/OpenSSL when the process exits, racing OpenSSL's
   default `atexit` teardown. Taskito now initializes OpenSSL itself with that teardown
   suppressed (`OPENSSL_INIT_NO_ATEXIT`) before the first Postgres connection.
+
+- **Namespace scoping is complete across the id-addressed storage APIs.** Every method that
+  addresses a row by id now takes the namespace it must match, so one tenant can no longer read,
+  mutate or complete another's job by guessing its id. Cross-namespace dependencies are rejected
+  at enqueue, and workflow runs are scoped through the store handle.
+- **Dashboard settings are compare-and-set in every SDK.** Two dashboards editing the same JSON
+  settings document no longer silently overwrite each other; a stale write is rejected instead of
+  clobbering the newer one.
+- **The predicate event taxonomy is complete across SDKs.** The gate outcome names each SDK
+  recognized diverged, so a webhook subscribed to one could not be registered against another.
+  All three now carry the same set. Separately, `workflow.submitted` fires on run submission
+  rather than staying dormant.
+- **Java null-safety contract and native platform coverage.** Nullability is declared across the
+  public API, and the published artifact carries every supported platform's native library rather
+  than only the build host's. `JobRec` reads are guarded by the backend monitor, and the build no
+  longer silently disables every compile task.
+- **The Redis task-metric retention purge is bounded.** It read its whole below-cutoff window in
+  one `ZRANGEBYSCORE` and issued a `GET` per id, so the first sweep after a long retention gap
+  stalled the maintenance tick. It now drains in batches like every other purge, with one `MGET`
+  per batch.
+- **Batch enqueue applies `unique_key` dedup.** A batch carrying any keyed entry now routes
+  through the unique path rather than the plain multi-row insert, which would hit the partial
+  unique index and fail the whole batch the moment a key duplicated an active job. Shared by the
+  Node and Java batch enqueues; a keyless batch keeps the chunked throughput path, and Python
+  still batch-inserts without dedup.
+- Version drift in the Node CLI banner and the Java installation docs.
 
 ## 0.21.0
 
