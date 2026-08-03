@@ -2079,6 +2079,7 @@ fn redis_storage_tests() {
     redis_purge_dead_drains_across_batches(&storage);
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
+    redis_purge_metrics_drains_across_batches(&storage);
 }
 
 /// A per-entry-TTL row archived before the `archived:expiry` index existed must
@@ -2174,6 +2175,42 @@ fn redis_purge_dead_drains_across_batches(s: &taskito_core::RedisStorage) {
     assert!(
         s.list_dead(10_000, 0, None).unwrap().is_empty(),
         "batched purge_dead must fully drain the DLQ"
+    );
+}
+
+/// S15: `purge_metrics` was the one retention purge that read its whole
+/// below-cutoff window in a single ZRANGEBYSCORE. Batching it must still drain
+/// more than one SCAN_BATCH (500) per call, and must keep clearing the
+/// `metrics:by_task` index for every batch — not just the first.
+#[cfg(feature = "redis")]
+fn redis_purge_metrics_drains_across_batches(s: &taskito_core::RedisStorage) {
+    let task = "purge_metrics_batch_task";
+    for i in 0..550 {
+        s.record_metric(task, &format!("job-{i}"), 10, 20, true, None)
+            .unwrap();
+    }
+
+    // Cutoff far in the future so every recorded metric is eligible.
+    let removed = s.purge_metrics(now_millis() + 3_600_000).unwrap();
+    assert!(
+        removed >= 550,
+        "batched purge_metrics must remove all >500 eligible rows, got {removed}"
+    );
+    assert!(
+        s.get_metrics(None, 0, None).unwrap().is_empty(),
+        "batched purge_metrics must fully drain the metric store"
+    );
+
+    // The blobs are gone either way; the by_task index is only cleaned from the
+    // row loaded per batch, so an unbatched second page would leave it populated.
+    let mut conn = s.conn().unwrap();
+    let remaining: i64 = redis::cmd("ZCARD")
+        .arg(rkey(s, &["metrics", "by_task", task]))
+        .query(&mut conn)
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "every batch must clear its by_task index entries"
     );
 }
 
