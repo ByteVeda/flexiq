@@ -633,8 +633,9 @@ checksum = "e9bb72bb94fdc1bd619f4c18cc91ecf6302aeb333d31b3c6ec0bb841cd920209"
 
 [[package]]
 name = "dagron-core"
-version = "0.1.0"
-source = "git+https://github.com/ByteVeda/dagron.git?rev=d1b61aaf2ed2d516b9a239f089a55b143cb05f65#d1b61aaf2ed2d516b9a239f089a55b143cb05f65"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ba5ea372deab88064adc844e3d1d680d7ed868a3c7ad380aa65c9591aacfab"
 dependencies = [
  "ahash",
  "bincode",

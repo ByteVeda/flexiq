@@ -31,7 +31,7 @@ redis = { version = "1.2", features = ["script", "streams"] }
 openssl-sys = { version = "0.9", features = ["vendored"] }
 pyo3 = { version = "0.29", features = ["multiple-pymethods"] }
 async-trait = "0.1"
-dagron-core = { git = "https://github.com/ByteVeda/dagron.git", rev = "d1b61aaf2ed2d516b9a239f089a55b143cb05f65" }
+dagron-core = "0.1.1"
 # Programmatic DDL builder — renders dialect-correct schema SQL executed through
 # the Diesel connection. `default-features = false` drops the mysql backend and
 # derive macros we don't use; `backend-postgres` is enabled per-crate under the
