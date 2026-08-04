@@ -170,10 +170,13 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
 
+      # --locked throughout: without it the first command may resolve a stale
+      # Cargo.lock and rewrite it on the runner, leaving the later steps to
+      # validate that rewritten lockfile instead of the committed one.
       - name: Check the crates build at the MSRV
         run: |
           read -ra pkgs <<< "$CRATES"
-          cargo +${{ steps.msrv.outputs.version }} check "${pkgs[@]}" --all-features
+          cargo +${{ steps.msrv.outputs.version }} check --locked "${pkgs[@]}" --all-features
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -181,12 +184,12 @@ jobs:
       - name: Rustdoc is warning-free
         run: |
           read -ra pkgs <<< "$CRATES"
-          RUSTDOCFLAGS="-D warnings" cargo doc "${pkgs[@]}" --no-deps --all-features
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked "${pkgs[@]}" --no-deps --all-features
 
       - name: Packages pass a publish dry-run
         run: |
           read -ra pkgs <<< "$CRATES"
-          cargo publish --dry-run "${pkgs[@]}"
+          cargo publish --dry-run --locked "${pkgs[@]}"
 
       # No baseline exists before a crate's first publish; its check is skipped
       # until then, and a breaking change fails CI once one does. Each crate is
