@@ -127,14 +127,26 @@ jobs:
                 ;;
               200)
                 # The index file is NDJSON, one line per version — slurp it into
-                # an array so the test is an explicit true/false rather than
-                # jq's "did the last line emit anything" exit status.
-                if jq -se --arg v "$VERSION" 'any(.[]; .vers == $v)' /tmp/index.json >/dev/null; then
-                  echo "${crate} ${VERSION} already on crates.io — skipping"
-                else
-                  echo "${crate}: ${VERSION} not yet published"
-                  pending="${pending} -p ${crate}"
+                # an array so the answer is an explicit true/false. Reading jq's
+                # exit status instead would collapse "parse failed" into "not
+                # published", which is the one mistake this probe must not make.
+                if ! found="$(jq -s --arg v "$VERSION" 'any(.[]; .vers == $v)' /tmp/index.json)"; then
+                  echo "::error::Could not parse the sparse-index response for ${crate}"
+                  exit 1
                 fi
+                case "$found" in
+                  true)
+                    echo "${crate} ${VERSION} already on crates.io — skipping"
+                    ;;
+                  false)
+                    echo "${crate}: ${VERSION} not yet published"
+                    pending="${pending} -p ${crate}"
+                    ;;
+                  *)
+                    echo "::error::Unexpected version probe result for ${crate}: ${found}"
+                    exit 1
+                    ;;
+                esac
                 ;;
               *)
                 echo "::error::Unexpected sparse-index response for ${crate}: HTTP ${status}"
