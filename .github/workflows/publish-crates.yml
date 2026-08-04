@@ -1,0 +1,195 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      # Rust crates use a `crates-v` tag namespace, distinct from Python (`v*`),
+      # Node (`node-v*`) and Java (`java-v*`). A crates.io version can be yanked
+      # but never replaced, so the Rust release is cut on its own tag rather
+      # than riding along with another registry's.
+      - "crates-v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.22.0) — must match the repo"
+        required: true
+        type: string
+      dry-run:
+        description: "Package and verify only — skip the upload and the tag"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A second run mid-upload would race the first over the same versions.
+concurrency:
+  group: publish-crates
+  cancel-in-progress: false
+
+env:
+  # Force HTTP/1.1 + extra retries for cargo's downloader — the same flaky
+  # "HTTP2 framing layer" / "unexpected eof" failures the CI jobs hit. See ci.yml.
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+  # The publishable crates, in no particular order: taskito-workflows and
+  # taskito-mesh both depend on taskito-core, so the set goes up together and
+  # cargo works out the upload order and the index waits itself. Every other
+  # workspace member is `publish = false` — binding shells and binaries.
+  CRATES: taskito-core taskito-workflows taskito-mesh
+
+jobs:
+  publish:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: crates.io
+    permissions:
+      contents: write # push the crates-v* tag on a dispatch run
+      id-token: write # mint a short-lived crates.io token over OIDC
+    env:
+      # Trusted publishing is the default path and needs no stored credential.
+      # It cannot bootstrap a name, though: a trusted publisher is configured on
+      # an existing crate, so the first version of each crate has to go up on an
+      # API token. Set CARGO_REGISTRY_TOKEN on the crates.io environment for
+      # that one release, then delete it and configure the trusted publisher
+      # (ByteVeda/taskito, publish-crates.yml, environment crates.io).
+      #
+      # `secrets` is unavailable in a step `if`, so the presence test is hoisted
+      # to job env, where it is allowed.
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      # Don't persist the write token in .git/config — cargo needs no git auth,
+      # and the only push (the tag) gets the token explicitly.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve version
+        id: resolve
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#crates-v}"
+          else
+            version="${VERSION_INPUT#v}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Invalid version format: ${version}"
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version matches codebase
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node scripts/version.mjs --check
+          repo_version="$(node scripts/version.mjs --current)"
+          if [ "$repo_version" != "$VERSION" ]; then
+            echo "::error::Resolved ${VERSION} but the repo declares ${repo_version}"
+            exit 1
+          fi
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      # Re-running a release must be a no-op for versions already up, so the
+      # upload set is whatever is genuinely missing. Probing the sparse index
+      # rather than the REST API: it is the registry's sanctioned programmatic
+      # path — a static CDN in cargo's own index format, no rate limits and no
+      # User-Agent policy (the API 403s UA-less requests). Path scheme for names
+      # of 4+ chars is /{first-two}/{next-two}/{name}, lowercase.
+      - name: Determine which crates still need publishing
+        id: pending
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          pending=""
+          for crate in $CRATES; do
+            prefix="${crate:0:2}/${crate:2:2}"
+            # Fail closed: only an explicit 404 means "not published yet". A
+            # transient error must never be read as "needs publishing" — that
+            # would turn a CDN blip into a duplicate-version upload attempt.
+            if ! status="$(curl -sS -o /tmp/index.json -w '%{http_code}' \
+              --retry 3 --retry-connrefused \
+              "https://index.crates.io/${prefix}/${crate}")"; then
+              echo "::error::Failed to query the crates.io sparse index for ${crate}"
+              exit 1
+            fi
+            case "$status" in
+              404)
+                echo "${crate}: not on crates.io yet"
+                pending="${pending} -p ${crate}"
+                ;;
+              200)
+                # The index file is NDJSON, one line per version — slurp it into
+                # an array so the test is an explicit true/false rather than
+                # jq's "did the last line emit anything" exit status.
+                if jq -se --arg v "$VERSION" 'any(.[]; .vers == $v)' /tmp/index.json >/dev/null; then
+                  echo "${crate} ${VERSION} already on crates.io — skipping"
+                else
+                  echo "${crate}: ${VERSION} not yet published"
+                  pending="${pending} -p ${crate}"
+                fi
+                ;;
+              *)
+                echo "::error::Unexpected sparse-index response for ${crate}: HTTP ${status}"
+                exit 1
+                ;;
+            esac
+          done
+          printf 'args=%s\n' "${pending# }" >> "$GITHUB_OUTPUT"
+
+      - name: Nothing to publish
+        if: steps.pending.outputs.args == ''
+        run: echo "::notice::Every crate already publishes ${{ steps.resolve.outputs.version }}"
+
+      # Packages each pending crate and builds it from its own tarball, resolving
+      # their inter-dependencies through a temporary registry. This is what
+      # catches a missing file or an unpublishable dependency, and it is the
+      # whole of a dry run. The upload below reuses these tarballs via
+      # --no-verify rather than compiling everything a second time.
+      - name: Package and verify
+        if: steps.pending.outputs.args != ''
+        run: cargo package --locked ${{ steps.pending.outputs.args }}
+
+      # Exchanges this job's OIDC identity for a token scoped to these crates and
+      # valid for this run only. Skipped when a bootstrap token is configured.
+      - name: Authenticate to crates.io
+        id: oidc
+        if: ${{ !inputs.dry-run && steps.pending.outputs.args != '' && env.HAS_TOKEN == 'false' }}
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        if: ${{ !inputs.dry-run && steps.pending.outputs.args != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.oidc.outputs.token }}
+        run: cargo publish --locked --no-verify ${{ steps.pending.outputs.args }}
+
+      # Records which commit the crates were cut from, in its own namespace so it
+      # never collides with the v* / node-v* / java-v* release tags. Written only
+      # after a successful upload, and only on a dispatch run — a tag push
+      # already carries the tag that triggered it.
+      - name: Create git tag
+        if: ${{ github.event_name != 'push' && !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: crates-v${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          existing="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "$(git rev-parse HEAD)" ]; then
+              echo "::notice::${TAG} already points at this commit"
+              exit 0
+            fi
+            echo "::error::${TAG} exists on remote at ${existing}, not HEAD"
+            exit 1
+          fi
+          git tag "$TAG"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            push origin "$TAG"
