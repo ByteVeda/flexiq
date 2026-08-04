@@ -6,9 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Workflow DAG engine for the Taskito task queue"
-# Blocked from crates.io until `taskito-core` is published (the path dependency
-# below needs a registry version to resolve); flip both together.
-publish = false
+keywords = ["workflow", "dag", "task-queue", "orchestration", "pipeline"]
+categories = ["asynchronous", "database"]
+readme = "README.md"
 
 [features]
 default = []
@@ -16,7 +16,7 @@ postgres = ["taskito-core/postgres", "diesel/postgres", "sea-query/backend-postg
 redis = ["taskito-core/redis", "dep:redis"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
+taskito-core = { workspace = true }
 dagron-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

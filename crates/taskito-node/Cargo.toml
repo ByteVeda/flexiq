@@ -22,7 +22,7 @@ workflows = ["dep:taskito-workflows"]
 push-dispatch = ["taskito-core/push-dispatch"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
+taskito-core = { workspace = true }
 # `dyn-symbols` is a napi 3 default that `default-features = false` drops; it
 # resolves the Node symbols at load time rather than linking against them.
 napi = { version = "3", default-features = false, features = [
@@ -39,7 +39,7 @@ uuid = { workspace = true }
 serde_json = { workspace = true }
 gethostname = "1"
 taskito-mesh = { path = "../taskito-mesh", optional = true }
-taskito-workflows = { path = "../taskito-workflows", optional = true }
+taskito-workflows = { workspace = true, optional = true }
 
 [build-dependencies]
 napi-build = "2"

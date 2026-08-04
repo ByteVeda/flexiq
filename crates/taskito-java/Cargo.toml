@@ -22,8 +22,8 @@ mesh = ["dep:taskito-mesh"]
 push-dispatch = ["taskito-core/push-dispatch"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
-taskito-workflows = { path = "../taskito-workflows", optional = true }
+taskito-core = { workspace = true }
+taskito-workflows = { workspace = true, optional = true }
 taskito-mesh = { path = "../taskito-mesh", optional = true }
 base64 = "0.23"
 jni = "0.21"
