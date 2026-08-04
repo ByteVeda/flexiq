@@ -37,7 +37,7 @@ env:
   # taskito-mesh both depend on taskito-core, so the set goes up together and
   # cargo works out the upload order and the index waits itself. Every other
   # workspace member is `publish = false` — binding shells and binaries.
-  CRATES: taskito-core taskito-workflows taskito-mesh
+  CRATES: taskito taskito-core taskito-workflows taskito-mesh
 
 jobs:
   publish:

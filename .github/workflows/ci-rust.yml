@@ -48,7 +48,7 @@ jobs:
         # depending on it. See crates/taskito-core/BINDING_CONTRACT.md.
         run: |
           set -euo pipefail
-          for crate in taskito-core taskito-workflows taskito-mesh; do
+          for crate in taskito taskito-core taskito-workflows taskito-mesh; do
             # Capture first so a `cargo tree` failure aborts (set -e) instead of
             # being swallowed by the pipe and silently passing the check.
             tree_output="$(cargo tree -p "$crate" -e normal --all-features)"
@@ -153,7 +153,7 @@ jobs:
     name: Publish Readiness (Rust crates)
     runs-on: ubuntu-latest
     env:
-      CRATES: -p taskito-core -p taskito-workflows -p taskito-mesh
+      CRATES: -p taskito -p taskito-core -p taskito-workflows -p taskito-mesh
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -203,7 +203,7 @@ jobs:
           # Cargo's own index format, no rate limits, no User-Agent policy
           # (the API 403s UA-less requests). Index path scheme for names of
           # 4+ chars: /{first-two}/{next-two}/{name}, lowercase.
-          for crate in taskito-core taskito-workflows taskito-mesh; do
+          for crate in taskito taskito-core taskito-workflows taskito-mesh; do
             prefix="${crate:0:2}/${crate:2:2}"
             # Fail closed: only an explicit 404 means "no baseline" — a transient
             # network error must not silently skip the semver check. Retries
@@ -220,6 +220,12 @@ jobs:
               *) echo "Unexpected sparse-index response for ${crate}: HTTP $status" >&2; exit 1 ;;
             esac
           done
+
+      - name: Semver check taskito
+        if: steps.baseline.outputs.taskito == 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: taskito
 
       - name: Semver check taskito-core
         if: steps.baseline.outputs.taskito-core == 'true'
