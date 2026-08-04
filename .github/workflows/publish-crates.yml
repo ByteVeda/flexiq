@@ -48,17 +48,6 @@ jobs:
     permissions:
       contents: write # push the crates-v* tag on a dispatch run
       id-token: write # mint a short-lived crates.io token over OIDC
-    env:
-      # Trusted publishing is the default path and needs no stored credential.
-      # It cannot bootstrap a name, though: a trusted publisher is configured on
-      # an existing crate, so the first version of each crate has to go up on an
-      # API token. Set CARGO_REGISTRY_TOKEN on the crates.io environment for
-      # that one release, then delete it and configure the trusted publisher
-      # (ByteVeda/taskito, publish-crates.yml, environment crates.io).
-      #
-      # `secrets` is unavailable in a step `if`, so the presence test is hoisted
-      # to job env, where it is allowed.
-      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       # Don't persist the write token in .git/config — cargo needs no git auth,
       # and the only push (the tag) gets the token explicitly.
@@ -170,16 +159,18 @@ jobs:
         run: cargo package --locked ${{ steps.pending.outputs.args }}
 
       # Exchanges this job's OIDC identity for a token scoped to these crates and
-      # valid for this run only. Skipped when a bootstrap token is configured.
+      # valid for this run only. All three crates require trusted publishing, so
+      # this is the only way in — an API token is rejected with a 403 even if one
+      # is configured, which is why no fallback is left to silently prefer.
       - name: Authenticate to crates.io
         id: oidc
-        if: ${{ !inputs.dry-run && steps.pending.outputs.args != '' && env.HAS_TOKEN == 'false' }}
+        if: ${{ !inputs.dry-run && steps.pending.outputs.args != '' }}
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish
         if: ${{ !inputs.dry-run && steps.pending.outputs.args != '' }}
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.oidc.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.oidc.outputs.token }}
         run: cargo publish --locked --no-verify ${{ steps.pending.outputs.args }}
 
       # Records which commit the crates were cut from, in its own namespace so it
