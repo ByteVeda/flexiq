@@ -140,13 +140,20 @@ jobs:
         env:
           TASKITO_REDIS_TEST_URL: redis://localhost:6379/15
 
-  # Everything a crates.io release of taskito-core depends on: the declared
-  # MSRV actually builds, the rustdoc is warning-free, the package passes a
+  # Everything a crates.io release of the Rust crates depends on: the declared
+  # MSRV actually builds, the rustdoc is warning-free, the packages pass a
   # publish dry-run, and (once a baseline exists on crates.io) the public API
   # hasn't broken semver.
+  #
+  # The three are checked as a set, never one at a time: taskito-workflows and
+  # taskito-mesh depend on taskito-core by path + version, so verifying either
+  # alone would try to resolve taskito-core from the registry. Packaged
+  # together, cargo resolves them against each other through a temp registry.
   publish-readiness:
-    name: Publish Readiness (taskito-core)
+    name: Publish Readiness (Rust crates)
     runs-on: ubuntu-latest
+    env:
+      CRATES: -p taskito-core -p taskito-workflows -p taskito-mesh
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -163,21 +170,29 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
 
-      - name: Check core builds at the MSRV
-        run: cargo +${{ steps.msrv.outputs.version }} check -p taskito-core --all-features
+      - name: Check the crates build at the MSRV
+        run: |
+          read -ra pkgs <<< "$CRATES"
+          cargo +${{ steps.msrv.outputs.version }} check "${pkgs[@]}" --all-features
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rustdoc is warning-free
-        run: RUSTDOCFLAGS="-D warnings" cargo doc -p taskito-core --no-deps --all-features
+        run: |
+          read -ra pkgs <<< "$CRATES"
+          RUSTDOCFLAGS="-D warnings" cargo doc "${pkgs[@]}" --no-deps --all-features
 
-      - name: Package passes a publish dry-run
-        run: cargo publish --dry-run -p taskito-core
+      - name: Packages pass a publish dry-run
+        run: |
+          read -ra pkgs <<< "$CRATES"
+          cargo publish --dry-run "${pkgs[@]}"
 
-      # No baseline exists before the first publish; the check is skipped until
-      # then, and a breaking change fails CI once one does.
-      - name: Check for a crates.io baseline
+      # No baseline exists before a crate's first publish; its check is skipped
+      # until then, and a breaking change fails CI once one does. Each crate is
+      # probed separately — they reach the registry at different times, and a
+      # published core must not stop gating just because mesh is still absent.
+      - name: Check for crates.io baselines
         id: baseline
         run: |
           # Probe the sparse index (index.crates.io), not the REST API: it is
@@ -185,25 +200,38 @@ jobs:
           # Cargo's own index format, no rate limits, no User-Agent policy
           # (the API 403s UA-less requests). Index path scheme for names of
           # 4+ chars: /{first-two}/{next-two}/{name}, lowercase.
-          crate="taskito-core"
-          prefix="${crate:0:2}/${crate:2:2}"
-          # Fail closed: only an explicit 404 means "no baseline" — a transient
-          # network error must not silently skip the semver check. Retries
-          # absorb CDN blips before that verdict.
-          if ! status="$(curl -sS -o /dev/null -w '%{http_code}' \
-            --retry 3 --retry-connrefused \
-            "https://index.crates.io/${prefix}/${crate}")"; then
-            echo "Failed to query the crates.io sparse index" >&2
-            exit 1
-          fi
-          case "$status" in
-            200) echo "exists=true" >> "$GITHUB_OUTPUT" ;;
-            404) echo "exists=false" >> "$GITHUB_OUTPUT" ;;
-            *) echo "Unexpected sparse-index response: HTTP $status" >&2; exit 1 ;;
-          esac
+          for crate in taskito-core taskito-workflows taskito-mesh; do
+            prefix="${crate:0:2}/${crate:2:2}"
+            # Fail closed: only an explicit 404 means "no baseline" — a transient
+            # network error must not silently skip the semver check. Retries
+            # absorb CDN blips before that verdict.
+            if ! status="$(curl -sS -o /dev/null -w '%{http_code}' \
+              --retry 3 --retry-connrefused \
+              "https://index.crates.io/${prefix}/${crate}")"; then
+              echo "Failed to query the crates.io sparse index for ${crate}" >&2
+              exit 1
+            fi
+            case "$status" in
+              200) echo "${crate}=true" >> "$GITHUB_OUTPUT" ;;
+              404) echo "${crate}=false" >> "$GITHUB_OUTPUT" ;;
+              *) echo "Unexpected sparse-index response for ${crate}: HTTP $status" >&2; exit 1 ;;
+            esac
+          done
 
-      - name: Semver check against crates.io baseline
-        if: steps.baseline.outputs.exists == 'true'
+      - name: Semver check taskito-core
+        if: steps.baseline.outputs.taskito-core == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: taskito-core
+
+      - name: Semver check taskito-workflows
+        if: steps.baseline.outputs.taskito-workflows == 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: taskito-workflows
+
+      - name: Semver check taskito-mesh
+        if: steps.baseline.outputs.taskito-mesh == 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: taskito-mesh
