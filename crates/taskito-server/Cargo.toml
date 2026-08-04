@@ -24,8 +24,8 @@ postgres = ["taskito-core/postgres", "taskito-workflows/postgres"]
 redis = ["taskito-core/redis", "taskito-workflows/redis"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
-taskito-workflows = { path = "../taskito-workflows" }
+taskito-core = { workspace = true }
+taskito-workflows = { workspace = true }
 axum = "0.8"
 tokio = { workspace = true }
 serde = { workspace = true }

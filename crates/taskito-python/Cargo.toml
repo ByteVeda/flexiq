@@ -24,13 +24,13 @@ name = "_taskito"
 crate-type = ["cdylib"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
+taskito-core = { workspace = true }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
-taskito-workflows = { path = "../taskito-workflows", optional = true }
+taskito-workflows = { workspace = true, optional = true }
 taskito-mesh = { path = "../taskito-mesh", optional = true }
 serde_json = { workspace = true }
 serde = { workspace = true }

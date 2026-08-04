@@ -6,9 +6,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Decentralized mesh scheduling overlay for the Taskito task queue"
+keywords = ["mesh", "gossip", "swim", "task-queue", "work-stealing"]
+categories = ["asynchronous", "network-programming"]
+readme = "README.md"
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
+taskito-core = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

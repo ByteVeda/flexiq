@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Headless terminal UI for inspecting and operating a Taskito queue"
+# An operator binary, not a library anyone depends on — kept off crates.io so a
+# release never has to version it as a public API.
+publish = false
 
 [[bin]]
 name = "taskito-tui"
@@ -19,8 +22,8 @@ postgres = ["taskito-core/postgres", "taskito-workflows/postgres"]
 redis = ["taskito-core/redis", "taskito-workflows/redis"]
 
 [dependencies]
-taskito-core = { path = "../taskito-core" }
-taskito-workflows = { path = "../taskito-workflows" }
+taskito-core = { workspace = true }
+taskito-workflows = { workspace = true }
 ratatui = "0.30"
 crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }

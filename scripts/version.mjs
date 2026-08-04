@@ -25,6 +25,21 @@ const SOURCE = {
 
 // Manifests with no way to reference the Cargo version natively.
 const MIRRORS = [
+  // Published crates depend on each other by `path` + `version`. The path is
+  // what builds here; the version is what cargo writes into the packaged
+  // manifest, so it has to name a release that exists on crates.io. There is no
+  // `version.workspace` for a dependency, hence the literals.
+  {
+    file: "Cargo.toml",
+    pattern: /^(taskito-core = \{ path = "crates\/taskito-core", version = ")(.+?)(" \})$/m,
+    label: "taskito-core registry coordinate",
+  },
+  {
+    file: "Cargo.toml",
+    pattern:
+      /^(taskito-workflows = \{ path = "crates\/taskito-workflows", version = ")(.+?)(" \})$/m,
+    label: "taskito-workflows registry coordinate",
+  },
   {
     file: "sdks/node/package.json",
     pattern: /^(  "version": ")(.+?)(",)$/m,
