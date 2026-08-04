@@ -184,10 +184,12 @@ jobs:
 
       # Records which commit the crates were cut from, in its own namespace so it
       # never collides with the v* / node-v* / java-v* release tags. Written only
-      # after a successful upload, and only on a dispatch run — a tag push
-      # already carries the tag that triggered it.
+      # on a dispatch run — a tag push already carries the tag that triggered it
+      # — and only when this run actually uploaded something. Tagging the
+      # no-pending path would let a later commit carrying the same version claim
+      # provenance over artifacts cut from an earlier one.
       - name: Create git tag
-        if: ${{ github.event_name != 'push' && !inputs.dry-run }}
+        if: ${{ github.event_name != 'push' && !inputs.dry-run && steps.pending.outputs.args != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: crates-v${{ steps.resolve.outputs.version }}
