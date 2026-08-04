@@ -6,7 +6,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Workflow DAG engine for the Taskito task queue"
-# Blocked from crates.io by the dagron-core git dependency; flip once it publishes.
+# Blocked from crates.io until `taskito-core` is published (the path dependency
+# below needs a registry version to resolve); flip both together.
 publish = false
 
 [features]
