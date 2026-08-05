@@ -23,7 +23,18 @@ public final class Webhook {
     /** Event wire names this hook fires on, e.g. {@code job.completed} (legacy outcome aliases still match). */
     public final List<String> events;
 
+    /** Task names this hook is restricted to. Empty = every task. */
+    public final List<String> taskFilters;
+
+    /**
+     * The first entry of {@link #taskFilters}, or {@code null} when unrestricted.
+     *
+     * @deprecated a hook can filter on several tasks; read {@link #taskFilters}.
+     *     This field only ever shows the first, so it silently hides the rest.
+     */
+    @Deprecated
     public final @Nullable String taskFilter;
+
     public final Map<String, String> headers;
     public final @Nullable String secret;
     public final int maxRetries;
@@ -37,12 +48,18 @@ public final class Webhook {
     public final long createdAt;
     public final long updatedAt;
 
+    /**
+     * Decode a stored row, accepting the scalar {@code taskFilter} written before
+     * a hook could filter on more than one task. An explicit {@code taskFilters}
+     * list wins; the scalar only seeds an absent one.
+     */
     @JsonCreator
-    Webhook(
+    static Webhook fromJson(
             @JsonProperty("id") String id,
             @JsonProperty("url") String url,
             @JsonProperty("events") @Nullable List<String> events,
-            @JsonProperty("taskFilter") @Nullable String taskFilter,
+            @JsonProperty("taskFilters") @Nullable List<String> taskFilters,
+            @JsonProperty("taskFilter") @Nullable String legacyTaskFilter,
             @JsonProperty("headers") @Nullable Map<String, String> headers,
             @JsonProperty("secret") @Nullable String secret,
             @JsonProperty("maxRetries") int maxRetries,
@@ -52,10 +69,44 @@ public final class Webhook {
             @JsonProperty("description") @Nullable String description,
             @JsonProperty("createdAt") long createdAt,
             @JsonProperty("updatedAt") long updatedAt) {
+        List<String> filters = taskFilters != null
+                ? taskFilters
+                : (legacyTaskFilter == null ? Collections.emptyList() : List.of(legacyTaskFilter));
+        return new Webhook(
+                id,
+                url,
+                events,
+                filters,
+                headers,
+                secret,
+                maxRetries,
+                timeoutMs,
+                retryBackoff,
+                enabled,
+                description,
+                createdAt,
+                updatedAt);
+    }
+
+    Webhook(
+            String id,
+            String url,
+            @Nullable List<String> events,
+            @Nullable List<String> taskFilters,
+            @Nullable Map<String, String> headers,
+            @Nullable String secret,
+            int maxRetries,
+            long timeoutMs,
+            double retryBackoff,
+            boolean enabled,
+            @Nullable String description,
+            long createdAt,
+            long updatedAt) {
         this.id = id;
         this.url = url;
         this.events = events == null ? Collections.emptyList() : events;
-        this.taskFilter = taskFilter;
+        this.taskFilters = taskFilters == null ? Collections.emptyList() : List.copyOf(taskFilters);
+        this.taskFilter = this.taskFilters.isEmpty() ? null : this.taskFilters.get(0);
         this.headers = headers == null ? Collections.emptyMap() : headers;
         this.secret = secret;
         this.maxRetries = maxRetries;
@@ -78,9 +129,7 @@ public final class Webhook {
         final String url;
         final List<String> events = new ArrayList<>();
         final Map<String, String> headers = new LinkedHashMap<>();
-
-        @Nullable
-        String taskFilter;
+        final List<String> taskFilters = new ArrayList<>();
 
         @Nullable
         String secret;
@@ -104,9 +153,18 @@ public final class Webhook {
             return this;
         }
 
-        public Builder taskFilter(String taskFilter) {
-            this.taskFilter = taskFilter;
+        /** Restrict the hook to these task names. Called more than once, they accumulate. */
+        public Builder taskFilters(String... taskFilters) {
+            Collections.addAll(this.taskFilters, taskFilters);
             return this;
+        }
+
+        /**
+         * @deprecated a hook can filter on several tasks; use {@link #taskFilters}.
+         */
+        @Deprecated
+        public Builder taskFilter(String taskFilter) {
+            return taskFilters(taskFilter);
         }
 
         public Builder header(String name, String value) {

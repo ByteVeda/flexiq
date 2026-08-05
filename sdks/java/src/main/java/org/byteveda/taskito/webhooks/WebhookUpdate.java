@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
 public record WebhookUpdate(
         @Nullable String url,
         @Nullable List<String> events,
-        @Nullable String taskFilter,
+        @Nullable List<String> taskFilters,
         @Nullable Map<String, String> headers,
         @Nullable String secret,
         @Nullable Integer maxRetries,
@@ -30,7 +30,7 @@ public record WebhookUpdate(
     public static final class Builder {
         private @Nullable String url;
         private @Nullable List<String> events;
-        private @Nullable String taskFilter;
+        private @Nullable List<String> taskFilters;
         private @Nullable Map<String, String> headers;
         private @Nullable String secret;
         private @Nullable Integer maxRetries;
@@ -51,9 +51,18 @@ public record WebhookUpdate(
             return this;
         }
 
-        public Builder taskFilter(@Nullable String taskFilter) {
-            this.taskFilter = taskFilter;
+        /** Replace the task restriction wholesale; an empty list clears it. */
+        public Builder taskFilters(@Nullable List<String> taskFilters) {
+            this.taskFilters = taskFilters;
             return this;
+        }
+
+        /**
+         * @deprecated a hook can filter on several tasks; use {@link #taskFilters}.
+         */
+        @Deprecated
+        public Builder taskFilter(@Nullable String taskFilter) {
+            return taskFilters(taskFilter == null ? null : List.of(taskFilter));
         }
 
         public Builder headers(Map<String, String> headers) {
@@ -96,7 +105,7 @@ public record WebhookUpdate(
             return new WebhookUpdate(
                     url,
                     events,
-                    taskFilter,
+                    taskFilters,
                     headers,
                     secret,
                     maxRetries,

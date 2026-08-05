@@ -50,9 +50,9 @@ public final class WebhooksHandlers {
         List<EventName> events = parseEvents(body.get("events"));
         spec.on(events.toArray(new EventName[0]));
         headers(body.get("headers")).forEach(spec::header);
-        String taskFilter = optionalString(body, "task_filter");
-        if (taskFilter != null) {
-            spec.taskFilter(taskFilter);
+        List<String> taskFilters = taskFilters(body.get("task_filter"));
+        if (taskFilters != null) {
+            spec.taskFilters(taskFilters.toArray(new String[0]));
         }
         spec.maxRetries(intOr(body.get("max_retries"), "max_retries", 3));
         spec.timeoutMs(timeoutMs(body.get("timeout_seconds"), 10_000));
@@ -81,7 +81,7 @@ public final class WebhooksHandlers {
                     .collect(Collectors.toList()));
         }
         if (body.containsKey("task_filter")) {
-            update.taskFilter(optionalString(body, "task_filter"));
+            update.taskFilters(taskFilters(body.get("task_filter")));
         }
         if (body.containsKey("headers")) {
             update.headers(headers(body.get("headers")));
@@ -243,6 +243,31 @@ public final class WebhooksHandlers {
             throw DashboardError.badRequest("invalid_timeout_seconds");
         }
         return Math.round(number.doubleValue() * 1000);
+    }
+
+    /**
+     * The contract carries {@code task_filter} as a list, but a scalar is still
+     * accepted so a client written against the older shape keeps working.
+     * {@code null} clears the restriction.
+     */
+    private static @Nullable List<String> taskFilters(@Nullable Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String single) {
+            return List.of(single);
+        }
+        if (!(value instanceof List<?> raw)) {
+            throw DashboardError.badRequest("invalid_task_filter");
+        }
+        List<String> names = new ArrayList<>(raw.size());
+        for (Object entry : raw) {
+            if (!(entry instanceof String name)) {
+                throw DashboardError.badRequest("invalid_task_filter");
+            }
+            names.add(name);
+        }
+        return names;
     }
 
     private static double retryBackoff(@Nullable Object value, double fallback) {

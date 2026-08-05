@@ -173,7 +173,7 @@ final class Contract {
         m.put("id", w.id);
         m.put("url", w.url);
         m.put("events", w.events);
-        m.put("task_filter", w.taskFilter);
+        m.put("task_filter", w.taskFilters.isEmpty() ? null : w.taskFilters);
         m.put("headers", maskHeaderValues(w.headers));
         m.put("has_secret", w.secret != null);
         m.put("max_retries", w.maxRetries);

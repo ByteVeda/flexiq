@@ -108,7 +108,7 @@ public final class WebhookManager implements Middleware {
                 UUID.randomUUID().toString(),
                 spec.url,
                 new ArrayList<>(spec.events),
-                spec.taskFilter,
+                new ArrayList<>(spec.taskFilters),
                 new LinkedHashMap<>(spec.headers),
                 spec.secret,
                 spec.maxRetries,
@@ -240,7 +240,7 @@ public final class WebhookManager implements Middleware {
         byte[] body = payload(event, wire);
         DeliveryContext ctx = new DeliveryContext(wire, event.taskName, event.jobId);
         for (Webhook hook : hooks) {
-            if (hook.enabled && subscribedTo(hook, name) && matches(hook.taskFilter, event.taskName)) {
+            if (hook.enabled && subscribedTo(hook, name) && matches(hook.taskFilters, event.taskName)) {
                 deliverOne(hook, body, ctx);
             }
         }
@@ -267,7 +267,7 @@ public final class WebhookManager implements Middleware {
         byte[] body = eventPayload(event, wire);
         DeliveryContext ctx = new DeliveryContext(wire, taskName, jobId);
         for (Webhook hook : hooks) {
-            if (hook.enabled && subscribedTo(hook, name) && matches(hook.taskFilter, taskName)) {
+            if (hook.enabled && subscribedTo(hook, name) && matches(hook.taskFilters, taskName)) {
                 deliverOne(hook, body, ctx);
             }
         }
@@ -337,7 +337,7 @@ public final class WebhookManager implements Middleware {
                 current.id,
                 updates.url() != null ? updates.url() : current.url,
                 updates.events() != null ? new ArrayList<>(updates.events()) : current.events,
-                updates.taskFilter() != null ? updates.taskFilter() : current.taskFilter,
+                updates.taskFilters() != null ? new ArrayList<>(updates.taskFilters()) : current.taskFilters,
                 updates.headers() != null ? new LinkedHashMap<>(updates.headers()) : current.headers,
                 updates.secret() != null ? updates.secret() : current.secret,
                 updates.maxRetries() != null ? updates.maxRetries() : current.maxRetries,
@@ -362,8 +362,9 @@ public final class WebhookManager implements Middleware {
     /** An immutable webhook list plus when it was read from the store. */
     private record CachedHooks(List<Webhook> hooks, long loadedAt) {}
 
-    private static boolean matches(@Nullable String filter, @Nullable String taskName) {
-        return filter == null || filter.equals(taskName);
+    /** An empty filter list matches everything; otherwise the task must be listed. */
+    private static boolean matches(List<String> filters, @Nullable String taskName) {
+        return filters.isEmpty() || filters.contains(taskName);
     }
 
     static byte[] payload(OutcomeEvent event, String wire) {
