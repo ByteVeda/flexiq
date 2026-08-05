@@ -38,7 +38,7 @@ log = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }
 gethostname = "1"
-taskito-mesh = { path = "../taskito-mesh", optional = true }
+taskito-mesh = { workspace = true, optional = true }
 taskito-workflows = { workspace = true, optional = true }
 
 [build-dependencies]

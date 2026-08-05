@@ -41,6 +41,11 @@ const MIRRORS = [
     label: "taskito-workflows registry coordinate",
   },
   {
+    file: "Cargo.toml",
+    pattern: /^(taskito-mesh = \{ path = "crates\/taskito-mesh", version = ")(.+?)(" \})$/m,
+    label: "taskito-mesh registry coordinate",
+  },
+  {
     file: "sdks/node/package.json",
     pattern: /^(  "version": ")(.+?)(",)$/m,
     label: "npm package",

@@ -3159,6 +3159,8 @@ name = "taskito"
 version = "0.22.0"
 dependencies = [
  "taskito-core",
+ "taskito-mesh",
+ "taskito-workflows",
 ]
 
 [[package]]
