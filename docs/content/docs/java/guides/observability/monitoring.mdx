@@ -58,6 +58,49 @@ A worker appears while it heartbeats (`lastHeartbeat` is Unix milliseconds);
 `stop()` unregisters it. See [Deployment](/java/guides/operations/deployment)
 for the worker lifecycle.
 
+## Health & readiness
+
+`Health.check()` and `Health.readiness(taskito)` are standalone — no dashboard,
+no HTTP server. Wire them into whatever already serves your probes, or call
+them from a script:
+
+```java
+import org.byteveda.taskito.health.Health;
+import org.byteveda.taskito.health.ReadinessReport;
+
+Health.check();                                  // HealthReport[status=ok] — liveness, never touches storage
+
+ReadinessReport report = Health.readiness(taskito);
+report.ready();                                  // true only when every check passed
+report.toMap();
+// {
+//   "status": "ready",
+//   "checks": {
+//     "storage": "ok",
+//     "workers": { "count": 2, "status": "ok" },
+//     "resources": { "count": 1, "unhealthy": [], "status": "ok" }
+//   }
+// }
+```
+
+`Health.readiness` never throws: a dependency that fails is reported as
+`"error: <message>"` in `checks` and degrades the overall status, so a probe
+endpoint can always answer. The `resources` check is omitted when no worker
+advertises a [worker resource](/java/api-reference/resources); when one does,
+it is built from `Health.resourceStatus(taskito)`, which aggregates
+per-resource health across every live worker's heartbeat.
+
+Serve them behind your own routes — return `503` on `degraded` so orchestrators
+drain the instance:
+
+```java
+ReadinessReport report = Health.readiness(taskito);
+int status = report.ready() ? 200 : 503;
+```
+
+The [dashboard](/java/guides/operations/dashboard) serves these same helpers on
+`/health` and `/readiness`.
+
 ## Metrics scraping & tracing
 
 For meters and distributed traces, the contrib integrations wrap the
