@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/taskito-core", "crates/taskito-python", "crates/taskito-node", "crates/taskito-java", "crates/taskito-workflows", "crates/taskito-mesh", "crates/taskito-tui", "crates/taskito-server"]
+members = ["crates/taskito", "crates/taskito-core", "crates/taskito-python", "crates/taskito-node", "crates/taskito-java", "crates/taskito-workflows", "crates/taskito-mesh", "crates/taskito-tui", "crates/taskito-server"]
 resolver = "2"
 
 # Shared crate metadata — every member inherits via `x.workspace = true`, so a
