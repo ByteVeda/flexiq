@@ -14,6 +14,10 @@ import org.jspecify.annotations.Nullable;
 /** A stored webhook subscription. Timestamps are Unix milliseconds. */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class Webhook {
+
+    /** Contract default: waits of 1s, 2s, 4s, ... */
+    public static final double DEFAULT_RETRY_BACKOFF = 2.0;
+
     public final String id;
     public final String url;
     /** Event wire names this hook fires on, e.g. {@code job.completed} (legacy outcome aliases still match). */
@@ -24,6 +28,10 @@ public final class Webhook {
     public final @Nullable String secret;
     public final int maxRetries;
     public final long timeoutMs;
+
+    /** Retry backoff base, in seconds: the Nth wait (counted from zero) is {@code retryBackoff ^ N}. */
+    public final double retryBackoff;
+
     public final boolean enabled;
     public final @Nullable String description;
     public final long createdAt;
@@ -39,6 +47,7 @@ public final class Webhook {
             @JsonProperty("secret") @Nullable String secret,
             @JsonProperty("maxRetries") int maxRetries,
             @JsonProperty("timeoutMs") long timeoutMs,
+            @JsonProperty("retryBackoff") double retryBackoff,
             @JsonProperty("enabled") boolean enabled,
             @JsonProperty("description") @Nullable String description,
             @JsonProperty("createdAt") long createdAt,
@@ -51,6 +60,9 @@ public final class Webhook {
         this.secret = secret;
         this.maxRetries = maxRetries;
         this.timeoutMs = timeoutMs;
+        // A row written before this field existed decodes as 0.0, which would
+        // collapse the curve to no wait at all; fall back to the contract default.
+        this.retryBackoff = retryBackoff > 0 ? retryBackoff : DEFAULT_RETRY_BACKOFF;
         this.enabled = enabled;
         this.description = description;
         this.createdAt = createdAt;
@@ -75,6 +87,7 @@ public final class Webhook {
 
         int maxRetries = 3;
         long timeoutMs = 10_000;
+        double retryBackoff = DEFAULT_RETRY_BACKOFF;
         boolean enabled = true;
 
         @Nullable
@@ -113,6 +126,12 @@ public final class Webhook {
 
         public Builder timeoutMs(long timeoutMs) {
             this.timeoutMs = timeoutMs;
+            return this;
+        }
+
+        /** Retry backoff base, in seconds: the Nth wait (from zero) is {@code retryBackoff ^ N}. */
+        public Builder retryBackoff(double retryBackoff) {
+            this.retryBackoff = retryBackoff;
             return this;
         }
 

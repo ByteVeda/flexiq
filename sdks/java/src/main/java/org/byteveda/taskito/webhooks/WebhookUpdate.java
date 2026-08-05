@@ -18,6 +18,7 @@ public record WebhookUpdate(
         @Nullable String secret,
         @Nullable Integer maxRetries,
         @Nullable Long timeoutMs,
+        @Nullable Double retryBackoff,
         @Nullable Boolean enabled,
         @Nullable String description) {
 
@@ -34,6 +35,7 @@ public record WebhookUpdate(
         private @Nullable String secret;
         private @Nullable Integer maxRetries;
         private @Nullable Long timeoutMs;
+        private @Nullable Double retryBackoff;
         private @Nullable Boolean enabled;
         private @Nullable String description;
 
@@ -74,6 +76,12 @@ public record WebhookUpdate(
             return this;
         }
 
+        /** Retry backoff base, in seconds: the Nth wait (from zero) is {@code retryBackoff ^ N}. */
+        public Builder retryBackoff(Double retryBackoff) {
+            this.retryBackoff = retryBackoff;
+            return this;
+        }
+
         public Builder enabled(Boolean enabled) {
             this.enabled = enabled;
             return this;
@@ -86,7 +94,16 @@ public record WebhookUpdate(
 
         public WebhookUpdate build() {
             return new WebhookUpdate(
-                    url, events, taskFilter, headers, secret, maxRetries, timeoutMs, enabled, description);
+                    url,
+                    events,
+                    taskFilter,
+                    headers,
+                    secret,
+                    maxRetries,
+                    timeoutMs,
+                    retryBackoff,
+                    enabled,
+                    description);
         }
     }
 }

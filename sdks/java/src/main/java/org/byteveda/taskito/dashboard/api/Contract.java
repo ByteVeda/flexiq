@@ -178,7 +178,7 @@ final class Contract {
         m.put("has_secret", w.secret != null);
         m.put("max_retries", w.maxRetries);
         m.put("timeout_seconds", w.timeoutMs / 1000.0);
-        m.put("retry_backoff", 2.0);
+        m.put("retry_backoff", w.retryBackoff);
         m.put("enabled", w.enabled);
         m.put("description", w.description);
         m.put("created_at", w.createdAt);

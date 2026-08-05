@@ -56,6 +56,7 @@ public final class WebhooksHandlers {
         }
         spec.maxRetries(intOr(body.get("max_retries"), "max_retries", 3));
         spec.timeoutMs(timeoutMs(body.get("timeout_seconds"), 10_000));
+        spec.retryBackoff(retryBackoff(body.get("retry_backoff"), Webhook.DEFAULT_RETRY_BACKOFF));
         if (body.containsKey("enabled")) {
             spec.enabled(bool(body.get("enabled"), "enabled"));
         }
@@ -90,6 +91,9 @@ public final class WebhooksHandlers {
         }
         if (body.containsKey("timeout_seconds")) {
             update.timeoutMs(timeoutMs(body.get("timeout_seconds"), 10_000));
+        }
+        if (body.containsKey("retry_backoff")) {
+            update.retryBackoff(retryBackoff(body.get("retry_backoff"), Webhook.DEFAULT_RETRY_BACKOFF));
         }
         if (body.containsKey("enabled")) {
             update.enabled(bool(body.get("enabled"), "enabled"));
@@ -239,6 +243,17 @@ public final class WebhooksHandlers {
             throw DashboardError.badRequest("invalid_timeout_seconds");
         }
         return Math.round(number.doubleValue() * 1000);
+    }
+
+    private static double retryBackoff(@Nullable Object value, double fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        // A base of zero or less would collapse the curve to no wait at all.
+        if (value instanceof Boolean || !(value instanceof Number number) || number.doubleValue() <= 0) {
+            throw DashboardError.badRequest("invalid_retry_backoff");
+        }
+        return number.doubleValue();
     }
 
     private static boolean bool(Object value, String name) {
