@@ -34,7 +34,7 @@ WebhookManager webhooks = WebhookManager.attach(taskito);
 Webhook hook = webhooks.create(Webhook.builder("https://hooks.example.com/jobs")
         .on(EventName.DEAD, EventName.SUCCESS, EventName.WORKER_OFFLINE) // any of the 26 events — required, or no deliveries
         .secret(System.getenv("WEBHOOK_SECRET"))
-        .taskFilter("send_email"));            // optional, exact task name
+        .taskFilters("send_email", "resize"));  // optional, exact task names
 
 webhooks.list();
 webhooks.get(hook.id);
@@ -45,10 +45,11 @@ webhooks.delete(hook.id);
 |---|---|---|
 | `on(EventName...)` | — | Events to deliver — any of the 29 dotted wire names (job/worker/queue/workflow/predicate); see [Events](/java/guides/extensibility/events). |
 | `secret(String)` | none | Signs each delivery as `X-Taskito-Signature: sha256=<hex>`. |
-| `taskFilter(String)` | all tasks | Only deliver for this exact task name — screens task-bearing events only (see below). |
+| `taskFilters(String...)` | all tasks | Only deliver for these exact task names — screens task-bearing events only (see below). Calls accumulate. |
 | `header(String, String)` | — | Extra headers added to every delivery. |
 | `maxRetries(int)` | `3` | Retry budget per delivery. |
 | `timeoutMs(long)` | `10000` | Per-request HTTP timeout. |
+| `retryBackoff(double)` | `2.0` | Backoff base in seconds — the Nth wait (from zero) is `retryBackoff ^ N`. |
 | `enabled(boolean)` | `true` | Disable without deleting. |
 | `description(String)` | — | Free-form note. |
 
@@ -82,14 +83,21 @@ Non-outcome events deliver a per-type body instead:
 | `WORKFLOW_NODE_*` | `run_id`, `node`, `error` |
 | `PREDICATE_REJECTED` | `task_name`, `reason` |
 
-A subscription's `taskFilter` only screens events that carry a task name —
+A subscription's `taskFilters` only screens events that carry a task name —
 job outcomes, `JOB_ENQUEUED`, and `PREDICATE_REJECTED`. Worker, queue, and
 workflow events have no task identity, so they always deliver regardless of
-`taskFilter`.
+`taskFilters`.
 
-A send error or a `5xx` response is retried with exponential backoff (500 ms
-base, doubling, capped at 30 s) up to `maxRetries`; `4xx` responses are not
-retried. Verify the signature on your endpoint by HMAC-SHA256-ing the raw body
+<Callout type="info">
+  Subscriptions live in the shared settings store under
+  `webhooks:subscriptions`, so every runtime driving the same queue sees the
+  same hooks. Hooks written by an older release under `taskito.webhooks` fold
+  into that document the first time the manager reads it.
+</Callout>
+
+A send error or a `5xx` response is retried with backoff — the Nth wait
+(counted from zero) is `retryBackoff ^ N` seconds, capped at 30 s — up to
+`maxRetries`; `4xx` responses are not retried. Verify the signature on your endpoint by HMAC-SHA256-ing the raw body
 with the shared secret's raw UTF-8 bytes and comparing against the
 `X-Taskito-Signature` header in constant time.
 
