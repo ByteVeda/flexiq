@@ -62,13 +62,31 @@ fn main() -> taskito::Result<()> {
 | `postgres` | PostgreSQL storage |
 | `redis` | Redis storage |
 | `push-dispatch` | event-driven scheduler wakeups instead of polling |
+| `workflows` | DAG workflows at `taskito::workflows` |
+| `mesh` | decentralized mesh scheduling at `taskito::mesh` |
 
-Each forwards to the identically named feature on `taskito-core`.
+The storage features forward to the identically named feature on `taskito-core`.
 
-## Companion crates
+## Companion engines
 
-- [`taskito-workflows`](https://crates.io/crates/taskito-workflows) — DAG workflows
-- [`taskito-mesh`](https://crates.io/crates/taskito-mesh) — decentralized mesh scheduling
+[`taskito-workflows`](https://crates.io/crates/taskito-workflows) and
+[`taskito-mesh`](https://crates.io/crates/taskito-mesh) are separate crates. Turn
+them on here to get them under one dependency:
+
+```toml
+taskito = { version = "0.22", features = ["workflows", "mesh"] }
+```
+
+```rust,ignore
+use taskito::workflows::WorkflowRun;
+use taskito::mesh::MeshNode;
+```
+
+Both are off by default. The other SDKs ship these inside one compiled artifact,
+but Rust resolves source crates, so the equivalent is an opt-in dependency — a
+consumer who only enqueues jobs should not compile a DAG engine and a gossip
+mesh. Depending on `taskito-workflows` or `taskito-mesh` directly works exactly
+the same; the re-export is a convenience, not a wrapper.
 
 ## License
 
