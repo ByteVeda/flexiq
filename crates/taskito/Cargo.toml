@@ -14,9 +14,16 @@ readme = "README.md"
 default = []
 # Forwarded verbatim so `cargo add taskito --features postgres` behaves exactly
 # as the same flag on taskito-core does.
-postgres = ["taskito-core/postgres"]
-redis = ["taskito-core/redis"]
+postgres = ["taskito-core/postgres", "taskito-workflows?/postgres"]
+redis = ["taskito-core/redis", "taskito-workflows?/redis"]
 push-dispatch = ["taskito-core/push-dispatch"]
+# The companion engines, off by default. The other SDKs ship them inside a single
+# compiled artifact; Rust resolves source crates, so the equivalent is an opt-in
+# dependency — no consumer pays for a DAG engine or a gossip mesh unasked.
+workflows = ["dep:taskito-workflows"]
+mesh = ["dep:taskito-mesh"]
 
 [dependencies]
 taskito-core = { workspace = true }
+taskito-workflows = { workspace = true, optional = true }
+taskito-mesh = { workspace = true, optional = true }
