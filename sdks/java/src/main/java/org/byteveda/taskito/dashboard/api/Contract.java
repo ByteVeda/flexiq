@@ -173,12 +173,12 @@ final class Contract {
         m.put("id", w.id);
         m.put("url", w.url);
         m.put("events", w.events);
-        m.put("task_filter", w.taskFilter);
+        m.put("task_filter", w.taskFilters.isEmpty() ? null : w.taskFilters);
         m.put("headers", maskHeaderValues(w.headers));
         m.put("has_secret", w.secret != null);
         m.put("max_retries", w.maxRetries);
         m.put("timeout_seconds", w.timeoutMs / 1000.0);
-        m.put("retry_backoff", 2.0);
+        m.put("retry_backoff", w.retryBackoff);
         m.put("enabled", w.enabled);
         m.put("description", w.description);
         m.put("created_at", w.createdAt);

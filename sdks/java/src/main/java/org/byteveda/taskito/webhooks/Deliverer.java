@@ -22,11 +22,7 @@ final class Deliverer {
     private static final TaskitoLogger LOG = TaskitoLogger.create("webhooks");
     private static final String ALGORITHM = "HmacSHA256";
     private static final char[] HEX = "0123456789abcdef".toCharArray();
-    // Exponential backoff matching the cross-SDK contract: 500ms, 1s, 2s, ... capped at 30s.
-    private static final long BASE_BACKOFF_MS = 500;
     private static final long MAX_BACKOFF_MS = 30_000;
-    // 500ms << 6 = 32s > cap, so larger shifts can never change the delay.
-    private static final int MAX_BACKOFF_SHIFT = 6;
 
     private final HttpClient client = HttpClient.newHttpClient();
 
@@ -67,10 +63,7 @@ final class Deliverer {
         client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
             boolean retryable = error != null || response.statusCode() >= 500;
             if (retryable && attempt < hook.maxRetries) {
-                // Clamp the exponent before shifting: an unbounded shift overflows and
-                // would schedule negative delays for very large maxRetries.
-                long delayMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS << Math.min(attempt, MAX_BACKOFF_SHIFT));
-                CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS)
+                CompletableFuture.delayedExecutor(backoffMs(hook, attempt), TimeUnit.MILLISECONDS)
                         .execute(() -> sendWithRetry(hook, request, attempt + 1, ctx, store, start));
                 return;
             }
@@ -89,6 +82,16 @@ final class Deliverer {
                 }
             }
         });
+    }
+
+    /**
+     * The cross-SDK retry curve: the Nth wait (counted from zero) is
+     * {@code retryBackoff ^ N} seconds, capped at 30s. A large exponent overflows
+     * to infinity rather than wrapping, so the cap still holds.
+     */
+    static long backoffMs(Webhook hook, int attempt) {
+        double seconds = Math.pow(hook.retryBackoff, attempt);
+        return (long) Math.min(MAX_BACKOFF_MS, seconds * 1000);
     }
 
     private static HttpRequest buildRequest(Webhook hook, byte[] body) {

@@ -1,19 +1,15 @@
 package org.byteveda.taskito.dashboard.api;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.function.BinaryOperator;
 import java.util.stream.Collectors;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.dashboard.support.Http;
-import org.byteveda.taskito.dashboard.support.Json;
 import org.byteveda.taskito.events.EventName;
+import org.byteveda.taskito.health.Health;
+import org.byteveda.taskito.health.ResourceStatusEntry;
 import org.byteveda.taskito.model.QueueStats;
 import org.byteveda.taskito.model.WorkerInfo;
 
@@ -74,58 +70,14 @@ public final class OpsHandlers {
      * workers disagree, the worst health wins.
      */
     public Object resources() {
-        Map<String, Integer> reported = new TreeMap<>();
-        Set<String> advertised = new TreeSet<>();
-        for (WorkerInfo worker : queue.listWorkers()) {
-            advertised.addAll(Json.parseStringList(worker.resources));
-            Map<String, Object> health = Json.parseMap(worker.resourceHealth);
-            if (health != null) {
-                // BinaryOperator.maxBy keeps the merge on boxed Integers — Math::max
-                // would funnel both arguments through an unchecked Integer->int unboxing.
-                health.forEach((name, value) -> reported.merge(
-                        name, severity(String.valueOf(value)), BinaryOperator.maxBy(Comparator.naturalOrder())));
-            }
-        }
-        Set<String> all = new TreeSet<>(advertised);
-        all.addAll(reported.keySet());
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (String name : all) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("name", name);
-            entry.put("scope", "worker");
-            entry.put("health", reported.containsKey(name) ? healthName(reported.get(name)) : "not_initialized");
-            entry.put("init_duration_ms", 0);
-            entry.put("recreations", 0);
-            entry.put("depends_on", List.of());
-            out.add(entry);
-        }
-        return out;
+        return Health.resourceStatus(queue).stream()
+                .map(ResourceStatusEntry::toMap)
+                .toList();
     }
 
-    private static int severity(String health) {
-        return switch (health) {
-            case "unhealthy" -> 2;
-            case "degraded" -> 1;
-            default -> 0;
-        };
-    }
-
-    private static String healthName(int severity) {
-        return switch (severity) {
-            case 2 -> "unhealthy";
-            case 1 -> "degraded";
-            default -> "healthy";
-        };
-    }
-
+    /** Real dependency checks — the endpoint used to answer {@code ready} unconditionally. */
     public Object readiness() {
-        Map<String, Object> checks = new LinkedHashMap<>();
-        checks.put("storage", true);
-        checks.put("workers", queue.listWorkers().size());
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("status", "ready");
-        out.put("checks", checks);
-        return out;
+        return Health.readiness(queue).toMap();
     }
 
     /** Prometheus text exposition of the queue's job counts and worker count. */

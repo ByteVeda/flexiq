@@ -14,43 +14,106 @@ import org.jspecify.annotations.Nullable;
 /** A stored webhook subscription. Timestamps are Unix milliseconds. */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class Webhook {
+
+    /** Contract default: waits of 1s, 2s, 4s, ... */
+    public static final double DEFAULT_RETRY_BACKOFF = 2.0;
+
     public final String id;
     public final String url;
     /** Event wire names this hook fires on, e.g. {@code job.completed} (legacy outcome aliases still match). */
     public final List<String> events;
 
+    /** Task names this hook is restricted to. Empty = every task. */
+    public final List<String> taskFilters;
+
+    /**
+     * The first entry of {@link #taskFilters}, or {@code null} when unrestricted.
+     *
+     * @deprecated a hook can filter on several tasks; read {@link #taskFilters}.
+     *     This field only ever shows the first, so it silently hides the rest.
+     */
+    @Deprecated
     public final @Nullable String taskFilter;
+
     public final Map<String, String> headers;
     public final @Nullable String secret;
     public final int maxRetries;
     public final long timeoutMs;
+
+    /** Retry backoff base, in seconds: the Nth wait (counted from zero) is {@code retryBackoff ^ N}. */
+    public final double retryBackoff;
+
     public final boolean enabled;
     public final @Nullable String description;
     public final long createdAt;
     public final long updatedAt;
 
+    /**
+     * Decode a stored row, accepting the scalar {@code taskFilter} written before
+     * a hook could filter on more than one task. An explicit {@code taskFilters}
+     * list wins; the scalar only seeds an absent one.
+     */
     @JsonCreator
-    Webhook(
+    static Webhook fromJson(
             @JsonProperty("id") String id,
             @JsonProperty("url") String url,
             @JsonProperty("events") @Nullable List<String> events,
-            @JsonProperty("taskFilter") @Nullable String taskFilter,
+            @JsonProperty("taskFilters") @Nullable List<String> taskFilters,
+            @JsonProperty("taskFilter") @Nullable String legacyTaskFilter,
             @JsonProperty("headers") @Nullable Map<String, String> headers,
             @JsonProperty("secret") @Nullable String secret,
             @JsonProperty("maxRetries") int maxRetries,
             @JsonProperty("timeoutMs") long timeoutMs,
+            @JsonProperty("retryBackoff") double retryBackoff,
             @JsonProperty("enabled") boolean enabled,
             @JsonProperty("description") @Nullable String description,
             @JsonProperty("createdAt") long createdAt,
             @JsonProperty("updatedAt") long updatedAt) {
+        List<String> filters = taskFilters != null
+                ? taskFilters
+                : (legacyTaskFilter == null ? Collections.emptyList() : List.of(legacyTaskFilter));
+        return new Webhook(
+                id,
+                url,
+                events,
+                filters,
+                headers,
+                secret,
+                maxRetries,
+                timeoutMs,
+                retryBackoff,
+                enabled,
+                description,
+                createdAt,
+                updatedAt);
+    }
+
+    Webhook(
+            String id,
+            String url,
+            @Nullable List<String> events,
+            @Nullable List<String> taskFilters,
+            @Nullable Map<String, String> headers,
+            @Nullable String secret,
+            int maxRetries,
+            long timeoutMs,
+            double retryBackoff,
+            boolean enabled,
+            @Nullable String description,
+            long createdAt,
+            long updatedAt) {
         this.id = id;
         this.url = url;
         this.events = events == null ? Collections.emptyList() : events;
-        this.taskFilter = taskFilter;
+        this.taskFilters = taskFilters == null ? Collections.emptyList() : List.copyOf(taskFilters);
+        this.taskFilter = this.taskFilters.isEmpty() ? null : this.taskFilters.get(0);
         this.headers = headers == null ? Collections.emptyMap() : headers;
         this.secret = secret;
         this.maxRetries = maxRetries;
         this.timeoutMs = timeoutMs;
+        // A row written before this field existed decodes as 0.0, which would
+        // collapse the curve to no wait at all; fall back to the contract default.
+        this.retryBackoff = retryBackoff > 0 ? retryBackoff : DEFAULT_RETRY_BACKOFF;
         this.enabled = enabled;
         this.description = description;
         this.createdAt = createdAt;
@@ -66,15 +129,14 @@ public final class Webhook {
         final String url;
         final List<String> events = new ArrayList<>();
         final Map<String, String> headers = new LinkedHashMap<>();
-
-        @Nullable
-        String taskFilter;
+        final List<String> taskFilters = new ArrayList<>();
 
         @Nullable
         String secret;
 
         int maxRetries = 3;
         long timeoutMs = 10_000;
+        double retryBackoff = DEFAULT_RETRY_BACKOFF;
         boolean enabled = true;
 
         @Nullable
@@ -91,9 +153,18 @@ public final class Webhook {
             return this;
         }
 
-        public Builder taskFilter(String taskFilter) {
-            this.taskFilter = taskFilter;
+        /** Restrict the hook to these task names. Called more than once, they accumulate. */
+        public Builder taskFilters(String... taskFilters) {
+            Collections.addAll(this.taskFilters, taskFilters);
             return this;
+        }
+
+        /**
+         * @deprecated a hook can filter on several tasks; use {@link #taskFilters}.
+         */
+        @Deprecated
+        public Builder taskFilter(String taskFilter) {
+            return taskFilters(taskFilter);
         }
 
         public Builder header(String name, String value) {
@@ -113,6 +184,12 @@ public final class Webhook {
 
         public Builder timeoutMs(long timeoutMs) {
             this.timeoutMs = timeoutMs;
+            return this;
+        }
+
+        /** Retry backoff base, in seconds: the Nth wait (from zero) is {@code retryBackoff ^ N}. */
+        public Builder retryBackoff(double retryBackoff) {
+            this.retryBackoff = retryBackoff;
             return this;
         }
 
