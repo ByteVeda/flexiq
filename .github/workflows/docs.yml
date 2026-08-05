@@ -73,6 +73,17 @@ jobs:
         with:
           path: docs/build/client
 
+      # Mirrored into docs.byteveda.org/<slug>/ by ByteVeda/byteveda.site.
+      # upload-pages-artifact keeps its artifact for 1 day, too short for the
+      # portal's next build to fetch, so publish a longer-lived copy.
+      - name: Upload docs for the portal mirror
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-dist
+          path: docs/build/client
+          retention-days: 90
+
   deploy:
     needs: build
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
