@@ -14,7 +14,13 @@ plugins {
 
 mavenPublishing {
     publishToMavenCentral()
-    signAllPublications()
+    // Only CI holds the signing key; see the root build for why asking for
+    // signatures without one breaks `publishToMavenLocal`.
+    if (providers.gradleProperty("signingInMemoryKey").isPresent ||
+        providers.gradleProperty("signing.keyId").isPresent
+    ) {
+        signAllPublications()
+    }
     coordinates(group.toString(), "taskito-processor", version.toString())
     pom {
         name.set("Taskito Processor")

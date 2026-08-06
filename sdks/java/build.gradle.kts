@@ -62,7 +62,16 @@ repositories {
 
 mavenPublishing {
     publishToMavenCentral()
-    signAllPublications()
+    // Signature artifacts are attached to the publication, so asking for them
+    // without a key makes even `publishToMavenLocal` fail on an unsigned
+    // artifact that can never be produced. Only CI holds the key, and the
+    // Central Portal rejects an unsigned upload, so the release path is still
+    // covered.
+    if (providers.gradleProperty("signingInMemoryKey").isPresent ||
+        providers.gradleProperty("signing.keyId").isPresent
+    ) {
+        signAllPublications()
+    }
     coordinates(group.toString(), "taskito", version.toString())
     pom {
         name.set("Taskito")
@@ -206,10 +215,22 @@ val nativeRuntime by configurations.creating {
 }
 artifacts.add(nativeRuntime.name, nativeStaging) { builtBy(copyNative) }
 
+fun stagedNativeDir(platform: String) =
+    nativeStaging.get().dir("org/byteveda/taskito/native/$platform").asFile
+
+/**
+ * Platforms this invocation can actually package. CI stages every platform's
+ * binary under build/native before calling Gradle, so it gets all five; a
+ * developer machine only ever has the host's, and building a jar for a binary
+ * that cannot exist locally would block `publishToMavenLocal` outright.
+ * `verifyNativeJars` is what keeps a real publish complete.
+ */
+val publishablePlatforms = nativePlatforms.filter { platform ->
+    platform == platformClassifier() || !stagedNativeDir(platform).listFiles().isNullOrEmpty()
+}
+
 // One classifier jar per platform, packaging exactly that platform's library.
-// CI stages all five under build/native before publishing; locally only the
-// host platform's jar is buildable (via copyNative).
-val nativeJars = nativePlatforms.map { platform ->
+val nativeJars = publishablePlatforms.map { platform ->
     val camel = platform.split("-").joinToString("") { part -> part.replaceFirstChar(Char::uppercase) }
     tasks.register<Jar>("nativeJar$camel") {
         archiveClassifier.set(platform)
@@ -234,6 +255,30 @@ tasks.register("nativeJars") {
     description = "Builds every per-platform native classifier jar."
     dependsOn(nativeJars)
 }
+
+/**
+ * A release must carry every platform. Local builds legitimately package only
+ * the host, so this is asserted on the way out to a real repository rather than
+ * when the jars are built — otherwise no one could publish to Maven local.
+ */
+val verifyNativeJars = tasks.register("verifyNativeJars") {
+    description = "Fails unless a native library is staged for every published platform."
+    doLast {
+        val missing = nativePlatforms.filter { stagedNativeDir(it).listFiles().isNullOrEmpty() }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "no native library staged for ${missing.joinToString(", ")} under build/native — " +
+                    "a release must package all of $nativePlatforms; stage the prebuilt " +
+                    "binaries before publishing"
+            )
+        }
+    }
+}
+
+// Remote publishes only — `publishToMavenLocal` is how a developer consumes a
+// local build and has no business demanding five platforms.
+tasks.matching { it.name.startsWith("publishAllPublicationsTo") || it.name.contains("MavenCentral") }
+    .configureEach { dependsOn(verifyNativeJars) }
 
 publishing {
     publications.withType<MavenPublication>().configureEach {
