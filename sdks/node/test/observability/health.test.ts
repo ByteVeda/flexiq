@@ -94,9 +94,27 @@ it("aggregates resource health across workers", async () => {
   const entries = await resourceStatus(fakeQueue({ listWorkers: async () => workers }));
   expect(entries.map((e) => [e.name, e.health])).toEqual([
     ["cache", "unhealthy"], // every worker reports it broken
-    ["db", "degraded"], // one healthy, one not
+    ["db", "unhealthy"], // the worst report wins, so one sick worker is enough
     ["idle", "not_initialized"], // advertised, never reported
   ]);
+});
+
+it("keeps a merely degraded resource out of unhealthy", async () => {
+  const workers = [
+    { ...worker(["db"], { db: "degraded" }), workerId: "w1" },
+    { ...worker(["db"], { db: "degraded" }), workerId: "w2" },
+  ];
+  const entries = await resourceStatus(fakeQueue({ listWorkers: async () => workers }));
+  expect(entries.map((e) => [e.name, e.health])).toEqual([["db", "degraded"]]);
+});
+
+it("degrades when reports are mixed but none are unhealthy", async () => {
+  const workers = [
+    { ...worker(["db"], { db: "healthy" }), workerId: "w1" },
+    { ...worker(["db"], { db: "degraded" }), workerId: "w2" },
+  ];
+  const entries = await resourceStatus(fakeQueue({ listWorkers: async () => workers }));
+  expect(entries.map((e) => [e.name, e.health])).toEqual([["db", "degraded"]]);
 });
 
 it("ignores malformed heartbeat JSON", async () => {

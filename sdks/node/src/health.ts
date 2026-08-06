@@ -100,9 +100,10 @@ export interface ResourceStatusEntry {
 }
 
 /**
- * Worker-resource health aggregated from heartbeat snapshots: any
- * `unhealthy` report wins; mixed healthy/unhealthy is `degraded`; all
- * healthy → `healthy`; advertised but not yet reported → `not_initialized`.
+ * Worker-resource health aggregated from heartbeat snapshots: any `unhealthy`
+ * report wins; all `healthy` → `healthy`; anything else (a `degraded` report,
+ * or an unrecognised one) → `degraded`; advertised but not yet reported →
+ * `not_initialized`.
  */
 export async function resourceStatus(queue: Queue): Promise<ResourceStatusEntry[]> {
   const observed = new Map<string, string[]>();
@@ -122,11 +123,13 @@ export async function resourceStatus(queue: Queue): Promise<ResourceStatusEntry[
   const names = new Set([...advertised, ...observed.keys()]);
   return [...names].sort().map((name) => {
     const reports = observed.get(name) ?? [];
+    // The worst report wins, so one sick worker is never averaged away and a
+    // fleet that is merely degraded is never escalated to unhealthy.
     let healthState = "not_initialized";
-    if (reports.length > 0) {
-      const unhealthy = reports.filter((r) => r !== "healthy").length;
-      healthState =
-        unhealthy === 0 ? "healthy" : unhealthy === reports.length ? "unhealthy" : "degraded";
+    if (reports.some((r) => r === "unhealthy")) {
+      healthState = "unhealthy";
+    } else if (reports.length > 0) {
+      healthState = reports.every((r) => r === "healthy") ? "healthy" : "degraded";
     }
     return {
       name,
