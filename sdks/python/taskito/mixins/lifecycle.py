@@ -397,10 +397,10 @@ class QueueLifecycleMixin:
         """Fallback path when the runtime isn't in this process.
 
         Aggregates each worker's ``resource_health`` JSON snapshot into a
-        status list shaped like ``ResourceRuntime.status()``. Uses the
-        rule: any ``unhealthy`` wins; mixed healthy/unhealthy is
-        ``degraded``; all ``healthy`` → ``healthy``; no workers reporting
-        a given resource → ``not_initialized``.
+        status list shaped like ``ResourceRuntime.status()``. The worst
+        report wins: any ``unhealthy`` → ``unhealthy``; all ``healthy`` →
+        ``healthy``; anything else → ``degraded``; no worker reporting a
+        given resource → ``not_initialized``.
         """
         observed: dict[str, list[str]] = {}
         try:
