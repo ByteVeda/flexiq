@@ -3,10 +3,11 @@ plugins {
 }
 
 repositories {
-    mavenCentral()
-    // Lets the example run against a locally built SDK: from sdks/java run
-    // `./gradlew publishToMavenLocal` and this picks it up ahead of Central.
+    // First so a locally published SDK wins: from sdks/java run
+    // `./gradlew publishToMavenLocal` and this resolves that build instead of
+    // the release. Remove it to pin the example to Maven Central.
     mavenLocal()
+    mavenCentral()
 }
 
 dependencies {
@@ -18,9 +19,9 @@ dependencies {
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.20.0")
 }
 
-java {
-    toolchain { languageVersion = JavaLanguageVersion.of(17) }
-}
+// No toolchain pin on purpose: the SDK's baseline is Java 17, so whatever JDK
+// runs Gradle works as long as it is 17 or newer. Pinning an exact version would
+// fail on a machine that simply has a newer one installed.
 
 application {
     mainClass = "NotifyWorker"
