@@ -1,0 +1,118 @@
+{
+  "$schema_version": 1,
+  "$comment": [
+    "Golden wire vectors for the cross-SDK call envelope defined in",
+    "crates/taskito-core/BINDING_CONTRACT.md: one tag byte (0x02 = CBOR) followed",
+    "by a CBOR-encoded [args, kwargs] pair.",
+    "",
+    "Every SDK asserts this file in its own test suite, so a change to any one",
+    "runtime's encoding fails that runtime's build instead of silently producing",
+    "payloads its peers cannot read. Do not edit a hex string to make a test pass:",
+    "a diff here is a wire-format change and breaks every already-enqueued job.",
+    "",
+    "`encode` cases pin bytes exactly — every SDK must both produce and decode",
+    "them. `decode_only` cases cover types whose CBOR encoding legitimately",
+    "differs between implementations (float width, bignum representation), so they",
+    "pin decoding and round-tripping rather than an exact encoder choice.",
+    "",
+    "One asymmetry is deliberate: a runtime whose call API is positional-only,",
+    "because its language has no keyword arguments, cannot PRODUCE a case with a",
+    "non-empty `kwargs` map. Every runtime must still DECODE those cases — a",
+    "worker has to run a job whose producer could express keyword arguments.",
+    "",
+    "KNOWN DIVERGENCE: the JVM SDK's CBOR library writes maps with indefinite",
+    "length (0xbf ... 0xff) where these vectors use definite length (0xa0). Both",
+    "decode identically, so payloads interoperate, but the bytes differ — which",
+    "breaks the automatic `auto:` idempotency key, since that hashes the",
+    "serialized payload. Its tests assert these vectors by decoding rather than",
+    "byte-for-byte until that is fixed."
+  ],
+  "encode": [
+    {
+      "name": "no-args",
+      "description": "A call with neither positional nor keyword arguments.",
+      "args": [],
+      "kwargs": {},
+      "hex": "028280a0"
+    },
+    {
+      "name": "contract-vector",
+      "description": "f(1, 'a') — the vector pinned in BINDING_CONTRACT.md.",
+      "args": [1, "a"],
+      "kwargs": {},
+      "hex": "028282016161a0"
+    },
+    {
+      "name": "kwargs-only",
+      "description": "Keyword arguments with no positional ones.",
+      "args": [],
+      "kwargs": { "k": true },
+      "hex": "028280a1616bf5"
+    },
+    {
+      "name": "positional-and-kwargs",
+      "description": "Both halves of the call body populated.",
+      "args": [1, "a"],
+      "kwargs": { "k": true },
+      "hex": "028282016161a1616bf5"
+    },
+    {
+      "name": "single-object-arg",
+      "description": "One object as the single positional argument — the shape a task called from every SDK uses.",
+      "args": [{ "order_id": "ord-0001", "amount_cents": 1000 }],
+      "kwargs": {},
+      "hex": "028281a2686f726465725f6964686f72642d303030316c616d6f756e745f63656e74731903e8a0",
+      "single_arg": true
+    },
+    {
+      "name": "null-and-bools",
+      "description": "The three CBOR simple values.",
+      "args": [null, true, false],
+      "kwargs": {},
+      "hex": "028283f6f5f4a0"
+    },
+    {
+      "name": "nested-structures",
+      "description": "Nested map/array round-tripping.",
+      "args": [{ "a": [1, 2, { "b": "c" }] }],
+      "kwargs": {},
+      "hex": "028281a16161830102a161626163a0",
+      "single_arg": true
+    },
+    {
+      "name": "unicode-and-empty-string",
+      "description": "Empty and non-ASCII text.",
+      "args": ["", "héllo"],
+      "kwargs": {},
+      "hex": "028282606668c3a96c6c6fa0"
+    },
+    {
+      "name": "negative-int",
+      "description": "Negative integers use CBOR major type 1.",
+      "args": [-1, -1000],
+      "kwargs": {},
+      "hex": "028282203903e7a0"
+    }
+  ],
+  "decode_only": [
+    {
+      "name": "float",
+      "description": "A double. Encoders may choose a narrower float width, so only decoding is pinned.",
+      "hex": "028281fb3ff8000000000000a0",
+      "args": [1.5],
+      "kwargs": {}
+    },
+    {
+      "name": "int-beyond-double-precision",
+      "description": "9007199254740993 — one past 2^53, where JSON would lose a digit. Value is not asserted because it is not representable in this file; decoding must round-trip to the same bytes.",
+      "hex": "0282811b0020000000000001a0",
+      "round_trip_only": true
+    },
+    {
+      "name": "byte-string",
+      "description": "CBOR major type 2. Each runtime surfaces its own byte type, so only the round-trip is pinned.",
+      "hex": "028281420102a0",
+      "round_trip_only": true
+    }
+  ]
+}
