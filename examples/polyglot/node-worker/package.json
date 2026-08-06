@@ -1,0 +1,11 @@
+{
+  "name": "taskito-polyglot-node-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "@byteveda/taskito": "^0.22.0"
+  }
+}
