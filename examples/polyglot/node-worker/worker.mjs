@@ -38,13 +38,13 @@ queue.task("orders.process", (order) => {
 // Poll only this stage's queue. A worker claims whatever is in the queues it
 // polls, so sharing one queue would let this process pick up `orders.notify`
 // jobs it has no handler for and dead-letter them.
-const worker = queue.runWorker({ queues: ["process"] });
+queue.runWorker({ queues: ["process"] });
 console.log(`[node] worker running against ${dbPath}; ctrl-c to stop`);
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
     console.log("\n[node] stopping");
-    await worker.stop();
+    await queue.shutdown();
     process.exit(0);
   });
 }
