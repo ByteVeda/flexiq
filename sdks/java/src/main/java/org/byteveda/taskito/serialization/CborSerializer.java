@@ -3,6 +3,7 @@ package org.byteveda.taskito.serialization;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.cbor.databind.CBORMapper;
+import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.Collections;
@@ -37,10 +38,15 @@ public final class CborSerializer implements Serializer {
     @Override
     public byte[] serialize(@Nullable Object value) {
         try {
-            return tagged(mapper.writeValueAsBytes(value));
+            return tagged(encode(value));
         } catch (Exception e) {
             throw new SerializationException("failed to serialize payload", e);
         }
+    }
+
+    /** Definite-length containers keep the bytes identical to peer SDKs — see the encoder. */
+    private byte[] encode(@Nullable Object value) throws IOException {
+        return DefiniteLengthCbor.encode(mapper, value);
     }
 
     @Override
@@ -69,7 +75,7 @@ public final class CborSerializer implements Serializer {
     public byte[] serializeCall(@Nullable Object payload) {
         List<Object> call = Arrays.asList(Arrays.asList(payload), Collections.emptyMap());
         try {
-            return tagged(mapper.writeValueAsBytes(call));
+            return tagged(encode(call));
         } catch (Exception e) {
             throw new SerializationException("failed to serialize call payload", e);
         }
