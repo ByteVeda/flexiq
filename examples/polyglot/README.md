@@ -19,7 +19,7 @@ producer — jobs wait in storage either way.
 
 ```bash
 # 1. Python producer
-pip install taskito
+pip install taskito==0.22.0
 python producer.py --db taskito.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications
