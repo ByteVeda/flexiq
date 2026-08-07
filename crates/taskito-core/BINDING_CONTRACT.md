@@ -59,12 +59,14 @@ handler-binding model.
   serializer; the tag is a self-check, not a negotiation mechanism.
 - Delivery-side semantics (retries, DLQ, acks) are unaffected — the envelope is
   purely a payload contract.
-- CBOR maps and arrays MUST be written with a definite length (`a0`), never the
-  indefinite-length form (`bf ... ff`); readers MUST accept both. Both decode
-  identically, so a divergent writer still interoperates — but the automatic
-  `auto:` idempotency key hashes the serialized payload, so it would silently
-  stop idempotent enqueues deduping across SDKs. Every call body ends in the
-  kwargs map, so the divergence would shift every payload's key at once.
+- CBOR maps and arrays MUST carry a definite-length header — `a0` for an empty
+  map, `80` for an empty array — never the indefinite-length form (`bf ... ff`,
+  `9f ... ff`); readers MUST accept both. Integers MUST use the shortest form
+  that holds the value. Both forms decode identically, so a divergent writer
+  still interoperates — but the automatic `auto:` idempotency key hashes the
+  serialized payload, so it would silently stop idempotent enqueues deduping
+  across SDKs. Every call body ends in the kwargs map, so the divergence would
+  shift every payload's key at once.
 
 **Test vectors** (hex, `0x02`-tagged CBOR):
 - call `f(1, "a")`, no kwargs → `02 82 82 01 61 61 a0` — `[ [1, "a"], {} ]`
