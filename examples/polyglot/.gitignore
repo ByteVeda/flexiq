@@ -1,0 +1,6 @@
+taskito.db
+taskito.db-*
+.taskito/
+node-worker/node_modules/
+java-worker/.gradle/
+java-worker/build/
