@@ -98,6 +98,27 @@ fn duration_ms(wall_time_ns: i64) -> Option<i64> {
     (wall_time_ns > 0).then_some(wall_time_ns / 1_000_000)
 }
 
+/// Parse a `"100/m"`-style rate, rejecting a value the core cannot read.
+///
+/// Both `rate_limit` and `retry_budget` take this syntax, and both silently lose
+/// their limit if the value does not parse — a typo would look like it took
+/// effect while the task ran unthrottled. Fail at worker start instead.
+fn parse_rate(
+    value: Option<&String>,
+    field: &str,
+    task_name: &str,
+) -> PyResult<Option<RateLimitConfig>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let parsed = RateLimitConfig::parse(raw).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "invalid {field} {raw:?} for task {task_name}: expected a rate like \"100/m\""
+        ))
+    })?;
+    Ok(Some(parsed))
+}
+
 /// Dispatch a ResultOutcome to Python middleware hooks and events.
 ///
 /// Called with the GIL held after `handle_result()` returns.
@@ -400,22 +421,8 @@ impl PyQueue {
                 max_delay_ms,
                 custom_delays_ms,
             };
-            let rate_limit = tc
-                .rate_limit
-                .as_ref()
-                .and_then(|s| RateLimitConfig::parse(s));
-            // Same "100/m" syntax as rate_limit, so it parses the same way. An
-            // unparseable value would silently disable the cap, so reject it here
-            // rather than let a typo look like it took effect.
-            let retry_budget = match tc.retry_budget.as_ref() {
-                Some(s) => Some(RateLimitConfig::parse(s).ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "invalid retry_budget {s:?} for task {}: expected a rate like \"100/m\"",
-                        tc.name
-                    ))
-                })?),
-                None => None,
-            };
+            let rate_limit = parse_rate(tc.rate_limit.as_ref(), "rate_limit", &tc.name)?;
+            let retry_budget = parse_rate(tc.retry_budget.as_ref(), "retry_budget", &tc.name)?;
             let circuit_breaker =
                 tc.circuit_breaker_threshold
                     .map(|threshold| CircuitBreakerConfig {
