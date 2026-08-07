@@ -15,6 +15,21 @@ public final class NotifyWorker {
     public static void main(String[] args) throws Exception {
         String db = System.getenv().getOrDefault("TASKITO_DB", "../taskito.db");
 
+        CountDownLatch stop = new CountDownLatch(1);
+        CountDownLatch closed = new CountDownLatch(1);
+        // The JVM runs shutdown hooks concurrently with the main thread and does
+        // not wait for it, so a hook that only signals `stop` would let the
+        // process halt mid-teardown. Blocking on `closed` keeps the JVM alive
+        // until try-with-resources has released the worker and the queue.
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            stop.countDown();
+            try {
+                closed.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+
         // Each SDK's own default serializer is same-language-only. CBOR is the
         // cross-SDK format, and every runtime here opts into it explicitly.
         try (Taskito taskito = Taskito.builder()
@@ -31,10 +46,10 @@ public final class NotifyWorker {
                         .start()) {
 
             System.out.println("[java] worker running against " + db + "; ctrl-c to stop");
-            CountDownLatch stop = new CountDownLatch(1);
-            Runtime.getRuntime().addShutdownHook(new Thread(stop::countDown));
             stop.await();
             System.out.println("\n[java] stopping");
+        } finally {
+            closed.countDown();
         }
     }
 
