@@ -27,12 +27,11 @@ interface DecodeCase {
 }
 
 /** Walk up to the repository root rather than counting directories. */
-function vectorFile(): string {
+function repoRoot(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (;;) {
-    const candidate = join(dir, "contracts", "wire-vectors.json");
-    if (existsSync(candidate)) {
-      return candidate;
+    if (existsSync(join(dir, "contracts", "wire-vectors.json"))) {
+      return dir;
     }
     const parent = resolve(dir, "..");
     if (parent === dir) {
@@ -42,9 +41,14 @@ function vectorFile(): string {
   }
 }
 
+const ROOT = repoRoot();
 const vectors: { encode: EncodeCase[]; decode_only: DecodeCase[] } = JSON.parse(
-  readFileSync(vectorFile(), "utf8"),
+  readFileSync(join(ROOT, "contracts", "wire-vectors.json"), "utf8"),
 );
+const BINDING_CONTRACT = join(ROOT, "crates", "taskito-core", "BINDING_CONTRACT.md");
+
+// A run of space-separated hex byte pairs inside backticks, as the doc writes them.
+const DOCUMENTED_BYTES = /`((?:[0-9a-f]{2} )+[0-9a-f]{2})`/;
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 
@@ -84,8 +88,21 @@ describe("cross-SDK wire vectors", () => {
     }
   });
 
+  // BINDING_CONTRACT.md restates the call vector; drift there is a silent contract change.
   it("keeps the vector quoted in BINDING_CONTRACT.md", () => {
-    const documented = vectors.encode.find((c) => c.name === "contract-vector");
-    expect(documented?.hex).toBe("028282016161a0");
+    const quoted = readFileSync(BINDING_CONTRACT, "utf8")
+      .split("\n")
+      .find((line) => line.includes('call `f(1, "a")`'));
+    if (quoted === undefined) {
+      throw new Error(`no documented call vector in ${BINDING_CONTRACT}`);
+    }
+
+    const documented = DOCUMENTED_BYTES.exec(quoted)?.[1];
+    if (documented === undefined) {
+      throw new Error(`no hex byte run in: ${quoted}`);
+    }
+
+    const shared = vectors.encode.find((c) => c.name === "contract-vector");
+    expect(documented.replaceAll(" ", "")).toBe(shared?.hex);
   });
 });

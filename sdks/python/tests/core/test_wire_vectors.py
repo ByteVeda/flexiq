@@ -9,6 +9,7 @@ read.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,16 +18,20 @@ import pytest
 from taskito.serializers import CborSerializer
 
 
-def _vector_file() -> Path:
+def _repo_root() -> Path:
     """Walk up to the repository root rather than counting directories."""
     for parent in Path(__file__).resolve().parents:
-        candidate = parent / "contracts" / "wire-vectors.json"
-        if candidate.is_file():
-            return candidate
+        if (parent / "contracts" / "wire-vectors.json").is_file():
+            return parent
     raise FileNotFoundError("contracts/wire-vectors.json not found above this test")
 
 
-VECTORS = json.loads(_vector_file().read_text(encoding="utf-8"))
+REPO_ROOT = _repo_root()
+VECTORS = json.loads((REPO_ROOT / "contracts" / "wire-vectors.json").read_text(encoding="utf-8"))
+BINDING_CONTRACT = REPO_ROOT / "crates" / "taskito-core" / "BINDING_CONTRACT.md"
+
+# A run of space-separated hex byte pairs inside backticks, as the doc writes them.
+_DOCUMENTED_BYTES = re.compile(r"`((?:[0-9a-f]{2} )+[0-9a-f]{2})`")
 
 
 def _ids(cases: list[dict[str, Any]]) -> list[str]:
@@ -60,7 +65,14 @@ def test_decode_only_vectors(case: dict[str, Any]) -> None:
         assert kwargs == case["kwargs"]
 
 
-def test_vector_file_covers_the_documented_contract_vector() -> None:
-    """The vector quoted in BINDING_CONTRACT.md must stay in the shared file."""
+def test_binding_contract_quotes_the_shared_contract_vector() -> None:
+    """BINDING_CONTRACT.md restates the call vector; drift there is a silent contract change."""
+    lines = BINDING_CONTRACT.read_text(encoding="utf-8").splitlines()
+    quoted = next((line for line in lines if 'call `f(1, "a")`' in line), None)
+    assert quoted is not None, f"no documented call vector in {BINDING_CONTRACT}"
+
+    match = _DOCUMENTED_BYTES.search(quoted)
+    assert match is not None, f"no hex byte run in: {quoted}"
+
     by_name = {case["name"]: case for case in VECTORS["encode"]}
-    assert by_name["contract-vector"]["hex"] == "028282016161a0"
+    assert match.group(1).replace(" ", "") == by_name["contract-vector"]["hex"]

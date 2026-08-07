@@ -11,6 +11,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -26,25 +28,33 @@ import org.junit.jupiter.params.provider.MethodSource;
  */
 class WireVectorsTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Path REPO_ROOT = repoRoot();
     private static final JsonNode VECTORS = load();
+
+    /** A run of space-separated hex byte pairs inside backticks, as the doc writes them. */
+    private static final Pattern DOCUMENTED_BYTES = Pattern.compile("`((?:[0-9a-f]{2} )+[0-9a-f]{2})`");
 
     private final CborSerializer cbor = new CborSerializer();
 
     /** Walk up to the repository root rather than counting directories. */
-    private static JsonNode load() {
+    private static Path repoRoot() {
         Path dir = Paths.get("").toAbsolutePath();
         while (dir != null) {
-            Path candidate = dir.resolve("contracts").resolve("wire-vectors.json");
-            if (Files.isRegularFile(candidate)) {
-                try {
-                    return JSON.readTree(candidate.toFile());
-                } catch (IOException e) {
-                    throw new IllegalStateException("failed to read " + candidate, e);
-                }
+            if (Files.isRegularFile(dir.resolve("contracts").resolve("wire-vectors.json"))) {
+                return dir;
             }
             dir = dir.getParent();
         }
         throw new IllegalStateException("contracts/wire-vectors.json not found above the working directory");
+    }
+
+    private static JsonNode load() {
+        Path vectors = REPO_ROOT.resolve("contracts").resolve("wire-vectors.json");
+        try {
+            return JSON.readTree(vectors.toFile());
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to read " + vectors, e);
+        }
     }
 
     private static List<JsonNode> cases(String section) {
@@ -155,12 +165,22 @@ class WireVectorsTest {
         }
     }
 
+    /** BINDING_CONTRACT.md restates the call vector; drift there is a silent contract change. */
     @Test
-    void keepsTheVectorQuotedInTheBindingContract() {
-        JsonNode documented = cases("encode").stream()
+    void keepsTheVectorQuotedInTheBindingContract() throws IOException {
+        Path contract = REPO_ROOT.resolve("crates").resolve("taskito-core").resolve("BINDING_CONTRACT.md");
+        String quoted = Files.readAllLines(contract).stream()
+                .filter(line -> line.contains("call `f(1, \"a\")`"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no documented call vector in " + contract));
+
+        Matcher documented = DOCUMENTED_BYTES.matcher(quoted);
+        assertTrue(documented.find(), "no hex byte run in: " + quoted);
+
+        JsonNode shared = cases("encode").stream()
                 .filter(c -> "contract-vector".equals(c.get("name").asText()))
                 .findFirst()
                 .orElseThrow();
-        assertEquals("028282016161a0", documented.get("hex").asText());
+        assertEquals(shared.get("hex").asText(), documented.group(1).replace(" ", ""));
     }
 }
