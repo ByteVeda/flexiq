@@ -1,10 +1,10 @@
-# Polyglot example — one queue, three languages
+# Polyglot example — one jobs table, three languages
 
 A Python producer enqueues orders. A Node worker processes them and enqueues a
 follow-up. A Java worker sends the notification. All three run against **one
 database and one jobs table**, and none of them imports the others.
 
-```
+```text
 Python producer ──▶ queue "process" ──▶ Node worker ──▶ queue "notify" ──▶ Java worker
 ```
 
@@ -31,7 +31,7 @@ cd java-worker && TASKITO_DB=../taskito.db ./gradlew run
 
 Expected output:
 
-```
+```text
 enqueued orders.process ord-0001 job=019fd561-...
 [node] processing ord-0001 — 10.00 EUR
 [java] notifying ada@example.com about ord-0001 — 10.00 EUR (processed by node)
@@ -95,16 +95,20 @@ use PostgreSQL.
 The commands above use published packages. To run against this repository
 instead:
 
+Each command runs from this directory, so the subshells leave you where you
+started. The symlink target is relative to the directory holding the link —
+`node_modules/@byteveda` — which is five levels below the repository root.
+
 ```bash
 # Python
-cd sdks/python && uv run maturin develop
+(cd ../../sdks/python && uv run maturin develop)
 
 # Node — link the workspace SDK into the example
-cd examples/polyglot/node-worker
-mkdir -p node_modules/@byteveda && ln -s ../../../../sdks/node node_modules/@byteveda/taskito
+(cd node-worker && mkdir -p node_modules/@byteveda \
+  && ln -s ../../../../../sdks/node node_modules/@byteveda/taskito)
 
 # Java — publish locally, then Gradle resolves it from mavenLocal()
-cd sdks/java && ./gradlew publishToMavenLocal
+(cd ../../sdks/java && ./gradlew publishToMavenLocal)
 ```
 
 A locally built Java SDK stages a native library only for the host platform. If
