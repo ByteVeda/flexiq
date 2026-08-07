@@ -20,12 +20,12 @@
     "non-empty `kwargs` map. Every runtime must still DECODE those cases — a",
     "worker has to run a job whose producer could express keyword arguments.",
     "",
-    "KNOWN DIVERGENCE: the JVM SDK's CBOR library writes maps with indefinite",
-    "length (0xbf ... 0xff) where these vectors use definite length (0xa0). Both",
-    "decode identically, so payloads interoperate, but the bytes differ — which",
-    "breaks the automatic `auto:` idempotency key, since that hashes the",
-    "serialized payload. Its tests assert these vectors by decoding rather than",
-    "byte-for-byte until that is fixed."
+    "Maps are definite-length (0xa0), never indefinite-length (0xbf ... 0xff).",
+    "Both decode identically, so a runtime that emits the indefinite form still",
+    "interoperates — but the automatic `auto:` idempotency key hashes the",
+    "serialized payload, so a divergent encoder silently stops idempotent",
+    "enqueues deduping across languages. Readers must accept both; writers must",
+    "emit definite length."
   ],
   "encode": [
     {

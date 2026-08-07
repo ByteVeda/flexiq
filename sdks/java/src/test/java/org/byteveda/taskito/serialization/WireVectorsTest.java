@@ -89,40 +89,40 @@ class WireVectorsTest {
         return out;
     }
 
-    /**
-     * Encoding is asserted through a decode rather than byte-for-byte: Jackson
-     * writes CBOR maps with indefinite length ({@code 0xbf ... 0xff}) where the
-     * peer SDKs write definite length ({@code 0xa0}). Both are valid CBOR and
-     * decode identically, so payloads still interoperate — see
-     * {@link #documentsTheIndefiniteLengthDivergence()} for what does not.
-     */
     @ParameterizedTest(name = "encodes {0}")
     @MethodSource("encodable")
-    void encodesToASemanticallyEqualPayload(JsonNode testCase) {
+    void encodesToThePinnedBytes(JsonNode testCase) {
         Object payload = JSON.convertValue(testCase.get("args").get(0), Object.class);
-        JsonNode call = JSON.valueToTree(cbor.deserialize(cbor.serializeCall(payload), Object.class));
 
-        assertEquals(testCase.get("args"), call.get(0));
-        assertEquals(testCase.get("kwargs"), call.get(1));
+        assertEquals(testCase.get("hex").asText(), hex(cbor.serializeCall(payload)));
     }
 
     /**
-     * Pins the divergence itself so a fix has to update this test deliberately.
+     * Guards the encoding choice that makes those bytes match in the first place.
      *
-     * <p>Every call payload ends in the empty kwargs map, so <em>every</em> Java
-     * payload differs byte-wise from the peer SDKs' encoding of the same call.
-     * That breaks the cross-SDK guarantee documented on {@code IdempotencyKeys}:
-     * the automatic {@code auto:} key hashes the serialized payload, so the same
-     * logical enqueue from two runtimes derives two different keys and idempotent
-     * enqueues do not dedupe across languages.
+     * <p>Jackson streams values, so left alone it writes CBOR maps with indefinite
+     * length ({@code 0xbf ... 0xff}) where this contract pins definite length
+     * ({@code 0xa0}). Both decode identically, so a regression here would not break
+     * interoperability — it would silently break the cross-SDK guarantee documented
+     * on {@code IdempotencyKeys}, because the automatic {@code auto:} key hashes the
+     * serialized payload. Every call ends in the empty kwargs map, so a regression
+     * would shift <em>every</em> payload's key at once.
      */
     @Test
-    void documentsTheIndefiniteLengthDivergence() {
+    void writesDefiniteLengthContainers() {
         String encoded = hex(cbor.serializeCall("x"));
 
-        // `bfff` is an indefinite-length empty map; the peer SDKs emit `a0`.
-        assertTrue(encoded.endsWith("bfff"), "expected an indefinite-length empty kwargs map, got " + encoded);
-        assertTrue(!encoded.endsWith("a0"), "definite-length output would mean the divergence is fixed");
+        assertEquals("0282816178a0", encoded, "kwargs must be a definite-length empty map (a0), not bf..ff");
+        assertTrue(!encoded.contains("bf"), "no indefinite-length container header may appear: " + encoded);
+    }
+
+    /** Payloads written before the definite-length fix must still decode. */
+    @Test
+    void decodesLegacyIndefiniteLengthPayloads() {
+        // 02 82 81 a1 6161 6162 bfff — args definite, kwargs the old indefinite empty map.
+        Object call = cbor.deserialize(unhex("028281a161616162bfff"), Object.class);
+
+        assertEquals("[[{a=b}], {}]", String.valueOf(call));
     }
 
     @ParameterizedTest(name = "decodes {0}")
@@ -142,14 +142,12 @@ class WireVectorsTest {
         Object call = cbor.deserialize(raw, Object.class);
 
         if (testCase.path("round_trip_only").asBoolean()) {
-            // The value has no lossless JSON form, so the assertion is that a
-            // re-encode decodes back to the same thing. Byte equality is not
-            // available here — see documentsTheIndefiniteLengthDivergence().
+            // The value has no lossless JSON form, so re-encoding is the assertion.
             List<?> parts = (List<?>) call;
             assertTrue(((java.util.Map<?, ?>) parts.get(1)).isEmpty());
             Object payload = ((List<?>) parts.get(0)).get(0);
-            Object again = cbor.deserialize(cbor.serializeCall(payload), Object.class);
-            assertEquals(JSON.valueToTree(call), JSON.valueToTree(again));
+
+            assertEquals(testCase.get("hex").asText(), hex(cbor.serializeCall(payload)));
         } else {
             JsonNode decoded = JSON.valueToTree(call);
             assertEquals(testCase.get("args"), decoded.get(0));
