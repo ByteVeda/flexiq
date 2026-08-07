@@ -84,6 +84,11 @@ const SNIPPET_PATTERNS = [
   /(org\.byteveda:taskito[\w-]*:)(\d+\.\d+\.\d+[\w.-]*)()/g,
   // Maven: <artifactId>taskito</artifactId> followed by its <version> tag.
   /(<artifactId>taskito[\w-]*<\/artifactId>\s*<version>)(\d+\.\d+\.\d+[\w.-]*)(<\/version>)/g,
+  // npm: "@byteveda/taskito": "0.21.0" — an exact pin only. A range starts with
+  // a non-digit, so a deliberate `^`/`~` is left alone instead of being frozen.
+  /("@byteveda\/taskito[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
+  // pip: taskito==0.21.0
+  /(\btaskito[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
@@ -94,6 +99,12 @@ const SNIPPETS = [
   "docs/content/docs/java/guides/integrations/spring.mdx",
   "docs/content/docs/java/guides/resources/testing.mdx",
   "docs/content/docs/shared/guides/operations/testing.mdx",
+  // The polyglot example pins every SDK so a reader reproduces one known-good
+  // combination. Listing the manifests here is what keeps those pins from
+  // silently aging past the release they claim to demonstrate.
+  "examples/polyglot/README.md",
+  "examples/polyglot/node-worker/package.json",
+  "examples/polyglot/java-worker/build.gradle.kts",
 ];
 
 // Checked, never written: release notes are authored by hand, but shipping a
