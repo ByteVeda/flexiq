@@ -3,7 +3,7 @@
 // In a polyglot deployment the registry is the only place an operator can tell
 // a stale worker from a current one without going host by host.
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,12 +12,19 @@ import { Queue, type Worker } from "../../src/index";
 
 let worker: Worker | undefined;
 let queue: Queue | undefined;
+let tempDir: string | undefined;
 
 afterEach(async () => {
   worker?.stop();
   worker = undefined;
+  // Shut down before removing the directory: the queue holds the SQLite file
+  // open, and on Windows an open handle blocks the delete.
   await queue?.shutdown();
   queue = undefined;
+  if (tempDir) {
+    rmSync(tempDir, { recursive: true, force: true });
+    tempDir = undefined;
+  }
 });
 
 async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 8000): Promise<boolean> {
@@ -35,7 +42,8 @@ describe("worker SDK identity", () => {
   it("records the SDK and its version on registration", async () => {
     // Bound locally as well as on the module-scoped handle the teardown uses,
     // so the closure below needs no non-null assertion.
-    const q = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-sdk-")), "q.db") });
+    tempDir = mkdtempSync(join(tmpdir(), "taskito-sdk-"));
+    const q = new Queue({ dbPath: join(tempDir, "q.db") });
     queue = q;
     q.task("noop", () => undefined);
     worker = q.runWorker({ concurrency: 1 });
