@@ -6,11 +6,17 @@ description: >-
   has run. Doing it in its own step keeps that retry off the real invocation,
   which would otherwise re-run the build to recover a download.
 
+inputs:
+  working-directory:
+    description: "Directory holding the Gradle wrapper to provision."
+    required: false
+    default: sdks/java
+
 runs:
   using: composite
   steps:
     - name: Download the pinned Gradle distribution
-      working-directory: sdks/java
+      working-directory: ${{ inputs.working-directory }}
       shell: bash
       run: |
         for attempt in 1 2 3; do

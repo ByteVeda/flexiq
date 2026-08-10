@@ -32,6 +32,7 @@ jobs:
       python: ${{ steps.decide.outputs.python }}
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
+      polyglot: ${{ steps.decide.outputs.polyglot }}
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
     steps:
@@ -75,6 +76,19 @@ jobs:
               - '.github/actions/setup-java/**'
               - 'sdks/java/**'
               - '.github/workflows/ci-java.yml'
+            # The cross-SDK suite: any SDK, the example itself, or its driver can
+            # break interop, so it watches all three shells at once.
+            polyglot:
+              - *shared
+              - 'rust-toolchain.toml'
+              - '.github/actions/setup-python/**'
+              - '.github/actions/setup-node/**'
+              - '.github/actions/setup-java/**'
+              - '.github/actions/provision-gradle/**'
+              - 'sdks/**'
+              - 'examples/polyglot/**'
+              - 'scripts/polyglot_e2e.py'
+              - '.github/workflows/ci-polyglot.yml'
             # Deliberately not `*shared`: the image build is two from-scratch
             # Rust compiles, and an engine-crate change that breaks the server
             # already turns the Rust suite red. What only this suite covers is
@@ -101,6 +115,7 @@ jobs:
           PYTHON: ${{ steps.filter.outputs.python }}
           NODE: ${{ steps.filter.outputs.node }}
           JAVA: ${{ steps.filter.outputs.java }}
+          POLYGLOT: ${{ steps.filter.outputs.polyglot }}
           SERVER: ${{ steps.filter.outputs.server }}
           CHART: ${{ steps.filter.outputs.chart }}
         run: |
@@ -115,6 +130,7 @@ jobs:
           decide python "$PYTHON"
           decide node "$NODE"
           decide java "$JAVA"
+          decide polyglot "$POLYGLOT"
           decide server "$SERVER"
           decide chart "$CHART"
 
@@ -153,6 +169,12 @@ jobs:
     if: needs.changes.outputs.java == 'true'
     uses: ./.github/workflows/ci-java.yml
 
+  polyglot:
+    name: Polyglot
+    needs: changes
+    if: needs.changes.outputs.polyglot == 'true'
+    uses: ./.github/workflows/ci-polyglot.yml
+
   server-image:
     name: Server image
     needs: changes
@@ -168,7 +190,7 @@ jobs:
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, server-image, chart]
+    needs: [changes, versions, rust, python, node, java, polyglot, server-image, chart]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed
