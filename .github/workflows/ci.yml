@@ -80,6 +80,7 @@ jobs:
             # break interop, so it watches all three shells at once.
             polyglot:
               - *shared
+              - 'rust-toolchain.toml'
               - '.github/actions/setup-python/**'
               - '.github/actions/setup-node/**'
               - '.github/actions/setup-java/**'
