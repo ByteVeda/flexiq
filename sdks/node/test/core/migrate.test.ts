@@ -35,27 +35,27 @@ describe("explicit migrate", () => {
 
     await expect(queue.stats()).rejects.toThrow(/no such table/);
 
-    const report = queue.migrate();
+    const report = await queue.migrate();
     expect(report.applied.length).toBeGreaterThan(0);
     expect(report.workflowApplied.length).toBeGreaterThan(0);
     expect(report.schemaless).toBe(false);
     await queue.stats();
 
-    const again = queue.migrate();
+    const again = await queue.migrate();
     expect(again.applied).toEqual([]);
     expect(again.workflowApplied).toEqual([]);
     expect(again.archivedJobs).toBe(0);
   });
 
-  it("leaves only the workflow tables for an auto-migrated queue", () => {
+  it("leaves only the workflow tables for an auto-migrated queue", async () => {
     // Opening applies the core schema; workflow tables are built on first
     // workflow use, so an explicit migrate is what brings them forward.
     const queue = new Queue({ dbPath: dbPath() });
 
-    const report = queue.migrate();
+    const report = await queue.migrate();
     expect(report.applied).toEqual([]);
     expect(report.workflowApplied.length).toBeGreaterThan(0);
 
-    expect(queue.migrate().workflowApplied).toEqual([]);
+    expect((await queue.migrate()).workflowApplied).toEqual([]);
   });
 });

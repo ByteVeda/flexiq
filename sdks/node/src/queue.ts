@@ -1446,9 +1446,10 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * Idempotent, and the only path that applies DDL when the queue was opened
    * with `autoMigrate: false`. Empty version lists mean the database was
    * already current; `schemaless` marks a backend that stores no schema and so
-   * never has anything to migrate.
+   * never has anything to migrate. Async: a fresh database means the whole
+   * schema plus the backlog sweep, which must not block the event loop.
    */
-  migrate(): MigrationSummary {
+  migrate(): Promise<MigrationSummary> {
     return this.native.migrate();
   }
 
