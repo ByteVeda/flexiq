@@ -238,7 +238,7 @@ fn run_generic<C: MigrationConn + Connection>(
     backend: Backend,
     tracking_table: &str,
     migrations: &[Box<dyn Migration>],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     conn.exec(&create_ledger_sql(tracking_table, backend), false)?;
     let applied: HashSet<String> = conn
         .load_versions(&select_versions_sql(tracking_table, backend))?
@@ -261,6 +261,7 @@ fn run_generic<C: MigrationConn + Connection>(
         )));
     }
 
+    let mut newly_applied = Vec::new();
     for migration in ordered {
         if applied.contains(migration.version()) {
             continue;
@@ -278,28 +279,65 @@ fn run_generic<C: MigrationConn + Connection>(
                 false,
             )
         })?;
+        newly_applied.push(migration.version().to_string());
     }
-    Ok(())
+    Ok(newly_applied)
+}
+
+/// What one explicit migration run did.
+///
+/// `applied` is empty on an already-current database, which is the common case
+/// and not an error. A schemaless backend reports `schemaless` and nothing else:
+/// it has no DDL to run and never will, so "nothing to migrate" is the honest
+/// answer rather than a failure.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MigrationReport {
+    /// Core schema versions applied by this run, in the order applied.
+    pub applied: Vec<String>,
+    /// Workflow schema versions applied by this run, if workflow tables were
+    /// migrated alongside.
+    pub workflow_applied: Vec<String>,
+    /// Terminal jobs the one-time backlog sweep moved into `archived_jobs`.
+    pub archived_jobs: u64,
+    /// The backend stores no schema, so there is nothing to migrate.
+    pub schemaless: bool,
+}
+
+impl MigrationReport {
+    /// The report a schemaless backend returns.
+    pub fn schemaless() -> Self {
+        Self {
+            schemaless: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this run changed anything.
+    pub fn is_empty(&self) -> bool {
+        self.applied.is_empty() && self.workflow_applied.is_empty() && self.archived_jobs == 0
+    }
 }
 
 /// Apply pending `migrations` to a SQLite database, recording each in
-/// `tracking_table`.
+/// `tracking_table`. Returns the versions this call applied, in the order it
+/// applied them — empty when the database was already current.
 pub fn run_sqlite(
     conn: &mut SqliteConnection,
     tracking_table: &str,
     migrations: &[Box<dyn Migration>],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     run_generic(conn, Backend::Sqlite, tracking_table, migrations)
 }
 
 /// Apply pending `migrations` to a Postgres database, recording each in
-/// `tracking_table`.
+/// `tracking_table`. Returns the versions this call applied, in the order it
+/// applied them — empty when the database was already current.
 #[cfg(feature = "postgres")]
 pub fn run_postgres(
     conn: &mut PgConnection,
     tracking_table: &str,
     migrations: &[Box<dyn Migration>],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     run_generic(conn, Backend::Postgres, tracking_table, migrations)
 }
 
