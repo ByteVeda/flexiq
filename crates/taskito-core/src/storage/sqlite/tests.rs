@@ -443,7 +443,7 @@ fn worker_sdk_columns_are_added_to_a_pre_existing_database() {
     .unwrap();
     drop(conn);
 
-    storage.run_migrations().unwrap();
+    storage.migrate().unwrap();
 
     storage
         .register_worker(&WorkerRegistration {
@@ -467,8 +467,8 @@ fn worker_sdk_columns_are_added_to_a_pre_existing_database() {
 fn worker_sdk_migration_is_idempotent() {
     let storage = test_storage();
 
-    storage.run_migrations().unwrap();
-    storage.run_migrations().unwrap();
+    storage.migrate().unwrap();
+    storage.migrate().unwrap();
 
     storage
         .register_worker(&WorkerRegistration {
@@ -2165,4 +2165,60 @@ fn test_reap_ephemeral_subscriptions_spares_durable_and_live() {
         .map(|s| s.subscription_name)
         .collect();
     assert_eq!(names, vec!["durable".to_string()]);
+}
+
+#[test]
+fn test_unmigrated_open_applies_no_ddl() {
+    let dir = std::env::temp_dir().join(format!("taskito-unmigrated-{}", now_millis()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("q.db");
+    let db = path.to_str().unwrap();
+
+    let storage = SqliteStorage::unmigrated(db, 1).unwrap();
+    // A gated deployment gets no tables at all, so a query fails rather than
+    // silently reading an empty queue.
+    assert!(
+        storage.stats(None).is_err(),
+        "unmigrated storage must not answer queries"
+    );
+
+    let report = storage.migrate().unwrap();
+    assert!(
+        !report.applied.is_empty(),
+        "the first explicit migrate applies the whole history"
+    );
+    assert!(!report.schemaless);
+    storage.stats(None).expect("migrated storage answers");
+
+    // Re-running is a no-op, and reports as one.
+    let again = storage.migrate().unwrap();
+    assert!(again.applied.is_empty());
+    assert!(again.is_empty(), "a current database reports no work");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_migrate_reports_the_backlog_sweep() {
+    let storage = test_storage();
+
+    // A terminal job left in `jobs` is what the one-time sweep exists to move;
+    // an explicit migrate must run it, not just the DDL.
+    let id = storage.enqueue(make_job("swept")).unwrap().id;
+    let complete = JobStatus::Complete as i32;
+    diesel::sql_query(format!(
+        "INSERT INTO jobs (id, queue, task_name, payload, status, priority, retry_count, \
+         max_retries, created_at, scheduled_at, completed_at, timeout_ms) VALUES ('{id}-old', \
+         'default', 'swept', X'01', {complete}, 0, 0, 3, 1, 1, 2, 1000)"
+    ))
+    .execute(&mut storage.conn().unwrap())
+    .unwrap();
+
+    let report = storage.migrate().unwrap();
+    assert!(report.applied.is_empty(), "schema was already current");
+    assert_eq!(
+        report.archived_jobs, 1,
+        "the stale terminal row is archived"
+    );
+    assert!(!report.is_empty(), "a sweep that moved rows is not a no-op");
 }

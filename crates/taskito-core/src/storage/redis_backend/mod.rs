@@ -51,6 +51,15 @@ impl RedisStorage {
         })
     }
 
+    /// Report that there is nothing to migrate.
+    ///
+    /// Redis stores no schema — keys are written on first use and every read is
+    /// already defensive about fields an older writer never set — so an
+    /// explicit migrate is a successful no-op rather than an error.
+    pub fn migrate(&self) -> Result<crate::storage::migrate::MigrationReport> {
+        Ok(crate::storage::migrate::MigrationReport::schemaless())
+    }
+
     /// Build a Redis key from parts: `"{prefix}{part1}:{part2}:..."`.
     fn key(&self, parts: &[&str]) -> String {
         let mut k = self.prefix.clone();

@@ -41,6 +41,27 @@ impl WorkflowSqliteStorage {
         })
     }
 
+    /// Wrap an existing `SqliteStorage` without applying workflow DDL, for a
+    /// deployment that gates schema changes behind an explicit migrate step.
+    /// Every workflow query fails until [`Self::migrate`] has run.
+    pub fn unmigrated(storage: SqliteStorage, namespace: Option<String>) -> Result<Self> {
+        Ok(Self {
+            inner: storage,
+            namespace,
+        })
+    }
+
+    /// Apply any pending workflow schema changes, returning the versions this
+    /// call applied. Idempotent: a current database applies nothing.
+    pub fn migrate(&self) -> Result<Vec<String>> {
+        let mut conn = self.inner.conn()?;
+        taskito_core::storage::migrate::run_sqlite(
+            &mut conn,
+            "workflow_schema_migrations",
+            &crate::migrations::all(),
+        )
+    }
+
     /// Access the underlying `SqliteStorage`.
     pub fn inner(&self) -> &SqliteStorage {
         &self.inner

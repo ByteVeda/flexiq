@@ -1300,6 +1300,19 @@ macro_rules! delegate {
 }
 
 impl StorageBackend {
+    /// Apply any pending schema changes to this backend, plus the one-time
+    /// backlog sweep. Idempotent, and a successful no-op on a schemaless
+    /// backend — see [`migrate::MigrationReport`].
+    pub fn migrate(&self) -> crate::error::Result<migrate::MigrationReport> {
+        match self {
+            StorageBackend::Sqlite(s) => s.migrate(),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(s) => s.migrate(),
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(s) => s.migrate(),
+        }
+    }
+
     /// Signal the scheduler that a ready job was enqueued, so it can dispatch
     /// immediately instead of waiting for the next poll. No-op for delayed
     /// jobs (`scheduled_at > now`) — those rely on the fallback timer — and a

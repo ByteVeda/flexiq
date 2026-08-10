@@ -18,6 +18,8 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, CustomizeConnection, Pool};
 use diesel::sqlite::SqliteConnection;
 
+use crate::storage::migrate::MigrationReport;
+
 use crate::error::Result;
 
 type DbPool = Pool<ConnectionManager<SqliteConnection>>;
@@ -66,6 +68,10 @@ impl SqliteStorage {
 
     /// Open (or create) a SQLite database with a custom connection pool size.
     pub fn with_pool_size(db_path: &str, pool_size: u32) -> Result<Self> {
+        Self::build(db_path, pool_size, true)
+    }
+
+    fn build(db_path: &str, pool_size: u32, auto_migrate: bool) -> Result<Self> {
         let manager = ConnectionManager::<SqliteConnection>::new(db_path);
         let pool = Pool::builder()
             .max_size(pool_size)
@@ -77,8 +83,43 @@ impl SqliteStorage {
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         };
-        storage.run_migrations()?;
+        if auto_migrate {
+            storage.migrate()?;
+        }
         Ok(storage)
+    }
+
+    /// Open without applying any DDL, for a deployment that gates schema
+    /// changes behind an explicit `migrate` step.
+    ///
+    /// The database is left exactly as found — on a fresh file that means no
+    /// tables at all, so every query fails until [`Self::migrate`] has run.
+    pub fn unmigrated(db_path: &str, pool_size: u32) -> Result<Self> {
+        Self::build(db_path, pool_size, false)
+    }
+
+    /// Apply any pending schema changes, plus the one-time backlog sweep the
+    /// automatic path runs. Idempotent: a current database reports an empty
+    /// [`MigrationReport`].
+    pub fn migrate(&self) -> Result<MigrationReport> {
+        let mut conn = self.conn()?;
+        let applied = crate::storage::migrate::run_sqlite(
+            &mut conn,
+            "schema_migrations",
+            &crate::storage::migrations::all(),
+        )?;
+        drop(conn);
+
+        // Drain any pre-existing terminal jobs left in `jobs` by older
+        // versions into `archived_jobs`. Terminal jobs now live there from the
+        // moment they transition; this one-time sweep migrates the backlog.
+        let archived_jobs = self.archive_old_jobs(i64::MAX)?;
+
+        Ok(MigrationReport {
+            applied,
+            archived_jobs,
+            ..MigrationReport::default()
+        })
     }
 
     /// Create an in-memory storage (useful for tests).
@@ -94,7 +135,7 @@ impl SqliteStorage {
             #[cfg(feature = "push-dispatch")]
             notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         };
-        storage.run_migrations()?;
+        storage.migrate()?;
         Ok(storage)
     }
 
@@ -117,23 +158,6 @@ impl SqliteStorage {
         &self,
     ) -> Result<diesel::r2d2::PooledConnection<ConnectionManager<SqliteConnection>>> {
         Ok(self.pool.get()?)
-    }
-
-    fn run_migrations(&self) -> Result<()> {
-        let mut conn = self.conn()?;
-        crate::storage::migrate::run_sqlite(
-            &mut conn,
-            "schema_migrations",
-            &crate::storage::migrations::all(),
-        )?;
-        drop(conn);
-
-        // Drain any pre-existing terminal jobs left in `jobs` by older
-        // versions into `archived_jobs`. Terminal jobs now live there from the
-        // moment they transition; this one-time sweep migrates the backlog.
-        self.archive_old_jobs(i64::MAX)?;
-
-        Ok(())
     }
 }
 
