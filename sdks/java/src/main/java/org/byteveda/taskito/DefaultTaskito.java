@@ -843,6 +843,16 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
         return decodeMap(backend.listSettingsJson(), String.class);
     }
 
+    @Override
+    public int minContract() {
+        return backend.minContract();
+    }
+
+    @Override
+    public void setMinContract(int level) {
+        backend.setMinContract(level);
+    }
+
     // ── Logs ────────────────────────────────────────────────────────
 
     @Override

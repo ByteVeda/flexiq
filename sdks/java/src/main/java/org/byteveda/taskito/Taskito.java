@@ -394,6 +394,23 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
     Map<String, String> listSettings();
 
     /**
+     * The lowest contract level a process may speak and still open this
+     * storage. The contract level is the revision of the shared storage and
+     * wire contract an SDK build implements; a build below the floor refuses to
+     * open rather than misreading rows its contract never described.
+     */
+    int minContract();
+
+    /**
+     * Raises or lowers the contract floor.
+     *
+     * <p>Raise it only once every process in the deployment has been upgraded —
+     * older ones stop opening immediately. A level this build does not itself
+     * speak is rejected, since writing it would lock the caller out too.
+     */
+    void setMinContract(int level);
+
+    /**
      * The retention windows a worker is applying to this queue's namespace, or
      * empty when no worker has swept yet — distinct from retention being
      * disabled, which reports with {@code enabled = false}.

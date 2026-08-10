@@ -112,6 +112,12 @@ public final class NativeQueue {
 
     public static native String listSettings(long handle);
 
+    /** The lowest contract level a process may speak and still open this storage. */
+    public static native int minContract(long handle);
+
+    /** Raises or lowers that floor; a level this build cannot speak is rejected. */
+    public static native void setMinContract(long handle, int level);
+
     /** Settings-key prefixes the dashboard's generic KV surface must hide. */
     public static native String[] reservedSettingPrefixes();
 
