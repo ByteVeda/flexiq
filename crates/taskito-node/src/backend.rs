@@ -25,19 +25,28 @@ fn resolve_pool_size(pool_size: Option<u32>, default: u32) -> Result<u32> {
 /// Open the storage backend named by `options.backend` (default `"sqlite"`).
 /// Returns an error if a requested backend was not compiled into this addon.
 pub fn open(options: &OpenOptions) -> Result<StorageBackend> {
+    let auto_migrate = options.auto_migrate.unwrap_or(true);
     match options.backend.as_deref().unwrap_or("sqlite") {
         "sqlite" => {
             let pool = resolve_pool_size(options.pool_size, DEFAULT_SQLITE_POOL)?;
-            let storage = SqliteStorage::with_pool_size(&options.dsn, pool).map_err(to_napi_err)?;
+            let storage = if auto_migrate {
+                SqliteStorage::with_pool_size(&options.dsn, pool)
+            } else {
+                SqliteStorage::unmigrated(&options.dsn, pool)
+            }
+            .map_err(to_napi_err)?;
             Ok(StorageBackend::Sqlite(storage))
         }
         #[cfg(feature = "postgres")]
         "postgres" => {
             let schema = options.schema.as_deref().unwrap_or(DEFAULT_POSTGRES_SCHEMA);
             let pool = resolve_pool_size(options.pool_size, DEFAULT_POSTGRES_POOL)?;
-            let storage =
+            let storage = if auto_migrate {
                 taskito_core::PostgresStorage::with_schema_and_pool_size(&options.dsn, schema, pool)
-                    .map_err(to_napi_err)?;
+            } else {
+                taskito_core::PostgresStorage::unmigrated(&options.dsn, schema, pool)
+            }
+            .map_err(to_napi_err)?;
             Ok(StorageBackend::Postgres(storage))
         }
         #[cfg(feature = "redis")]

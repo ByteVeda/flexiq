@@ -16,6 +16,10 @@ const DEFAULT_POSTGRES_SCHEMA: &str = "taskito";
 pub struct QueueHandle {
     pub storage: StorageBackend,
     pub namespace: Option<String>,
+    /// Whether opening applied schema changes. When false the workflow store is
+    /// built unmigrated too, so no path applies DDL until `migrate` runs.
+    #[cfg(feature = "workflows")]
+    pub auto_migrate: bool,
     /// Workflow storage, built lazily on first workflow call (its constructor
     /// runs the workflow-table migrations). Shares this queue's connection pool.
     #[cfg(feature = "workflows")]
@@ -45,7 +49,7 @@ impl QueueHandle {
         if let Some(wf) = self.workflow_storage.get() {
             return Ok(wf.clone()); // another thread won the race while we waited
         }
-        let wf = build_workflow_storage(&self.storage, self.namespace.clone())?;
+        let wf = build_workflow_storage(&self.storage, self.namespace.clone(), self.auto_migrate)?;
         let _ = self.workflow_storage.set(wf.clone());
         Ok(wf)
     }
@@ -53,19 +57,27 @@ impl QueueHandle {
 
 /// Construct workflow storage matching this queue's core backend.
 #[cfg(feature = "workflows")]
-fn build_workflow_storage(
+pub(crate) fn build_workflow_storage(
     storage: &StorageBackend,
     namespace: Option<String>,
+    auto_migrate: bool,
 ) -> Result<taskito_workflows::WorkflowStorageBackend, BindingError> {
     use taskito_workflows::{WorkflowSqliteStorage, WorkflowStorageBackend};
     let wf = match storage {
-        StorageBackend::Sqlite(s) => {
-            WorkflowStorageBackend::Sqlite(WorkflowSqliteStorage::new(s.clone(), namespace)?)
-        }
+        // A queue opened with autoMigrate=false gates every schema change
+        // behind `migrate`, workflow tables included — otherwise the first
+        // workflow call would quietly apply DDL the operator withheld.
+        StorageBackend::Sqlite(s) => WorkflowStorageBackend::Sqlite(if auto_migrate {
+            WorkflowSqliteStorage::new(s.clone(), namespace)?
+        } else {
+            WorkflowSqliteStorage::unmigrated(s.clone(), namespace)?
+        }),
         #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => WorkflowStorageBackend::Postgres(
-            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)?,
-        ),
+        StorageBackend::Postgres(s) => WorkflowStorageBackend::Postgres(if auto_migrate {
+            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)?
+        } else {
+            taskito_workflows::WorkflowPostgresStorage::unmigrated(s.clone(), namespace)?
+        }),
         #[cfg(feature = "redis")]
         StorageBackend::Redis(s) => WorkflowStorageBackend::Redis(
             taskito_workflows::WorkflowRedisStorage::new(s.clone(), namespace)?,
@@ -115,20 +127,29 @@ fn resolve_pool_size(pool_size: Option<u32>, default: u32) -> Result<u32, Bindin
 /// Open the storage backend named by `options.backend` (default `"sqlite"`).
 /// Returns an error if a requested backend was not compiled into this library.
 pub fn open(options: OpenOptions) -> Result<QueueHandle, BindingError> {
+    let auto_migrate = options.auto_migrate.unwrap_or(true);
     let storage = match options.backend.as_deref().unwrap_or("sqlite") {
         "sqlite" => {
             let pool = resolve_pool_size(options.pool_size, DEFAULT_SQLITE_POOL)?;
-            StorageBackend::Sqlite(SqliteStorage::with_pool_size(&options.dsn, pool)?)
+            StorageBackend::Sqlite(if auto_migrate {
+                SqliteStorage::with_pool_size(&options.dsn, pool)?
+            } else {
+                SqliteStorage::unmigrated(&options.dsn, pool)?
+            })
         }
         #[cfg(feature = "postgres")]
         "postgres" => {
             let schema = options.schema.as_deref().unwrap_or(DEFAULT_POSTGRES_SCHEMA);
             let pool = resolve_pool_size(options.pool_size, DEFAULT_POSTGRES_POOL)?;
-            StorageBackend::Postgres(taskito_core::PostgresStorage::with_schema_and_pool_size(
-                &options.dsn,
-                schema,
-                pool,
-            )?)
+            StorageBackend::Postgres(if auto_migrate {
+                taskito_core::PostgresStorage::with_schema_and_pool_size(
+                    &options.dsn,
+                    schema,
+                    pool,
+                )?
+            } else {
+                taskito_core::PostgresStorage::unmigrated(&options.dsn, schema, pool)?
+            })
         }
         #[cfg(feature = "redis")]
         "redis" => {
@@ -141,11 +162,18 @@ pub fn open(options: OpenOptions) -> Result<QueueHandle, BindingError> {
         other => return Err(unknown_backend(other)),
     };
     // Every process that joins a deployment passes through this one open, so
-    // the contract floor is checked here rather than in the SDK.
-    taskito_core::ensure_contract_supported(&storage)?;
+    // the contract floor is checked here rather than in the SDK. The one storage
+    // that cannot answer is one whose schema was never applied — there is no
+    // floor recorded and nothing to read it from — and that storage is unusable
+    // until `migrate` runs, which checks it then.
+    if auto_migrate || storage.is_migrated()? {
+        taskito_core::ensure_contract_supported(&storage)?;
+    }
     Ok(QueueHandle {
         storage,
         namespace: options.namespace,
+        #[cfg(feature = "workflows")]
+        auto_migrate,
         #[cfg(feature = "workflows")]
         workflow_storage: std::sync::OnceLock::new(),
         #[cfg(feature = "workflows")]

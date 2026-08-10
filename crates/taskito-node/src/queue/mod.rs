@@ -30,6 +30,10 @@ mod workflows;
 pub struct JsQueue {
     storage: StorageBackend,
     namespace: Option<String>,
+    /// Whether opening applies schema changes. When false the workflow store is
+    /// built unmigrated too, so no path applies DDL until `migrate()` runs.
+    #[cfg(feature = "workflows")]
+    pub(crate) auto_migrate: bool,
     /// Workflow storage, lazily initialized on first workflow call so the
     /// workflow migrations only run when workflows are actually used.
     #[cfg(feature = "workflows")]
@@ -42,13 +46,21 @@ impl JsQueue {
     #[napi(factory)]
     pub fn open(options: OpenOptions) -> Result<Self> {
         let namespace = options.namespace.clone();
+        let auto_migrate = options.auto_migrate.unwrap_or(true);
         let storage = crate::backend::open(&options)?;
         // Every process that joins a deployment passes through this one open,
-        // so the contract floor is checked here rather than in the SDK.
-        taskito_core::ensure_contract_supported(&storage).map_err(to_napi_err)?;
+        // so the contract floor is checked here rather than in the SDK. The one
+        // storage that cannot answer is one whose schema was never applied —
+        // there is no floor recorded and nothing to read it from — and that
+        // storage is unusable until `migrate()` runs, which checks it then.
+        if auto_migrate || storage.is_migrated().map_err(to_napi_err)? {
+            taskito_core::ensure_contract_supported(&storage).map_err(to_napi_err)?;
+        }
         Ok(Self {
             storage,
             namespace,
+            #[cfg(feature = "workflows")]
+            auto_migrate,
             #[cfg(feature = "workflows")]
             workflow_storage: std::sync::OnceLock::new(),
         })

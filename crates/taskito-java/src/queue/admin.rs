@@ -465,3 +465,47 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_setMinCont
         Ok(())
     })
 }
+
+/// `String migrate(long handle)` — apply pending schema changes, returning the
+/// report as JSON (`applied`, `workflowApplied`, `archivedJobs`, `schemaless`).
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_migrate<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jstring {
+    guard(&mut env, std::ptr::null_mut(), |env| {
+        let queue = unsafe { borrow_queue(handle) };
+        let report = queue.storage.migrate()?;
+        let workflow_applied = migrate_workflow_storage(queue)?;
+
+        new_string(
+            env,
+            to_json(&serde_json::json!({
+                "applied": report.applied,
+                "workflowApplied": workflow_applied,
+                "archivedJobs": report.archived_jobs,
+                "schemaless": report.schemaless,
+            }))?,
+        )
+    })
+}
+
+/// Apply pending workflow schema changes, reporting the versions applied. Built
+/// unmigrated first so those versions are visible rather than swallowed by the
+/// constructor.
+#[cfg(feature = "workflows")]
+fn migrate_workflow_storage(
+    queue: &crate::backend::QueueHandle,
+) -> Result<Vec<String>, crate::error::BindingError> {
+    let wf =
+        crate::backend::build_workflow_storage(&queue.storage, queue.namespace.clone(), false)?;
+    Ok(wf.migrate()?)
+}
+
+#[cfg(not(feature = "workflows"))]
+fn migrate_workflow_storage(
+    _queue: &crate::backend::QueueHandle,
+) -> Result<Vec<String>, crate::error::BindingError> {
+    Ok(Vec::new())
+}

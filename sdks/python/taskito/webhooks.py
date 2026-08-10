@@ -61,9 +61,11 @@ class WebhookManager:
     exponential backoff.
     """
 
-    def __init__(self, queue_ref: Queue | None = None) -> None:
+    def __init__(self, queue_ref: Queue | None = None, preload: bool = True) -> None:
         # ``queue_ref`` is the parent :class:`taskito.app.Queue`. Optional
-        # so legacy in-process tests can construct a bare manager.
+        # so legacy in-process tests can construct a bare manager. ``preload``
+        # is off for a queue whose schema is gated behind an explicit migrate —
+        # there is nothing to read until then.
         self._queue: Queue | None = queue_ref
         # In-memory subscription list. Each entry is a dict shaped like a
         # legacy ``add_webhook`` call so both code paths share a single
@@ -72,7 +74,7 @@ class WebhookManager:
         self._delivery_queue: queue.Queue[tuple[dict[str, Any], dict[str, Any]]] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        if queue_ref is not None:
+        if queue_ref is not None and preload:
             self.reload()
 
     # ── Snapshot management ───────────────────────────────────────

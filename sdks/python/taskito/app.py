@@ -38,6 +38,7 @@ from taskito.interception import ArgumentInterceptor, InterceptionMode
 from taskito.interception.built_in import build_default_registry
 from taskito.interception.metrics import InterceptionMetrics
 from taskito.middleware import TaskMiddleware
+from taskito.migration_gate import migrations_withheld
 from taskito.mixins import (
     QueueDecoratorMixin,
     QueueEventsMixin,
@@ -158,6 +159,7 @@ class Queue(
         dlq_auto_retry_max: int = 1,
         retention: Retention | None = None,
         max_pending: dict[str, int] | None = None,
+        auto_migrate: bool = True,
     ):
         """Initialize a new task queue.
 
@@ -237,6 +239,15 @@ class Queue(
                 is automatically retried. ``None`` disables auto-retry.
             dlq_auto_retry_max: Maximum number of DLQ auto-retries per entry
                 before giving up. Defaults to 1.
+            auto_migrate: Whether opening applies pending schema changes.
+                ``True`` (default) keeps the existing behavior. ``False`` gates
+                every schema change behind :meth:`migrate`, for a deployment
+                whose database credentials do not permit DDL at runtime. On
+                SQLite and PostgreSQL a database that has never been migrated
+                has no tables, so queries fail until ``migrate`` has run —
+                typically from a separate process, after which an application
+                opened this way works normally. Redis stores no schema and is
+                unaffected either way.
             max_pending: Opt-in per-queue admission cap, mapping queue name to a
                 maximum pending backlog. When set, ``enqueue``/``enqueue_many``
                 raise :class:`QueueFullError` once a queue's pending count
@@ -255,6 +266,12 @@ class Queue(
         # storage here would put the database credentials back in the app image
         # that the attach split exists to keep them out of.
         detached = is_detached()
+
+        # `taskito migrate` imports the same app to reach its queue, so the
+        # import itself would apply the DDL the command exists to gate. The
+        # env var only ever withholds migrations, never grants them.
+        if migrations_withheld():
+            auto_migrate = False
 
         if backend == "sqlite" and not detached:
             # Ensure parent directory exists for SQLite
@@ -288,6 +305,7 @@ class Queue(
                 dlq_auto_retry_delay=dlq_auto_retry_delay,
                 dlq_auto_retry_max=dlq_auto_retry_max,
                 retention=retention._as_map() if retention is not None else None,
+                auto_migrate=auto_migrate,
             )
         )
         self._backend = backend
@@ -348,7 +366,16 @@ class Queue(
             if _cap < 0:
                 raise ValueError(f"max_pending for '{_queue}' must be non-negative")
         self._event_bus = EventBus(max_workers=event_workers)
-        self._webhook_manager = WebhookManager(queue_ref=self)
+        self._auto_migrate = auto_migrate
+        # Gating migrations does not mean the schema is missing: the normal flow
+        # is one process running `taskito migrate` and the application starting
+        # afterwards with `auto_migrate=False` against a database that is fully
+        # migrated. Only a never-migrated store has nothing to read, and there
+        # :meth:`migrate` loads the snapshot instead.
+        self._webhook_manager = WebhookManager(
+            queue_ref=self,
+            preload=auto_migrate or self._inner.is_migrated(),
+        )
 
         # Proxy handlers
         self._proxy_registry = ProxyRegistry()

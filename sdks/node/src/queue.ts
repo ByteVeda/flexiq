@@ -37,6 +37,7 @@ import type { EnqueueContext, Middleware } from "./middleware";
 import {
   JsQueue,
   type JsTopicMessage,
+  type MigrationSummary,
   type EnqueueOptions as NativeEnqueueOptions,
   type NativeQueue,
   type OpenOptions,
@@ -134,6 +135,14 @@ export interface QueueOptions {
   prefix?: string;
   /** Namespace applied to enqueued jobs and the worker scheduler. */
   namespace?: string;
+  /**
+   * Whether opening applies pending schema changes. `true` (default) keeps the
+   * existing behavior; `false` gates every schema change behind
+   * {@link Queue.migrate}, for a deployment whose database credentials do not
+   * permit DDL at runtime. Until `migrate` has run, queries fail — the tables
+   * do not exist yet.
+   */
+  autoMigrate?: boolean;
   /** Codec for task args/results. Defaults to {@link JsonSerializer}. */
   serializer?: Serializer;
   /**
@@ -1432,6 +1441,19 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   }
 
   /**
+   * Apply any pending schema changes and report what ran.
+   *
+   * Idempotent, and the only path that applies DDL when the queue was opened
+   * with `autoMigrate: false`. Empty version lists mean the database was
+   * already current; `schemaless` marks a backend that stores no schema and so
+   * never has anything to migrate. Async: a fresh database means the whole
+   * schema plus the backlog sweep, which must not block the event loop.
+   */
+  migrate(): Promise<MigrationSummary> {
+    return this.native.migrate();
+  }
+
+  /**
    * The lowest contract level a process may speak and still open this storage.
    *
    * The contract level is the revision of the shared storage and wire contract
@@ -1781,7 +1803,13 @@ function toOpenOptions(options: QueueOptions): OpenOptions {
     // Zero-config default, like Python: an on-disk DB under `.taskito/`.
     const dsn = options.dsn ?? options.dbPath ?? DEFAULT_SQLITE_DB;
     ensureSqliteParentDir(dsn);
-    return { backend, dsn, poolSize: options.poolSize, namespace: options.namespace };
+    return {
+      backend,
+      dsn,
+      poolSize: options.poolSize,
+      namespace: options.namespace,
+      autoMigrate: options.autoMigrate,
+    };
   }
   // Postgres/Redis have no sensible default endpoint — require an explicit dsn.
   // The Postgres `schema` (default `"taskito"`, resolved in the addon) and the
@@ -1797,6 +1825,7 @@ function toOpenOptions(options: QueueOptions): OpenOptions {
     schema: options.schema,
     prefix: options.prefix,
     namespace: options.namespace,
+    autoMigrate: options.autoMigrate,
   };
 }
 

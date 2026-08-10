@@ -38,6 +38,7 @@ pub fn run(config: Config) -> Result<()> {
             dsn,
             config.backend.as_deref(),
             config.namespace.clone(),
+            config.auto_migrate,
         )?),
         None => None,
     };

@@ -11,6 +11,8 @@ export interface GlobalOptions {
   prefix?: string;
   namespace?: string;
   json?: boolean;
+  /** Open without applying DDL. Only the `migrate` command sets it. */
+  autoMigrate?: boolean;
 }
 
 /** Build a {@link Queue} from the CLI's global connection options. */
@@ -23,6 +25,7 @@ export function connect(options: GlobalOptions): Queue {
     schema: options.schema,
     prefix: options.prefix,
     namespace: options.namespace,
+    autoMigrate: options.autoMigrate,
   };
   return new Queue(queueOptions);
 }

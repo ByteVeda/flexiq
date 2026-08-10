@@ -20,6 +20,23 @@ pub struct OpenOptions {
     pub prefix: Option<String>,
     /// Optional namespace applied to enqueued jobs and the worker scheduler.
     pub namespace: Option<String>,
+    /// Whether opening applies pending schema changes. Defaults to true; false
+    /// gates every schema change behind an explicit `migrate()`.
+    pub auto_migrate: Option<bool>,
+}
+
+/// What one explicit `migrate()` call did. Empty lists mean the database was
+/// already current, which is the common case and not an error.
+#[napi(object)]
+pub struct MigrationSummary {
+    /// Core schema versions applied by this run, in the order applied.
+    pub applied: Vec<String>,
+    /// Workflow schema versions applied by this run.
+    pub workflow_applied: Vec<String>,
+    /// Terminal jobs the one-time backlog sweep moved into `archived_jobs`.
+    pub archived_jobs: i64,
+    /// The backend stores no schema, so there is nothing to migrate.
+    pub schemaless: bool,
 }
 
 /// Per-enqueue overrides. All optional — omitted fields fall back to defaults

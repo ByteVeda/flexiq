@@ -813,7 +813,7 @@ impl JsQueue {
         if let Some(wf) = self.workflow_storage.get() {
             return Ok(wf.clone());
         }
-        let wf = build_workflow_storage(&self.storage, self.namespace.clone())?;
+        let wf = build_workflow_storage(&self.storage, self.namespace.clone(), self.auto_migrate)?;
         // If another thread raced us, either handle wraps the same pool.
         let _ = self.workflow_storage.set(wf.clone());
         Ok(wf)
@@ -834,20 +834,30 @@ fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> Result<()> 
 }
 
 /// Construct the workflow storage matching the queue's core backend.
-fn build_workflow_storage(
+pub(crate) fn build_workflow_storage(
     storage: &StorageBackend,
     namespace: Option<String>,
+    auto_migrate: bool,
 ) -> Result<WorkflowStorageBackend> {
     let wf = match storage {
-        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone(), namespace)
-            .map(WorkflowStorageBackend::Sqlite)
-            .map_err(to_napi_err)?,
-        #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => {
-            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)
-                .map(WorkflowStorageBackend::Postgres)
-                .map_err(to_napi_err)?
+        // A queue opened with `autoMigrate: false` gates every schema change
+        // behind `migrate()`, workflow tables included — otherwise the first
+        // workflow call would quietly apply DDL the operator withheld.
+        StorageBackend::Sqlite(s) => if auto_migrate {
+            WorkflowSqliteStorage::new(s.clone(), namespace)
+        } else {
+            WorkflowSqliteStorage::unmigrated(s.clone(), namespace)
         }
+        .map(WorkflowStorageBackend::Sqlite)
+        .map_err(to_napi_err)?,
+        #[cfg(feature = "postgres")]
+        StorageBackend::Postgres(s) => if auto_migrate {
+            taskito_workflows::WorkflowPostgresStorage::new(s.clone(), namespace)
+        } else {
+            taskito_workflows::WorkflowPostgresStorage::unmigrated(s.clone(), namespace)
+        }
+        .map(WorkflowStorageBackend::Postgres)
+        .map_err(to_napi_err)?,
         #[cfg(feature = "redis")]
         StorageBackend::Redis(s) => {
             taskito_workflows::WorkflowRedisStorage::new(s.clone(), namespace)

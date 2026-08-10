@@ -1724,6 +1724,36 @@ Runs created before the namespace column existed carry none, so a scoped process
 does not see them — the same trade every other pre-namespace row makes. An
 unscoped console still does.
 
+## Gating schema changes
+
+By default, opening a queue applies any pending schema changes — zero-config, and
+the right behavior for most deployments. Where the application's database
+credentials do not permit DDL, or a DBA owns every migration, turn it off and
+apply the schema explicitly:
+
+<SdkSwap python={<code>Queue(auto_migrate=False)</code>} node={<code>new Queue(&#123; autoMigrate: false &#125;)</code>} java={<code>Taskito.builder().autoMigrate(false)</code>} />
+
+Nothing then applies DDL until you run the migrate command, which is idempotent
+and safe to run on every deploy:
+
+```bash
+taskito migrate
+```
+
+It reports the versions it applied — core and workflow tables both — plus any
+terminal jobs the one-time backlog sweep moved into the archive. On an
+already-current database it applies nothing and says so. On Redis there is no
+schema to apply and it reports that instead of failing.
+
+<Callout type="warn" title="Migrate before you serve">
+  A gated queue has no tables until the command runs, so every query fails until
+  then. `taskito-server` honors the same switch through `TASKITO_AUTO_MIGRATE`
+  and refuses to start when the **core** schema is absent, naming the variable
+  rather than leaking a bare "no such table". Workflow tables are not part of
+  that check — a deployment that never runs workflows does not need them — so
+  run the command, which applies both.
+</Callout>
+
 ## Version skew and the contract floor
 
 A deployment outlives individual releases: during any rolling upgrade one

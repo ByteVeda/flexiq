@@ -23,6 +23,14 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 
 use crate::error::Result;
+use crate::storage::migrate::MigrationReport;
+
+/// One `COUNT(*)` result, for the catalog probe in [`PostgresStorage::is_migrated`].
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+}
 
 type PgPool = Pool<ConnectionManager<PgConnection>>;
 
@@ -104,7 +112,71 @@ impl PostgresStorage {
         Self::build(database_url, pool_size, schema)
     }
 
+    /// Connect without applying any DDL, for a deployment that gates schema
+    /// changes behind an explicit `migrate` step. The database is left exactly
+    /// as found, so every query fails until [`Self::migrate`] has run.
+    pub fn unmigrated(database_url: &str, schema: &str, pool_size: u32) -> Result<Self> {
+        Self::build_with(database_url, pool_size, schema, false)
+    }
+
+    /// Apply any pending schema changes, plus the one-time backlog sweep the
+    /// automatic path runs. Idempotent: a current database reports an empty
+    /// [`MigrationReport`].
+    pub fn migrate(&self) -> Result<MigrationReport> {
+        let mut conn = self.conn()?;
+
+        // Postgres-only: ensure the target schema exists before any DDL runs.
+        diesel::sql_query(format!(
+            "CREATE SCHEMA IF NOT EXISTS {}",
+            pg_quote_ident(&self.schema)
+        ))
+        .execute(&mut conn)?;
+
+        let applied = crate::storage::migrate::run_postgres(
+            &mut conn,
+            "schema_migrations",
+            &crate::storage::migrations::all(),
+        )?;
+        drop(conn);
+
+        // Drain any pre-existing terminal jobs left in `jobs` by older
+        // versions into `archived_jobs`. Terminal jobs now live there from the
+        // moment they transition; this one-time sweep migrates the backlog.
+        let archived_jobs = self.archive_old_jobs(i64::MAX)?;
+
+        Ok(MigrationReport {
+            applied,
+            archived_jobs,
+            ..MigrationReport::default()
+        })
+    }
+
+    /// Whether the core schema has been applied in this storage's schema — the
+    /// ledger table exists.
+    ///
+    /// A catalog read, not DDL, so a gated deployment can ask without applying
+    /// anything: it is how a shell tells "nothing here yet" apart from "opened
+    /// without migrating an existing deployment".
+    pub fn is_migrated(&self) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let rows: Vec<CountRow> = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM information_schema.tables \
+             WHERE table_schema = current_schema() AND table_name = 'schema_migrations'",
+        )
+        .load(&mut conn)?;
+        Ok(rows.first().is_some_and(|row| row.count > 0))
+    }
+
     fn build(database_url: &str, pool_size: u32, schema: &str) -> Result<Self> {
+        Self::build_with(database_url, pool_size, schema, true)
+    }
+
+    fn build_with(
+        database_url: &str,
+        pool_size: u32,
+        schema: &str,
+        auto_migrate: bool,
+    ) -> Result<Self> {
         validate_schema_name(schema)?;
         init_openssl_without_atexit();
 
@@ -123,7 +195,9 @@ impl PostgresStorage {
             #[cfg(feature = "push-dispatch")]
             database_url: database_url.to_string(),
         };
-        storage.run_migrations()?;
+        if auto_migrate {
+            storage.migrate()?;
+        }
         Ok(storage)
     }
 
@@ -143,31 +217,6 @@ impl PostgresStorage {
         .execute(&mut conn)
         .map_err(crate::error::QueueError::Storage)?;
         Ok(conn)
-    }
-
-    fn run_migrations(&self) -> Result<()> {
-        let mut conn = self.conn()?;
-
-        // Postgres-only: ensure the target schema exists before any DDL runs.
-        diesel::sql_query(format!(
-            "CREATE SCHEMA IF NOT EXISTS {}",
-            pg_quote_ident(&self.schema)
-        ))
-        .execute(&mut conn)?;
-
-        crate::storage::migrate::run_postgres(
-            &mut conn,
-            "schema_migrations",
-            &crate::storage::migrations::all(),
-        )?;
-        drop(conn);
-
-        // Drain any pre-existing terminal jobs left in `jobs` by older
-        // versions into `archived_jobs`. Terminal jobs now live there from the
-        // moment they transition; this one-time sweep migrates the backlog.
-        self.archive_old_jobs(i64::MAX)?;
-
-        Ok(())
     }
 }
 

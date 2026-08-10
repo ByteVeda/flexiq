@@ -11,6 +11,7 @@ import {
   registerEnqueue,
   registerExecutor,
   registerJobs,
+  registerMigrate,
   registerQueues,
   registerRun,
   registerScaler,
@@ -35,6 +36,7 @@ program
 registerEnqueue(program);
 registerStats(program);
 registerJobs(program);
+registerMigrate(program);
 registerCancel(program);
 registerQueues(program);
 registerDlq(program);

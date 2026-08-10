@@ -46,6 +46,7 @@ export type {
   JsWorkflowNode,
   JsWorkflowRun,
   MeshWorkerConfig,
+  MigrationSummary,
   OpenOptions,
   PublishOptions,
   QueueConfigInput,

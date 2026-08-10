@@ -258,6 +258,11 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public String migrateJson() {
+        return withOpenHandle(() -> NativeQueue.migrate(handle));
+    }
+
+    @Override
     public int minContract() {
         return withOpenHandle(() -> NativeQueue.minContract(handle));
     }

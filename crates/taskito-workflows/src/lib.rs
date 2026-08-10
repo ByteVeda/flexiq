@@ -52,6 +52,20 @@ pub enum WorkflowStorageBackend {
     Redis(WorkflowRedisStorage),
 }
 
+impl WorkflowStorageBackend {
+    /// Apply any pending workflow schema changes, returning the versions this
+    /// call applied. A schemaless backend applies none.
+    pub fn migrate(&self) -> taskito_core::Result<Vec<String>> {
+        match self {
+            WorkflowStorageBackend::Sqlite(s) => s.migrate(),
+            #[cfg(feature = "postgres")]
+            WorkflowStorageBackend::Postgres(s) => s.migrate(),
+            #[cfg(feature = "redis")]
+            WorkflowStorageBackend::Redis(_) => Ok(Vec::new()),
+        }
+    }
+}
+
 /// Dispatch a `WorkflowStorage` method across every enum variant.
 ///
 /// Each variant arm forwards `$method($($arg),*)` to the inner backend handle.

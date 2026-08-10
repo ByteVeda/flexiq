@@ -9,6 +9,8 @@ use napi_derive::napi;
 use taskito_core::job::{now_millis, NewJob};
 use taskito_core::Storage;
 
+use crate::config::MigrationSummary;
+
 use super::JsQueue;
 use crate::config::RetentionInput;
 use crate::convert::{dead_job_to_js, JsDeadJob, JsDeadJobPage};
@@ -264,6 +266,31 @@ impl JsQueue {
         self.storage.list_settings().map_err(to_napi_err)
     }
 
+    /// Apply any pending schema changes and report what ran. Idempotent, and
+    /// the only path that applies DDL when the queue was opened with
+    /// `autoMigrate: false`.
+    /// Async because a migration is unbounded work — the whole schema on a
+    /// fresh database, plus the backlog sweep — and it must not sit on the
+    /// event loop while it runs.
+    #[napi]
+    pub async fn migrate(&self) -> Result<MigrationSummary> {
+        let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
+        spawn_blocking(move || {
+            let report = storage.migrate().map_err(to_napi_err)?;
+            let workflow_applied = migrate_workflow_storage(&storage, namespace)?;
+
+            Ok(MigrationSummary {
+                applied: report.applied,
+                workflow_applied,
+                archived_jobs: report.archived_jobs as i64,
+                schemaless: report.schemaless,
+            })
+        })
+        .await
+        .map_err(join_to_napi_err)?
+    }
+
     /// The lowest contract level a process may speak and still open this
     /// storage. See `BINDING_CONTRACT.md`.
     #[napi]
@@ -326,4 +353,24 @@ impl JsQueue {
         .await
         .map_err(join_to_napi_err)?
     }
+}
+
+/// Apply pending workflow schema changes, reporting the versions applied. Built
+/// unmigrated first so those versions are visible to the caller rather than
+/// swallowed by the constructor.
+#[cfg(feature = "workflows")]
+fn migrate_workflow_storage(
+    storage: &taskito_core::StorageBackend,
+    namespace: Option<String>,
+) -> Result<Vec<String>> {
+    let wf = crate::queue::workflows::build_workflow_storage(storage, namespace, false)?;
+    wf.migrate().map_err(to_napi_err)
+}
+
+#[cfg(not(feature = "workflows"))]
+fn migrate_workflow_storage(
+    _storage: &taskito_core::StorageBackend,
+    _namespace: Option<String>,
+) -> Result<Vec<String>> {
+    Ok(Vec::new())
 }

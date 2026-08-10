@@ -94,6 +94,7 @@ pub fn ensure_contract_supported<S: Storage>(storage: &S) -> Result<()> {
 mod tests {
     use super::*;
     use crate::storage::sqlite::SqliteStorage;
+    use crate::storage::Storage;
 
     fn storage() -> SqliteStorage {
         SqliteStorage::in_memory().expect("in-memory sqlite")
@@ -168,6 +169,25 @@ mod tests {
                 .expect("setting"),
             None,
             "a rejected raise must not write"
+        );
+    }
+
+    #[test]
+    fn migrating_checks_the_floor_it_could_not_read_at_open() {
+        use crate::storage::StorageBackend;
+
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("sqlite"));
+        // A gated open skips the check because the settings table may not exist
+        // yet; `migrate` is where the deferred check lands, so a deployment the
+        // build may not join is refused there rather than never.
+        storage
+            .set_setting(CONTRACT_FLOOR_SETTING, &(CONTRACT_VERSION + 1).to_string())
+            .expect("write");
+
+        let error = storage.migrate().expect_err("migrate must refuse");
+        assert!(
+            matches!(error, QueueError::ContractTooOld { .. }),
+            "{error}"
         );
     }
 
