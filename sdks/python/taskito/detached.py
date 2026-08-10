@@ -178,6 +178,15 @@ class DetachedNative:
         """
         return False
 
+    def is_migrated(self) -> bool:
+        """An executor has no storage, so nothing about its schema is pending.
+
+        Answers rather than raising for the same reason the reads below do:
+        ``Queue.__init__`` consults it, and an executor must still be able to
+        build a Queue.
+        """
+        return True
+
     def get_setting(self, key: str) -> None:
         """No settings without storage.
 

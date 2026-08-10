@@ -242,9 +242,12 @@ class Queue(
             auto_migrate: Whether opening applies pending schema changes.
                 ``True`` (default) keeps the existing behavior. ``False`` gates
                 every schema change behind :meth:`migrate`, for a deployment
-                whose database credentials do not permit DDL at runtime — note
-                that until ``migrate`` has run, queries fail because the tables
-                do not exist.
+                whose database credentials do not permit DDL at runtime. On
+                SQLite and PostgreSQL a database that has never been migrated
+                has no tables, so queries fail until ``migrate`` has run —
+                typically from a separate process, after which an application
+                opened this way works normally. Redis stores no schema and is
+                unaffected either way.
             max_pending: Opt-in per-queue admission cap, mapping queue name to a
                 maximum pending backlog. When set, ``enqueue``/``enqueue_many``
                 raise :class:`QueueFullError` once a queue's pending count
@@ -364,9 +367,15 @@ class Queue(
                 raise ValueError(f"max_pending for '{_queue}' must be non-negative")
         self._event_bus = EventBus(max_workers=event_workers)
         self._auto_migrate = auto_migrate
-        # A queue that gates its own schema has no tables to read yet, so the
-        # webhook snapshot is loaded by :meth:`migrate` instead of here.
-        self._webhook_manager = WebhookManager(queue_ref=self, preload=auto_migrate)
+        # Gating migrations does not mean the schema is missing: the normal flow
+        # is one process running `taskito migrate` and the application starting
+        # afterwards with `auto_migrate=False` against a database that is fully
+        # migrated. Only a never-migrated store has nothing to read, and there
+        # :meth:`migrate` loads the snapshot instead.
+        self._webhook_manager = WebhookManager(
+            queue_ref=self,
+            preload=auto_migrate or self._inner.is_migrated(),
+        )
 
         # Proxy handlers
         self._proxy_registry = ProxyRegistry()

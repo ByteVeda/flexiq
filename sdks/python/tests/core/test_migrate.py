@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from taskito import Queue
+from taskito.dashboard.webhook_store import WebhookSubscriptionStore
 
 
 def test_an_unmigrated_queue_applies_its_own_schema(tmp_path: Any) -> None:
@@ -55,3 +56,21 @@ def test_a_gated_queue_is_fully_usable_after_migrating(tmp_path: Any) -> None:
     job_id = add.delay(2, 3).id
     assert queue.get_job(job_id) is not None
     assert queue.stats()["pending"] == 1
+
+
+def test_a_gated_runtime_loads_state_a_previous_process_migrated(tmp_path: Any) -> None:
+    db_path = str(tmp_path / "q.db")
+    # The normal flow: one process migrates, the application starts afterwards
+    # still gated. Its storage is fully migrated, so nothing it reads at
+    # construction may be deferred.
+    Queue(db_path=db_path, auto_migrate=False).migrate()
+
+    operator = Queue(db_path=db_path, auto_migrate=False)
+    WebhookSubscriptionStore(operator).create(
+        url="https://example.test/hook", events=["job.completed"]
+    )
+
+    app = Queue(db_path=db_path, auto_migrate=False)
+    assert [hook["url"] for hook in app._webhook_manager._webhooks] == [
+        "https://example.test/hook"
+    ]

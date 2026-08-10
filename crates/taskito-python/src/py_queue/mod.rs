@@ -722,6 +722,14 @@ impl PyQueue {
         Ok(dict.unbind())
     }
 
+    /// Whether the core schema has been applied. A catalog read, never DDL, so
+    /// a queue that gates its own migrations can still tell an empty database
+    /// apart from one another process already migrated.
+    pub fn is_migrated(&self, py: Python<'_>) -> PyResult<bool> {
+        py.detach(|| self.storage.is_migrated())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// The lowest contract level a process may speak and still open this
     /// storage. See ``BINDING_CONTRACT.md``.
     pub fn min_contract(&self) -> PyResult<u32> {
