@@ -22,7 +22,15 @@ afterEach(async () => {
   await queue?.shutdown();
   queue = undefined;
   if (tempDir) {
-    rmSync(tempDir, { recursive: true, force: true });
+    // Best effort. Shutdown stops dispatch but does not close storage — the
+    // native handle goes away when the queue object is finalized, which JS
+    // cannot force, so on Windows the unlink can still hit EBUSY. A temp dir
+    // the runner reclaims anyway must not fail the test.
+    try {
+      rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {
+      // the OS reclaims it
+    }
     tempDir = undefined;
   }
 });
