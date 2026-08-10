@@ -84,7 +84,10 @@ export function workerToContract(worker: WorkerInfo) {
     hostname: worker.hostname ?? null,
     pid: worker.pid ?? null,
     pool_type: worker.poolType ?? null,
+    threads: worker.threads,
     tags: worker.tags ?? null,
+    sdk: worker.sdk ?? null,
+    sdk_version: worker.sdkVersion ?? null,
   };
 }
 

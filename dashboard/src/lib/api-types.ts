@@ -178,11 +178,19 @@ export interface TimeseriesBucket {
 export interface Worker {
   worker_id: string;
   queues: string;
+  status: string;
   /** Unix milliseconds. */
   last_heartbeat: number;
-  /** Unix milliseconds. */
+  /** Unix milliseconds. Falls back to `last_heartbeat` when the row predates it. */
   registered_at: number;
+  hostname: string | null;
+  pid: number | null;
+  pool_type: string | null;
+  threads: number;
   tags: string | null;
+  /** SDK that registered the worker; null from one that predates version reporting. */
+  sdk: string | null;
+  sdk_version: string | null;
 }
 
 export interface CircuitBreaker {

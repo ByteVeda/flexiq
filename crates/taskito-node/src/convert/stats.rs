@@ -114,6 +114,9 @@ pub struct JsWorkerRow {
     /// JSON object of per-resource health (`"healthy"`/`"unhealthy"`), written
     /// by the worker's heartbeat.
     pub resource_health: Option<String>,
+    /// SDK that registered the worker, and the release of it.
+    pub sdk: Option<String>,
+    pub sdk_version: Option<String>,
 }
 
 pub fn worker_to_js(worker: WorkerInfo) -> JsWorkerRow {
@@ -130,6 +133,8 @@ pub fn worker_to_js(worker: WorkerInfo) -> JsWorkerRow {
         tags: worker.tags,
         resources: worker.resources,
         resource_health: worker.resource_health,
+        sdk: worker.sdk,
+        sdk_version: worker.sdk_version,
     }
 }
 

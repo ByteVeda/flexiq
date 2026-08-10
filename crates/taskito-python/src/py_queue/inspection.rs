@@ -562,6 +562,8 @@ impl PyQueue {
                 dict.set_item("hostname", r.hostname)?;
                 dict.set_item("pid", r.pid)?;
                 dict.set_item("pool_type", r.pool_type)?;
+                dict.set_item("sdk", r.sdk)?;
+                dict.set_item("sdk_version", r.sdk_version)?;
                 result.push(dict.into());
             }
             Ok(result)

@@ -72,6 +72,8 @@ final class Contract {
         m.put("pool_type", w.poolType);
         m.put("threads", w.threads);
         m.put("tags", w.tags);
+        m.put("sdk", w.sdk);
+        m.put("sdk_version", w.sdkVersion);
         return m;
     }
 

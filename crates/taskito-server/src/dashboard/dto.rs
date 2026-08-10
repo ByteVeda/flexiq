@@ -85,6 +85,8 @@ pub fn worker(worker: &WorkerInfo) -> Value {
         "hostname": worker.hostname,
         "pid": worker.pid,
         "pool_type": worker.pool_type,
+        "sdk": worker.sdk,
+        "sdk_version": worker.sdk_version,
     })
 }
 
