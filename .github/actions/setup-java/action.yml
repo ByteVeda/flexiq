@@ -10,6 +10,13 @@ inputs:
     description: "Temurin JDK major version to install."
     required: false
     default: "21"
+  cache:
+    description: >-
+      Build tool whose caches to restore and save ('gradle' by default). Pass an
+      empty string in a job that would only mint cache entries it never reuses —
+      the 10 GB Actions quota is shared across every workflow here.
+    required: false
+    default: gradle
 
 runs:
   using: composite
@@ -19,4 +26,4 @@ runs:
       with:
         distribution: temurin
         java-version: ${{ inputs.java-version }}
-        cache: gradle
+        cache: ${{ inputs.cache }}
