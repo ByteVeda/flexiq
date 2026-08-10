@@ -398,8 +398,14 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
      * storage. The contract level is the revision of the shared storage and
      * wire contract an SDK build implements; a build below the floor refuses to
      * open rather than misreading rows its contract never described.
+     *
+     * <p>The level belongs to the native build, so an implementation backed by
+     * something else does not have one — hence the default, which keeps an
+     * existing implementation of this interface compiling.
      */
-    int minContract();
+    default int minContract() {
+        throw new UnsupportedOperationException("the contract floor requires the native backend");
+    }
 
     /**
      * Raises or lowers the contract floor.
@@ -407,8 +413,11 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
      * <p>Raise it only once every process in the deployment has been upgraded —
      * older ones stop opening immediately. A level this build does not itself
      * speak is rejected, since writing it would lock the caller out too.
+     * Native-only, for the same reason as {@link #minContract()}.
      */
-    void setMinContract(int level);
+    default void setMinContract(int level) {
+        throw new UnsupportedOperationException("the contract floor requires the native backend");
+    }
 
     /**
      * The retention windows a worker is applying to this queue's namespace, or
