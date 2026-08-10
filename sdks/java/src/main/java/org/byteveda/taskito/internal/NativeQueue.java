@@ -112,6 +112,9 @@ public final class NativeQueue {
 
     public static native String listSettings(long handle);
 
+    /** Applies pending schema changes; returns the report as JSON. */
+    public static native String migrate(long handle);
+
     /** The lowest contract level a process may speak and still open this storage. */
     public static native int minContract(long handle);
 

@@ -131,6 +131,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Continuously refresh stats every 2 seconds",
     )
 
+    # migrate subcommand
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Apply pending schema changes (for a deployment that gates DDL)",
+    )
+    migrate_parser.add_argument(
+        "--app",
+        required=True,
+        help="Python path to the Queue instance (e.g., 'myapp.tasks:queue')",
+    )
+
     # pause subcommand
     pause_parser = subparsers.add_parser("pause", help="Pause a queue")
     pause_parser.add_argument(
@@ -269,6 +280,8 @@ def main() -> None:
         run_dashboard(args)
     elif args.command == "info":
         run_info(args)
+    elif args.command == "migrate":
+        run_migrate(args)
     elif args.command == "pause":
         queue = _load_queue(args.app)
         queue.pause(args.queue_name)
@@ -439,6 +452,25 @@ def run_dashboard(args: argparse.Namespace) -> None:
         secure_cookies=not args.insecure_cookies,
         auth_enabled=args.auth,
     )
+
+
+def run_migrate(args: argparse.Namespace) -> None:
+    """Apply pending schema changes and report what ran."""
+    queue = _load_queue(args.app)
+    report = queue.migrate()
+
+    if report["schemaless"]:
+        print("Nothing to migrate: this backend stores no schema.")
+        return
+
+    for version in report["applied"]:
+        print(f"applied {version}")
+    for version in report["workflow_applied"]:
+        print(f"applied {version} (workflows)")
+    if report["archived_jobs"]:
+        print(f"archived {report['archived_jobs']} terminal job(s) left by an older version")
+    if not report["applied"] and not report["workflow_applied"] and not report["archived_jobs"]:
+        print("Already up to date.")
 
 
 def run_info(args: argparse.Namespace) -> None:

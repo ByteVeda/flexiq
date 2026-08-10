@@ -158,6 +158,7 @@ class Queue(
         dlq_auto_retry_max: int = 1,
         retention: Retention | None = None,
         max_pending: dict[str, int] | None = None,
+        auto_migrate: bool = True,
     ):
         """Initialize a new task queue.
 
@@ -237,6 +238,12 @@ class Queue(
                 is automatically retried. ``None`` disables auto-retry.
             dlq_auto_retry_max: Maximum number of DLQ auto-retries per entry
                 before giving up. Defaults to 1.
+            auto_migrate: Whether opening applies pending schema changes.
+                ``True`` (default) keeps the existing behavior. ``False`` gates
+                every schema change behind :meth:`migrate`, for a deployment
+                whose database credentials do not permit DDL at runtime — note
+                that until ``migrate`` has run, queries fail because the tables
+                do not exist.
             max_pending: Opt-in per-queue admission cap, mapping queue name to a
                 maximum pending backlog. When set, ``enqueue``/``enqueue_many``
                 raise :class:`QueueFullError` once a queue's pending count
@@ -288,6 +295,7 @@ class Queue(
                 dlq_auto_retry_delay=dlq_auto_retry_delay,
                 dlq_auto_retry_max=dlq_auto_retry_max,
                 retention=retention._as_map() if retention is not None else None,
+                auto_migrate=auto_migrate,
             )
         )
         self._backend = backend
@@ -348,7 +356,10 @@ class Queue(
             if _cap < 0:
                 raise ValueError(f"max_pending for '{_queue}' must be non-negative")
         self._event_bus = EventBus(max_workers=event_workers)
-        self._webhook_manager = WebhookManager(queue_ref=self)
+        self._auto_migrate = auto_migrate
+        # A queue that gates its own schema has no tables to read yet, so the
+        # webhook snapshot is loaded by :meth:`migrate` instead of here.
+        self._webhook_manager = WebhookManager(queue_ref=self, preload=auto_migrate)
 
         # Proxy handlers
         self._proxy_registry = ProxyRegistry()

@@ -51,6 +51,7 @@ import org.byteveda.taskito.model.Job;
 import org.byteveda.taskito.model.JobDag;
 import org.byteveda.taskito.model.JobError;
 import org.byteveda.taskito.model.JobFilter;
+import org.byteveda.taskito.model.MigrationReport;
 import org.byteveda.taskito.model.Page;
 import org.byteveda.taskito.model.PeriodicInfo;
 import org.byteveda.taskito.model.QueueStats;
@@ -841,6 +842,11 @@ final class DefaultTaskito implements Taskito, LogTopicReader {
     @Override
     public Map<String, String> listSettings() {
         return decodeMap(backend.listSettingsJson(), String.class);
+    }
+
+    @Override
+    public MigrationReport migrate() {
+        return decode(backend.migrateJson(), MigrationReport.class);
     }
 
     @Override

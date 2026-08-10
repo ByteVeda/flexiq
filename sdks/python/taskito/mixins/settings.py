@@ -16,6 +16,7 @@ class QueueSettingsMixin:
     """
 
     _inner: Any
+    _webhook_manager: Any
 
     def get_setting(self, key: str) -> str | None:
         """Return the value for ``key``, or ``None`` if not set."""
@@ -42,6 +43,20 @@ class QueueSettingsMixin:
     def list_settings(self) -> dict[str, str]:
         """Return all settings as a ``{key: value}`` dict."""
         return self._inner.list_settings()  # type: ignore[no-any-return]
+
+    def migrate(self) -> dict[str, Any]:
+        """Apply any pending schema changes and report what ran.
+
+        Idempotent, and the only path that applies DDL when the queue was
+        opened with ``auto_migrate=False``. Returns ``applied`` and
+        ``workflow_applied`` version lists, ``archived_jobs`` (rows the
+        one-time backlog sweep moved), and ``schemaless`` for a backend that
+        stores no schema and therefore never has anything to migrate.
+        """
+        report: dict[str, Any] = self._inner.migrate()
+        # The tables exist now, so state deferred at construction can load.
+        self._webhook_manager.reload()
+        return report
 
     def min_contract(self) -> int:
         """Return the lowest contract level a process may speak to open this storage.

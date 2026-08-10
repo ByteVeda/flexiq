@@ -5,6 +5,7 @@ export { registerDlq } from "./dlq";
 export { registerEnqueue } from "./enqueue";
 export { registerExecutor } from "./executor";
 export { registerJobs } from "./jobs";
+export { registerMigrate } from "./migrate";
 export { registerQueues } from "./queues";
 export { registerRun } from "./run";
 export { registerScaler } from "./scaler";

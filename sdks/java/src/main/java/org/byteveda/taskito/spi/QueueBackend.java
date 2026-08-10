@@ -157,6 +157,14 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     String listSettingsJson();
 
     /**
+     * Applies pending schema changes, returning the report as JSON. Only the
+     * native backend owns a schema, so only it can migrate one.
+     */
+    default String migrateJson() {
+        throw new UnsupportedOperationException("migrate requires the native backend");
+    }
+
+    /**
      * The lowest contract level a process may speak and still open this
      * storage. The level itself is a property of the native build, so only the
      * native backend can answer.

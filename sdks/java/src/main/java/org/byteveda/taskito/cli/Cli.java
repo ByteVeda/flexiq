@@ -26,6 +26,7 @@ import picocli.CommandLine.ParentCommand;
             Cli.Stats.class,
             Cli.Enqueue.class,
             Cli.Jobs.class,
+            Cli.Migrate.class,
             Cli.Cancel.class,
             Cli.Pause.class,
             Cli.Resume.class,
@@ -47,12 +48,16 @@ public final class Cli {
     String url;
 
     Taskito open() {
+        return open(true);
+    }
+
+    Taskito open(boolean autoMigrate) {
         // Only SQLite has a sensible default store; every other backend needs a URL.
         if (url == null && !"sqlite".equalsIgnoreCase(backend)) {
             throw new CommandLine.ParameterException(
                     spec.commandLine(), "--url is required for the '" + backend + "' backend");
         }
-        Taskito.Builder builder = Taskito.builder().backend(backend);
+        Taskito.Builder builder = Taskito.builder().backend(backend).autoMigrate(autoMigrate);
         if (url != null) {
             builder.url(url);
         }
@@ -80,6 +85,22 @@ public final class Cli {
         public Integer call() {
             try (Taskito queue = parent.open()) {
                 System.out.println(json(queue.stats()));
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "migrate", description = "Apply pending schema changes (for a deployment that gates DDL).")
+    static final class Migrate implements Callable<Integer> {
+        @ParentCommand
+        Cli parent;
+
+        @Override
+        public Integer call() {
+            // Opened unmigrated on purpose: this command is the one path
+            // allowed to apply DDL, so opening must not do it first.
+            try (Taskito queue = parent.open(false)) {
+                System.out.println(json(queue.migrate()));
             }
             return 0;
         }

@@ -34,6 +34,7 @@ import org.byteveda.taskito.model.Job;
 import org.byteveda.taskito.model.JobDag;
 import org.byteveda.taskito.model.JobError;
 import org.byteveda.taskito.model.JobFilter;
+import org.byteveda.taskito.model.MigrationReport;
 import org.byteveda.taskito.model.Page;
 import org.byteveda.taskito.model.PeriodicInfo;
 import org.byteveda.taskito.model.QueueStats;
@@ -392,6 +393,17 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
     boolean deleteSetting(String key);
 
     Map<String, String> listSettings();
+
+    /**
+     * Applies any pending schema changes and reports what ran.
+     *
+     * <p>Idempotent, and the only path that applies DDL when the client was
+     * built with {@code autoMigrate(false)}. Native-only, like the contract
+     * floor below.
+     */
+    default MigrationReport migrate() {
+        throw new UnsupportedOperationException("migrate requires the native backend");
+    }
 
     /**
      * The lowest contract level a process may speak and still open this
@@ -858,6 +870,18 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
 
         public Builder namespace(String namespace) {
             options.put("namespace", namespace);
+            return this;
+        }
+
+        /**
+         * Whether opening applies pending schema changes. {@code true} (the
+         * default) keeps the existing behavior; {@code false} gates every
+         * schema change behind {@link Taskito#migrate()}, for a deployment
+         * whose database credentials do not permit DDL at runtime. Until
+         * migrate has run, queries fail — the tables do not exist yet.
+         */
+        public Builder autoMigrate(boolean autoMigrate) {
+            options.put("autoMigrate", autoMigrate);
             return this;
         }
 
