@@ -117,3 +117,8 @@ the runtime cannot find it, point at it directly:
 ```bash
 ./gradlew run -Dtaskito.native.lib=/path/to/libtaskito_java.so
 ```
+
+Once all three are wired up, `python scripts/polyglot_e2e.py` (from the
+repository root) drives this same pipeline unattended and asserts it drained.
+CI runs it on every supported Python, Node and JDK version — it is what keeps a
+cross-language wire change from merging green.
