@@ -42,15 +42,24 @@ pub(super) fn workflow_storage(queue: &PyQueue) -> PyResult<WorkflowStorageBacke
         return Ok(wf.clone());
     }
     let wf = match &queue.storage {
-        StorageBackend::Sqlite(s) => WorkflowSqliteStorage::new(s.clone(), queue.namespace.clone())
-            .map(WorkflowStorageBackend::Sqlite)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
-        #[cfg(feature = "postgres")]
-        StorageBackend::Postgres(s) => {
-            WorkflowPostgresStorage::new(s.clone(), queue.namespace.clone())
-                .map(WorkflowStorageBackend::Postgres)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+        // A queue opened with `auto_migrate=False` gates every schema change
+        // behind `migrate()`, including the workflow tables — otherwise the
+        // first workflow call would quietly apply DDL the operator withheld.
+        StorageBackend::Sqlite(s) => if queue.auto_migrate {
+            WorkflowSqliteStorage::new(s.clone(), queue.namespace.clone())
+        } else {
+            WorkflowSqliteStorage::unmigrated(s.clone(), queue.namespace.clone())
         }
+        .map(WorkflowStorageBackend::Sqlite)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+        #[cfg(feature = "postgres")]
+        StorageBackend::Postgres(s) => if queue.auto_migrate {
+            WorkflowPostgresStorage::new(s.clone(), queue.namespace.clone())
+        } else {
+            WorkflowPostgresStorage::unmigrated(s.clone(), queue.namespace.clone())
+        }
+        .map(WorkflowStorageBackend::Postgres)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
         #[cfg(feature = "redis")]
         StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone(), queue.namespace.clone())
             .map(WorkflowStorageBackend::Redis)
@@ -60,6 +69,34 @@ pub(super) fn workflow_storage(queue: &PyQueue) -> PyResult<WorkflowStorageBacke
     // handle is equivalent because the underlying pool is shared.
     let _ = queue.workflow_storage.set(wf.clone());
     Ok(wf)
+}
+
+/// Apply pending workflow schema changes and report the versions applied.
+///
+/// Built unmigrated first so the versions this call applies are visible in the
+/// return value rather than swallowed by the constructor.
+pub(crate) fn migrate_workflow_storage(queue: &PyQueue, py: Python<'_>) -> PyResult<Vec<String>> {
+    let wf = match &queue.storage {
+        StorageBackend::Sqlite(s) => {
+            WorkflowSqliteStorage::unmigrated(s.clone(), queue.namespace.clone())
+                .map(WorkflowStorageBackend::Sqlite)
+        }
+        #[cfg(feature = "postgres")]
+        StorageBackend::Postgres(s) => {
+            WorkflowPostgresStorage::unmigrated(s.clone(), queue.namespace.clone())
+                .map(WorkflowStorageBackend::Postgres)
+        }
+        #[cfg(feature = "redis")]
+        StorageBackend::Redis(s) => WorkflowRedisStorage::new(s.clone(), queue.namespace.clone())
+            .map(WorkflowStorageBackend::Redis),
+    }
+    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let applied = py
+        .detach(|| wf.migrate())
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let _ = queue.workflow_storage.set(wf);
+    Ok(applied)
 }
 
 /// Refuse a `run_id` this queue's namespace cannot see.

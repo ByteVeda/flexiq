@@ -385,6 +385,24 @@ level a process may speak and still join it.
   process is upgraded. A level the writing build cannot itself speak is
   rejected, since that write would lock the operator out of their own storage.
 
+## Applying the schema (cross-SDK)
+Opening applies pending migrations by default. A shell MUST also expose the
+gated path, for a deployment whose credentials do not permit DDL at runtime:
+
+- an **open option** (`auto_migrate` / `autoMigrate`, default on) that selects
+  `SqliteStorage::unmigrated` / `PostgresStorage::unmigrated` instead of the
+  migrating constructors — and the matching unmigrated workflow store, or the
+  first workflow call would apply the DDL the operator withheld;
+- a **`migrate()` method** over `StorageBackend::migrate`, returning the applied
+  core versions, the applied workflow versions, the rows the one-time backlog
+  sweep archived, and `schemaless` for a backend that has no schema at all;
+- a **`migrate` CLI command** that opens *unmigrated* and calls it, so the
+  command itself is the only thing that applies DDL.
+
+The contract floor is checked at open, but reading it needs the settings table.
+A gated open therefore skips the check and `migrate()` performs it once the
+schema exists.
+
 ## Schema evolution is expand-only (cross-SDK)
 One database is read by shells at different versions during any rolling upgrade,
 so a schema change MUST stay readable by the version already running.

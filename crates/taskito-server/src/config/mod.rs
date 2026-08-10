@@ -46,6 +46,10 @@ pub struct Config {
     /// Where the sidecar-injecting admission webhook listens. `None` disables
     /// it.
     pub webhook: Option<WebhookConfig>,
+    /// Whether opening storage applies pending schema changes. Off for a
+    /// deployment whose database credentials do not permit DDL at runtime; the
+    /// schema must then be applied out of band before the server starts.
+    pub auto_migrate: bool,
 }
 
 impl Config {
@@ -65,6 +69,7 @@ impl Config {
             queues: queues(env),
             workers: usize_value(env, "TASKITO_WORKERS")?,
             maintenance: flag(env, "TASKITO_MAINTENANCE", true),
+            auto_migrate: flag(env, "TASKITO_AUTO_MIGRATE", true),
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,

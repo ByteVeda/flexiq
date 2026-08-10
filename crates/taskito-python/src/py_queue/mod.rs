@@ -51,6 +51,11 @@ pub struct PyQueue {
     /// Opt-in event-driven dispatch. Honored only when the crate is built with
     /// the `push-dispatch` cargo feature; otherwise accepted and ignored.
     pub(crate) push_dispatch: bool,
+    /// Whether opening applies schema changes. When false the workflow store is
+    /// built unmigrated too, so *no* path applies DDL until `migrate()` runs.
+    /// Only the workflow path reads it, hence the cfg.
+    #[cfg(feature = "workflows")]
+    pub(crate) auto_migrate: bool,
     /// Active worker dispatcher, set while `run_worker` is executing. Used by
     /// `request_cancel` to deliver a side-channel signal to pools that run
     /// tasks out-of-process (prefork). For in-process pools the trait's
@@ -117,7 +122,7 @@ fn build_retention_config(
 )]
 impl PyQueue {
     #[new]
-    #[pyo3(signature = (db_path=".taskito/taskito.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="taskito", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=1, namespace=None, push_dispatch=false, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None))]
+    #[pyo3(signature = (db_path=".taskito/taskito.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="taskito", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=1, namespace=None, push_dispatch=false, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         py: Python<'_>,
@@ -140,6 +145,7 @@ impl PyQueue {
         dlq_auto_retry_delay: Option<i64>,
         dlq_auto_retry_max: i32,
         retention: Option<std::collections::HashMap<String, i64>>,
+        auto_migrate: bool,
     ) -> PyResult<Self> {
         // A negative TTL inverts the cleanup cutoff: `now.saturating_sub(-ttl)`
         // lands in the future, so every archived job matches and auto-cleanup
@@ -191,8 +197,15 @@ impl PyQueue {
         let storage = py.detach(|| -> PyResult<StorageBackend> {
             match backend {
                 "sqlite" => {
-                    let s = SqliteStorage::new(db_path)
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    // `pool_size` stays a Postgres knob here, as it always has
+                    // been — this arm only gains the auto-migrate branch.
+                    const SQLITE_POOL: u32 = 8;
+                    let s = if auto_migrate {
+                        SqliteStorage::with_pool_size(db_path, SQLITE_POOL)
+                    } else {
+                        SqliteStorage::unmigrated(db_path, SQLITE_POOL)
+                    }
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                     Ok(StorageBackend::Sqlite(s))
                 }
                 #[cfg(feature = "postgres")]
@@ -202,11 +215,12 @@ impl PyQueue {
                             "db_url is required for postgres backend",
                         )
                     })?;
-                    let s = PostgresStorage::with_schema_and_pool_size(
-                        url,
-                        schema,
-                        pool_size.unwrap_or(10),
-                    )
+                    let pool = pool_size.unwrap_or(10);
+                    let s = if auto_migrate {
+                        PostgresStorage::with_schema_and_pool_size(url, schema, pool)
+                    } else {
+                        PostgresStorage::unmigrated(url, schema, pool)
+                    }
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                     Ok(StorageBackend::Postgres(s))
                 }
@@ -237,9 +251,13 @@ impl PyQueue {
         })?;
 
         // Every process that joins a deployment passes through this one open,
-        // so the contract floor is checked here rather than in the SDK.
-        py.detach(|| taskito_core::ensure_contract_supported(&storage))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        // so the contract floor is checked here rather than in the SDK. An
+        // unmigrated open has no tables to read it from — that storage is
+        // unusable until `migrate()` runs, which checks the floor itself.
+        if auto_migrate {
+            py.detach(|| taskito_core::ensure_contract_supported(&storage))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        }
 
         let num_workers = if workers == 0 {
             std::thread::available_parallelism()
@@ -267,6 +285,8 @@ impl PyQueue {
             dlq_auto_retry_max,
             namespace,
             push_dispatch,
+            #[cfg(feature = "workflows")]
+            auto_migrate,
             dispatcher: Arc::new(Mutex::new(None)),
             #[cfg(feature = "workflows")]
             workflow_storage: std::sync::OnceLock::new(),
@@ -676,6 +696,31 @@ impl PyQueue {
         self.storage
             .set_setting_if(key, expected, value)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Apply any pending schema changes and report what ran, as a dict:
+    /// ``applied``, ``workflow_applied``, ``archived_jobs``, ``schemaless``.
+    /// Idempotent — a current database reports empty lists.
+    pub fn migrate(&self, py: Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
+        let report = py
+            .detach(|| self.storage.migrate())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        #[cfg(feature = "workflows")]
+        let workflow_applied = workflow_ops::migrate_workflow_storage(self, py)?;
+        #[cfg(not(feature = "workflows"))]
+        let workflow_applied: Vec<String> = Vec::new();
+
+        // The schema now exists, so the floor can finally be read — a gated
+        // deployment is checked here instead of at open.
+        py.detach(|| taskito_core::ensure_contract_supported(&self.storage))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("applied", report.applied)?;
+        dict.set_item("workflow_applied", workflow_applied)?;
+        dict.set_item("archived_jobs", report.archived_jobs)?;
+        dict.set_item("schemaless", report.schemaless)?;
+        Ok(dict.unbind())
     }
 
     /// The lowest contract level a process may speak and still open this

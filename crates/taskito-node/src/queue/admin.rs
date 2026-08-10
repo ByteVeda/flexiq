@@ -9,6 +9,8 @@ use napi_derive::napi;
 use taskito_core::job::{now_millis, NewJob};
 use taskito_core::Storage;
 
+use crate::config::MigrationSummary;
+
 use super::JsQueue;
 use crate::config::RetentionInput;
 use crate::convert::{dead_job_to_js, JsDeadJob, JsDeadJobPage};
@@ -262,6 +264,44 @@ impl JsQueue {
     #[napi]
     pub fn list_settings(&self) -> Result<HashMap<String, String>> {
         self.storage.list_settings().map_err(to_napi_err)
+    }
+
+    /// Apply any pending schema changes and report what ran. Idempotent, and
+    /// the only path that applies DDL when the queue was opened with
+    /// `autoMigrate: false`.
+    #[napi]
+    pub fn migrate(&self) -> Result<MigrationSummary> {
+        let report = self.storage.migrate().map_err(to_napi_err)?;
+        let workflow_applied = self.migrate_workflow_storage()?;
+
+        // The schema exists now, so the floor can finally be read — a gated
+        // deployment is checked here instead of at open.
+        taskito_core::ensure_contract_supported(&self.storage).map_err(to_napi_err)?;
+
+        Ok(MigrationSummary {
+            applied: report.applied,
+            workflow_applied,
+            archived_jobs: report.archived_jobs as i64,
+            schemaless: report.schemaless,
+        })
+    }
+
+    /// Apply pending workflow schema changes, reporting the versions applied.
+    /// Built unmigrated first so those versions are visible here rather than
+    /// swallowed by the constructor.
+    #[cfg(feature = "workflows")]
+    fn migrate_workflow_storage(&self) -> Result<Vec<String>> {
+        let wf = crate::queue::workflows::build_workflow_storage(
+            &self.storage,
+            self.namespace.clone(),
+            false,
+        )?;
+        wf.migrate().map_err(to_napi_err)
+    }
+
+    #[cfg(not(feature = "workflows"))]
+    fn migrate_workflow_storage(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
     }
 
     /// The lowest contract level a process may speak and still open this

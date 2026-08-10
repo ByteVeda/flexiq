@@ -32,6 +32,8 @@ pub struct OpenOptions {
     #[cfg_attr(not(feature = "redis"), allow(dead_code))]
     pub prefix: Option<String>,
     pub namespace: Option<String>,
+    /// Whether opening applies pending schema changes; absent means yes.
+    pub auto_migrate: Option<bool>,
 }
 
 /// Per-enqueue options. Every field is optional; absent fields take core
