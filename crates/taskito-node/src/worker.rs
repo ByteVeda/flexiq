@@ -8,6 +8,7 @@ use std::sync::Arc;
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
+use taskito_core::storage::records::WorkerRegistration;
 use taskito_core::worker::WorkerDispatcher;
 use taskito_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use tokio::sync::Notify;
@@ -317,17 +318,19 @@ fn spawn_worker_lifecycle(
         let reg_storage = storage.clone();
         let reg_id = worker_id.clone();
         match spawn_blocking(move || {
-            reg_storage.register_worker(
-                &reg_id,
-                &queues_csv,
-                None,
-                resources.as_deref(),
-                None,
-                capacity as i32,
-                Some(&hostname),
-                Some(pid),
-                Some("node"),
-            )
+            reg_storage.register_worker(&WorkerRegistration {
+                worker_id: &reg_id,
+                queues: &queues_csv,
+                resources: resources.as_deref(),
+                threads: capacity as i32,
+                hostname: Some(&hostname),
+                pid: Some(pid),
+                pool_type: Some("node"),
+                sdk: Some("node"),
+                // The addon's version, which the package is published from.
+                sdk_version: Some(env!("CARGO_PKG_VERSION")),
+                ..Default::default()
+            })
         })
         .await
         {

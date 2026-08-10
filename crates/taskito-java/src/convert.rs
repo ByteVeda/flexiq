@@ -665,6 +665,9 @@ pub struct WorkerView<'a> {
     pub resources: Option<&'a str>,
     /// JSON object of per-resource health, written by the worker's heartbeat.
     pub resource_health: Option<&'a str>,
+    /// SDK that registered the worker, and the release of it.
+    pub sdk: Option<&'a str>,
+    pub sdk_version: Option<&'a str>,
 }
 
 impl<'a> From<&'a WorkerInfo> for WorkerView<'a> {
@@ -682,6 +685,8 @@ impl<'a> From<&'a WorkerInfo> for WorkerView<'a> {
             tags: w.tags.as_deref(),
             resources: w.resources.as_deref(),
             resource_health: w.resource_health.as_deref(),
+            sdk: w.sdk.as_deref(),
+            sdk_version: w.sdk_version.as_deref(),
         }
     }
 }

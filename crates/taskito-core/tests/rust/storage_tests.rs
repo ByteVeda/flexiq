@@ -8,7 +8,7 @@
 //! when all tests share a single storage instance.
 
 use taskito_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
-use taskito_core::storage::records::{SubscriptionMode, WorkerStatus};
+use taskito_core::storage::records::{SubscriptionMode, WorkerRegistration, WorkerStatus};
 use taskito_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use taskito_core::SqliteStorage;
 
@@ -556,17 +556,19 @@ fn test_workers(s: &impl Storage) {
     let resources = Some(r#"["db","redis"]"#);
     let health = Some(r#"{"db":"healthy","redis":"healthy"}"#);
 
-    s.register_worker(
-        "w-test-1",
-        "q-workers",
-        None,
+    s.register_worker(&WorkerRegistration {
+        worker_id: "w-test-1",
+        queues: "q-workers",
         resources,
-        health,
-        4,
-        Some("test-host"),
-        Some(12345),
-        Some("thread"),
-    )
+        resource_health: health,
+        threads: 4,
+        hostname: Some("test-host"),
+        pid: Some(12345),
+        pool_type: Some("thread"),
+        sdk: Some("rust"),
+        sdk_version: Some("9.9.9"),
+        ..Default::default()
+    })
     .unwrap();
     s.heartbeat("w-test-1", Some(r#"{"db":"unhealthy","redis":"healthy"}"#))
         .unwrap();
@@ -581,6 +583,10 @@ fn test_workers(s: &impl Storage) {
     assert_eq!(w.pid, Some(12345));
     assert_eq!(w.pool_type.as_deref(), Some("thread"));
     assert!(w.started_at.is_some());
+    // Every backend must round-trip the SDK identity, including Redis, which
+    // stores workers as a hash rather than a migrated table.
+    assert_eq!(w.sdk.as_deref(), Some("rust"));
+    assert_eq!(w.sdk_version.as_deref(), Some("9.9.9"));
 
     // Test update_worker_status
     s.update_worker_status("w-test-1", WorkerStatus::Draining)

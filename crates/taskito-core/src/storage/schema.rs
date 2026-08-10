@@ -167,6 +167,8 @@ diesel::table! {
         hostname -> Nullable<Text>,
         pid -> Nullable<Integer>,
         pool_type -> Nullable<Text>,
+        sdk -> Nullable<Text>,
+        sdk_version -> Nullable<Text>,
     }
 }
 

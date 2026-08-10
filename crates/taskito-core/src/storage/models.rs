@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::records::{
     CircuitBreakerState, JobError, LockInfo, PeriodicTask, RateLimitState, ReplayEntry,
     Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicMessage, WorkerInfo,
+    WorkerRegistration,
 };
 use super::schema::{
     archived_jobs, circuit_breakers, dashboard_settings, dead_letter, distributed_locks,
@@ -392,6 +393,8 @@ pub struct WorkerRow {
     pub hostname: Option<String>,
     pub pid: Option<i32>,
     pub pool_type: Option<String>,
+    pub sdk: Option<String>,
+    pub sdk_version: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset, Debug)]
@@ -409,6 +412,33 @@ pub struct NewWorkerRow<'a> {
     pub hostname: Option<&'a str>,
     pub pid: Option<i32>,
     pub pool_type: Option<&'a str>,
+    pub sdk: Option<&'a str>,
+    pub sdk_version: Option<&'a str>,
+}
+
+impl<'a> NewWorkerRow<'a> {
+    /// The insertable row for a joining worker, stamped at `now`.
+    ///
+    /// Shared by both Diesel backends: they differ only in how they resolve the
+    /// conflict on an existing `worker_id`, never in what the row contains.
+    pub fn joining(registration: &WorkerRegistration<'a>, now: i64) -> Self {
+        Self {
+            worker_id: registration.worker_id,
+            last_heartbeat: now,
+            queues: registration.queues,
+            status: "active",
+            tags: registration.tags,
+            resources: registration.resources,
+            resource_health: registration.resource_health,
+            threads: registration.threads,
+            started_at: Some(now),
+            hostname: registration.hostname,
+            pid: registration.pid,
+            pool_type: registration.pool_type,
+            sdk: registration.sdk,
+            sdk_version: registration.sdk_version,
+        }
+    }
 }
 
 // ── Queue State ─────────────────────────────────────────────────
@@ -875,6 +905,8 @@ impl From<WorkerRow> for WorkerInfo {
             hostname: r.hostname,
             pid: r.pid,
             pool_type: r.pool_type,
+            sdk: r.sdk,
+            sdk_version: r.sdk_version,
         }
     }
 }

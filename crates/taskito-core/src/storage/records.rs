@@ -417,6 +417,38 @@ fn default_success_rate() -> f64 {
     0.8
 }
 
+/// Everything a worker announces about itself when it joins the registry.
+///
+/// Grouped into a struct rather than passed positionally: the shells populate
+/// these from unrelated sources — hostname from the OS, `sdk`/`sdk_version`
+/// baked in at build time, `queues`/`threads` from user config — and a run of
+/// nine same-typed `Option<&str>` arguments is easy to transpose silently.
+#[derive(Debug, Clone, Default)]
+pub struct WorkerRegistration<'a> {
+    /// Unique worker id.
+    pub worker_id: &'a str,
+    /// Comma-separated queue names the worker consumes.
+    pub queues: &'a str,
+    /// Pre-encoded JSON list of worker tags.
+    pub tags: Option<&'a str>,
+    /// Pre-encoded JSON list of resource names the worker provides.
+    pub resources: Option<&'a str>,
+    /// Pre-encoded JSON of per-resource health.
+    pub resource_health: Option<&'a str>,
+    /// Worker thread count.
+    pub threads: i32,
+    /// Host the worker runs on.
+    pub hostname: Option<&'a str>,
+    /// OS process id of the worker.
+    pub pid: Option<i32>,
+    /// Execution pool type (e.g. `thread`, `prefork`).
+    pub pool_type: Option<&'a str>,
+    /// SDK registering the worker (e.g. `python`, `node`, `java`).
+    pub sdk: Option<&'a str>,
+    /// Release of that SDK.
+    pub sdk_version: Option<&'a str>,
+}
+
 /// A registered worker as seen by the cluster registry.
 #[derive(Debug, Clone)]
 pub struct WorkerInfo {
@@ -444,6 +476,11 @@ pub struct WorkerInfo {
     pub pid: Option<i32>,
     /// Execution pool type (e.g. `thread`, `prefork`).
     pub pool_type: Option<String>,
+    /// SDK that registered the worker (e.g. `python`, `node`, `java`).
+    pub sdk: Option<String>,
+    /// Release of that SDK, so a stale worker is visible without going host by
+    /// host. `None` from a shell that predates version reporting.
+    pub sdk_version: Option<String>,
 }
 
 /// Holder and expiry of a distributed lock.

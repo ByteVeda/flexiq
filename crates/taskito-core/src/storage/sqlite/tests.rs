@@ -1,6 +1,7 @@
 use super::*;
 use crate::error::QueueError;
 use crate::job::{now_millis, JobStatus, NewJob};
+use crate::storage::records::WorkerRegistration;
 
 fn test_storage() -> SqliteStorage {
     SqliteStorage::in_memory().unwrap()
@@ -424,6 +425,66 @@ fn test_retry_dead_missing_id_returns_not_found() {
     }
 }
 
+/// A database created before `0009_worker_sdk` must gain the columns on open,
+/// not fail against a schema that no longer matches the row structs.
+#[test]
+fn worker_sdk_columns_are_added_to_a_pre_existing_database() {
+    use diesel::connection::SimpleConnection;
+
+    let storage = test_storage();
+
+    // Rewind to the pre-0009 shape: drop the columns and forget the ledger row.
+    let mut conn = storage.conn().unwrap();
+    conn.batch_execute(
+        "ALTER TABLE workers DROP COLUMN sdk;
+         ALTER TABLE workers DROP COLUMN sdk_version;
+         DELETE FROM schema_migrations WHERE version = '0009_worker_sdk';",
+    )
+    .unwrap();
+    drop(conn);
+
+    storage.run_migrations().unwrap();
+
+    storage
+        .register_worker(&WorkerRegistration {
+            worker_id: "migrated",
+            queues: "default",
+            threads: 1,
+            sdk: Some("python"),
+            sdk_version: Some("1.2.3"),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let workers = storage.list_workers().unwrap();
+    let worker = workers.iter().find(|w| w.worker_id == "migrated").unwrap();
+    assert_eq!(worker.sdk.as_deref(), Some("python"));
+    assert_eq!(worker.sdk_version.as_deref(), Some("1.2.3"));
+}
+
+/// Re-running a completed migration is a no-op rather than a duplicate-column error.
+#[test]
+fn worker_sdk_migration_is_idempotent() {
+    let storage = test_storage();
+
+    storage.run_migrations().unwrap();
+    storage.run_migrations().unwrap();
+
+    storage
+        .register_worker(&WorkerRegistration {
+            worker_id: "twice",
+            queues: "default",
+            threads: 1,
+            sdk: Some("node"),
+            ..Default::default()
+        })
+        .unwrap();
+    let workers = storage.list_workers().unwrap();
+    let worker = workers.iter().find(|w| w.worker_id == "twice").unwrap();
+    assert_eq!(worker.sdk.as_deref(), Some("node"));
+    assert_eq!(worker.sdk_version, None);
+}
+
 #[test]
 fn test_reap_if_leader_only_leader_reaps_and_gets_ids() {
     use diesel::prelude::*;
@@ -432,7 +493,12 @@ fn test_reap_if_leader_only_leader_reaps_and_gets_ids() {
 
     let storage = test_storage();
     storage
-        .register_worker("stale", "default", None, None, None, 1, None, None, None)
+        .register_worker(&WorkerRegistration {
+            worker_id: "stale",
+            queues: "default",
+            threads: 1,
+            ..Default::default()
+        })
         .unwrap();
     let cutoff = now_millis() - crate::storage::DEAD_WORKER_THRESHOLD_MS - 1_000;
     let mut conn = storage.conn().unwrap();
@@ -487,10 +553,20 @@ fn test_reap_dead_workers_removes_stale_keeps_fresh() {
 
     let storage = test_storage();
     storage
-        .register_worker("stale", "default", None, None, None, 1, None, None, None)
+        .register_worker(&WorkerRegistration {
+            worker_id: "stale",
+            queues: "default",
+            threads: 1,
+            ..Default::default()
+        })
         .unwrap();
     storage
-        .register_worker("fresh", "default", None, None, None, 1, None, None, None)
+        .register_worker(&WorkerRegistration {
+            worker_id: "fresh",
+            queues: "default",
+            threads: 1,
+            ..Default::default()
+        })
         .unwrap();
 
     // Backdate `stale` past the dead-worker threshold (30s) so it is reaped;
@@ -526,10 +602,20 @@ fn test_list_live_worker_ids_filters_stale() {
 
     let storage = test_storage();
     storage
-        .register_worker("stale", "default", None, None, None, 1, None, None, None)
+        .register_worker(&WorkerRegistration {
+            worker_id: "stale",
+            queues: "default",
+            threads: 1,
+            ..Default::default()
+        })
         .unwrap();
     storage
-        .register_worker("fresh", "default", None, None, None, 1, None, None, None)
+        .register_worker(&WorkerRegistration {
+            worker_id: "fresh",
+            queues: "default",
+            threads: 1,
+            ..Default::default()
+        })
         .unwrap();
 
     let now = now_millis();

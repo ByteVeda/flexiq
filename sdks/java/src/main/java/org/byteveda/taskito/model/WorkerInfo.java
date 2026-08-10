@@ -22,6 +22,11 @@ public final class WorkerInfo {
     /** JSON object of per-resource health written by the worker's heartbeat; may be null. */
     public final String resourceHealth;
 
+    /** SDK that registered the worker (e.g. {@code java}); null from a shell predating this. */
+    public final String sdk;
+    /** Release of that SDK; null from a shell predating this. */
+    public final String sdkVersion;
+
     @JsonCreator
     public WorkerInfo(
             @JsonProperty("workerId") String workerId,
@@ -35,7 +40,9 @@ public final class WorkerInfo {
             @JsonProperty("threads") int threads,
             @JsonProperty("tags") String tags,
             @JsonProperty("resources") String resources,
-            @JsonProperty("resourceHealth") String resourceHealth) {
+            @JsonProperty("resourceHealth") String resourceHealth,
+            @JsonProperty("sdk") String sdk,
+            @JsonProperty("sdkVersion") String sdkVersion) {
         this.workerId = workerId;
         this.queues = queues;
         this.status = status;
@@ -48,5 +55,7 @@ public final class WorkerInfo {
         this.tags = tags;
         this.resources = resources;
         this.resourceHealth = resourceHealth;
+        this.sdk = sdk;
+        this.sdkVersion = sdkVersion;
     }
 }

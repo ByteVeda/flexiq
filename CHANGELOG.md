@@ -5,6 +5,43 @@ All notable changes to taskito are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). All SDKs (Python, Node, Java) and the
 underlying Rust crates are released together, in lock-step.
 
+## 0.23.0
+
+Version-skew release. A polyglot deployment can now say which SDK and release each worker runs,
+and the wire format the SDKs exchange is pinned by golden vectors instead of by convention.
+
+### Changed
+
+- **BREAKING (Rust core): `Storage::register_worker` takes a `WorkerRegistration` struct**, and
+  `WorkerInfo` carries two more fields. Registration was already nine positional arguments under a
+  `too_many_arguments` allow, so the SDK identity below would have made it eleven. Only direct
+  users of the `taskito-core` crate are affected — the Python, Node and Java APIs are unchanged.
+
+### Added
+
+- **Workers record the SDK and release that registered them.** `sdk` and `sdk_version` land on the
+  `workers` table (migration `0009_worker_sdk`), reach `list_workers` and `/api/workers` in every
+  SDK, and render as an SDK column in the dashboard. In a polyglot deployment the registry is the
+  only place an operator can tell a stale worker from a current one without going host by host.
+  A worker registered by an older shell reports null rather than a wrong version.
+- **Golden wire vectors.** `contracts/wire-vectors.json` pins the payload envelope byte for byte —
+  nine encode vectors and three decode-only ones — and every SDK suite asserts against the same
+  file, so a serializer that drifts fails in its own tests rather than in a mixed deployment.
+- **A polyglot example.** `examples/polyglot/` runs a Python producer with Node and Java workers
+  against one jobs table, documenting the two footguns that setup has: every SDK's default
+  serializer is same-language-only, and all three processes must opt into the same codec.
+- **The `taskito` facade re-exports the workflow and mesh crates**, so a Rust consumer depends on
+  one crate instead of three.
+
+### Fixed
+
+- **An unparseable per-task `rate_limit` now raises instead of silently disabling throttling.** A
+  typo like `"100/mn"` parsed to `None` and dropped the limit with no error, which is precisely
+  the failure the limit exists to prevent; `retry_budget` already rejected the same mistake.
+- **CBOR payloads are encoded with definite-length containers in every SDK.** One SDK emitted
+  indefinite-length maps, so the same arguments hashed differently across languages and automatic
+  idempotency keys did not match between a producer and a worker written in different languages.
+
 ## 0.22.0
 
 Attach and executor release. `taskito-server` becomes a standalone binary that schedules for an

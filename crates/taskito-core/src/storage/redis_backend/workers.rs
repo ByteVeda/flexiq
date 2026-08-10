@@ -3,42 +3,36 @@ use redis::Commands;
 use super::{map_err, RedisStorage};
 use crate::error::Result;
 use crate::job::now_millis;
-use crate::storage::records::WorkerInfo;
+use crate::storage::records::{WorkerInfo, WorkerRegistration};
 
 impl RedisStorage {
-    #[allow(clippy::too_many_arguments)]
     /// Register a worker in the cluster registry, or update it if the id
     /// already exists. `tags`/`resources` are pre-encoded JSON.
-    pub fn register_worker(
-        &self,
-        worker_id: &str,
-        queues: &str,
-        tags: Option<&str>,
-        resources: Option<&str>,
-        resource_health: Option<&str>,
-        threads: i32,
-        hostname: Option<&str>,
-        pid: Option<i32>,
-        pool_type: Option<&str>,
-    ) -> Result<()> {
+    pub fn register_worker(&self, registration: &WorkerRegistration<'_>) -> Result<()> {
         let mut conn = self.conn()?;
         let now = now_millis();
-        let wkey = self.key(&["worker", worker_id]);
+        let wkey = self.key(&["worker", registration.worker_id]);
         let wall = self.key(&["workers", "all"]);
 
         let pipe = &mut redis::pipe();
         pipe.hset(&wkey, "last_heartbeat", now);
-        pipe.hset(&wkey, "queues", queues);
+        pipe.hset(&wkey, "queues", registration.queues);
         pipe.hset(&wkey, "status", "active");
-        pipe.hset(&wkey, "tags", tags.unwrap_or(""));
-        pipe.hset(&wkey, "resources", resources.unwrap_or(""));
-        pipe.hset(&wkey, "resource_health", resource_health.unwrap_or(""));
-        pipe.hset(&wkey, "threads", threads);
+        pipe.hset(&wkey, "tags", registration.tags.unwrap_or(""));
+        pipe.hset(&wkey, "resources", registration.resources.unwrap_or(""));
+        pipe.hset(
+            &wkey,
+            "resource_health",
+            registration.resource_health.unwrap_or(""),
+        );
+        pipe.hset(&wkey, "threads", registration.threads);
         pipe.hset(&wkey, "started_at", now);
-        pipe.hset(&wkey, "hostname", hostname.unwrap_or(""));
-        pipe.hset(&wkey, "pid", pid.unwrap_or(0));
-        pipe.hset(&wkey, "pool_type", pool_type.unwrap_or(""));
-        pipe.sadd(&wall, worker_id);
+        pipe.hset(&wkey, "hostname", registration.hostname.unwrap_or(""));
+        pipe.hset(&wkey, "pid", registration.pid.unwrap_or(0));
+        pipe.hset(&wkey, "pool_type", registration.pool_type.unwrap_or(""));
+        pipe.hset(&wkey, "sdk", registration.sdk.unwrap_or(""));
+        pipe.hset(&wkey, "sdk_version", registration.sdk_version.unwrap_or(""));
+        pipe.sadd(&wall, registration.worker_id);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
         Ok(())
@@ -122,6 +116,8 @@ impl RedisStorage {
                     .and_then(|s| s.parse().ok())
                     .filter(|&v: &i32| v != 0),
                 pool_type: to_opt("pool_type"),
+                sdk: to_opt("sdk"),
+                sdk_version: to_opt("sdk_version"),
             });
         }
 

@@ -46,6 +46,24 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
         },
       },
       {
+        id: "sdk",
+        header: "SDK",
+        // The point of the column in a polyglot fleet is spotting the odd one
+        // out, so the version sits next to the name rather than in its own.
+        cell: ({ row }) => {
+          const { sdk, sdk_version } = row.original;
+          if (!sdk) return <span className="text-[var(--fg-subtle)]">—</span>;
+          return (
+            <span className="text-xs text-[var(--fg-muted)]">
+              {sdk}
+              {sdk_version ? (
+                <span className="ml-1 font-mono text-[var(--fg-subtle)]">{sdk_version}</span>
+              ) : null}
+            </span>
+          );
+        },
+      },
+      {
         accessorKey: "tags",
         header: "Tags",
         cell: ({ getValue }) => {
@@ -99,7 +117,9 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
   }
 
   if (loading && !workers) {
-    return <TableSkeleton rows={4} columns={["w-32", "w-40", "w-24", "w-24", "w-24", "w-20"]} />;
+    return (
+      <TableSkeleton rows={4} columns={["w-32", "w-40", "w-20", "w-24", "w-24", "w-24", "w-20"]} />
+    );
   }
 
   if (!workers || workers.length === 0) {

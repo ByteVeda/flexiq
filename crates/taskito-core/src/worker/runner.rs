@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use crate::error::Result;
 use crate::scheduler::{QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
+use crate::storage::records::WorkerRegistration;
 use crate::storage::{
     reap_dead_workers_if_leader, sweep_ephemeral_subscriptions, Storage, StorageBackend,
 };
@@ -177,17 +178,16 @@ impl Worker {
                 )
             });
 
-        storage.register_worker(
-            &worker_id,
-            &queues.join(","),
-            None,
-            None,
-            None,
-            num_workers as i32,
-            None,
-            Some(std::process::id() as i32),
-            Some(&pool_type),
-        )?;
+        storage.register_worker(&WorkerRegistration {
+            worker_id: &worker_id,
+            queues: &queues.join(","),
+            threads: num_workers as i32,
+            pid: Some(std::process::id() as i32),
+            pool_type: Some(&pool_type),
+            sdk: Some("rust"),
+            sdk_version: Some(env!("CARGO_PKG_VERSION")),
+            ..Default::default()
+        })?;
 
         // Bound dispatch to the pool size so this scheduler never claims more
         // than its workers can run; also makes `in_flight_settled` meaningful.

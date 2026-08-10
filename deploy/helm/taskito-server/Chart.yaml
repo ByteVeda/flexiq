@@ -5,8 +5,8 @@ type: application
 # Chart version and appVersion move together: the chart only ever ships the
 # image built from the same commit, and `node scripts/version.mjs --check`
 # enforces that in CI.
-version: 0.22.0
-appVersion: "0.22.0"
+version: 0.23.0
+appVersion: "0.23.0"
 home: https://taskito.grigori.in
 sources:
   - https://github.com/ByteVeda/taskito

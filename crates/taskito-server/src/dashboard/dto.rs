@@ -79,9 +79,14 @@ pub fn worker(worker: &WorkerInfo) -> Value {
         "resource_health": worker.resource_health,
         "threads": worker.threads,
         "started_at": worker.started_at,
+        // The SPA reads `registered_at`, and the peer SDKs have always emitted
+        // it; this route emitted only `started_at`, so the field rendered empty.
+        "registered_at": worker.started_at.unwrap_or(worker.last_heartbeat),
         "hostname": worker.hostname,
         "pid": worker.pid,
         "pool_type": worker.pool_type,
+        "sdk": worker.sdk,
+        "sdk_version": worker.sdk_version,
     })
 }
 

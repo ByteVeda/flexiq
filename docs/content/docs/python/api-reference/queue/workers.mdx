@@ -61,6 +61,8 @@ Return live state of all registered workers. Each dict contains:
 | `tags` | `str \| None` | Worker specialization tags |
 | `resources` | `str \| None` | Registered resource names (JSON) |
 | `resource_health` | `str \| None` | Per-resource health status (JSON) |
+| `sdk` | `str \| None` | SDK that registered the worker |
+| `sdk_version` | `str \| None` | Release of that SDK; `None` from a worker predating this field |
 
 ### `await queue.aworkers()`
 
