@@ -361,6 +361,45 @@ reads leak credentials, writes spoof a published policy.
   written, or deleted through it. The runtime's own readers and writers use the
   `Storage` settings methods, which stay unrestricted.
 
+## Contract level and the floor (cross-SDK)
+A deployment outlives individual SDK releases, so the storage carries the lowest
+level a process may speak and still join it.
+
+- `contract::CONTRACT_VERSION` is the revision of this shared contract a build
+  implements. Bump it only in the change that makes an older build unable to
+  read what a newer one writes; an additive change keeps the level (see the
+  expand-only rule below).
+- The floor lives in the settings KV at `contract:min_sdk`, under the reserved
+  `contract:` prefix so no dashboard can read or spoof it.
+- **Every shell MUST call `ensure_contract_supported(&storage)` once, on the
+  single native open**, before the process does anything else. The check is
+  read-only — an unset floor is the permissive default, so a deployment that
+  never raises the dial carries no row for it — and fails with
+  `QueueError::ContractTooOld`, naming both levels, when this build is below it.
+  A *newer* build is always allowed: the floor is a minimum, not the equality
+  check the worker handshake uses.
+- An attached executor has no storage of its own, so it has no floor to check;
+  the scheduler it attaches to was already held to one.
+- Raising the floor is an operator's act (`set_min_contract`), done once every
+  process is upgraded. A level the writing build cannot itself speak is
+  rejected, since that write would lock the operator out of their own storage.
+
+## Schema evolution is expand-only (cross-SDK)
+One database is read by shells at different versions during any rolling upgrade,
+so a schema change MUST stay readable by the version already running.
+
+- **Add, never repurpose.** New columns are nullable or defaulted; an existing
+  column keeps its meaning, its type, and its units forever. Renaming a column
+  is an add plus a later drop, never a rename.
+- **Drop only after a level bump.** A column no longer written may be dropped
+  once `CONTRACT_VERSION` has moved past the last build that read it and the
+  floor has been raised to match — three separate releases, not one.
+- **Readers tolerate absence.** A field a peer never wrote reads as null and
+  MUST NOT fail the read; that is how a worker registered by an older shell
+  reports no `sdk_version` rather than a wrong one.
+- **The wire envelope follows the same rule** — a reader accepts both the old
+  and the new encoding for as long as any supported build emits the old one.
+
 ## Types the shell produces / consumes
 - **`Job`** — `job.rs`. Fields incl. `id`, `queue`, `task_name`, `payload: Vec<u8>` (opaque),
   `status`, `priority`, `retry_count`, `max_retries`, `timeout_ms`, `unique_key`,
