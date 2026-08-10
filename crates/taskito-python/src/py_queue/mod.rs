@@ -236,6 +236,11 @@ impl PyQueue {
             }
         })?;
 
+        // Every process that joins a deployment passes through this one open,
+        // so the contract floor is checked here rather than in the SDK.
+        py.detach(|| taskito_core::ensure_contract_supported(&storage))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
         let num_workers = if workers == 0 {
             std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -671,6 +676,20 @@ impl PyQueue {
         self.storage
             .set_setting_if(key, expected, value)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// The lowest contract level a process may speak and still open this
+    /// storage. See ``BINDING_CONTRACT.md``.
+    pub fn min_contract(&self) -> PyResult<u32> {
+        taskito_core::min_contract(&self.storage)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Raise or lower that floor. Rejects a level this build does not itself
+    /// speak, which would lock the caller out of its own storage.
+    pub fn set_min_contract(&self, level: u32) -> PyResult<()> {
+        taskito_core::set_min_contract(&self.storage, level)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Delete a dashboard setting. Returns ``True`` if the key existed.

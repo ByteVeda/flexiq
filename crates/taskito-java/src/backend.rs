@@ -140,6 +140,9 @@ pub fn open(options: OpenOptions) -> Result<QueueHandle, BindingError> {
         }
         other => return Err(unknown_backend(other)),
     };
+    // Every process that joins a deployment passes through this one open, so
+    // the contract floor is checked here rather than in the SDK.
+    taskito_core::ensure_contract_supported(&storage)?;
     Ok(QueueHandle {
         storage,
         namespace: options.namespace,
