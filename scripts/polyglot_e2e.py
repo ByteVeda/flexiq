@@ -23,9 +23,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from taskito import Queue
+from taskito.result import JobResult
 from taskito.serializers import CborSerializer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -78,16 +80,26 @@ class Worker:
         self.log_path = log_path
         self._log = log_path.open("w")
         env = {**os.environ, "TASKITO_DB": str(db)}
-        # Own session so the whole tree (Gradle's JVM, node's threads) can be
-        # signalled as one group at teardown.
-        self._process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdout=self._log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        try:
+            # Own session so the whole tree (Gradle's JVM, node's threads) can be
+            # signalled as one group at teardown.
+            self._process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=env,
+                stdout=self._log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError:
+            self._log.close()
+            raise
+
+    def __enter__(self) -> Worker:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.stop()
 
     def died(self) -> bool:
         return self._process.poll() is not None
@@ -106,10 +118,21 @@ class Worker:
         return "\n".join(self.log_path.read_text().splitlines()[-lines:])
 
 
-def start_workers(db: Path, java_start_script: Path, workdir: Path) -> list[Worker]:
+def start_workers(
+    stack: ExitStack, db: Path, java_start_script: Path, workdir: Path
+) -> list[Worker]:
+    """Start both workers, registering each with the caller's exit stack.
+
+    The stack unwinds what it already holds if a later worker fails to start, so
+    a half-started run never leaves a process holding the database open.
+    """
     return [
-        Worker("node", ["node", "worker.mjs"], NODE_WORKER_DIR, db, workdir / "node.log"),
-        Worker("java", [str(java_start_script)], JAVA_WORKER_DIR, db, workdir / "java.log"),
+        stack.enter_context(
+            Worker("node", ["node", "worker.mjs"], NODE_WORKER_DIR, db, workdir / "node.log")
+        ),
+        stack.enter_context(
+            Worker("java", [str(java_start_script)], JAVA_WORKER_DIR, db, workdir / "java.log")
+        ),
     ]
 
 
@@ -121,7 +144,7 @@ def run_producer(db: Path, orders: int) -> None:
     )
 
 
-def completed(queue: Queue, task_name: str, limit: int) -> list:
+def completed(queue: Queue, task_name: str, limit: int) -> list[JobResult]:
     return queue.list_jobs(task_name=task_name, status="complete", limit=limit)
 
 
@@ -169,29 +192,28 @@ def assert_results_round_trip(queue: Queue, orders: int) -> None:
             )
 
 
-def report_failure(error: Exception, workers: list[Worker]) -> None:
-    print(f"\npolyglot pipeline FAILED: {error}\n", file=sys.stderr)
+def dump_worker_logs(workers: list[Worker]) -> None:
+    """Print what each worker said. The reason for the failure is printed by the
+    caller — this is the context that explains it."""
     for worker in workers:
-        print(f"--- {worker.name} worker ({worker.log_path}) ---", file=sys.stderr)
+        print(f"\n--- {worker.name} worker ({worker.log_path}) ---", file=sys.stderr)
         print(worker.tail(), file=sys.stderr)
 
 
 def run(db: Path, orders: int, timeout: float, workdir: Path) -> None:
     java_start_script = build_java_worker()
-    workers = start_workers(db, java_start_script, workdir)
-    try:
-        run_producer(db, orders)
-        # Same serializer as every other process in the example: each SDK's own
-        # default is same-language-only.
-        queue = Queue(str(db), serializer=CborSerializer())
-        wait_for_drain(queue, orders, workers, timeout)
-        assert_results_round_trip(queue, orders)
-    except Exception as error:
-        report_failure(error, workers)
-        raise
-    finally:
-        for worker in workers:
-            worker.stop()
+    with ExitStack() as stack:
+        workers = start_workers(stack, db, java_start_script, workdir)
+        try:
+            run_producer(db, orders)
+            # Same serializer as every other process in the example: each SDK's
+            # own default is same-language-only.
+            queue = Queue(str(db), serializer=CborSerializer())
+            wait_for_drain(queue, orders, workers, timeout)
+            assert_results_round_trip(queue, orders)
+        except Exception:
+            dump_worker_logs(workers)
+            raise
 
 
 def main() -> int:
@@ -216,7 +238,10 @@ def main() -> int:
     print(f"running the polyglot pipeline in {workdir}")
     try:
         run(db, args.orders, args.timeout, workdir)
-    except (PipelineError, subprocess.CalledProcessError) as error:
+    # OSError covers a runtime that is missing entirely (no `node` on PATH, no
+    # start script) — a setup mistake deserves the same one-line report as a
+    # broken payload, not a traceback.
+    except (PipelineError, subprocess.CalledProcessError, OSError) as error:
         print(f"polyglot pipeline failed: {error}", file=sys.stderr)
         return 1
 
