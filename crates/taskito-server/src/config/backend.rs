@@ -24,13 +24,17 @@ pub struct Backend {
 /// scopes the workflow store the same way it already scopes the scheduler and
 /// every dashboard view.
 pub fn open(dsn: &str, hint: Option<&str>, namespace: Option<String>) -> Result<Backend> {
-    match hint.map(str::to_ascii_lowercase).as_deref() {
+    let backend = match hint.map(str::to_ascii_lowercase).as_deref() {
         Some("sqlite") => open_sqlite(dsn, namespace),
         Some("postgres") | Some("postgresql") => open_postgres(dsn, namespace),
         Some("redis") => open_redis(dsn, namespace),
         Some(other) => bail!("TASKITO_BACKEND must be sqlite, postgres, or redis, got '{other}'"),
         None => open_by_scheme(dsn, namespace),
-    }
+    }?;
+    // The server joins the deployment like any SDK process, so it is held to
+    // the same contract floor rather than scheduling over data it cannot read.
+    taskito_core::ensure_contract_supported(&backend.storage)?;
+    Ok(backend)
 }
 
 fn open_by_scheme(dsn: &str, namespace: Option<String>) -> Result<Backend> {

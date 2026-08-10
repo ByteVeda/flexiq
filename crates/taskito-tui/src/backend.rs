@@ -5,6 +5,11 @@
 //! the URL scheme instead of a separate argument. Postgres/Redis arms are
 //! `#[cfg]`-gated; a URL for a disabled backend fails with a clear message
 //! telling the user which feature to rebuild with.
+//!
+//! Deliberately **not** held to the contract floor the SDKs and the server
+//! check on open: the TUI inspects a deployment rather than joining it, and a
+//! floor raised past this build is exactly the situation an operator needs to
+//! be able to look at.
 
 use anyhow::{bail, Context, Result};
 

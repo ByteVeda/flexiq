@@ -33,6 +33,7 @@ class WebhookTaskFilterTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation") // asserts the deprecated mirror itself
     void unrestrictedWhenNeitherFieldIsPresent() throws Exception {
         Webhook hook = decode("{\"id\":\"a\",\"url\":\"https://x.test\"}");
         assertThat(hook.taskFilters).isEmpty();
@@ -40,6 +41,7 @@ class WebhookTaskFilterTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation") // asserts the deprecated mirror itself
     void theDeprecatedFieldMirrorsTheFirstEntry() throws Exception {
         Webhook hook = decode("{\"id\":\"a\",\"url\":\"https://x.test\",\"taskFilters\":[\"send\",\"resize\"]}");
         assertThat(hook.taskFilter).isEqualTo("send");

@@ -1,6 +1,8 @@
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
 
+/// The contract level a deployment requires, and the floor that enforces it.
+pub mod contract;
 /// Error types: [`QueueError`] and the crate-wide [`Result`] alias.
 pub mod error;
 /// Core job model: [`Job`], [`JobStatus`], [`NewJob`], [`JobCompletion`].
@@ -22,6 +24,10 @@ pub mod worker;
 // Primary public API — the types most consumers need. The crate root is the
 // blessed import path; submodules stay public for discoverability but new code
 // should prefer these re-exports.
+pub use contract::{
+    ensure_contract_supported, min_contract, set_min_contract, CONTRACT_VERSION,
+    MIN_CONTRACT_VERSION,
+};
 pub use error::{QueueError, Result};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};

@@ -157,6 +157,20 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
     String listSettingsJson();
 
     /**
+     * The lowest contract level a process may speak and still open this
+     * storage. The level itself is a property of the native build, so only the
+     * native backend can answer.
+     */
+    default int minContract() {
+        throw new UnsupportedOperationException("the contract floor requires the native backend");
+    }
+
+    /** Raises or lowers that floor. Native-only, for the same reason. */
+    default void setMinContract(int level) {
+        throw new UnsupportedOperationException("the contract floor requires the native backend");
+    }
+
+    /**
      * The retention windows the elected cleaner last published for this queue's
      * namespace, as JSON, or empty when no worker has swept yet. Defaults to
      * empty for backends that do not report one.

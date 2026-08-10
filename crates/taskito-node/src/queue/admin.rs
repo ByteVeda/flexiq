@@ -264,6 +264,20 @@ impl JsQueue {
         self.storage.list_settings().map_err(to_napi_err)
     }
 
+    /// The lowest contract level a process may speak and still open this
+    /// storage. See `BINDING_CONTRACT.md`.
+    #[napi]
+    pub fn min_contract(&self) -> Result<u32> {
+        taskito_core::min_contract(&self.storage).map_err(to_napi_err)
+    }
+
+    /// Raise or lower that floor. Rejects a level this build does not itself
+    /// speak, which would lock the caller out of its own storage.
+    #[napi]
+    pub fn set_min_contract(&self, level: u32) -> Result<()> {
+        taskito_core::set_min_contract(&self.storage, level).map_err(to_napi_err)
+    }
+
     /// The retention windows the elected cleaner last published for this
     /// queue's namespace, as a JSON document, or `null` if no worker has swept
     /// yet. See `BINDING_CONTRACT.md`.

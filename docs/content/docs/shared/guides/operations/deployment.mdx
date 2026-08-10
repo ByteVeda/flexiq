@@ -1724,6 +1724,36 @@ Runs created before the namespace column existed carry none, so a scoped process
 does not see them — the same trade every other pre-namespace row makes. An
 unscoped console still does.
 
+## Version skew and the contract floor
+
+A deployment outlives individual releases: during any rolling upgrade one
+database is read by processes at different versions, and in a polyglot setup by
+different SDKs too. Two things keep that safe.
+
+**Schema changes are expand-only.** A new column is nullable or defaulted, an
+existing one keeps its meaning forever, and a reader treats a field a peer never
+wrote as absent rather than failing. That is why a worker registered by an older
+release reports no SDK version instead of a wrong one.
+
+**The storage carries a floor.** Every build speaks one *contract level* — the
+revision of the shared storage and wire contract it implements. The floor is the
+lowest level a process may speak and still open the storage; a build below it
+refuses to start, naming both levels, rather than joining and misreading rows its
+contract never described.
+
+<SdkSwap python={<code>queue.min_contract()</code>} node={<code>queue.minContract()</code>} java={<code>taskito.minContract()</code>} />
+
+The floor starts permissive and is an operator's dial, not an automatic one —
+one that rose on its own would lock out the peers still mid-rollout. Raise it
+only once every process is upgraded:
+
+<SdkSwap python={<code>queue.set_min_contract(2)</code>} node={<code>queue.setMinContract(2)</code>} java={<code>taskito.setMinContract(2)</code>} />
+
+A level the calling build cannot itself speak is rejected, since that write would
+lock the operator out of their own storage. An attached executor has no storage
+of its own, so it has no floor to check — the scheduler it attaches to was
+already held to one.
+
 ## Checklist
 
 - [ ] Use an absolute path for the SQLite file

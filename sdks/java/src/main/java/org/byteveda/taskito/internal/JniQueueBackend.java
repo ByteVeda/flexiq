@@ -258,6 +258,19 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public int minContract() {
+        return withOpenHandle(() -> NativeQueue.minContract(handle));
+    }
+
+    @Override
+    public void setMinContract(int level) {
+        withOpenHandle(() -> {
+            NativeQueue.setMinContract(handle, level);
+            return null;
+        });
+    }
+
+    @Override
     public void writeTaskLog(
             String jobId, String taskName, String level, String message, @Nullable String extraOrNull) {
         withOpenHandle(() -> {

@@ -42,3 +42,21 @@ class QueueSettingsMixin:
     def list_settings(self) -> dict[str, str]:
         """Return all settings as a ``{key: value}`` dict."""
         return self._inner.list_settings()  # type: ignore[no-any-return]
+
+    def min_contract(self) -> int:
+        """Return the lowest contract level a process may speak to open this storage.
+
+        The contract level is the revision of the shared storage and wire
+        contract an SDK build implements; a build below the floor refuses to
+        open rather than misreading rows its contract never described.
+        """
+        return self._inner.min_contract()  # type: ignore[no-any-return]
+
+    def set_min_contract(self, level: int) -> None:
+        """Raise or lower the contract floor.
+
+        Raise it only once every process in the deployment has been upgraded —
+        older ones stop opening immediately. A level this build does not itself
+        speak is rejected, since writing it would lock the caller out too.
+        """
+        self._inner.set_min_contract(level)

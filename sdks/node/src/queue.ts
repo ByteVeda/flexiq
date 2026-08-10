@@ -1432,6 +1432,28 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   }
 
   /**
+   * The lowest contract level a process may speak and still open this storage.
+   *
+   * The contract level is the revision of the shared storage and wire contract
+   * an SDK build implements; a build below the floor refuses to open rather
+   * than misreading rows its contract never described.
+   */
+  minContract(): number {
+    return this.native.minContract();
+  }
+
+  /**
+   * Raise or lower the contract floor.
+   *
+   * Raise it only once every process in the deployment has been upgraded —
+   * older ones stop opening immediately. A level this build does not itself
+   * speak is rejected, since writing it would lock the caller out too.
+   */
+  setMinContract(level: number): void {
+    this.native.setMinContract(level);
+  }
+
+  /**
    * The retention windows a worker is applying to this namespace, or `null`
    * when no worker has swept yet — distinct from retention being disabled,
    * which reports with `enabled: false`.

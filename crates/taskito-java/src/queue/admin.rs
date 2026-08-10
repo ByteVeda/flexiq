@@ -1,7 +1,7 @@
 //! Mutating administration entry points for `NativeQueue`.
 
 use jni::objects::{JClass, JString};
-use jni::sys::{jboolean, jlong, jobjectArray, jstring, JNI_FALSE};
+use jni::sys::{jboolean, jint, jlong, jobjectArray, jstring, JNI_FALSE};
 use jni::JNIEnv;
 use taskito_core::job::{now_millis, NewJob};
 use taskito_core::Storage;
@@ -428,5 +428,40 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_getReplayH
         let rows = queue.storage.get_replay_history(&id)?;
         let views: Vec<ReplayEntryView> = rows.iter().map(ReplayEntryView::from).collect();
         new_string(env, to_json(&views)?)
+    })
+}
+
+/// `int minContract(long handle)` — the lowest contract level a process may
+/// speak and still open this storage.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_minContract<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jint {
+    guard(&mut env, 0, |_env| {
+        let queue = unsafe { borrow_queue(handle) };
+        Ok(taskito_core::min_contract(&queue.storage)? as jint)
+    })
+}
+
+/// `void setMinContract(long handle, int level)` — raise or lower that floor.
+/// A level this build does not itself speak is rejected.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_setMinContract<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    level: jint,
+) {
+    guard(&mut env, (), |_env| {
+        let queue = unsafe { borrow_queue(handle) };
+        // A negative level cannot be a contract, and the cast would wrap it into
+        // an enormous floor that locks the deployment out.
+        let level = u32::try_from(level).map_err(|_| {
+            crate::error::BindingError::new(format!("contract level must not be negative: {level}"))
+        })?;
+        taskito_core::set_min_contract(&queue.storage, level)?;
+        Ok(())
     })
 }
