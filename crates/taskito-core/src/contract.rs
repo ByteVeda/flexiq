@@ -50,16 +50,23 @@ pub fn min_contract<S: Storage>(storage: &S) -> Result<u32> {
     })
 }
 
-/// Raise or lower the floor.
+/// Raise or lower the floor, within the levels that mean something.
 ///
 /// Refuses a level this build does not itself speak — writing it would lock the
 /// writer out of the deployment on its next open, with no process left able to
-/// lower it again.
+/// lower it again — and equally one below [`MIN_CONTRACT_VERSION`], which admits
+/// nothing a floor of `MIN_CONTRACT_VERSION` does not.
 pub fn set_min_contract<S: Storage>(storage: &S, level: u32) -> Result<()> {
     if level > CONTRACT_VERSION {
         return Err(QueueError::Config(format!(
             "cannot require contract {level}: this build speaks contract {CONTRACT_VERSION}, \
              so the write would lock it out of its own storage"
+        )));
+    }
+    if level < MIN_CONTRACT_VERSION {
+        return Err(QueueError::Config(format!(
+            "cannot require contract {level}: {MIN_CONTRACT_VERSION} is the oldest level any \
+             build speaks, so a lower floor admits nothing extra and only obscures the dial"
         )));
     }
     storage.set_setting(CONTRACT_FLOOR_SETTING, &level.to_string())
@@ -133,6 +140,20 @@ mod tests {
             message.contains(&CONTRACT_VERSION.to_string())
                 && message.contains(&(CONTRACT_VERSION + 1).to_string()),
             "the error must name both levels: {message}"
+        );
+    }
+
+    #[test]
+    fn a_floor_below_the_oldest_level_is_rejected() {
+        let storage = storage();
+        let error = set_min_contract(&storage, MIN_CONTRACT_VERSION - 1).expect_err("must reject");
+        assert!(error.to_string().contains("oldest level"));
+        assert_eq!(
+            storage
+                .get_setting(CONTRACT_FLOOR_SETTING)
+                .expect("setting"),
+            None,
+            "a rejected floor must not write"
         );
     }
 
