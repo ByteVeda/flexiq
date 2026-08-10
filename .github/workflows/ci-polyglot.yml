@@ -1,0 +1,176 @@
+name: CI Polyglot
+
+# Reusable workflow: build all three SDKs from this tree once, then drive
+# examples/polyglot end to end — a Python producer, a Node worker and a Java
+# worker over one jobs table and one CBOR wire format — on every supported
+# runtime major. It is the only suite where the SDKs meet, so a cross-SDK wire
+# break shows up here and nowhere else. Called by ci.yml when polyglot-relevant
+# paths change.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  # Everything that needs Rust or a package build happens once; the test legs
+  # only install runtimes.
+  build:
+    name: Build the three SDKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          # Read-only restore of the release-profile namespace that ci-python.yml
+          # writes on master (save-if defaults to false). A namespace of its own
+          # would be another entry against the 10 GB cache quota this repo has
+          # already hit once.
+          shared-key: release
+
+      # Every supported Python major: the extension is not abi3, so each test
+      # leg needs a wheel tagged for its own interpreter.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: |
+            3.10
+            3.12
+            3.14
+
+      - name: Build the Python wheels
+        uses: PyO3/maturin-action@v1.51.0
+        with:
+          command: build
+          args: >-
+            --release --out dist
+            --interpreter python3.10 python3.12 python3.14
+            --features extension-module,postgres,redis,native-async,workflows,mesh
+          maturin-version: v1.13.3
+          # Build on the runner rather than in a manylinux container: the cargo
+          # cache restored above is the host's, and these wheels only ever have
+          # to install on this same image.
+          container: "off"
+          working-directory: sdks/python
+
+      - name: Set up Node + pnpm
+        uses: ./.github/actions/setup-node
+
+      # No build:dashboard — the example never opens the dashboard.
+      - name: Build the Node addon and TypeScript
+        run: |
+          pnpm -C sdks/node run build:native
+          pnpm -C sdks/node run build:ts
+
+      # JDK 25 so the jar carries the FFM overlay like a release build does; its
+      # base classes still target 17, so every test leg can run it.
+      - name: Set up Java + Gradle
+        uses: ./.github/actions/setup-java
+        with:
+          java-version: "25"
+
+      - name: Provision Gradle
+        uses: ./.github/actions/provision-gradle
+
+      - name: Build the JNI cdylib
+        run: cargo build --release --features postgres,redis,workflows,mesh -p taskito-java
+
+      # The example resolves org.byteveda:taskito from mavenLocal(), so this
+      # tree's build has to land there. -x cargoBuild reuses the cdylib above;
+      # copyNative still stages it into the classifier jar.
+      - name: Publish the Java SDK to the local Maven repository
+        working-directory: sdks/java
+        run: ./gradlew publishToMavenLocal -x cargoBuild --no-daemon
+
+      - name: Pack the local Maven repository
+        run: tar -czf taskito-m2.tar.gz -C ~/.m2/repository org/byteveda
+
+      - name: Upload the built SDKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: taskito-polyglot-sdks
+          path: |
+            sdks/python/dist
+            sdks/node/native
+            sdks/node/dist
+            taskito-m2.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # One cell per supported combination of runtimes. No Rust here at all.
+  e2e:
+    name: Polyglot e2e (Python ${{ matrix.python }} / Node ${{ matrix.node }} / JDK ${{ matrix.java }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # PRs run the two edge cells — oldest and newest supported of each runtime,
+      # which is where a version-specific break lives. Push and workflow_dispatch
+      # add the default-toolchain cell.
+      matrix: ${{ github.event_name == 'pull_request'
+        && fromJSON('{"include":[{"python":"3.10","node":"20","java":"17"},{"python":"3.14","node":"24","java":"25"}]}')
+        || fromJSON('{"include":[{"python":"3.10","node":"20","java":"17"},{"python":"3.12","node":"22","java":"21"},{"python":"3.14","node":"24","java":"25"}]}') }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Python + uv
+        uses: ./.github/actions/setup-python
+        with:
+          python-version: ${{ matrix.python }}
+          # The wheel below carries the only dependencies the example needs.
+          sync: "false"
+
+      - name: Set up Node + pnpm
+        uses: ./.github/actions/setup-node
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Set up Java + Gradle
+        uses: ./.github/actions/setup-java
+        with:
+          java-version: ${{ matrix.java }}
+          # No Gradle cache: one namespace per cell against a quota this repo has
+          # already exhausted once, to save a build that takes seconds.
+          cache: ""
+
+      - name: Download the built SDKs
+        uses: actions/download-artifact@v8
+        with:
+          name: taskito-polyglot-sdks
+
+      - name: Install the Python wheel
+        env:
+          PYTHON: ${{ matrix.python }}
+        run: |
+          wheel=$(ls sdks/python/dist/*cp"${PYTHON/./}"-*.whl)
+          python -m pip install "$wheel"
+
+      # Same wiring the README documents for a local build, with an absolute
+      # link target because the workspace path is known here.
+      - name: Link the workspace Node SDK into the example
+        run: |
+          mkdir -p examples/polyglot/node-worker/node_modules/@byteveda
+          ln -sfn "$GITHUB_WORKSPACE/sdks/node" examples/polyglot/node-worker/node_modules/@byteveda/taskito
+
+      - name: Unpack the local Maven repository
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -xzf taskito-m2.tar.gz -C ~/.m2/repository
+
+      - name: Provision Gradle for the example
+        uses: ./.github/actions/provision-gradle
+        with:
+          working-directory: examples/polyglot/java-worker
+
+      - name: Run the polyglot pipeline
+        run: python scripts/polyglot_e2e.py --orders 3
