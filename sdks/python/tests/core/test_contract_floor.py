@@ -60,3 +60,15 @@ def test_the_floor_is_hidden_from_the_generic_settings_api() -> None:
     # Reserved prefixes keep the dial off the dashboard's key/value surface, so
     # nothing can spoof the level a process is checked against.
     assert any(CONTRACT_FLOOR_SETTING.startswith(prefix) for prefix in reserved_setting_prefixes())
+
+
+def test_a_gated_open_over_a_migrated_deployment_still_checks_the_floor(tmp_path: Any) -> None:
+    db_path = str(tmp_path / "q.db")
+    migrated = Queue(db_path=db_path)
+    unreachable = migrated.min_contract() + 1
+    migrated.set_setting(CONTRACT_FLOOR_SETTING, str(unreachable))
+
+    # Skipping the check whenever migrations are gated would let a build too old
+    # for the deployment join it — the schema is there, so the floor is readable.
+    with pytest.raises(RuntimeError, match=str(unreachable)):
+        Queue(db_path=db_path, auto_migrate=False)
