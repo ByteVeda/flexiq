@@ -13,6 +13,7 @@
 /// stay unrestricted.
 pub const RESERVED_SETTING_PREFIXES: &[&str] = &[
     "auth:",                // dashboard sessions, OAuth state, API tokens
+    "contract:",            // the contract floor a process is checked against
     "middleware:disabled:", // per-task middleware disable lists
     "retention:",           // the windows a cleanup leader publishes
     "taskito.webhooks",     // webhook store
@@ -39,6 +40,9 @@ mod tests {
             "billing"
         ))));
         assert!(is_reserved_setting_key("auth:session:abc"));
+        assert!(is_reserved_setting_key(
+            crate::contract::CONTRACT_FLOOR_SETTING
+        ));
         assert!(is_reserved_setting_key("webhooks:subscriptions"));
     }
 

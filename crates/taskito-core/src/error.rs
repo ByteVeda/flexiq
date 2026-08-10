@@ -64,6 +64,17 @@ pub enum QueueError {
     #[error("setting '{0}' was changed by another writer on every attempt")]
     SettingConflict(String),
 
+    /// The storage requires a newer contract level than this build speaks.
+    #[error(
+        "storage requires contract {required}, but this build speaks contract {speaks}:          upgrade this process, or lower the floor from one that is already current"
+    )]
+    ContractTooOld {
+        /// The level this build implements.
+        speaks: u32,
+        /// The level the storage requires.
+        required: u32,
+    },
+
     /// Any other failure that fits no specific variant.
     #[error("{0}")]
     Other(String),
