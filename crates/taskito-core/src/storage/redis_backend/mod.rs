@@ -60,6 +60,12 @@ impl RedisStorage {
         Ok(crate::storage::migrate::MigrationReport::schemaless())
     }
 
+    /// Always migrated: Redis stores no schema, so there is never a state where
+    /// its keys are "not yet applied".
+    pub fn is_migrated(&self) -> Result<bool> {
+        Ok(true)
+    }
+
     /// Build a Redis key from parts: `"{prefix}{part1}:{part2}:..."`.
     fn key(&self, parts: &[&str]) -> String {
         let mut k = self.prefix.clone();

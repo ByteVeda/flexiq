@@ -49,10 +49,11 @@ impl JsQueue {
         let auto_migrate = options.auto_migrate.unwrap_or(true);
         let storage = crate::backend::open(&options)?;
         // Every process that joins a deployment passes through this one open,
-        // so the contract floor is checked here rather than in the SDK. An
-        // unmigrated open has no tables to read it from — that storage is
-        // unusable until `migrate()` runs, which checks the floor itself.
-        if auto_migrate {
+        // so the contract floor is checked here rather than in the SDK. The one
+        // storage that cannot answer is one whose schema was never applied —
+        // there is no floor recorded and nothing to read it from — and that
+        // storage is unusable until `migrate()` runs, which checks it then.
+        if auto_migrate || storage.is_migrated().map_err(to_napi_err)? {
             taskito_core::ensure_contract_supported(&storage).map_err(to_napi_err)?;
         }
         Ok(Self {

@@ -25,6 +25,13 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use crate::error::Result;
 use crate::storage::migrate::MigrationReport;
 
+/// One `COUNT(*)` result, for the catalog probe in [`PostgresStorage::is_migrated`].
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+}
+
 type PgPool = Pool<ConnectionManager<PgConnection>>;
 
 /// Validate a PostgreSQL schema name (alphanumeric + underscores, non-empty).
@@ -142,6 +149,22 @@ impl PostgresStorage {
             archived_jobs,
             ..MigrationReport::default()
         })
+    }
+
+    /// Whether the core schema has been applied in this storage's schema — the
+    /// ledger table exists.
+    ///
+    /// A catalog read, not DDL, so a gated deployment can ask without applying
+    /// anything: it is how a shell tells "nothing here yet" apart from "opened
+    /// without migrating an existing deployment".
+    pub fn is_migrated(&self) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let rows: Vec<CountRow> = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM information_schema.tables \
+             WHERE table_schema = current_schema() AND table_name = 'schema_migrations'",
+        )
+        .load(&mut conn)?;
+        Ok(rows.first().is_some_and(|row| row.count > 0))
     }
 
     fn build(database_url: &str, pool_size: u32, schema: &str) -> Result<Self> {

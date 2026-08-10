@@ -48,16 +48,13 @@ pub fn open(
     // the same contract floor rather than scheduling over data it cannot read.
     // Reading the floor needs the schema, which a gated deployment applies out
     // of band — say so rather than leaking a bare "no such table".
-    taskito_core::ensure_contract_supported(&backend.storage).map_err(|error| {
-        if auto_migrate {
-            anyhow::Error::new(error)
-        } else {
-            anyhow::Error::new(error).context(
-                "TASKITO_AUTO_MIGRATE is off, so this server applies no schema — \
-                 run an SDK's `taskito migrate` against this database first",
-            )
-        }
-    })?;
+    if !auto_migrate && !backend.storage.is_migrated()? {
+        bail!(
+            "TASKITO_AUTO_MIGRATE is off, so this server applies no schema, and this \
+             database has none — run an SDK's `taskito migrate` against it first"
+        );
+    }
+    taskito_core::ensure_contract_supported(&backend.storage)?;
     Ok(backend)
 }
 
@@ -188,6 +185,10 @@ mod tests {
         assert!(
             error.to_string().contains("TASKITO_AUTO_MIGRATE"),
             "unexpected message: {error}"
+        );
+        assert!(
+            open(dsn, None, None, false).is_err(),
+            "the refused open must not have created the schema on its way out"
         );
 
         // Applied out of band, the same open succeeds and still ran no DDL of

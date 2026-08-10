@@ -274,10 +274,6 @@ impl JsQueue {
         let report = self.storage.migrate().map_err(to_napi_err)?;
         let workflow_applied = self.migrate_workflow_storage()?;
 
-        // The schema exists now, so the floor can finally be read — a gated
-        // deployment is checked here instead of at open.
-        taskito_core::ensure_contract_supported(&self.storage).map_err(to_napi_err)?;
-
         Ok(MigrationSummary {
             applied: report.applied,
             workflow_applied,

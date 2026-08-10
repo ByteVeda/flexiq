@@ -400,8 +400,11 @@ gated path, for a deployment whose credentials do not permit DDL at runtime:
   command itself is the only thing that applies DDL.
 
 The contract floor is checked at open, but reading it needs the settings table.
-A gated open therefore skips the check and `migrate()` performs it once the
-schema exists.
+A shell therefore checks it whenever `auto_migrate` is on **or**
+`StorageBackend::is_migrated()` reports an existing schema — the only storage
+exempt is one that was never migrated, which answers no query anyway.
+`StorageBackend::migrate` performs the check itself once the DDL has run, so the
+gated path is covered by the one method every shell already calls.
 
 ## Schema evolution is expand-only (cross-SDK)
 One database is read by shells at different versions during any rolling upgrade,

@@ -20,6 +20,13 @@ use diesel::sqlite::SqliteConnection;
 
 use crate::storage::migrate::MigrationReport;
 
+/// One `COUNT(*)` result, for the catalog probe in [`SqliteStorage::is_migrated`].
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+}
+
 use crate::error::Result;
 
 type DbPool = Pool<ConnectionManager<SqliteConnection>>;
@@ -120,6 +127,21 @@ impl SqliteStorage {
             archived_jobs,
             ..MigrationReport::default()
         })
+    }
+
+    /// Whether the core schema has been applied — the ledger table exists.
+    ///
+    /// A cheap catalog read, not a DDL statement, so a gated deployment can ask
+    /// without applying anything: it is how a shell tells "nothing here yet"
+    /// apart from "opened without migrating an existing deployment".
+    pub fn is_migrated(&self) -> Result<bool> {
+        let mut conn = self.conn()?;
+        let rows: Vec<CountRow> = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM sqlite_master \
+             WHERE type = 'table' AND name = 'schema_migrations'",
+        )
+        .load(&mut conn)?;
+        Ok(rows.first().is_some_and(|row| row.count > 0))
     }
 
     /// Create an in-memory storage (useful for tests).

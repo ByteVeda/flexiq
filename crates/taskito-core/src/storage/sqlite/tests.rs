@@ -2222,3 +2222,21 @@ fn test_migrate_reports_the_backlog_sweep() {
     );
     assert!(!report.is_empty(), "a sweep that moved rows is not a no-op");
 }
+
+#[test]
+fn test_is_migrated_distinguishes_an_empty_database() {
+    let dir = std::env::temp_dir().join(format!("taskito-probe-{}", now_millis()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("q.db");
+    let db = path.to_str().unwrap();
+
+    // The probe is what lets a gated open tell "nothing here yet" apart from
+    // "an existing deployment I must be checked against".
+    let storage = SqliteStorage::unmigrated(db, 1).unwrap();
+    assert!(!storage.is_migrated().unwrap());
+
+    storage.migrate().unwrap();
+    assert!(storage.is_migrated().unwrap());
+
+    std::fs::remove_dir_all(&dir).ok();
+}

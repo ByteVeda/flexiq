@@ -479,10 +479,6 @@ pub extern "system" fn Java_org_byteveda_taskito_internal_NativeQueue_migrate<'l
         let report = queue.storage.migrate()?;
         let workflow_applied = migrate_workflow_storage(queue)?;
 
-        // The schema exists now, so the floor can finally be read — a gated
-        // deployment is checked here instead of at open.
-        taskito_core::ensure_contract_supported(&queue.storage)?;
-
         new_string(
             env,
             to_json(&serde_json::json!({

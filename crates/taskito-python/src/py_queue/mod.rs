@@ -251,13 +251,17 @@ impl PyQueue {
         })?;
 
         // Every process that joins a deployment passes through this one open,
-        // so the contract floor is checked here rather than in the SDK. An
-        // unmigrated open has no tables to read it from — that storage is
-        // unusable until `migrate()` runs, which checks the floor itself.
-        if auto_migrate {
-            py.detach(|| taskito_core::ensure_contract_supported(&storage))
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        }
+        // so the contract floor is checked here rather than in the SDK. The one
+        // storage that cannot answer is one whose schema was never applied —
+        // there is no floor recorded and nothing to read it from — and that
+        // storage is unusable until `migrate()` runs, which checks it then.
+        py.detach(|| -> taskito_core::Result<()> {
+            if auto_migrate || storage.is_migrated()? {
+                taskito_core::ensure_contract_supported(&storage)?;
+            }
+            Ok(())
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let num_workers = if workers == 0 {
             std::thread::available_parallelism()
@@ -709,11 +713,6 @@ impl PyQueue {
         let workflow_applied = workflow_ops::migrate_workflow_storage(self, py)?;
         #[cfg(not(feature = "workflows"))]
         let workflow_applied: Vec<String> = Vec::new();
-
-        // The schema now exists, so the floor can finally be read — a gated
-        // deployment is checked here instead of at open.
-        py.detach(|| taskito_core::ensure_contract_supported(&self.storage))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("applied", report.applied)?;

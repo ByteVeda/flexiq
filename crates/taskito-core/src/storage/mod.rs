@@ -1304,12 +1304,33 @@ impl StorageBackend {
     /// backlog sweep. Idempotent, and a successful no-op on a schemaless
     /// backend — see [`migrate::MigrationReport`].
     pub fn migrate(&self) -> crate::error::Result<migrate::MigrationReport> {
-        match self {
+        let report = match self {
             StorageBackend::Sqlite(s) => s.migrate(),
             #[cfg(feature = "postgres")]
             StorageBackend::Postgres(s) => s.migrate(),
             #[cfg(feature = "redis")]
             StorageBackend::Redis(s) => s.migrate(),
+        }?;
+        // A gated open cannot read the contract floor — the settings table may
+        // not exist yet — so the check is deferred to here, where it does. It
+        // lives on this one path rather than in each shell so no shell can skip
+        // it. Deliberately after the DDL: an older build only ever applies the
+        // migrations it was compiled with, all of which predate the deployment
+        // that outranks it.
+        crate::contract::ensure_contract_supported(self)?;
+        Ok(report)
+    }
+
+    /// Whether the core schema has been applied. Lets a caller tell an empty
+    /// database apart from one opened without migrating, without applying
+    /// anything itself.
+    pub fn is_migrated(&self) -> crate::error::Result<bool> {
+        match self {
+            StorageBackend::Sqlite(s) => s.is_migrated(),
+            #[cfg(feature = "postgres")]
+            StorageBackend::Postgres(s) => s.is_migrated(),
+            #[cfg(feature = "redis")]
+            StorageBackend::Redis(s) => s.is_migrated(),
         }
     }
 
