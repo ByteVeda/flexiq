@@ -6,7 +6,7 @@ resolver = "2"
 # release bumps `version` in exactly one place. `rust-version` is verified by
 # the CI msrv job; sea-query 1.x pins the floor at 1.88.
 [workspace.package]
-version = "0.22.0"
+version = "0.23.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ByteVeda/taskito"
@@ -16,9 +16,9 @@ rust-version = "1.88"
 # Published members carry a `version` beside `path`: cargo resolves the path when
 # building here and rewrites it to the registry coordinate when packaging, so a
 # dependent crate is publishable. Every literal is mirrored by scripts/version.mjs.
-taskito-core = { path = "crates/taskito-core", version = "0.22.0" }
-taskito-workflows = { path = "crates/taskito-workflows", version = "0.22.0" }
-taskito-mesh = { path = "crates/taskito-mesh", version = "0.22.0" }
+taskito-core = { path = "crates/taskito-core", version = "0.23.0" }
+taskito-workflows = { path = "crates/taskito-workflows", version = "0.23.0" }
+taskito-mesh = { path = "crates/taskito-mesh", version = "0.23.0" }
 diesel = { version = "2.2", features = ["sqlite", "r2d2", "returning_clauses_for_sqlite_3_35"] }
 libsqlite3-sys = { version = "0.37", features = ["bundled"] }
 pq-sys = { version = "0.7", features = ["bundled"] }

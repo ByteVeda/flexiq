@@ -6,6 +6,6 @@
     "start": "node worker.mjs"
   },
   "dependencies": {
-    "@byteveda/taskito": "0.22.0"
+    "@byteveda/taskito": "0.23.0"
   }
 }
