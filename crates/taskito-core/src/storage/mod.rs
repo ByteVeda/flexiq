@@ -1023,17 +1023,9 @@ macro_rules! impl_storage {
             }
             fn register_worker(
                 &self,
-                worker_id: &str,
-                queues: &str,
-                tags: Option<&str>,
-                resources: Option<&str>,
-                resource_health: Option<&str>,
-                threads: i32,
-                hostname: Option<&str>,
-                pid: Option<i32>,
-                pool_type: Option<&str>,
+                registration: &$crate::storage::records::WorkerRegistration<'_>,
             ) -> $crate::error::Result<()> {
-                self.register_worker(worker_id, queues, tags, resources, resource_health, threads, hostname, pid, pool_type)
+                self.register_worker(registration)
             }
             fn heartbeat(
                 &self,
@@ -1841,31 +1833,8 @@ impl Storage for StorageBackend {
     fn list_circuit_breakers(&self) -> Result<Vec<records::CircuitBreakerState>> {
         delegate!(self, list_circuit_breakers)
     }
-    fn register_worker(
-        &self,
-        worker_id: &str,
-        queues: &str,
-        tags: Option<&str>,
-        resources: Option<&str>,
-        resource_health: Option<&str>,
-        threads: i32,
-        hostname: Option<&str>,
-        pid: Option<i32>,
-        pool_type: Option<&str>,
-    ) -> Result<()> {
-        delegate!(
-            self,
-            register_worker,
-            worker_id,
-            queues,
-            tags,
-            resources,
-            resource_health,
-            threads,
-            hostname,
-            pid,
-            pool_type
-        )
+    fn register_worker(&self, registration: &records::WorkerRegistration<'_>) -> Result<()> {
+        delegate!(self, register_worker, registration)
     }
     fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()> {
         delegate!(self, heartbeat, worker_id, resource_health)

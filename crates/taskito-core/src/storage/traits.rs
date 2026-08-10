@@ -3,7 +3,7 @@ use crate::job::{Job, NewJob};
 use crate::storage::records::{
     CircuitBreakerState, JobError, LockInfo, NewPeriodicTask, NewSubscription, PeriodicTask,
     RateLimitState, ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic,
-    TopicLogStats, TopicMessage, WorkerInfo, WorkerStatus,
+    TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -497,20 +497,8 @@ pub trait Storage: Send + Sync + Clone {
     // ── Worker operations ───────────────────────────────────────────
 
     /// Register a worker in the cluster registry, or update it if the id
-    /// already exists. `tags`/`resources` are pre-encoded JSON.
-    #[allow(clippy::too_many_arguments)]
-    fn register_worker(
-        &self,
-        worker_id: &str,
-        queues: &str,
-        tags: Option<&str>,
-        resources: Option<&str>,
-        resource_health: Option<&str>,
-        threads: i32,
-        hostname: Option<&str>,
-        pid: Option<i32>,
-        pool_type: Option<&str>,
-    ) -> Result<()>;
+    /// already exists.
+    fn register_worker(&self, registration: &WorkerRegistration<'_>) -> Result<()>;
     /// Refresh a worker's heartbeat timestamp, optionally updating its
     /// resource-health JSON.
     fn heartbeat(&self, worker_id: &str, resource_health: Option<&str>) -> Result<()>;

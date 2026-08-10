@@ -22,7 +22,7 @@ use taskito_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use tokio::sync::Notify;
 
 use taskito_core::job::now_millis;
-use taskito_core::storage::records::NewSubscription;
+use taskito_core::storage::records::{NewSubscription, WorkerRegistration};
 
 use crate::backend::QueueHandle;
 use crate::convert::{
@@ -232,17 +232,18 @@ fn register_live_worker(
 ) -> Result<(), crate::error::BindingError> {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let pid = std::process::id() as i32;
-    storage.register_worker(
+    storage.register_worker(&WorkerRegistration {
         worker_id,
-        queues_csv,
-        None,
-        None,
-        None,
-        capacity as i32,
-        Some(&hostname),
-        Some(pid),
-        Some("java"),
-    )?;
+        queues: queues_csv,
+        threads: capacity as i32,
+        hostname: Some(&hostname),
+        pid: Some(pid),
+        pool_type: Some("java"),
+        sdk: Some("java"),
+        // The native library's version, which the jar is published alongside.
+        sdk_version: Some(env!("CARGO_PKG_VERSION")),
+        ..Default::default()
+    })?;
     Ok(())
 }
 
