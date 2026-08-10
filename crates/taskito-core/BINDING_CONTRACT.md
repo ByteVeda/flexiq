@@ -374,7 +374,8 @@ level a process may speak and still join it.
 - **Every shell MUST call `ensure_contract_supported(&storage)` once, on the
   single native open**, before the process does anything else. The check is
   read-only — an unset floor is the permissive default, so a deployment that
-  never raises the dial carries no row for it — and fails with
+  never raises the dial carries no row for it, while a value that will not parse
+  is an error rather than a fallback — and fails with
   `QueueError::ContractTooOld`, naming both levels, when this build is below it.
   A *newer* build is always allowed: the floor is a minimum, not the equality
   check the worker handshake uses.

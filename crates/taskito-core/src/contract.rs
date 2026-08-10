@@ -34,14 +34,20 @@ pub const CONTRACT_FLOOR_SETTING: &str = "contract:min_sdk";
 /// The floor this storage requires, defaulting to [`MIN_CONTRACT_VERSION`] when
 /// nothing has been recorded yet.
 ///
-/// An unreadable value reads as the default rather than failing the caller: a
-/// corrupt dial should not stop a deployment that is otherwise healthy, and the
-/// next [`set_min_contract`] overwrites it.
+/// Only an *absent* key takes the default. A present value that will not parse
+/// is an error, not a fallback: reading it as permissive would let anything able
+/// to write the key neuter a raised floor by storing garbage. Recovery does not
+/// need the read — [`set_min_contract`] overwrites the key without consulting
+/// it.
 pub fn min_contract<S: Storage>(storage: &S) -> Result<u32> {
-    Ok(storage
-        .get_setting(CONTRACT_FLOOR_SETTING)?
-        .and_then(|raw| raw.trim().parse().ok())
-        .unwrap_or(MIN_CONTRACT_VERSION))
+    let Some(raw) = storage.get_setting(CONTRACT_FLOOR_SETTING)? else {
+        return Ok(MIN_CONTRACT_VERSION);
+    };
+    raw.trim().parse().map_err(|_| {
+        QueueError::Config(format!(
+            "{CONTRACT_FLOOR_SETTING} holds {raw:?}, which is not a contract level;              set it to a whole number to repair the floor"
+        ))
+    })
 }
 
 /// Raise or lower the floor.
@@ -145,11 +151,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_floor_reads_as_the_default() {
+    fn an_unreadable_floor_fails_closed() {
         let storage = storage();
         storage
             .set_setting(CONTRACT_FLOOR_SETTING, "not-a-level")
             .expect("write");
-        assert_eq!(min_contract(&storage).expect("floor"), MIN_CONTRACT_VERSION);
+
+        // Reading it as the permissive default would let anything able to write
+        // the key neuter a raised floor by storing garbage.
+        let error = min_contract(&storage).expect_err("must not fall back");
+        assert!(error.to_string().contains("not a contract level"));
+        ensure_contract_supported(&storage).expect_err("open must refuse too");
+
+        // The repair path does not read the broken value.
+        set_min_contract(&storage, CONTRACT_VERSION).expect("repair");
+        assert_eq!(min_contract(&storage).expect("floor"), CONTRACT_VERSION);
     }
 }
