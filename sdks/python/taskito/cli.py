@@ -16,6 +16,7 @@ from taskito.autoscale import AutoscaleConfig, serve_autoscaler
 from taskito.dashboard import serve_dashboard
 from taskito.detached import DETACHED_ENV
 from taskito.log_config import configure as configure_logging
+from taskito.migration_gate import withhold_migrations
 from taskito.scaler import serve_scaler
 
 # How long the executor's main loop blocks between signal checks. Short enough
@@ -456,6 +457,10 @@ def run_dashboard(args: argparse.Namespace) -> None:
 
 def run_migrate(args: argparse.Namespace) -> None:
     """Apply pending schema changes and report what ran."""
+    # Withheld before the import: the application module builds its own queue,
+    # which would otherwise migrate on open and leave this command reporting
+    # work it did not do.
+    withhold_migrations()
     queue = _load_queue(args.app)
     report = queue.migrate()
 

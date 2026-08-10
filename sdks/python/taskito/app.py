@@ -38,6 +38,7 @@ from taskito.interception import ArgumentInterceptor, InterceptionMode
 from taskito.interception.built_in import build_default_registry
 from taskito.interception.metrics import InterceptionMetrics
 from taskito.middleware import TaskMiddleware
+from taskito.migration_gate import migrations_withheld
 from taskito.mixins import (
     QueueDecoratorMixin,
     QueueEventsMixin,
@@ -262,6 +263,12 @@ class Queue(
         # storage here would put the database credentials back in the app image
         # that the attach split exists to keep them out of.
         detached = is_detached()
+
+        # `taskito migrate` imports the same app to reach its queue, so the
+        # import itself would apply the DDL the command exists to gate. The
+        # env var only ever withholds migrations, never grants them.
+        if migrations_withheld():
+            auto_migrate = False
 
         if backend == "sqlite" and not detached:
             # Ensure parent directory exists for SQLite
