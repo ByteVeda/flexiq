@@ -1,7 +1,13 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { Plug } from "lucide-react";
 import { useMemo } from "react";
-import { Badge, DataTable, EmptyState, ErrorState, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/ui";
 import type { Executor } from "@/lib/api-types";
 import { formatCount } from "@/lib/number";
 import { formatRelative } from "@/lib/time";
@@ -21,7 +27,7 @@ const NUMERIC_CELL =
 const TASKS_SHOWN = 4;
 
 export function ExecutorsTable({ executors, loading, error, onRetry }: ExecutorsTableProps) {
-  const columns = useMemo<ColumnDef<Executor>[]>(
+  const columns = useMemo<DataTableColumn<Executor>[]>(
     () => [
       {
         accessorKey: "executor_id",

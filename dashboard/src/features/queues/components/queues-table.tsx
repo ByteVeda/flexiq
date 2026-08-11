@@ -1,10 +1,10 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { Box, Pause, Play } from "lucide-react";
 import { useMemo } from "react";
 import {
   Badge,
   Button,
   DataTable,
+  type DataTableColumn,
   EmptyState,
   ErrorState,
   QueueBar,
@@ -57,7 +57,7 @@ export function QueuesTable({ stats, paused, loading, error, onRetry }: QueuesTa
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [stats, paused]);
 
-  const columns = useMemo<ColumnDef<QueueRow>[]>(
+  const columns = useMemo<DataTableColumn<QueueRow>[]>(
     () => [
       {
         accessorKey: "name",

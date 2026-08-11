@@ -1,7 +1,13 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { Server } from "lucide-react";
 import { useMemo } from "react";
-import { Badge, DataTable, EmptyState, ErrorState, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/ui";
 import type { Worker } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
 import { isWorkerStale } from "../utils";
@@ -17,7 +23,7 @@ const TIME_CELL =
   "block w-full text-right font-mono text-[0.82rem] tabular-nums text-[var(--fg-muted)]";
 
 export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableProps) {
-  const columns = useMemo<ColumnDef<Worker>[]>(
+  const columns = useMemo<DataTableColumn<Worker>[]>(
     () => [
       {
         accessorKey: "worker_id",
