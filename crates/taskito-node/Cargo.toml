@@ -25,12 +25,15 @@ push-dispatch = ["taskito-core/push-dispatch"]
 taskito-core = { workspace = true }
 # `dyn-symbols` is a napi 3 default that `default-features = false` drops; it
 # resolves the Node symbols at load time rather than linking against them.
-napi = { version = "3", default-features = false, features = [
+# The floor tracks what `napi-derive` expands to — cargo can't see that
+# dependency, so a lone derive bump otherwise resolves against a runtime
+# missing the prelude items it emits (3.12: `NativeBorrow{Scope,Barrier}`).
+napi = { version = "3.12", default-features = false, features = [
     "napi8",
     "tokio_rt",
     "dyn-symbols",
 ] }
-napi-derive = "3"
+napi-derive = "3.6.2"
 tokio = { workspace = true }
 crossbeam-channel = { workspace = true }
 async-trait = { workspace = true }
