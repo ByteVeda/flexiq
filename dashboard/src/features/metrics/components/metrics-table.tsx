@@ -1,6 +1,12 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useMemo } from "react";
-import { DataTable, EmptyState, ErrorState, MeterBar, TableSkeleton } from "@/components/ui";
+import {
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  MeterBar,
+  TableSkeleton,
+} from "@/components/ui";
 import type { MetricsResponse, TaskMetrics } from "@/lib/api-types";
 import { formatCount, formatPercent } from "@/lib/number";
 import type { Tone } from "@/lib/status";
@@ -30,7 +36,7 @@ export function MetricsTable({ metrics, loading, error, onRetry }: MetricsTableP
       .sort((a, b) => b.count - a.count);
   }, [metrics]);
 
-  const columns = useMemo<ColumnDef<Row>[]>(
+  const columns = useMemo<DataTableColumn<Row>[]>(
     () => [
       {
         id: "task",

@@ -1,8 +1,14 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import type { ColumnDef } from "@tanstack/react-table";
 import { ListTree } from "lucide-react";
 import { useMemo } from "react";
-import { DataTable, EmptyState, ErrorState, Skeleton, StatusBadge } from "@/components/ui";
+import {
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+  StatusBadge,
+} from "@/components/ui";
 import type { Job } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
 
@@ -16,7 +22,7 @@ interface RecentJobsProps {
 export function RecentJobs({ jobs, loading, error, onRetry }: RecentJobsProps) {
   const navigate = useNavigate();
 
-  const columns = useMemo<ColumnDef<Job>[]>(
+  const columns = useMemo<DataTableColumn<Job>[]>(
     () => [
       {
         accessorKey: "id",

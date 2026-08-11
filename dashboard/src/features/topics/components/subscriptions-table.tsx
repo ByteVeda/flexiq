@@ -1,7 +1,13 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { Radio } from "lucide-react";
 import { useMemo } from "react";
-import { Badge, DataTable, EmptyState, ErrorState, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/ui";
 import type { SubscriptionBacklog } from "@/lib/api-types";
 import { formatCount } from "@/lib/number";
 import { formatDuration } from "@/lib/time";
@@ -29,7 +35,7 @@ export function SubscriptionsTable({
     [subscriptions],
   );
 
-  const columns = useMemo<ColumnDef<SubscriptionBacklog>[]>(
+  const columns = useMemo<DataTableColumn<SubscriptionBacklog>[]>(
     () => [
       {
         accessorKey: "subscription",

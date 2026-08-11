@@ -1,8 +1,13 @@
 import { useNavigate } from "@tanstack/react-router";
-import type { ColumnDef } from "@tanstack/react-table";
 import { Radio } from "lucide-react";
 import { useMemo } from "react";
-import { DataTable, EmptyState, ErrorState, TableSkeleton } from "@/components/ui";
+import {
+  DataTable,
+  type DataTableColumn,
+  EmptyState,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/ui";
 import type { TopicSummary } from "@/lib/api-types";
 import { formatCount } from "@/lib/number";
 
@@ -23,7 +28,7 @@ export function TopicsTable({ topics, loading, error, onRetry }: TopicsTableProp
     [topics],
   );
 
-  const columns = useMemo<ColumnDef<TopicSummary>[]>(
+  const columns = useMemo<DataTableColumn<TopicSummary>[]>(
     () => [
       {
         accessorKey: "topic",

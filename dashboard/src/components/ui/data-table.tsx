@@ -1,19 +1,18 @@
 import {
-  type ColumnDef,
   flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
   type Row,
+  type RowData,
   type SortingState,
-  useReactTable,
+  useTable,
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { memo, type ReactNode, useState } from "react";
 import { cn } from "@/lib/cn";
+import { type DataTableColumn, dataTableFeatures } from "./data-table-features";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./table";
 
-interface DataTableProps<TData> {
-  columns: ColumnDef<TData, unknown>[];
+interface DataTableProps<TData extends RowData> {
+  columns: DataTableColumn<TData>[];
   data: TData[];
   empty?: ReactNode;
   onRowClick?: (row: TData) => void;
@@ -22,7 +21,7 @@ interface DataTableProps<TData> {
   initialSorting?: SortingState;
 }
 
-function DataTableImpl<TData>({
+function DataTableImpl<TData extends RowData>({
   columns,
   data,
   empty,
@@ -33,13 +32,12 @@ function DataTableImpl<TData>({
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
 
-  const table = useReactTable({
+  const table = useTable({
+    features: dataTableFeatures,
     data,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -93,7 +91,7 @@ function DataTableImpl<TData>({
               </TableCell>
             </TableRow>
           ) : (
-            table.getRowModel().rows.map((row: Row<TData>, index) => (
+            table.getRowModel().rows.map((row: Row<typeof dataTableFeatures, TData>, index) => (
               <TableRow
                 key={rowKey ? rowKey(row.original, index) : row.id}
                 className={cn(
@@ -113,7 +111,7 @@ function DataTableImpl<TData>({
                     : undefined
                 }
               >
-                {row.getVisibleCells().map((cell) => (
+                {row.getAllCells().map((cell) => (
                   <TableCell key={cell.id}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>

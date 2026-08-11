@@ -1,8 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useMemo } from "react";
 import {
   DataTable,
+  type DataTableColumn,
   EmptyState,
   ErrorState,
   StatusBadge,
@@ -30,8 +30,8 @@ export function JobTable({ jobs, loading, error, onRetry }: JobTableProps) {
     [navigate],
   );
 
-  const columns = useMemo<ColumnDef<Job>[]>(() => {
-    const base: ColumnDef<Job>[] = [
+  const columns = useMemo<DataTableColumn<Job>[]>(() => {
+    const base: DataTableColumn<Job>[] = [
       {
         accessorKey: "id",
         header: "Job",
