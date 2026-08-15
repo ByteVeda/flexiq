@@ -86,6 +86,7 @@ pub fn build_new_job(
         namespace: options
             .namespace
             .or_else(|| default_namespace.map(str::to_string)),
+        debounce_key: None,
     }
 }
 

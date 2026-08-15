@@ -378,6 +378,7 @@ impl PyQueue {
             expires_at: None,
             result_ttl_ms: original.result_ttl_ms,
             namespace: original.namespace,
+            debounce_key: None,
         };
 
         let job = self

@@ -169,6 +169,7 @@ impl JsQueue {
                 expires_at: None,
                 result_ttl_ms: None,
                 namespace: self.namespace.clone(),
+                debounce_key: None,
             };
             let job = self.storage.enqueue(new_job).map_err(to_napi_err)?;
             job_ids.insert(topo.name.clone(), job.id.clone());
@@ -460,6 +461,7 @@ impl JsQueue {
                 expires_at: None,
                 result_ttl_ms: None,
                 namespace: self.namespace.clone(),
+                debounce_key: None,
             };
             let job = self.storage.enqueue(new_job).map_err(to_napi_err)?;
             child_job_ids.push(job.id.clone());
@@ -512,6 +514,7 @@ impl JsQueue {
             expires_at: None,
             result_ttl_ms: None,
             namespace: self.namespace.clone(),
+            debounce_key: None,
         };
         let job = self.storage.enqueue(new_job).map_err(to_napi_err)?;
         // Cancel the job if we can't bind it to its node, so it doesn't run
@@ -730,6 +733,7 @@ impl JsQueue {
             expires_at: None,
             result_ttl_ms: None,
             namespace: self.namespace.clone(),
+            debounce_key: None,
         };
         let job = self.storage.enqueue(new_job).map_err(to_napi_err)?;
         // Cancel the job if binding fails, so a compensation job can't run

@@ -41,6 +41,7 @@ pub struct JobRow {
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
     pub has_deps: bool,
+    pub debounce_key: Option<String>,
 }
 
 /// A row in the `jobs` table with every column EXCEPT the `payload`/`result`
@@ -74,6 +75,7 @@ pub struct NarrowJobRow {
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
     pub has_deps: bool,
+    pub debounce_key: Option<String>,
 }
 
 /// Insertable struct for creating new jobs.
@@ -103,6 +105,9 @@ pub struct NewJobRow<'a> {
     /// index by subscription; `None` for ordinary jobs.
     pub topic: Option<&'a str>,
     pub subscription_name: Option<&'a str>,
+    /// Key a debounced enqueue coalesces on. Kept separate from `unique_key`,
+    /// which already carries idempotency auto-keys and the pub/sub salt.
+    pub debounce_key: Option<&'a str>,
 }
 
 /// A row in the `dead_letter` table.

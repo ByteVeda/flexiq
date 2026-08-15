@@ -228,6 +228,7 @@ macro_rules! impl_diesel_job_ops {
                         has_deps: job.has_deps,
                         topic: topic.as_deref(),
                         subscription_name: subscription_name.as_deref(),
+                        debounce_key: job.debounce_key.as_deref(),
                     };
 
                     diesel::insert_into(jobs::table)
@@ -338,6 +339,7 @@ macro_rules! impl_diesel_job_ops {
                             has_deps: job.has_deps,
                             topic: topic.as_deref(),
                             subscription_name: subscription_name.as_deref(),
+                            debounce_key: job.debounce_key.as_deref(),
                         })
                         .collect();
 
@@ -437,6 +439,7 @@ macro_rules! impl_diesel_job_ops {
                             has_deps: job.has_deps,
                             topic: topic.as_deref(),
                             subscription_name: subscription_name.as_deref(),
+                            debounce_key: job.debounce_key.as_deref(),
                         };
 
                         diesel::insert_into(jobs::table)
@@ -572,6 +575,7 @@ macro_rules! impl_diesel_job_ops {
                                 has_deps: job.has_deps,
                                 topic: topic.as_deref(),
                                 subscription_name: subscription_name.as_deref(),
+                                debounce_key: job.debounce_key.as_deref(),
                             };
                             diesel::insert_into(jobs::table)
                                 .values(&row)

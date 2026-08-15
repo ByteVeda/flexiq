@@ -180,6 +180,7 @@ fn delivery_job(request: &PublishRequest, sub: &Subscription) -> NewJob {
         expires_at: request.expires_at,
         result_ttl_ms: request.result_ttl_ms,
         namespace: request.namespace.clone(),
+        debounce_key: None,
     }
 }
 

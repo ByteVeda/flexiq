@@ -189,6 +189,7 @@ fn make_job(id: &str, task_name: &str, payload: &[u8]) -> Job {
         result_ttl_ms: None,
         namespace: None,
         has_deps: false,
+        debounce_key: None,
     }
 }
 
@@ -511,6 +512,7 @@ fn a_dropped_executor_leaves_its_job_for_the_scheduler_to_recover() {
             expires_at: None,
             result_ttl_ms: None,
             namespace: None,
+            debounce_key: None,
         })
         .expect("enqueue");
 

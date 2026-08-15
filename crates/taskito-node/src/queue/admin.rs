@@ -136,6 +136,7 @@ impl JsQueue {
                 expires_at: None,
                 result_ttl_ms: original.result_ttl_ms,
                 namespace: original.namespace.clone(),
+                debounce_key: None,
             };
             let job = storage.enqueue(new_job).map_err(to_napi_err)?;
             // Best-effort audit row — a history write must not fail the replay.

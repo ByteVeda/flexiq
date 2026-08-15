@@ -42,6 +42,7 @@ fn main() -> taskito_core::Result<()> {
         expires_at: None,
         result_ttl_ms: None,
         namespace: None,
+        debounce_key: None,
     })?;
 
     std::thread::sleep(std::time::Duration::from_millis(500));

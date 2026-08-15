@@ -302,6 +302,7 @@ impl Scheduler {
                 expires_at: None,
                 result_ttl_ms: None,
                 namespace: self.namespace.clone(),
+                debounce_key: None,
             };
 
             if let Err(e) = self.storage.enqueue_unique(new_job) {

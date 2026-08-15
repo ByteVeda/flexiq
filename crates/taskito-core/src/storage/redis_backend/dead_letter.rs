@@ -397,6 +397,9 @@ impl RedisStorage {
             expires_at: None,
             result_ttl_ms: entry.result_ttl_ms,
             namespace: entry.namespace,
+            // Cleared for the same reason as `unique_key`: an operator retry
+            // must run, not be coalesced into someone's window.
+            debounce_key: None,
         };
 
         let job = self.enqueue(new_job)?;

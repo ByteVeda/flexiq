@@ -392,6 +392,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn m0010_renders_the_debounce_column_and_its_partial_index() {
+        let backends = [
+            (Backend::Sqlite, "sqlite"),
+            #[cfg(feature = "postgres")]
+            (Backend::Postgres, "postgres"),
+        ];
+        for (backend, label) in backends {
+            let joined = crate::storage::migrations::all()
+                .iter()
+                .find(|m| m.version() == "0010_debounce")
+                .expect("m0010 registered")
+                .up(backend)
+                .iter()
+                .map(|s| s.sql.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(joined.contains("debounce_key"), "{label}: {joined}");
+            assert!(
+                joined.contains("idx_jobs_debounce_key"),
+                "{label}: {joined}"
+            );
+            // The index only covers rows a debounce write can collide with;
+            // without the predicate it would span every terminal job ever run.
+            assert!(
+                joined.contains("WHERE") && joined.contains("\"status\" = 0"),
+                "{label}: partial predicate must render: {joined}"
+            );
+            // Uniqueness is deliberately absent — `namespace` is nullable and
+            // NULLs are distinct in a unique index, so it would constrain
+            // nothing in the default namespace. See the migration's doc comment.
+            assert!(
+                !joined.contains("UNIQUE"),
+                "{label}: index must not be unique: {joined}"
+            );
+        }
+    }
+
     #[cfg(feature = "postgres")]
     #[test]
     fn add_column_renders_if_not_exists_on_postgres() {

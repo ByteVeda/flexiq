@@ -196,6 +196,7 @@ impl DataSource for DbSource {
             expires_at: None,
             result_ttl_ms: job.result_ttl_ms,
             namespace: job.namespace,
+            debounce_key: None,
         };
         let created = self.be.storage.enqueue(new_job)?;
         // Audit is best-effort: the job already exists, so a failure here must
@@ -311,6 +312,7 @@ mod tests {
                 expires_at: None,
                 result_ttl_ms: None,
                 namespace: None,
+                debounce_key: None,
             })
             .expect("enqueue")
     }

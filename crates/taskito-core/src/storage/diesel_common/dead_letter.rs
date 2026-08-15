@@ -261,6 +261,9 @@ macro_rules! impl_diesel_dead_letter_ops {
                     expires_at: None,
                     result_ttl_ms: dead_row.result_ttl_ms,
                     namespace: dead_row.namespace,
+                    // Cleared for the same reason as `unique_key`: an operator
+                    // retry must run, not be coalesced into someone's window.
+                    debounce_key: None,
                 };
 
                 let job = new_job.into_job();
@@ -293,6 +296,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                         has_deps: job.has_deps,
                         topic: topic.as_deref(),
                         subscription_name: subscription_name.as_deref(),
+                        debounce_key: job.debounce_key.as_deref(),
                     };
 
                     diesel::insert_into(jobs::table)

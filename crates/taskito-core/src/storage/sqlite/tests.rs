@@ -23,6 +23,7 @@ fn make_job(task_name: &str) -> NewJob {
         expires_at: None,
         result_ttl_ms: None,
         namespace: None,
+        debounce_key: None,
     }
 }
 
@@ -483,6 +484,72 @@ fn worker_sdk_migration_is_idempotent() {
     let worker = workers.iter().find(|w| w.worker_id == "twice").unwrap();
     assert_eq!(worker.sdk.as_deref(), Some("node"));
     assert_eq!(worker.sdk_version, None);
+}
+
+/// The debounce key must survive both the full row read and the blob-free
+/// narrow read that listings use — those are separate projections.
+#[test]
+fn debounce_key_round_trips_through_the_jobs_table() {
+    let storage = test_storage();
+
+    let mut new_job = make_job("build_report");
+    new_job.debounce_key = Some("report:user-7".to_string());
+    let job = storage.enqueue(new_job).unwrap();
+    assert_eq!(job.debounce_key.as_deref(), Some("report:user-7"));
+
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(fetched.debounce_key.as_deref(), Some("report:user-7"));
+
+    let listed = storage.list_jobs(None, None, None, 10, 0, None).unwrap();
+    let listed = listed.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(listed.debounce_key.as_deref(), Some("report:user-7"));
+}
+
+/// `archived_jobs` deliberately has no `debounce_key` column: a terminal job
+/// has left its debounce window, so the key reads back as absent rather than
+/// stale. Locks the decision recorded in `m0010_debounce`.
+#[test]
+fn debounce_key_is_dropped_when_a_job_is_archived() {
+    let storage = test_storage();
+
+    let mut new_job = make_job("build_report");
+    new_job.debounce_key = Some("report:user-7".to_string());
+    let job = storage.enqueue(new_job).unwrap();
+
+    storage.dequeue("default", now_millis(), None).unwrap();
+    storage.complete(&job.id, Some(vec![1]), None).unwrap();
+
+    let archived = storage.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(archived.status, JobStatus::Complete);
+    assert_eq!(archived.debounce_key, None);
+}
+
+/// A database created before `0010_debounce` must gain the column on the next
+/// migrate, not fail against a schema that no longer matches the row structs.
+#[test]
+fn debounce_key_column_is_added_to_a_pre_existing_database() {
+    use diesel::connection::SimpleConnection;
+
+    let storage = test_storage();
+
+    // Rewind to the pre-0010 shape: drop the column and its index, and forget
+    // the ledger row.
+    let mut conn = storage.conn().unwrap();
+    conn.batch_execute(
+        "DROP INDEX idx_jobs_debounce_key;
+         ALTER TABLE jobs DROP COLUMN debounce_key;
+         DELETE FROM schema_migrations WHERE version = '0010_debounce';",
+    )
+    .unwrap();
+    drop(conn);
+
+    storage.migrate().unwrap();
+
+    let mut new_job = make_job("build_report");
+    new_job.debounce_key = Some("report:migrated".to_string());
+    let job = storage.enqueue(new_job).unwrap();
+    let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(fetched.debounce_key.as_deref(), Some("report:migrated"));
 }
 
 #[test]

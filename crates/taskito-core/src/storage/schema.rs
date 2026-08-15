@@ -26,6 +26,7 @@ diesel::table! {
         has_deps -> Bool,
         topic -> Nullable<Text>,
         subscription_name -> Nullable<Text>,
+        debounce_key -> Nullable<Text>,
     }
 }
 
