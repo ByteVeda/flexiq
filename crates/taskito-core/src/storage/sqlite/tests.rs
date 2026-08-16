@@ -731,6 +731,36 @@ fn distinct_debounce_keys_and_namespaces_stay_independent() {
     );
 }
 
+/// A coalescing call is a vote to run again soon, not a redefinition of the
+/// run: everything but the deadline — and the payload under `replace_payload` —
+/// belongs to the job that opened the window. Without this, widening the
+/// coalescing `UPDATE` would break the documented contract silently.
+#[test]
+fn coalescing_discards_the_rest_of_the_new_call() {
+    let storage = test_storage();
+
+    let mut opening = debounced_job("report:user-7");
+    opening.priority = 1;
+    opening.metadata = Some(r#"{"round":1}"#.to_string());
+    opening.expires_at = Some(now_millis() + 900_000);
+    let first = storage
+        .enqueue_debounced(opening, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    let mut louder = debounced_job("report:user-7");
+    louder.priority = 9;
+    louder.metadata = Some(r#"{"round":2}"#.to_string());
+    louder.expires_at = Some(now_millis() + 1);
+    let coalesced = storage
+        .enqueue_debounced(louder, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    assert_eq!(coalesced.id, first.id);
+    assert_eq!(coalesced.priority, 1, "priority belongs to the opener");
+    assert_eq!(coalesced.metadata, first.metadata);
+    assert_eq!(coalesced.expires_at, first.expires_at);
+}
+
 /// `replace_payload` is the difference between "run with the latest input" and
 /// "run with the input that opened the window".
 #[test]
