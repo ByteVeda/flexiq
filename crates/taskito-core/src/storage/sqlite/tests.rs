@@ -798,6 +798,30 @@ fn debounced_enqueue_rejects_options_that_cannot_debounce() {
     assert!(all.is_empty());
 }
 
+/// A window large enough to overflow the epoch must saturate, not wrap. Wrapping
+/// lands `scheduled_at` in the *past* and dispatches the job at once — the exact
+/// opposite of the request — and panics outright in a debug build.
+#[test]
+fn an_overflowing_window_saturates_instead_of_dispatching_at_once() {
+    let storage = test_storage();
+
+    let job = storage
+        .enqueue_debounced(
+            debounced_job("report:user-7"),
+            debounce_opts(i64::MAX, i64::MAX),
+        )
+        .unwrap();
+
+    assert_eq!(job.scheduled_at, i64::MAX);
+    assert!(
+        storage
+            .dequeue("default", now_millis(), None)
+            .unwrap()
+            .is_none(),
+        "a saturated deadline must not be due now"
+    );
+}
+
 #[test]
 fn test_reap_if_leader_only_leader_reaps_and_gets_ids() {
     use diesel::prelude::*;

@@ -428,8 +428,12 @@ macro_rules! impl_diesel_job_ops {
                 // own clock reading there lets the two drift a millisecond
                 // apart, which is enough to make a slide move a deadline
                 // backwards when `max_wait_ms == window_ms`.
+                // Saturating, like the ceiling below: an absurd `window_ms`
+                // would otherwise wrap `scheduled_at` negative and dispatch the
+                // job *immediately*, the exact opposite of what was asked for
+                // (and panic outright in a debug build).
                 job.created_at = now;
-                job.scheduled_at = now + options.window_ms;
+                job.scheduled_at = now.saturating_add(options.window_ms);
 
                 self.write_transaction(|conn| {
                     if let Some(pending) =
