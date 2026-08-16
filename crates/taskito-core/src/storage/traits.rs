@@ -59,6 +59,11 @@ pub trait Storage: Send + Sync + Clone {
     /// to tell coalescing from insertion. Rejects a missing or empty
     /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
     /// window with [`QueueError::Config`](crate::error::QueueError::Config).
+    ///
+    /// **Not implemented on the Redis backend**, which has no transaction to
+    /// hang the read-modify-write on: every call there fails until its Lua path
+    /// lands. Falling back to a plain `enqueue` would insert one job per call,
+    /// which is what debounce exists to prevent.
     fn enqueue_debounced(&self, new_job: NewJob, options: DebounceOptions) -> Result<Job>;
     /// Atomically claim the highest-priority ready job from a queue, moving it
     /// to `Running`. `None` when no job is eligible. `namespace = None`
