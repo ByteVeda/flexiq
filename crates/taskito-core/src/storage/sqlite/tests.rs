@@ -1,7 +1,7 @@
 use super::*;
 use crate::error::QueueError;
 use crate::job::{now_millis, JobStatus, NewJob};
-use crate::storage::records::WorkerRegistration;
+use crate::storage::records::{DebounceOptions, WorkerRegistration};
 
 fn test_storage() -> SqliteStorage {
     SqliteStorage::in_memory().unwrap()
@@ -550,6 +550,306 @@ fn debounce_key_column_is_added_to_a_pre_existing_database() {
     let job = storage.enqueue(new_job).unwrap();
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.debounce_key.as_deref(), Some("report:migrated"));
+}
+
+// ── Debounced enqueue ────────────────────────────────────────────────
+
+fn debounce_opts(window_ms: i64, max_wait_ms: i64) -> DebounceOptions {
+    DebounceOptions {
+        window_ms,
+        max_wait_ms,
+        replace_payload: false,
+    }
+}
+
+fn debounced_job(key: &str) -> NewJob {
+    let mut new_job = make_job("build_report");
+    new_job.debounce_key = Some(key.to_string());
+    new_job
+}
+
+/// Move a pending job's `created_at` back, standing in for a window that opened
+/// `age_ms` ago. The alternative is sleeping out a real `max_wait`.
+fn backdate_creation(storage: &SqliteStorage, job_id: &str, age_ms: i64) {
+    use crate::storage::schema::jobs;
+    let mut conn = storage.conn().unwrap();
+    diesel::update(jobs::table.filter(jobs::id.eq(job_id)))
+        .set(jobs::created_at.eq(now_millis() - age_ms))
+        .execute(&mut conn)
+        .unwrap();
+}
+
+/// The whole point: repeated enqueues under one key produce one job, and each
+/// one pushes its deadline further out.
+#[test]
+fn debounced_enqueue_collapses_a_burst_into_one_job() {
+    let storage = test_storage();
+    let before = now_millis();
+
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..5 {
+        let job = storage
+            .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+            .unwrap();
+        assert!(
+            job.scheduled_at >= before + 5_000,
+            "deadline slides forward"
+        );
+        ids.insert(job.id);
+    }
+
+    assert_eq!(ids.len(), 1, "the burst must land on one job");
+    let pending = storage
+        .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+        .unwrap();
+    assert_eq!(pending.len(), 1, "no second row was inserted");
+}
+
+/// `max_wait_ms` is measured from the pending job's `created_at`, so a caller
+/// who never stops enqueuing cannot starve the job past that ceiling.
+#[test]
+fn debounce_max_wait_caps_the_slide() {
+    let storage = test_storage();
+
+    let first = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 20_000))
+        .unwrap();
+    // 18s into a 20s ceiling: only 2s of slide is left, not the full window.
+    backdate_creation(&storage, &first.id, 18_000);
+
+    let now = now_millis();
+    let slid = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 20_000))
+        .unwrap();
+
+    assert_eq!(slid.id, first.id);
+    assert!(
+        slid.scheduled_at <= now + 2_000,
+        "capped at first_seen + max_wait, got {} (now {now})",
+        slid.scheduled_at
+    );
+    assert!(slid.scheduled_at > now, "the cap has not elapsed yet");
+}
+
+/// Once the ceiling has elapsed the job is due and further enqueues stop
+/// deferring it. This is the anti-starvation guarantee: a caller holding the
+/// button down can no longer push the run out.
+#[test]
+fn debounce_stops_deferring_once_the_ceiling_elapses() {
+    let storage = test_storage();
+
+    let first = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 20_000))
+        .unwrap();
+    // 90s into a 20s ceiling — a backlogged worker has not picked it up yet.
+    backdate_creation(&storage, &first.id, 90_000);
+
+    for _ in 0..3 {
+        let slid = storage
+            .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 20_000))
+            .unwrap();
+        assert_eq!(slid.id, first.id);
+        assert!(
+            slid.scheduled_at <= now_millis(),
+            "an elapsed ceiling leaves the job due, never further out"
+        );
+    }
+
+    assert!(
+        storage
+            .dequeue("default", now_millis(), None)
+            .unwrap()
+            .is_some(),
+        "the job is dispatchable despite the ongoing burst"
+    );
+}
+
+/// A job a worker already holds must never be pulled back to a later deadline.
+/// `claim_execution` writes its row without touching `status`, so the guard has
+/// to consult the claim table, not just the status column.
+#[test]
+fn debounce_leaves_a_claimed_job_alone() {
+    let storage = test_storage();
+
+    let claimed = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert!(storage.claim_execution(&claimed.id, "worker-1").unwrap());
+
+    let fresh = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    assert_ne!(fresh.id, claimed.id, "a claimed job opens a fresh window");
+    let untouched = storage.get_job(&claimed.id, None).unwrap().unwrap();
+    assert_eq!(untouched.scheduled_at, claimed.scheduled_at);
+}
+
+/// Once a job leaves `Pending` its window is over, so the next enqueue starts a
+/// new one instead of resurrecting the running job's schedule.
+#[test]
+fn debounce_opens_a_fresh_window_once_the_job_is_running() {
+    let storage = test_storage();
+
+    let first = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    let dequeued = storage
+        .dequeue("default", first.scheduled_at, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(dequeued.id, first.id);
+
+    let second = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(second.id, first.id);
+}
+
+/// The key is payload-derived by design (`report:{user_id}`), so two keys must
+/// not share a window — and neither must two tenants using the same key.
+#[test]
+fn distinct_debounce_keys_and_namespaces_stay_independent() {
+    let storage = test_storage();
+
+    let user_7 = storage
+        .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    let user_9 = storage
+        .enqueue_debounced(debounced_job("report:user-9"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(user_7.id, user_9.id);
+
+    let mut tenant_job = debounced_job("report:user-7");
+    tenant_job.namespace = Some("tenant-a".to_string());
+    let tenant = storage
+        .enqueue_debounced(tenant_job, debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(
+        tenant.id, user_7.id,
+        "a namespace boundary is also a debounce boundary"
+    );
+}
+
+/// A coalescing call is a vote to run again soon, not a redefinition of the
+/// run: everything but the deadline — and the payload under `replace_payload` —
+/// belongs to the job that opened the window. Without this, widening the
+/// coalescing `UPDATE` would break the documented contract silently.
+#[test]
+fn coalescing_discards_the_rest_of_the_new_call() {
+    let storage = test_storage();
+
+    let mut opening = debounced_job("report:user-7");
+    opening.priority = 1;
+    opening.metadata = Some(r#"{"round":1}"#.to_string());
+    opening.expires_at = Some(now_millis() + 900_000);
+    let first = storage
+        .enqueue_debounced(opening, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    let mut louder = debounced_job("report:user-7");
+    louder.priority = 9;
+    louder.metadata = Some(r#"{"round":2}"#.to_string());
+    louder.expires_at = Some(now_millis() + 1);
+    let coalesced = storage
+        .enqueue_debounced(louder, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    assert_eq!(coalesced.id, first.id);
+    assert_eq!(coalesced.priority, 1, "priority belongs to the opener");
+    assert_eq!(coalesced.metadata, first.metadata);
+    assert_eq!(coalesced.expires_at, first.expires_at);
+}
+
+/// `replace_payload` is the difference between "run with the latest input" and
+/// "run with the input that opened the window".
+#[test]
+fn replace_payload_controls_which_payload_survives() {
+    let storage = test_storage();
+
+    let mut opening = debounced_job("report:user-7");
+    opening.payload = vec![1];
+    let first = storage
+        .enqueue_debounced(opening, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    let mut kept = debounced_job("report:user-7");
+    kept.payload = vec![2];
+    let unchanged = storage
+        .enqueue_debounced(kept, debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(unchanged.id, first.id);
+    assert_eq!(unchanged.payload, vec![1], "the window's payload is kept");
+
+    let mut newest = debounced_job("report:user-7");
+    newest.payload = vec![3];
+    let replaced = storage
+        .enqueue_debounced(
+            newest,
+            DebounceOptions {
+                replace_payload: true,
+                ..debounce_opts(5_000, 60_000)
+            },
+        )
+        .unwrap();
+    assert_eq!(replaced.id, first.id);
+    assert_eq!(replaced.payload, vec![3]);
+    assert_eq!(
+        storage.get_job(&first.id, None).unwrap().unwrap().payload,
+        vec![3],
+        "the swap is persisted, not just reflected in the return value"
+    );
+}
+
+/// Each rejected combination is a silent-misbehaviour trap, not a style
+/// preference: no key debounces every job of the task against every other, a
+/// non-positive window schedules into the past, and a ceiling below the window
+/// makes the window meaningless.
+#[test]
+fn debounced_enqueue_rejects_options_that_cannot_debounce() {
+    let storage = test_storage();
+
+    let no_key = storage.enqueue_debounced(make_job("build_report"), debounce_opts(5_000, 60_000));
+    assert!(matches!(no_key, Err(QueueError::Config(_))));
+
+    let empty_key = storage.enqueue_debounced(debounced_job(""), debounce_opts(5_000, 60_000));
+    assert!(matches!(empty_key, Err(QueueError::Config(_))));
+
+    let no_window =
+        storage.enqueue_debounced(debounced_job("report:user-7"), debounce_opts(0, 60_000));
+    assert!(matches!(no_window, Err(QueueError::Config(_))));
+
+    let short_ceiling =
+        storage.enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 1_000));
+    assert!(matches!(short_ceiling, Err(QueueError::Config(_))));
+
+    // A rejected call must not have written anything.
+    let all = storage.list_jobs(None, None, None, 10, 0, None).unwrap();
+    assert!(all.is_empty());
+}
+
+/// A window large enough to overflow the epoch must saturate, not wrap. Wrapping
+/// lands `scheduled_at` in the *past* and dispatches the job at once — the exact
+/// opposite of the request — and panics outright in a debug build.
+#[test]
+fn an_overflowing_window_saturates_instead_of_dispatching_at_once() {
+    let storage = test_storage();
+
+    let job = storage
+        .enqueue_debounced(
+            debounced_job("report:user-7"),
+            debounce_opts(i64::MAX, i64::MAX),
+        )
+        .unwrap();
+
+    assert_eq!(job.scheduled_at, i64::MAX);
+    assert!(
+        storage
+            .dequeue("default", now_millis(), None)
+            .unwrap()
+            .is_none(),
+        "a saturated deadline must not be due now"
+    );
 }
 
 #[test]

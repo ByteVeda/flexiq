@@ -376,6 +376,159 @@ macro_rules! impl_diesel_job_ops {
                 })
             }
 
+            /// The pending job a debounce write may slide, or `None` when the key
+            /// has no window open. Oldest first, so a burst always coalesces onto
+            /// the same row and its `created_at` is a stable `first_seen` for the
+            /// `max_wait` cap.
+            ///
+            /// Rows holding an execution claim are skipped. A claim can outlive a
+            /// `Pending` status — `complete_execution` failing on the result path
+            /// only logs — and a job a worker already holds must never be pulled
+            /// back to a later deadline. Two queries rather than a join: `jobs`
+            /// and `execution_claims` are not declared joinable, the same reason
+            /// `reap_orphaned_jobs` splits its lookup.
+            fn find_debounce_target(
+                conn: &mut $conn_type,
+                namespace: Option<&str>,
+                debounce_key: &str,
+            ) -> Result<Option<NarrowJobRow>> {
+                let candidates = Self::lock_debounce_candidates(conn, namespace, debounce_key)?;
+                if candidates.is_empty() {
+                    return Ok(None);
+                }
+
+                let ids: Vec<String> = candidates.iter().map(|row| row.id.clone()).collect();
+                let claimed: std::collections::HashSet<String> = execution_claims::table
+                    .filter(execution_claims::job_id.eq_any(ids))
+                    .select(execution_claims::job_id)
+                    .load(conn)?
+                    .into_iter()
+                    .collect();
+
+                Ok(candidates
+                    .into_iter()
+                    .find(|row| !claimed.contains(&row.id)))
+            }
+
+            /// Enqueue under a debounce window. See
+            /// [`Storage::enqueue_debounced`](crate::storage::Storage::enqueue_debounced).
+            pub fn enqueue_debounced(
+                &self,
+                new_job: NewJob,
+                options: $crate::storage::records::DebounceOptions,
+            ) -> Result<Job> {
+                let debounce_key = $crate::storage::validated_debounce_key(&new_job, &options)?;
+
+                let depends_on = new_job.depends_on.clone();
+                let mut job = new_job.into_job();
+                let now = now_millis();
+                // The window decides when a debounced job runs, not the caller.
+                // `created_at` is pinned to the same instant because it doubles
+                // as `first_seen` for the `max_wait` cap: leaving `into_job`'s
+                // own clock reading there lets the two drift a millisecond
+                // apart, which is enough to make a slide move a deadline
+                // backwards when `max_wait_ms == window_ms`.
+                // Saturating, like the ceiling below: an absurd `window_ms`
+                // would otherwise wrap `scheduled_at` negative and dispatch the
+                // job *immediately*, the exact opposite of what was asked for
+                // (and panic outright in a debug build).
+                job.created_at = now;
+                job.scheduled_at = now.saturating_add(options.window_ms);
+
+                self.write_transaction(|conn| {
+                    if let Some(pending) =
+                        Self::find_debounce_target(conn, job.namespace.as_deref(), &debounce_key)?
+                    {
+                        // The cap is measured from when the window opened, so a
+                        // caller holding the button down cannot starve the job.
+                        let deadline = std::cmp::min(
+                            job.scheduled_at,
+                            pending.created_at.saturating_add(options.max_wait_ms),
+                        );
+                        let target = jobs::table.filter(jobs::id.eq(&pending.id));
+                        if options.replace_payload {
+                            diesel::update(target)
+                                .set((
+                                    jobs::scheduled_at.eq(deadline),
+                                    jobs::payload.eq(&job.payload),
+                                ))
+                                .execute(conn)?;
+                        } else {
+                            diesel::update(target)
+                                .set(jobs::scheduled_at.eq(deadline))
+                                .execute(conn)?;
+                        }
+
+                        // Re-read rather than patch the narrow candidate: the
+                        // scan is deliberately blob-free, and the caller expects
+                        // the payload the job will actually run with.
+                        let row: JobRow = jobs::table
+                            .filter(jobs::id.eq(&pending.id))
+                            .select(JobRow::as_select())
+                            .first(conn)?;
+                        return Ok(Job::from(row));
+                    }
+
+                    // No open window: insert, validating dependencies exactly as
+                    // `enqueue` does (RollbackTransaction → DependencyNotFound).
+                    for dep_id in &depends_on {
+                        Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
+                    }
+
+                    let (topic, subscription_name) =
+                        $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
+                            .map_or((None, None), |(t, s)| (Some(t), Some(s)));
+                    let row = NewJobRow {
+                        id: &job.id,
+                        queue: &job.queue,
+                        task_name: &job.task_name,
+                        payload: &job.payload,
+                        status: job.status as i32,
+                        priority: job.priority,
+                        created_at: job.created_at,
+                        scheduled_at: job.scheduled_at,
+                        retry_count: job.retry_count,
+                        max_retries: job.max_retries,
+                        timeout_ms: job.timeout_ms,
+                        unique_key: job.unique_key.as_deref(),
+                        metadata: job.metadata.as_deref(),
+                        notes: job.notes.as_deref(),
+                        cancel_requested: 0,
+                        expires_at: job.expires_at,
+                        result_ttl_ms: job.result_ttl_ms,
+                        namespace: job.namespace.as_deref(),
+                        has_deps: job.has_deps,
+                        topic: topic.as_deref(),
+                        subscription_name: subscription_name.as_deref(),
+                        debounce_key: job.debounce_key.as_deref(),
+                    };
+                    diesel::insert_into(jobs::table)
+                        .values(&row)
+                        .execute(conn)?;
+
+                    for dep_id in &depends_on {
+                        let dep_row = NewJobDependencyRow {
+                            id: &uuid::Uuid::now_v7().to_string(),
+                            job_id: &job.id,
+                            depends_on_job_id: dep_id,
+                        };
+                        diesel::insert_into(job_dependencies::table)
+                            .values(&dep_row)
+                            .execute(conn)?;
+                    }
+
+                    Ok(job.clone())
+                })
+                .map_err(|e| match e {
+                    QueueError::Storage(diesel::result::Error::RollbackTransaction) => {
+                        QueueError::DependencyNotFound(
+                            "dependency not found or already dead/cancelled".to_string(),
+                        )
+                    }
+                    other => other,
+                })
+            }
+
             /// Enqueue with unique_key deduplication. Returns the existing active
             /// job on a duplicate, validates dependencies exactly like `enqueue`,
             /// and never returns a job whose insert was rolled back.

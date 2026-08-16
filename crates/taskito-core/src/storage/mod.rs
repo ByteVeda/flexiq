@@ -65,6 +65,45 @@ pub(crate) const RETENTION_LOCK: &str = "taskito:retention";
 /// cap bounds — the first sweep after a retention default flip is the long one.
 pub(crate) const RETENTION_LOCK_TTL_MS: i64 = 300_000;
 
+/// How many pending rows a debounce write inspects before giving up on finding
+/// an unclaimed one. A healthy key has exactly one; more only appear when a row
+/// is mid-claim, so the scan is bounded rather than unlimited.
+pub(crate) const DEBOUNCE_CANDIDATE_SCAN: i64 = 8;
+
+/// Check the arguments of a debounced enqueue and hand back the key it
+/// coalesces on.
+///
+/// All three rules are load-bearing. A missing key would debounce every job of
+/// the task against every other — the design calls for a payload-derived key
+/// like `report:{user_id}`. A non-positive window would schedule the job in the
+/// past, so nothing ever coalesces. And a `max_wait_ms` below the window would
+/// cap the very first insert, silently making the window meaningless; that is a
+/// caller mistake worth surfacing rather than absorbing.
+pub(crate) fn validated_debounce_key(
+    new_job: &NewJob,
+    options: &records::DebounceOptions,
+) -> Result<String> {
+    let key = new_job.debounce_key.as_deref().unwrap_or("");
+    if key.is_empty() {
+        return Err(crate::error::QueueError::Config(
+            "enqueue_debounced requires a non-empty debounce_key".to_string(),
+        ));
+    }
+    if options.window_ms <= 0 {
+        return Err(crate::error::QueueError::Config(format!(
+            "debounce window_ms must be positive, got {}",
+            options.window_ms
+        )));
+    }
+    if options.max_wait_ms < options.window_ms {
+        return Err(crate::error::QueueError::Config(format!(
+            "debounce max_wait_ms ({}) must be at least window_ms ({})",
+            options.max_wait_ms, options.window_ms
+        )));
+    }
+    Ok(key.to_string())
+}
+
 /// Hold `lock_name` as `owner_id` for another `ttl_ms`, renewing first and only
 /// taking it when free. Returns whether this caller now holds it.
 ///
@@ -454,6 +493,13 @@ macro_rules! impl_storage {
                 new_jobs: Vec<$crate::job::NewJob>,
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.enqueue_unique_batch(new_jobs)
+            }
+            fn enqueue_debounced(
+                &self,
+                new_job: $crate::job::NewJob,
+                options: $crate::storage::records::DebounceOptions,
+            ) -> $crate::error::Result<$crate::job::Job> {
+                self.enqueue_debounced(new_job, options)
             }
             fn dequeue(
                 &self,
@@ -1374,6 +1420,12 @@ impl Storage for StorageBackend {
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
         let job = delegate!(self, enqueue_unique, new_job)?;
+        #[cfg(feature = "push-dispatch")]
+        self.notify_if_ready(job.scheduled_at);
+        Ok(job)
+    }
+    fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
+        let job = delegate!(self, enqueue_debounced, new_job, options)?;
         #[cfg(feature = "push-dispatch")]
         self.notify_if_ready(job.scheduled_at);
         Ok(job)
