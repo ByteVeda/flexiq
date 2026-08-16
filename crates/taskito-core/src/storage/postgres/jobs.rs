@@ -172,6 +172,12 @@ impl PostgresStorage {
 /// `\x1f` separator keeps `(ns="a", key="xb")` from colliding with
 /// `(ns="ax", key="b")`. Collisions only cost extra serialization, never
 /// correctness.
+///
+/// The id deliberately omits `PostgresStorage::schema`, even though advisory
+/// locks are database-wide: two instances isolated by schema then serialize on
+/// a shared `(namespace, debounce_key)` pair. Each still scans only its own
+/// schema, so that is contention and nothing more — not worth threading the
+/// schema through a scan signature the SQLite twin has no use for.
 fn debounce_lock_id(namespace: Option<&str>, debounce_key: &str) -> i64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
