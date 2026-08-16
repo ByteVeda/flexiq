@@ -60,10 +60,10 @@ pub trait Storage: Send + Sync + Clone {
     /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
     /// window with [`QueueError::Config`](crate::error::QueueError::Config).
     ///
-    /// **Not implemented on the Redis backend**, which has no transaction to
-    /// hang the read-modify-write on: every call there fails until its Lua path
-    /// lands. Falling back to a plain `enqueue` would insert one job per call,
-    /// which is what debounce exists to prevent.
+    /// The Diesel backends get their atomicity from the transaction; the Redis
+    /// backend has none, so it decides slide-vs-insert in a Lua script and
+    /// commits a slide as a document compare-and-swap. Contended enough to lose
+    /// that swap repeatedly, it errors rather than inserting a second job.
     fn enqueue_debounced(&self, new_job: NewJob, options: DebounceOptions) -> Result<Job>;
     /// Atomically claim the highest-priority ready job from a queue, moving it
     /// to `Running`. `None` when no job is eligible. `namespace = None`

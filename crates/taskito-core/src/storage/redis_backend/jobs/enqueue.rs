@@ -1,11 +1,136 @@
 //! Enqueue, batch enqueue, and unique-keyed enqueue.
 
+use std::sync::LazyLock;
+
 use redis::Commands;
 
 use super::dequeue_score;
 use crate::error::{QueueError, Result};
-use crate::job::{Job, JobStatus, NewJob};
+use crate::job::{now_millis, Job, JobStatus, NewJob};
+use crate::storage::records::DebounceOptions;
 use crate::storage::redis_backend::{map_err, RedisStorage};
+use crate::storage::DEBOUNCE_CANDIDATE_SCAN;
+
+/// Lua: find the pending, unclaimed job a debounce write may slide, pruning the
+/// index as it goes. Shared verbatim by [`DEBOUNCE_RESOLVE`] and
+/// [`DEBOUNCE_INSERT`] — the insert must re-run it under the same script call
+/// that writes, or two first-of-a-burst enqueues both find nothing and both
+/// insert, which is the exact case debounce exists to collapse.
+///
+/// Candidates come out of the index oldest-first, so a burst always coalesces
+/// onto the same job and its `created_at` is a stable `first_seen` for the
+/// `max_wait` cap — the Diesel scan's ordering.
+///
+/// Membership is a hint, never an authority: an entry whose job is gone or has
+/// left `Pending` is dropped here. A job holding an execution claim is skipped
+/// but left indexed — `claim_execution` writes its row without touching
+/// `status`, so a Pending job can carry a live claim, and a job a worker
+/// already holds must never be pulled back to a later deadline.
+///
+/// The status comparison uses `JobStatus::wire_name()` passed through ARGV
+/// rather than a discriminant baked into the Lua, keeping the wire-format
+/// contract single-sourced (see `wire_name_matches_serde_output`).
+///
+/// KEYS[1]: debounce index. ARGV[1-4]: job key prefix, claim key prefix,
+/// pending wire name, scan limit. Falls through when nothing matches.
+const DEBOUNCE_SCAN: &str = r#"
+    local debounce_index = KEYS[1]
+    local job_key_prefix = ARGV[1]
+    local claim_key_prefix = ARGV[2]
+    local pending_status = ARGV[3]
+    local scan_limit = tonumber(ARGV[4])
+
+    local candidates = redis.call('ZRANGE', debounce_index, 0, scan_limit - 1)
+    for i = 1, #candidates do
+        local candidate_id = candidates[i]
+        local candidate = redis.call('GET', job_key_prefix .. candidate_id)
+        if not candidate then
+            redis.call('ZREM', debounce_index, candidate_id)
+        elseif cjson.decode(candidate).status ~= pending_status then
+            redis.call('ZREM', debounce_index, candidate_id)
+        elseif redis.call('EXISTS', claim_key_prefix .. candidate_id) == 0 then
+            return candidate
+        end
+    end
+"#;
+
+/// Lua: [`DEBOUNCE_SCAN`] as a lookup — the slide target's document, or nil when
+/// the key has no window open.
+///
+/// Composed at first use rather than as a `const`: the two scripts share the
+/// scan verbatim, and a `Script` built once keeps its SHA so every call after
+/// the first is an `EVALSHA`.
+static DEBOUNCE_RESOLVE: LazyLock<redis::Script> =
+    LazyLock::new(|| redis::Script::new(&format!("{DEBOUNCE_SCAN}\n    return nil\n")));
+
+/// Lua: open a fresh window — insert the job with every index a plain `enqueue`
+/// writes, plus its own debounce entry. Re-runs [`DEBOUNCE_SCAN`] first and
+/// hands back the document instead if a concurrent caller opened the window in
+/// the meantime, so the caller slides that one rather than inserting a second
+/// job.
+///
+/// KEYS (after the index): job, status set, queue zset, by_queue, by_task, all,
+/// and — only for a pub/sub delivery — its subscription's pending backlog.
+/// ARGV (after the scan's four): job id, job JSON, queue score, `created_at`,
+/// dependency count, then one `(depends_on_key, dep_id, dependents_key)` triple
+/// per dependency.
+static DEBOUNCE_INSERT: LazyLock<redis::Script> =
+    LazyLock::new(|| redis::Script::new(&format!("{DEBOUNCE_SCAN}{DEBOUNCE_INSERT_BODY}")));
+
+/// The write half of [`DEBOUNCE_INSERT`], appended to [`DEBOUNCE_SCAN`].
+const DEBOUNCE_INSERT_BODY: &str = r#"
+    local job_id = ARGV[5]
+    local job_json = ARGV[6]
+    local score = tonumber(ARGV[7])
+    local created_at = tonumber(ARGV[8])
+    local num_deps = tonumber(ARGV[9])
+    local dep_args_base = 10
+
+    redis.call('SET', KEYS[2], job_json)
+    redis.call('SADD', KEYS[3], job_id)
+    redis.call('ZADD', KEYS[4], score, job_id)
+    redis.call('SADD', KEYS[5], job_id)
+    redis.call('SADD', KEYS[6], job_id)
+    redis.call('ZADD', KEYS[7], -created_at, job_id)
+    redis.call('ZADD', debounce_index, created_at, job_id)
+
+    if KEYS[8] then
+        redis.call('ZADD', KEYS[8], created_at, job_id)
+    end
+
+    for i = 1, num_deps do
+        local offset = dep_args_base + (i - 1) * 3
+        redis.call('SADD', ARGV[offset], ARGV[offset + 1])
+        redis.call('SADD', ARGV[offset + 2], job_id)
+    end
+
+    return nil
+"#;
+
+/// Lua: commit a slid deadline as a compare-and-swap on the whole document.
+///
+/// Comparing the document the scan read is what makes the read-modify-write
+/// safe without a transaction: a job archived, retried, or otherwise rewritten
+/// in between no longer matches, so the write is refused rather than
+/// resurrecting or clobbering it. The claim is re-checked because a claim
+/// appears beside the document without changing it. Returns 1 on write, 0 to
+/// retry from the scan.
+///
+/// KEYS: job, queue zset, execution claim. ARGV: job id, document as read,
+/// document to write, new queue score.
+const DEBOUNCE_SLIDE: &str = r#"
+    if redis.call('GET', KEYS[1]) ~= ARGV[2] then return 0 end
+    if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
+    redis.call('SET', KEYS[1], ARGV[3])
+    redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
+    return 1
+"#;
+
+/// How many times a debounced enqueue re-runs the scan before giving up. Each
+/// retry means another caller took the slot mid-flight; persistent contention
+/// surfaces as an error rather than a second job or a phantom one. Mirrors
+/// `MAX_ENQUEUE_ATTEMPTS` in [`RedisStorage::enqueue_unique`].
+const MAX_DEBOUNCE_ATTEMPTS: usize = 3;
 
 impl RedisStorage {
     /// Validate that each `dep_id` references a job that exists, shares
@@ -91,6 +216,13 @@ impl RedisStorage {
         pipe.sadd(&by_task_key, &job.id);
         pipe.zadd(&all_key, &job.id, -(job.created_at as f64));
 
+        // A pending job carrying a debounce key is a valid slide target however
+        // it was enqueued, so it enters the key's index here too — the Diesel
+        // partial index covers every insert, not only the debounced path.
+        if let Some(debounce_key) = self.job_debounce_index_key(&job) {
+            pipe.zadd(&debounce_key, &job.id, job.created_at as f64);
+        }
+
         // Store dependencies
         for dep_id in &depends_on {
             let depends_on_key = self.key(&["job", &job.id, "depends_on"]);
@@ -148,6 +280,11 @@ impl RedisStorage {
             pipe.sadd(&by_task_key, &job.id);
             pipe.zadd(&all_key, &job.id, -(job.created_at as f64));
 
+            // Debounce index, as in the single-job `enqueue`.
+            if let Some(debounce_key) = self.job_debounce_index_key(job) {
+                pipe.zadd(&debounce_key, &job.id, job.created_at as f64);
+            }
+
             // Store dependencies
             for dep_id in &dep_lists[i] {
                 let depends_on_key = self.key(&["job", &job.id, "depends_on"]);
@@ -177,22 +314,164 @@ impl RedisStorage {
             .collect()
     }
 
-    /// Debounced enqueue, not yet implemented on this backend.
-    ///
-    /// The Diesel backends hang the read-modify-write on a transaction; Redis
-    /// has none, so this needs a Lua script plus a `namespace + debounce_key →
-    /// job id` index that claiming, completing, dead-lettering, and purging all
-    /// clear. Rejecting is the only honest answer until that lands: falling
-    /// back to a plain `enqueue` would turn a burst into one job per call,
-    /// which is the exact bug debounce exists to prevent.
-    pub fn enqueue_debounced(
+    /// The document of the pending, unclaimed job this key may slide, or `None`
+    /// when its window is closed. Prunes stale index entries as it scans.
+    fn resolve_debounce_target(
         &self,
-        _new_job: NewJob,
-        _options: crate::storage::records::DebounceOptions,
-    ) -> Result<Job> {
-        Err(QueueError::Other(
-            "enqueue_debounced is not supported on the Redis backend yet".to_string(),
-        ))
+        conn: &mut redis::Connection,
+        index_key: &str,
+    ) -> Result<Option<String>> {
+        let mut invocation = DEBOUNCE_RESOLVE.prepare_invoke();
+        invocation.key(index_key);
+        self.push_debounce_scan_args(&mut invocation);
+        invocation.invoke(conn).map_err(map_err)
+    }
+
+    /// The four arguments [`DEBOUNCE_SCAN`] reads, in order. Shared so the
+    /// resolve and insert calls can never drift out of agreement on them.
+    fn push_debounce_scan_args(&self, invocation: &mut redis::ScriptInvocation<'_>) {
+        invocation
+            .arg(self.key(&["job", ""]))
+            .arg(self.key(&["exec_claim", ""]))
+            .arg(JobStatus::Pending.wire_name())
+            .arg(DEBOUNCE_CANDIDATE_SCAN);
+    }
+
+    /// Slide `target_json`'s deadline and commit it, or `None` when the job
+    /// changed under us and the caller should rescan.
+    ///
+    /// The document is patched here rather than in Lua: `payload` is a
+    /// `Vec<u8>`, so an empty one serializes as `[]`, and a `cjson` decode /
+    /// encode round trip rewrites that as `{}`, which no longer deserializes.
+    /// Keeping serde the only writer of the document costs one extra round trip
+    /// on the slide and none on the insert.
+    fn slide_debounce_target(
+        &self,
+        conn: &mut redis::Connection,
+        target_json: &str,
+        job: &Job,
+        options: &DebounceOptions,
+    ) -> Result<Option<Job>> {
+        let mut target: Job = serde_json::from_str(target_json)?;
+        // The cap is measured from when the window opened, so a caller holding
+        // the button down cannot starve the job. Saturating like `job
+        // .scheduled_at` above: an absurd `max_wait_ms` would otherwise wrap
+        // negative and dispatch immediately, the opposite of what was asked.
+        target.scheduled_at = std::cmp::min(
+            job.scheduled_at,
+            target.created_at.saturating_add(options.max_wait_ms),
+        );
+        if options.replace_payload {
+            target.payload.clone_from(&job.payload);
+        }
+
+        let new_json = serde_json::to_string(&target)?;
+        let applied: i32 = redis::Script::new(DEBOUNCE_SLIDE)
+            .key(self.key(&["job", &target.id]))
+            .key(self.key(&["queue", &target.queue, "pending"]))
+            .key(self.key(&["exec_claim", &target.id]))
+            .arg(&target.id)
+            .arg(target_json)
+            .arg(&new_json)
+            .arg(dequeue_score(target.priority, target.scheduled_at))
+            .invoke(conn)
+            .map_err(map_err)?;
+
+        Ok((applied == 1).then_some(target))
+    }
+
+    /// Open a window with `job`. `Some(document)` means a concurrent caller
+    /// opened it first and that job is the one to slide.
+    fn insert_debounced(
+        &self,
+        conn: &mut redis::Connection,
+        index_key: &str,
+        job: &Job,
+        depends_on: &[String],
+    ) -> Result<Option<String>> {
+        let mut invocation = DEBOUNCE_INSERT.prepare_invoke();
+        invocation
+            .key(index_key)
+            .key(self.key(&["job", &job.id]))
+            .key(self.key(&["jobs", "status", &(job.status as i32).to_string()]))
+            .key(self.key(&["queue", &job.queue, "pending"]))
+            .key(self.key(&["jobs", "by_queue", &job.queue]))
+            .key(self.key(&["jobs", "by_task", &job.task_name]))
+            .key(self.key(&["jobs", "all"]));
+        // A pub/sub delivery also enters its subscription's pending backlog
+        // index, in the same script so the two cannot desync on a crash.
+        if let Some((topic, name)) = crate::pubsub::extract_topic_subscription(job.notes.as_deref())
+        {
+            invocation.key(self.key(&["sub", "pending", &topic, &name]));
+        }
+
+        self.push_debounce_scan_args(&mut invocation);
+        invocation
+            .arg(&job.id)
+            .arg(serde_json::to_string(job)?)
+            .arg(dequeue_score(job.priority, job.scheduled_at))
+            .arg(job.created_at)
+            .arg(depends_on.len());
+        for dep_id in depends_on {
+            invocation
+                .arg(self.key(&["job", &job.id, "depends_on"]))
+                .arg(dep_id)
+                .arg(self.key(&["job", dep_id, "dependents"]));
+        }
+
+        invocation.invoke(conn).map_err(map_err)
+    }
+
+    /// Enqueue under a debounce window. See
+    /// [`Storage::enqueue_debounced`](crate::storage::Storage::enqueue_debounced).
+    ///
+    /// Redis has no transaction to hang the read-modify-write on, so the
+    /// slide-or-insert decision is a Lua script over the key's debounce index
+    /// and the slide commits as a document-level compare-and-swap. Losing
+    /// either race rescans rather than writing, so a burst can never leave two
+    /// jobs behind.
+    pub fn enqueue_debounced(&self, new_job: NewJob, options: DebounceOptions) -> Result<Job> {
+        let debounce_key = crate::storage::validated_debounce_key(&new_job, &options)?;
+
+        let depends_on = new_job.depends_on.clone();
+        let mut job = new_job.into_job();
+        let now = now_millis();
+        // The window decides when a debounced job runs, not the caller.
+        // `created_at` is pinned to the same instant because it doubles as
+        // `first_seen` for the `max_wait` cap: leaving `into_job`'s own clock
+        // reading there lets the two drift a millisecond apart, which is enough
+        // to slide a deadline *backwards* when `max_wait_ms == window_ms`.
+        job.created_at = now;
+        job.scheduled_at = now.saturating_add(options.window_ms);
+
+        let mut conn = self.conn()?;
+        let index_key = self.debounce_index_key(job.namespace.as_deref(), &debounce_key);
+
+        for _ in 0..MAX_DEBOUNCE_ATTEMPTS {
+            let target = match self.resolve_debounce_target(&mut conn, &index_key)? {
+                Some(target) => target,
+                None => {
+                    // No open window: insert, validating dependencies exactly as
+                    // `enqueue` does. A coalescing call never reaches this, which
+                    // matches the Diesel backends — a vote to run again soon does
+                    // not redefine the run, so its dependencies are discarded
+                    // unread.
+                    self.validate_dep_ids(&mut conn, &depends_on, job.namespace.as_deref(), None)?;
+                    match self.insert_debounced(&mut conn, &index_key, &job, &depends_on)? {
+                        None => return Ok(job),
+                        Some(raced) => raced,
+                    }
+                }
+            };
+
+            if let Some(slid) = self.slide_debounce_target(&mut conn, &target, &job, &options)? {
+                return Ok(slid);
+            }
+        }
+
+        Err(QueueError::Other(format!(
+            "debounced enqueue for {debounce_key} lost its slide target {MAX_DEBOUNCE_ATTEMPTS} times"
+        )))
     }
 
     /// Enqueue with `unique_key` deduplication: a Lua script atomically returns
@@ -257,8 +536,9 @@ impl RedisStorage {
 
             // Store everything atomically via Lua. Active-status names are
             // passed via ARGV (positions 7-8) for the same reason as above —
-            // single-sourced in `JobStatus::wire_name()`. Dependency triples
-            // start at ARGV[9].
+            // single-sourced in `JobStatus::wire_name()`. ARGV[9] names the
+            // KEYS slot holding the debounce index, and dependency triples
+            // start at ARGV[10].
             let store_script = redis::Script::new(
                 r#"
                 local unique_key = KEYS[1]
@@ -277,7 +557,8 @@ impl RedisStorage {
                 local job_key_prefix = ARGV[6]
                 local active_pending = ARGV[7]
                 local active_running = ARGV[8]
-                local dep_args_base = 9
+                local debounce_slot = tonumber(ARGV[9])
+                local dep_args_base = 10
 
                 -- Re-check unique key (race guard against a concurrent enqueue).
                 local existing = redis.call('GET', unique_key)
@@ -307,6 +588,13 @@ impl RedisStorage {
                 -- backlog index cannot desync from the job on a crash.
                 if KEYS[8] then
                     redis.call('ZADD', KEYS[8], created_at, job_id)
+                end
+
+                -- A debounce key makes the job a slide target while it stays
+                -- pending. Its index sits at the KEYS slot ARGV[9] names,
+                -- because both optional keys can be absent independently.
+                if debounce_slot > 0 then
+                    redis.call('ZADD', KEYS[debounce_slot], created_at, job_id)
                 end
 
                 -- Store dependencies (3 ARGVs per dep: dep_on_key, dep_id, dependents_key).
@@ -350,6 +638,16 @@ impl RedisStorage {
             {
                 keys.push(self.key(&["sub", "pending", &topic, &name]));
             }
+            // The debounce index goes last, and the Lua reads its slot from
+            // ARGV: it and the pub/sub backlog key are independently optional,
+            // so neither can own a fixed position.
+            let debounce_slot = match self.job_debounce_index_key(&job) {
+                Some(debounce_key) => {
+                    keys.push(debounce_key);
+                    keys.len()
+                }
+                None => 0,
+            };
             let mut args: Vec<String> = vec![
                 job.id.clone(),
                 job_json.clone(),
@@ -359,6 +657,7 @@ impl RedisStorage {
                 job_key_prefix,
                 active_pending.to_string(),
                 active_running.to_string(),
+                debounce_slot.to_string(),
             ];
 
             for dep_id in &depends_on {
