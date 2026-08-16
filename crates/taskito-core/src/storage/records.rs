@@ -417,6 +417,24 @@ fn default_success_rate() -> f64 {
     0.8
 }
 
+/// How a debounced enqueue collapses a burst into one run.
+///
+/// Grouped into a struct rather than passed positionally for the same reason as
+/// [`WorkerRegistration`]: two adjacent millisecond durations are easy to
+/// transpose, and transposing these two silently inverts the semantics.
+#[derive(Debug, Clone, Copy)]
+pub struct DebounceOptions {
+    /// How far ahead of *now* each enqueue pushes the run, in milliseconds.
+    pub window_ms: i64,
+    /// Hard ceiling on the total delay, measured from the pending job's
+    /// `created_at`. Mandatory: without it a caller who never stops enqueuing
+    /// starves the job forever, which is the classic debounce footgun.
+    pub max_wait_ms: i64,
+    /// Overwrite the pending job's payload with the newest one. `false` keeps
+    /// the payload the window opened with.
+    pub replace_payload: bool,
+}
+
 /// Everything a worker announces about itself when it joins the registry.
 ///
 /// Grouped into a struct rather than passed positionally: the shells populate

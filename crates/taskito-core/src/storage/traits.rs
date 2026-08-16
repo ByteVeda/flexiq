@@ -1,9 +1,9 @@
 use crate::error::Result;
 use crate::job::{Job, NewJob};
 use crate::storage::records::{
-    CircuitBreakerState, JobError, LockInfo, NewPeriodicTask, NewSubscription, PeriodicTask,
-    RateLimitState, ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic,
-    TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    CircuitBreakerState, DebounceOptions, JobError, LockInfo, NewPeriodicTask, NewSubscription,
+    PeriodicTask, RateLimitState, ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry,
+    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -34,6 +34,32 @@ pub trait Storage: Send + Sync + Clone {
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job>;
     /// Batch variant of [`enqueue_unique`](Self::enqueue_unique), one transaction.
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;
+    /// Enqueue under a debounce window: while a job carrying the same
+    /// `debounce_key` is still pending and unclaimed, slide its `scheduled_at`
+    /// forward instead of inserting a second job, so a burst of enqueues
+    /// collapses into one run.
+    ///
+    /// The new deadline is `min(now + window_ms, first_seen + max_wait_ms)`,
+    /// where `first_seen` is the pending job's `created_at` — no extra column.
+    /// `new_job.scheduled_at` is ignored; the window decides when the job runs.
+    ///
+    /// The read, the status guard, and the write are one transaction. A job
+    /// claimed a microsecond ago must never be pulled back to a later deadline
+    /// after a worker already has it, so a claimed row is left alone and the
+    /// call inserts a fresh job instead.
+    ///
+    /// A coalescing call changes only the deadline, plus the payload when
+    /// `replace_payload` is set. Everything else on `new_job` — priority,
+    /// metadata, notes, `depends_on`, `expires_at` — belongs to the job that
+    /// opened the window and is discarded; the call is a vote to run again
+    /// soon, not a redefinition of the run.
+    ///
+    /// Returns the job the enqueue landed on, whether that is the slid pending
+    /// one or a newly inserted one; compare its id against the previous call's
+    /// to tell coalescing from insertion. Rejects a missing or empty
+    /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
+    /// window with [`QueueError::Config`](crate::error::QueueError::Config).
+    fn enqueue_debounced(&self, new_job: NewJob, options: DebounceOptions) -> Result<Job>;
     /// Atomically claim the highest-priority ready job from a queue, moving it
     /// to `Running`. `None` when no job is eligible. `namespace = None`
     /// matches only namespace-less jobs.

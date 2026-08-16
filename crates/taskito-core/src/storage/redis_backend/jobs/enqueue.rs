@@ -177,6 +177,24 @@ impl RedisStorage {
             .collect()
     }
 
+    /// Debounced enqueue, not yet implemented on this backend.
+    ///
+    /// The Diesel backends hang the read-modify-write on a transaction; Redis
+    /// has none, so this needs a Lua script plus a `namespace + debounce_key →
+    /// job id` index that claiming, completing, dead-lettering, and purging all
+    /// clear. Rejecting is the only honest answer until that lands: falling
+    /// back to a plain `enqueue` would turn a burst into one job per call,
+    /// which is the exact bug debounce exists to prevent.
+    pub fn enqueue_debounced(
+        &self,
+        _new_job: NewJob,
+        _options: crate::storage::records::DebounceOptions,
+    ) -> Result<Job> {
+        Err(QueueError::Other(
+            "enqueue_debounced is not supported on the Redis backend yet".to_string(),
+        ))
+    }
+
     /// Enqueue with `unique_key` deduplication: a Lua script atomically returns
     /// the existing active job when a duplicate is found instead of inserting.
     pub fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {

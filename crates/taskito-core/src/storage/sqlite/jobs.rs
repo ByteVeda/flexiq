@@ -34,6 +34,35 @@ impl SqliteStorage {
         conn.immediate_transaction(f)
     }
 
+    /// Pending rows a debounced enqueue may slide, oldest first (narrow — no
+    /// payload/result blobs; the winner is re-read in full).
+    ///
+    /// No row-locking clause and none needed: the caller's `BEGIN IMMEDIATE`
+    /// write transaction already holds the database-wide write lock, so no
+    /// second writer can insert a competing row for this key between the scan
+    /// and the write. That is what makes "one pending job per debounce key" an
+    /// invariant of the transaction rather than of an index — see
+    /// `m0010_debounce` for why the index is deliberately not unique.
+    fn lock_debounce_candidates(
+        conn: &mut SqliteConnection,
+        namespace: Option<&str>,
+        debounce_key: &str,
+    ) -> diesel::result::QueryResult<Vec<NarrowJobRow>> {
+        let mut query = jobs::table
+            .filter(jobs::debounce_key.eq(debounce_key))
+            .filter(jobs::status.eq(JobStatus::Pending as i32))
+            .into_boxed();
+        query = match namespace {
+            Some(ns) => query.filter(jobs::namespace.eq(ns)),
+            None => query.filter(jobs::namespace.is_null()),
+        };
+        query
+            .order((jobs::created_at.asc(), jobs::id.asc()))
+            .limit(crate::storage::DEBOUNCE_CANDIDATE_SCAN)
+            .select(NarrowJobRow::as_select())
+            .load(conn)
+    }
+
     /// Load up to `limit` ready candidate rows (narrow — no payload/result
     /// blobs) for a dequeue. SQLite needs no row-level locking clause: the
     /// `BEGIN IMMEDIATE` write transaction already serializes writers, so two

@@ -8,7 +8,9 @@
 //! when all tests share a single storage instance.
 
 use taskito_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
-use taskito_core::storage::records::{SubscriptionMode, WorkerRegistration, WorkerStatus};
+use taskito_core::storage::records::{
+    DebounceOptions, SubscriptionMode, WorkerRegistration, WorkerStatus,
+};
 use taskito_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use taskito_core::SqliteStorage;
 
@@ -1830,6 +1832,174 @@ fn run_storage_tests(s: &impl Storage) {
     test_debounce_key_round_trip(s);
 }
 
+/// Contract tests every backend *should* pass but only the Diesel ones can
+/// today. `enqueue_debounced` needs a transaction to hang its read-modify-write
+/// on; the Redis backend rejects the call until its Lua script lands, at which
+/// point these move into [`run_storage_tests`] and this block goes away.
+fn run_diesel_storage_tests(s: &impl Storage) {
+    test_enqueue_debounced_collapses_a_burst(s);
+    test_enqueue_debounced_caps_at_max_wait(s);
+    test_enqueue_debounced_skips_a_claimed_job(s);
+    test_enqueue_debounced_isolates_keys_and_namespaces(s);
+    test_enqueue_debounced_replaces_the_payload_on_request(s);
+    test_enqueue_debounced_rejects_unusable_options(s);
+}
+
+fn debounced(queue: &str, key: &str) -> NewJob {
+    let mut new_job = make_job(queue, "debounced_task");
+    new_job.debounce_key = Some(key.to_string());
+    new_job
+}
+
+fn debounce_opts(window_ms: i64, max_wait_ms: i64) -> DebounceOptions {
+    DebounceOptions {
+        window_ms,
+        max_wait_ms,
+        replace_payload: false,
+    }
+}
+
+/// A burst under one key produces one job whose deadline keeps sliding out.
+fn test_enqueue_debounced_collapses_a_burst(s: &impl Storage) {
+    let q = "q-debounce-burst";
+    let before = now_millis();
+
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..5 {
+        let job = s
+            .enqueue_debounced(debounced(q, "burst:user-1"), debounce_opts(5_000, 60_000))
+            .unwrap();
+        assert!(job.scheduled_at >= before + 5_000);
+        ids.insert(job.id);
+    }
+
+    assert_eq!(ids.len(), 1, "the burst must land on one job");
+    let pending = s
+        .list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 10, 0, None)
+        .unwrap();
+    assert_eq!(pending.len(), 1, "no second row was inserted");
+}
+
+/// The slide is capped at `first_seen + max_wait`, so a caller who never stops
+/// enqueuing cannot starve the job. Asserted through the public surface only:
+/// with `max_wait_ms == window_ms` the ceiling binds on the very first slide,
+/// which needs no clock-skewing to observe.
+fn test_enqueue_debounced_caps_at_max_wait(s: &impl Storage) {
+    let q = "q-debounce-maxwait";
+    let first = s
+        .enqueue_debounced(debounced(q, "cap:user-1"), debounce_opts(30_000, 30_000))
+        .unwrap();
+
+    for _ in 0..3 {
+        let slid = s
+            .enqueue_debounced(debounced(q, "cap:user-1"), debounce_opts(30_000, 30_000))
+            .unwrap();
+        assert_eq!(slid.id, first.id);
+        assert_eq!(
+            slid.scheduled_at, first.scheduled_at,
+            "a ceiling equal to the window admits no slide at all"
+        );
+    }
+}
+
+/// A job a worker already holds is never pulled back to a later deadline —
+/// `claim_execution` writes its row without touching `status`, so the guard has
+/// to consult the claim, not just the status column.
+fn test_enqueue_debounced_skips_a_claimed_job(s: &impl Storage) {
+    let q = "q-debounce-claimed";
+    let claimed = s
+        .enqueue_debounced(debounced(q, "claimed:user-1"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert!(s.claim_execution(&claimed.id, "w-debounce").unwrap());
+
+    let fresh = s
+        .enqueue_debounced(debounced(q, "claimed:user-1"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(fresh.id, claimed.id);
+    assert_eq!(
+        s.get_job(&claimed.id, None).unwrap().unwrap().scheduled_at,
+        claimed.scheduled_at
+    );
+}
+
+/// Different keys never share a window, and neither do two tenants using the
+/// same key.
+fn test_enqueue_debounced_isolates_keys_and_namespaces(s: &impl Storage) {
+    let q = "q-debounce-isolation";
+    let user_1 = s
+        .enqueue_debounced(debounced(q, "iso:user-1"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    let user_2 = s
+        .enqueue_debounced(debounced(q, "iso:user-2"), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(user_1.id, user_2.id);
+
+    let mut tenant_job = debounced(q, "iso:user-1");
+    tenant_job.namespace = Some("tenant-debounce".to_string());
+    let tenant = s
+        .enqueue_debounced(tenant_job, debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(tenant.id, user_1.id);
+}
+
+/// `replace_payload` decides whether the run uses the newest input or the one
+/// that opened the window.
+fn test_enqueue_debounced_replaces_the_payload_on_request(s: &impl Storage) {
+    let q = "q-debounce-payload";
+    let mut opening = debounced(q, "payload:user-1");
+    opening.payload = vec![1];
+    let first = s
+        .enqueue_debounced(opening, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    let mut kept = debounced(q, "payload:user-1");
+    kept.payload = vec![2];
+    let unchanged = s
+        .enqueue_debounced(kept, debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(unchanged.id, first.id);
+    assert_eq!(unchanged.payload, vec![1]);
+
+    let mut newest = debounced(q, "payload:user-1");
+    newest.payload = vec![3];
+    let replaced = s
+        .enqueue_debounced(
+            newest,
+            DebounceOptions {
+                replace_payload: true,
+                ..debounce_opts(5_000, 60_000)
+            },
+        )
+        .unwrap();
+    assert_eq!(replaced.id, first.id);
+    assert_eq!(replaced.payload, vec![3]);
+    assert_eq!(
+        s.get_job(&first.id, None).unwrap().unwrap().payload,
+        vec![3]
+    );
+}
+
+/// Options that cannot debounce are rejected on every backend, and a rejected
+/// call writes nothing.
+fn test_enqueue_debounced_rejects_unusable_options(s: &impl Storage) {
+    let q = "q-debounce-invalid";
+    assert!(s
+        .enqueue_debounced(make_job(q, "debounced_task"), debounce_opts(5_000, 60_000))
+        .is_err());
+    assert!(s
+        .enqueue_debounced(debounced(q, ""), debounce_opts(5_000, 60_000))
+        .is_err());
+    assert!(s
+        .enqueue_debounced(debounced(q, "bad:user-1"), debounce_opts(0, 60_000))
+        .is_err());
+    assert!(s
+        .enqueue_debounced(debounced(q, "bad:user-1"), debounce_opts(5_000, 1_000))
+        .is_err());
+
+    let written = s.list_jobs(None, Some(q), None, 10, 0, None).unwrap();
+    assert!(written.is_empty(), "a rejected call must write nothing");
+}
+
 /// The debounce key must survive a write and both read projections on every
 /// backend — the Diesel backends store it in a column, the Redis backend in the
 /// job's JSON document, and only this suite runs against all three.
@@ -2121,6 +2291,7 @@ fn test_rate_limit_token_exhaustion(s: &impl Storage) {
 fn sqlite_storage_tests() {
     let storage = SqliteStorage::in_memory().unwrap();
     run_storage_tests(&storage);
+    run_diesel_storage_tests(&storage);
 }
 
 #[cfg(feature = "redis")]
@@ -2587,4 +2758,5 @@ fn postgres_storage_tests() {
     };
 
     run_storage_tests(&storage);
+    run_diesel_storage_tests(&storage);
 }
