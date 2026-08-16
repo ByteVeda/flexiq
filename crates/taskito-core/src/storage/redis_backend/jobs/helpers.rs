@@ -45,7 +45,13 @@ impl RedisStorage {
         let data: Option<String> = conn.get(&archived_key).map_err(map_err)?;
         match data {
             Some(d) => {
-                let job: Job = serde_json::from_str(&d)?;
+                let mut job: Job = serde_json::from_str(&d)?;
+                // The archive stores the whole `Job` document, so it keeps a
+                // field the Diesel `archived_jobs` table has no column for.
+                // Normalize on read — this is the Redis seam that matches
+                // `From<ArchivedJobRow> for Job`, and it also corrects rows
+                // archived before the column existed.
+                job.debounce_key = None;
                 Ok(Some(job))
             }
             None => Ok(None),
