@@ -112,32 +112,6 @@ impl RedisStorage {
         Ok(job)
     }
 
-    /// Save job JSON and move between status sets.
-    pub(in crate::storage::redis_backend) fn save_job_and_move_status(
-        &self,
-        conn: &mut redis::Connection,
-        job: &Job,
-        old_status: JobStatus,
-    ) -> Result<()> {
-        let job_json = serde_json::to_string(job)?;
-        let job_key = self.key(&["job", &job.id]);
-        let old_status_key = self.key(&["jobs", "status", &(old_status as i32).to_string()]);
-        let new_status_key = self.key(&["jobs", "status", &(job.status as i32).to_string()]);
-
-        let pipe = &mut redis::pipe();
-        pipe.set(&job_key, &job_json);
-        if old_status != job.status {
-            pipe.srem(&old_status_key, &job.id);
-            pipe.sadd(&new_status_key, &job.id);
-        }
-        // Mirror the status move on the pub/sub backlog indices, keyed on the
-        // job's new status (no-op for ordinary jobs). Same pipe as the move.
-        self.push_pubsub_transition(pipe, job, job.status);
-        pipe.query::<()>(conn).map_err(map_err)?;
-
-        Ok(())
-    }
-
     /// Reset a job to `Pending` and (re)insert it into the per-queue pending
     /// zset in a single MULTI/EXEC. Folding the status-set move and the zset
     /// add into one transaction means a crash can no longer strand the job as

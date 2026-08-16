@@ -269,15 +269,19 @@ impl RedisStorage {
                 continue;
             }
 
-            // Skip expired jobs
+            // Skip expired jobs — archive them as cancelled, exactly as the
+            // single-job `dequeue` and both Diesel paths do. A status move
+            // alone would leave the row in every live index (and in its
+            // debounce window) as a terminal job that no listing by
+            // `Cancelled` can reach, since those read the archive.
             if let Some(expires_at) = job.expires_at {
                 if now > expires_at {
                     job.status = JobStatus::Cancelled;
                     job.completed_at = Some(now);
                     job.error = Some("expired before execution".to_string());
-                    self.save_job_and_move_status(&mut conn, &job, JobStatus::Pending)?;
                     conn.zrem::<_, _, ()>(&queue_key, &job_id)
                         .map_err(map_err)?;
+                    self.archive_job_immediately(&mut conn, &job, JobStatus::Pending)?;
                     continue;
                 }
             }

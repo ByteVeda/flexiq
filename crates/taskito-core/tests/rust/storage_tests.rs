@@ -92,6 +92,43 @@ fn test_dequeue_batch(s: &impl Storage) {
     assert!(zero.is_empty());
 }
 
+/// A batch dequeue archives the expired candidates it skips, like the single-job
+/// `dequeue`. Asserted through the listings because they are what a status move
+/// alone would fool: a terminal status is read from the archive, so a job merely
+/// flipped to `Cancelled` in place is reachable from neither list.
+fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
+    let q = "q-dequeue-batch-expired";
+    let now = now_millis();
+
+    let mut expiring = make_job(q, "batch_expired");
+    expiring.expires_at = Some(now - 1_000);
+    let expired = s.enqueue(expiring).unwrap();
+    let live = s.enqueue(make_job(q, "batch_live")).unwrap();
+
+    let claimed = s.dequeue_batch(q, now + 1_000, None, 10).unwrap();
+    assert_eq!(claimed.len(), 1, "the expired job is not claimable");
+    assert_eq!(claimed[0].id, live.id);
+
+    let cancelled = s
+        .list_jobs(
+            Some(JobStatus::Cancelled as i32),
+            Some(q),
+            None,
+            50,
+            0,
+            None,
+        )
+        .unwrap();
+    assert!(
+        cancelled.iter().any(|job| job.id == expired.id),
+        "the expired job must be archived as cancelled"
+    );
+    let pending = s
+        .list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 50, 0, None)
+        .unwrap();
+    assert!(!pending.iter().any(|job| job.id == expired.id));
+}
+
 fn test_complete(s: &impl Storage) {
     let q = "q-complete";
     let job = s.enqueue(make_job(q, "complete_task")).unwrap();
@@ -1774,6 +1811,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_and_get(s);
     test_dequeue(s);
     test_dequeue_batch(s);
+    test_dequeue_batch_archives_expired_jobs(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
     test_fail(s);
