@@ -197,6 +197,7 @@ mod tests {
                 expires_at: None,
                 result_ttl_ms: None,
                 namespace: None,
+                debounce_key: None,
             })
             .expect("enqueue")
             .id

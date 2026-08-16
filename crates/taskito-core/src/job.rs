@@ -124,6 +124,14 @@ pub struct Job {
     /// scheduler skip the dependency lookup entirely for the common case.
     #[serde(default)]
     pub has_deps: bool,
+    /// Key a debounced enqueue coalesces on: while this job is still pending,
+    /// another enqueue for the same key slides its `scheduled_at` instead of
+    /// creating a second job. Deliberately separate from [`Job::unique_key`],
+    /// which already means both idempotency and pub/sub fan-out identity.
+    /// `#[serde(default)]` so jobs written before the column existed still
+    /// decode from the Redis backend's JSON documents.
+    #[serde(default)]
+    pub debounce_key: Option<String>,
 }
 
 impl From<JobRow> for Job {
@@ -153,6 +161,7 @@ impl From<JobRow> for Job {
             result_ttl_ms: row.result_ttl_ms,
             namespace: row.namespace,
             has_deps: row.has_deps,
+            debounce_key: row.debounce_key,
         }
     }
 }
@@ -185,6 +194,9 @@ impl From<ArchivedJobRow> for Job {
             namespace: row.namespace,
             // Archived jobs are terminal and never re-dequeued.
             has_deps: false,
+            // `archived_jobs` carries no debounce key: a terminal job has left
+            // its debounce window, so nothing would ever read one back.
+            debounce_key: None,
         }
     }
 }
@@ -219,6 +231,7 @@ impl Job {
             result_ttl_ms: narrow.result_ttl_ms,
             namespace: narrow.namespace,
             has_deps: narrow.has_deps,
+            debounce_key: narrow.debounce_key,
         }
     }
 
@@ -252,6 +265,8 @@ impl Job {
             result_ttl_ms: narrow.result_ttl_ms,
             namespace: narrow.namespace,
             has_deps: false,
+            // See `From<ArchivedJobRow>`: the archive has no such column.
+            debounce_key: None,
         }
     }
 }
@@ -302,6 +317,8 @@ pub struct NewJob {
     pub result_ttl_ms: Option<i64>,
     /// Tenant namespace the job is scoped to. `None` = default namespace.
     pub namespace: Option<String>,
+    /// Key a debounced enqueue coalesces on. See [`Job::debounce_key`].
+    pub debounce_key: Option<String>,
 }
 
 impl NewJob {
@@ -335,6 +352,7 @@ impl NewJob {
             result_ttl_ms: self.result_ttl_ms,
             namespace: self.namespace,
             has_deps,
+            debounce_key: self.debounce_key,
         }
     }
 }
@@ -374,5 +392,50 @@ mod tests {
                 "wire_name() drift for {status:?}",
             );
         }
+    }
+
+    fn sample_job() -> Job {
+        NewJob {
+            queue: "default".to_string(),
+            task_name: "build_report".to_string(),
+            payload: vec![1, 2, 3],
+            priority: 0,
+            scheduled_at: now_millis(),
+            max_retries: 3,
+            timeout_ms: 300_000,
+            unique_key: None,
+            metadata: None,
+            notes: None,
+            depends_on: vec![],
+            expires_at: None,
+            result_ttl_ms: None,
+            namespace: None,
+            debounce_key: Some("report:user-7".to_string()),
+        }
+        .into_job()
+    }
+
+    /// The Redis backend stores jobs as `serde_json` of `Job`, so the debounce
+    /// key has to survive that encoding — there is no column to fall back on.
+    #[test]
+    fn debounce_key_round_trips_through_json() {
+        let json = serde_json::to_string(&sample_job()).expect("serialize Job");
+        let decoded: Job = serde_json::from_str(&json).expect("deserialize Job");
+        assert_eq!(decoded.debounce_key.as_deref(), Some("report:user-7"));
+    }
+
+    /// A document written before the field existed must still decode — a
+    /// rolling upgrade reads jobs both shells wrote. `#[serde(default)]` is
+    /// what makes that true; this test fails if it is ever removed.
+    #[test]
+    fn a_job_written_without_a_debounce_key_still_decodes() {
+        let mut value = serde_json::to_value(sample_job()).expect("serialize Job");
+        value
+            .as_object_mut()
+            .expect("job encodes as an object")
+            .remove("debounce_key");
+
+        let decoded: Job = serde_json::from_value(value).expect("deserialize legacy Job");
+        assert_eq!(decoded.debounce_key, None);
     }
 }

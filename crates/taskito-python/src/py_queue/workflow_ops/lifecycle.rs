@@ -196,6 +196,7 @@ impl PyQueue {
                 expires_at: None,
                 result_ttl_ms: self.result_ttl_ms,
                 namespace: self.namespace.clone(),
+                debounce_key: None,
             };
 
             let job = self

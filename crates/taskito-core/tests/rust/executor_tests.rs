@@ -636,6 +636,7 @@ fn make_job(id: &str, task_name: &str, payload: &[u8]) -> Job {
         result_ttl_ms: None,
         namespace: None,
         has_deps: false,
+        debounce_key: None,
     }
 }
 

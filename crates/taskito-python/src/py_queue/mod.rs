@@ -390,6 +390,7 @@ impl PyQueue {
             expires_at,
             result_ttl_ms,
             namespace: self.namespace.clone(),
+            debounce_key: None,
         };
 
         let job = if unique_key.is_some() {
@@ -496,6 +497,7 @@ impl PyQueue {
                 expires_at,
                 result_ttl_ms,
                 namespace: self.namespace.clone(),
+                debounce_key: None,
             });
         }
 

@@ -28,6 +28,7 @@ fn make_job(queue: &str, task_name: &str) -> NewJob {
         expires_at: None,
         result_ttl_ms: None,
         namespace: None,
+        debounce_key: None,
     }
 }
 
@@ -1826,6 +1827,73 @@ fn run_storage_tests(s: &impl Storage) {
     test_task_logs_after_cursor(s);
     test_keyset_pagination_jobs(s);
     test_keyset_pagination_dlq_and_archive(s);
+    test_debounce_key_round_trip(s);
+}
+
+/// The debounce key must survive a write and both read projections on every
+/// backend — the Diesel backends store it in a column, the Redis backend in the
+/// job's JSON document, and only this suite runs against all three.
+fn test_debounce_key_round_trip(s: &impl Storage) {
+    let q = "q-debounce-key";
+    let mut new_job = make_job(q, "debounce_task");
+    new_job.debounce_key = Some("report:user-7".to_string());
+
+    let job = s.enqueue(new_job).unwrap();
+    assert_eq!(job.debounce_key.as_deref(), Some("report:user-7"));
+
+    let fetched = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(fetched.debounce_key.as_deref(), Some("report:user-7"));
+
+    // Listings read a blob-free projection, which is a separate column list.
+    let listed = s
+        .list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 10, 0, None)
+        .unwrap();
+    let listed = listed.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(listed.debounce_key.as_deref(), Some("report:user-7"));
+
+    // A job enqueued without one reads back as absent, never as an empty key.
+    let plain = s.enqueue(make_job(q, "debounce_task")).unwrap();
+    assert_eq!(plain.debounce_key, None);
+    assert_eq!(
+        s.get_job(&plain.id, None).unwrap().unwrap().debounce_key,
+        None
+    );
+
+    test_debounce_key_absent_once_terminal(s);
+}
+
+/// A terminal job must report no debounce key on **every** backend: it has left
+/// its debounce window, so a stale key would read as if one were still open.
+///
+/// The two backends get there differently and can drift apart silently. Diesel
+/// drops it structurally — `archived_jobs` has no such column. Redis archives
+/// the whole `Job` document, so it keeps the field on disk and normalizes it on
+/// read. This asserts the observable behaviour both must agree on.
+fn test_debounce_key_absent_once_terminal(s: &impl Storage) {
+    let q = "q-debounce-terminal";
+    let mut new_job = make_job(q, "debounce_terminal_task");
+    new_job.debounce_key = Some("report:user-9".to_string());
+    let job = s.enqueue(new_job).unwrap();
+
+    s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
+    s.complete(&job.id, Some(vec![7]), None).unwrap();
+
+    let fetched = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(fetched.status, JobStatus::Complete);
+    assert_eq!(
+        fetched.debounce_key, None,
+        "a terminal job must not expose a debounce key"
+    );
+
+    // Terminal listings read the archive too, on a different code path.
+    let listed = s
+        .list_jobs(Some(JobStatus::Complete as i32), Some(q), None, 10, 0, None)
+        .unwrap();
+    let listed = listed.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(
+        listed.debounce_key, None,
+        "archived listings must not expose a debounce key"
+    );
 }
 
 /// S12: keyset-paginated `list_jobs_after` must page through every row exactly

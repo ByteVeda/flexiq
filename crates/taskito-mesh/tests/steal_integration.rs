@@ -43,6 +43,7 @@ fn make_job(task_name: &str) -> taskito_core::job::Job {
         expires_at: None,
         result_ttl_ms: None,
         namespace: None,
+        debounce_key: None,
     }
     .into_job()
 }

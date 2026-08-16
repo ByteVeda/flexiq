@@ -162,6 +162,7 @@ fn new_job(task_name: &str) -> NewJob {
         expires_at: None,
         result_ttl_ms: None,
         namespace: None,
+        debounce_key: None,
     }
 }
 
