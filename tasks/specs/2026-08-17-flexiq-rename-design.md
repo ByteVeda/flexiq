@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-17
 **Status:** Approved, pending implementation plan
-**Branch:** `rename/flexiq` off `dev` (created off `master` at `280f650c`)
+**Branch:** `rename/flexiq`, branched off `master` at `280f650c`. PR targets `master`.
 
 ## Goal
 
@@ -107,8 +107,8 @@ change; only the marker strings carried inside payloads do.
 3. **Untracked files.** Pre-commit hooks drop untracked files.
    `examples/polyglot/java-worker/bin/` is backed up to the session scratchpad.
    Done.
-4. **`dev` branch.** Created locally off `master`; must be pushed to `origin`
-   before the PR can target it.
+4. **Base branch.** `master` is the only long-lived branch and the PR target;
+   there is no `dev`.
 
 ## Commit plan
 
