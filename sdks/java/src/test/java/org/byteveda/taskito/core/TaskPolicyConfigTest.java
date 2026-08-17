@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.events.EventName;
+import org.byteveda.taskito.model.QueueStats;
 import org.byteveda.taskito.task.OnExcess;
 import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.worker.Worker;
@@ -225,7 +226,10 @@ class TaskPolicyConfigTest {
                     .filter(entry -> entry.error != null && entry.error.startsWith("rate_limit:"))
                     .count();
             assertEquals(total - 1, shed, "every excess job is shed with the reserved rate_limit: reason");
-            assertEquals(0, queue.stats().pending, "a shed job must not return to the queue");
+            QueueStats stats = queue.stats();
+            assertEquals(1, stats.completed, "the job that won the token must still run");
+            assertEquals(total, stats.completed + stats.dead, "shedding loses no job silently");
+            assertEquals(0, stats.pending, "a shed job must not return to the queue");
         }
     }
 

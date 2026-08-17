@@ -136,7 +136,10 @@ it("sheds rate-limited jobs to the dead-letter queue under onExcess: drop", asyn
     return dead.filter((entry) => entry.error?.startsWith("rate_limit:")).length;
   };
   expect(await waitForAsync(async () => (await shed()) === total - 1)).toBe(true);
+  expect(await waitForAsync(async () => (await queue.stats()).completed === 1)).toBe(true);
 
   const stats = await queue.stats();
   expect(stats.pending).toBe(0);
+  // Shedding loses no job silently: each one either ran or reached the DLQ.
+  expect(stats.completed + stats.dead).toBe(total);
 });

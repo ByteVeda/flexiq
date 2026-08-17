@@ -1389,6 +1389,19 @@ mod tests {
             Some(shed::RATE_LIMIT_SHED_METADATA),
             "shed work must be countable without parsing the reason string"
         );
+
+        // The DLQ row alone would not prove the job itself reached a terminal
+        // state; `get_job` falls through to `archived_jobs`, where the move left it.
+        let shed_job = scheduler
+            .storage
+            .get_job(&dead[0].original_job_id, None)
+            .unwrap()
+            .expect("a shed job stays readable by id");
+        assert_eq!(
+            shed_job.status,
+            JobStatus::Dead,
+            "shedding is terminal, not a silent delete"
+        );
     }
 
     #[test]
