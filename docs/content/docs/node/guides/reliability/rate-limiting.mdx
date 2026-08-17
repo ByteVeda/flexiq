@@ -25,6 +25,37 @@ queue.configureQueue("emails", { rateLimit: "50/s" });
 Queue-level limits are evaluated before per-task limits. Rate-limited jobs stay
 `pending` and retry on the next tick — they do not consume the retry budget.
 
+## Shedding instead of deferring
+
+Deferral is the right default: the job keeps its place and runs once tokens are
+available. But some work is worth less than the backlog it would build — a
+metrics sample, a cache warm — and for that, `onExcess: "drop"` sheds the job
+instead of rescheduling it:
+
+```ts
+queue.task("record_sample", recordSample, {
+  rateLimit: "10/s",
+  onExcess: "drop",
+});
+```
+
+A dropped job is **dead-lettered on the spot**, not silently deleted. Its
+reason is prefixed `rate_limit:` and its dead-letter metadata is
+`{"shed":"rate_limit"}`, so shedding stays visible in the dashboard and
+countable in metrics — an operator can always tell shedding apart from data
+loss. The dead-letter auto-retry sweep skips these entries: resurrecting a job
+the scheduler deliberately shed would undo the shed.
+
+Three things worth knowing:
+
+- `onExcess` applies to the limit on this task **and** to the limit on the
+  queue it runs in — either one rejecting means the same thing to the caller.
+- A tripped [circuit breaker](/node/guides/reliability/circuit-breakers)
+  always defers regardless. That is downstream failure, not excess load: the
+  job is fine, its dependency is not.
+- Dropping fires no middleware or event hooks. The job never ran, so there is
+  no outcome to report — the dead-letter row is the record.
+
 > **Coming from BullMQ?** BullMQ configures rate limiting on the `Worker`
 > (`limiter: { max, duration }`), but it's enforced storage-side across every
 > worker consuming that queue — not literally per process despite living on

@@ -316,6 +316,14 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
         if (!rateLimit.isEmpty()) {
             chain.append(".rateLimit(\"").append(rateLimit).append("\")");
         }
+        String onExcess = stringValue(mirror, "onExcess", "");
+        if (!onExcess.isEmpty()) {
+            // Resolved by the runtime, like rateLimit: this processor is
+            // deliberately dependency-free, so it cannot name the enum constants.
+            chain.append(".onExcess(org.byteveda.taskito.task.OnExcess.fromWireName(\"")
+                    .append(escape(onExcess))
+                    .append("\"))");
+        }
         String retryBudget = stringValue(mirror, "retryBudget", "");
         if (!retryBudget.isEmpty()) {
             chain.append(".retryBudget(\"").append(retryBudget).append("\")");

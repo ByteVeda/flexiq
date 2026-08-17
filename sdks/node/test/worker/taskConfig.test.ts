@@ -108,3 +108,38 @@ it("registers a task that sets only retryBudget", async () => {
   };
   expect(await waitForAsync(async () => (await budgetKilled()) > 0)).toBe(true);
 });
+
+it("rejects a malformed onExcess rather than silently deferring", async () => {
+  const queue = newQueue();
+  queue.task("bad", async () => {}, { onExcess: "discard" as never });
+  expect(() => queue.runWorker({ queues: ["default"] })).toThrow(/onExcess/);
+});
+
+it("sheds rate-limited jobs to the dead-letter queue under onExcess: drop", async () => {
+  // One token per hour: exactly one of the four jobs can dispatch, and the
+  // other three must terminate instead of waiting out the limit. The limiter
+  // gates at dispatch, so this asserts on dead-letter rows and pending depth,
+  // never on when the handler ran.
+  const queue = newQueue();
+  const total = 4;
+
+  queue.task("sample", async () => {}, { rateLimit: "1/h", onExcess: "drop" });
+
+  for (let i = 0; i < total; i += 1) {
+    await queue.enqueue("sample");
+  }
+
+  worker = queue.runWorker({ queues: ["default"], concurrency: 2, batchSize: total });
+
+  const shed = async (): Promise<number> => {
+    const dead = await queue.deadLetters(10);
+    return dead.filter((entry) => entry.error?.startsWith("rate_limit:")).length;
+  };
+  expect(await waitForAsync(async () => (await shed()) === total - 1)).toBe(true);
+  expect(await waitForAsync(async () => (await queue.stats()).completed === 1)).toBe(true);
+
+  const stats = await queue.stats();
+  expect(stats.pending).toBe(0);
+  // Shedding loses no job silently: each one either ran or reached the DLQ.
+  expect(stats.completed + stats.dead).toBe(total);
+});

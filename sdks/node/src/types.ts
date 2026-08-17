@@ -155,6 +155,9 @@ export type TaskMap = Record<string, AnyHandler>;
 /** A rate-limit spec: `<count>/<unit>` with unit `s | m | h` (e.g. `"100/m"`). */
 export type RateLimit = `${number}/${"s" | "m" | "h"}`;
 
+/** What a saturated rate limit does to a job: keep it, or shed it. */
+export type OnExcess = "defer" | "drop";
+
 /** Per-task defaults and resilience config, applied when registering a task. */
 export interface TaskOptions {
   /** Retry budget (also the per-job default at enqueue). */
@@ -188,6 +191,22 @@ export interface TaskOptions {
   maxInFlightPerTask?: number;
   /** Rate-limit spec like `"100/m"`, `"50/s"`, `"3600/h"`. */
   rateLimit?: RateLimit;
+  /**
+   * What a saturated rate limit does to this task's jobs. `"defer"` (the
+   * default) reschedules the job for a later dispatch cycle. `"drop"` sheds it:
+   * the job is dead-lettered on the spot with a reserved `rate_limit:` reason,
+   * so shedding stays visible in the dashboard and countable in metrics, and
+   * the dead-letter auto-retry sweep never resurrects it. Suits traffic whose
+   * value expires with the moment — metrics samples, cache warms — where a
+   * backlog is worth less than nothing.
+   *
+   * Applies to the limit on this task **and** to the one on the queue it runs
+   * in, since either rejecting means the same thing to the caller. A tripped
+   * {@link TaskOptions.circuitBreaker} always defers regardless: that is
+   * downstream failure, not excess load. Dropping fires no middleware or event
+   * hooks — the job never ran.
+   */
+  onExcess?: OnExcess;
   /**
    * Cap on how fast this task may **retry**, across all of its jobs — same spec
    * as {@link TaskOptions.rateLimit}. Once spent, failures dead-letter instead

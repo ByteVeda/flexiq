@@ -16,6 +16,18 @@ class StorageBackend(str, enum.Enum):
     REDIS = "redis"
 
 
+class OnExcess(str, enum.Enum):
+    """What a saturated rate limit does to a task's jobs.
+
+    ``DEFER`` keeps the job and retries it on a later dispatch cycle.
+    ``DROP`` sheds it to the dead-letter queue, for traffic whose value
+    expires with the moment and is worth less than the backlog it would build.
+    """
+
+    DEFER = "defer"
+    DROP = "drop"
+
+
 def coerce_enum(enum_cls: type[E], value: E | str, *, param: str) -> E:
     """Accept an enum member or its wire string, else raise naming the valid set.
 

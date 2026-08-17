@@ -44,6 +44,14 @@ public @interface TaskHandler {
     String rateLimit() default "";
 
     /**
+     * What a saturated rate limit does to this task's jobs: {@code "defer"}
+     * (the default) reschedules it, {@code "drop"} sheds it to the dead-letter
+     * queue. Empty means {@code "defer"}; anything else fails the worker's
+     * start rather than silently keeping the job.
+     */
+    String onExcess() default "";
+
+    /**
      * Cap on how fast this task may <em>retry</em>, across all of its jobs — a
      * spec like {@code "100/m"}; empty (default) leaves retries uncapped. Once
      * spent, failures dead-letter instead of retrying.

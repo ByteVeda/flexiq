@@ -16,6 +16,7 @@ use taskito_core::resilience::circuit_breaker::CircuitBreakerConfig;
 use taskito_core::resilience::rate_limiter::RateLimitConfig;
 use taskito_core::resilience::retry::RetryPolicy;
 use taskito_core::scheduler::codel::CodelConfig;
+use taskito_core::scheduler::shed::OnExcess;
 use taskito_core::scheduler::{ResultOutcome, TaskConfig};
 use taskito_core::worker::WorkerDispatcher;
 use taskito_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
@@ -331,11 +332,13 @@ fn build_task_policies(
         let rate_limit = parse_rate_spec("rateLimit", &config.name, config.rate_limit.as_deref())?;
         let retry_budget =
             parse_rate_spec("retryBudget", &config.name, config.retry_budget.as_deref())?;
+        let on_excess = parse_on_excess(&config.name, config.on_excess.as_deref())?;
         built.push((
             config.name,
             TaskConfig {
                 retry_policy,
                 rate_limit,
+                on_excess,
                 circuit_breaker,
                 retry_budget,
                 max_concurrent: config.max_concurrent,
@@ -376,6 +379,20 @@ fn parse_rate_spec(
             ))
         }),
         None => Ok(None),
+    }
+}
+
+/// Parse an optional `onExcess` spec. Unset means the default, `defer`; an
+/// unrecognized value is a config error rather than a silent fall back to
+/// keeping the job, which a caller who asked to shed would never notice.
+fn parse_on_excess(task: &str, spec: Option<&str>) -> Result<OnExcess, crate::error::BindingError> {
+    match spec {
+        Some(s) => OnExcess::parse(s).ok_or_else(|| {
+            crate::error::BindingError::new(format!(
+                "invalid onExcess '{s}' on task '{task}' (expected 'defer' or 'drop')"
+            ))
+        }),
+        None => Ok(OnExcess::default()),
     }
 }
 

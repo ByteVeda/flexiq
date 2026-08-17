@@ -171,6 +171,7 @@ export type {
   JobFilter,
   MeshWorkerConfig,
   Metric,
+  OnExcess,
   Page,
   PeriodicOptions,
   PeriodicTask,
