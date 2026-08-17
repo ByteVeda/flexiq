@@ -15,7 +15,7 @@ register them.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue, TaskMiddleware
+from flexiq import Queue, TaskMiddleware
 
 class LoggingMiddleware(TaskMiddleware):
     def before(self, ctx):
@@ -45,7 +45,7 @@ queue.use({
   <Tab sdk="java">
 
 ```java
-taskito.use(new Middleware() {
+flexiq.use(new Middleware() {
     @Override
     public void before(TaskContext context) {
         log.info("start " + context.taskName);
@@ -205,7 +205,7 @@ queue.use({
   <Tab sdk="java">
 
 ```java
-taskito.use(new Middleware() {
+flexiq.use(new Middleware() {
     @Override
     public void onEnqueue(EnqueueContext context) {
         // Bump priority for urgent tasks
@@ -339,7 +339,7 @@ integration does with `taskFilter`).
 <SdkOnly sdk="java">
 
 There's no separate per-task registration — every middleware passed to
-`taskito.use()` applies to every task. Scope a middleware's own hooks to
+`flexiq.use()` applies to every task. Scope a middleware's own hooks to
 specific tasks by checking `context.taskName` inside them.
 
 </SdkOnly>
@@ -352,7 +352,7 @@ Coming from Celery signals? Use these instead of connecting to `task_prerun` /
 `task_postrun` / `task_failure`: queue-level **hooks** for global behavior, or
 per-task **middleware** for scoped behavior.
 
-taskito has two systems for running code around tasks:
+flexiq has two systems for running code around tasks:
 
 |   | Hooks (`@queue.on_failure`, etc.) | Middleware (`TaskMiddleware`) |
 |---|---|---|
@@ -380,8 +380,8 @@ execution — compose them with your own middleware freely.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
-from taskito.contrib.otel import OpenTelemetryMiddleware
+from flexiq import Queue
+from flexiq.contrib.otel import OpenTelemetryMiddleware
 
 queue = Queue(middleware=[
     OpenTelemetryMiddleware(),
@@ -393,7 +393,7 @@ queue = Queue(middleware=[
   <Tab sdk="node">
 
 ```ts
-import { otelMiddleware } from "@byteveda/taskito/contrib/otel";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
 
 queue.use(otelMiddleware());
 queue.use({ before: (ctx) => log.info("start", ctx.taskName) }); // your own middleware
@@ -403,10 +403,10 @@ queue.use({ before: (ctx) => log.info("start", ctx.taskName) }); // your own mid
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.contrib.TaskitoObservation;
+import org.byteveda.flexiq.contrib.FlexiQObservation;
 
-taskito.use(new TaskitoObservation(registry));
-taskito.use(new Middleware() { // your own middleware
+flexiq.use(new FlexiQObservation(registry));
+flexiq.use(new Middleware() { // your own middleware
     @Override
     public void before(TaskContext context) {
         log.info("start " + context.taskName);

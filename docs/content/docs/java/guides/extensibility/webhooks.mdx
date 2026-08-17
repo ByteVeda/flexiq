@@ -25,11 +25,11 @@ subscriptions are persisted in storage — they survive restarts.
   ]}
 />
 
-`WebhookManager.attach(taskito)` registers the manager as middleware on the
+`WebhookManager.attach(flexiq)` registers the manager as middleware on the
 client; create subscriptions with the `Webhook` builder:
 
 ```java
-WebhookManager webhooks = WebhookManager.attach(taskito);
+WebhookManager webhooks = WebhookManager.attach(flexiq);
 
 Webhook hook = webhooks.create(Webhook.builder("https://hooks.example.com/jobs")
         .on(EventName.DEAD, EventName.SUCCESS, EventName.WORKER_OFFLINE) // any of the 26 events — required, or no deliveries
@@ -56,7 +56,7 @@ webhooks.delete(hook.id);
 Deliveries fire from the process that attached the `WebhookManager` — usually
 the worker process for job outcomes, though queue-, workflow-, and
 predicate-level events fire from wherever that action happened (`pause()`,
-`submitWorkflow()`, …) on the same `Taskito` client. Every delivery is an
+`submitWorkflow()`, …) on the same `FlexiQ` client. Every delivery is an
 async `POST` with a JSON body in snake_case; job outcomes look like this:
 
 ```json
@@ -91,7 +91,7 @@ workflow events have no task identity, so they always deliver regardless of
 <Callout type="info">
   Subscriptions live in the shared settings store under
   `webhooks:subscriptions`, so every runtime driving the same queue sees the
-  same hooks. Hooks written by an older release under `taskito.webhooks` fold
+  same hooks. Hooks written by an older release under `flexiq.webhooks` fold
   into that document the first time the manager reads it.
 </Callout>
 

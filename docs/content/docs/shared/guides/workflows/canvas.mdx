@@ -3,7 +3,7 @@ title: Canvas Primitives
 description: "chain / group / chord — shorthand composition for common task pipeline and workflow shapes."
 ---
 
-taskito's canvas gives you three shorthand primitives for common pipeline
+flexiq's canvas gives you three shorthand primitives for common pipeline
 shapes: **chain** (sequential), **group** (parallel), and **chord**
 (parallel with a callback) — composing task calls without hand-wiring
 dependencies yourself.
@@ -45,20 +45,20 @@ it with the regular builder if you need more.
 
 ## Coming from Celery
 
-taskito's canvas mirrors Celery's `chain` / `group` / `chord` / `.s()` /
+flexiq's canvas mirrors Celery's `chain` / `group` / `chord` / `.s()` /
 `.si()` / `chunks` / `starmap`, with a few deliberate differences:
 
-| Celery | taskito | Difference |
+| Celery | flexiq | Difference |
 |---|---|---|
 | `chain(...).apply_async()` | `chain(...).apply(queue)` | `.apply()` here **submits** the canvas; pass the `queue`. |
-| `chain(...).apply()` (eager) | — | taskito has **no** eager `.apply()`; it always enqueues for workers. |
+| `chain(...).apply()` (eager) | — | flexiq has **no** eager `.apply()`; it always enqueues for workers. |
 | `AsyncResult.get(timeout=)` | `job.result(timeout=)` | Same idea, different name. |
-| `group(...)` → `GroupResult` | `group(...).apply(queue)` → `list[JobResult]` | taskito returns a plain list of handles — iterate and call `.result()` on each. |
+| `group(...)` → `GroupResult` | `group(...).apply(queue)` → `list[JobResult]` | flexiq returns a plain list of handles — iterate and call `.result()` on each. |
 | `.s()` / `.si()` | `.s()` / `.si()` | Identical (mutable vs immutable signature). |
 
 <Callout type="warn" title="`.apply()` means submit, not run">
   The biggest gotcha: in Celery, `.apply()` executes the canvas **locally and
-  synchronously**. In taskito, `.apply(queue)` **enqueues** it for workers,
+  synchronously**. In flexiq, `.apply(queue)` **enqueues** it for workers,
   and you await results with `.result()`. There is no eager local execution.
 </Callout>
 
@@ -74,7 +74,7 @@ Each primitive is composed from small step descriptors:
 A `Signature` wraps a task call for deferred execution:
 
 ```python
-from taskito import chain, group, chord
+from flexiq import chain, group, chord
 
 sig = add.s(1, 2)    # Mutable — receives previous result as first arg
 sig = add.si(1, 2)   # Immutable — ignores previous result
@@ -369,7 +369,7 @@ queue.submitWorkflow(report);
 ## Saga compensation
 
 Canvas primitives support in-thread saga compensation via
-`.with_compensation()`. When a step fails, taskito dispatches the
+`.with_compensation()`. When a step fails, flexiq dispatches the
 compensators for the steps that already succeeded — no workflow engine
 required.
 
@@ -386,7 +386,7 @@ Attach one compensator per chain step. `None` skips a slot. On failure,
 compensators for completed steps run in **reverse order**:
 
 ```python
-from taskito import chain
+from flexiq import chain
 
 @queue.task()
 def step_a(x: int) -> int:
@@ -426,7 +426,7 @@ the **succeeded** members dispatch in parallel. The failed member is not
 compensated:
 
 ```python
-from taskito import group
+from flexiq import group
 
 g = group(
     debit_account.s(100),
@@ -446,7 +446,7 @@ g.apply(queue)
 `chord.with_compensation` takes separate `group=` and `callback=` arguments:
 
 ```python
-from taskito import chord, group
+from flexiq import chord, group
 
 ch = chord(
     group(fetch.s("url1"), fetch.s("url2")),
@@ -545,7 +545,7 @@ return a plain `Workflow`, and `Workflow.named(...).step(...)` exposes a
 <SdkOnly sdk="python">
 
 ```python
-from taskito import chunks, starmap
+from flexiq import chunks, starmap
 
 # Batch processing — split 1000 items into groups of 100
 results = chunks(process_batch, items, chunk_size=100).apply(queue)
@@ -614,7 +614,7 @@ For dynamic per-item fan-out, use `Step.Builder.fanOut(...)` / `.fanIn(...)`.
 
 | Feature | Canvas | DAG Workflows |
 |---------|--------|---------------|
-| Setup | No imports needed | `from taskito.workflows import Workflow` |
+| Setup | No imports needed | `from flexiq.workflows import Workflow` |
 | Topology | Linear chains, flat groups | Arbitrary DAGs |
 | Fan-out | Static (known at build time) | Dynamic (from return values) |
 | Conditions | None | `on_success`, `on_failure`, `always`, callables |

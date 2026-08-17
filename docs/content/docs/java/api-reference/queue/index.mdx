@@ -1,22 +1,22 @@
 ---
-title: Taskito
+title: FlexiQ
 description: "Construct the client and the full producer/admin API."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
 ```java
-import org.byteveda.taskito.Taskito;
+import org.byteveda.flexiq.FlexiQ;
 
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) {
     // ...
 }
 ```
 
-`Taskito` is `AutoCloseable`; `close()` releases the native storage handle.
+`FlexiQ` is `AutoCloseable`; `close()` releases the native storage handle.
 
 <Callout type="info" title="Sub-pages">
-  The `Taskito` API is split across several pages for readability:
+  The `FlexiQ` API is split across several pages for readability:
 
   - **[Job Management](/java/api-reference/queue/jobs)** — results, cancellation, listing, error history
   - **[Queue & Stats](/java/api-reference/queue/queues)** — statistics, dead letters, queue control, settings
@@ -34,13 +34,13 @@ try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
 | `url(String)` | Connection string: a file path for SQLite, a URL for Postgres/Redis. |
 | `sqlite()` / `sqlite(path)` / `postgres(url)` / `redis(url)` | Backend shortcuts. SQLite defaults to `.flexiq/flexiq.db`. |
 | `poolSize(int)` | Connection pool size (SQLite/Postgres). |
-| `schema(String)` | Postgres schema (default `taskito`). |
+| `schema(String)` | Postgres schema (default `flexiq`). |
 | `prefix(String)` | Redis key prefix. |
 | `namespace(String)` | Namespace applied to enqueued jobs + the worker scheduler. |
 | `serializer(Serializer)` | Payload/result serializer (default `JsonSerializer`). |
 | `codec(PayloadCodec...)` | Global [codec chain](/java/api-reference/serializers) around the serializer. |
 | `codec(String, PayloadCodec)` | Register a named codec for per-task selection (`Task.codecs`). |
-| `open()` | Open the native backend → `Taskito`. |
+| `open()` | Open the native backend → `FlexiQ`. |
 | `open(QueueBackend)` | Open over an explicit backend (e.g. a test fake). |
 
 ## Producer

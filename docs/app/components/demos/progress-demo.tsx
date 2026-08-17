@@ -34,7 +34,7 @@ const NODE_H = 54;
 const NODE_W = 190;
 const NODES: FlowNode[] = [
   { x: 24, w: NODE_W, title: "POST /process", sub: "your endpoint" },
-  { x: 375, w: NODE_W, title: "taskito queue", sub: "buffers the job" },
+  { x: 375, w: NODE_W, title: "flexiq queue", sub: "buffers the job" },
   { x: 726, w: NODE_W, title: "worker", sub: "" },
 ];
 
@@ -195,7 +195,7 @@ export default function ProgressDemo(_props: DemoProps) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           role="img"
-          aria-label={`A request posts a ${SIZES[size].label} file to your endpoint, which hands it to taskito with .delay() and returns 202 in ${RESPONSE_MS} milliseconds. A worker then processes ${n} chunks, calling progress.update() per chunk so the caller's UI shows a live ${pct}% progress bar.`}
+          aria-label={`A request posts a ${SIZES[size].label} file to your endpoint, which hands it to flexiq with .delay() and returns 202 in ${RESPONSE_MS} milliseconds. A worker then processes ${n} chunks, calling progress.update() per chunk so the caller's UI shows a live ${pct}% progress bar.`}
         >
           <defs>
             <marker

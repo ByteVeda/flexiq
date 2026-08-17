@@ -12,7 +12,7 @@ boundary into the worker), but most real-world dependencies are not.
 
 Coming from Celery (which has no first-class DI), resources replace the
 module-level globals you'd otherwise create — a single `db = create_engine(...)`
-at import time — with per-worker instances that taskito initializes, scopes, and
+at import time — with per-worker instances that flexiq initializes, scopes, and
 tears down for you.
 
 Two terms come up throughout this section: a **recipe** is the small,
@@ -55,7 +55,7 @@ recipe; the worker rebuilds the live object before the task runs.
 ## Minimal end-to-end example
 
 ```python
-from taskito import Queue, Inject
+from flexiq import Queue, Inject
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -94,9 +94,9 @@ process_order.delay(42)
 Start the worker:
 
 ```bash
-taskito worker --app myapp.tasks:queue
-# [taskito] Initialized 1 resource(s): db
-# [taskito] Worker started with 8 threads
+flexiq worker --app myapp.tasks:queue
+# [flexiq] Initialized 1 resource(s): db
+# [flexiq] Worker started with 8 threads
 ```
 
 ## Section overview

@@ -25,7 +25,7 @@ import os
 
 import httpx
 
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(
     db_path=".flexiq/notifications.db",
@@ -191,7 +191,7 @@ print(f"\nQueue stats: {stats}")
   <Tab value="Terminal 1 — Worker">
 
 ```bash
-taskito worker --app tasks:queue
+flexiq worker --app tasks:queue
 ```
 
   </Tab>
@@ -205,7 +205,7 @@ python service.py
   <Tab value="Terminal 3 — Monitor">
 
 ```bash
-taskito info --app tasks:queue --watch
+flexiq info --app tasks:queue --watch
 ```
 
   </Tab>

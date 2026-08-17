@@ -3,18 +3,18 @@ title: Job Management
 description: "List and inspect jobs, manage the dead-letter queue, and pause queues."
 ---
 
-Read and manage individual jobs directly from the `Taskito` handle. For
+Read and manage individual jobs directly from the `FlexiQ` handle. For
 queue-wide health — stats, per-execution metrics, workers — see
 [Monitoring](/java/guides/observability/monitoring).
 
 ## Jobs
 
 ```java
-List<Job> failed = taskito.listJobs(
+List<Job> failed = flexiq.listJobs(
         JobFilter.builder().status(JobStatus.FAILED).limit(50).build());
-taskito.getJob(id);       // Optional<Job>
-taskito.jobErrors(id);    // per-attempt error history
-taskito.cancel(id);       // cancel a pending job
+flexiq.getJob(id);       // Optional<Job>
+flexiq.jobErrors(id);    // per-attempt error history
+flexiq.cancel(id);       // cancel a pending job
 ```
 
 `JobFilter.builder()` also filters by `queue(name)` and `task(name)` and pages
@@ -23,35 +23,35 @@ with `offset(n)`.
 ## Dead letters
 
 ```java
-taskito.listDead(50, 0);              // newest first: limit, offset
-taskito.listDeadByTask("send_email", 50, 0);
-taskito.retryDead(deadId);            // re-enqueue; returns the new job id
-taskito.deleteDead(deadId);
-taskito.purgeDead(olderThanMs);
-taskito.purgeDeadByTask("send_email");
-taskito.purgeCompleted(olderThanMs);
+flexiq.listDead(50, 0);              // newest first: limit, offset
+flexiq.listDeadByTask("send_email", 50, 0);
+flexiq.retryDead(deadId);            // re-enqueue; returns the new job id
+flexiq.deleteDead(deadId);
+flexiq.purgeDead(olderThanMs);
+flexiq.purgeDeadByTask("send_email");
+flexiq.purgeCompleted(olderThanMs);
 ```
 
 ## Pause / resume
 
-Per-queue operations live on the `Queue` handle from `taskito.queue(name)`;
+Per-queue operations live on the `Queue` handle from `flexiq.queue(name)`;
 the global view stays on the client:
 
 ```java
-taskito.queue("default").pause();
-taskito.queue("default").resume();
-taskito.queue("default").isPaused();
-taskito.listPausedQueues();
+flexiq.queue("default").pause();
+flexiq.queue("default").resume();
+flexiq.queue("default").isPaused();
+flexiq.listPausedQueues();
 ```
 
 ## Periodic tasks
 
 ```java
-taskito.registerPeriodic(PeriodicTask.builder("nightly", "report", "0 0 0 * * *").build());
-taskito.listPeriodic();       // every registered task, enabled or paused
-taskito.pausePeriodic("nightly");
-taskito.resumePeriodic("nightly");
-taskito.deletePeriodic("nightly");
+flexiq.registerPeriodic(PeriodicTask.builder("nightly", "report", "0 0 0 * * *").build());
+flexiq.listPeriodic();       // every registered task, enabled or paused
+flexiq.pausePeriodic("nightly");
+flexiq.resumePeriodic("nightly");
+flexiq.deletePeriodic("nightly");
 ```
 
 <Callout type="info">

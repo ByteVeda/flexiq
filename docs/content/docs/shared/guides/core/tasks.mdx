@@ -13,7 +13,7 @@ the function and stores its return value as the job's result.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(db_path="myapp.db")
 
@@ -27,7 +27,7 @@ def send_email(to: str, subject: str, body: str) -> str:
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "myapp.db" });
 
@@ -54,7 +54,7 @@ Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class)
         .maxRetries(5);
 
 // Worker side: bind the logic separately as a TaskFunction.
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(sendEmail, payload -> { smtp.send(payload); return "sent"; })
         .start();
 ```
@@ -76,7 +76,7 @@ descriptor, not a function. A worker binds the actual logic separately, as a
 result (or `null`):
 
 ```java
-try (Worker worker = taskito.worker()
+try (Worker worker = flexiq.worker()
         .handle(sendEmail, payload -> deliver(payload))             // Task + TaskFunction
         .handle("resize", ImageJob.class, payload -> resize(payload)) // name + payload type
         .start()) { ... }
@@ -89,7 +89,7 @@ for the full worker lifecycle.
 ### Typed tasks from `@TaskHandler`
 
 Annotate handler methods with `@TaskHandler`; the compile-time processor
-(`org.byteveda:taskito-processor`) generates a `<Class>Tasks` companion with a
+(`org.byteveda:flexiq-processor`) generates a `<Class>Tasks` companion with a
 typed `Task` constant per method plus a `bind(...)` — name declared once, full
 generics, zero runtime reflection:
 
@@ -103,9 +103,9 @@ class EmailTasks {
 }
 
 // generated EmailTasksTasks:
-String id = taskito.enqueue(EmailTasksTasks.SEND, payload);
+String id = flexiq.enqueue(EmailTasksTasks.SEND, payload);
 
-taskito.worker()
+flexiq.worker()
         .apply(b -> EmailTasksTasks.bind(b, new EmailTasks()))
         .start();
 ```
@@ -208,7 +208,7 @@ queue.configureQueue("emails", { rateLimit: "50/s" });
 <Callout type="info" title="Coming from BullMQ?">
   BullMQ splits a job into `queue.add(name, data)` on one side and a `new
   Worker(queueName, processor)` callback on the other — the processor lives
-  wherever you construct the `Worker`. taskito ties the handler to the task
+  wherever you construct the `Worker`. flexiq ties the handler to the task
   name once, via `queue.task(name, handler, options)`; `enqueue()` just
   references that name, and `runWorker()` takes no processor argument. Also
   note: `enqueue()` returns the job id (a `string`), not a rich `Job` object —
@@ -378,7 +378,7 @@ checks — useful for a long loop that should stop cleanly instead of being
 killed mid-iteration:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task(timeout=300, soft_timeout=60)
 def long_running(items):
@@ -527,7 +527,7 @@ Apply middleware to a specific task only, in addition to queue-level
 middleware:
 
 ```python
-from taskito.contrib.sentry import SentryMiddleware
+from flexiq.contrib.sentry import SentryMiddleware
 
 @queue.task(middleware=[SentryMiddleware()])
 def important_task():
@@ -547,7 +547,7 @@ from the dashboard (`queue.disableMiddlewareForTask(task, name)`).
 
 <SdkOnly sdk="java">
 
-Java `Middleware` is registered globally with `taskito.use(...)`; there's no
+Java `Middleware` is registered globally with `flexiq.use(...)`; there's no
 per-task attachment. Branch inside the middleware on `ctx.taskName()`.
 
 </SdkOnly>
@@ -563,7 +563,7 @@ worker and the native async worker honor the per-task serializer, falling
 back to the queue-level serializer for tasks that have none registered.
 
 ```python
-from taskito.serializers import JsonSerializer
+from flexiq.serializers import JsonSerializer
 
 @queue.task(serializer=JsonSerializer())
 def api_event(payload: dict) -> dict:
@@ -593,7 +593,7 @@ See <SdkLink to="guides/extensibility/serializers">Serializers</SdkLink>.
 
 <SdkOnly sdk="java">
 
-The serializer is a builder-level choice (`Taskito.builder().serializer(...)`);
+The serializer is a builder-level choice (`FlexiQ.builder().serializer(...)`);
 it can't be swapped per task. For per-task payload handling, use
 `Task.codecs(...)` — the same layered-transform model (compression / encryption
 / signing) applied on top of the builder serializer:
@@ -638,7 +638,7 @@ it with `queue.cancelJob(id)`.
 The Java SDK has no job-expiration deadline. `EnqueueOptions` offers `delay`
 (earliest start) and `timeout` (max run time), but a queued job is never
 discarded for sitting too long. Gate stale work inside the handler, or cancel
-it with `taskito.cancelJob(id)`.
+it with `flexiq.cancelJob(id)`.
 
 </SdkOnly>
 
@@ -715,8 +715,8 @@ const id = queue.enqueue("sendEmail", ["user@example.com", "Hello", "World"]);
   <Tab sdk="java">
 
 ```java
-String id = taskito.enqueue(sendEmail, payload);        // typed
-String id2 = taskito.enqueue("send_email", payload);    // by name, default options
+String id = flexiq.enqueue(sendEmail, payload);        // typed
+String id2 = flexiq.enqueue("send_email", payload);    // by name, default options
 ```
 
   </Tab>
@@ -759,7 +759,7 @@ const id = queue.enqueue("sendEmail", ["user@example.com", "Hello", "World"], {
   <Tab sdk="java">
 
 ```java
-String id = taskito.enqueue(sendEmail, payload, EnqueueOptions.builder()
+String id = flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder()
         .priority(100)                                     // Override priority
         .delay(Duration.ofHours(1))                         // Run 1 hour from now
         .queue("urgent-emails")                              // Override queue
@@ -804,7 +804,7 @@ const result = await sendEmail("user@example.com", "Hi"); // runs now, bypasses 
 <SdkOnly sdk="java">
 
 A `Task<T>` carries no logic to call. Invoke the `TaskFunction` / handler
-method directly for a synchronous run; `taskito.enqueue(task, payload)` is the
+method directly for a synchronous run; `flexiq.enqueue(task, payload)` is the
 only path that goes through the queue.
 
 ```java
@@ -843,7 +843,7 @@ const ids = queue.enqueueMany("sendEmail", [
   <Tab sdk="java">
 
 ```java
-List<String> ids = taskito.enqueueMany(sendEmail, List.of(emailA, emailB));
+List<String> ids = flexiq.enqueueMany(sendEmail, List.of(emailA, emailB));
 ```
 
   </Tab>
@@ -903,7 +903,7 @@ queue.enqueue("process", [data], {
   <Tab sdk="java">
 
 ```java
-taskito.enqueue(process, data, EnqueueOptions.builder()
+flexiq.enqueue(process, data, EnqueueOptions.builder()
         .metadata("{\"userId\": 42, \"source\": \"api\"}")
         .build());
 ```

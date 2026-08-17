@@ -5,13 +5,13 @@ description: "Read per-resource created / disposed / active counters with resour
 
 The resource runtime keeps three counters per registered name: how many
 instances were built, how many were disposed, and how many are live right
-now. Read them straight from the `Taskito` client — there's no separate
+now. Read them straight from the `FlexiQ` client — there's no separate
 collector, dashboard endpoint, or background reporter involved.
 
 ## `resourceMetrics()`
 
 ```java
-Map<String, ResourceStat> metrics = taskito.resourceMetrics();
+Map<String, ResourceStat> metrics = flexiq.resourceMetrics();
 
 ResourceStat db = metrics.get("db");
 System.out.printf("db: created=%d disposed=%d active=%d%n",
@@ -56,7 +56,7 @@ checkout and return don't touch them — so `active` tracks how many pool
 members currently exist, not how many are checked out right now:
 
 ```java
-ResourceStat ftp = taskito.resourceMetrics().get("ftp");
+ResourceStat ftp = flexiq.resourceMetrics().get("ftp");
 // created climbs toward poolSize as tasks force new instances to be built,
 // then stays flat once the pool is warm and checkouts start reusing them
 ```

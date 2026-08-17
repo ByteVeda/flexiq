@@ -21,8 +21,8 @@ do its successors run or get skipped.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 queue = Queue(db_path="tasks.db")
 
@@ -50,7 +50,7 @@ run = queue.submit_workflow(wf)
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 
@@ -406,7 +406,7 @@ in the process that reached it — the same process whose tracker owns the run
 for the full list of event types):
 
 ```python
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def notify_team(event_type, payload):
     send_slack(f"Workflow {payload['run_id']} needs approval at {payload['node_name']}")
@@ -510,7 +510,7 @@ instance passed to `run_worker()`.
 
 > **Coming from BullMQ?** `FlowProducer` has no pause/resume primitive — a
 > human-in-the-loop approval step is something you'd build yourself (e.g. a
-> job that polls a database flag). taskito's `.gate()` is a first-class step
+> job that polls a database flag). flexiq's `.gate()` is a first-class step
 > kind: the run genuinely pauses, and `approveGate`/`rejectGate` resolve it
 > from any process.
 

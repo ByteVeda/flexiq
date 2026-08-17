@@ -1,6 +1,6 @@
 ---
 title: GraalVM Native Image
-description: "Compile taskito applications to a native binary with GraalVM."
+description: "Compile flexiq applications to a native binary with GraalVM."
 ---
 
 The SDK is built to stay native-image friendly, and CI proves it: every change
@@ -11,14 +11,14 @@ binary.
 
 Three design choices do the heavy lifting:
 
-- **No runtime reflection for handlers** — the `taskito-processor` annotation
+- **No runtime reflection for handlers** — the `flexiq-processor` annotation
   processor generates task bindings at compile time, so `@TaskHandler` wiring
   needs no reflection metadata at all.
 - **A narrow native seam** — the Rust engine is reached through a small, fixed
   JNI surface, and the model classes are plain Jackson DTOs.
-- **Shipped reachability metadata** — the `taskito` jar carries its own
-  metadata under `META-INF/native-image/org.byteveda/taskito/`, which
-  `native-image` discovers automatically. Taskito's JNI up-calls, DTO
+- **Shipped reachability metadata** — the `flexiq` jar carries its own
+  metadata under `META-INF/native-image/org.byteveda/flexiq/`, which
+  `native-image` discovers automatically. FlexiQ's JNI up-calls, DTO
   reflection, and native-library resources need no tracing on your side.
 
 ## Building your app
@@ -40,10 +40,10 @@ graalvmNative {
 If your *own* code uses reflection (or Jackson on your own types outside the
 generated task bindings), record that with the
 [tracing agent](https://www.graalvm.org/latest/reference-manual/native-image/metadata/AutomaticMetadataCollection/)
-as usual — taskito paths are already covered by the shipped metadata. The
+as usual — flexiq paths are already covered by the shipped metadata. The
 per-platform native library still extracts and loads at runtime exactly as on
 the JVM, so the [deployment](/java/guides/operations/deployment) properties
-(`taskito.native.workdir`, `taskito.native.lib`) apply to native binaries too.
+(`flexiq.native.workdir`, `flexiq.native.lib`) apply to native binaries too.
 
 <Callout type="info">
   The repository's `graalvm-smoke` module is a minimal, working reference:

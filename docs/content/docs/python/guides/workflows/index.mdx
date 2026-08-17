@@ -4,7 +4,7 @@ description: "Build multi-step pipelines as directed acyclic graphs."
 ---
 
 Build multi-step pipelines as directed acyclic graphs. Define steps, wire
-dependencies, and let taskito handle execution order, parallelism, failure
+dependencies, and let flexiq handle execution order, parallelism, failure
 propagation, and state tracking — all backed by a Rust engine with
 dagron-core for graph algorithms.
 
@@ -22,8 +22,8 @@ dagron-core for graph algorithms.
 ## Quick start
 
 ```python
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 queue = Queue(db_path="tasks.db")
 
@@ -56,9 +56,9 @@ in `wf.step(...)`. To pass a value between steps, use fan-out / fan-in or read
 
 <Callout type="warn" title="Workflows need a running worker">
   `submit_workflow()` enqueues the step jobs; they execute only while a worker is
-  consuming the queue. Start one first — `taskito worker --app tasks:queue`, or
+  consuming the queue. Start one first — `flexiq worker --app tasks:queue`, or
   `queue.run_worker()` in a background thread — otherwise `run.wait()` blocks
-  until it times out. Workflows ship in the standard `pip install taskito` wheel;
+  until it times out. Workflows ship in the standard `pip install flexiq` wheel;
   no extra install is needed.
 </Callout>
 

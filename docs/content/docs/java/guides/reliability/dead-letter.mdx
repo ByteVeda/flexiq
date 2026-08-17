@@ -9,7 +9,7 @@ investigate and replay.
 
 <Callout type="info" title="Coming from JMS/RabbitMQ?">
   There's no separate DLQ/DLX to declare, bind, or point a routing key at —
-  taskito's dead-letter store is built into the same client and queried
+  flexiq's dead-letter store is built into the same client and queried
   through the same API (`listDead`, `retryDead`) as everything else.
 </Callout>
 
@@ -33,9 +33,9 @@ List<JobError> history = queue.jobErrors(dead.originalJobId);
 From the CLI:
 
 ```bash
-taskito --url flexiq.db dlq list
-taskito --url flexiq.db dlq retry <deadId>
-taskito --url flexiq.db dlq delete <deadId>
+flexiq --url flexiq.db dlq list
+flexiq --url flexiq.db dlq retry <deadId>
+flexiq --url flexiq.db dlq delete <deadId>
 ```
 
 <Callout type="info">

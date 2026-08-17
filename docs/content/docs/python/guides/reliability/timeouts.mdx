@@ -49,7 +49,7 @@ not stop the work. `soft_timeout` is the deadline the task polls itself, so the
 task actually unwinds:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task(soft_timeout=25, timeout=30)
 def export(dataset: str) -> str:

@@ -5,7 +5,7 @@ description: "Trust model, payload authentication, dashboard auth, webhook SSRF,
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-taskito is a library you embed in your own services, so most of its security
+flexiq is a library you embed in your own services, so most of its security
 posture is a function of how you deploy it. This page describes the trust
 model and the controls available to harden a deployment.
 
@@ -14,7 +14,7 @@ model and the controls available to harden a deployment.
 The single most important assumption to understand:
 
 <Callout type="warn" title="Storage write access ≈ code execution">
-  taskito trusts its backing store. The default serializer can execute code
+  flexiq trusts its backing store. The default serializer can execute code
   on load (cloudpickle handles lambdas and arbitrary objects), so anyone who
   can write to the SQLite file, the Postgres tables, or the Redis keyspace
   can craft a job payload that runs arbitrary code on every worker that
@@ -39,8 +39,8 @@ produced with the shared key.
 
 ```python
 import os
-from taskito import Queue
-from taskito.serializers import SignedSerializer, SmartSerializer
+from flexiq import Queue
+from flexiq.serializers import SignedSerializer, SmartSerializer
 
 key = os.urandom(32)  # 32+ bytes, identical on producers and workers
 queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
@@ -50,7 +50,7 @@ For confidentiality as well, wrap `EncryptedSerializer` (AES-GCM, so it
 authenticates the payload too — no need to also wrap `SignedSerializer`):
 
 ```python
-from taskito.serializers import EncryptedSerializer, SmartSerializer
+from flexiq.serializers import EncryptedSerializer, SmartSerializer
 
 enc_key = os.urandom(32)  # 16, 24, or 32 bytes for AES-128/192/256
 queue = Queue(serializer=EncryptedSerializer(SmartSerializer(), enc_key))
@@ -79,7 +79,7 @@ queue.max_payload_bytes = 0                 # disable the cap
 ## Dashboard
 
 The dashboard serves **openly by default** — authentication is opt-in via
-`serve_dashboard(auth_enabled=True)` or `taskito dashboard --auth`. Production
+`serve_dashboard(auth_enabled=True)` or `flexiq dashboard --auth`. Production
 deployments should enable it (or keep the dashboard on a private network
 behind their own auth). With auth enabled, the dashboard enforces sessions
 once at least one user exists; until then every API route returns
@@ -93,7 +93,7 @@ once at least one user exists; until then every API route returns
 - **Cookies.** Session and CSRF cookies carry `HttpOnly` (session),
   `SameSite=Strict`, and `Secure`. Behind a TLS-terminating proxy that speaks
   plain HTTP to the backend you may need `serve_dashboard(secure_cookies=False)`
-  or `taskito dashboard --insecure-cookies` — only on a trusted network.
+  or `flexiq dashboard --insecure-cookies` — only on a trusted network.
 - **Metrics.** With auth enabled, `/metrics` and `/readiness` require a valid
   session or the `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer (give scrapers the
   token). Without auth they stay public unless that token is set; `/health`
@@ -108,7 +108,7 @@ once at least one user exists; until then every API route returns
   paths ever become clickable.
 
 <Callout type="warn" title="Contrib routers are not auth-gated by default">
-  The FastAPI/Flask routers in `taskito.contrib` expose job-control endpoints
+  The FastAPI/Flask routers in `flexiq.contrib` expose job-control endpoints
   with **no authentication** unless you attach your own. Always mount them
   behind your application's auth (e.g. FastAPI `dependencies=[Depends(...)]`).
 </Callout>
@@ -149,7 +149,7 @@ maintenance reaper is down.
 
 ## Scaler bind address
 
-`taskito scaler` and `serve_scaler()` bind to `127.0.0.1` by default. The
+`flexiq scaler` and `serve_scaler()` bind to `127.0.0.1` by default. The
 scaler endpoints are unauthenticated — only bind to `0.0.0.0` behind a trusted
 network boundary (e.g. a KEDA sidecar on a private network).
 

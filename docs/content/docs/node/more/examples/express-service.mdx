@@ -3,7 +3,7 @@ title: Express Image Service
 description: "A REST API that enqueues image jobs, streams progress to the browser over SSE, and cancels work in flight."
 ---
 
-A thin Express front end accepts upload requests, enqueues a Taskito job, and
+A thin Express front end accepts upload requests, enqueues a FlexiQ job, and
 hands back a job id immediately. The browser then follows progress over
 server-sent events (SSE) fed by the task's published partial results, and can
 cancel a running job.
@@ -25,7 +25,7 @@ cancel request stops it cleanly.
 
 ```ts
 import express from "express";
-import { Queue, currentJob } from "@byteveda/taskito";
+import { Queue, currentJob } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "image-service.db" });
 
@@ -107,7 +107,7 @@ The worker is a separate process that shares the same database. It registers the
 same task so it knows how to run `processImage`.
 
 ```ts
-import { Queue, currentJob } from "@byteveda/taskito";
+import { Queue, currentJob } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "image-service.db" });
 
@@ -170,4 +170,4 @@ The browser opens an `EventSource` and renders each partial as it arrives.
 | Live progress over SSE | `queue.stream` + `currentJob().publish` |
 | Dashboard progress | `currentJob().setProgress` |
 | Cooperative cancellation | `queue.requestCancel` + `signal.aborted` |
-| Mounting a ready-made REST API | [`taskitoRouter`](/node/guides/integrations/express) |
+| Mounting a ready-made REST API | [`flexiqRouter`](/node/guides/integrations/express) |

@@ -3,7 +3,7 @@ title: Overview
 description: "Hybrid architecture: a thin language SDK on top, one Rust engine underneath."
 ---
 
-taskito is a hybrid <SdkLang />/Rust system. <SdkName /> provides the
+flexiq is a hybrid <SdkLang />/Rust system. <SdkName /> provides the
 user-facing API. Rust handles all the heavy lifting: storage, scheduling,
 dispatch, rate limiting, and worker management.
 
@@ -15,7 +15,7 @@ Most task queues are three services glued together: a **message broker** (Redis
 or RabbitMQ) that holds pending jobs, a **result backend** that stores return
 values, and the workers. You install, secure, and monitor all three.
 
-taskito removes the first two. The queue **is** a database — SQLite in
+flexiq removes the first two. The queue **is** a database — SQLite in
 [WAL mode](/architecture/storage) by default, or Postgres — and it serves as
 both the broker (the durable, ordered job store the scheduler polls) and the
 result backend (return values are rows in the same store). The

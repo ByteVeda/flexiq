@@ -21,7 +21,7 @@ notifications/
 Each channel is its own task so they retry, rate-limit, and scale independently.
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 export const queue = new Queue({ dbPath: "notifications.db" });
 

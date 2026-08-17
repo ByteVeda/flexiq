@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: "How taskito's pieces fit together: queues, tasks, workers, results — and why there's no broker."
+description: "How flexiq's pieces fit together: queues, tasks, workers, results — and why there's no broker."
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
@@ -8,7 +8,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 A **task queue** lets your app hand slow work — sending an email, processing an
 upload, calling a third-party API — to a background **worker**, so the request
-that triggered it can return right away. taskito is a task queue for Python with
+that triggered it can return right away. flexiq is a task queue for Python with
 one distinguishing trait: **it needs no broker.**
 
 ## Why "no broker" matters
@@ -22,11 +22,11 @@ services you have to run and operate:
   values are stored; and
 - the **workers** themselves.
 
-taskito collapses the broker and the result backend into a single queue
+flexiq collapses the broker and the result backend into a single queue
 database — an embedded SQLite file by default, or a Postgres server for shared
 deployments. Enqueued jobs and their results live in the same place. There is no
 separate message broker to install, secure, or monitor: with SQLite it's `pip
-install taskito`, point a queue at a path, and start a worker; Postgres still
+install flexiq`, point a queue at a path, and start a worker; Postgres still
 runs its own database server, but that's the only external service.
 
 <Callout type="info" title="Coming from Celery?">
@@ -41,7 +41,7 @@ A **queue** is a SQLite (or Postgres) database that holds enqueued jobs. You
 instantiate one in your application code:
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 queue = Queue(db_path="tasks.db")
 ```
 
@@ -59,7 +59,7 @@ back to the same database. Calling `job.result(timeout=30)` blocks (or
 `await job.aresult(...)` yields) until the job finishes, then returns the value
 or re-raises the error.
 
-When a task fails, taskito **retries** it with backoff; once it exhausts
+When a task fails, flexiq **retries** it with backoff; once it exhausts
 `max_retries` the job moves to the **dead letter queue (DLQ)** — a holding area
 for permanently-failed jobs that you can inspect and replay.
 
@@ -74,6 +74,6 @@ for permanently-failed jobs that you can inspect and replay.
   <Card
     title="Capabilities at a glance"
     href="/python/getting-started/capabilities"
-    description="Everything taskito does, each linked to its guide."
+    description="Everything flexiq does, each linked to its guide."
   />
 </Cards>

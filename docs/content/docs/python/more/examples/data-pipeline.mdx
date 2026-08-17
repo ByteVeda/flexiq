@@ -28,7 +28,7 @@ import json
 
 import httpx
 
-from taskito import Queue, current_job
+from flexiq import Queue, current_job
 
 queue = Queue(
     db_path=".flexiq/pipeline.db",

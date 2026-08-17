@@ -8,7 +8,7 @@ constructing those inside every handler, register them once as **resources** and
 let the worker build, share, and tear them down with the right lifetime.
 
 ```ts
-import { Queue, useResource } from "@byteveda/taskito";
+import { Queue, useResource } from "@byteveda/flexiq";
 import { Pool } from "pg";
 
 const queue = new Queue({ dbPath: "tasks.db" });
@@ -196,7 +196,7 @@ Register a stub factory to swap a real dependency in tests. `mockResource(value)
 wraps a value as a factory and records how often it was built:
 
 ```ts
-import { mockResource } from "@byteveda/taskito";
+import { mockResource } from "@byteveda/flexiq";
 
 const db = mockResource({ query: async () => fakeRows });
 queue.resource("db", db.factory);

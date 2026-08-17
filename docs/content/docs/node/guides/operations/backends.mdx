@@ -15,8 +15,8 @@ later without changing task code.
 
 ```ts
 new Queue({ dbPath: "flexiq.db" });                                   // SQLite (default)
-new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
-new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
+new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "flexiq" });
+new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "flexiq" });
 ```
 
 | Backend | Use when | Notes |

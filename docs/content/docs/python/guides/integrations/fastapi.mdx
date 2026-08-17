@@ -1,16 +1,16 @@
 ---
 title: FastAPI Integration
-description: "TaskitoRouter — pre-built APIRouter with job status, SSE progress, dead letter management."
+description: "FlexiQRouter — pre-built APIRouter with job status, SSE progress, dead letter management."
 ---
 
-taskito provides a pre-built `APIRouter` for FastAPI with endpoints for
+flexiq provides a pre-built `APIRouter` for FastAPI with endpoints for
 job management, progress streaming via SSE, and dead letter queue
 operations.
 
 ## Installation
 
 ```bash
-pip install taskito[fastapi]
+pip install flexiq[fastapi]
 ```
 
 This installs `fastapi` and `pydantic` as extras.
@@ -19,8 +19,8 @@ This installs `fastapi` and `pydantic` as extras.
 
 ```python
 from fastapi import FastAPI
-from taskito import Queue
-from taskito.contrib.fastapi import TaskitoRouter
+from flexiq import Queue
+from flexiq.contrib.fastapi import FlexiQRouter
 
 queue = Queue(db_path="myapp.db")
 
@@ -29,7 +29,7 @@ def process_data(payload: dict) -> str:
     return "done"
 
 app = FastAPI()
-app.include_router(TaskitoRouter(queue), prefix="/tasks")
+app.include_router(FlexiQRouter(queue), prefix="/tasks")
 ```
 
 Run with:
@@ -57,19 +57,19 @@ uvicorn myapp:app --reload
 
 ## Configuration
 
-`TaskitoRouter` accepts options to control which routes are registered,
+`FlexiQRouter` accepts options to control which routes are registered,
 how results are serialized, and page sizes:
 
 ```python
 from fastapi import Depends, Header, HTTPException
-from taskito.contrib.fastapi import TaskitoRouter
+from flexiq.contrib.fastapi import FlexiQRouter
 
 def require_api_key(x_api_key: str = Header(...)):
     if x_api_key != "secret":
         raise HTTPException(status_code=403)
 
 app.include_router(
-    TaskitoRouter(
+    FlexiQRouter(
         queue,
         include_routes={"stats", "jobs", "dead-letters", "retry-dead"},
         dependencies=[Depends(require_api_key)],
@@ -149,7 +149,7 @@ All endpoints return validated Pydantic models with clean OpenAPI docs.
 You can import them for type-safe client code:
 
 ```python
-from taskito.contrib.fastapi import (
+from flexiq.contrib.fastapi import (
     StatsResponse,
     JobResponse,
     JobErrorResponse,
@@ -164,8 +164,8 @@ from taskito.contrib.fastapi import (
 
 ```python
 from fastapi import FastAPI, Header, HTTPException, Depends
-from taskito import Queue, current_job
-from taskito.contrib.fastapi import TaskitoRouter
+from flexiq import Queue, current_job
+from flexiq.contrib.fastapi import FlexiQRouter
 
 queue = Queue(db_path="myapp.db")
 
@@ -183,13 +183,13 @@ async def require_auth(authorization: str = Header(...)):
 
 app = FastAPI(title="Image Service")
 app.include_router(
-    TaskitoRouter(queue, dependencies=[Depends(require_auth)]),
+    FlexiQRouter(queue, dependencies=[Depends(require_auth)]),
     prefix="/tasks",
     tags=["tasks"],
 )
 
 # Start worker in a separate process:
-#   taskito worker --app myapp:queue
+#   flexiq worker --app myapp:queue
 ```
 
 ```bash

@@ -28,7 +28,7 @@ worker's dispatch buffer between the core and the pool.
 raise it to amortize polling under high throughput.
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(resize, p -> resizeImage(p))
         .concurrency(8)
         .channelCapacity(256)

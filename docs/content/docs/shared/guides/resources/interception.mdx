@@ -32,7 +32,7 @@ decide its fate. See [Enqueue interceptors](#enqueue-interceptors) below.
 <SdkOnly sdk="java">
 
 This SDK runs **enqueue interceptors** — functions you register with
-`taskito.intercept()` that inspect the whole call (task name + payload) and
+`flexiq.intercept()` that inspect the whole call (task name + payload) and
 decide its fate. See [The interceptor pipeline](#the-interceptor-pipeline)
 below.
 
@@ -300,7 +300,7 @@ start of every enqueue — before per-task defaults, middleware, and gates —
 and decides what happens to the call:
 
 ```ts
-import { Interception } from "@byteveda/taskito";
+import { Interception } from "@byteveda/flexiq";
 
 queue.intercept((taskName, args) => {
   if (taskName === "chargeCard" && (args[0] as number) < 0) {
@@ -356,12 +356,12 @@ plain data through the queue.
 
 ## The interceptor pipeline
 
-`taskito.intercept(interceptor)` registers an `Interceptor` — a functional
+`flexiq.intercept(interceptor)` registers an `Interceptor` — a functional
 interface that sees the task name and payload and returns one of four
 `Interception` strategies:
 
 ```java
-taskito.intercept((taskName, payload) -> {
+flexiq.intercept((taskName, payload) -> {
     if (payload instanceof String s && s.startsWith("pw:")) {
         return Interception.convert("***"); // redact before it reaches storage
     }
@@ -386,14 +386,14 @@ Rejecting from an interceptor aborts the enqueue — the job is never created
 and the error propagates to the caller:
 
 ```java
-taskito.intercept((taskName, payload) -> {
+flexiq.intercept((taskName, payload) -> {
     if (taskName.equals("charge") && ((Order) payload).total() < 0) {
         return Interception.reject("charge amount must be non-negative");
     }
     return Interception.pass();
 });
 
-taskito.enqueue(CHARGE, invalidOrder); // throws InterceptionException — nothing enqueued
+flexiq.enqueue(CHARGE, invalidOrder); // throws InterceptionException — nothing enqueued
 ```
 
 ### Rewriting options — the `onEnqueue` hook

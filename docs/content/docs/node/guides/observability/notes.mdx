@@ -84,7 +84,7 @@ Violations throw `NotesValidationError`, and the message names the constraint
 that failed:
 
 ```ts
-import { NotesValidationError } from "@byteveda/taskito";
+import { NotesValidationError } from "@byteveda/flexiq";
 
 try {
   queue.enqueue("processOrder", [order], { notes: tooManyFields });
@@ -102,8 +102,8 @@ top-level key count and the encoded byte size are bounded.
 
 <Callout type="info">
   `NotesValidationError` extends
-  [`TaskitoError`](/node/api-reference/errors), so an enclosing
-  `catch (e) { if (e instanceof TaskitoError) … }` catches it too.
+  [`FlexiQError`](/node/api-reference/errors), so an enclosing
+  `catch (e) { if (e instanceof FlexiQError) … }` catches it too.
 </Callout>
 
 ## Dashboard rendering

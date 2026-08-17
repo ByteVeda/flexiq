@@ -1,36 +1,36 @@
 ---
 title: Migrating from Celery
-description: "Side-by-side concept mapping and step-by-step migration from Celery to taskito."
+description: "Side-by-side concept mapping and step-by-step migration from Celery to flexiq."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
-This guide maps Celery concepts to their taskito equivalents. If you're
+This guide maps Celery concepts to their flexiq equivalents. If you're
 coming from Celery, you'll find that most concepts translate directly —
 with less infrastructure and simpler configuration.
 
 ## Concept mapping
 
-| Celery | taskito | Notes |
+| Celery | flexiq | Notes |
 |---|---|---|
 | `Celery()` app | `Queue()` | `Queue(db_path=...)` replaces `Celery(broker=..., backend=...)` — no broker URL, no result-backend URL, no `app.conf` setup. |
 | `@app.task` | `@queue.task()` | Same decorator shape; `max_retries`, `rate_limit`, `bind=True`, `name=` carry over with identical names. |
-| `.apply_async()` | `.apply_async()` | `priority` and `queue` carry over. Celery's `countdown` becomes `delay`; there is no `eta` (use `delay` with relative seconds). taskito adds `unique_key`, `expires`, `depends_on`. |
+| `.apply_async()` | `.apply_async()` | `priority` and `queue` carry over. Celery's `countdown` becomes `delay`; there is no `eta` (use `delay` with relative seconds). flexiq adds `unique_key`, `expires`, `depends_on`. |
 | `.delay()` | `.delay()` | Drop-in. Returns `JobResult` instead of `AsyncResult`. |
 | `AsyncResult` | `JobResult` | `.result(timeout=...)` replaces `.get(timeout=...)`; async variant `await job.aresult()`. |
-| Canvas (`chain`, `group`, `chord`) | `chain`, `group`, `chord` | API-compatible. taskito adds a DAG `Workflow` builder with conditions, gates, and fan-in. |
+| Canvas (`chain`, `group`, `chord`) | `chain`, `group`, `chord` | API-compatible. flexiq adds a DAG `Workflow` builder with conditions, gates, and fan-in. |
 | `celery beat` | `@queue.periodic()` | No separate beat daemon. Cron expressions support seconds (6 fields) and live in the worker process. |
 | Result backend (Redis/DB) | Built-in (SQLite) | Results store in the same SQLite file as jobs. Per-job `result_ttl_ms` controls retention. |
 | Broker (Redis/RabbitMQ) | Not needed | A single SQLite (or Postgres) connection replaces the broker. WAL mode allows concurrent reads. |
-| `celery worker` | `taskito worker` | `--concurrency`, `--queues`, `--loglevel` carry over. taskito adds `--pool prefork` for CPU parallelism. |
-| `celery inspect` | `taskito info` | Covers `inspect active/scheduled/registered`. `taskito dashboard` is the live UI version. |
+| `celery worker` | `flexiq worker` | `--concurrency`, `--queues`, `--loglevel` carry over. flexiq adds `--pool prefork` for CPU parallelism. |
+| `celery inspect` | `flexiq info` | Covers `inspect active/scheduled/registered`. `flexiq dashboard` is the live UI version. |
 
 ## Side-by-side examples
 
 ### App setup
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -46,10 +46,10 @@ app.conf.result_serializer = "json"
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(db_path="myapp.db")
 # That's it. No broker, no backend, no serializer config.
@@ -60,7 +60,7 @@ queue = Queue(db_path="myapp.db")
 
 ### Task definition
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -73,7 +73,7 @@ def send_email(self, to, subject, body):
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 @queue.task(max_retries=3, retry_backoff=2.0, retry_on=[SMTPError])
@@ -88,13 +88,13 @@ def send_email(to, subject, body):
 
 <Callout type="info" title="Automatic retries">
   In Celery, you must explicitly catch exceptions and call `self.retry()`. In
-  taskito, any unhandled exception triggers a retry automatically (up to
+  flexiq, any unhandled exception triggers a retry automatically (up to
   `max_retries`).
 </Callout>
 
 ### Enqueueing tasks
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -111,7 +111,7 @@ send_email.apply_async(
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 # Simple
@@ -133,7 +133,7 @@ The only change: `countdown` becomes `delay`.
 
 ### Getting results
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -147,7 +147,7 @@ result.status  # "PENDING", "SUCCESS", "FAILURE"
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 job = send_email.delay("user@example.com", "Hi", "Body")
@@ -169,7 +169,7 @@ Key differences:
 
 ### Workflows (canvas)
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -189,10 +189,10 @@ chord(
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
-from taskito import chain, group, chord
+from flexiq import chain, group, chord
 
 # Chain
 chain(fetch.s(url), parse.s(), store.s()).apply()
@@ -213,14 +213,14 @@ chord(
 Almost identical. The only change: `.apply_async()` becomes `.apply()`.
 
 <Callout type="warn" title="`.apply()` is not Celery's eager `.apply()`">
-  In Celery, `.apply()` runs the canvas **locally and synchronously**. In taskito,
+  In Celery, `.apply()` runs the canvas **locally and synchronously**. In flexiq,
   `.apply(queue)` **submits** it to the queue for workers to run — await results
-  with `.result()`. taskito has no eager local execution mode.
+  with `.result()`. flexiq has no eager local execution mode.
 </Callout>
 
 ### Periodic tasks
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -237,7 +237,7 @@ app.conf.beat_schedule = {
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 @queue.periodic(cron="0 0 * * * *")
@@ -245,17 +245,17 @@ def cleanup():
     ...
 
 # No separate process — the worker handles scheduling.
-# taskito worker --app myapp:queue
+# flexiq worker --app myapp:queue
 ```
 
   </Tab>
 </Tabs>
 
 <Callout type="info">
-  taskito uses 6-field cron expressions (with seconds). Celery's `crontab()`
+  flexiq uses 6-field cron expressions (with seconds). Celery's `crontab()`
   maps to the last 5 fields, with `0` prepended for seconds.
 
-  | Celery `crontab()` | taskito cron |
+  | Celery `crontab()` | flexiq cron |
   |---|---|
   | `crontab()` (every minute) | `0 * * * * *` |
   | `crontab(minute=0)` (every hour) | `0 0 * * * *` |
@@ -265,7 +265,7 @@ def cleanup():
 
 ### Rate limiting
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -275,7 +275,7 @@ def call_api(endpoint):
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 @queue.task(rate_limit="100/m")
@@ -290,7 +290,7 @@ Identical syntax.
 
 ### Worker
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```bash
@@ -298,10 +298,10 @@ celery -A myapp worker --loglevel=info -Q emails,default
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```bash
-taskito worker --app myapp:queue --queues emails,default
+flexiq worker --app myapp:queue --queues emails,default
 ```
 
   </Tab>
@@ -309,7 +309,7 @@ taskito worker --app myapp:queue --queues emails,default
 
 ### Testing
 
-<Tabs items={["Celery", "taskito"]}>
+<Tabs items={["Celery", "flexiq"]}>
   <Tab value="Celery">
 
 ```python
@@ -322,7 +322,7 @@ assert result.get() == 5
 ```
 
   </Tab>
-  <Tab value="taskito">
+  <Tab value="flexiq">
 
 ```python
 with queue.test_mode() as results:
@@ -333,14 +333,14 @@ with queue.test_mode() as results:
   </Tab>
 </Tabs>
 
-taskito's test mode uses a context manager instead of a global setting, so
+flexiq's test mode uses a context manager instead of a global setting, so
 it's safe to use in parallel test runs.
 
-## What taskito doesn't have
+## What flexiq doesn't have
 
-Some Celery features don't have taskito equivalents:
+Some Celery features don't have flexiq equivalents:
 
-| Celery feature | Status in taskito |
+| Celery feature | Status in flexiq |
 |---|---|
 | Distributed workers (multi-server) | Use Postgres backend |
 | Message routing (exchanges, topics) | Use named queues instead |
@@ -361,5 +361,5 @@ Some Celery features don't have taskito equivalents:
 - [ ] Replace celery beat schedule with `@queue.periodic()`
 - [ ] Update cron expressions to 6-field format (prepend seconds)
 - [ ] Remove broker and result backend configuration
-- [ ] Change `celery worker` to `taskito worker` in deployment scripts
+- [ ] Change `celery worker` to `flexiq worker` in deployment scripts
 - [ ] Replace `task_always_eager` with `queue.test_mode()` in tests

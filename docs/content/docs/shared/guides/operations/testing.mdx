@@ -28,7 +28,7 @@ in-process with no mocks of the core.
 
 <SdkOnly sdk="java">
 
-The `taskito-test` artifact ships a pure-Java, in-memory `QueueBackend` — the
+The `flexiq-test` artifact ships a pure-Java, in-memory `QueueBackend` — the
 full client API with no native library and no disk — ideal for fast unit
 tests of producers, handlers, retries, and dead-lettering.
 
@@ -40,7 +40,7 @@ tests of producers, handlers, retries, and dead-lettering.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -65,7 +65,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { Queue, type Worker } from "@byteveda/taskito";
+import { Queue, type Worker } from "@byteveda/flexiq";
 
 let worker: Worker | undefined;
 afterEach(() => {
@@ -93,26 +93,26 @@ it("runs a task end to end", async () => {
   <Tab sdk="java">
 
 ```kotlin
-testImplementation("org.byteveda:taskito-test:0.23.0")
+testImplementation("org.byteveda:flexiq-test:0.23.0")
 ```
 
 ```java
-import org.byteveda.taskito.test.InMemoryTaskito;
+import org.byteveda.flexiq.test.InMemoryFlexiQ;
 
 @Test
 void runsATaskEndToEnd() throws Exception {
-    try (Taskito taskito = InMemoryTaskito.open()) {
-        String id = taskito.enqueue("add", List.of(2, 3));
+    try (FlexiQ flexiq = InMemoryFlexiQ.open()) {
+        String id = flexiq.enqueue("add", List.of(2, 3));
 
-        try (Worker worker = taskito.worker()
+        try (Worker worker = flexiq.worker()
                 .handle("add", List.class, numbers ->
                         (int) numbers.get(0) + (int) numbers.get(1))
                 .start()) {
-            Job job = taskito.awaitJob(id, Duration.ofSeconds(5)).orElseThrow();
+            Job job = flexiq.awaitJob(id, Duration.ofSeconds(5)).orElseThrow();
             assertEquals(JobStatus.COMPLETE, job.status);
         }
 
-        assertEquals(5, taskito.getResult(id, Integer.class).orElseThrow());
+        assertEquals(5, flexiq.getResult(id, Integer.class).orElseThrow());
     }
 }
 ```
@@ -122,9 +122,9 @@ void runsATaskEndToEnd() throws Exception {
 
 <SdkOnly sdk="java">
 
-`InMemoryTaskito.open(serializer)` swaps the JSON default. To construct the
+`InMemoryFlexiQ.open(serializer)` swaps the JSON default. To construct the
 backend explicitly (e.g. to share one across a custom builder), pass it to
-`Taskito.builder().open(new InMemoryQueueBackend())`.
+`FlexiQ.builder().open(new InMemoryQueueBackend())`.
 
 </SdkOnly>
 
@@ -132,7 +132,7 @@ backend explicitly (e.g. to share one across a custom builder), pass it to
 
 ## How it works
 
-When you enter `queue.test_mode()`, taskito patches the `enqueue()` method
+When you enter `queue.test_mode()`, flexiq patches the `enqueue()` method
 so that every `.delay()` or `.apply_async()` call:
 
 1. Looks up the task function in the registry
@@ -261,7 +261,7 @@ internally, which is intercepted by the test mode patch. Chords do too — the
 callback receives the list of group results as its first argument:
 
 ```python
-from taskito import chord
+from flexiq import chord
 
 @queue.task()
 def sum_results(values: list[int]) -> int:
@@ -279,7 +279,7 @@ def test_chord():
 ### Chains
 
 ```python
-from taskito import chain
+from flexiq import chain
 
 @queue.task()
 def double(n: int) -> int:
@@ -301,7 +301,7 @@ def test_chain():
 ### Groups
 
 ```python
-from taskito import group
+from flexiq import group
 
 def test_group():
     with queue.test_mode() as results:
@@ -318,7 +318,7 @@ def test_group():
 task runs:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def context_aware():
@@ -379,7 +379,7 @@ def test_create_user():
   <Tab sdk="node">
 
 ```ts
-import { useResource } from "@byteveda/taskito";
+import { useResource } from "@byteveda/flexiq";
 
 queue.resource("db", () => fakeDb);
 queue.task("sync", async () => {
@@ -392,7 +392,7 @@ queue.task("sync", async () => {
   <Tab sdk="java">
 
 ```java
-taskito.resource("db", context -> fakeDb);
+flexiq.resource("db", context -> fakeDb);
 ```
 
   </Tab>
@@ -405,7 +405,7 @@ taskito.resource("db", context -> fakeDb);
 `MockResource` adds call tracking to a mock value:
 
 ```python
-from taskito import MockResource
+from flexiq import MockResource
 
 spy = MockResource("db", wraps=real_db, track_calls=True)
 
@@ -486,7 +486,7 @@ was built — register the factory and assert on `resolutions` to confirm a
 worker-scoped resource was built once, not once per job:
 
 ```ts
-import { mockResource, Queue, useResource } from "@byteveda/taskito";
+import { mockResource, Queue, useResource } from "@byteveda/flexiq";
 
 const db = mockResource({ query: () => 7 });
 queue.resource("db", db.factory);
@@ -510,11 +510,11 @@ await waitFor(() => db.resolutions === 1);
 
 ### Asserting resource construction
 
-`InMemoryTaskito` paired with a counting factory confirms a resource was
+`InMemoryFlexiQ` paired with a counting factory confirms a resource was
 built the expected number of times, without touching a native backend:
 
 ```java
-try (Taskito queue = InMemoryTaskito.open()) {
+try (FlexiQ queue = InMemoryFlexiQ.open()) {
     AtomicInteger built = new AtomicInteger();
     queue.resource("db", ctx -> {
         built.incrementAndGet();
@@ -620,10 +620,10 @@ def test_e2e():
   tests without running a real worker.
 </Callout>
 
-## Contributing: taskito's own test suite
+## Contributing: flexiq's own test suite
 
 <Callout type="info">
-  This section is for people contributing to taskito itself — building the
+  This section is for people contributing to flexiq itself — building the
   Rust extension and running its internal test suite. If you're testing
   tasks in your own application, the sections above (`test_mode()`,
   `TestResult`, `MockResource`) are what you want instead.
@@ -640,8 +640,8 @@ uv run maturin develop
 uv run python -m pytest tests/python/ -v
 
 # Linting (run from sdks/python/)
-uv run ruff check taskito/ tests/
-uv run mypy taskito/ --no-incremental
+uv run ruff check flexiq/ tests/
+uv run mypy flexiq/ --no-incremental
 ```
 
 To build with native async support:
@@ -662,7 +662,7 @@ an event listener with a `CountDownLatch` works too:
 
 ```java
 CountDownLatch done = new CountDownLatch(1);
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle("echo", String.class, payload -> payload.length())
         .on(EventName.SUCCESS, event -> done.countDown())
         .start();
@@ -675,8 +675,8 @@ throwaway SQLite database — the whole enqueue → execute → result path runs
 in-process:
 
 ```java
-Path dir = Files.createTempDirectory("taskito-test");
-try (Taskito taskito = Taskito.builder().sqlite(dir.resolve("q.db").toString()).open()) {
+Path dir = Files.createTempDirectory("flexiq-test");
+try (FlexiQ flexiq = FlexiQ.builder().sqlite(dir.resolve("q.db").toString()).open()) {
     // real backend, no server
 }
 ```

@@ -6,7 +6,7 @@ description: "Test mode, TestResult, and MockResource for unit testing tasks."
 ## `TestMode`
 
 ```python
-from taskito.testing import TestMode
+from flexiq.testing import TestMode
 # or use the shortcut:
 # queue.test_mode()
 ```
@@ -47,7 +47,7 @@ with queue.test_mode(resources={"db": mock_session}) as results:
 ## `TestResult`
 
 ```python
-from taskito import TestResult
+from flexiq import TestResult
 ```
 
 Dataclass capturing the result of a single task execution in test mode.
@@ -76,7 +76,7 @@ Dataclass capturing the result of a single task execution in test mode.
 ## `TestResults`
 
 ```python
-from taskito import TestResults
+from flexiq import TestResults
 ```
 
 A `list[TestResult]` subclass with convenience filtering methods.
@@ -116,7 +116,7 @@ results.filter(task_name="myapp.process", succeeded=True)
 ## `MockResource`
 
 ```python
-from taskito import MockResource
+from flexiq import MockResource
 ```
 
 Test double for a worker resource with optional call tracking. Pass instances
@@ -150,7 +150,7 @@ MockResource(
 ### Usage
 
 ```python
-from taskito import MockResource
+from flexiq import MockResource
 
 # Simple mock value
 mock_db = MockResource("db", return_value=FakeSessionFactory())

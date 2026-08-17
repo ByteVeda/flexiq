@@ -24,7 +24,7 @@ backoff. Network tasks run on a dedicated `network` queue so a backlog there
 never starves CPU-bound extraction.
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 export const queue = new Queue({ dbPath: "scraper.db" });
 

@@ -6,7 +6,7 @@ description: "DAG-style depends_on for jobs — cascade cancel, missing-dep hand
 import { Callout } from "fumadocs-ui/components/callout";
 import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
-taskito supports declaring dependencies between jobs, allowing you to build
+flexiq supports declaring dependencies between jobs, allowing you to build
 DAG-style workflows where a job only runs after its upstream dependencies
 have completed successfully.
 
@@ -254,7 +254,7 @@ job_success = on_valid.apply_async(
 
 ## Combining with other features
 
-Dependencies compose naturally with other taskito features:
+Dependencies compose naturally with other flexiq features:
 
 ```python
 job = transform.apply_async(

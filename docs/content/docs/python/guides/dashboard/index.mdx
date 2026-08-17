@@ -3,13 +3,13 @@ title: Overview
 description: "Zero-dependency built-in web UI for browsing jobs, configuring webhooks, tuning per-task runtime limits, and managing the queue."
 ---
 
-taskito ships with a built-in web dashboard for monitoring jobs, inspecting
+flexiq ships with a built-in web dashboard for monitoring jobs, inspecting
 dead letters (the DLQ — a holding area for jobs that exhausted their retries), configuring webhooks, tuning per-task runtime limits, and
 managing your task queue in real time. The dashboard is a single-page
 application served directly from the Python package — **zero extra
 dependencies required**.
 
-> Coming from Celery? This is taskito's built-in equivalent of Flower — no
+> Coming from Celery? This is flexiq's built-in equivalent of Flower — no
 > separate monitoring service to install or run.
 
 ![Overview page with stats cards, throughput chart, and recent activity](/screenshots/dashboard/overview.png)
@@ -45,7 +45,7 @@ dependencies required**.
   <Tab value="CLI">
 
 ```bash
-taskito dashboard --app myapp:queue
+flexiq dashboard --app myapp:queue
 ```
 
 The `--app` argument uses the same `module:attribute` format as the worker.
@@ -54,7 +54,7 @@ The `--app` argument uses the same `module:attribute` format as the worker.
   <Tab value="Programmatic">
 
 ```python
-from taskito.dashboard import serve_dashboard
+from flexiq.dashboard import serve_dashboard
 from myapp import queue
 
 serve_dashboard(queue, host="0.0.0.0", port=8080)
@@ -76,7 +76,7 @@ By default the dashboard starts on `http://localhost:8080`.
 
 ```bash
 # Bind to all interfaces on port 9000
-taskito dashboard --app myapp:queue --host 0.0.0.0 --port 9000
+flexiq dashboard --app myapp:queue --host 0.0.0.0 --port 9000
 ```
 
 <Callout type="info" title="Running alongside the worker">
@@ -85,17 +85,17 @@ taskito dashboard --app myapp:queue --host 0.0.0.0 --port 9000
 
   ```bash
   # Terminal 1
-  taskito worker --app myapp:queue
+  flexiq worker --app myapp:queue
 
   # Terminal 2
-  taskito dashboard --app myapp:queue
+  flexiq dashboard --app myapp:queue
   ```
 </Callout>
 
 <Callout type="warn" title="The dashboard serves openly by default">
   Authentication is opt-in — without it, anyone who can reach the port
   has full control. For production, enable it with
-  `serve_dashboard(auth_enabled=True)` or `taskito dashboard --auth`, or
+  `serve_dashboard(auth_enabled=True)` or `flexiq dashboard --auth`, or
   keep the dashboard on a private network. See
   [Authentication](/python/guides/dashboard/authentication) for the full
   flow, including the env-var bootstrap path useful for managed
@@ -132,7 +132,7 @@ The full REST API surface is documented at
 
 The dashboard is a React 19 + Vite 8 + TypeScript SPA routed via TanStack
 Router, styled with Tailwind v4 and shadcn/ui, and shipped as
-hash-busted multi-file assets under `sdks/python/taskito/static/dashboard/`.
+hash-busted multi-file assets under `sdks/python/flexiq/static/dashboard/`.
 
 - **Dark and light mode** — Toggle via the sun/moon button in the header.
   Preference is stored in `localStorage` and follows the system scheme by
@@ -151,9 +151,9 @@ hash-busted multi-file assets under `sdks/python/taskito/static/dashboard/`.
 
 <Callout type="info" title="Zero extra dependencies at runtime">
   The built SPA ships inside the Python wheel under
-  `sdks/python/taskito/static/dashboard/` and is served by the Python
+  `sdks/python/flexiq/static/dashboard/` and is served by the Python
   dashboard process. No Node.js, no pnpm, no CDN at runtime — just
-  `pip install taskito`. Node.js and pnpm are only needed by
+  `pip install flexiq`. Node.js and pnpm are only needed by
   contributors rebuilding the dashboard source.
 </Callout>
 
@@ -232,7 +232,7 @@ cd dashboard && pnpm install
 pnpm run dev
 
 # In another terminal, start the backend
-taskito dashboard --app myapp:queue
+flexiq dashboard --app myapp:queue
 
 # Build and copy to Python package
 pnpm run build
@@ -244,7 +244,7 @@ pnpm run build
 </Callout>
 
 The build produces a static `index.html` plus hashed JS/CSS chunks
-under `sdks/python/taskito/static/dashboard/`. The built assets aren't
+under `sdks/python/flexiq/static/dashboard/`. The built assets aren't
 committed — release tooling runs `pnpm -C dashboard build` before
 packaging so the wheel ships them.
 

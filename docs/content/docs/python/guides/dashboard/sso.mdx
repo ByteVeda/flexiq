@@ -13,7 +13,7 @@ own button on the login screen.
 
 OAuth requires
 [dashboard authentication](/python/guides/dashboard/authentication) to be
-enabled (`serve_dashboard(auth_enabled=True)` / `taskito dashboard --auth`)
+enabled (`serve_dashboard(auth_enabled=True)` / `flexiq dashboard --auth`)
 and is itself **off by default**. Setting any provider's env vars turns it
 on; password login remains enabled unless you opt out explicitly.
 
@@ -30,9 +30,9 @@ Quick glossary for the acronyms used on this page:
   OAuth requires the `authlib` extra:
 
   ```bash
-  pip install 'taskito[oauth]'
+  pip install 'flexiq[oauth]'
   # or with uv:
-  uv pip install 'taskito[oauth]'
+  uv pip install 'flexiq[oauth]'
   ```
 
   Skip this if you only use password login.
@@ -65,7 +65,7 @@ Quick glossary for the acronyms used on this page:
     D->>P: POST /token (code + code_verifier)
     P-->>D: { id_token, access_token }
     Note over D: verify JWKS / nonce / aud / iss<br/>enforce allowlist<br/>get_or_create User<br/>create Session
-    D-->>B: 302 to /<br/>Set-Cookie: flexiq_session, taskito_csrf`}
+    D-->>B: 302 to /<br/>Set-Cookie: flexiq_session, flexiq_csrf`}
 />
 
 State is **single-use** and **time-bounded** (5-min default TTL). PKCE
@@ -80,7 +80,7 @@ S256, OIDC nonce, ID-token signature (via the provider's JWKS),
    the callback URL:
 
    ```
-   https://taskito.your-company.com/api/auth/oauth/callback/google
+   https://flexiq.your-company.com/api/auth/oauth/callback/google
    ```
 
    (For local development, `http://localhost:8080/api/auth/oauth/callback/google`
@@ -89,7 +89,7 @@ S256, OIDC nonce, ID-token signature (via the provider's JWKS),
 2. **Set env vars** before starting the dashboard:
 
    ```bash
-   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
    # Restrict logins to your Google Workspace domain:
@@ -107,7 +107,7 @@ GitHub is OAuth2-only (no OIDC), so the dashboard hits `/user` and
 
 1. Create a [GitHub OAuth App](https://github.com/settings/developers).
    Set the *Authorization callback URL* to
-   `https://taskito.your-company.com/api/auth/oauth/callback/github`.
+   `https://flexiq.your-company.com/api/auth/oauth/callback/github`.
 
 2. Env vars:
 
@@ -137,7 +137,7 @@ its own callback URL, own user namespace, and own button on the login
 screen.
 
 ```bash
-export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
 
 # List the slots first.
 export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
@@ -160,7 +160,7 @@ The callback URL for each slot is
 exact URL with your IdP.
 
 Slot names must match `^[a-z][a-z0-9_-]{0,31}$` and must not collide
-with `google` / `github` (the built-ins). The Taskito user generated
+with `google` / `github` (the built-ins). The FlexiQ user generated
 for an OIDC login is namespaced as `{slot}:{sub}`, so two different
 Okta tenants stay distinct users even when subjects overlap.
 
@@ -226,7 +226,7 @@ domain/org allowlist too.
 | **iss / aud / exp** | All validated; 60-second clock skew tolerance for `exp`. |
 | **Open redirect** | The `next` query param is validated against `is_safe_redirect` — relative paths only, no scheme, no `//`. Falls back to `/`. |
 | **HTTPS required** | `redirect_base_url` must be `https://` unless the host is `localhost` / `127.0.0.1`. Misconfiguration aborts startup. |
-| **Provider tokens** | Never persisted. Only the verified identity flows into the Taskito session. |
+| **Provider tokens** | Never persisted. Only the verified identity flows into the FlexiQ session. |
 | **Cross-provider linking** | Disabled by design. A given `(slot, subject)` always maps to one user. Two different providers with the same email = two different users. |
 
 ## API surface
@@ -237,7 +237,7 @@ domain/org allowlist too.
 | `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
 | `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges code, enforces allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
 
-The callback uses the same `flexiq_session` + `taskito_csrf` cookies
+The callback uses the same `flexiq_session` + `flexiq_csrf` cookies
 as password login — every other dashboard route works identically once
 you're signed in.
 
@@ -268,7 +268,7 @@ The trailing slash and the slot value must match exactly.
 
 ```bash
 # Required when any provider is configured.
-FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.company.com
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.company.com
 
 # Google.
 FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...

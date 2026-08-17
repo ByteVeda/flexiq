@@ -78,7 +78,7 @@ trusted private network.
 The bundled native library is extracted to a per-user, owner-only
 (`rwx------`) directory and verified by SHA-256 before every load — a swapped
 or symlinked file in a shared temp directory is rejected. Point
-`-Dtaskito.native.workdir` at a private, exec-permitted directory on hardened
+`-Dflexiq.native.workdir` at a private, exec-permitted directory on hardened
 hosts with a `noexec` `/tmp`.
 
 ## Hardening checklist

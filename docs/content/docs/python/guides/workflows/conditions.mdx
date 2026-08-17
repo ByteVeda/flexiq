@@ -28,7 +28,7 @@ wf.step("notify", send_slack, after="deploy", condition="always")
 Pass a function that receives a `WorkflowContext`:
 
 ```python
-from taskito.workflows import WorkflowContext
+from flexiq.workflows import WorkflowContext
 
 def high_score(ctx: WorkflowContext) -> bool:
     return ctx.results["validate"]["score"] > 0.95

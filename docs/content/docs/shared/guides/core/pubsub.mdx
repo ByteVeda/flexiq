@@ -12,7 +12,7 @@ independently per subscriber. A failing subscriber never affects its
 siblings, and publishing to a topic with zero subscribers is a valid no-op
 that returns an empty list.
 
-<SdkSwap python={<>Subscribe with the <code>@queue.subscriber()</code> decorator.</>} node={<>Subscribe with <code>queue.subscriber()</code>.</>} java={<>Subscribe with <code>taskito.subscribe()</code>.</>} />
+<SdkSwap python={<>Subscribe with the <code>@queue.subscriber()</code> decorator.</>} node={<>Subscribe with <code>queue.subscriber()</code>.</>} java={<>Subscribe with <code>flexiq.subscribe()</code>.</>} />
 
 <Mermaid
   chart={`flowchart LR
@@ -32,7 +32,7 @@ topic — every active subscription gets its own delivery:
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -52,7 +52,7 @@ queue.publish("orders", 42)    # -> [JobResult, JobResult] — one per subscribe
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "orders.db" });
 
@@ -72,20 +72,20 @@ await queue.publish("orders", [42]); // -> Job[] — one per subscriber
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.pubsub.SubscriptionOptions;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.pubsub.SubscriptionOptions;
+import org.byteveda.flexiq.task.Task;
 
 Task<Integer> sendConfirmationEmail = Task.of("send_confirmation_email", Integer.class);
 Task<Integer> trackOrder = Task.of("track_order", Integer.class);
 
-try (Taskito taskito = Taskito.builder().sqlite("orders.db").open()) {
-    taskito.subscribe("orders", sendConfirmationEmail,
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("orders.db").open()) {
+    flexiq.subscribe("orders", sendConfirmationEmail,
             SubscriptionOptions.builder().name("email").build());
-    taskito.subscribe("orders", trackOrder,
+    flexiq.subscribe("orders", trackOrder,
             SubscriptionOptions.builder().name("analytics").build());
 
-    taskito.publish("orders", 42); // -> List<Job> — one per subscriber
+    flexiq.publish("orders", 42); // -> List<Job> — one per subscriber
 }
 ```
 
@@ -98,7 +98,7 @@ try (Taskito taskito = Taskito.builder().sqlite("orders.db").open()) {
 handler itself on the worker the same way you would for any other task:
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(sendConfirmationEmail, orderId -> mailer.sendConfirmation(orderId))
         .handle(trackOrder, orderId -> analytics.record(orderId))
         .start();
@@ -175,10 +175,10 @@ queue.runWorker(); // the subscription registers here, owned by this worker
 
 ```java
 Task<Integer> tail = Task.of("tail", Integer.class);
-taskito.subscribe("orders", tail, SubscriptionOptions.builder().durable(false).build());
+flexiq.subscribe("orders", tail, SubscriptionOptions.builder().durable(false).build());
 
 // The subscription registers once a worker actually starts and handles it.
-try (Worker worker = taskito.worker().handle(tail, orderId -> log(orderId)).start()) {
+try (Worker worker = flexiq.worker().handle(tail, orderId -> log(orderId)).start()) {
     ...
 }
 ```
@@ -234,13 +234,13 @@ await queue.listTopics();                      // distinct topics with a subscri
   <Tab sdk="java">
 
 ```java
-taskito.pauseSubscription("orders", "email");
-taskito.publish("orders", 1);                  // only "analytics" is delivered
-taskito.resumeSubscription("orders", "email");
+flexiq.pauseSubscription("orders", "email");
+flexiq.publish("orders", 1);                  // only "analytics" is delivered
+flexiq.resumeSubscription("orders", "email");
 
-taskito.unsubscribe("orders", "email");        // remove it entirely
-taskito.listSubscriptions("orders");           // active subscriptions for a topic
-taskito.listTopics();                          // distinct topics with a subscriber
+flexiq.unsubscribe("orders", "email");        // remove it entirely
+flexiq.listSubscriptions("orders");           // active subscriptions for a topic
+flexiq.listTopics();                          // distinct topics with a subscriber
 ```
 
   </Tab>
@@ -324,12 +324,12 @@ const third = await queue.publish("orders", [1], { idempotencyKey: "evt-42" }); 
 
 ```java
 PublishOptions keyed = PublishOptions.builder().idempotencyKey("evt-42").build();
-List<Job> first = taskito.publish("orders", 1, keyed);   // 2 subscribers -> 2 jobs
-List<Job> second = taskito.publish("orders", 1, keyed);  // same jobs, no new rows
+List<Job> first = flexiq.publish("orders", 1, keyed);   // 2 subscribers -> 2 jobs
+List<Job> second = flexiq.publish("orders", 1, keyed);  // same jobs, no new rows
 
 Task<Integer> auditOrder = Task.of("audit_order", Integer.class);
-taskito.subscribe("orders", auditOrder, SubscriptionOptions.builder().name("audit").build());
-List<Job> third = taskito.publish("orders", 1, keyed);   // "audit" gets its own delivery
+flexiq.subscribe("orders", auditOrder, SubscriptionOptions.builder().name("audit").build());
+List<Job> third = flexiq.publish("orders", 1, keyed);   // "audit" gets its own delivery
 ```
 
   </Tab>
@@ -364,7 +364,7 @@ JSON.parse(job.notes ?? "{}");
   <Tab sdk="java">
 
 ```java
-List<Job> jobs = taskito.publish("orders", 5,
+List<Job> jobs = flexiq.publish("orders", 5,
         PublishOptions.builder().notes(Map.of("tenant", "acme")).build());
 Map<String, Object> notes = jobs.get(0).notesMap().orElseThrow();
 // {topic=orders, subscription=email, tenant=acme}
@@ -401,7 +401,7 @@ publish, versus fan-out's one job write per subscriber), and a topic can mix
 both kinds: the same publish stores the log message once *and* fans out jobs
 to any fan-out subscribers on it.
 
-<SdkSwap python={<>Register a log subscription with <code>queue.subscribe_log()</code>, pull with <code>queue.read_topic()</code>, and advance its cursor with <code>queue.ack_topic()</code>.</>} node={<>Register a log subscription with <code>queue.subscribeLog()</code>, pull with <code>queue.readTopic()</code>, and advance its cursor with <code>queue.ackTopic()</code>.</>} java={<>Register a log subscription with <code>taskito.subscribeLog()</code>, pull with <code>taskito.readTopic()</code>, and advance its cursor with <code>taskito.ackTopic()</code>.</>} />
+<SdkSwap python={<>Register a log subscription with <code>queue.subscribe_log()</code>, pull with <code>queue.read_topic()</code>, and advance its cursor with <code>queue.ack_topic()</code>.</>} node={<>Register a log subscription with <code>queue.subscribeLog()</code>, pull with <code>queue.readTopic()</code>, and advance its cursor with <code>queue.ackTopic()</code>.</>} java={<>Register a log subscription with <code>flexiq.subscribeLog()</code>, pull with <code>flexiq.readTopic()</code>, and advance its cursor with <code>flexiq.ackTopic()</code>.</>} />
 
 <Mermaid
   chart={`flowchart LR
@@ -449,17 +449,17 @@ for (const msg of await queue.readTopic("orders", "audit-log")) {
 
 ```java
 // Keep the Serializer you configure on the builder — readTopic() returns a
-// raw byte[] payload, and Taskito has no getter to recover it later.
+// raw byte[] payload, and FlexiQ has no getter to recover it later.
 Serializer serializer = new JsonSerializer();
-try (Taskito taskito = Taskito.builder().sqlite("orders.db").serializer(serializer).open()) {
-    taskito.subscribeLog("orders", "audit-log");
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("orders.db").serializer(serializer).open()) {
+    flexiq.subscribeLog("orders", "audit-log");
 
-    taskito.publish("orders", 42); // -> [] no fan-out jobs; one message stored
+    flexiq.publish("orders", 42); // -> [] no fan-out jobs; one message stored
 
-    for (TopicMessage msg : taskito.readTopic("orders", "audit-log")) {
+    for (TopicMessage msg : flexiq.readTopic("orders", "audit-log")) {
         int orderId = serializer.deserialize(msg.payload, Integer.class);
         auditSink.write(orderId);
-        taskito.ackTopic("orders", "audit-log", msg.id);
+        flexiq.ackTopic("orders", "audit-log", msg.id);
     }
 }
 ```
@@ -533,11 +533,11 @@ await queue.readTopic("orders", "audit-log"); // -> sees the earlier publish
   <Tab sdk="java">
 
 ```java
-taskito.declareTopic("orders", Duration.ofHours(1));
+flexiq.declareTopic("orders", Duration.ofHours(1));
 
-taskito.publish("orders", 42); // retained even with no subscriber yet
-taskito.subscribeLog("orders", "audit-log");
-taskito.readTopic("orders", "audit-log"); // -> sees the earlier publish
+flexiq.publish("orders", 42); // retained even with no subscriber yet
+flexiq.subscribeLog("orders", "audit-log");
+flexiq.readTopic("orders", "audit-log"); // -> sees the earlier publish
 ```
 
   </Tab>
@@ -588,11 +588,11 @@ queue.runWorker(); // spawns the consumer's poll loop
 
 ```java
 // The payload type is explicit — Java can't infer it from the lambda.
-taskito.logConsumer("orders", "audit-log", Integer.class, orderId -> {
+flexiq.logConsumer("orders", "audit-log", Integer.class, orderId -> {
     auditSink.write(orderId);
 });
 
-taskito.worker().start(); // spawns the consumer's poll loop
+flexiq.worker().start(); // spawns the consumer's poll loop
 ```
 
   </Tab>
@@ -648,12 +648,12 @@ for (const msg of await queue.leaseTopic("orders", "audit-log", { visibility: 30
   <Tab sdk="java">
 
 ```java
-for (TopicMessage msg : taskito.leaseTopic("orders", "audit-log", 100, Duration.ofSeconds(30))) {
+for (TopicMessage msg : flexiq.leaseTopic("orders", "audit-log", 100, Duration.ofSeconds(30))) {
     try {
         auditSink.write(serializer.deserialize(msg.payload, Order.class));
-        taskito.ackMessage("orders", "audit-log", msg.id);
+        flexiq.ackMessage("orders", "audit-log", msg.id);
     } catch (TransientException e) {
-        taskito.nackMessage("orders", "audit-log", msg.id); // redeliver now
+        flexiq.nackMessage("orders", "audit-log", msg.id); // redeliver now
     }
 }
 ```

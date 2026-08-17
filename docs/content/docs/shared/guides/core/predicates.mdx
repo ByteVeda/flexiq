@@ -8,7 +8,7 @@ is allowed to proceed — a declarative way to say "only do this under
 condition X." What a denial does depends on the configured outcome: a reject
 or cancel outcome means no work runs, while a defer outcome schedules the job
 to try again later.
-<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>, returning a boolean or a richer <code>Decision</code>.</>} java={<>Register one with <code>taskito.predicate()</code>, or the richer <code>taskito.gate()</code>.</>} />
+<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>, returning a boolean or a richer <code>Decision</code>.</>} java={<>Register one with <code>flexiq.predicate()</code>, or the richer <code>flexiq.gate()</code>.</>} />
 
 ## Quick start
 
@@ -16,7 +16,7 @@ to try again later.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -46,10 +46,10 @@ queue.enqueue("charge", [-1]); // throws PredicateRejectedError
 ```java
 Task<Integer> charge = Task.of("charge", Integer.class);
 
-taskito.predicate("charge", ctx -> (Integer) ctx.payload() > 0);
+flexiq.predicate("charge", ctx -> (Integer) ctx.payload() > 0);
 
-taskito.enqueue(charge, 50);  // ok
-taskito.enqueue(charge, -1);  // throws PredicateRejectedException
+flexiq.enqueue(charge, 50);  // ok
+flexiq.enqueue(charge, -1);  // throws PredicateRejectedException
 ```
 
   </Tab>
@@ -77,7 +77,7 @@ has run, so gates see the rewritten payload.
 
 ## What predicates *do not* do
 
-Predicates are not the right place to rebuild taskito's atomic
+Predicates are not the right place to rebuild flexiq's atomic
 enforcement primitives. Use the dedicated knobs:
 
 | Goal | Use this — *not* a predicate |
@@ -112,7 +112,7 @@ allow_or_urgent = allow | feature_flag("urgent_bypass")
   <Tab sdk="node">
 
 ```ts
-import { allOf, anyOf, businessHours, isWeekend, not } from "@byteveda/taskito";
+import { allOf, anyOf, businessHours, isWeekend, not } from "@byteveda/flexiq";
 
 const highPriority = ({ args }) => args[0].priority === "high";
 
@@ -132,8 +132,8 @@ has no meaning).
 Predicate positive = ctx -> (Integer) ctx.payload() > 0;
 Predicate small = ctx -> (Integer) ctx.payload() <= 10_000;
 
-taskito.predicate("charge", Predicates.allOf(positive, small));
-taskito.predicate("dispatch", Predicates.not(isHoliday));
+flexiq.predicate("charge", Predicates.allOf(positive, small));
+flexiq.predicate("dispatch", Predicates.not(isHoliday));
 ```
 
   </Tab>
@@ -198,8 +198,8 @@ not booleans.
 
 ```python
 from typing import Any
-from taskito import Queue
-from taskito.predicates import Predicate, PredicateContext
+from flexiq import Queue
+from flexiq.predicates import Predicate, PredicateContext
 
 queue = Queue()
 
@@ -243,7 +243,7 @@ A gate may return a `Decision` instead of a boolean:
 | `Decision.deferUntil(date)` | The same, expressed as an instant (a past instant means no delay). |
 
 ```ts
-import { Decision } from "@byteveda/taskito";
+import { Decision } from "@byteveda/flexiq";
 
 queue.gate("digest", ({ args }) => {
   if (!tenants.has(args[0] as string)) return Decision.reject("unknown tenant");
@@ -274,7 +274,7 @@ can do more than pass/fail. Gates run in registration order; the first
 non-allow decision wins.
 
 ```java
-taskito.gate("charge", ctx -> switch (classify(ctx.payload())) {
+flexiq.gate("charge", ctx -> switch (classify(ctx.payload())) {
     case OK        -> EnqueueDecision.allow();
     case DUPLICATE -> EnqueueDecision.skip("already charged");
     case TOO_EARLY -> EnqueueDecision.defer(Duration.ofHours(1));
@@ -294,7 +294,7 @@ taskito.gate("charge", ctx -> switch (classify(ctx.payload())) {
 `Optional` instead of an exception:
 
 ```java
-Optional<String> id = taskito.tryEnqueue(charge, amount);
+Optional<String> id = flexiq.tryEnqueue(charge, amount);
 ```
 
 `predicate(taskName, p)` is sugar for a gate that only ever allows or
@@ -307,7 +307,7 @@ you need skip/defer too.
 
 <SdkOnly sdk="python">
 
-All recipes are registered AST ops. Import from `taskito.predicates`.
+All recipes are registered AST ops. Import from `flexiq.predicates`.
 
 ### Time
 
@@ -342,7 +342,7 @@ All recipes are registered AST ops. Import from `taskito.predicates`.
 #### Pluggable feature-flag provider
 
 ```python
-from taskito.predicates import FeatureFlagProvider, register_feature_flag_provider
+from flexiq.predicates import FeatureFlagProvider, register_feature_flag_provider
 
 class LaunchDarklyProvider:
     def __init__(self, client) -> None:
@@ -368,11 +368,11 @@ defer out-of-window enqueues to the next open moment; filters skip
 silently:
 
 ```java
-taskito.gate("dispatch", Recipes.businessHours(ZoneId.of("America/New_York")));
-taskito.gate("digest", Recipes.dayOfWeek(zone, DayOfWeek.MONDAY, DayOfWeek.THURSDAY));
-taskito.gate("sync", Recipes.timeWindow(zone, LocalTime.of(22, 0), LocalTime.of(6, 0)));
-taskito.gate("beta", Recipes.featureFlag("beta-export", flags));
-taskito.gate("charge", Recipes.payloadMatches(p -> ((Order) p).amount() > 0));
+flexiq.gate("dispatch", Recipes.businessHours(ZoneId.of("America/New_York")));
+flexiq.gate("digest", Recipes.dayOfWeek(zone, DayOfWeek.MONDAY, DayOfWeek.THURSDAY));
+flexiq.gate("sync", Recipes.timeWindow(zone, LocalTime.of(22, 0), LocalTime.of(6, 0)));
+flexiq.gate("beta", Recipes.featureFlag("beta-export", flags));
+flexiq.gate("charge", Recipes.payloadMatches(p -> ((Order) p).amount() > 0));
 ```
 
 </SdkOnly>
@@ -419,7 +419,7 @@ to `"UTC"`. A target across a DST boundary resolves to the correct instant.
 | `featureFlag("beta-export", provider?)` | Skips while the flag is off. Defaults to `envFeatureFlagProvider()`, reading `FF_BETA_EXPORT`. |
 
 ```ts
-import { Recipes } from "@byteveda/taskito";
+import { Recipes } from "@byteveda/flexiq";
 
 const zone = "America/New_York";
 queue.gate("dispatch", Recipes.businessHours({ timeZone: zone }));
@@ -434,7 +434,7 @@ queue.gate("charge", Recipes.payloadMatches("args.0.currency", "USD"));
 `featureFlag` takes either a `FeatureFlagProvider` or a plain lookup function:
 
 ```ts
-import { featureFlag, type FeatureFlagProvider } from "@byteveda/taskito";
+import { featureFlag, type FeatureFlagProvider } from "@byteveda/flexiq";
 
 const launchDarkly: FeatureFlagProvider = {
   isEnabled(flag, ctx) {
@@ -452,7 +452,7 @@ Register a gate by name to drive gating from configuration — the name is the
 portable part, since a Node gate is a closure with no serializable form:
 
 ```ts
-import { defaultRegistry, registerPredicate, Recipes } from "@byteveda/taskito";
+import { defaultRegistry, registerPredicate, Recipes } from "@byteveda/flexiq";
 
 registerPredicate("business-hours", Recipes.businessHours({ timeZone: zone }));
 
@@ -474,7 +474,7 @@ equivalent authoring paths produce the same tree — Python operators
 (above), JSON, and a small string DSL:
 
 ```python
-from taskito.predicates import Predicate
+from flexiq.predicates import Predicate
 
 p = Predicate.from_dict({
     "op": "or",
@@ -489,7 +489,7 @@ p = Predicate.from_dict({
 ```
 
 ```python
-from taskito.predicates import parse
+from flexiq.predicates import parse
 
 p = parse(
     'is_business_hours(tz="US/Pacific") & !queue_paused() '
@@ -502,7 +502,7 @@ The string DSL supports `&` / `|` / `!` and the long forms `and` /
 `null`, and `[lists, of, literals]`. Round-trip is stable:
 
 ```python
-from taskito.predicates import format_predicate, parse
+from flexiq.predicates import format_predicate, parse
 
 p1 = is_business_hours() & ~queue_paused()
 s = format_predicate(p1)        # 'is_business_hours() & !queue_paused()'
@@ -545,8 +545,8 @@ middleware applies to. The legacy contrib `task_filter=Callable[[str], bool]`
 kwarg still works and is translated internally to a predicate.
 
 ```python
-from taskito.contrib.sentry import SentryMiddleware
-from taskito.predicates import payload_matches
+from flexiq.contrib.sentry import SentryMiddleware
+from flexiq.predicates import payload_matches
 
 queue = Queue(middleware=[
     SentryMiddleware(predicate=payload_matches("kwargs.env", "prod")),
@@ -644,7 +644,7 @@ beside each task. To round-trip a predicate from the inspection
 output:
 
 ```python
-from taskito.predicates import Predicate
+from flexiq.predicates import Predicate
 
 blob = queue.predicate_for("app.send_invoice")
 restored = Predicate.from_dict(blob)
@@ -688,7 +688,7 @@ Three events fire on the queue's event bus:
   `PredicateRejectedError`.
 
 ```python
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def on_predicate_event(event_type: EventType, payload: dict) -> None:
     print(event_type.value, payload)
@@ -741,7 +741,7 @@ event enum carries no deferred/rejected predicate signals.
 ### Business-hours-only report with urgent override
 
 ```python
-from taskito.predicates import is_business_hours, payload_matches
+from flexiq.predicates import is_business_hours, payload_matches
 
 @queue.task(
     predicate=is_business_hours(tz="US/Pacific")
@@ -757,7 +757,7 @@ send_daily_report.delay("alpha", urgent=True)           # runs now
 
 ```python
 from typing import Any
-from taskito.predicates import Predicate, PredicateContext
+from flexiq.predicates import Predicate, PredicateContext
 
 @queue.register_predicate("tenant_in")
 class TenantIn(Predicate):
@@ -788,7 +788,7 @@ def reindex_search(tenant: str): ...
 
 ```python
 import httpx
-from taskito.predicates import Defer, Predicate, PredicateContext
+from flexiq.predicates import Defer, Predicate, PredicateContext
 
 class QuotaAvailable(Predicate):
     OP = "quota_available"
@@ -828,7 +828,7 @@ queue.enqueue("reindexSearch", ["evilcorp"]); // throws PredicateRejectedError
 ### Business-hours + urgent override (recipe defers, urgent allows now)
 
 ```ts
-import { anyOf, businessHours } from "@byteveda/taskito";
+import { anyOf, businessHours } from "@byteveda/flexiq";
 
 const urgent = ({ args }: { args: readonly unknown[] }) => args[1] === true;
 
@@ -841,7 +841,7 @@ queue.enqueue("sendDailyReport", ["alpha", true]); // urgent bypass: runs now
 ### Quietly dropping work a flag has turned off
 
 ```ts
-import { Recipes } from "@byteveda/taskito";
+import { Recipes } from "@byteveda/flexiq";
 
 queue.gate("exportLedger", Recipes.featureFlag("beta-export"));
 
@@ -858,11 +858,11 @@ queue.enqueue("exportLedger", ["acme"]); // flag off: throws EnqueueSkippedError
 ```java
 EnqueueGate hours = Recipes.businessHours(ZoneId.of("America/Los_Angeles"));
 
-taskito.gate("sendDailyReport", ctx ->
+flexiq.gate("sendDailyReport", ctx ->
     ((Report) ctx.payload()).urgent() ? EnqueueDecision.allow() : hours.decide(ctx));
 
-taskito.enqueue(sendReport, new Report("alpha", false)); // defers to next 09:00 PT
-taskito.enqueue(sendReport, new Report("alpha", true));  // runs now
+flexiq.enqueue(sendReport, new Report("alpha", false)); // defers to next 09:00 PT
+flexiq.enqueue(sendReport, new Report("alpha", true));  // runs now
 ```
 
 ### Tenant allowlist (skip vs reject, gate-aware `tryEnqueue`)
@@ -870,13 +870,13 @@ taskito.enqueue(sendReport, new Report("alpha", true));  // runs now
 ```java
 Set<String> allowed = Set.of("acme", "globex");
 
-taskito.gate("reindexSearch", ctx ->
+flexiq.gate("reindexSearch", ctx ->
     allowed.contains(((Reindex) ctx.payload()).tenant())
         ? EnqueueDecision.allow()
         : EnqueueDecision.reject("tenant not allowed"));
 
-Optional<String> id = taskito.tryEnqueue(reindex, new Reindex("acme")); // present
-taskito.enqueue(reindex, new Reindex("evilcorp"));   // throws PredicateRejectedException
+Optional<String> id = flexiq.tryEnqueue(reindex, new Reindex("acme")); // present
+flexiq.enqueue(reindex, new Reindex("evilcorp"));   // throws PredicateRejectedException
 ```
 
 </SdkOnly>

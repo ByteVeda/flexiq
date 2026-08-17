@@ -4,17 +4,17 @@ description: "Awaiting jobs and reading typed results."
 ---
 
 ```java
-String id = taskito.enqueue(add, payload);
+String id = flexiq.enqueue(add, payload);
 
-taskito.awaitJob(id, Duration.ofSeconds(30));         // block until terminal
-Optional<Integer> sum = taskito.getResult(id, Integer.class); // 5
+flexiq.awaitJob(id, Duration.ofSeconds(30));         // block until terminal
+Optional<Integer> sum = flexiq.getResult(id, Integer.class); // 5
 ```
 
 ## Awaiting
 
 `awaitJob(id, timeout)` polls the store until the job reaches a terminal state
 (`COMPLETE`, `DEAD`, or `CANCELLED`) and returns its `Optional<Job>` snapshot;
-it throws a `TaskitoException` if the timeout elapses first. Any process
+it throws a `FlexiQException` if the timeout elapses first. Any process
 sharing the storage can await a job by id.
 
 ## Reading the result
@@ -33,7 +33,7 @@ you need to block.
 `getJob(id)` returns the job's current state without waiting:
 
 ```java
-taskito.getJob(id).ifPresent(job -> {
+flexiq.getJob(id).ifPresent(job -> {
     System.out.println(job.status);      // JobStatus.RUNNING
     System.out.println(job.progress);    // 0–100, if reported
     System.out.println(job.error);       // last error, if any

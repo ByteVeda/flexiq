@@ -18,7 +18,7 @@ import type { Route } from "./+types/home";
 
 export function meta(_: Route.MetaArgs) {
   return [
-    { title: "Taskito — background jobs without a broker" },
+    { title: "FlexiQ — background jobs without a broker" },
     {
       name: "description",
       content:

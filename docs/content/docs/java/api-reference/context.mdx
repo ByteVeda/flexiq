@@ -12,9 +12,9 @@ the handler, and the `TaskContext` handed to middleware.
 ## `Resources.use`
 
 ```java
-import org.byteveda.taskito.resources.Resources;
+import org.byteveda.flexiq.resources.Resources;
 
-taskito.worker().handle(sendEmail, payload -> {
+flexiq.worker().handle(sendEmail, payload -> {
     SmtpClient smtp = Resources.use("smtp");
     return smtp.deliver(payload);
 });
@@ -32,7 +32,7 @@ The job's identity travels through [middleware](/java/api-reference/queue)
 hooks rather than the handler signature:
 
 ```java
-taskito.use(new Middleware() {
+flexiq.use(new Middleware() {
     @Override
     public void before(TaskContext context) {
         MDC.put("jobId", context.jobId);
@@ -54,8 +54,8 @@ taskito.use(new Middleware() {
 ## Progress & cancellation
 
 Progress and cooperative cancellation go through the client by job id:
-`taskito.setProgress(jobId, percent)` records 0–100 for inspection and the
-dashboard, and `taskito.isCancelRequested(jobId)` lets a long-running handler
+`flexiq.setProgress(jobId, percent)` records 0–100 for inspection and the
+dashboard, and `flexiq.isCancelRequested(jobId)` lets a long-running handler
 poll for a `requestCancel` from another process. Thread the job id into the
 payload (or capture it in middleware `attributes()`) when a handler needs
 either.

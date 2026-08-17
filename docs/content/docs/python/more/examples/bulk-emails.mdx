@@ -8,7 +8,7 @@ A common shape: your application enqueues one task per recipient, but you'd rath
 ## Setup
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -17,7 +17,7 @@ queue = Queue()
 def send_emails(items: list[dict]) -> None:
     """Send a batch of email items.
 
-    Called by taskito with up to ``max_size`` accumulated items, or
+    Called by flexiq with up to ``max_size`` accumulated items, or
     sooner if ``max_wait_ms`` elapses since the first item arrived.
     """
     with smtp.connect() as conn:
@@ -38,7 +38,7 @@ def signup_completed(user_id: int) -> None:
     user = users.get(user_id)
     send_emails.delay({
         "to": user.email,
-        "subject": "Welcome to taskito",
+        "subject": "Welcome to flexiq",
         "body": welcome_template(user),
     })
 
@@ -52,7 +52,7 @@ def order_shipped(order_id: int) -> None:
     })
 ```
 
-Two different code paths both `.delay()` into the same batched task. They accumulate in a shared buffer; when 200 items arrive or 1 second elapses, taskito enqueues **one** job whose payload is the full list.
+Two different code paths both `.delay()` into the same batched task. They accumulate in a shared buffer; when 200 items arrive or 1 second elapses, flexiq enqueues **one** job whose payload is the full list.
 
 ## Trade-off
 
@@ -95,7 +95,7 @@ def send_emails(items: list[dict]) -> None:
 If you want **N separate jobs** each holding a sub-list (so each chunk retries independently), use `canvas.chunks()`:
 
 ```python
-from taskito import chunks
+from flexiq import chunks
 
 # Five jobs, each handling 100 emails, each with independent retry.
 chunks(send_emails, all_recipients, chunk_size=100).apply(queue)

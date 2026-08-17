@@ -14,7 +14,7 @@ When a task does small per-call work — sending an email, writing a row, callin
 </Callout>
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -60,7 +60,7 @@ send_emails.delay(item1, item2)             # ✗ ValueError
 ## Durability trade-off
 
 <Callout type="warn" title="Items in the buffer are not durable">
-Items that have been added to the in-memory accumulator but not yet flushed are **lost** if the process crashes. taskito does **not** persist them between the `.delay()` call and the flush.
+Items that have been added to the in-memory accumulator but not yet flushed are **lost** if the process crashes. flexiq does **not** persist them between the `.delay()` call and the flush.
 
 This matches Celery's `Batches` extension semantics — it's the price you pay for higher throughput. For tasks where every item must reach the queue (financial transactions, ordered side effects), do not enable batching. Use regular `.delay()`.
 

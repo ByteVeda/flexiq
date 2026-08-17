@@ -4,20 +4,20 @@ description: "One Observation per task execution — a timer and a trace span fr
 ---
 
 Optional dependency: `io.micrometer:micrometer-observation` (the SDK compiles
-against it as `compileOnly`; add it to your build). `TaskitoObservation` is a
+against it as `compileOnly`; add it to your build). `FlexiQObservation` is a
 [middleware](/java/guides/extensibility/middleware) that wraps each task
 execution in a Micrometer `Observation` — one instrumentation that yields both
 **metrics** (a timer) and a **trace span**, exported by whatever handlers your
 `ObservationRegistry` is configured with.
 
 ```java
-import org.byteveda.taskito.contrib.TaskitoObservation;
+import org.byteveda.flexiq.contrib.FlexiQObservation;
 
-taskito.use(new TaskitoObservation(registry));
+flexiq.use(new FlexiQObservation(registry));
 ```
 
-Each execution attempt starts an observation named `taskito.task` with the
-low-cardinality key value `taskito.task` = the task name. On success the
+Each execution attempt starts an observation named `flexiq.task` with the
+low-cardinality key value `flexiq.task` = the task name. On success the
 observation stops cleanly; when the handler throws, the exception is recorded
 on the observation before it stops. A retry is a new attempt, so it produces a
 new observation.
@@ -28,21 +28,21 @@ The three-argument constructor customizes the observation name and filters
 tasks:
 
 ```java
-taskito.use(new TaskitoObservation(
+flexiq.use(new FlexiQObservation(
         registry,
-        "app.job",                                // observation name (default "taskito.task")
+        "app.job",                                // observation name (default "flexiq.task")
         task -> !task.startsWith("internal.")));  // Predicate<String> task filter
 ```
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `registry` | `ObservationRegistry` | — | The registry your app configures |
-| `name` | `String` | `"taskito.task"` | Observation (and derived timer/span) name |
+| `name` | `String` | `"flexiq.task"` | Observation (and derived timer/span) name |
 | `taskFilter` | `Predicate<String>` | all tasks | Return `false` to skip a task |
 
 ## Wiring backends
 
-`TaskitoObservation` creates observations; it never configures exporters. Wire
+`FlexiQObservation` creates observations; it never configures exporters. Wire
 the registry to your backends the standard Micrometer way — a
 `DefaultMeterObservationHandler` over your `MeterRegistry` (Prometheus,
 Datadog, ...) for metrics, and a `micrometer-tracing` bridge (OpenTelemetry,
@@ -51,6 +51,6 @@ auto-configured `ObservationRegistry` and both come pre-wired.
 
 <Callout type="info">
   Because metrics and traces derive from the same Observation, you instrument
-  once and choose backends per environment — no taskito-specific exporter
+  once and choose backends per environment — no flexiq-specific exporter
   configuration exists or is needed.
 </Callout>

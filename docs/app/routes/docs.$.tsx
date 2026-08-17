@@ -53,14 +53,14 @@ export function meta({ params }: Route.MetaArgs) {
     const base = import.meta.env.BASE_URL.replace(/\/$/, "");
     const target = `${base}${dest}`;
     return [
-      { title: "Redirecting… | Taskito" },
+      { title: "Redirecting… | FlexiQ" },
       { httpEquiv: "refresh", content: `0; url=${target}` },
       { tagName: "link", rel: "canonical", href: target },
     ];
   }
   const meta = docMeta(path);
   const tags: MetaDescriptor[] = [
-    { title: meta?.title ? `${meta.title} | Taskito` : "Taskito" },
+    { title: meta?.title ? `${meta.title} | FlexiQ` : "FlexiQ" },
     { name: "description", content: meta?.description ?? "" },
   ];
   if (meta?.canonical) {

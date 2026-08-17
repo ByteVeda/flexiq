@@ -3,7 +3,7 @@ import { useRafLoop, useReducedMotion } from "./lib";
 import type { DemoProps } from "./types";
 
 /*
- * Multi-region work-stealing demo — taskito runs in several regions that gossip
+ * Multi-region work-stealing demo — flexiq runs in several regions that gossip
  * queue depth; when one backlog spikes, an idle peer steals a batch over HTTP so
  * load self-balances with no central broker. React port of demo-worksteal.js
  * (SVG world map + RAF simulation).
@@ -503,7 +503,7 @@ export default function WorkStealDemo(_props: DemoProps) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           role="img"
-          aria-label="A world map with five taskito regions connected by a gossip mesh. When one region's queue spikes, idle regions steal batches of jobs over HTTP so load balances out."
+          aria-label="A world map with five flexiq regions connected by a gossip mesh. When one region's queue spikes, idle regions steal batches of jobs over HTTP so load balances out."
         >
           <defs>
             <pattern

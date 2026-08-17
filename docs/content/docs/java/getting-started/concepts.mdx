@@ -15,14 +15,14 @@ and the worker processes themselves. Spring's `@Async` skips the broker but
 skips durability too — queued calls live in an in-process executor and vanish
 on restart.
 
-taskito collapses all of that into the `Taskito` client: one SQLite file (or a
+flexiq collapses all of that into the `FlexiQ` client: one SQLite file (or a
 Postgres schema, or Redis) holds the job queue, the results, and any cron
 schedules together. There's no broker to install, secure, or monitor —
-`Taskito.builder().sqlite(...).open()` is the whole setup.
+`FlexiQ.builder().sqlite(...).open()` is the whole setup.
 
 <Callout type="info" title="Coming from a brokered queue or Spring @Async?">
   Your `ConnectionFactory` / `spring.rabbitmq.*` / JMS listener config
-  disappears — a single `Taskito.builder().sqlite("flexiq.db").open()`
+  disappears — a single `FlexiQ.builder().sqlite("flexiq.db").open()`
   replaces the broker, the result store, and the connection pool. Unlike
   `@Async`, jobs survive an app restart: they're rows in storage, not
   in-memory tasks.
@@ -40,15 +40,15 @@ schedules together. There's no broker to install, secure, or monitor —
 
 ## Client
 
-A `Taskito` is the handle to one store (SQLite file, Postgres schema, or Redis
-prefix), opened with `Taskito.builder()...open()`. You enqueue jobs, run
+A `FlexiQ` is the handle to one store (SQLite file, Postgres schema, or Redis
+prefix), opened with `FlexiQ.builder()...open()`. You enqueue jobs, run
 workers, and inspect state through it; it is `AutoCloseable`, so hold it in
 try-with-resources. Multiple processes pointed at the same storage share one
-logical queue. `taskito.queue(name)` returns a handle to a single named queue
+logical queue. `flexiq.queue(name)` returns a handle to a single named queue
 (pause / resume).
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) { ... }
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) { ... }
 ```
 
 ## Task
@@ -73,14 +73,14 @@ holding area for exhausted jobs) — see
 
 ## Worker
 
-`taskito.worker()` builds a worker: register handlers with `.handle(task, fn)`,
+`flexiq.worker()` builds a worker: register handlers with `.handle(task, fn)`,
 then `.start()`. The Rust core polls storage, claims due jobs, and hands each
 one to your handler on a thread pool; the result is serialized and written
 back. `close()` stops dispatch and drains in-flight jobs.
 
 ## Result
 
-`taskito.getResult(id, type)` returns the handler's return value once the job
+`flexiq.getResult(id, type)` returns the handler's return value once the job
 finishes, deserialized with the queue's
 [serializer](/java/guides/extensibility/serializers). Results live in storage,
 so any process sharing the store can read them; `awaitJob(id, timeout)` blocks

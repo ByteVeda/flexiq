@@ -145,7 +145,7 @@ increases to `max_poll_interval`.
 - `SerializationError` — if result deserialization fails
 
 ```python
-from taskito import TaskFailedError, MaxRetriesExceededError, TaskCancelledError
+from flexiq import TaskFailedError, MaxRetriesExceededError, TaskCancelledError
 
 job = add.delay(2, 3)
 result = job.result(timeout=10)  # blocks, returns 5

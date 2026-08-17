@@ -8,7 +8,7 @@ sign-in for **Google**, **GitHub**, and any **OIDC-compliant** provider (Okta,
 Auth0, Keycloak, Microsoft Entra, Dex, …). Multiple OIDC providers can run side
 by side, each its own button on the login screen. OAuth requires session auth to
 be enabled (`serveDashboard(queue, { authEnabled: true })`, or
-`taskito dashboard --auth`; the dashboard serves openly by default) and is itself
+`flexiq dashboard --auth`; the dashboard serves openly by default) and is itself
 off by default — setting any provider's env vars turns it on, alongside password
 login unless you opt out.
 
@@ -17,7 +17,7 @@ login unless you opt out.
   `node:crypto` — signature verification against the provider's JWKS, then the
   issuer / audience / nonce / expiry claim checks. Unlike the Java SDK (which
   needs `nimbus-jose-jwt` on the classpath), **the Node SDK bundles no JOSE
-  library and needs no extra install** — everything works with `@byteveda/taskito`
+  library and needs no extra install** — everything works with `@byteveda/flexiq`
   alone on Node 20+. GitHub login is plain OAuth2 (no id-token to verify) and
   likewise needs nothing extra.
 </Callout>
@@ -48,7 +48,7 @@ login unless you opt out.
     D->>P: POST token endpoint (code + code_verifier)
     P-->>D: { id_token, access_token }
     Note over D: verify JWKS signature / iss / aud / exp / nonce<br/>enforce allowlist<br/>get-or-create user, create session
-    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, taskito_csrf`}
+    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, flexiq_csrf`}
 />
 
 State is single-use — `OAuthStateStore.consume` deletes the row (from the
@@ -63,7 +63,7 @@ environment variables. Invalid or partial config is logged and OAuth is disabled
 (password login still works) rather than crashing startup.
 
 ```ts
-import { Queue, serveDashboard } from "@byteveda/taskito";
+import { Queue, serveDashboard } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "flexiq.db" });
 // authEnabled turns on session auth; OAuth is built from the
@@ -76,7 +76,7 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
   and pass it as `oauth`:
 
   ```ts
-  import { Queue, OAuthFlow, oauthConfigFromEnv, serveDashboard } from "@byteveda/taskito";
+  import { Queue, OAuthFlow, oauthConfigFromEnv, serveDashboard } from "@byteveda/flexiq";
 
   const queue = new Queue({ dbPath: "flexiq.db" });
   const config = oauthConfigFromEnv(); // or hand-build an OAuthConfig
@@ -94,7 +94,7 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
    (type *Web application*) and register the callback URL:
 
    ```
-   https://taskito.your-company.com/api/auth/oauth/callback/google
+   https://flexiq.your-company.com/api/auth/oauth/callback/google
    ```
 
    For local development, `http://localhost:8787/api/auth/oauth/callback/google`
@@ -103,7 +103,7 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
 2. **Set env vars** before starting the dashboard:
 
    ```bash
-   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
    # Restrict logins to your Google Workspace domain:
@@ -111,7 +111,7 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
    ```
 
 3. **Start the dashboard** with session auth on
-   (`serveDashboard(queue, { authEnabled: true })` or `taskito dashboard --auth`).
+   (`serveDashboard(queue, { authEnabled: true })` or `flexiq dashboard --auth`).
    The login screen now shows a "Continue with Google" button above the password
    form.
 
@@ -127,12 +127,12 @@ GitHub has no OIDC id-token, so identity comes from `GET /user` and
 
 1. Create a [GitHub OAuth App](https://github.com/settings/developers). Set
    the *Authorization callback URL* to
-   `https://taskito.your-company.com/api/auth/oauth/callback/github`.
+   `https://flexiq.your-company.com/api/auth/oauth/callback/github`.
 
 2. Env vars:
 
    ```bash
-   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
    export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
    export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
    # Restrict logins to members of these GitHub orgs:
@@ -156,7 +156,7 @@ Generic OIDC providers are **named slots** — each gets its own callback URL,
 its own namespaced users, and its own button on the login screen.
 
 ```bash
-export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
 
 # List the slots first.
 export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
@@ -243,7 +243,7 @@ defaults to `true`.
 | **Discovery endpoints** | The `authorization_endpoint`, `token_endpoint`, and `jwks_uri` read from the discovery document must be `https` (plain `http` only for local hosts) before any code or client secret is sent. |
 | **Open redirect** | The `next` query param must be a bare rooted path (`isSafeRedirect`) — no scheme, no host, no `//` or `/\` prefix. Falls back to `/`. |
 | **HTTPS required** | The redirect base URL must be `https://` unless the host is `localhost` / `127.0.0.1` / `::1`. A misconfiguration is rejected at config-parse time. |
-| **Provider tokens** | Never persisted — only the verified identity produces a Taskito session. |
+| **Provider tokens** | Never persisted — only the verified identity produces a FlexiQ session. |
 | **Cross-provider identity** | A given `(slot, subject)` always maps to one user (`{slot}:{subject}`); the same email at two different providers creates two distinct users. |
 
 ## API surface
@@ -254,7 +254,7 @@ defaults to `true`.
 | `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
 | `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges the code, enforces the allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
 
-The callback sets the same `flexiq_session` + `taskito_csrf` cookies as
+The callback sets the same `flexiq_session` + `flexiq_csrf` cookies as
 password login (`HttpOnly` on the session cookie, `SameSite=Strict`, `Secure`
 unless `secureCookies: false`) — every other dashboard route works identically
 once you're signed in.
@@ -288,7 +288,7 @@ disabling OAuth entirely rather than failing to start.
 
 ```bash
 # Required when any provider is configured.
-FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.company.com
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.company.com
 
 # Google.
 FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...
@@ -316,7 +316,7 @@ FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false                            # option
 ```
 
 Session auth itself (required for OAuth) is enabled with
-`serveDashboard(queue, { authEnabled: true })` or `taskito dashboard --auth`, and
+`serveDashboard(queue, { authEnabled: true })` or `flexiq dashboard --auth`, and
 an initial admin can be bootstrapped headlessly with
 `FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD` — see the
 [dashboard guide](/node/guides/operations/dashboard).

@@ -8,7 +8,7 @@ real dependencies (database pools, HTTP clients, cloud SDKs) are not. The Node
 SDK keeps those on the worker and passes only plain data through the queue.
 
 ```ts
-import { Queue, useResource } from "@byteveda/taskito";
+import { Queue, useResource } from "@byteveda/flexiq";
 import { Pool } from "pg";
 
 const queue = new Queue({ dbPath: "tasks.db" });

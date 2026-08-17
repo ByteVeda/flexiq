@@ -28,7 +28,7 @@ stops on its own: the task observes the flag by calling `check_cancelled()`,
 which raises `TaskCancelledError` when a cancel has been requested.
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def process_batch(rows: list[dict]) -> int:

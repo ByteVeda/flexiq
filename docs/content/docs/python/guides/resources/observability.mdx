@@ -119,7 +119,7 @@ The built-in dashboard exposes three JSON endpoints for the resource system:
 Start the dashboard:
 
 ```bash
-taskito dashboard --app myapp.tasks:queue
+flexiq dashboard --app myapp.tasks:queue
 ```
 
 See the [Web Dashboard](/python/guides/dashboard) guide for
@@ -127,13 +127,13 @@ full dashboard documentation.
 
 ## CLI commands
 
-### `taskito resources`
+### `flexiq resources`
 
 Print a formatted table of all registered resources and their current
 status:
 
 ```bash
-taskito resources --app myapp.tasks:queue
+flexiq resources --app myapp.tasks:queue
 # RESOURCE             SCOPE      HEALTH           INIT (ms)    RECREATIONS    DEPENDS ON
 # -----------------------------------------------------------------------
 # config               worker     healthy          12.40        0              -
@@ -142,21 +142,21 @@ taskito resources --app myapp.tasks:queue
 #                           pool: active=3 idle=5 max=20 timeouts=0
 ```
 
-### `taskito reload`
+### `flexiq reload`
 
 Send `SIGHUP` to a running worker to reload all reloadable resources:
 
 ```bash
-taskito reload --pid 12345
+flexiq reload --pid 12345
 # Sent SIGHUP to worker (PID 12345)
 
 # Reload a specific resource only:
-taskito reload --pid 12345 --resource feature_flags
+flexiq reload --pid 12345 --resource feature_flags
 ```
 
 <Callout type="info">
-  `taskito reload` sends `SIGHUP` — it does not wait for the reload to
-  complete. Check `taskito resources` or logs to confirm the reload
+  `flexiq reload` sends `SIGHUP` — it does not wait for the reload to
+  complete. Check `flexiq resources` or logs to confirm the reload
   succeeded.
 </Callout>
 
@@ -165,11 +165,11 @@ taskito reload --pid 12345 --resource feature_flags
 Install the Prometheus integration:
 
 ```bash
-pip install taskito[prometheus]
+pip install flexiq[prometheus]
 ```
 
 ```python
-from taskito.contrib.prometheus import PrometheusMiddleware, PrometheusStatsCollector
+from flexiq.contrib.prometheus import PrometheusMiddleware, PrometheusStatsCollector
 
 queue = Queue(db_path="tasks.db", middleware=[PrometheusMiddleware()])
 
@@ -182,34 +182,34 @@ collector.start()
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `taskito_resource_health_status` | Gauge | `resource` | `1` if healthy, `0` if unhealthy |
-| `taskito_resource_recreation_total` | Gauge | `resource` | Total recreation count (a Gauge, not a Counter, despite the `_total` suffix — it's set to the current count on each poll rather than incremented) |
-| `taskito_resource_init_duration_seconds` | Gauge | `resource` | Initialization duration |
-| `taskito_resource_pool_size` | Gauge | `resource` | Pool max size (task scope) |
-| `taskito_resource_pool_active` | Gauge | `resource` | Active pool instances |
-| `taskito_resource_pool_idle` | Gauge | `resource` | Idle pool instances |
-| `taskito_resource_pool_timeout_total` | Counter | `resource` | Pool acquisition timeouts |
+| `flexiq_resource_health_status` | Gauge | `resource` | `1` if healthy, `0` if unhealthy |
+| `flexiq_resource_recreation_total` | Gauge | `resource` | Total recreation count (a Gauge, not a Counter, despite the `_total` suffix — it's set to the current count on each poll rather than incremented) |
+| `flexiq_resource_init_duration_seconds` | Gauge | `resource` | Initialization duration |
+| `flexiq_resource_pool_size` | Gauge | `resource` | Pool max size (task scope) |
+| `flexiq_resource_pool_active` | Gauge | `resource` | Active pool instances |
+| `flexiq_resource_pool_idle` | Gauge | `resource` | Idle pool instances |
+| `flexiq_resource_pool_timeout_total` | Counter | `resource` | Pool acquisition timeouts |
 
 ### Proxy metrics
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `taskito_proxy_reconstruct_total` | Counter | `handler` | Total reconstructions |
-| `taskito_proxy_reconstruct_errors_total` | Counter | `handler` | Reconstruction errors |
-| `taskito_proxy_reconstruct_duration_seconds` | Histogram | `handler` | Reconstruction duration |
+| `flexiq_proxy_reconstruct_total` | Counter | `handler` | Total reconstructions |
+| `flexiq_proxy_reconstruct_errors_total` | Counter | `handler` | Reconstruction errors |
+| `flexiq_proxy_reconstruct_duration_seconds` | Histogram | `handler` | Reconstruction duration |
 
 ### Interception metrics
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `taskito_intercept_strategy_total` | Counter | `strategy` | Count per strategy (`pass`, `convert`, `redirect`, `proxy`, `reject`) |
-| `taskito_intercept_duration_seconds` | Histogram | — | Interception pass duration |
+| `flexiq_intercept_strategy_total` | Counter | `strategy` | Count per strategy (`pass`, `convert`, `redirect`, `proxy`, `reject`) |
+| `flexiq_intercept_duration_seconds` | Histogram | — | Interception pass duration |
 
 Metrics are exposed at `/metrics` on the dashboard server or via a
 standalone metrics server:
 
 ```python
-from taskito.contrib.prometheus import start_metrics_server
+from flexiq.contrib.prometheus import start_metrics_server
 
 start_metrics_server(port=9090)
 ```

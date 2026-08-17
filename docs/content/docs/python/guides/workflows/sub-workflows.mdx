@@ -78,7 +78,7 @@ outer run hanging), and the parent run finalizes normally.
 
 Stack `@queue.periodic()` on top of `@queue.workflow()`:
 
-taskito cron is **6-field, seconds first** (`sec min hour day month weekday`), so
+flexiq cron is **6-field, seconds first** (`sec min hour day month weekday`), so
 `0 0 2 * * *` is 02:00:00 daily — not Celery's 5-field `crontab`. Prepend a
 seconds field when porting a Celery schedule.
 

@@ -68,7 +68,7 @@ implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
     D->>P: POST token endpoint (code + code_verifier)
     P-->>D: { id_token, access_token }
     Note over D: verify JWKS signature / iss / aud / exp / nonce<br/>enforce allowlist<br/>get-or-create user, create session
-    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, taskito_csrf`}
+    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, flexiq_csrf`}
 />
 
 State is single-use — `OAuthStateStore.consume` deletes the row before
@@ -83,7 +83,7 @@ the provider's JWKS) are all enforced server-side.
    (type *Web application*) and register the callback URL:
 
    ```
-   https://taskito.your-company.com/api/auth/oauth/callback/google
+   https://flexiq.your-company.com/api/auth/oauth/callback/google
    ```
 
    For local development, `http://localhost:8080/api/auth/oauth/callback/google`
@@ -92,7 +92,7 @@ the provider's JWKS) are all enforced server-side.
 2. **Set env vars** before starting the dashboard:
 
    ```bash
-   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
    export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
    # Restrict logins to your Google Workspace domain:
@@ -110,7 +110,7 @@ GitHub has no OIDC id-token, so identity comes from `GET /user` and
 
 1. Create a [GitHub OAuth App](https://github.com/settings/developers). Set
    the *Authorization callback URL* to
-   `https://taskito.your-company.com/api/auth/oauth/callback/github`.
+   `https://flexiq.your-company.com/api/auth/oauth/callback/github`.
 
 2. Env vars:
 
@@ -138,7 +138,7 @@ Generic OIDC providers are **named slots** — each gets its own callback URL,
 its own namespaced users, and its own button on the login screen.
 
 ```bash
-export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
 
 # List the slots first.
 export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
@@ -208,7 +208,7 @@ form and renders only the provider buttons.
 | **iss / aud / exp** | All checked; 60-second clock-skew tolerance on `exp`; a multi-audience token must additionally carry `azp == client_id`. |
 | **Open redirect** | The `next` query param must be a bare rooted path (`UrlSafety.isSafeRedirect`) — no scheme, no host, no `//` or `/\` prefix. Falls back to `/`. |
 | **HTTPS required** | The redirect base URL must be `https://` unless the host is `localhost` / `127.0.0.1` / `::1`. A misconfiguration is rejected at config-parse time. |
-| **Provider tokens** | Never persisted — only the verified identity produces a Taskito session. |
+| **Provider tokens** | Never persisted — only the verified identity produces a FlexiQ session. |
 | **Cross-provider identity** | A given `(slot, subject)` always maps to one user; the same email at two different providers creates two distinct users. |
 
 ## API surface
@@ -219,7 +219,7 @@ form and renders only the provider buttons.
 | `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
 | `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges the code, enforces the allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
 
-The callback sets the same `flexiq_session` + `taskito_csrf` cookies as
+The callback sets the same `flexiq_session` + `flexiq_csrf` cookies as
 password login — every other dashboard route works identically once you're
 signed in.
 
@@ -252,7 +252,7 @@ rather than failing to start.
 
 ```bash
 # Required when any provider is configured.
-FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.company.com
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.company.com
 
 # Google.
 FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...

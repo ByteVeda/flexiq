@@ -4,7 +4,7 @@ description: "currentJob() — the running task's job context."
 ---
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 const job = currentJob(); // JobContext | undefined
 ```
@@ -36,7 +36,7 @@ cancellation flow.
 ## `useResource`
 
 ```ts
-import { useResource } from "@byteveda/taskito";
+import { useResource } from "@byteveda/flexiq";
 
 const db = await useResource<Pool>("db"); // inside a running task
 ```

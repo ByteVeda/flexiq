@@ -214,7 +214,7 @@ export function SiteNav({
         <ThemeToggle />
         <a
           className="icon-btn"
-          href="https://github.com/ByteVeda/taskito"
+          href="https://github.com/ByteVeda/flexiq"
           aria-label="GitHub repository"
           target="_blank"
           rel="noreferrer"

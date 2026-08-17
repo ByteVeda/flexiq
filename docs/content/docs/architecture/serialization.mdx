@@ -3,13 +3,13 @@ title: Serialization
 description: "Pluggable serializers for task arguments and results, with a per-SDK default codec."
 ---
 
-taskito uses a pluggable serializer for task arguments and results. The default
+flexiq uses a pluggable serializer for task arguments and results. The default
 is <SdkSwap python={<code>SmartSerializer</code>} node={<code>JsonSerializer</code>} java={<code>JsonSerializer</code>} />,
 which <SdkSwap python="uses MessagePack with a cloudpickle fallback for lambdas, closures, and complex objects" node="emits human-readable JSON bytes" java="emits human-readable JSON bytes via Jackson" />.
 
 <SdkOnly sdk="python">
 
-> Coming from Celery? Celery defaults to JSON; taskito's Python default is
+> Coming from Celery? Celery defaults to JSON; flexiq's Python default is
 > `SmartSerializer` (MessagePack with a cloudpickle fallback). The fallback
 > **executes code on load**, and it's Python-only — use `JsonSerializer` for
 > cross-language or untrusted payloads.
@@ -19,7 +19,7 @@ which <SdkSwap python="uses MessagePack with a cloudpickle fallback for lambdas,
 <SdkOnly sdk="python">
 
 ```python
-from taskito import Queue, JsonSerializer
+from flexiq import Queue, JsonSerializer
 
 # Use JSON for simpler, cross-language payloads
 queue = Queue(serializer=JsonSerializer())
@@ -30,7 +30,7 @@ queue = Queue(serializer=JsonSerializer())
 <SdkOnly sdk="node">
 
 ```ts
-import { Queue, MsgpackSerializer } from "@byteveda/taskito";
+import { Queue, MsgpackSerializer } from "@byteveda/flexiq";
 
 // Use msgpack for compact, binary payloads
 new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
@@ -41,11 +41,11 @@ new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 <SdkOnly sdk="java">
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.MsgpackSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.MsgpackSerializer;
 
 // Use msgpack for compact, binary payloads
-Taskito queue = Taskito.builder()
+FlexiQ queue = FlexiQ.builder()
     .sqlite("flexiq.db")
     .serializer(new MsgpackSerializer())
     .open();

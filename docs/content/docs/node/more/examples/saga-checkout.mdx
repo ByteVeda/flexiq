@@ -5,7 +5,7 @@ description: "A multi-step checkout with compensating transactions: when a later
 
 A checkout touches several systems — inventory, payments, shipping — with no
 distributed transaction across them. The saga pattern models each forward step
-with a compensator; if a later step fails, Taskito runs the compensators for the
+with a compensator; if a later step fails, FlexiQ runs the compensators for the
 already-completed steps in reverse-dependency order.
 
 ## tasks.ts
@@ -14,7 +14,7 @@ Declare each forward task and its rollback. A compensator receives the forward
 step's result as its single argument, so it knows exactly what to undo.
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 export const queue = new Queue({ dbPath: "checkout.db" });
 
@@ -67,7 +67,7 @@ switch (final.state) {
 
 ## What happens on failure
 
-If `createShipment` throws, `reserve` and `charge` have already completed. Taskito
+If `createShipment` throws, `reserve` and `charge` have already completed. FlexiQ
 runs their compensators in reverse order:
 
 ```

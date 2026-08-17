@@ -19,7 +19,7 @@ as the result.
 Create a file called `tasks.py`:
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 # Create a queue backed by SQLite
 queue = Queue(db_path="tasks.db")
@@ -39,7 +39,7 @@ def send_email(to: str, subject: str, body: str) -> str:
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "flexiq.db" });
 
@@ -59,8 +59,8 @@ queue.task("add", (a: number, b: number) => a + b, {
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.time.Duration;
 import java.util.Map;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.task.Task;
 
 // A task is a name plus its payload type — the producer never needs the handler body.
 Task<Map<String, Integer>> add =
@@ -68,7 +68,7 @@ Task<Map<String, Integer>> add =
                 .retries(3)
                 .timeout(Duration.ofSeconds(30));
 
-Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
+FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
 ```
 
   </Tab>
@@ -88,7 +88,7 @@ running while you enqueue in the next step:
 
 ```bash
 # Runs in its own terminal and blocks, processing jobs until you stop it (Ctrl+C)
-taskito worker --app tasks:queue
+flexiq worker --app tasks:queue
 ```
 
   </Tab>
@@ -127,7 +127,7 @@ asyncio.run(main())
 
 ```bash
 # Loads the module that registers the tasks above and runs a worker over them
-taskito run ./app.js --queues default
+flexiq run ./app.js --queues default
 ```
 
   </Tab>
@@ -145,9 +145,9 @@ const worker = queue.runWorker({ queues: ["default"] });
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.worker.Worker;
 
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(add, p -> p.get("a") + p.get("b"))
         .start();
 // ... later: worker.close();
@@ -204,11 +204,11 @@ worker.stop();
 
 ```java
 // Enqueue a job (producer).
-String id = taskito.enqueue(add, Map.of("a", 2, "b", 3));
+String id = flexiq.enqueue(add, Map.of("a", 2, "b", 3));
 
 // Block until the job is terminal, then read its result.
-taskito.awaitJob(id, Duration.ofSeconds(20));
-int result = taskito.getResult(id, Integer.class).orElseThrow(); // 5
+flexiq.awaitJob(id, Duration.ofSeconds(20));
+int result = flexiq.getResult(id, Integer.class).orElseThrow(); // 5
 
 worker.close();
 ```
@@ -234,14 +234,14 @@ print(stats)
 Or the CLI:
 
 ```bash
-taskito info --app tasks:queue
+flexiq info --app tasks:queue
 ```
 
 <SdkOnly sdk="python">
 
 ```bash
 # Live dashboard, refreshes every 2s
-taskito info --app tasks:queue --watch
+flexiq info --app tasks:queue --watch
 ```
 
 </SdkOnly>
@@ -256,20 +256,20 @@ await queue.stats(); // { pending, running, completed, failed, dead, cancelled }
 Or the CLI:
 
 ```bash
-taskito --db flexiq.db stats
+flexiq --db flexiq.db stats
 ```
 
   </Tab>
   <Tab sdk="java">
 
 ```java
-QueueStats stats = taskito.stats(); // pending, running, completed, failed, dead, cancelled
+QueueStats stats = flexiq.stats(); // pending, running, completed, failed, dead, cancelled
 ```
 
 Or the CLI:
 
 ```bash
-taskito --url flexiq.db stats
+flexiq --url flexiq.db stats
 ```
 
   </Tab>
@@ -285,7 +285,7 @@ package itself; no separate service or extra dependencies:
   <Tab sdk="python">
 
 ```bash
-taskito dashboard --app tasks:queue
+flexiq dashboard --app tasks:queue
 ```
 
 Open `http://localhost:8080` in your browser.
@@ -301,7 +301,7 @@ Open `http://localhost:8080` in your browser.
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db flexiq.db dashboard --port 8787
+flexiq --db flexiq.db dashboard --port 8787
 ```
 
 Open `http://localhost:8787` in your browser.
@@ -316,7 +316,7 @@ Open `http://localhost:8787` in your browser.
   <Tab sdk="java">
 
 ```bash
-taskito --url flexiq.db dashboard --port 8080 --token "$DASH_TOKEN"
+flexiq --url flexiq.db dashboard --port 8080 --token "$DASH_TOKEN"
 ```
 
 Open `http://localhost:8080` in your browser.

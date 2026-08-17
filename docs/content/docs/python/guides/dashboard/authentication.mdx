@@ -18,7 +18,7 @@ private network behind their own auth).
   <Tab value="Programmatic">
 
 ```python
-from taskito.dashboard import serve_dashboard
+from flexiq.dashboard import serve_dashboard
 from myapp import queue
 
 serve_dashboard(queue, auth_enabled=True)
@@ -28,14 +28,14 @@ serve_dashboard(queue, auth_enabled=True)
   <Tab value="CLI">
 
 ```bash
-taskito dashboard --app myapp:queue --auth
+flexiq dashboard --app myapp:queue --auth
 ```
 
   </Tab>
   <Tab value="Django">
 
 ```bash
-python manage.py taskito_dashboard --auth
+python manage.py flexiq_dashboard --auth
 ```
 
 Or set `FLEXIQ_DASHBOARD_AUTH = True` in `settings.py` to make it the
@@ -70,9 +70,9 @@ describes the auth-enabled dashboard.
   an `HttpOnly` + `SameSite=Strict` + `Secure` cookie named
   `flexiq_session` (the `Secure` flag means HTTPS-only; for local HTTP
   dev use `serve_dashboard(secure_cookies=False)` or
-  `taskito dashboard --insecure-cookies`).
+  `flexiq dashboard --insecure-cookies`).
 - **CSRF** uses the double-submit pattern: a non-HttpOnly cookie named
-  `taskito_csrf` carries a per-session token that the SPA reads and
+  `flexiq_csrf` carries a per-session token that the SPA reads and
   echoes back via the `X-CSRF-Token` header on POST/PUT/DELETE. The
   server rejects any state-changing request whose header doesn't match
   both the cookie and the session-bound token.
@@ -97,7 +97,7 @@ vars before starting the dashboard:
 ```bash
 export FLEXIQ_DASHBOARD_ADMIN_USER=admin
 export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
-taskito dashboard --app myapp:queue --auth
+flexiq dashboard --app myapp:queue --auth
 ```
 
 The bootstrap is **idempotent** — once a user with that name exists,
@@ -126,7 +126,7 @@ curl -c jar -X POST http://localhost:8080/api/auth/login \
 
 # The CSRF token comes back in a non-HttpOnly cookie. Read it and
 # echo it on writes.
-CSRF=$(grep taskito_csrf jar | awk '{print $7}')
+CSRF=$(grep flexiq_csrf jar | awk '{print $7}')
 curl -b jar -H "X-CSRF-Token: $CSRF" -X POST \
   http://localhost:8080/api/queues/default/pause
 ```
@@ -161,7 +161,7 @@ deployment scripts, custom dashboards. The minimal workflow:
 
 1. `POST /api/auth/login` — save the `Set-Cookie` values
 2. For every read: send the `flexiq_session` cookie
-3. For every write: send the `flexiq_session` cookie + `taskito_csrf`
+3. For every write: send the `flexiq_session` cookie + `flexiq_csrf`
    cookie + matching `X-CSRF-Token` header
 
 ```python
@@ -172,7 +172,7 @@ s.post(
     "http://localhost:8080/api/auth/login",
     json={"username": "admin", "password": "..."},
 )
-csrf = s.cookies.get("taskito_csrf")
+csrf = s.cookies.get("flexiq_csrf")
 s.headers["X-CSRF-Token"] = csrf
 
 # Reads — no CSRF needed.

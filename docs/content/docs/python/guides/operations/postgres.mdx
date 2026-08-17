@@ -5,7 +5,7 @@ description: "Multi-machine workers and concurrent writes with the PostgreSQL ba
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-taskito supports PostgreSQL as an alternative storage backend for production
+flexiq supports PostgreSQL as an alternative storage backend for production
 deployments that need multi-machine workers or higher write throughput.
 
 ## When to use Postgres
@@ -22,18 +22,18 @@ external dependencies required.
 ## Installation
 
 ```bash
-pip install taskito[postgres]
+pip install flexiq[postgres]
 ```
 
 ## Configuration
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(
     backend="postgres",
     db_url="postgresql://user:password@localhost:5432/myapp",
-    schema="taskito",  # optional, default: "taskito"
+    schema="flexiq",  # optional, default: "flexiq"
 )
 ```
 
@@ -41,7 +41,7 @@ queue = Queue(
 |-----------|------|---------|-------------|
 | `backend` | `str` | `"sqlite"` | Set to `"postgres"` or `"postgresql"` |
 | `db_url` | `str` | `None` | PostgreSQL connection URL (required for Postgres) |
-| `schema` | `str` | `"taskito"` | PostgreSQL schema for all tables |
+| `schema` | `str` | `"flexiq"` | PostgreSQL schema for all tables |
 | `workers` | `int` | `0` (auto) | Number of worker threads |
 
 All other `Queue` parameters (`default_retry`, `default_timeout`,
@@ -56,13 +56,13 @@ Configure the Postgres backend via Django settings:
 # settings.py
 FLEXIQ_BACKEND = "postgres"
 FLEXIQ_DB_URL = "postgresql://user:password@localhost:5432/myapp"
-FLEXIQ_SCHEMA = "taskito"
+FLEXIQ_SCHEMA = "flexiq"
 ```
 
 Then use the Django integration as normal:
 
 ```python
-from taskito.contrib.django.settings import get_queue
+from flexiq.contrib.django.settings import get_queue
 
 queue = get_queue()
 ```
@@ -73,7 +73,7 @@ All Django settings:
 |---------|---------|-------------|
 | `FLEXIQ_BACKEND` | `"sqlite"` | Storage backend (`"sqlite"` or `"postgres"`) |
 | `FLEXIQ_DB_URL` | `None` | PostgreSQL connection URL |
-| `FLEXIQ_SCHEMA` | `"taskito"` | PostgreSQL schema name |
+| `FLEXIQ_SCHEMA` | `"flexiq"` | PostgreSQL schema name |
 | `FLEXIQ_DB_PATH` | `".flexiq/flexiq.db"` | SQLite database path (ignored with Postgres) |
 | `FLEXIQ_WORKERS` | `0` | Worker thread count (0 = auto-detect) |
 | `FLEXIQ_DEFAULT_RETRY` | `3` | Default max retries |
@@ -91,8 +91,8 @@ All Django settings:
 
 ## Schema isolation
 
-taskito creates all tables inside a dedicated PostgreSQL schema (default:
-`taskito`). The schema is created automatically if it doesn't exist.
+flexiq creates all tables inside a dedicated PostgreSQL schema (default:
+`flexiq`). The schema is created automatically if it doesn't exist.
 
 ```python
 # Use a custom schema
@@ -102,8 +102,8 @@ queue = Queue(backend="postgres", db_url="postgresql://...", schema="myapp_tasks
 Schema names must contain only alphanumeric characters and underscores.
 Invalid names raise a `ConfigError` at startup.
 
-This lets you run multiple independent taskito instances in the same
-database by using different schemas, or keep taskito tables separate from
+This lets you run multiple independent flexiq instances in the same
+database by using different schemas, or keep flexiq tables separate from
 your application tables.
 
 ## Connection pooling
@@ -130,7 +130,7 @@ raise it if workers are blocking waiting for a free connection under load.
 
 ## Migrations
 
-Migrations run automatically on first connection. taskito creates the
+Migrations run automatically on first connection. flexiq creates the
 following **11 tables** inside the configured schema:
 
 | Table | Purpose |
@@ -173,7 +173,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_DB: myapp
-      POSTGRES_USER: taskito
+      POSTGRES_USER: flexiq
       POSTGRES_PASSWORD: secret
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -184,7 +184,7 @@ services:
     build: .
     environment:
       FLEXIQ_BACKEND: postgres
-      FLEXIQ_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_DB_URL: postgresql://flexiq:secret@postgres:5432/myapp
     depends_on:
       - postgres
     stop_signal: SIGINT
@@ -192,10 +192,10 @@ services:
 
   dashboard:
     build: .
-    command: taskito dashboard --app myapp:queue --host 0.0.0.0
+    command: flexiq dashboard --app myapp:queue --host 0.0.0.0
     environment:
       FLEXIQ_BACKEND: postgres
-      FLEXIQ_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_DB_URL: postgresql://flexiq:secret@postgres:5432/myapp
     depends_on:
       - postgres
     ports:
@@ -213,7 +213,7 @@ different hosts.
 
 ```ini
 [Unit]
-Description=taskito worker
+Description=flexiq worker
 After=network.target postgresql.service
 
 [Service]
@@ -221,7 +221,7 @@ Type=simple
 User=myapp
 Group=myapp
 WorkingDirectory=/opt/myapp
-ExecStart=/opt/myapp/.venv/bin/taskito worker --app myapp:queue
+ExecStart=/opt/myapp/.venv/bin/flexiq worker --app myapp:queue
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
@@ -229,7 +229,7 @@ TimeoutStopSec=35
 
 Environment=PYTHONPATH=/opt/myapp
 Environment=FLEXIQ_BACKEND=postgres
-Environment=FLEXIQ_DB_URL=postgresql://taskito:secret@db.internal:5432/myapp
+Environment=FLEXIQ_DB_URL=postgresql://flexiq:secret@db.internal:5432/myapp
 
 [Install]
 WantedBy=multi-user.target
@@ -243,13 +243,13 @@ locking:
 
 ```bash
 # Machine 1
-taskito worker --app myapp:queue
+flexiq worker --app myapp:queue
 
 # Machine 2
-taskito worker --app myapp:queue
+flexiq worker --app myapp:queue
 
 # Machine 3
-taskito worker --app myapp:queue
+flexiq worker --app myapp:queue
 ```
 
 All workers share the same job queue and dequeue work atomically.
@@ -259,11 +259,11 @@ All workers share the same job queue and dequeue work atomically.
 Use standard PostgreSQL backup tools instead of SQLite-specific commands:
 
 ```bash
-# Dump the taskito schema
-pg_dump -h localhost -U taskito -d myapp -n taskito > backup.sql
+# Dump the flexiq schema
+pg_dump -h localhost -U flexiq -d myapp -n flexiq > backup.sql
 
 # Restore
-psql -h localhost -U taskito -d myapp < backup.sql
+psql -h localhost -U flexiq -d myapp < backup.sql
 ```
 
 For continuous backups, use PostgreSQL's built-in WAL (write-ahead logging —

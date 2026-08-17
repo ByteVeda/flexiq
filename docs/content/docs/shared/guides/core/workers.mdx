@@ -18,7 +18,7 @@ task functions, and writes results back.
   <Tab sdk="python">
 
 ```bash
-taskito worker --app myapp.tasks:queue
+flexiq worker --app myapp.tasks:queue
 ```
 
 ```python
@@ -30,7 +30,7 @@ queue.run_worker()
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 queue.task("process", (itemId: number) => {
@@ -47,7 +47,7 @@ worker.stop();
   <Tab sdk="java">
 
 ```java
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .queues("default")
         .start();
@@ -62,7 +62,7 @@ worker.close();
 <SdkOnly sdk="python">
 
 `run_worker()` **blocks the calling thread** until the worker stops — that's
-why the CLI (`taskito worker --app ...`) is the recommended way to run one. To
+why the CLI (`flexiq worker --app ...`) is the recommended way to run one. To
 keep your own thread free, run it in a background thread or use the async
 variant:
 
@@ -87,7 +87,7 @@ asyncio.run(main())
 <SdkOnly sdk="node">
 
 `runWorker()` never blocks — it starts the worker on the Rust core and
-returns immediately. The bundled `taskito run ./app.js` CLI wraps this for
+returns immediately. The bundled `flexiq run ./app.js` CLI wraps this for
 you and wires `Ctrl+C` to `worker.stop()`; calling `runWorker()` from your
 own code needs no CLI at all.
 
@@ -106,7 +106,7 @@ own code needs no CLI at all.
 
 `start()` never blocks — scheduling runs in the background and handlers
 execute on the pool you configure. There's no CLI worker subcommand: workers
-are code, built with `taskito.worker()` in your application; wire
+are code, built with `flexiq.worker()` in your application; wire
 `awaitShutdown()` (see [Graceful shutdown](#graceful-shutdown)) to keep the
 process alive.
 
@@ -138,7 +138,7 @@ explicitly binds with `.handle(task, fn)` (or `.register(...)` /
 `.apply(...)` for generated handler sets). A job for a task name the builder
 never bound fails immediately with `no handler registered for task '...'`,
 which also means two workers can bind different subsets of your tasks from
-the same `Taskito` client.
+the same `FlexiQ` client.
 
 </SdkOnly>
 
@@ -156,7 +156,7 @@ queue.run_worker(queues=["emails", "reports"])
 ```
 
 ```bash
-taskito worker --app myapp.tasks:queue --queues emails,reports
+flexiq worker --app myapp.tasks:queue --queues emails,reports
 ```
 
   </Tab>
@@ -170,7 +170,7 @@ queue.runWorker({ queues: ["emails", "reports"] });
   <Tab sdk="java">
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(sendEmail, payload -> send(payload))
         .queues("emails", "reports")
         .start();
@@ -211,10 +211,10 @@ populate it — it stays empty for Node-started workers.
 
 <SdkOnly sdk="java">
 
-`taskito.worker()` has no `tags(...)` builder method — Java workers can't
+`flexiq.worker()` has no `tags(...)` builder method — Java workers can't
 advertise capability tags. Route capability-specific work with
 [dedicated queues](#selecting-queues) instead
-(`taskito.worker().queues("gpu").start()`).
+(`flexiq.worker().queues("gpu").start()`).
 
 `WorkerInfo.tags` exists on `listWorkers()` rows, but only SDKs that support
 tag advertisement set it; it's null for Java-started workers.
@@ -246,7 +246,7 @@ queue.runWorker({ channelCapacity: 256, batchSize: 16 }); // dispatch buffer + p
   <Tab sdk="java">
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(process, payload -> handle(payload))
         .concurrency(8) // fixed handler-thread pool; 0 (default) uses a cached pool
         .start();
@@ -276,7 +276,7 @@ per poll; real concurrency caps come from per-task/queue `maxConcurrent`. See
 <Callout type="info" title="Coming from BullMQ?">
   BullMQ's `new Worker(queueName, processor, { concurrency: N })` runs `N`
   jobs at once **per worker process** — concurrency scales with how many
-  workers you start. taskito's `runWorker()` takes no processor or
+  workers you start. flexiq's `runWorker()` takes no processor or
   concurrency argument (handlers come from `queue.task()`); simultaneous
   execution is bounded by per-task/per-queue
   <SdkLink to="guides/reliability/concurrency">maxConcurrent</SdkLink>,
@@ -322,7 +322,7 @@ const workers = await queue.listWorkers();
   <Tab sdk="java">
 
 ```java
-for (WorkerInfo w : taskito.listWorkers()) {
+for (WorkerInfo w : flexiq.listWorkers()) {
     log.info(w.workerId + " on " + w.hostname + " (pid " + w.pid + ", " + w.status + ")");
 }
 ```
@@ -347,7 +347,7 @@ from a separate dashboard process.
 Subscribe to worker join/leave/health transitions:
 
 ```python
-from taskito import EventType
+from flexiq import EventType
 
 @queue.on_event(EventType.WORKER_ONLINE)
 def on_online(event_type, payload):
@@ -392,7 +392,7 @@ interval to configure.
 Java has no worker-lifecycle events. `.on(EventName, ...)` fires only the four
 job-outcome events (`SUCCESS`, `RETRY`, `DEAD`, `CANCELLED`) — there's no
 `WORKER_ONLINE` / `OFFLINE` / `UNHEALTHY`. Observe worker presence and health by
-polling `taskito.listWorkers()`, whose `WorkerInfo` rows carry `status` and a
+polling `flexiq.listWorkers()`, whose `WorkerInfo` rows carry `status` and a
 `resourceHealth` snapshot from the last heartbeat.
 
 </SdkOnly>
@@ -414,11 +414,11 @@ queue = Queue(db_path="myapp.db", drain_timeout=60)  # wait up to 60s (default: 
 ```
 
 ```
-$ taskito worker --app myapp:queue
-[taskito] Starting worker...
+$ flexiq worker --app myapp:queue
+[flexiq] Starting worker...
 ^C
-[taskito] Warm shutdown (waiting for running tasks to finish)...
-[taskito] Worker stopped.
+[flexiq] Warm shutdown (waiting for running tasks to finish)...
+[flexiq] Worker stopped.
 ```
 
 </SdkOnly>
@@ -426,7 +426,7 @@ $ taskito worker --app myapp:queue
 <SdkOnly sdk="node">
 
 `runWorker()` doesn't wire any signal handling itself — the
-`taskito run ./app.js` CLI does that for you (`SIGINT`/`SIGTERM` →
+`flexiq run ./app.js` CLI does that for you (`SIGINT`/`SIGTERM` →
 `worker.stop()`). Calling `runWorker()` from your own code, wire it yourself:
 
 ```ts
@@ -443,7 +443,7 @@ JVM calls `close()` on exit, and block `main` on `awaitShutdown()`:
 ```java
 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
     worker.close();
-    taskito.close();
+    flexiq.close();
 }));
 worker.awaitShutdown();
 ```

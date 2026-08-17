@@ -1,33 +1,33 @@
 ---
 title: NestJS Integration
-description: "Inject a TaskitoService into your Nest providers."
+description: "Inject a FlexiQService into your Nest providers."
 ---
 
 Peer dependencies: `@nestjs/common` + `reflect-metadata`. Import from the
-`@byteveda/taskito/contrib/nest` subpath.
+`@byteveda/flexiq/contrib/nest` subpath.
 
 ```ts
 import { Module } from "@nestjs/common";
-import { TaskitoModule } from "@byteveda/taskito/contrib/nest";
+import { FlexiQModule } from "@byteveda/flexiq/contrib/nest";
 
 @Module({
-  imports: [TaskitoModule.forRoot(queue)],
+  imports: [FlexiQModule.forRoot(queue)],
 })
 export class AppModule {}
 ```
 
-`TaskitoModule.forRoot(queue)` returns a `DynamicModule` that exports
-`TaskitoService` to any module that imports it.
+`FlexiQModule.forRoot(queue)` returns a `DynamicModule` that exports
+`FlexiQService` to any module that imports it.
 
-## Injecting `TaskitoService`
+## Injecting `FlexiQService`
 
 ```ts
 import { Injectable } from "@nestjs/common";
-import { TaskitoService } from "@byteveda/taskito/contrib/nest";
+import { FlexiQService } from "@byteveda/flexiq/contrib/nest";
 
 @Injectable()
 export class ReportService {
-  constructor(private readonly tasks: TaskitoService) {}
+  constructor(private readonly tasks: FlexiQService) {}
 
   scheduleReport(reportId: string): string {
     return this.tasks.enqueue("generateReport", [reportId], {
@@ -42,7 +42,7 @@ export class ReportService {
 }
 ```
 
-## `TaskitoService` methods
+## `FlexiQService` methods
 
 | Method | Description |
 |---|---|
@@ -55,6 +55,6 @@ export class ReportService {
 | `queue` | The raw `Queue` instance for the full API surface. |
 
 <Callout type="info">
-  `TaskitoService` wraps the most common operations. For anything not listed —
+  `FlexiQService` wraps the most common operations. For anything not listed —
   workflows, distributed locks, metrics — access `tasks.queue` directly.
 </Callout>

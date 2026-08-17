@@ -39,12 +39,12 @@ per-connection).
 
 ## Postgres differences
 
-taskito also supports PostgreSQL as an alternative storage backend. See the
+flexiq also supports PostgreSQL as an alternative storage backend. See the
 <SdkLink to="guides/operations">Postgres backend guide</SdkLink> for full details.
 
 - **Connection pooling**: `r2d2` pool with a default of 10 connections (vs. 8 for SQLite)
 - **Schema isolation**: all tables are created inside a configurable PostgreSQL schema
-  (default: `taskito`), with `search_path` set on each connection
+  (default: `flexiq`), with `search_path` set on each connection
 - **Additional tables**: the Postgres backend creates 11 tables (vs. 6 for SQLite),
   adding `job_dependencies`, `task_metrics`, `replay_history`, `task_logs`, and
   `circuit_breakers`

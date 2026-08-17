@@ -5,19 +5,19 @@ description: "Subscribe to job, worker, queue, workflow, and predicate lifecycle
 
 Two surfaces subscribe to the same lifecycle events. Worker-scoped
 `Worker.Builder.on(...)` sees only that worker's own job outcomes;
-client-scoped `taskito.onEvent(...)` sees everything — queue-level events plus
-every event raised by workers built from the same `Taskito`.
+client-scoped `flexiq.onEvent(...)` sees everything — queue-level events plus
+every event raised by workers built from the same `FlexiQ`.
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
-    taskito.onEvent(EventName.WORKER_OFFLINE, event -> alertOps(event));
-    taskito.onEvent(EventName.WORKFLOW_FAILED, event -> {
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) {
+    flexiq.onEvent(EventName.WORKER_OFFLINE, event -> alertOps(event));
+    flexiq.onEvent(EventName.WORKFLOW_FAILED, event -> {
         if (event instanceof WorkflowEvent workflow) {
             alertOps(workflow.runId(), workflow.error());
         }
     });
 
-    try (Worker worker = taskito.worker()
+    try (Worker worker = flexiq.worker()
             .handle(add, payload -> payload.a() + payload.b())
             .on(EventName.SUCCESS, event -> log.info("done " + event.jobId))
             .on(EventName.JOB_FAILED, event -> log.warn("attempt failed: " + event.taskName))
@@ -31,12 +31,12 @@ try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
 `Worker.Builder.on(EventName, Consumer<OutcomeEvent>)` is unchanged — still
 job-outcome events only (`SUCCESS`, `RETRY`, `DEAD`, `CANCELLED`, and now
 `JOB_FAILED`), delivered as a typed `OutcomeEvent` with no cast.
-`taskito.onEvent(EventName, Consumer<TaskitoEvent>)` is new: since one
+`flexiq.onEvent(EventName, Consumer<FlexiQEvent>)` is new: since one
 subscription surface fans in every event type, its callback receives the
-sealed `TaskitoEvent` interface and you narrow it yourself:
+sealed `FlexiQEvent` interface and you narrow it yourself:
 
 ```java
-taskito.onEvent(EventName.WORKFLOW_GATE_REACHED, event -> {
+flexiq.onEvent(EventName.WORKFLOW_GATE_REACHED, event -> {
     if (event instanceof GateEvent gate) {
         log.info("run {} parked at {}", gate.runId(), gate.nodeName());
     }
@@ -49,9 +49,9 @@ must exist first) and before any event-producing work begins, then let them go
 away with the worker or the client. A listener that throws is caught and
 logged; it never blocks other listeners.
 
-## `TaskitoEvent`
+## `FlexiQEvent`
 
-`TaskitoEvent` is a sealed interface with one method, `EventName name()`.
+`FlexiQEvent` is a sealed interface with one method, `EventName name()`.
 `OutcomeEvent` implements it directly; every other event is a record:
 `EnqueuedEvent(jobId, taskName, queue)`, `WorkerEvent(name, queues)`,
 `QueueEvent(name, queue)`, `WorkflowEvent(name, runId, workflowName, error)`,

@@ -3,7 +3,7 @@ title: Configuration
 description: "The resource() overloads, choosing a scope, teardown, and PoolConfig tuning."
 ---
 
-Every resource is registered programmatically through `Taskito.resource(...)`
+Every resource is registered programmatically through `FlexiQ.resource(...)`
 — there is no external config file to load and nothing to reload at runtime.
 Registration happens once per client, before you start a worker over it, and
 the same call shape applies whether the resource lives for the whole worker
@@ -27,23 +27,23 @@ what each scope is good for. This page walks through registering one of each:
 
 ```java
 // WORKER — built once, shared by every task
-taskito.resource("db", ResourceScope.WORKER, ctx -> openPool(url), pool -> pool.close());
+flexiq.resource("db", ResourceScope.WORKER, ctx -> openPool(url), pool -> pool.close());
 
 // THREAD — built once per worker thread, not thread-safe so not shared further
-taskito.resource("formatter", ResourceScope.THREAD,
+flexiq.resource("formatter", ResourceScope.THREAD,
         ctx -> new SimpleDateFormat("yyyy-MM-dd"));
 
 // TASK — built per invocation, torn down when it ends
-taskito.resource("tx", ResourceScope.TASK,
+flexiq.resource("tx", ResourceScope.TASK,
         ctx -> beginTransaction(),
         tx -> tx.rollbackIfOpen());
 
 // REQUEST — fresh every time a handler calls use(), never cached
-taskito.resource("requestId", ResourceScope.REQUEST,
+flexiq.resource("requestId", ResourceScope.REQUEST,
         ctx -> UUID.randomUUID().toString());
 
 // POOLED — bounded pool, sized by a PoolConfig
-taskito.resource("ftp",
+flexiq.resource("ftp",
         PoolConfig.of(4).withPoolMin(1).withAcquireTimeout(Duration.ofSeconds(10)),
         ctx -> connectFtp(),
         conn -> conn.close());
@@ -58,10 +58,10 @@ taskito.resource("ftp",
 | `resource(name, scope, factory, dispose)` | the given scope | runs when the scope ends |
 | `resource(name, pool, factory, dispose)` | `POOLED` (implied by the `PoolConfig`) | runs when the pool retires an instance |
 
-Every overload returns the `Taskito` client, so registrations chain:
+Every overload returns the `FlexiQ` client, so registrations chain:
 
 ```java
-Taskito taskito = Taskito.builder().sqlite("tasks.db").open()
+FlexiQ flexiq = FlexiQ.builder().sqlite("tasks.db").open()
         .resource("config", ctx -> loadConfig())
         .resource("db", ctx -> {
             Config config = ctx.use("config");

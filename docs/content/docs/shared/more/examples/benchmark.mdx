@@ -15,7 +15,7 @@ end-to-end latency.
   <Tab sdk="python">
 
 ```python
-"""taskito throughput benchmark.
+"""flexiq throughput benchmark.
 
 Measures:
 1. Enqueue throughput (jobs/sec) using batch insert
@@ -27,7 +27,7 @@ import os
 import threading
 import time
 
-from taskito import Queue
+from flexiq import Queue
 
 # ── Configuration ────────────────────────────────────────
 
@@ -98,7 +98,7 @@ def bench_latency(task, samples=100):
 # ── Main ─────────────────────────────────────────────────
 
 def main():
-    print(f"taskito benchmark")
+    print(f"flexiq benchmark")
     print(f"  Workers: {NUM_WORKERS}")
     print(f"  Jobs:    {NUM_JOBS:,}")
     print(f"  DB:      {DB_PATH}")
@@ -138,7 +138,7 @@ if __name__ == "__main__":
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const N = 50_000;
 // Fresh database per run — leftover rows from a previous run would satisfy
@@ -201,13 +201,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.model.Job;
-import org.byteveda.taskito.model.JobFilter;
-import org.byteveda.taskito.model.JobStatus;
-import org.byteveda.taskito.model.QueueStats;
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.model.Job;
+import org.byteveda.flexiq.model.JobFilter;
+import org.byteveda.flexiq.model.JobStatus;
+import org.byteveda.flexiq.model.QueueStats;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.worker.Worker;
 
 public final class Benchmark {
     private static final int N = 50_000;
@@ -215,8 +215,8 @@ public final class Benchmark {
 
     public static void main(String[] args) throws Exception {
         // Fresh database per run — a reused file skews stats with old rows.
-        Path dir = Files.createTempDirectory("taskito-bench");
-        try (Taskito taskito = Taskito.builder().sqlite(dir.resolve("bench.db").toString()).open()) {
+        Path dir = Files.createTempDirectory("flexiq-bench");
+        try (FlexiQ flexiq = FlexiQ.builder().sqlite(dir.resolve("bench.db").toString()).open()) {
 
             // 1. Enqueue throughput — stage N jobs in batches of 1,000.
             long t0 = System.currentTimeMillis();
@@ -225,7 +225,7 @@ public final class Benchmark {
                 for (int k = 0; k < 1_000; k++) {
                     batch.add(i + k);
                 }
-                taskito.enqueueMany(NOOP, batch);
+                flexiq.enqueueMany(NOOP, batch);
             }
             long enqueueMs = System.currentTimeMillis() - t0;
 
@@ -234,13 +234,13 @@ public final class Benchmark {
             long t1 = System.currentTimeMillis();
             long deadline = t1 + 120_000;
             long processMs;
-            try (Worker worker = taskito.worker()
+            try (Worker worker = flexiq.worker()
                     .handle(NOOP, n -> null)
                     .concurrency(8)
                     .batchSize(64)
                     .channelCapacity(512)
                     .start()) {
-                QueueStats stats = taskito.stats();
+                QueueStats stats = flexiq.stats();
                 while (stats.completed < N) {
                     if (stats.failed > 0 || stats.dead > 0) {
                         throw new IllegalStateException(
@@ -250,13 +250,13 @@ public final class Benchmark {
                         throw new IllegalStateException("drain timed out with " + stats.completed + "/" + N + " completed");
                     }
                     Thread.sleep(20);
-                    stats = taskito.stats();
+                    stats = flexiq.stats();
                 }
                 processMs = System.currentTimeMillis() - t1;
             }
 
             // 3. End-to-end latency — created → completed across a sample of jobs.
-            List<Long> latencies = taskito
+            List<Long> latencies = flexiq
                     .listJobs(JobFilter.builder().status(JobStatus.COMPLETE).limit(1_000).build())
                     .stream()
                     .filter(job -> job.completedAt != null)
@@ -311,7 +311,7 @@ Illustrative — measure your own:
   <Tab sdk="python">
 
 ```
-taskito benchmark
+flexiq benchmark
   Workers: 8
   Jobs:    10,000
   DB:      :memory:
@@ -449,14 +449,14 @@ Rough directional comparison on the same hardware (8-core, single
 machine). These are not scientific benchmarks — run the benchmark above on
 your own hardware for accurate numbers.
 
-| Metric | taskito (SQLite) | taskito (Postgres) | Celery + Redis | Dramatiq + Redis |
+| Metric | flexiq (SQLite) | flexiq (Postgres) | Celery + Redis | Dramatiq + Redis |
 |--------|-----------------|-------------------|---------------|-----------------|
 | Enqueue throughput | ~55,000/s | ~20,000/s | ~5,000/s | ~3,000/s |
 | Processing (noop, 8 workers) | ~4,000/s | ~3,500/s | ~2,000/s | ~1,500/s |
 | p50 latency | 1.1ms | 2.5ms | 5–10ms | 8–15ms |
 | p99 latency | 3.4ms | 8ms | 20–50ms | 30–80ms |
 | Memory (idle worker) | ~30 MB | ~35 MB | ~80 MB | ~60 MB |
-| Setup | `pip install taskito` | + Postgres | + Redis + Celery | + Redis + Dramatiq |
+| Setup | `pip install flexiq` | + Postgres | + Redis + Celery | + Redis + Dramatiq |
 | External services | 0 | 1 (Postgres) | 2 (Redis + result backend) | 1 (Redis) |
 
 <Callout type="info">
@@ -465,7 +465,7 @@ your own hardware for accurate numbers.
   configuration. Run your own benchmarks before making decisions.
 </Callout>
 
-**Why is taskito faster?**
+**Why is flexiq faster?**
 
 - Rust scheduler avoids GIL contention — scheduling and dispatch never block Python
 - SQLite WAL mode with batch inserts — disk I/O is minimized
@@ -493,8 +493,8 @@ your own hardware for accurate numbers.
 
 | Pattern | Where |
 | --- | --- |
-| Batched staging | `taskito.enqueueMany` |
-| Drain to a target | poll `taskito.stats().completed` |
+| Batched staging | `flexiq.enqueueMany` |
+| Drain to a target | poll `flexiq.stats().completed` |
 | Worker throughput knobs | `batchSize` + `channelCapacity` + `concurrency` |
 | Latency percentiles | `listJobs` + `completedAt − createdAt` |
 

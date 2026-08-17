@@ -1,9 +1,9 @@
 ---
 title: CLI Reference
-description: "The taskito command-line interface — worker, dashboard, info, pause, resume, scaler, autoscale, resources, reload."
+description: "The flexiq command-line interface — worker, dashboard, info, pause, resume, scaler, autoscale, resources, reload."
 ---
 
-taskito provides a command-line interface for running workers and inspecting
+flexiq provides a command-line interface for running workers and inspecting
 queue state.
 
 ## Installation
@@ -11,19 +11,19 @@ queue state.
 The CLI is installed automatically with the package:
 
 ```bash
-pip install taskito
+pip install flexiq
 ```
 
-The `taskito` command becomes available in your `PATH`.
+The `flexiq` command becomes available in your `PATH`.
 
 ## Commands
 
-### `taskito worker`
+### `flexiq worker`
 
 Start a worker process that consumes and executes tasks.
 
 ```bash
-taskito worker --app <module:attribute> [--queues <queue1,queue2,...>]
+flexiq worker --app <module:attribute> [--queues <queue1,queue2,...>]
 ```
 
 | Flag | Required | Description |
@@ -36,27 +36,27 @@ taskito worker --app <module:attribute> [--queues <queue1,queue2,...>]
 
 ```bash
 # Start a worker using the queue defined in myapp/tasks.py
-taskito worker --app myapp.tasks:queue
+flexiq worker --app myapp.tasks:queue
 
 # Only process the "emails" and "reports" queues
-taskito worker --app myapp.tasks:queue --queues emails,reports
+flexiq worker --app myapp.tasks:queue --queues emails,reports
 
 # Use a nested module path
-taskito worker --app myproject.workers.tasks:task_queue
+flexiq worker --app myproject.workers.tasks:task_queue
 
 # Use the prefork pool
-taskito worker --app myapp.tasks:queue --pool prefork
+flexiq worker --app myapp.tasks:queue --pool prefork
 ```
 
 The worker blocks until interrupted with `Ctrl+C`. It performs a graceful
 shutdown — in-flight tasks are allowed to complete before the process exits.
 
-### `taskito dashboard`
+### `flexiq dashboard`
 
 Start the web dashboard (SPA + REST API) for the queue.
 
 ```bash
-taskito dashboard --app <module:attribute> [--host <addr>] [--port <port>] [--auth] [--insecure-cookies]
+flexiq dashboard --app <module:attribute> [--host <addr>] [--port <port>] [--auth] [--insecure-cookies]
 ```
 
 | Flag | Default | Description |
@@ -70,19 +70,19 @@ taskito dashboard --app <module:attribute> [--host <addr>] [--port <port>] [--au
 **Example:**
 
 ```bash
-taskito dashboard --app myapp.tasks:queue --port 8080
+flexiq dashboard --app myapp.tasks:queue --port 8080
 ```
 
 See the [Dashboard guide](/python/guides/dashboard) for authentication and deployment.
 
-### `taskito pause` / `taskito resume`
+### `flexiq pause` / `flexiq resume`
 
 Pause or resume a named queue. A paused queue stops dequeuing new jobs;
 in-flight jobs still run to completion.
 
 ```bash
-taskito pause --app <module:attribute> <queue_name>
-taskito resume --app <module:attribute> <queue_name>
+flexiq pause --app <module:attribute> <queue_name>
+flexiq resume --app <module:attribute> <queue_name>
 ```
 
 | Flag / Arg | Required | Description |
@@ -93,16 +93,16 @@ taskito resume --app <module:attribute> <queue_name>
 **Example:**
 
 ```bash
-taskito pause --app myapp.tasks:queue emails
-taskito resume --app myapp.tasks:queue emails
+flexiq pause --app myapp.tasks:queue emails
+flexiq resume --app myapp.tasks:queue emails
 ```
 
-### `taskito info`
+### `flexiq info`
 
 Display queue statistics.
 
 ```bash
-taskito info --app <module:attribute> [--watch]
+flexiq info --app <module:attribute> [--watch]
 ```
 
 | Flag | Required | Description |
@@ -114,13 +114,13 @@ taskito info --app <module:attribute> [--watch]
 
 ```bash
 # Show stats once
-taskito info --app myapp.tasks:queue
+flexiq info --app myapp.tasks:queue
 ```
 
 Output:
 
 ```
-taskito queue statistics
+flexiq queue statistics
 ------------------------------
   pending      12
   running      4
@@ -134,13 +134,13 @@ taskito queue statistics
 
 ```bash
 # Live monitoring with throughput
-taskito info --app myapp.tasks:queue --watch
+flexiq info --app myapp.tasks:queue --watch
 ```
 
 Output (refreshes every 2s):
 
 ```
-taskito queue statistics
+flexiq queue statistics
 ------------------------------
   pending      3
   running      8
@@ -179,12 +179,12 @@ directory is in `PYTHONPATH`.
 | `myapp/tasks.py` with `queue = Queue()` | `myapp.tasks:queue` |
 | `src/workers/q.py` with `app = Queue()` | `src.workers.q:app` |
 
-### `taskito scaler`
+### `flexiq scaler`
 
 Start a lightweight KEDA metrics server.
 
 ```bash
-taskito scaler --app <module:attribute> [--host <addr>] [--port <port>] [--target-queue-depth <n>]
+flexiq scaler --app <module:attribute> [--host <addr>] [--port <port>] [--target-queue-depth <n>]
 ```
 
 | Flag | Default | Description |
@@ -205,19 +205,19 @@ The server exposes three routes:
 **Example:**
 
 ```bash
-taskito scaler --app myapp:queue --port 9091 --target-queue-depth 5
+flexiq scaler --app myapp:queue --port 9091 --target-queue-depth 5
 ```
 
 See the [KEDA Integration guide](/python/guides/operations) for Kubernetes deploy
 templates.
 
-### `taskito autoscale`
+### `flexiq autoscale`
 
 Start a bare-metal autoscaler that spawns and drains worker processes based on
 queue depth and worker utilisation.
 
 ```bash
-taskito autoscale --app <module:attribute> [options]
+flexiq autoscale --app <module:attribute> [options]
 ```
 
 | Flag | Default | Description |
@@ -237,19 +237,19 @@ taskito autoscale --app <module:attribute> [options]
 **Example:**
 
 ```bash
-taskito autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
+flexiq autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
 ```
 
 See the [Autoscaler guide](/python/guides/operations/autoscaling) for deployment
 patterns and tuning advice.
 
-### `taskito resources`
+### `flexiq resources`
 
 Show the status of every registered resource — scope, health, init time,
 recreation count, and dependencies.
 
 ```bash
-taskito resources --app <module:attribute>
+flexiq resources --app <module:attribute>
 ```
 
 | Flag | Required | Description |
@@ -258,13 +258,13 @@ taskito resources --app <module:attribute>
 
 See the [Resource System](/python/guides/resources) guide for background.
 
-### `taskito reload`
+### `flexiq reload`
 
 Send `SIGHUP` to a running worker process to hot-reload resources without
 restarting the worker.
 
 ```bash
-taskito reload --pid <pid> [--resource <name>]
+flexiq reload --pid <pid> [--resource <name>]
 ```
 
 | Flag | Required | Description |
@@ -275,8 +275,8 @@ taskito reload --pid <pid> [--resource <name>]
 **Example:**
 
 ```bash
-taskito reload --pid 12345
-taskito reload --pid 12345 --resource db_pool
+flexiq reload --pid 12345
+flexiq reload --pid 12345 --resource db_pool
 ```
 
 ## Error messages

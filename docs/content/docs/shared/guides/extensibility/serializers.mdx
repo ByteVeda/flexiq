@@ -51,7 +51,7 @@ A one-byte tag on each payload records which codec produced it, so `loads()`
 always picks the right path.
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()  # uses SmartSerializer
 ```
@@ -64,7 +64,7 @@ MessagePack fast path. Use it directly for that predictability, or as the
 inner serializer for `EncryptedSerializer` / `SignedSerializer`.
 
 ```python
-from taskito import CloudpickleSerializer, Queue
+from flexiq import CloudpickleSerializer, Queue
 
 queue = Queue(serializer=CloudpickleSerializer())
 ```
@@ -80,7 +80,7 @@ or when arguments and results are plain types.
   <Tab sdk="python">
 
 ```python
-from taskito import JsonSerializer, Queue
+from flexiq import JsonSerializer, Queue
 
 queue = Queue(serializer=JsonSerializer())
 ```
@@ -89,7 +89,7 @@ queue = Queue(serializer=JsonSerializer())
   <Tab sdk="node">
 
 ```ts
-import { Queue, JsonSerializer } from "@byteveda/taskito";
+import { Queue, JsonSerializer } from "@byteveda/flexiq";
 
 new Queue({ dbPath: "flexiq.db", serializer: new JsonSerializer() });
 ```
@@ -98,10 +98,10 @@ new Queue({ dbPath: "flexiq.db", serializer: new JsonSerializer() });
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.JsonSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.JsonSerializer;
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new JsonSerializer())
         .open();
@@ -119,7 +119,7 @@ compatible.
   <Tab sdk="python">
 
 ```python
-from taskito import MsgPackSerializer, Queue
+from flexiq import MsgPackSerializer, Queue
 
 queue = Queue(serializer=MsgPackSerializer())
 ```
@@ -128,7 +128,7 @@ queue = Queue(serializer=MsgPackSerializer())
   <Tab sdk="node">
 
 ```ts
-import { Queue, MsgpackSerializer } from "@byteveda/taskito";
+import { Queue, MsgpackSerializer } from "@byteveda/flexiq";
 
 new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
@@ -137,10 +137,10 @@ new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.MsgpackSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.MsgpackSerializer;
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new MsgpackSerializer())
         .open();
@@ -151,8 +151,8 @@ Taskito taskito = Taskito.builder()
 
 <SdkOnly sdk="python">
 
-`msgpack` ships as a core taskito dependency, so no extra install is
-required — `pip install taskito[msgpack]` exists only for discoverability if
+`msgpack` ships as a core flexiq dependency, so no extra install is
+required — `pip install flexiq[msgpack]` exists only for discoverability if
 you want to spell it out in your own requirements file.
 
 <Callout type="info" title="Type restrictions">
@@ -180,7 +180,7 @@ you want to spell it out in your own requirements file.
 ### CborSerializer
 
 Binary serialization writing the `0x02` wire-envelope tag — the default
-format for tasks produced or consumed by another Taskito SDK. Unlike JSON,
+format for tasks produced or consumed by another FlexiQ SDK. Unlike JSON,
 big integers, `datetime`/`Date`, `bytes`, and decimals round-trip losslessly
 across languages.
 
@@ -188,7 +188,7 @@ across languages.
   <Tab sdk="python">
 
 ```python
-from taskito import CborSerializer, Queue
+from flexiq import CborSerializer, Queue
 
 queue = Queue(serializer=CborSerializer())
 ```
@@ -197,7 +197,7 @@ queue = Queue(serializer=CborSerializer())
   <Tab sdk="node">
 
 ```ts
-import { Queue, CborSerializer } from "@byteveda/taskito";
+import { Queue, CborSerializer } from "@byteveda/flexiq";
 
 new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
 ```
@@ -206,10 +206,10 @@ new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.CborSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.CborSerializer;
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new CborSerializer())
         .open();
@@ -220,9 +220,9 @@ Taskito taskito = Taskito.builder()
 
 <SdkOnly sdk="python">
 
-`cbor2` ships as a required taskito dependency — no extra install needed. The
+`cbor2` ships as a required flexiq dependency — no extra install needed. The
 default `SmartSerializer` can already *read* `0x02`-tagged CBOR payloads (for
-example one written by another Taskito SDK) without extra configuration; use
+example one written by another FlexiQ SDK) without extra configuration; use
 `CborSerializer` explicitly to *write* cross-SDK payloads.
 
 </SdkOnly>
@@ -260,7 +260,7 @@ the queue's storage cannot smuggle in a forged payload.
 
 ```python
 import os
-from taskito import Queue, SignedSerializer, SmartSerializer
+from flexiq import Queue, SignedSerializer, SmartSerializer
 
 key = os.urandom(32)  # share this across producers and workers
 queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
@@ -270,7 +270,7 @@ queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
   <Tab sdk="node">
 
 ```ts
-import { Queue, SignedSerializer } from "@byteveda/taskito";
+import { Queue, SignedSerializer } from "@byteveda/flexiq";
 
 new Queue({
   dbPath: "flexiq.db",
@@ -283,13 +283,13 @@ new Queue({
 
 ```java
 import java.nio.charset.StandardCharsets;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.JsonSerializer;
-import org.byteveda.taskito.serialization.SignedSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.JsonSerializer;
+import org.byteveda.flexiq.serialization.SignedSerializer;
 
 byte[] key = System.getenv("FLEXIQ_SIGNING_KEY").getBytes(StandardCharsets.UTF_8);
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new SignedSerializer(new JsonSerializer(), key))
         .open();
@@ -330,7 +330,7 @@ ciphertext — only the key holder can read them. Provides confidentiality
 ```python
 import base64
 import os
-from taskito import CloudpickleSerializer, EncryptedSerializer, Queue
+from flexiq import CloudpickleSerializer, EncryptedSerializer, Queue
 
 key = base64.b64decode(os.environ["QUEUE_KEY"])  # 16, 24, or 32 raw bytes
 queue = Queue(serializer=EncryptedSerializer(CloudpickleSerializer(), key))
@@ -340,7 +340,7 @@ queue = Queue(serializer=EncryptedSerializer(CloudpickleSerializer(), key))
   <Tab sdk="node">
 
 ```ts
-import { Queue, EncryptedSerializer } from "@byteveda/taskito";
+import { Queue, EncryptedSerializer } from "@byteveda/flexiq";
 
 new Queue({
   dbPath: "flexiq.db",
@@ -353,13 +353,13 @@ new Queue({
 
 ```java
 import java.util.Base64;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.JsonSerializer;
-import org.byteveda.taskito.serialization.EncryptedSerializer;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.JsonSerializer;
+import org.byteveda.flexiq.serialization.EncryptedSerializer;
 
 byte[] key = Base64.getDecoder().decode(System.getenv("FLEXIQ_ENC_KEY")); // 16, 24, or 32 bytes
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new EncryptedSerializer(new JsonSerializer(), key))
         .open();
@@ -381,7 +381,7 @@ python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
 For both confidentiality **and** integrity, wrap one in the other:
 
 ```python
-from taskito import EncryptedSerializer, Queue, SignedSerializer, SmartSerializer
+from flexiq import EncryptedSerializer, Queue, SignedSerializer, SmartSerializer
 
 inner = EncryptedSerializer(SmartSerializer(), key=enc_key)
 queue = Queue(serializer=SignedSerializer(inner, sign_key))
@@ -405,7 +405,7 @@ Implement the `Serializer` interface with two methods:
 
 ```python
 import msgpack
-from taskito import Queue, Serializer
+from flexiq import Queue, Serializer
 
 
 class MyMsgpackSerializer:
@@ -423,8 +423,8 @@ queue = Queue(serializer=MyMsgpackSerializer())
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
-import type { Serializer } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
+import type { Serializer } from "@byteveda/flexiq";
 
 const mySerializer: Serializer = {
   serialize: (value) => Buffer.from(JSON.stringify(value)),
@@ -438,7 +438,7 @@ new Queue({ dbPath: "flexiq.db", serializer: mySerializer });
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.serialization.Serializer;
+import org.byteveda.flexiq.serialization.Serializer;
 
 public final class MySerializer implements Serializer {
     @Override
@@ -490,14 +490,14 @@ override it in a generics-aware implementation, as `JsonSerializer` does.
 | **Cross-language** | Python only | Python only | Portable format, same-SDK payloads | Portable format, same-SDK payloads | Yes (cross-SDK wire format) | Python only (by default) |
 | **Performance** | Best for plain data | Good | Good for simple types | Best | Good | Adds encryption overhead |
 | **Security** | None | None | None | None | None | AES-256-GCM |
-| **Extra dependency** | No | No | No | No | No | `cryptography` (`taskito[encryption]`) |
+| **Extra dependency** | No | No | No | No | No | `cryptography` (`flexiq[encryption]`) |
 | **Default** | Yes | No | No | No | No | No |
 
 **Rule of thumb**: use the default `SmartSerializer` unless you have a
 specific reason to switch — it gets you compact MessagePack payloads for
 plain data with an automatic cloudpickle fallback for anything MessagePack
 can't encode. Use `CborSerializer` when a task is produced or consumed by
-another Taskito SDK — it's the only serializer here whose wire format is
+another FlexiQ SDK — it's the only serializer here whose wire format is
 part of the cross-SDK contract. Use `EncryptedSerializer` when tasks carry
 sensitive data that must not be readable in the database. See
 [Architecture: Serialization](/architecture/serialization) for a shorter
@@ -513,7 +513,7 @@ overview and what gets serialized where.
 |---|---|---|
 | `JsonSerializer` | The default — human-readable, debuggable payloads for Node↔Node work. Leave it unless you have a reason to switch. | No — portable format, same-SDK payloads |
 | `MsgpackSerializer` | Node↔Node work where you want compact binary payloads instead of JSON text. | No — portable format, same-SDK payloads |
-| `CborSerializer` | A task is produced or consumed by another Taskito SDK. The only serializer whose wire format (the `0x02` envelope tag) is part of the cross-SDK contract; round-trips big integers as `BigInt`. | Yes — cross-SDK wire format |
+| `CborSerializer` | A task is produced or consumed by another FlexiQ SDK. The only serializer whose wire format (the `0x02` envelope tag) is part of the cross-SDK contract; round-trips big integers as `BigInt`. | Yes — cross-SDK wire format |
 | `SignedSerializer(secret, inner?)` | Payloads must be tamper-evident but not hidden — prefixes an HMAC-SHA256 tag and rejects mismatches. Authentication, not encryption. | Same-SDK by default (wraps `JsonSerializer`) |
 | `EncryptedSerializer(secret, inner?)` | Tasks carry sensitive data that must not be readable in the database — AES-256-GCM confidentiality **and** integrity. | Same-SDK by default (wraps `JsonSerializer`) |
 
@@ -532,7 +532,7 @@ when payloads must not be readable in storage.
 |---|---|---|
 | `JsonSerializer` | The default — JSON via Jackson, accepts a custom `ObjectMapper`. Human-readable and debuggable for Java↔Java work. | No — portable format, same-SDK payloads |
 | `MsgpackSerializer` | Java↔Java work where you want compact binary payloads. Its `jackson-dataformat-msgpack` dependency is `compileOnly` — add it to your build. | No — portable format, same-SDK payloads |
-| `CborSerializer` | A task is produced or consumed by another Taskito SDK. The only serializer whose wire format (the `0x02` envelope tag) is part of the cross-SDK contract. `jackson-dataformat-cbor` is `compileOnly`. | Yes — cross-SDK wire format |
+| `CborSerializer` | A task is produced or consumed by another FlexiQ SDK. The only serializer whose wire format (the `0x02` envelope tag) is part of the cross-SDK contract. `jackson-dataformat-cbor` is `compileOnly`. | Yes — cross-SDK wire format |
 | `SignedSerializer(delegate, key)` | Payloads must be tamper-evident but not hidden — prefixes an HMAC-SHA256 tag with constant-time verification. Authentication, not encryption. | Same-SDK by default (depends on `delegate`) |
 | `EncryptedSerializer(delegate, key)` | Tasks carry sensitive data that must not be readable in the database — AES-GCM confidentiality **and** integrity. Key must be 16, 24, or 32 bytes. | Same-SDK by default (depends on `delegate`) |
 
@@ -549,7 +549,7 @@ A `PayloadCodec` is a reversible byte-to-byte transform layered *around* a
 serializer — compression, encryption, signing — applied after serialization
 on the producer and reversed before deserialization on the worker. Wire
 formats are part of the cross-SDK wire contract, so a codec-framed payload
-decodes from any Taskito binding:
+decodes from any FlexiQ binding:
 
 | Codec | Wire format | Description |
 |---|---|---|
@@ -570,7 +570,7 @@ payload *and* result:
   <Tab sdk="python">
 
 ```python
-from taskito import AesGcmCodec, GzipCodec, Queue
+from flexiq import AesGcmCodec, GzipCodec, Queue
 
 queue = Queue(codec=[GzipCodec(), AesGcmCodec(key)])  # compress, then encrypt
 ```
@@ -579,7 +579,7 @@ queue = Queue(codec=[GzipCodec(), AesGcmCodec(key)])  # compress, then encrypt
   <Tab sdk="node">
 
 ```ts
-import { Queue, GzipCodec, AesGcmCodec } from "@byteveda/taskito";
+import { Queue, GzipCodec, AesGcmCodec } from "@byteveda/flexiq";
 
 new Queue({
   dbPath: "flexiq.db",
@@ -591,7 +591,7 @@ new Queue({
   <Tab sdk="java">
 
 ```java
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .codec(new GzipCodec(), new AesGcmCodec(key)) // compress, then encrypt
         .open();
@@ -615,7 +615,7 @@ results still use the plain queue serializer:
   <Tab sdk="python">
 
 ```python
-from taskito import AesGcmCodec, Queue
+from flexiq import AesGcmCodec, Queue
 
 queue = Queue(codecs={"secret": AesGcmCodec(key)})
 
@@ -628,7 +628,7 @@ def export_report(report_id: int):
   <Tab sdk="node">
 
 ```ts
-import { Queue, AesGcmCodec } from "@byteveda/taskito";
+import { Queue, AesGcmCodec } from "@byteveda/flexiq";
 
 const queue = new Queue({
   dbPath: "flexiq.db",
@@ -648,7 +648,7 @@ queue.task(
   <Tab sdk="java">
 
 ```java
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .codec("secret", new AesGcmCodec(key))
         .open();

@@ -23,8 +23,8 @@ await queue.getJobErrors(jobId); // per-attempt error history
 From the CLI:
 
 ```bash
-taskito --db flexiq.db dlq list
-taskito --db flexiq.db dlq retry <deadId>
+flexiq --db flexiq.db dlq list
+flexiq --db flexiq.db dlq retry <deadId>
 ```
 
 <Callout type="info">
@@ -35,6 +35,6 @@ taskito --db flexiq.db dlq retry <deadId>
 
 > **Coming from BullMQ?** BullMQ has no separate dead-letter store — exhausted
 > jobs stay in the same queue's `failed` set (`queue.getFailed()`,
-> `job.retry()`). taskito moves them into a distinct DLQ with its own
+> `job.retry()`). flexiq moves them into a distinct DLQ with its own
 > `deadLetters()` / `retryDead()` / `purgeDead()` API, so failed jobs don't
 > clutter the same listings as active work.

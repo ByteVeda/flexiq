@@ -3,9 +3,9 @@ title: Attached Executors
 description: "Run task bodies in your app container while a separate scheduler holds the database credentials."
 ---
 
-An **attached executor** splits a worker in two. The scheduler — `taskito-server`
+An **attached executor** splits a worker in two. The scheduler — `flexiq-server`
 — holds the database connection, claims jobs, and owns retries, the dead-letter
-queue and retention. Your app container runs `taskito executor`, which dials the
+queue and retention. Your app container runs `flexiq executor`, which dials the
 scheduler, announces the tasks it can run, and executes whatever it is sent.
 
 The app image needs no database credentials and no inbound port.
@@ -15,9 +15,9 @@ The app image needs no database credentials and no inbound port.
     subgraph app["app container — unchanged"]
       direction TB
       entry["your app entrypoint"]:::skipped
-      exec["taskito executor"]:::success
+      exec["flexiq executor"]:::success
     end
-    server["taskito-server<br/>scheduler · dashboard · retention"]:::active
+    server["flexiq-server<br/>scheduler · dashboard · retention"]:::active
     store[("storage<br/>source of truth")]:::terminal
     exec -- "dials out" --> server
     server -- "jobs" --> exec
@@ -37,14 +37,14 @@ Unix socket, and the security requirements that go with the attach port — see
 
 ## Running the scheduler
 
-`taskito-server` is configured entirely through the environment — there are no
+`flexiq-server` is configured entirely through the environment — there are no
 flags. At minimum it needs a DSN and an attach address:
 
 ```bash
-FLEXIQ_DSN=postgres://user:pass@db/taskito \
+FLEXIQ_DSN=postgres://user:pass@db/flexiq \
 FLEXIQ_LISTEN=0.0.0.0:7777 \
 FLEXIQ_ATTACH_TOKEN=$(openssl rand -hex 32) \
-taskito-server
+flexiq-server
 ```
 
 The scheduler starts lazily, on the **first attach**. With nothing attached it
@@ -59,7 +59,7 @@ placement timeout elapsed — a retry storm against an idle deployment.
 ```bash
 FLEXIQ_ATTACH=scheduler:7777 \
 FLEXIQ_ATTACH_TOKEN=... \
-taskito executor --app myapp:queue --slots 4
+flexiq executor --app myapp:queue --slots 4
 ```
 
   </Tab>
@@ -68,7 +68,7 @@ taskito executor --app myapp:queue --slots 4
 ```bash
 FLEXIQ_ATTACH=scheduler:7777 \
 FLEXIQ_ATTACH_TOKEN=... \
-taskito executor ./app.js --slots 4
+flexiq executor ./app.js --slots 4
 ```
 
   </Tab>
@@ -77,7 +77,7 @@ taskito executor ./app.js --slots 4
 ```bash
 FLEXIQ_ATTACH=scheduler:7777 \
 FLEXIQ_ATTACH_TOKEN=... \
-java -cp app.jar org.byteveda.taskito.cli.Cli executor --slots 4
+java -cp app.jar org.byteveda.flexiq.cli.Cli executor --slots 4
 ```
 
 Handlers are discovered from the classpath through `META-INF/services`, so no
@@ -115,7 +115,7 @@ carry task payloads on a port that dispatches code. On anything but loopback or
 a Unix socket, terminate mTLS in a proxy in front of the listener and treat the
 token as the second factor.
 
-`taskito-server` does not terminate TLS itself. Setting
+`flexiq-server` does not terminate TLS itself. Setting
 `FLEXIQ_LISTEN_TLS_CERT` or `FLEXIQ_LISTEN_TLS_KEY` fails at startup rather
 than being ignored, so a deployment cannot come up believing it is encrypted
 when it is not.

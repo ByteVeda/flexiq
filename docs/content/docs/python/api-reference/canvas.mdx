@@ -6,7 +6,7 @@ description: "Workflow primitives — Signature, chain, group, chord, chunks, st
 Canvas primitives for composing task workflows. Import directly from the package:
 
 ```python
-from taskito import chain, group, chord, chunks, starmap
+from flexiq import chain, group, chord, chunks, starmap
 ```
 
 <Callout type="warn" title="apply_async() means something different here">
@@ -330,7 +330,7 @@ Raises `ValueError` if `args_list` is empty.
 An ETL pipeline using all three primitives:
 
 ```python
-from taskito import Queue, chain, group, chord
+from flexiq import Queue, chain, group, chord
 
 queue = Queue()
 

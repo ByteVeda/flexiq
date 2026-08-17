@@ -8,12 +8,12 @@ REST API over the queue — no separate service, no asset build step.
 
 ## Starting the dashboard
 
-<Tabs items={["Programmatic", "Taskito.dashboard()", "CLI"]}>
+<Tabs items={["Programmatic", "FlexiQ.dashboard()", "CLI"]}>
   <Tab value="Programmatic">
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
-        DashboardServer server = DashboardServer.start(taskito, 8080)) {
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
+        DashboardServer server = DashboardServer.start(flexiq, 8080)) {
     System.out.println("dashboard on http://localhost:" + server.port());
     // ...
 }
@@ -26,22 +26,22 @@ try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
 `start(queue, port, token, staticDir, secureCookies, authEnabled)`.
 
   </Tab>
-  <Tab value="Taskito.dashboard()">
+  <Tab value="FlexiQ.dashboard()">
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
-        DashboardServer server = taskito.dashboard(8080)) {
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
+        DashboardServer server = flexiq.dashboard(8080)) {
     // ...
 }
 
 // Session auth (login/setup, CSRF, roles):
-taskito.dashboard(8080, true);
+flexiq.dashboard(8080, true);
 
 // Legacy shared-token mode, gating /api/* as a fixed admin identity:
-taskito.dashboard(8080, System.getenv("DASH_TOKEN"));
+flexiq.dashboard(8080, System.getenv("DASH_TOKEN"));
 ```
 
-`Taskito.dashboard(port)` / `dashboard(port, authEnabled)` /
+`FlexiQ.dashboard(port)` / `dashboard(port, authEnabled)` /
 `dashboard(port, token)` are convenience defaults over
 `DashboardServer.start(...)` for the common case — one fewer import.
 
@@ -49,7 +49,7 @@ taskito.dashboard(8080, System.getenv("DASH_TOKEN"));
   <Tab value="CLI">
 
 ```bash
-taskito --url flexiq.db dashboard --port 8080
+flexiq --url flexiq.db dashboard --port 8080
 ```
 
 | Flag | Default | Description |
@@ -65,13 +65,13 @@ taskito --url flexiq.db dashboard --port 8080
 
 Pass `0` as the port for an ephemeral one (`server.port()` reports what was
 bound). The SPA is extracted from the jar to a per-user, content-addressed
-directory on first use; `-Dtaskito.dashboard.dir=/path` (or the `staticDir`
+directory on first use; `-Dflexiq.dashboard.dir=/path` (or the `staticDir`
 argument / `--static`) overrides it with an unpacked build. Without bundled
 assets only `/api/*` responds.
 
 <Callout type="info">
-  Running Spring Boot? `taskito-spring` can auto-start a `DashboardServer` bean
-  from `taskito.dashboard.*` properties — see
+  Running Spring Boot? `flexiq-spring` can auto-start a `DashboardServer` bean
+  from `flexiq.dashboard.*` properties — see
   [Spring Boot: Dashboard auto-configuration](/java/guides/integrations/spring#dashboard-auto-configuration).
 </Callout>
 
@@ -115,7 +115,7 @@ and Redis.
   ```bash
   export FLEXIQ_DASHBOARD_ADMIN_USER=admin
   export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
-  taskito --url flexiq.db dashboard --port 8080 --auth
+  flexiq --url flexiq.db dashboard --port 8080 --auth
   ```
 
   The env vars are only read when session auth is enabled.
@@ -134,13 +134,13 @@ and Redis.
 - **Sessions** are opaque tokens with a 24-hour TTL, carried in an `HttpOnly`,
   `SameSite=Strict` `flexiq_session` cookie (plus `Secure` unless disabled —
   see below).
-- **CSRF** uses the double-submit pattern: a non-HttpOnly `taskito_csrf`
+- **CSRF** uses the double-submit pattern: a non-HttpOnly `flexiq_csrf`
   cookie must match both the token bound to the session and the
   `X-CSRF-Token` header on every state-changing request
   (`POST`/`PUT`/`DELETE`/`PATCH`). `/api/auth/login` and `/api/auth/setup` are
   exempt — there is no session yet to bind to.
 - **`--insecure-cookies`** (or `secureCookies=false` on `DashboardServer.start`,
-  or `taskito.dashboard.secure-cookies=false` in Spring) drops the `Secure`
+  or `flexiq.dashboard.secure-cookies=false` in Spring) drops the `Secure`
   cookie attribute for local HTTP development. Keep it on — the default — for
   anything served over HTTPS.
 
@@ -163,11 +163,11 @@ Pass a `token` to gate `/api/*` behind a single fixed credential — no users,
 no sessions, no RBAC. Kept for back-compat with the pre-auth dashboard.
 
 ```java
-DashboardServer.start(taskito, 8080, System.getenv("DASH_TOKEN"));
+DashboardServer.start(flexiq, 8080, System.getenv("DASH_TOKEN"));
 ```
 
 API requests authenticate via `Authorization: Bearer <token>`, an
-`X-Flexiq-Token` header, or the `taskito_token` cookie (compared in constant
+`X-Flexiq-Token` header, or the `flexiq_token` cookie (compared in constant
 time). Opening `/?token=<token>` once sets the httpOnly cookie and redirects
 with the token stripped from the URL, keeping the secret out of subsequent
 browser history and `Referer` propagation — a `?token=` query is never

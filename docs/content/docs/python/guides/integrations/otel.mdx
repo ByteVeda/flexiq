@@ -5,7 +5,7 @@ description: "Distributed tracing with span-per-task — exporters, customizatio
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-taskito provides optional OpenTelemetry support for distributed tracing of
+flexiq provides optional OpenTelemetry support for distributed tracing of
 task execution.
 
 ## Installation
@@ -13,7 +13,7 @@ task execution.
 Install with the `otel` extra:
 
 ```bash
-pip install taskito[otel]
+pip install flexiq[otel]
 ```
 
 This installs `opentelemetry-api` and `opentelemetry-sdk` as
@@ -26,8 +26,8 @@ exporter package matches your backend).
 Add `OpenTelemetryMiddleware` to your queue:
 
 ```python
-from taskito import Queue
-from taskito.contrib.otel import OpenTelemetryMiddleware
+from flexiq import Queue
+from flexiq.contrib.otel import OpenTelemetryMiddleware
 
 queue = Queue(middleware=[OpenTelemetryMiddleware()])
 ```
@@ -36,12 +36,12 @@ queue = Queue(middleware=[OpenTelemetryMiddleware()])
 
 Each task execution produces a span (a timed unit of work in a distributed trace) with:
 
-- **Span name**: `taskito.execute.<task_name>` (customizable)
+- **Span name**: `flexiq.execute.<task_name>` (customizable)
 - **Attributes**:
-    - `taskito.job_id` — the job ID
-    - `taskito.task_name` — the registered task name
-    - `taskito.queue` — the queue name
-    - `taskito.retry_count` — current retry attempt
+    - `flexiq.job_id` — the job ID
+    - `flexiq.task_name` — the registered task name
+    - `flexiq.queue` — the queue name
+    - `flexiq.retry_count` — current retry attempt
 - **Status**: `OK` on success, `ERROR` on failure (with exception recorded)
 - **Events**: a `retry` event is added when a task is about to be retried
 
@@ -62,8 +62,8 @@ provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
 trace.set_tracer_provider(provider)
 
 # Now create your queue — spans will be exported automatically
-from taskito import Queue
-from taskito.contrib.otel import OpenTelemetryMiddleware
+from flexiq import Queue
+from flexiq.contrib.otel import OpenTelemetryMiddleware
 
 queue = Queue(middleware=[OpenTelemetryMiddleware()])
 ```
@@ -85,9 +85,9 @@ OpenTelemetryMiddleware(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `tracer_name` | `str` | `"taskito"` | OpenTelemetry tracer name. |
+| `tracer_name` | `str` | `"flexiq"` | OpenTelemetry tracer name. |
 | `span_name_fn` | `Callable[[JobContext], str] \| None` | `None` | Custom span name builder. Receives `JobContext`, returns a string. Defaults to `<prefix>.execute.<task_name>`. |
-| `attribute_prefix` | `str` | `"taskito"` | Prefix for all span attribute keys. |
+| `attribute_prefix` | `str` | `"flexiq"` | Prefix for all span attribute keys. |
 | `extra_attributes_fn` | `Callable[[JobContext], dict] \| None` | `None` | Returns extra attributes to add to each span. Receives `JobContext`. |
 | `task_filter` | `Callable[[str], bool] \| None` | `None` | Predicate that receives a task name. Return `True` to trace, `False` to skip. `None` traces all tasks. |
 

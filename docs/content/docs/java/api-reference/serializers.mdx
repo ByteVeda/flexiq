@@ -4,10 +4,10 @@ description: "JsonSerializer, MsgpackSerializer, CborSerializer, payload codecs,
 ---
 
 ```java
-import org.byteveda.taskito.serialization.JsonSerializer;
-import org.byteveda.taskito.serialization.MsgpackSerializer;
+import org.byteveda.flexiq.serialization.JsonSerializer;
+import org.byteveda.flexiq.serialization.MsgpackSerializer;
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new MsgpackSerializer())
         .open();
@@ -19,7 +19,7 @@ Taskito taskito = Taskito.builder()
 |---|---|
 | `JsonSerializer` | Default. JSON via Jackson; accepts a custom `ObjectMapper`. |
 | `MsgpackSerializer` | Compact binary (MessagePack via Jackson). Its `org.msgpack:jackson-dataformat-msgpack` dependency is `compileOnly` — add it to your build. |
-| `CborSerializer` | Binary (CBOR via Jackson), tagged with the `0x02` wire-envelope byte — the default format for tasks produced or consumed by another Taskito SDK. Its `com.fasterxml.jackson.dataformat:jackson-dataformat-cbor` dependency is `compileOnly` — add it to your build. |
+| `CborSerializer` | Binary (CBOR via Jackson), tagged with the `0x02` wire-envelope byte — the default format for tasks produced or consumed by another FlexiQ SDK. Its `com.fasterxml.jackson.dataformat:jackson-dataformat-cbor` dependency is `compileOnly` — add it to your build. |
 | `SignedSerializer(delegate, key)` | Prefixes each payload with an HMAC-SHA256 tag; verifies it (constant-time) on read — authentication, not encryption. |
 | `EncryptedSerializer(delegate, key)` | AES-GCM with a fresh 12-byte IV per payload — confidentiality **and** integrity. Key must be 16/24/32 bytes. |
 
@@ -27,9 +27,9 @@ Producers and workers must configure a compatible serializer — the Rust core
 treats payloads as opaque bytes.
 
 ```java
-import org.byteveda.taskito.serialization.CborSerializer;
+import org.byteveda.flexiq.serialization.CborSerializer;
 
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .serializer(new CborSerializer())
         .open();
@@ -53,7 +53,7 @@ A chain applies in order on encode and in reverse on decode — order `GzipCodec
 decompressing:
 
 ```java
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("flexiq.db")
         .codec(new GzipCodec(), new HmacCodec(secret))   // global chain
         .codec("encrypted", new AesGcmCodec(key))        // named, per-task

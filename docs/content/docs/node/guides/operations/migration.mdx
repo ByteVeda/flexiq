@@ -1,16 +1,16 @@
 ---
 title: Migrating from BullMQ
-description: "Concept mapping from BullMQ to the Taskito Node SDK."
+description: "Concept mapping from BullMQ to the FlexiQ Node SDK."
 ---
 
 If you're coming from BullMQ, the moving parts map closely. The biggest shifts:
-Taskito is **storage-backed** (SQLite, Postgres, *or* Redis — not Redis-only),
+FlexiQ is **storage-backed** (SQLite, Postgres, *or* Redis — not Redis-only),
 handlers are **registered by name** on the queue rather than wired to a separate
 `Worker` processor, and orchestration is built in.
 
 ## Concept map
 
-| BullMQ | Taskito |
+| BullMQ | FlexiQ |
 |---|---|
 | `new Queue(name, { connection })` | `new Queue({ backend, dsn })` — one object is producer + admin |
 | `new Worker(name, processor, { connection })` | `queue.task(name, fn)` to register, then `queue.runWorker()` |
@@ -35,7 +35,7 @@ const queue = new Queue("emails", { connection });
 await queue.add("welcome", { userId: 1 });
 new Worker("emails", async (job) => send(job.data.userId), { connection });
 
-// Taskito
+// FlexiQ
 const queue = new Queue({ backend: "redis", dsn: "redis://localhost" });
 queue.task("welcome", (userId: number) => send(userId));
 queue.enqueue("welcome", [1], { queue: "emails" });
@@ -60,6 +60,6 @@ queue.runWorker({ queues: ["emails"] });
   `QueueScheduler`-equivalent to run independently.
 
 <Callout type="info">
-  Migrating incrementally? Point Taskito at the same Redis you already run, move
+  Migrating incrementally? Point FlexiQ at the same Redis you already run, move
   one task family at a time, and keep both systems until cut over.
 </Callout>

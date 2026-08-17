@@ -26,7 +26,7 @@ Task<Integer> seed = Task.of("seed", Integer.class);
 Task<Integer> square = Task.of("square", Integer.class);
 Task<List<Integer>> sum = Task.of("sum", new TypeReference<List<Integer>>() {});
 
-try (Taskito queue = Taskito.builder().url("fan.db").open()) {
+try (FlexiQ queue = FlexiQ.builder().url("fan.db").open()) {
     // seed(4) -> [1,2,3,4]; square each -> [1,4,9,16]; sum all -> 30
     Workflow batch = Workflow.named("batch")
             .step("seed", seed, 4)

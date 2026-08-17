@@ -3,7 +3,7 @@ title: Sentry Integration
 description: "Report task failures to Sentry, tagged by task name, job id, and queue."
 ---
 
-taskito ships a Sentry middleware that reports task failures to
+flexiq ships a Sentry middleware that reports task failures to
 [Sentry](https://sentry.io), tagging each event with the task name, job id,
 and queue so failures are groupable and searchable. Sentry itself is never
 initialized for you — call `Sentry.init(...)` in your own app before
@@ -16,7 +16,7 @@ registering the middleware.
 Install the `sentry` extra, which pulls in `sentry-sdk`:
 
 ```bash
-pip install taskito[sentry]
+pip install flexiq[sentry]
 ```
 
 </SdkOnly>
@@ -24,7 +24,7 @@ pip install taskito[sentry]
 <SdkOnly sdk="node">
 
 Peer dependency: install `@sentry/node` yourself and import the middleware
-from the `taskito/contrib/sentry` subpath.
+from the `flexiq/contrib/sentry` subpath.
 
 ```bash
 npm install @sentry/node
@@ -51,8 +51,8 @@ Initialize Sentry, then register the middleware on the queue:
 
 ```python
 import sentry_sdk
-from taskito import Queue
-from taskito.contrib.sentry import SentryMiddleware
+from flexiq import Queue
+from flexiq.contrib.sentry import SentryMiddleware
 
 sentry_sdk.init(dsn="https://examplePublicKey@o0.ingest.sentry.io/0")
 
@@ -64,7 +64,7 @@ queue = Queue(db_path="myapp.db", middleware=[SentryMiddleware()])
 
 ```ts
 import * as Sentry from "@sentry/node";
-import { sentryMiddleware } from "@byteveda/taskito/contrib/sentry";
+import { sentryMiddleware } from "@byteveda/flexiq/contrib/sentry";
 
 Sentry.init({ dsn: process.env.SENTRY_DSN });
 
@@ -76,11 +76,11 @@ queue.use(sentryMiddleware());
 
 ```java
 import io.sentry.Sentry;
-import org.byteveda.taskito.contrib.SentryMiddleware;
+import org.byteveda.flexiq.contrib.SentryMiddleware;
 
 Sentry.init(options -> options.setDsn(System.getenv("SENTRY_DSN")));
 
-taskito.use(new SentryMiddleware());
+flexiq.use(new SentryMiddleware());
 ```
 
   </Tab>
@@ -103,16 +103,16 @@ Every task execution opens a Sentry scope tagged with the job's metadata
 
 | Tag | Value |
 |-----|-------|
-| `taskito.task_name` | The registered task name |
-| `taskito.job_id` | The job ID |
-| `taskito.queue` | The queue name |
-| `taskito.retry_count` | Current retry attempt |
+| `flexiq.task_name` | The registered task name |
+| `flexiq.job_id` | The job ID |
+| `flexiq.queue` | The queue name |
+| `flexiq.retry_count` | Current retry attempt |
 
-The Sentry transaction name defaults to `taskito:<task_name>` (customizable
+The Sentry transaction name defaults to `flexiq:<task_name>` (customizable
 via `transaction_name_fn`). When a task raises, `SentryMiddleware` calls
 `sentry_sdk.capture_exception()` automatically — **every failed attempt** is
 reported, not just the terminal failure. When a task is retried, a
-breadcrumb is added (category `taskito` by default, level `warning`,
+breadcrumb is added (category `flexiq` by default, level `warning`,
 message `Retrying <task_name> (attempt <N>): <error>`), so the final failure
 carries a trail of the retries leading up to it.
 
@@ -127,8 +127,8 @@ the task/job/queue tags. Successful jobs and jobs that recover on retry are
 never reported. Set `captureRetries: true` to also report each intermediate
 retry as a `"warning"`-level event.
 
-Tags set on every event: `taskito.task_name`, `taskito.job_id`,
-`taskito.queue`, `taskito.retry_count`, and `taskito.timed_out` (when the
+Tags set on every event: `flexiq.task_name`, `flexiq.job_id`,
+`flexiq.queue`, `flexiq.retry_count`, and `flexiq.timed_out` (when the
 job timed out). If a job dead-letters from a timeout without throwing, a
 synthetic error is captured so the failure is still recorded.
 
@@ -144,8 +144,8 @@ Two kinds of events are reported:
 - **Dead-letters** — when a job exhausts its retries, a `FATAL`-level
   message (`task dead-lettered: <error>`) marks the terminal failure.
 
-Both event kinds carry the tags `taskito.task` (task name) and
-`taskito.job` (job id).
+Both event kinds carry the tags `flexiq.task` (task name) and
+`flexiq.job` (job id).
 
 </SdkOnly>
 
@@ -192,7 +192,7 @@ new SentryMiddleware(task -> !task.startsWith("noisy."));
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `tag_prefix` | `str` | `"taskito"` | Prefix for Sentry tag keys and breadcrumb category. |
+| `tag_prefix` | `str` | `"flexiq"` | Prefix for Sentry tag keys and breadcrumb category. |
 | `transaction_name_fn` | `Callable[[JobContext], str] \| None` | `None` | Custom transaction name builder. Receives `JobContext`. Defaults to `<prefix>:<task_name>`. |
 | `task_filter` | `Callable[[str], bool] \| None` | `None` | Predicate on task name. Return `True` to report, `False` to skip. `None` reports all tasks. |
 | `extra_tags_fn` | `Callable[[JobContext], dict[str, str]] \| None` | `None` | Returns extra Sentry tags to set. Receives `JobContext`. |
@@ -203,7 +203,7 @@ new SentryMiddleware(task -> !task.startsWith("noisy."));
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `tagPrefix` | `string` | `"taskito"` | Prefix for Sentry tag keys. |
+| `tagPrefix` | `string` | `"flexiq"` | Prefix for Sentry tag keys. |
 | `captureRetries` | `boolean` | `false` | Also report each retried failure as a `"warning"` event. |
 | `level` | `SeverityLevel` | `"error"` | Severity for the terminal dead-letter event. |
 | `extraTags` | `(event) => Record<string, string>` | — | Extra tags merged onto the event. |
@@ -225,8 +225,8 @@ environment, and sampling are all configured through the Sentry SDK itself.
 
 ```python
 import sentry_sdk
-from taskito import Queue
-from taskito.contrib.sentry import SentryMiddleware
+from flexiq import Queue
+from flexiq.contrib.sentry import SentryMiddleware
 
 # Initialize Sentry first
 sentry_sdk.init(
@@ -247,17 +247,17 @@ def process_payment(order_id: str, amount: float):
 ```
 
 When `process_payment` fails, the error appears in Sentry tagged
-`taskito.task_name=myapp.tasks.process_payment`, `taskito.job_id=...`,
-`taskito.queue=default`. Each retry is recorded as a breadcrumb, so the
+`flexiq.task_name=myapp.tasks.process_payment`, `flexiq.job_id=...`,
+`flexiq.queue=default`. Each retry is recorded as a breadcrumb, so the
 final failure (after all retries) includes the full breadcrumb trail.
 
   </Tab>
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 import * as Sentry from "@sentry/node";
-import { sentryMiddleware } from "@byteveda/taskito/contrib/sentry";
+import { sentryMiddleware } from "@byteveda/flexiq/contrib/sentry";
 
 // Initialize Sentry first
 Sentry.init({
@@ -284,18 +284,18 @@ queue.task(
 
 If `processPayment` keeps failing until it exhausts its retries, one event
 is sent to Sentry — carrying the original stack trace from the last failed
-attempt plus tags `taskito.task_name=processPayment`, `taskito.job_id=...`,
-`taskito.queue=default`, `taskito.retry_count=3`.
+attempt plus tags `flexiq.task_name=processPayment`, `flexiq.job_id=...`,
+`flexiq.queue=default`, `flexiq.retry_count=3`.
 
   </Tab>
   <Tab sdk="java">
 
 ```java
 import io.sentry.Sentry;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.contrib.SentryMiddleware;
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.contrib.SentryMiddleware;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.worker.Worker;
 
 // Initialize Sentry first
 Sentry.init(options -> {
@@ -303,13 +303,13 @@ Sentry.init(options -> {
     options.setTracesSampleRate(1.0);
 });
 
-Taskito taskito = Taskito.builder().sqlite("myapp.db").open();
-taskito.use(new SentryMiddleware());
+FlexiQ flexiq = FlexiQ.builder().sqlite("myapp.db").open();
+flexiq.use(new SentryMiddleware());
 
 Task<PaymentRequest> processPayment = Task.of("process_payment", PaymentRequest.class)
         .maxRetries(3);
 
-try (Worker worker = taskito.worker()
+try (Worker worker = flexiq.worker()
         .handle(processPayment, payload ->
                 paymentGateway.charge(payload.orderId(), payload.amount()))
         .start()) {
@@ -318,7 +318,7 @@ try (Worker worker = taskito.worker()
 ```
 
 Each failed attempt of `process_payment` is captured immediately with tags
-`taskito.task=process_payment`, `taskito.job=<job id>`. Once retries are
+`flexiq.task=process_payment`, `flexiq.job=<job id>`. Once retries are
 exhausted, a final `FATAL` dead-letter event marks the terminal failure.
 
   </Tab>
@@ -334,8 +334,8 @@ how hooks run across multiple middleware instances.
 <SdkOnly sdk="python">
 
 ```python
-from taskito.contrib.otel import OpenTelemetryMiddleware
-from taskito.contrib.prometheus import PrometheusMiddleware
+from flexiq.contrib.otel import OpenTelemetryMiddleware
+from flexiq.contrib.prometheus import PrometheusMiddleware
 
 queue = Queue(
     db_path="myapp.db",

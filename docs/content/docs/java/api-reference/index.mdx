@@ -1,17 +1,17 @@
 ---
 title: API Reference
-description: "The Java SDK public surface — the Taskito client, tasks, workers, workflows, and the CLI."
+description: "The Java SDK public surface — the FlexiQ client, tasks, workers, workflows, and the CLI."
 ---
 
-The public API lives under `org.byteveda.taskito` (Maven coordinates
-`org.byteveda:taskito`). Contrib helpers live under
-`org.byteveda.taskito.contrib`; the Spring Boot 3 starter ships separately as
-`org.byteveda:taskito-spring`.
+The public API lives under `org.byteveda.flexiq` (Maven coordinates
+`org.byteveda:flexiq`). Contrib helpers live under
+`org.byteveda.flexiq.contrib`; the Spring Boot 3 starter ships separately as
+`org.byteveda:flexiq-spring`.
 
 | Page | Covers |
 |---|---|
-| [Overview](/java/api-reference/overview) | The layered architecture — `Taskito` down to the native `QueueBackend`. |
-| [Taskito](/java/api-reference/queue) | `Taskito.builder()`, enqueue, inspect, admin, locks, periodic. |
+| [Overview](/java/api-reference/overview) | The layered architecture — `FlexiQ` down to the native `QueueBackend`. |
+| [FlexiQ](/java/api-reference/queue) | `FlexiQ.builder()`, enqueue, inspect, admin, locks, periodic. |
 | [Task](/java/api-reference/task) | `Task.of` typed tasks, `EnqueueOptions`, `RetryPolicy`, the annotations. |
 | [Worker](/java/api-reference/worker) | The `Worker.Builder` and the running worker handle. |
 | [Result](/java/api-reference/result) | Awaiting jobs and reading typed results. |
@@ -22,6 +22,6 @@ The public API lives under `org.byteveda.taskito` (Maven coordinates
 | [Workflows](/java/api-reference/workflows) | The `Workflow` builder, `WorkflowRun`, gates, sagas, analysis. |
 | [Canvas](/java/api-reference/canvas) | `Canvas.link`, `chain`, `group`, and `chord` shortcuts. |
 | [Saga](/java/api-reference/saga) | `Step.Builder.compensate`, saga run/node states, the rollback contract. |
-| [Errors](/java/api-reference/errors) | The `TaskitoException` hierarchy. |
+| [Errors](/java/api-reference/errors) | The `FlexiQException` hierarchy. |
 | [Testing](/java/api-reference/testing) | The in-memory backend for fast, native-library-free tests. |
-| [CLI](/java/api-reference/cli) | The `taskito` command. |
+| [CLI](/java/api-reference/cli) | The `flexiq` command. |

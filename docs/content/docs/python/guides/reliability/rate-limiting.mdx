@@ -5,7 +5,7 @@ description: "Token bucket rate limits per task — count/period syntax, persist
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-taskito uses a **token bucket** (a standard rate-limit algorithm that refills allowance over time) algorithm to limit how fast tasks execute.
+flexiq uses a **token bucket** (a standard rate-limit algorithm that refills allowance over time) algorithm to limit how fast tasks execute.
 Rate limits are per-task and persisted in the queue database (SQLite or Postgres).
 
 ## Usage
@@ -93,7 +93,7 @@ send_email.apply_async(args=("bob@example.com", "Hi", "Body"), queue="urgent")
 ```
 
 > **Coming from Celery:** Celery's `rate_limit` is enforced **per worker** — the
-> effective rate scales with worker count. taskito enforces it **globally per task
+> effective rate scales with worker count. flexiq enforces it **globally per task
 > name** at the scheduler, so `"100/m"` means 100/min across the whole deployment
 > regardless of how many workers run.
 

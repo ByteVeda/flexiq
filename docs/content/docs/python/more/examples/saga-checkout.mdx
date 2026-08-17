@@ -3,15 +3,15 @@ title: Saga — e-commerce checkout
 description: A multi-step checkout workflow with automatic reverse-order compensation
 ---
 
-A realistic saga: reserve inventory, charge payment, ship the order, and notify the customer. If any step fails after another has succeeded, taskito runs the compensators of the completed steps in reverse topological order.
+A realistic saga: reserve inventory, charge payment, ship the order, and notify the customer. If any step fails after another has succeeded, flexiq runs the compensators of the completed steps in reverse topological order.
 
 ## Tasks
 
 Each forward step has a compensator declared via `@queue.task(compensates=...)`:
 
 ```python
-from taskito import Queue
-from taskito.workflows import Workflow, WorkflowState
+from flexiq import Queue
+from flexiq.workflows import Workflow, WorkflowState
 
 queue = Queue()
 
@@ -128,7 +128,7 @@ If `refund_payment` itself failed (max retries exhausted), the run terminates as
 You can use `current_compensation_context()` instead of unpacking positional args:
 
 ```python
-from taskito.workflows.saga import current_compensation_context
+from flexiq.workflows.saga import current_compensation_context
 
 @queue.task
 def refund_payment(forward_args: tuple, forward_kwargs: dict, forward_result: dict) -> None:
@@ -147,4 +147,4 @@ The context is automatically populated by the framework for the duration of the 
 
 ## Idempotency
 
-Compensators **must** be idempotent. taskito guarantees at-most-one compensation per `(run, node)` pair via the `compensation:{run_id}:{node_name}` idempotency key, but the worker can still retry the compensator on transient failures (network glitches) before exhaustion. Design the rollback to be safe to retry — e.g. `payments.refund(charge_id)` should silently no-op if the charge was already refunded.
+Compensators **must** be idempotent. flexiq guarantees at-most-one compensation per `(run, node)` pair via the `compensation:{run_id}:{node_name}` idempotency key, but the worker can still retry the compensator on transient failures (network glitches) before exhaustion. Design the rollback to be safe to retry — e.g. `payments.refund(charge_id)` should silently no-op if the charge was already refunded.

@@ -1,10 +1,10 @@
 ---
 title: Sagas
-description: "Roll back completed workflow steps in reverse order when a run fails — declare a compensator per step and taskito handles the rest."
+description: "Roll back completed workflow steps in reverse order when a run fails — declare a compensator per step and flexiq handles the rest."
 ---
 
 A saga is a workflow where steps that succeed register a **compensator** —
-a task that undoes that step's side effect. If a later step fails, taskito
+a task that undoes that step's side effect. If a later step fails, flexiq
 automatically rolls back every already-completed step by running its
 compensator, in reverse-dependency order, so the run ends in a consistent
 state instead of a half-applied one. There's no separate "saga" API — any
@@ -17,8 +17,8 @@ compensator.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 queue = Queue()
 
@@ -137,7 +137,7 @@ try (Worker worker = queue.worker()
 ## How it works
 
 1. A step's forward execution fails with its retries exhausted.
-2. taskito collects every step that **completed** and declared a
+2. flexiq collects every step that **completed** and declared a
    compensator — steps that are pending, ready, or skipped never ran, and a
    step that itself failed has nothing to undo, so all three are left
    alone.
@@ -166,7 +166,7 @@ try (Worker worker = queue.worker()
 
 ## Declaring compensators
 
-Each step names a rollback task; when the run fails, taskito calls it with
+Each step names a rollback task; when the run fails, flexiq calls it with
 the forward step's outcome:
 
 <CodeTabs>
@@ -245,8 +245,8 @@ wf.step("charge", charge_payment, compensates=None)         # disable compensati
 
 > **Coming from BullMQ?** There's no built-in saga/compensation concept in
 > BullMQ — you'd hand-roll rollback logic in your own failure handler.
-> taskito's `compensate` option and automatic reverse-order rollback are
-> taskito-only.
+> flexiq's `compensate` option and automatic reverse-order rollback are
+> flexiq-only.
 
 </SdkOnly>
 

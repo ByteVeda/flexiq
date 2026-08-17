@@ -30,10 +30,10 @@ constraints (trace IDs, request envelopes, etc.).
 Pass a `Map` to `notes(...)` on the enqueue-options builder:
 
 ```java
-import org.byteveda.taskito.task.EnqueueOptions;
+import org.byteveda.flexiq.task.EnqueueOptions;
 import java.util.Map;
 
-String id = taskito.enqueue(processOrder, order, EnqueueOptions.builder()
+String id = flexiq.enqueue(processOrder, order, EnqueueOptions.builder()
         .notes(Map.of(
                 "customer_id", "cus_abc",
                 "tier", "gold",
@@ -51,11 +51,11 @@ before the job is enqueued.
 `notesMap()`:
 
 ```java
-import org.byteveda.taskito.model.Job;
+import org.byteveda.flexiq.model.Job;
 import java.util.Map;
 import java.util.Optional;
 
-Optional<Map<String, Object>> notes = taskito.getJob(id)
+Optional<Map<String, Object>> notes = flexiq.getJob(id)
         .flatMap(Job::notesMap);
 
 notes.ifPresent(n -> System.out.println(n.get("customer_id")));  // cus_abc
@@ -68,7 +68,7 @@ untouched JSON string is on `Job.notes` if you need it verbatim.
 
 Validation runs when the options are built (the Rust storage layer receives an
 already-encoded JSON string and stores it verbatim). The contract lives in
-`org.byteveda.taskito.serialization.Notes`:
+`org.byteveda.flexiq.serialization.Notes`:
 
 | Constraint | Default | Constant |
 |---|---|---|
@@ -82,11 +82,11 @@ Values may be any JSON primitive (string, number, boolean, null), plus nested
 `List` or `Map` within the depth cap.
 
 Violations throw `NotesValidationException`
-(`org.byteveda.taskito.errors.NotesValidationException`); the message names the
+(`org.byteveda.flexiq.errors.NotesValidationException`); the message names the
 offending key or constraint so it can be surfaced directly to end users:
 
 ```java
-import org.byteveda.taskito.errors.NotesValidationException;
+import org.byteveda.flexiq.errors.NotesValidationException;
 
 try {
     EnqueueOptions.builder().notes(tooManyFields).build();

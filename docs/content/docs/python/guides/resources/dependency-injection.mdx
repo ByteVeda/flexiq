@@ -12,7 +12,7 @@ entirely in the worker process and are never put in the queue.
 <Callout type="info" title="Why not just a module-level global?">
   Celery has no first-class DI, so you typically open a connection at import time
   (`db = create_engine(...)`) and share that global. Worker resources replace that
-  pattern: taskito creates one instance per worker, scopes it
+  pattern: flexiq creates one instance per worker, scopes it
   (worker / thread / task / pooled), injects it by name, and tears it down on
   shutdown — no import-time side effects, and clean per-scope lifecycles.
 </Callout>
@@ -41,7 +41,7 @@ async def create_redis():
     return await aioredis.from_url("redis://localhost")
 ```
 
-Taskito runs the async factory on the worker's event loop before accepting
+FlexiQ runs the async factory on the worker's event loop before accepting
 tasks.
 
 ## `worker_resource()` parameters
@@ -80,7 +80,7 @@ def process_order(order_id: int, db):
   <Tab value="Inject annotation">
 
 ```python
-from taskito import Inject
+from flexiq import Inject
 
 @queue.task()
 def process_order(order_id: int, db: Inject["db"]):
@@ -146,7 +146,7 @@ Pool configuration parameters (`pool_size`, `pool_min`, `acquire_timeout`,
 
 ## Dependencies
 
-Resources can declare other resources they depend on. Taskito resolves the
+Resources can declare other resources they depend on. FlexiQ resolves the
 dependency graph and initializes in topological order, injecting
 dependencies as keyword arguments to the factory:
 
@@ -194,7 +194,7 @@ def create_db():
 Or use `register_resource()` for the programmatic API:
 
 ```python
-from taskito.resources.definition import ResourceDefinition
+from flexiq.resources.definition import ResourceDefinition
 
 queue.register_resource(ResourceDefinition(
     name="db",
@@ -204,7 +204,7 @@ queue.register_resource(ResourceDefinition(
 ))
 ```
 
-Teardown callables can be async — Taskito awaits them if they return a
+Teardown callables can be async — FlexiQ awaits them if they return a
 coroutine.
 
 ## Health checking
@@ -277,7 +277,7 @@ Task-scoped resources include a `"pool"` key with pool statistics. See
 ## Full example
 
 ```python
-from taskito import Queue, Inject
+from flexiq import Queue, Inject
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 

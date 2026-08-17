@@ -22,7 +22,7 @@ scraper/
 ```python
 import json
 import time
-from taskito import Queue, current_job, chain, group, chord
+from flexiq import Queue, current_job, chain, group, chord
 
 queue = Queue(
     db_path=".flexiq/scraper.db",
@@ -116,7 +116,7 @@ def hourly_cleanup():
 ```python
 """Enqueue scraping jobs."""
 from tasks import queue, scrape_page, summarize, store_results
-from taskito import group, chord
+from flexiq import group, chord
 
 urls = [
     "https://example.com",
@@ -193,7 +193,7 @@ python run.py
   <Tab value="Terminal 3 — Monitor">
 
 ```bash
-taskito info --app tasks:queue --watch
+flexiq info --app tasks:queue --watch
 ```
 
   </Tab>

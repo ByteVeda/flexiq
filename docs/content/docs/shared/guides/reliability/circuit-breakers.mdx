@@ -11,7 +11,7 @@ scheduler; each SDK only supplies the configuration.
 
 <SdkOnly sdk="python">
 
-> Celery has no built-in circuit breaker — this is taskito-native, configured
+> Celery has no built-in circuit breaker — this is flexiq-native, configured
 > per task with `circuit_breaker={...}`.
 
 </SdkOnly>
@@ -19,7 +19,7 @@ scheduler; each SDK only supplies the configuration.
 <SdkOnly sdk="node">
 
 > **Coming from BullMQ?** BullMQ has no built-in circuit breaker either —
-> it's a taskito-specific addition. You'd otherwise reach for a separate
+> it's a flexiq-specific addition. You'd otherwise reach for a separate
 > library (e.g. `opossum`) alongside a BullMQ `Worker`.
 
 </SdkOnly>
@@ -71,7 +71,7 @@ them normally, since there's nothing yet to gate on.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
 
@@ -90,7 +90,7 @@ def call_external_api(endpoint: str) -> dict:
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 
@@ -354,7 +354,7 @@ exhausted.
   <Tab sdk="python">
 
 ```python
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def monitor_breakers(event_type: EventType, payload: dict) -> None:
     # fires on every failed attempt, including ones that will be retried

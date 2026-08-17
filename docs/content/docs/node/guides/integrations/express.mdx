@@ -3,20 +3,20 @@ title: Express Integration
 description: "Mount a REST API and the dashboard into an Express app."
 ---
 
-Peer dependency: `express`. Import from the `@byteveda/taskito/contrib/express`
+Peer dependency: `express`. Import from the `@byteveda/flexiq/contrib/express`
 subpath.
 
 ```ts
 import express from "express";
-import { taskitoRouter, taskitoDashboard } from "@byteveda/taskito/contrib/express";
+import { flexiqRouter, flexiqDashboard } from "@byteveda/flexiq/contrib/express";
 
 const app = express();
 
 // REST API — mounted at /tasks
-app.use("/tasks", taskitoRouter(queue));
+app.use("/tasks", flexiqRouter(queue));
 
 // Dashboard SPA — mounted at /admin
-app.use("/admin", taskitoDashboard(queue));
+app.use("/admin", flexiqDashboard(queue));
 
 app.listen(3000);
 ```
@@ -40,7 +40,7 @@ JSON body parsing is mounted internally on the router.
 | `GET` | `/readiness` | Readiness probe: storage, workers, resources. `503` when degraded. |
 | `GET` | `/resources` | Worker-resource health aggregated across live workers. |
 
-## `taskitoRouter` options
+## `flexiqRouter` options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -60,16 +60,16 @@ Route names: `enqueue`, `stats`, `queue-stats`, `job`, `job-errors`,
 
 ## Dashboard
 
-`taskitoDashboard(queue, { staticDir? })` returns a request handler that serves
+`flexiqDashboard(queue, { staticDir? })` returns a request handler that serves
 the built dashboard SPA and proxies `/api/*` to the queue. Mount it under a path
 prefix:
 
 ```ts
-app.use("/admin", taskitoDashboard(queue));
+app.use("/admin", flexiqDashboard(queue));
 ```
 
 <Callout type="warning">
   The SPA assets must be built first: `pnpm build:dashboard`. The built files
-  land in `node_modules/@byteveda/taskito/static/dashboard` by default; pass
+  land in `node_modules/@byteveda/flexiq/static/dashboard` by default; pass
   `staticDir` to point elsewhere.
 </Callout>

@@ -1,22 +1,22 @@
 ---
 title: Errors
-description: "The taskito exception hierarchy — catch by specific type or by the TaskitoError base."
+description: "The flexiq exception hierarchy — catch by specific type or by the FlexiQError base."
 ---
 
-Almost every exception taskito raises extends `TaskitoError`, so a single
+Almost every exception flexiq raises extends `FlexiQError`, so a single
 `except` can scope them; the specific subclasses let you branch on what went
 wrong. Two exceptions sit outside the tree (noted below) — a blanket
-`except TaskitoError` will not catch them.
+`except FlexiQError` will not catch them.
 
 ```python
-from taskito import TaskitoError, ResourceNotFoundError
+from flexiq import FlexiQError, ResourceNotFoundError
 
 try:
     result = job.result(timeout=5)
 except ResourceNotFoundError as exc:
     # the message names the missing resource, e.g. "Resource 'db' is not registered"
     print(exc)
-except TaskitoError as exc:
+except FlexiQError as exc:
     report(exc)
 ```
 
@@ -24,23 +24,23 @@ except TaskitoError as exc:
 
 | Class | Extends | Raised when |
 |---|---|---|
-| `TaskitoError` | `Exception` | Base — never raised directly. |
-| `TaskTimeoutError` | `TaskitoError` | A task exceeds its hard timeout. |
-| `SoftTimeoutError` | `TaskitoError` | A task exceeds its soft timeout (checked cooperatively via the context). |
-| `TaskCancelledError` | `TaskitoError` | A running task detects it has been cancelled. |
-| `TaskFailedError` | `TaskitoError` | Awaiting a job that failed or dead-lettered. Carries `errtype`, `traceback`, `job_id`, `raw_error`. |
-| `MaxRetriesExceededError` | `TaskitoError` | A task exhausts all retry attempts. Same failure details as `TaskFailedError`. |
-| `SerializationError` | `TaskitoError` | Serialization / deserialization or payload-integrity failure (e.g. a bad `SignedSerializer` signature). |
+| `FlexiQError` | `Exception` | Base — never raised directly. |
+| `TaskTimeoutError` | `FlexiQError` | A task exceeds its hard timeout. |
+| `SoftTimeoutError` | `FlexiQError` | A task exceeds its soft timeout (checked cooperatively via the context). |
+| `TaskCancelledError` | `FlexiQError` | A running task detects it has been cancelled. |
+| `TaskFailedError` | `FlexiQError` | Awaiting a job that failed or dead-lettered. Carries `errtype`, `traceback`, `job_id`, `raw_error`. |
+| `MaxRetriesExceededError` | `FlexiQError` | A task exhausts all retry attempts. Same failure details as `TaskFailedError`. |
+| `SerializationError` | `FlexiQError` | Serialization / deserialization or payload-integrity failure (e.g. a bad `SignedSerializer` signature). |
 | `CryptoError` | `SerializationError` | A [payload codec](/python/api-reference/serializers) (`HmacCodec`, `AesGcmCodec`) fails to decrypt or verify. |
 | `InterceptionError` | `SerializationError` | An [argument interceptor](/python/guides/resources/proxies) rejects or misbehaves. |
-| `CircuitBreakerOpenError` | `TaskitoError` | A task's circuit breaker is open. |
-| `RateLimitExceededError` | `TaskitoError` | A task's rate limit is exceeded. |
-| `JobNotFoundError` | `TaskitoError`, `KeyError` | A job ID isn't found in storage. |
-| `QueueError` | `TaskitoError` | A queue-level operational error. |
-| `NotesValidationError` | `TaskitoError`, `ValueError` | A `notes` dict breaks the contract (>15 fields, >4 KiB, …). |
-| `PredicateRejectedError` | `TaskitoError` | An enqueue-time [predicate](/python/guides/core/predicates) cancelled the submission. Carries `task_name`, `reason`. |
+| `CircuitBreakerOpenError` | `FlexiQError` | A task's circuit breaker is open. |
+| `RateLimitExceededError` | `FlexiQError` | A task's rate limit is exceeded. |
+| `JobNotFoundError` | `FlexiQError`, `KeyError` | A job ID isn't found in storage. |
+| `QueueError` | `FlexiQError` | A queue-level operational error. |
+| `NotesValidationError` | `FlexiQError`, `ValueError` | A `notes` dict breaks the contract (>15 fields, >4 KiB, …). |
+| `PredicateRejectedError` | `FlexiQError` | An enqueue-time [predicate](/python/guides/core/predicates) cancelled the submission. Carries `task_name`, `reason`. |
 | `BatchPartialFailureError` | `TaskFailedError` | A batch task where some items failed. |
-| `ResourceError` | `TaskitoError` | Base for resource dependency-injection errors. |
+| `ResourceError` | `FlexiQError` | Base for resource dependency-injection errors. |
 | `ResourceInitError` | `ResourceError` | A resource factory fails during initialization. |
 | `ResourceUnavailableError` | `ResourceError` | A resource is permanently unhealthy and can't be resolved. |
 | `CircularDependencyError` | `ResourceError` | Resource dependencies form a cycle. |
@@ -48,12 +48,12 @@ except TaskitoError as exc:
 | `ProxyReconstructionError` | `ResourceError` | A proxy handler fails to reconstruct an object from its recipe. |
 | `ProxyCleanupError` | `ResourceError` | A proxy handler fails during cleanup. |
 
-## Outside the `TaskitoError` tree
+## Outside the `FlexiQError` tree
 
 | Class | Extends | Import from | Raised when |
 |---|---|---|---|
-| `LockNotAcquiredError` | `Exception` | `taskito.locks` | `queue.lock(...)` can't acquire a held lock. |
-| `BatchResultTypeError` | `TypeError` | `taskito` | A batch result is read as the wrong type. |
+| `LockNotAcquiredError` | `Exception` | `flexiq.locks` | `queue.lock(...)` can't acquire a held lock. |
+| `BatchResultTypeError` | `TypeError` | `flexiq` | A batch result is read as the wrong type. |
 
 The `KeyError` / `ValueError` / `TypeError` mix-ins keep existing
 `except KeyError` / `except ValueError` clauses working when these are raised

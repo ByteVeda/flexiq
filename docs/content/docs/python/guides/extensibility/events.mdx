@@ -3,7 +3,7 @@ title: Events
 description: "The in-process event bus — every lifecycle event type, its payload, listener registration, and ordering guarantees."
 ---
 
-taskito emits a lifecycle event for everything that happens to a job, a worker,
+flexiq emits a lifecycle event for everything that happens to a job, a worker,
 a queue, or a workflow run. The **in-process event bus** dispatches those to
 Python callbacks in the same process: lowest latency, no serialization, no HTTP.
 
@@ -69,8 +69,8 @@ Use `queue.on_event()` to subscribe a callback. Callbacks run in a
 but don't affect job processing.
 
 ```python
-from taskito import Queue
-from taskito.events import EventType
+from flexiq import Queue
+from flexiq.events import EventType
 
 queue = Queue(db_path="tasks.db")
 
@@ -105,7 +105,7 @@ the event bus is the cheapest path:
 
 ```python
 import requests
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def notify_slack(event_type: EventType, payload: dict) -> None:
     requests.post(
@@ -124,7 +124,7 @@ queue.on_event(EventType.JOB_DEAD, notify_slack)
 ### Database audit trail
 
 ```python
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def audit_log(event_type: EventType, payload: dict) -> None:
     db.execute(

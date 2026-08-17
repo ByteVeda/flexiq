@@ -3,17 +3,17 @@ title: Structured Task Logging
 description: "The built-in leveled logger — levels, namespaces, a pluggable sink — plus per-job task logs."
 ---
 
-The SDK ships a tiny zero-dependency leveled logger, `TaskitoLogger`. It writes
+The SDK ships a tiny zero-dependency leveled logger, `FlexiQLogger`. It writes
 to **stderr** by default, so it never pollutes stdout (the CLI's JSON output and
-piped data stay clean). Taskito uses it internally; it is public API for your
+piped data stay clean). FlexiQ uses it internally; it is public API for your
 own use too.
 
 ```java
-import org.byteveda.taskito.logging.TaskitoLogger;
+import org.byteveda.flexiq.logging.FlexiQLogger;
 
-TaskitoLogger log = TaskitoLogger.create("billing"); // tagged [taskito:billing]
+FlexiQLogger log = FlexiQLogger.create("billing"); // tagged [flexiq:billing]
 
-taskito.worker().handle("charge", ChargeRequest.class, request -> {
+flexiq.worker().handle("charge", ChargeRequest.class, request -> {
     log.info("charging " + request.amount());
     return charge(request);
 });
@@ -26,9 +26,9 @@ read once from `FLEXIQ_LOG_LEVEL`; override it at runtime — globally and
 immediately:
 
 ```java
-import org.byteveda.taskito.logging.LogLevel;
+import org.byteveda.flexiq.logging.LogLevel;
 
-TaskitoLogger.setLevel(LogLevel.DEBUG);
+FlexiQLogger.setLevel(LogLevel.DEBUG);
 ```
 
 `debug` also takes a `Supplier<String>` that is only evaluated when the level
@@ -47,8 +47,8 @@ log.error("delivery failed", exception);
 
 ## Namespaces
 
-`TaskitoLogger.create(ns)` tags every line `[taskito:ns]`; `TaskitoLogger.root()`
-is the bare `[taskito]` logger.
+`FlexiQLogger.create(ns)` tags every line `[flexiq:ns]`; `FlexiQLogger.root()`
+is the bare `[flexiq]` logger.
 
 ## Custom sink
 
@@ -57,9 +57,9 @@ logging framework — globally and immediately. `LogSink` is a functional
 interface receiving every formatted line that clears the threshold:
 
 ```java
-import org.byteveda.taskito.logging.LogSink;
+import org.byteveda.flexiq.logging.LogSink;
 
-TaskitoLogger.setSink((level, line) -> slf4jLogger.info(line));
+FlexiQLogger.setSink((level, line) -> slf4jLogger.info(line));
 ```
 
 <Callout type="info">
@@ -74,9 +74,9 @@ log lines. `writeTaskLog` appends a line to storage; `getTaskLogs` reads a
 job's lines back:
 
 ```java
-taskito.writeTaskLog(jobId, "import", "info", "processed batch 3/10");
+flexiq.writeTaskLog(jobId, "import", "info", "processed batch 3/10");
 
-for (var entry : taskito.getTaskLogs(jobId)) {
+for (var entry : flexiq.getTaskLogs(jobId)) {
     System.out.println(entry.loggedAt + " " + entry.level + " " + entry.message);
 }
 ```

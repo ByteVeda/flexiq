@@ -9,7 +9,7 @@ Deduplicate active jobs by key — if a job with the same `unique_key` is
 already pending or running, the existing job is returned instead of creating
 a new one:
 
-> Celery has no native dedup — you'd add `celery-once` plus a Redis lock. taskito
+> Celery has no native dedup — you'd add `celery-once` plus a Redis lock. flexiq
 > needs neither: deduplication is enforced in the queue database.
 
 ```python

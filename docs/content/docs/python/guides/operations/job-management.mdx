@@ -65,7 +65,7 @@ Pass a `Retention` to override only the tables you care about — any field
 you leave unset (`None`, the default) keeps that table forever:
 
 ```python
-from taskito import Queue, Retention
+from flexiq import Queue, Retention
 
 queue = Queue(
     db_path="myapp.db",
@@ -146,7 +146,7 @@ windows. Pass candidate windows to size one before committing to it — no worke
 restart needed:
 
 ```python
-from taskito import Retention
+from flexiq import Retention
 
 preview = queue.dry_run_retention(Retention(archived_jobs=3 * 86_400))
 print(f"a 3-day archive window would delete {preview.counts['archived_jobs']} jobs")
@@ -249,7 +249,7 @@ Archived jobs are no longer returned by `queue.stats()` or
 ### Scheduled archival
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.periodic(cron="0 0 2 * * *")  # Daily at 2 AM
 def nightly_archival():
@@ -302,7 +302,7 @@ for entry in dead:
 ## SQLite configuration
 
 Left at their defaults, SQLite's own pragmas favor safety over throughput
-and let concurrent readers block on writers — so taskito sets these at
+and let concurrent readers block on writers — so flexiq sets these at
 connection time to give WAL-mode concurrency and predictable behavior under
 lock contention without any configuration on your part:
 

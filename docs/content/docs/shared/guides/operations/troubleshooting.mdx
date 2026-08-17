@@ -11,7 +11,7 @@ Turn on debug logs first — they show the worker claiming, running, and
 settling jobs:
 
 ```ts
-import { setLogLevel } from "@byteveda/taskito";
+import { setLogLevel } from "@byteveda/flexiq";
 setLogLevel("debug");
 // or: FLEXIQ_LOG_LEVEL=debug node app.js
 ```
@@ -24,7 +24,7 @@ Turn on debug logs first — they show the worker claiming, running, and
 settling jobs:
 
 ```java
-TaskitoLogger.setLevel(LogLevel.DEBUG);
+FlexiQLogger.setLevel(LogLevel.DEBUG);
 // or: FLEXIQ_LOG_LEVEL=debug java -jar app.jar
 ```
 
@@ -36,7 +36,7 @@ Turn on debug logs first — the Rust core's own logging is wired through
 `RUST_LOG`, independent of Python's `logging` module:
 
 ```bash
-RUST_LOG=taskito_core=debug,taskito_python=debug taskito worker --app myapp:queue
+RUST_LOG=flexiq_core=debug,flexiq_python=debug flexiq worker --app myapp:queue
 ```
 
 </SdkOnly>
@@ -77,8 +77,8 @@ queue.resumeQueue("default");
   <Tab sdk="java">
 
 ```java
-taskito.listPausedQueues();
-taskito.queue("default").resume();
+flexiq.listPausedQueues();
+flexiq.queue("default").resume();
 ```
 
   </Tab>
@@ -121,10 +121,10 @@ for (const job of stuck) {
   <Tab sdk="java">
 
 ```java
-QueueStats stats = taskito.stats();
+QueueStats stats = flexiq.stats();
 System.out.println(stats.running + " running, " + stats.pending + " pending");
 
-List<Job> stuck = taskito.listJobs(
+List<Job> stuck = flexiq.listJobs(
         JobFilter.builder().status(JobStatus.RUNNING).limit(20).build());
 for (Job job : stuck) {
     System.out.println(job.id + " | " + job.taskName + " | started " + job.startedAt);
@@ -181,7 +181,7 @@ Task<Payload> PROCESS_DATA = Task.of("process_data", Payload.class)
 <SdkOnly sdk="python">
 
 `timeout_ms` is the internal, database-stored deadline in milliseconds; the
-`timeout=` kwarg above takes **seconds** and taskito converts it under the
+`timeout=` kwarg above takes **seconds** and flexiq converts it under the
 hood.
 
 </SdkOnly>
@@ -230,7 +230,7 @@ For that last case — a job neither recovery mechanism will touch — force it
 back to `pending` manually:
 
 ```java
-taskito.requeueJob(jobId); // true if it was running and is now pending
+flexiq.requeueJob(jobId); // true if it was running and is now pending
 ```
 
 `requeueJob()` releases the job's execution claim so a healthy worker can
@@ -270,7 +270,7 @@ for (const w of workers) {
   <Tab sdk="java">
 
 ```java
-List<WorkerInfo> workers = taskito.listWorkers();
+List<WorkerInfo> workers = flexiq.listWorkers();
 for (WorkerInfo w : workers) {
     System.out.println(w.workerId + ": " + w.status + " (last seen: " + w.lastHeartbeat + ")");
 }
@@ -298,7 +298,7 @@ for CPU-bound tasks — it runs tasks in separate subprocesses instead of
 threads, so one task's GIL usage can't block the scheduler.
 
 ```bash
-taskito worker --app myapp:queue --pool prefork
+flexiq worker --app myapp:queue --pool prefork
 ```
 
 </SdkOnly>
@@ -396,7 +396,7 @@ same file, this surfaces as lock contention.
 OperationalError: database is locked
 ```
 
-taskito sets `busy_timeout=5000ms` to wait for locks, but heavy write loads
+flexiq sets `busy_timeout=5000ms` to wait for locks, but heavy write loads
 can still cause contention.
 
 **Causes:**
@@ -469,10 +469,10 @@ await queue.purgeDead(30 * 24 * 60 * 60 * 1000);
 
 ```java
 // Purge completed jobs older than 7 days (olderThanMs is in milliseconds)
-taskito.purgeCompleted(Duration.ofDays(7).toMillis());
+flexiq.purgeCompleted(Duration.ofDays(7).toMillis());
 
 // Purge dead-lettered jobs older than 30 days
-taskito.purgeDead(Duration.ofDays(30).toMillis());
+flexiq.purgeDead(Duration.ofDays(30).toMillis());
 ```
 
   </Tab>
@@ -544,7 +544,7 @@ console.log(`Pending: ${stats.pending}, Running: ${stats.running}`);
   <Tab sdk="java">
 
 ```java
-QueueStats stats = taskito.stats();
+QueueStats stats = flexiq.stats();
 System.out.println("Pending: " + stats.pending + ", Running: " + stats.running);
 ```
 
@@ -745,7 +745,7 @@ for (const job of jobs) {
   <Tab sdk="java">
 
 ```java
-List<Job> jobs = taskito.listJobs(
+List<Job> jobs = flexiq.listJobs(
         JobFilter.builder().status(JobStatus.COMPLETE).task("daily_report").limit(50).build());
 for (Job job : jobs) {
     System.out.println(job.completedAt);
@@ -768,8 +768,8 @@ registry doesn't have that name, the job fails.
   <Tab sdk="python">
 
 ```python
-from taskito import Queue
-from taskito.codecs import GzipCodec
+from flexiq import Queue
+from flexiq.codecs import GzipCodec
 
 # Both the producer and the worker construct their Queue with the same
 # codec registered under the same name.
@@ -784,7 +784,7 @@ def process_large_payload(data: bytes):
   <Tab sdk="node">
 
 ```ts
-import { Queue, GzipCodec } from "@byteveda/taskito";
+import { Queue, GzipCodec } from "@byteveda/flexiq";
 
 // Both the producer and the worker construct their Queue with the same
 // codec registered under the same name.
@@ -797,11 +797,11 @@ queue.task("processLargePayload", (data: Buffer) => handle(data), { codecs: ["gz
   <Tab sdk="java">
 
 ```java
-import org.byteveda.taskito.serialization.GzipCodec;
+import org.byteveda.flexiq.serialization.GzipCodec;
 
-// Both the producer and the worker build their Taskito client with the
+// Both the producer and the worker build their FlexiQ client with the
 // same codec registered under the same name.
-Taskito taskito = Taskito.builder()
+FlexiQ flexiq = FlexiQ.builder()
         .sqlite("tasks.db")
         .codec("gz", new GzipCodec())
         .open();
@@ -837,7 +837,7 @@ Task<byte[]> PROCESS_LARGE_PAYLOAD = Task.of("process_large_payload", byte[].cla
 - **Serializer mismatch** — producers and workers must use the same
   [serializer](/java/guides/extensibility/serializers) and codec chain.
 - **`no codec registered named '...'`** — the task was enqueued with named
-  codecs; register the same names with `Taskito.builder().codec(name, codec)`
+  codecs; register the same names with `FlexiQ.builder().codec(name, codec)`
   on the worker.
 - **Generic payload types** — a non-Jackson serializer only supports plain
   `Class` payloads; use `JsonSerializer`/`MsgpackSerializer` (or a
@@ -850,12 +850,12 @@ Task<byte[]> PROCESS_LARGE_PAYLOAD = Task.of("process_large_payload", byte[].cla
 <SdkOnly sdk="python">
 
 ```
-ModuleNotFoundError: No module named 'taskito._taskito'
+ModuleNotFoundError: No module named 'flexiq._flexiq'
 ```
 
 The compiled Rust extension isn't present for this platform or Python
 version. Reinstall from a wheel that matches both
-(`pip install --force-reinstall taskito`), or rebuild it locally with
+(`pip install --force-reinstall flexiq`), or rebuild it locally with
 `uv run maturin develop` if you're working from source.
 
 </SdkOnly>
@@ -880,10 +880,10 @@ UnsatisfiedLinkError: no bundled native library for platform '...'
 ```
 
 The jar has no native binary for this OS/architecture. Build the native
-library for the platform and point `-Dtaskito.native.lib=/path/to/library`
+library for the platform and point `-Dflexiq.native.lib=/path/to/library`
 at it. On hardened hosts where `/tmp` is mounted `noexec`, extraction
 succeeds but loading fails — set
-`-Dtaskito.native.workdir=/path/on/exec/volume` instead.
+`-Dflexiq.native.workdir=/path/on/exec/volume` instead.
 
 </SdkOnly>
 
@@ -911,8 +911,8 @@ succeeds but loading fails — set
 <SdkOnly sdk="java">
 
 <Callout type="info">
-  Inspect failures with `taskito.jobErrors(id)` and
-  `taskito.listDead(50, 0)`; see
+  Inspect failures with `flexiq.jobErrors(id)` and
+  `flexiq.listDead(50, 0)`; see
   [job management](/java/guides/operations/inspection).
 </Callout>
 

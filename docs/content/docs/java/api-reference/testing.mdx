@@ -1,36 +1,36 @@
 ---
 title: Testing
-description: "InMemoryTaskito and InMemoryQueueBackend — a pure-Java backend for fast unit tests."
+description: "InMemoryFlexiQ and InMemoryQueueBackend — a pure-Java backend for fast unit tests."
 ---
 
 ```java
-import org.byteveda.taskito.test.InMemoryTaskito;
+import org.byteveda.flexiq.test.InMemoryFlexiQ;
 ```
 
-Ships in the `org.byteveda:taskito-test` artifact (the `:test-support`
+Ships in the `org.byteveda:flexiq-test` artifact (the `:test-support`
 subproject). The testing model is: swap in an in-memory backend, run a real
 in-process worker against it, and synchronize on results the same way you
 would against a native backend. For a walkthrough with assertions, see the
 [Testing guide](/java/guides/operations/testing).
 
 ```kotlin
-testImplementation("org.byteveda:taskito-test:0.23.0")
+testImplementation("org.byteveda:flexiq-test:0.23.0")
 ```
 
-## `InMemoryTaskito`
+## `InMemoryFlexiQ`
 
 ```java
-static Taskito open()
-static Taskito open(Serializer serializer)
+static FlexiQ open()
+static FlexiQ open(Serializer serializer)
 ```
 
-Opens a [`Taskito`](/java/api-reference/queue) over a fresh
+Opens a [`FlexiQ`](/java/api-reference/queue) over a fresh
 `InMemoryQueueBackend`. `open()` uses the default JSON serializer; `open(Serializer)`
 swaps it. To share one backend instance across a custom builder, construct it
 explicitly:
 
 ```java
-Taskito taskito = Taskito.builder().open(new InMemoryQueueBackend());
+FlexiQ flexiq = FlexiQ.builder().open(new InMemoryQueueBackend());
 ```
 
 ## `InMemoryQueueBackend`
@@ -42,16 +42,16 @@ dead-letter, honoring per-worker queue filters and priority/FIFO ordering
 among pending jobs.
 
 ```java
-try (Taskito taskito = InMemoryTaskito.open()) {
-    String id = taskito.enqueue("add", List.of(2, 3));
+try (FlexiQ flexiq = InMemoryFlexiQ.open()) {
+    String id = flexiq.enqueue("add", List.of(2, 3));
 
-    try (Worker worker = taskito.worker()
+    try (Worker worker = flexiq.worker()
             .handle("add", List.class, numbers -> (int) numbers.get(0) + (int) numbers.get(1))
             .start()) {
-        taskito.awaitJob(id, Duration.ofSeconds(5));
+        flexiq.awaitJob(id, Duration.ofSeconds(5));
     }
 
-    assertEquals(5, taskito.getResult(id, Integer.class).orElseThrow());
+    assertEquals(5, flexiq.getResult(id, Integer.class).orElseThrow());
 }
 ```
 
@@ -68,7 +68,7 @@ There is no dedicated mock-resource type — register a stub factory the same
 way you'd register a real one:
 
 ```java
-taskito.resource("db", context -> fakeDb);
+flexiq.resource("db", context -> fakeDb);
 ```
 
 The worker injects whatever is registered, so no real connection is opened
@@ -82,7 +82,7 @@ works too:
 
 ```java
 CountDownLatch done = new CountDownLatch(1);
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle("echo", String.class, payload -> payload.length())
         .on(EventName.SUCCESS, event -> done.countDown())
         .start();

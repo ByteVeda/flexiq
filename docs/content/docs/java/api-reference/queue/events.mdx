@@ -19,6 +19,6 @@ carry **streaming partial results**: a running task writes partials at level
 
 ## Webhooks & autoscaler
 
-`WebhookManager.attach(taskito)` registers outcome webhooks, and
-`Scaler.start(taskito, ScalerOptions.onPort(9090))` serves a queue-depth
+`WebhookManager.attach(flexiq)` registers outcome webhooks, and
+`Scaler.start(flexiq, ScalerOptions.onPort(9090))` serves a queue-depth
 endpoint for external autoscalers — both build on this client.

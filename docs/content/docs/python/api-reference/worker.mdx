@@ -99,9 +99,9 @@ health endpoint or a supervisor thread.
 ## From the CLI
 
 ```bash
-taskito worker --app myapp:queue
-taskito worker --app myapp:queue --queues emails,default --pool prefork
-taskito worker --app myapp:queue --drain-timeout 60
+flexiq worker --app myapp:queue
+flexiq worker --app myapp:queue --queues emails,default --pool prefork
+flexiq worker --app myapp:queue --drain-timeout 60
 ```
 
 The CLI resolves `--app`, applies `--drain-timeout` if given, and calls

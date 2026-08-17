@@ -32,7 +32,7 @@ queue.enqueue("send_email", [user], {
 > field-for-field: `opts.delay` → `delayMs`, `opts.priority` → `priority`
 > (inverted direction — see [queues](/node/guides/core/queues)), and an
 > explicit custom `opts.jobId` (BullMQ's usual dedup trick) → `uniqueKey`.
-> taskito's `uniqueKey` dedup is automatic and scoped to "while the first job
+> flexiq's `uniqueKey` dedup is automatic and scoped to "while the first job
 > is pending/running" — it frees up once that job finishes, rather than
 > permanently reserving the key.
 

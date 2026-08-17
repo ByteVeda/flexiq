@@ -5,7 +5,7 @@ description: "A multi-step checkout with compensating transactions: when a later
 
 A checkout touches several systems — inventory, payments, shipping — with no
 distributed transaction across them. The saga pattern models each forward step
-with a compensator; if a later step fails, Taskito runs the compensators for
+with a compensator; if a later step fails, FlexiQ runs the compensators for
 the already-completed steps in reverse-dependency order.
 
 ## Tasks.java
@@ -38,13 +38,13 @@ Each step names its `compensate` task. The steps run in dependency order; the
 compensators are wired automatically.
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.workflows.Step;
-import org.byteveda.taskito.workflows.Workflow;
-import org.byteveda.taskito.workflows.WorkflowRun;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.workflows.Step;
+import org.byteveda.flexiq.workflows.Workflow;
+import org.byteveda.flexiq.workflows.WorkflowRun;
 
 public final class Checkout {
-    public static WorkflowRun submit(Taskito taskito, Order order) {
+    public static WorkflowRun submit(FlexiQ flexiq, Order order) {
         Workflow checkout = Workflow.named("checkout")
                 .step(Step.of("reserve", Tasks.RESERVE, order)
                         .compensate(Tasks.RELEASE)
@@ -57,7 +57,7 @@ public final class Checkout {
                         .after("charge")
                         .compensate(Tasks.CANCEL_SHIPMENT)
                         .build());
-        return taskito.submitWorkflow(checkout);
+        return flexiq.submitWorkflow(checkout);
     }
 
     private Checkout() {}
@@ -73,13 +73,13 @@ otherwise time out.
 
 ```java
 import java.time.Duration;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.worker.Worker;
-import org.byteveda.taskito.workflows.WorkflowRun;
-import org.byteveda.taskito.workflows.WorkflowStatus;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.worker.Worker;
+import org.byteveda.flexiq.workflows.WorkflowRun;
+import org.byteveda.flexiq.workflows.WorkflowStatus;
 
-try (Taskito taskito = Taskito.builder().sqlite("checkout.db").open();
-        Worker worker = taskito.worker()
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("checkout.db").open();
+        Worker worker = flexiq.worker()
                 .handle(Tasks.RESERVE, order -> inventory.reserve(order))
                 .handle(Tasks.RELEASE, reservation -> inventory.release(reservation))
                 .handle(Tasks.CHARGE, order -> payments.charge(order))
@@ -89,7 +89,7 @@ try (Taskito taskito = Taskito.builder().sqlite("checkout.db").open();
                 .trackWorkflows()
                 .start()) {
 
-    WorkflowRun run = Checkout.submit(taskito, order);
+    WorkflowRun run = Checkout.submit(flexiq, order);
     WorkflowStatus done = run.await(Duration.ofMinutes(1));
 
     switch (done.state) {
@@ -104,7 +104,7 @@ try (Taskito taskito = Taskito.builder().sqlite("checkout.db").open();
 ## What happens on failure
 
 If `create_shipment` throws, `reserve` and `charge` have already completed.
-Taskito runs their compensators in reverse order:
+FlexiQ runs their compensators in reverse order:
 
 ```
 ship      ✗ failed

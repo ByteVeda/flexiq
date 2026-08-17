@@ -24,7 +24,7 @@ time-window and feature-flag gates.
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import org.byteveda.taskito.predicates.Predicate;
+import org.byteveda.flexiq.predicates.Predicate;
 
 public final class Policies {
     // Stand-ins — replace with your usage store and feature-flag client.
@@ -46,26 +46,26 @@ public final class Policies {
 
 ## App.java
 
-`taskito.predicate` attaches a boolean gate; `taskito.gate` attaches a
+`flexiq.predicate` attaches a boolean gate; `flexiq.gate` attaches a
 decision gate (allow / skip / defer / reject). Multiple gates on one task run
 in registration order and the first non-allow decision wins.
 
 ```java
 import java.time.LocalTime;
 import java.time.ZoneId;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.predicates.Predicate;
-import org.byteveda.taskito.predicates.Predicates;
-import org.byteveda.taskito.predicates.Recipes;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.predicates.Predicate;
+import org.byteveda.flexiq.predicates.Predicates;
+import org.byteveda.flexiq.predicates.Recipes;
 
-Taskito taskito = Taskito.builder().sqlite("gated.db").open();
+FlexiQ flexiq = FlexiQ.builder().sqlite("gated.db").open();
 ZoneId newYork = ZoneId.of("America/New_York");
 
 // Out-of-hours promos are *deferred* to the next opening, not dropped.
-taskito.gate("send_promo", Recipes.businessHours(newYork));
+flexiq.gate("send_promo", Recipes.businessHours(newYork));
 
 // Re-index only while its flag is on; otherwise skip silently.
-taskito.predicate("reindex", Policies.FLAG_ON);
+flexiq.predicate("reindex", Policies.FLAG_ON);
 
 // Stand-in for your own calendar logic.
 Predicate businessHours = context -> {
@@ -74,7 +74,7 @@ Predicate businessHours = context -> {
 };
 
 // Exports: under quota AND outside business hours (off-peak only).
-taskito.predicate("export_data", Predicates.allOf(
+flexiq.predicate("export_data", Predicates.allOf(
         Policies.UNDER_QUOTA,
         Predicates.not(businessHours)));
 ```
@@ -87,16 +87,16 @@ of throwing.
 
 ```java
 import java.util.Optional;
-import org.byteveda.taskito.errors.PredicateRejectedException;
+import org.byteveda.flexiq.errors.PredicateRejectedException;
 
 try {
-    taskito.enqueue(SEND_PROMO, "newsletter-subscribers");
+    flexiq.enqueue(SEND_PROMO, "newsletter-subscribers");
 } catch (PredicateRejectedException rejected) {
     respond(409, "blocked by policy");
 }
 
 // Skip-tolerant: empty means a gate decided this enqueue shouldn't happen.
-Optional<String> id = taskito.tryEnqueue(REINDEX, "catalog");
+Optional<String> id = flexiq.tryEnqueue(REINDEX, "catalog");
 id.ifPresentOrElse(
         jobId -> log.info("reindex staged as {}", jobId),
         () -> log.info("reindex flag is off — skipped"));
@@ -109,9 +109,9 @@ your own windows on top of `defer`/`deferUntil`:
 
 ```java
 import java.time.Duration;
-import org.byteveda.taskito.predicates.EnqueueDecision;
+import org.byteveda.flexiq.predicates.EnqueueDecision;
 
-taskito.gate("send_promo", context ->
+flexiq.gate("send_promo", context ->
         marketingPaused()
                 ? EnqueueDecision.defer(Duration.ofHours(1))
                 : EnqueueDecision.allow());
@@ -128,9 +128,9 @@ taskito.gate("send_promo", context ->
 
 | Pattern | Where |
 | --- | --- |
-| Attach a boolean gate | `taskito.predicate(task, predicate)` |
-| Allow / skip / defer / reject | `taskito.gate(task, enqueueGate)` |
+| Attach a boolean gate | `flexiq.predicate(task, predicate)` |
+| Allow / skip / defer / reject | `flexiq.gate(task, enqueueGate)` |
 | Compose policies | `Predicates.allOf` / `anyOf` / `not` |
 | Ready-made windows | `Recipes.businessHours` / `timeWindow` / `dayOfWeek` / `featureFlag` |
 | Handle rejection | `catch (PredicateRejectedException)` |
-| Tolerate skips | `taskito.tryEnqueue` → `Optional` |
+| Tolerate skips | `flexiq.tryEnqueue` → `Optional` |

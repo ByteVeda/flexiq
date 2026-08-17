@@ -8,7 +8,7 @@ constructing those inside every handler, register them once as **resources** and
 let the worker build, share, and tear them down with the right lifetime.
 
 ```java
-try (Taskito queue = Taskito.builder().sqlite("tasks.db").open()) {
+try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open()) {
     queue.resource("db", ResourceScope.WORKER,
             ctx -> openPool(System.getenv("DATABASE_URL")),
             pool -> pool.close());
@@ -185,10 +185,10 @@ it closes; a task-scoped resource's `created`/`disposed` climb per job with
 
 Register a stub factory to swap a real dependency in tests — handlers resolve
 by name, so they never know the difference. The `test-support` module's
-`InMemoryTaskito` gives you a queue with no native backend at all:
+`InMemoryFlexiQ` gives you a queue with no native backend at all:
 
 ```java
-try (Taskito queue = InMemoryTaskito.open()) {
+try (FlexiQ queue = InMemoryFlexiQ.open()) {
     AtomicInteger built = new AtomicInteger();
     queue.resource("db", ctx -> {
         built.incrementAndGet();
