@@ -1,0 +1,39 @@
+[package]
+name = "flexiq-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Python (PyO3) bindings for the FlexiQ task-queue core"
+publish = false
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]
+redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
+native-async = []
+workflows = ["dep:flexiq-workflows"]
+# Event-driven scheduler wakeups. OFF by default (not in maturin defaults).
+push-dispatch = ["flexiq-core/push-dispatch"]
+mesh = ["dep:flexiq-mesh"]
+
+[lib]
+name = "_flexiq"
+crate-type = ["cdylib"]
+
+[dependencies]
+flexiq-core = { workspace = true }
+pyo3 = { workspace = true }
+tokio = { workspace = true }
+crossbeam-channel = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+flexiq-workflows = { workspace = true, optional = true }
+flexiq-mesh = { workspace = true, optional = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+pyo3-log = "0.13"
+gethostname = "1.1.0"

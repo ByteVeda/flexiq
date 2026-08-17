@@ -1,0 +1,30 @@
+[package]
+name = "flexiq-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Headless terminal UI for inspecting and operating a FlexiQ queue"
+# An operator binary, not a library anyone depends on — kept off crates.io so a
+# release never has to version it as a public API.
+publish = false
+
+[[bin]]
+name = "flexiq-tui"
+path = "src/main.rs"
+
+[features]
+default = []
+# Forward backend selection down to core + workflow storage so the same URL
+# sniff in backend.rs can open Postgres / Redis when compiled in.
+postgres = ["flexiq-core/postgres", "flexiq-workflows/postgres"]
+redis = ["flexiq-core/redis", "flexiq-workflows/redis"]
+
+[dependencies]
+flexiq-core = { workspace = true }
+flexiq-workflows = { workspace = true }
+ratatui = "0.30"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

@@ -1,0 +1,53 @@
+[package]
+name = "flexiq-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Standalone FlexiQ scheduler, executor attach listener, and dashboard server"
+publish = false
+
+[lib]
+name = "flexiq_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flexiq-server"
+path = "src/main.rs"
+
+[features]
+default = []
+# Forward backend selection down to core + workflow storage so one DSN sniff
+# in config/backend.rs can open Postgres / Redis when compiled in.
+postgres = ["flexiq-core/postgres", "flexiq-workflows/postgres"]
+redis = ["flexiq-core/redis", "flexiq-workflows/redis"]
+
+[dependencies]
+flexiq-core = { workspace = true }
+flexiq-workflows = { workspace = true }
+axum = "0.8"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = "0.7"
+anyhow = "1"
+log = { workspace = true }
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+rand = { workspace = true }
+base64 = "0.23"
+sha2 = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac = "0.12"
+thiserror = { workspace = true }
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Same parser reqwest uses, so the SSRF guard and the request agree on the host.
+url = "2"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
