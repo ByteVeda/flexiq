@@ -321,7 +321,9 @@ jobs:
       - name: Verify version on npm
         if: ${{ !inputs.dry-run }}
         run: |
-          for _attempt in 1 2 3 4 5; do
+          # 5 minutes: a first-ever package took longer than the old 75s to be
+          # served, failing the run after a publish that had actually succeeded.
+          for _attempt in $(seq 1 20); do
             if npm view "@byteveda/flexiq@${VERSION}" version >/dev/null 2>&1; then
               echo "@byteveda/flexiq@${VERSION} live on npm"
               exit 0

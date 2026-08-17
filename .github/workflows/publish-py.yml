@@ -362,7 +362,9 @@ jobs:
       - name: Verify version on PyPI
         if: "!inputs.dry-run"
         run: |
-          for _attempt in 1 2 3 4 5; do
+          # 5 minutes — a first-ever package can take minutes to be served, and
+          # a short window fails the run after a publish that actually worked.
+          for _attempt in $(seq 1 20); do
             status=$(curl -s -o /dev/null -w '%{http_code}' --head \
               --connect-timeout 10 --max-time 30 \
               -H "User-Agent: flexiq-release/1.0" \
