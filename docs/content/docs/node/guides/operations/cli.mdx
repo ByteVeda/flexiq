@@ -1,21 +1,21 @@
 ---
 title: CLI
-description: "Operate the queue from the terminal with the standalone taskito command."
+description: "Operate the queue from the terminal with the standalone flexiq command."
 ---
 
-A standalone `taskito` command (no Python) operates the queue from the terminal.
+A standalone `flexiq` command (no Python) operates the queue from the terminal.
 Connect with `--db <path>`, or `--backend`/`--dsn` for Postgres/Redis.
 
 ```bash
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db stats
-taskito --db taskito.db jobs --status failed
-taskito --db taskito.db dlq list
-taskito --db taskito.db dlq retry <deadId>
-taskito --db taskito.db pause default
-taskito --db taskito.db resume default
-taskito --db taskito.db paused
-taskito --db taskito.db cancel <jobId>
+flexiq --db flexiq.db enqueue add '[2,3]'
+flexiq --db flexiq.db stats
+flexiq --db flexiq.db jobs --status failed
+flexiq --db flexiq.db dlq list
+flexiq --db flexiq.db dlq retry <deadId>
+flexiq --db flexiq.db pause default
+flexiq --db flexiq.db resume default
+flexiq --db flexiq.db paused
+flexiq --db flexiq.db cancel <jobId>
 ```
 
 Add `--json` to any read command for machine-readable output.
@@ -25,7 +25,7 @@ Add `--json` to any read command for machine-readable output.
 `run` loads a module that exports a configured `Queue` and runs its worker:
 
 ```bash
-taskito run ./app.js --queues default,emails
+flexiq run ./app.js --queues default,emails
 ```
 
 The module registers its tasks on the exported queue; `run` starts a worker
@@ -34,7 +34,7 @@ over them. Use it as your container entrypoint for worker processes.
 ## Serving the dashboard
 
 ```bash
-taskito --db taskito.db dashboard --port 8787
+flexiq --db flexiq.db dashboard --port 8787
 ```
 
 Serves openly by default. `--auth` enables session authentication
@@ -44,7 +44,7 @@ gate instead — see [Dashboard](/node/guides/operations/dashboard).
 ## KEDA scaler
 
 ```bash
-taskito --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
+flexiq --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
 ```
 
 Serves the queue-depth metric for [KEDA](/node/guides/operations/keda).
@@ -52,7 +52,7 @@ Serves the queue-depth metric for [KEDA](/node/guides/operations/keda).
 ## Autoscaling worker processes
 
 ```bash
-taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+flexiq --db flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 ```
 
 Spawns and drains `run`-style workers to track queue depth, for hosts without

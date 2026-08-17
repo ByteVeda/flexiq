@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taskito.dashboard.oauth.config import (
+from flexiq.dashboard.oauth.config import (
     GitHubConfig,
     GoogleConfig,
     OAuthConfig,
@@ -22,8 +22,8 @@ def test_from_env_requires_base_url_when_any_provider_set() -> None:
     with pytest.raises(OAuthConfigError, match="REDIRECT_BASE_URL"):
         from_env(
             {
-                "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-                "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+                "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+                "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
             }
         )
 
@@ -31,10 +31,10 @@ def test_from_env_requires_base_url_when_any_provider_set() -> None:
 def test_from_env_parses_google_provider() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS": "acme.com, partner.com",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS": "acme.com, partner.com",
         }
     )
     assert config is not None
@@ -51,8 +51,8 @@ def test_from_env_partial_google_config_raises() -> None:
     with pytest.raises(OAuthConfigError, match="CLIENT_SECRET"):
         from_env(
             {
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-                "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+                "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
             }
         )
 
@@ -60,10 +60,10 @@ def test_from_env_partial_google_config_raises() -> None:
 def test_from_env_parses_github_provider() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID": "hid",
-            "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET": "hsec",
-            "TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS": "acme,partner",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID": "hid",
+            "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET": "hsec",
+            "FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS": "acme,partner",
         }
     )
     assert config is not None
@@ -74,16 +74,16 @@ def test_from_env_parses_github_provider() -> None:
 def test_from_env_parses_multiple_oidc_slots() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta,microsoft",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://acme.okta.com/.well-known/openid-configuration",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_LABEL": "Acme SSO",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS": "acme.com",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID": "mid",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET": "msec",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL": "https://login.microsoftonline.com/x/v2.0/.well-known/openid-configuration",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta,microsoft",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://acme.okta.com/.well-known/openid-configuration",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL": "Acme SSO",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS": "acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID": "mid",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET": "msec",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL": "https://login.microsoftonline.com/x/v2.0/.well-known/openid-configuration",
         }
     )
     assert config is not None
@@ -100,11 +100,11 @@ def test_from_env_rejects_duplicate_oidc_slot() -> None:
     with pytest.raises(OAuthConfigError, match="twice"):
         from_env(
             {
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta,okta",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://x/y",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta,okta",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://x/y",
             }
         )
 
@@ -131,7 +131,7 @@ def test_oidc_slot_must_be_url_safe() -> None:
 
 def test_redirect_base_url_must_be_https_for_remote_hosts() -> None:
     with pytest.raises(OAuthConfigError, match="https"):
-        OAuthConfig(redirect_base_url="http://taskito.acme.com")
+        OAuthConfig(redirect_base_url="http://flexiq.acme.com")
 
 
 def test_redirect_base_url_allows_http_for_localhost() -> None:
@@ -143,10 +143,10 @@ def test_redirect_base_url_allows_http_for_localhost() -> None:
 def test_password_auth_flag_parses() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
-            "TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED": "false",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+            "FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED": "false",
         }
     )
     assert config is not None
@@ -157,8 +157,8 @@ def test_disabling_password_without_providers_is_an_error() -> None:
     with pytest.raises(OAuthConfigError, match="no way to log in"):
         from_env(
             {
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-                "TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED": "false",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+                "FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED": "false",
             }
         )
 
@@ -166,10 +166,10 @@ def test_disabling_password_without_providers_is_an_error() -> None:
 def test_admin_emails_parsed_as_tuple() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
-            "TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS": " alice@acme.com , bob@acme.com ",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+            "FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS": " alice@acme.com , bob@acme.com ",
         }
     )
     assert config is not None
@@ -179,27 +179,27 @@ def test_admin_emails_parsed_as_tuple() -> None:
 def test_callback_url_built_from_base_url_and_slot() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com/",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com/",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
         }
     )
     assert config is not None
     assert (
-        config.callback_url("google") == "https://taskito.acme.com/api/auth/oauth/callback/google"
+        config.callback_url("google") == "https://flexiq.acme.com/api/auth/oauth/callback/google"
     )
 
 
 def test_find_provider_returns_matching_slot() -> None:
     config = from_env(
         {
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://taskito.acme.com",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
-            "TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://acme.okta.com/.well-known/openid-configuration",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL": "https://flexiq.acme.com",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID": "gid",
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET": "gsec",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS": "okta",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID": "oid",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET": "osec",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL": "https://acme.okta.com/.well-known/openid-configuration",
         }
     )
     assert config is not None

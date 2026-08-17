@@ -3,7 +3,7 @@ title: Delivery Guarantees
 description: "Exactly-once dispatch, at-least-once execution, and how to design idempotent tasks."
 ---
 
-Taskito gives **exactly-once dispatch**: an atomic claim in storage makes sure
+FlexiQ gives **exactly-once dispatch**: an atomic claim in storage makes sure
 two workers never pick up the same job at once. But the system as a whole is
 **at-least-once execution** — if a worker crashes after it starts a task but
 before the result is recorded, the job is retried and the task body runs
@@ -121,7 +121,7 @@ def charge_customer(order_id, amount):
   <Tab sdk="node">
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("charge", async (orderId: string) => {
   const job = currentJob();
@@ -243,7 +243,7 @@ on designing dedup keys.
 
 ## Comparison with other queues
 
-| Guarantee | Taskito | Celery | SQS |
+| Guarantee | FlexiQ | Celery | SQS |
 |-----------|---------|--------|-----|
 | Delivery | At-least-once | At-least-once | At-least-once |
 | Duplicate prevention | Atomic claim (dispatch-level) | Visibility timeout | Visibility timeout |
@@ -278,7 +278,7 @@ See <SdkLink to="api-reference/queue/jobs">`queue.get_job()`</SdkLink> and
 </Callout>
 
 > **Coming from BullMQ?** BullMQ's `QueueEvents` is a dedicated Redis Streams
-> consumer, so any process can listen for job outcomes. taskito's
+> consumer, so any process can listen for job outcomes. flexiq's
 > `queue.on(event, handler)` fires inside the **worker process** handling the
 > job — it isn't a cross-process subscription. For visibility from another
 > process, poll `queue.getJob(id)` / `queue.stats()`, or use the

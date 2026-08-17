@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 import { Queue } from "../src/index";
 
 function newQueue(): Queue {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-")), "queue.db");
   return new Queue({ dbPath });
 }
 
 describe("N-API boundary validation", () => {
   it("rejects a zero pool size instead of panicking r2d2", () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-")), "queue.db");
+    const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-")), "queue.db");
     expect(() => new Queue({ dbPath, poolSize: 0 })).toThrow(/poolSize/);
   });
 

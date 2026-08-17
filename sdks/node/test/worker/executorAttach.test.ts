@@ -3,7 +3,7 @@
  *
  * A scheduler is played by a plain socket speaking the frame protocol, so these
  * run without building the Rust server binary. `executorAttachServer.test.ts`
- * runs the same assertions against the real `taskito-server` when one is
+ * runs the same assertions against the real `flexiq-server` when one is
  * available — that pairing is what keeps this fake honest.
  */
 
@@ -273,7 +273,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-exec-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-exec-")), "q.db") });
 }
 
 /** Uses the job-scoped conveniences that need storage in a worker. */
@@ -537,14 +537,14 @@ it("requires an attach address", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previous = process.env.TASKITO_ATTACH;
-  process.env.TASKITO_ATTACH = undefined;
-  delete process.env.TASKITO_ATTACH;
+  const previous = process.env.FLEXIQ_ATTACH;
+  process.env.FLEXIQ_ATTACH = undefined;
+  delete process.env.FLEXIQ_ATTACH;
   try {
-    await expect(queue.runExecutor()).rejects.toThrow(/TASKITO_ATTACH/);
+    await expect(queue.runExecutor()).rejects.toThrow(/FLEXIQ_ATTACH/);
   } finally {
     if (previous !== undefined) {
-      process.env.TASKITO_ATTACH = previous;
+      process.env.FLEXIQ_ATTACH = previous;
     }
   }
 });
@@ -554,17 +554,17 @@ it("takes the attach address and slot count from the environment", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previousAttach = process.env.TASKITO_ATTACH;
-  const previousSlots = process.env.TASKITO_SLOTS;
-  process.env.TASKITO_ATTACH = `127.0.0.1:${scheduler.port}`;
-  process.env.TASKITO_SLOTS = "3";
+  const previousAttach = process.env.FLEXIQ_ATTACH;
+  const previousSlots = process.env.FLEXIQ_SLOTS;
+  process.env.FLEXIQ_ATTACH = `127.0.0.1:${scheduler.port}`;
+  process.env.FLEXIQ_SLOTS = "3";
   try {
     executor = await queue.runExecutor();
     const hello = await scheduler.attached();
     expect(hello.slots).toBe(3);
   } finally {
-    restoreEnv("TASKITO_ATTACH", previousAttach);
-    restoreEnv("TASKITO_SLOTS", previousSlots);
+    restoreEnv("FLEXIQ_ATTACH", previousAttach);
+    restoreEnv("FLEXIQ_SLOTS", previousSlots);
   }
 });
 
@@ -572,12 +572,12 @@ it("rejects a non-numeric slot count from the environment", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previous = process.env.TASKITO_SLOTS;
-  process.env.TASKITO_SLOTS = "many";
+  const previous = process.env.FLEXIQ_SLOTS;
+  process.env.FLEXIQ_SLOTS = "many";
   try {
     await expect(queue.runExecutor({ attach: "127.0.0.1:1" })).rejects.toThrow(RangeError);
   } finally {
-    restoreEnv("TASKITO_SLOTS", previous);
+    restoreEnv("FLEXIQ_SLOTS", previous);
   }
 });
 
@@ -612,7 +612,7 @@ it("opens no storage", async () => {
 });
 
 it("degrades progress and publish rather than failing the job", async () => {
-  // This scheduler advertises no side-channel — an older `taskito-server` —
+  // This scheduler advertises no side-channel — an older `flexiq-server` —
   // so the executor sends nothing it could not parse. Losing the progress bar
   // is a degradation; failing the job over it would be a regression for anyone
   // moving a worker to an executor.

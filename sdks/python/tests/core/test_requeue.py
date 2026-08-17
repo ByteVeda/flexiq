@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_requeue_pending_job_returns_false(queue: Queue) -> None:

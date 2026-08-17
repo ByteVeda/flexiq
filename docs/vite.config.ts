@@ -12,7 +12,7 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { docsManifest } from "./vite-plugin-docs-manifest";
 
-// Deploy under /taskito on GitHub Pages; serve from root locally.
+// Deploy under /flexiq on GitHub Pages; serve from root locally.
 const base = process.env.DOCS_BASE_PATH
   ? `${process.env.DOCS_BASE_PATH}/`
   : "/";

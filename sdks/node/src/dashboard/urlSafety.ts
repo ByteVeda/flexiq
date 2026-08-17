@@ -17,8 +17,8 @@ export function isSafeRedirect(path: string | null | undefined): boolean {
   try {
     // Base-relative parse: if the path smuggles a scheme/host, the resolved
     // origin differs from the sentinel base.
-    const resolved = new URL(path, "http://taskito.invalid");
-    return resolved.origin === "http://taskito.invalid";
+    const resolved = new URL(path, "http://flexiq.invalid");
+    return resolved.origin === "http://flexiq.invalid";
   } catch {
     return false;
   }

@@ -61,7 +61,7 @@ export function Hero() {
           <Link className="btn pri" to={active.docHref}>
             Quickstart →
           </Link>
-          <a className="btn gho" href="https://github.com/ByteVeda/taskito">
+          <a className="btn gho" href="https://github.com/ByteVeda/flexiq">
             GitHub ↗
           </a>
         </div>

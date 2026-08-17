@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { type Job, type Page, Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-pg-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-pg-")), "q.db") });
 }
 
 /** Walk every page, collecting ids, so a dropped or repeated row shows up. */

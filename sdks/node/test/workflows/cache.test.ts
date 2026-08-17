@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-wfcache-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-wfcache-")), "q.db") });
 }
 
 it("reuses a cacheable step's result across runs", async () => {

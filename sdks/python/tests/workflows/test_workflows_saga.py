@@ -11,8 +11,8 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any
 
-from taskito import Queue
-from taskito.workflows import Workflow, WorkflowState
+from flexiq import Queue
+from flexiq.workflows import Workflow, WorkflowState
 
 if TYPE_CHECKING:
     pass

@@ -24,9 +24,9 @@ from unittest.mock import patch
 
 import pytest
 
-from taskito import Queue
-from taskito.exceptions import PredicateRejectedError
-from taskito.predicates import (
+from flexiq import Queue
+from flexiq.exceptions import PredicateRejectedError
+from flexiq.predicates import (
     AndPredicate,
     Cancel,
     Defer,
@@ -51,7 +51,7 @@ from taskito.predicates import (
     queue_paused,
     register_predicate,
 )
-from taskito.predicates.core import _CallablePredicate
+from flexiq.predicates.core import _CallablePredicate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -294,12 +294,12 @@ def test_payload_matches_kwargs_path() -> None:
 
 
 def test_env_var_truthy_reads_environ() -> None:
-    pred = env_var_truthy("TASKITO_TEST_PREDICATE_FLAG")
-    with patch.dict(os.environ, {"TASKITO_TEST_PREDICATE_FLAG": "yes"}, clear=False):
+    pred = env_var_truthy("FLEXIQ_TEST_PREDICATE_FLAG")
+    with patch.dict(os.environ, {"FLEXIQ_TEST_PREDICATE_FLAG": "yes"}, clear=False):
         assert pred.evaluate(_ctx()) is True
-    with patch.dict(os.environ, {"TASKITO_TEST_PREDICATE_FLAG": "0"}, clear=False):
+    with patch.dict(os.environ, {"FLEXIQ_TEST_PREDICATE_FLAG": "0"}, clear=False):
         assert pred.evaluate(_ctx()) is False
-    os.environ.pop("TASKITO_TEST_PREDICATE_FLAG", None)
+    os.environ.pop("FLEXIQ_TEST_PREDICATE_FLAG", None)
     assert pred.evaluate(_ctx()) is False
 
 

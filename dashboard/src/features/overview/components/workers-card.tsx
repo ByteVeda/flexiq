@@ -23,7 +23,7 @@ export function WorkersCard({ workers, loading }: WorkersCardProps) {
         <EmptyState
           icon={Server}
           title="No active workers"
-          description="Workers register when you call q.start() or run taskito worker."
+          description="Workers register when you call q.start() or run flexiq worker."
         />
       </Card>
     );

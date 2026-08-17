@@ -1,0 +1,25 @@
+{% extends "flexiq/admin/base.html" %}
+
+{% block flexiq_content %}
+<h1>FlexiQ Dashboard</h1>
+
+{% if stats %}
+<div class="module">
+  <table>
+    <thead>
+      <tr><th>Status</th><th>Count</th></tr>
+    </thead>
+    <tbody>
+      {% for name, count in stats.items %}
+      <tr>
+        <td>{{ name }}</td>
+        <td>{{ count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p>No queue statistics available.</p>
+{% endif %}
+{% endblock %}

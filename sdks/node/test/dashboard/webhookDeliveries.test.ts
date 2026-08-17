@@ -11,7 +11,7 @@ import { seedAdminAndSession } from "../../src/dashboard/testing";
 import { Queue, serveDashboard } from "../../src/index";
 
 // These deliveries target a loopback receiver, which the SSRF guard blocks by default.
-process.env.TASKITO_WEBHOOKS_ALLOW_PRIVATE = "1";
+process.env.FLEXIQ_WEBHOOKS_ALLOW_PRIVATE = "1";
 
 const pkgRoot = fileURLToPath(new URL("../..", import.meta.url));
 const staticDir = join(pkgRoot, "static", "dashboard");
@@ -44,7 +44,7 @@ beforeEach(async () => {
   await once(receiver, "listening");
   sinkUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/hook`;
 
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashdel-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashdel-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("noop", () => null);
   ({ headers } = await seedAdminAndSession(queue));

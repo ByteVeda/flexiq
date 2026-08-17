@@ -30,7 +30,7 @@ JSON blob without size constraints (trace IDs, request envelopes, etc.).
 Pass a dict to `notes=` on any enqueue call:
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue()
 
@@ -66,7 +66,7 @@ attached). The raw stored JSON string is also available on the underlying
 
 Validation runs at the Python boundary; the Rust storage layer receives an
 already-encoded JSON string and stores it verbatim. The exact contract is
-defined in [`taskito.notes`](https://github.com/ByteVeda/taskito/blob/master/sdks/python/taskito/notes.py):
+defined in [`flexiq.notes`](https://github.com/ByteVeda/flexiq/blob/master/sdks/python/flexiq/notes.py):
 
 | Constraint | Default | Constant |
 |---|---|---|
@@ -80,11 +80,11 @@ Values may be any JSON-serializable primitive (`str`, `int`, `float`,
 `bool`, `None`), plus `list` or `dict` within the depth cap.
 
 Violations raise [`NotesValidationError`](#errors), a subclass of both
-`TaskitoError` and `ValueError`, so existing `except ValueError` handlers
+`FlexiQError` and `ValueError`, so existing `except ValueError` handlers
 keep working:
 
 ```python
-from taskito import NotesValidationError
+from flexiq import NotesValidationError
 
 try:
     process_order.apply_async(args=(42,), notes={f"k{i}": i for i in range(20)})
@@ -112,9 +112,9 @@ representation on Redis. Notes survive:
 ## Errors
 
 ```python
-from taskito import NotesValidationError
+from flexiq import NotesValidationError
 ```
 
-Subclasses `TaskitoError` and `ValueError`. The exception message names
+Subclasses `FlexiQError` and `ValueError`. The exception message names
 the offending key or constraint so it can be surfaced directly to end
 users.

@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
-from taskito import Queue
-from taskito.exceptions import TaskFailedError
+from flexiq import Queue
+from flexiq.exceptions import TaskFailedError
 
 
 def _make_failing_poll(job_id: str) -> Any:

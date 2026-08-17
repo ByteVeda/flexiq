@@ -20,7 +20,7 @@ One job per recipient keeps retries and failures isolated — a bad address neve
 blocks the rest. The limits cap how fast and how many run at once.
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 export const queue = new Queue({ dbPath: "bulk-email.db" });
 

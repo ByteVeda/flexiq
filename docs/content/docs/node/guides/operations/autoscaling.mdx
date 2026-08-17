@@ -16,9 +16,9 @@ already know KEDA.
 ## Quick start
 
 ```ts
-import { Queue, serveAutoscaler } from "@byteveda/taskito";
+import { Queue, serveAutoscaler } from "@byteveda/flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 await serveAutoscaler(queue, {
   app: "./app.js",
@@ -27,7 +27,7 @@ await serveAutoscaler(queue, {
 });
 ```
 
-`app` is the same module `taskito run` loads — one that exports a configured
+`app` is the same module `flexiq run` loads — one that exports a configured
 `Queue` as its default export or as `queue`. Each spawned worker imports it and
 starts a worker over its registered tasks.
 
@@ -37,7 +37,7 @@ drained.
 ## CLI
 
 ```bash
-taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+flexiq --db flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 ```
 
 Every option below has a matching flag (`--target-queue-depth`,
@@ -50,12 +50,12 @@ A systemd unit for the pool:
 
 ```ini
 [Unit]
-Description=taskito autoscaler
+Description=flexiq autoscaler
 After=network.target
 
 [Service]
 WorkingDirectory=/opt/myapp
-ExecStart=/usr/bin/npx taskito --db /var/lib/taskito/taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+ExecStart=/usr/bin/npx flexiq --db /var/lib/flexiq/flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 Restart=always
 KillMode=process
 TimeoutStopSec=120
@@ -143,7 +143,7 @@ Invalid values throw `RangeError` up front rather than misbehaving at runtime.
 process:
 
 ```ts
-import { Autoscaler } from "@byteveda/taskito";
+import { Autoscaler } from "@byteveda/flexiq";
 
 const autoscaler = new Autoscaler(queue, { app: "./app.js", maxWorkers: 20 });
 autoscaler.start();
@@ -167,7 +167,7 @@ and `killAll()`.
 <Callout type="info">
   Each tick logs one line at `info`:
   `pending=N running=M workers=X -> Y (rationale)`. Set
-  `TASKITO_LOG_LEVEL=info` (or `setLogLevel("info")`) to see the scaling
+  `FLEXIQ_LOG_LEVEL=info` (or `setLogLevel("info")`) to see the scaling
   history.
 </Callout>
 
@@ -196,6 +196,6 @@ worker that dies on its own is noticed on the next tick and replaced up to
 | Crash recovery | Replaces crashed workers | Kubernetes restarts pods |
 | Setup | None | KEDA operator + `ScaledObject` |
 
-On Kubernetes, run `serveScaler` (or `taskito scaler`) and let KEDA size the
+On Kubernetes, run `serveScaler` (or `flexiq scaler`) and let KEDA size the
 deployment. The two compose: KEDA sizes the fleet, and each pod can still run
 its own autoscaler over that machine's cores.

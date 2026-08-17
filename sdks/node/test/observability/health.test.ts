@@ -6,7 +6,7 @@ import { checkHealth, checkReadiness, type ResourcesCheck, resourceStatus } from
 import { Queue, type WorkerInfo } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-health-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-health-")), "q.db") });
 }
 
 /** A Queue stand-in for the failure paths a real storage won't produce. */

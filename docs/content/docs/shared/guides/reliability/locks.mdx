@@ -3,7 +3,7 @@ title: Distributed Locking
 description: "TTL-bounded, owner-scoped locks backed by the queue's storage — mutual exclusion across workers and processes."
 ---
 
-Coordinate across processes without a separate lock server. taskito's
+Coordinate across processes without a separate lock server. flexiq's
 distributed locks are TTL-bounded and owner-scoped, backed by the same
 storage as the task queue — locks work across multiple worker processes on
 one machine, and across multiple machines when the backend is a shared
@@ -17,7 +17,7 @@ constraint.
 <SdkOnly sdk="python">
 
 > Celery has no built-in lock — teams reach for `celery-once` or a Redis
-> lock. taskito's `queue.lock()` uses the queue database directly, so
+> lock. flexiq's `queue.lock()` uses the queue database directly, so
 > there's nothing extra to run.
 
 </SdkOnly>
@@ -26,7 +26,7 @@ constraint.
 
 > **Coming from BullMQ?** BullMQ's locking is internal — a `lockDuration`
 > per job that stops two workers double-processing it, not something you
-> can call from application code. taskito's `queue.lock()` / `withLock()`
+> can call from application code. flexiq's `queue.lock()` / `withLock()`
 > is a general-purpose distributed lock you can use for *any* critical
 > section, job processing or not.
 
@@ -106,7 +106,7 @@ if the lock is held elsewhere.
   <Tab sdk="java">
 
 ```java
-boolean ran = taskito.withLock("report:2026-06", 60_000, () -> rebuildReport());
+boolean ran = flexiq.withLock("report:2026-06", 60_000, () -> rebuildReport());
 if (!ran) {
     log.info("another worker holds the lock");
 }
@@ -177,7 +177,7 @@ otherwise call `lock.release()`.
 `Lock` is `AutoCloseable`, so try-with-resources releases it at block exit:
 
 ```java
-try (Lock lock = taskito.lock("resource", 30_000)) {
+try (Lock lock = flexiq.lock("resource", 30_000)) {
     if (lock.acquire()) {
         // ... critical section
     }
@@ -191,7 +191,7 @@ try (Lock lock = taskito.lock("resource", 30_000)) {
 | `extend(long ttlMs)` | Push the expiry out if still held; `false` means the lock was lost. |
 | `release()` / `close()` | Give the lock up (no-op if not held). |
 
-`taskito.lock(name)` without a TTL defaults to 30 seconds.
+`flexiq.lock(name)` without a TTL defaults to 30 seconds.
 
   </Tab>
 </CodeTabs>
@@ -254,7 +254,7 @@ another process. Pass `timeout` to retry every `retry_interval` seconds
 until it succeeds or the timeout elapses:
 
 ```python
-from taskito.locks import LockNotAcquiredError
+from flexiq.locks import LockNotAcquiredError
 
 try:
     with queue.lock("resource", timeout=5.0):
@@ -281,7 +281,7 @@ except LockNotAcquiredError:
 elapses:
 
 ```java
-try (Lock lock = taskito.lock("resource", 30_000)) {
+try (Lock lock = flexiq.lock("resource", 30_000)) {
     if (!lock.tryAcquire(Duration.ofSeconds(5))) {
         log.info("could not acquire lock within 5 seconds");
         return;
@@ -317,7 +317,7 @@ const info = queue.lock("my-lock").info();
   <Tab sdk="java">
 
 ```java
-Optional<LockInfo> info = taskito.lockInfo("my-lock");
+Optional<LockInfo> info = flexiq.lockInfo("my-lock");
 info.ifPresent(i -> log.info("held by {} until {}", i.ownerId, i.expiresAt));
 ```
 
@@ -343,7 +343,7 @@ info.ifPresent(i -> log.info("held by {} until {}", i.ownerId, i.expiresAt));
   <Tab sdk="python">
 
 ```python
-from taskito.locks import LockNotAcquiredError
+from flexiq.locks import LockNotAcquiredError
 
 try:
     with queue.lock("my-lock", timeout=2.0):
@@ -357,7 +357,7 @@ except LockNotAcquiredError:
   <Tab sdk="node">
 
 ```ts
-import { LockNotAcquiredError } from "@byteveda/taskito";
+import { LockNotAcquiredError } from "@byteveda/flexiq";
 
 try {
   await queue.withLock("my-lock", async () => {
@@ -377,7 +377,7 @@ try {
   <Tab sdk="java">
 
 ```java
-boolean ran = taskito.withLock("my-lock", 30_000, () -> criticalSection());
+boolean ran = flexiq.withLock("my-lock", 30_000, () -> criticalSection());
 if (!ran) {
     // Another process holds the lock; withLock doesn't throw for this case
     log.warn("skipping — another process is running the critical section");
@@ -439,10 +439,10 @@ await queue.withLock("billing-run", async () => {
 
 ```java
 // Process A (machine 1)
-taskito.withLock("billing-run", 30_000, () -> runBilling());
+flexiq.withLock("billing-run", 30_000, () -> runBilling());
 
 // Process B (machine 2) — returns false while A holds it; retry-wait instead:
-try (Lock lock = taskito.lock("billing-run", 30_000)) {
+try (Lock lock = flexiq.lock("billing-run", 30_000)) {
     if (lock.tryAcquire(Duration.ofSeconds(30))) {
         runBilling();
     }

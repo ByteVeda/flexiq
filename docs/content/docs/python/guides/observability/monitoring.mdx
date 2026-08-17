@@ -25,11 +25,11 @@ stats = await queue.astats()
 ### One-shot stats
 
 ```bash
-taskito info --app myapp:queue
+flexiq info --app myapp:queue
 ```
 
 ```
-taskito queue statistics
+flexiq queue statistics
 ------------------------------
   pending      12
   running      3
@@ -44,7 +44,7 @@ taskito queue statistics
 ### Live CLI stats
 
 ```bash
-taskito info --app myapp:queue --watch
+flexiq info --app myapp:queue --watch
 ```
 
 Refreshes every 2 seconds with throughput calculation (completed jobs per second).
@@ -54,7 +54,7 @@ Refreshes every 2 seconds with throughput calculation (completed jobs per second
 Report progress from inside tasks using `current_job`:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def process_batch(items):
@@ -87,7 +87,7 @@ Inside a running task, `current_job` provides:
 | `current_job.queue_name` | `str` | The queue this job is running on |
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def my_task():
@@ -124,7 +124,7 @@ The worker heartbeat is also available via the dashboard REST API at
 
 ## Events system
 
-taskito includes an in-process event bus for reacting to job lifecycle
+flexiq includes an in-process event bus for reacting to job lifecycle
 events (`JOB_ENQUEUED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_RETRYING`,
 `JOB_DEAD`, `JOB_CANCELLED`). Events can also be delivered as signed HTTP
 webhooks to external systems.
@@ -137,7 +137,7 @@ For production monitoring, the optional Prometheus integration provides
 counters, histograms, and gauges for task execution:
 
 ```bash
-pip install taskito[prometheus]
+pip install flexiq[prometheus]
 ```
 
 [Prometheus integration →](/python/guides/integrations/prometheus)
@@ -206,7 +206,7 @@ def alert_on_error(task_name, args, kwargs, error):
 
 ## Grafana setup
 
-A minimal Prometheus + Grafana stack for monitoring taskito:
+A minimal Prometheus + Grafana stack for monitoring flexiq:
 
 ```yaml
 # docker-compose.monitoring.yml
@@ -229,7 +229,7 @@ services:
 ```yaml
 # prometheus.yml
 scrape_configs:
-  - job_name: taskito
+  - job_name: flexiq
     static_configs:
       - targets: ["host.docker.internal:8080"]
     metrics_path: /metrics
@@ -240,30 +240,30 @@ scrape_configs:
 **Queue depth** (gauge):
 
 ```text
-taskito_queue_depth{queue="default"}
+flexiq_queue_depth{queue="default"}
 ```
 
 **Job processing rate** (rate):
 
 ```text
-rate(taskito_jobs_total{status="completed"}[5m])
+rate(flexiq_jobs_total{status="completed"}[5m])
 ```
 
 **Job duration p99** (histogram):
 
 ```text
-histogram_quantile(0.99, rate(taskito_job_duration_seconds_bucket[5m]))
+histogram_quantile(0.99, rate(flexiq_job_duration_seconds_bucket[5m]))
 ```
 
 ### Alert rules
 
 ```yaml
 # Alert if queue depth stays above 1000 for 5 minutes
-- alert: TaskitoQueueBacklog
-  expr: taskito_queue_depth > 1000
+- alert: FlexiQQueueBacklog
+  expr: flexiq_queue_depth > 1000
   for: 5m
 
 # Alert if p99 latency exceeds 5 seconds
-- alert: TaskitoHighLatency
-  expr: histogram_quantile(0.99, rate(taskito_job_duration_seconds_bucket[5m])) > 5
+- alert: FlexiQHighLatency
+  expr: histogram_quantile(0.99, rate(flexiq_job_duration_seconds_bucket[5m])) > 5
 ```

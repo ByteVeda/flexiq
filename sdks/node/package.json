@@ -1,6 +1,6 @@
 {
-  "name": "@byteveda/taskito",
-  "version": "0.23.0",
+  "name": "@byteveda/flexiq",
+  "version": "1.0.0",
   "description": "Rust-powered task queue for Node.js \u2014 no broker required.",
   "license": "MIT",
   "type": "module",
@@ -12,7 +12,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "taskito": "./dist/cli.js"
+    "flexiq": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -73,11 +73,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/ByteVeda/taskito.git",
+    "url": "https://github.com/ByteVeda/flexiq.git",
     "directory": "sdks/node"
   },
   "napi": {
-    "binaryName": "taskito",
+    "binaryName": "flexiq",
     "targets": [
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
@@ -90,7 +90,7 @@
   },
   "scripts": {
     "build": "pnpm run build:native && pnpm run build:ts",
-    "build:native": "napi build --platform --release --manifest-path ../../crates/taskito-node/Cargo.toml --features postgres,redis,mesh,workflows --output-dir native",
+    "build:native": "napi build --platform --release --manifest-path ../../crates/flexiq-node/Cargo.toml --features postgres,redis,mesh,workflows --output-dir native",
     "build:ts": "tsup",
     "build:dashboard": "pnpm -C ../../dashboard exec vite build --outDir ../sdks/node/static/dashboard --emptyOutDir",
     "prepack": "pnpm run build:dashboard",

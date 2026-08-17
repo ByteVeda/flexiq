@@ -1,6 +1,6 @@
 import { SEARCH_DOCS, type SearchDoc } from "./search";
 
-// Prefix the deploy base (`/taskito` on Pages, empty locally) so emitted links
+// Prefix the deploy base (`/flexiq` on Pages, empty locally) so emitted links
 // resolve under the project path, not the domain root.
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const docUrl = (id: string): string => `${BASE}${id}`;
@@ -15,7 +15,7 @@ function uniqueDocs(): SearchDoc[] {
 
 /** Index of every doc page (title + URL) — the `/llms.txt` body. */
 export function llmsIndex(): string {
-  const lines = ["# Taskito documentation", ""];
+  const lines = ["# FlexiQ documentation", ""];
   for (const doc of uniqueDocs()) {
     lines.push(`- [${doc.title}](${docUrl(doc.id)})`);
   }
@@ -27,5 +27,5 @@ export function llmsFull(): string {
   const blocks = uniqueDocs().map(
     (doc) => `## ${doc.title}\nURL: ${docUrl(doc.id)}\n\n${doc.text}\n`,
   );
-  return `# Taskito documentation (full text)\n\n${blocks.join("\n---\n\n")}`;
+  return `# FlexiQ documentation (full text)\n\n${blocks.join("\n---\n\n")}`;
 }

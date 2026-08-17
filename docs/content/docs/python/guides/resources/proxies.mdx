@@ -51,7 +51,7 @@ queue = Queue(
 ```
 
 If `recipe_signing_key` is not set on the constructor, it falls back to
-the `TASKITO_RECIPE_SECRET` environment variable. Signed recipes are
+the `FLEXIQ_RECIPE_SECRET` environment variable. Signed recipes are
 verified at reconstruction time — a modified or forged recipe raises
 `ProxyReconstructionError`.
 
@@ -81,7 +81,7 @@ Restrict which file paths the file proxy handler is allowed to reconstruct:
 ```python
 queue = Queue(
     db_path="tasks.db",
-    file_path_allowlist=["/data/uploads/", "/tmp/taskito/"],
+    file_path_allowlist=["/data/uploads/", "/tmp/flexiq/"],
 )
 ```
 
@@ -93,7 +93,7 @@ reconstruction. Without an allowlist, any path is permitted.
 Disable individual handlers by id — `BuiltInProxy` members or their strings:
 
 ```python
-from taskito import BuiltInProxy, Queue
+from flexiq import BuiltInProxy, Queue
 
 queue = Queue(
     db_path="tasks.db",
@@ -113,7 +113,7 @@ typo can't quietly leave the handler enabled.
 ### AWS (boto3)
 
 ```bash
-pip install taskito[aws]   # adds boto3>=1.20
+pip install flexiq[aws]   # adds boto3>=1.20
 ```
 
 The `boto3_client` handler stores the service name, region, and optional
@@ -133,7 +133,7 @@ process_upload.delay(s3, "my-bucket/key")
 ### Google Cloud Storage
 
 ```bash
-pip install taskito[gcs]   # adds google-cloud-storage>=2.0
+pip install flexiq[gcs]   # adds google-cloud-storage>=2.0
 ```
 
 The `gcs_client` handler stores the project and resource identifiers for
@@ -155,7 +155,7 @@ Opt out of proxy handling for a specific argument. The value is passed
 through to the serializer as-is:
 
 ```python
-from taskito import NoProxy
+from flexiq import NoProxy
 
 session = requests.Session()
 session.headers["User-Agent"] = "my-worker/1.0"
@@ -164,7 +164,7 @@ session.headers["User-Agent"] = "my-worker/1.0"
 process.delay(NoProxy(session))
 ```
 
-Use `NoProxy` when the serializer can handle the value directly — taskito's
+Use `NoProxy` when the serializer can handle the value directly — flexiq's
 default serializer, `SmartSerializer`, falls back to cloudpickle for objects
 MessagePack can't encode, so it can round-trip most live objects including
 `requests.Session` — or when you want to suppress proxy

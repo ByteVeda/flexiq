@@ -9,7 +9,7 @@ import { UnsafeWebhookUrlError } from "./errors";
  * `http://169.254.169.254/...` and turn the worker into an SSRF proxy for cloud
  * metadata, loopback services, or the RFC1918 intranet. Delivery to loopback,
  * link-local, RFC1918, CGNAT, and ULA destinations is refused by default; set
- * `TASKITO_WEBHOOKS_ALLOW_PRIVATE` (truthy) to disable the guard when developing
+ * `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` (truthy) to disable the guard when developing
  * against a local endpoint.
  *
  * Two layers: {@link assertSafeWebhookUrl} rules on the URL itself (scheme,
@@ -19,7 +19,7 @@ import { UnsafeWebhookUrlError } from "./errors";
  * Mirrors the cross-SDK `validate_webhook_url` contract.
  */
 
-const ALLOW_ENV_VAR = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+const ALLOW_ENV_VAR = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE";
 
 // Names that never leave this host regardless of DNS, which an address check
 // (run only after resolution) would miss for names that fail to resolve.

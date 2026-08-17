@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.resources import ResourceDefinition, ResourceRuntime
+from flexiq import Queue
+from flexiq.resources import ResourceDefinition, ResourceRuntime
 
 # ---------------------------------------------------------------------------
 # ResourceRuntime.status()
@@ -181,7 +181,7 @@ class TestQueueResourceStatus:
 class TestHealthCheckIntegration:
     def test_readiness_reports_healthy_resources(self, tmp_path: Any) -> None:
         """check_readiness includes resource status when all healthy."""
-        from taskito.health import check_readiness
+        from flexiq.health import check_readiness
 
         queue = Queue(db_path=str(tmp_path / "q.db"))
 
@@ -203,7 +203,7 @@ class TestHealthCheckIntegration:
 
     def test_readiness_reports_unhealthy_resources(self, tmp_path: Any) -> None:
         """check_readiness marks status as degraded for unhealthy resources."""
-        from taskito.health import check_readiness
+        from flexiq.health import check_readiness
 
         queue = Queue(db_path=str(tmp_path / "q.db"))
 
@@ -225,7 +225,7 @@ class TestHealthCheckIntegration:
 
     def test_readiness_no_resources(self, tmp_path: Any) -> None:
         """check_readiness works fine without any resources."""
-        from taskito.health import check_readiness
+        from flexiq.health import check_readiness
 
         queue = Queue(db_path=str(tmp_path / "q.db"))
         result = check_readiness(queue)
@@ -237,7 +237,7 @@ class TestHealthCheckIntegration:
 
     def test_health_check_always_ok(self) -> None:
         """check_health is always ok regardless of resources."""
-        from taskito.health import check_health
+        from flexiq.health import check_health
 
         assert check_health() == {"status": "ok"}
 
@@ -298,11 +298,11 @@ class TestPrometheusResourceMetrics:
     def test_prometheus_middleware_has_resource_metrics(self) -> None:
         """Verify resource metric singletons are initialized."""
         pytest.importorskip("prometheus_client")
-        from taskito.contrib.prometheus import _init_metrics  # type: ignore[attr-defined]
+        from flexiq.contrib.prometheus import _init_metrics  # type: ignore[attr-defined]
 
         _init_metrics()
 
-        from taskito.contrib import prometheus as pmod
+        from flexiq.contrib import prometheus as pmod
 
         assert pmod._resource_health is not None  # type: ignore[attr-defined]
         assert pmod._resource_recreations is not None  # type: ignore[attr-defined]

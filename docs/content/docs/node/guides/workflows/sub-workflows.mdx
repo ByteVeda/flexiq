@@ -127,7 +127,7 @@ in a conditional branch: place an `on_failure` step after it and an `on_success`
 step for the happy path. See [Conditions](/node/guides/workflows/conditions).
 
 > **Coming from BullMQ?** `FlowProducer`'s nested `children` arrays are the
-> closest BullMQ concept, but they're structural, not a linked *run*: taskito's
+> closest BullMQ concept, but they're structural, not a linked *run*: flexiq's
 > child is a fully independent workflow run with its own id, state, and
 > `queue.workflows.children()` listing — closer to calling `.submit()` from
 > inside a step than to a static tree.

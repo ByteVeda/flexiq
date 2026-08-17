@@ -6,7 +6,7 @@ description: "@queue.task(batch=…), BatchConfig, BatchedJobResult."
 Producer-side task batching primitives. Import paths:
 
 ```python
-from taskito.batching import BatchAccumulator, BatchConfig, BatchedJobResult
+from flexiq.batching import BatchAccumulator, BatchConfig, BatchedJobResult
 ```
 
 For the conceptual overview and trade-offs, see [Task batching](/python/guides/core/batching).
@@ -31,7 +31,7 @@ def send_emails(items: list[Email]) -> None:
         smtp.send(item)
 ```
 
-The task function **must** accept a `list` as its first positional argument. Each `.delay(item)` call adds one element to the in-memory buffer; when the buffer reaches `max_size` or `max_wait_ms` elapses, taskito enqueues one job whose payload is the full list.
+The task function **must** accept a `list` as its first positional argument. Each `.delay(item)` call adds one element to the in-memory buffer; when the buffer reaches `max_size` or `max_wait_ms` elapses, flexiq enqueues one job whose payload is the full list.
 
 ### Restrictions
 

@@ -20,7 +20,7 @@ function fileProxies(allowedRoots: readonly string[] = []): Proxies {
 }
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), "taskito-proxies-"));
+  return mkdtempSync(join(tmpdir(), "flexiq-proxies-"));
 }
 
 /** Simulate the wire: serialize the ref to JSON and parse it back. */

@@ -38,22 +38,22 @@ const COLS: { title: string; links: FootLink[] }[] = [
     links: [
       {
         label: "GitHub",
-        href: "https://github.com/ByteVeda/taskito",
+        href: "https://github.com/ByteVeda/flexiq",
         external: true,
       },
       {
         label: "Releases",
-        href: "https://github.com/ByteVeda/taskito/releases",
+        href: "https://github.com/ByteVeda/flexiq/releases",
         external: true,
       },
       {
         label: "Issues",
-        href: "https://github.com/ByteVeda/taskito/issues",
+        href: "https://github.com/ByteVeda/flexiq/issues",
         external: true,
       },
       {
         label: "PyPI",
-        href: "https://pypi.org/project/taskito/",
+        href: "https://pypi.org/project/flexiq/",
         external: true,
       },
     ],
@@ -100,7 +100,7 @@ export function Footer() {
         ))}
       </div>
       <div className="foot-bottom">
-        <span>© 2026 ByteVeda · taskito</span>
+        <span>© 2026 ByteVeda · flexiq</span>
         <span>MIT License · v{VERSION}</span>
       </div>
     </footer>

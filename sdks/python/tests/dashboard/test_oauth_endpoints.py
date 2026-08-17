@@ -19,17 +19,17 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import _make_handler
-from taskito.dashboard.auth import AuthStore
-from taskito.dashboard.oauth.config import (
+from flexiq import Queue
+from flexiq.dashboard import _make_handler
+from flexiq.dashboard.auth import AuthStore
+from flexiq.dashboard.oauth.config import (
     GitHubConfig,
     GoogleConfig,
     OAuthConfig,
     OIDCConfig,
 )
-from taskito.dashboard.oauth.flow import OAuthFlow
-from taskito.dashboard.oauth.identity import (
+from flexiq.dashboard.oauth.flow import OAuthFlow
+from flexiq.dashboard.oauth.identity import (
     AllowlistDenied,
     IdentityFetchError,
     ProviderIdentity,
@@ -298,9 +298,9 @@ def test_callback_creates_session_and_sets_cookies(
     assert cb_headers["Location"] == ["/dashboard"]
 
     cookies = _parse_set_cookies(cb_headers.get("Set-Cookie", []))
-    assert "taskito_session" in cookies
-    assert "taskito_csrf" in cookies
-    assert cookies["taskito_session"]
+    assert "flexiq_session" in cookies
+    assert "flexiq_csrf" in cookies
+    assert cookies["flexiq_session"]
 
     # A user was created in the AuthStore with the OAuth username scheme.
     user = AuthStore(queue).get_user("google:118420987654321")

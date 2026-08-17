@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taskito.dashboard.url_safety import is_safe_redirect
+from flexiq.dashboard.url_safety import is_safe_redirect
 
 
 @pytest.mark.parametrize(

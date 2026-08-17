@@ -1,4 +1,4 @@
-rootProject.name = "taskito"
+rootProject.name = "flexiq"
 
 include(":processor")
 include(":test-support")

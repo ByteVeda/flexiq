@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.workflows import NodeStatus, Workflow, WorkflowState
+from flexiq import Queue
+from flexiq.workflows import NodeStatus, Workflow, WorkflowState
 
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 PollUntil = Any  # the conftest fixture's runtime type

@@ -4,8 +4,8 @@ description: "JsonSerializer, MsgpackSerializer, CborSerializer, and the Seriali
 ---
 
 ```ts
-import { Queue, JsonSerializer, MsgpackSerializer } from "@byteveda/taskito";
-import type { Serializer } from "@byteveda/taskito";
+import { Queue, JsonSerializer, MsgpackSerializer } from "@byteveda/flexiq";
+import type { Serializer } from "@byteveda/flexiq";
 ```
 
 ## Built-ins
@@ -14,18 +14,18 @@ import type { Serializer } from "@byteveda/taskito";
 |---|---|
 | `JsonSerializer` | Default. Human-readable JSON bytes. |
 | `MsgpackSerializer` | Compact binary (msgpack). |
-| `CborSerializer` | Binary (CBOR, RFC 8949), tagged with the `0x02` wire-envelope byte — the default format for tasks produced or consumed by another Taskito SDK. Integers beyond `Number.MAX_SAFE_INTEGER` round-trip as `BigInt`. |
+| `CborSerializer` | Binary (CBOR, RFC 8949), tagged with the `0x02` wire-envelope byte — the default format for tasks produced or consumed by another FlexiQ SDK. Integers beyond `Number.MAX_SAFE_INTEGER` round-trip as `BigInt`. |
 | `SignedSerializer` | Wraps another codec with an HMAC-SHA256 tag; rejects tampered payloads. |
 | `EncryptedSerializer` | Wraps another codec with AES-256-GCM; encrypts + authenticates. |
 
 ```ts
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 ```ts
-import { Queue, CborSerializer } from "@byteveda/taskito";
+import { Queue, CborSerializer } from "@byteveda/flexiq";
 
-new Queue({ dbPath: "taskito.db", serializer: new CborSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
 ```
 
 `SignedSerializer(secret, inner?)` prefixes each payload with a 32-byte HMAC tag
@@ -36,8 +36,8 @@ producers and workers must share it.
 
 ```ts
 new Queue({
-  dbPath: "taskito.db",
-  serializer: new EncryptedSerializer(process.env.TASKITO_SECRET!),
+  dbPath: "flexiq.db",
+  serializer: new EncryptedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
 
@@ -47,7 +47,7 @@ A `PayloadCodec` is a reversible byte transform layered *around* a serializer
 — compression, encryption, signing — rather than a replacement for it. Codecs
 compose: a chain encodes in list order on the producer and decodes in reverse
 on the worker. Wire formats are part of the cross-SDK contract, so a
-codec-framed payload decodes from any Taskito SDK.
+codec-framed payload decodes from any FlexiQ SDK.
 
 ```ts
 interface PayloadCodec {
@@ -68,10 +68,10 @@ covers every payload and result), or register named codecs via
 (payload only — results still use the plain serializer):
 
 ```ts
-import { Queue, GzipCodec, HmacCodec } from "@byteveda/taskito";
+import { Queue, GzipCodec, HmacCodec } from "@byteveda/flexiq";
 
 const queue = new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   codec: [new GzipCodec(), new HmacCodec(hmacKey)], // encodes gzip, then hmac
 });
 ```

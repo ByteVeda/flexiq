@@ -42,7 +42,7 @@ let base = "";
 let headers: Record<string, string> = {};
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dash-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dash-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   queue.enqueue("add", [1, 2]);
@@ -121,7 +121,7 @@ it("creates and lists webhooks via the dashboard api", async () => {
 });
 
 it("lists a running worker", async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dash-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dash-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("noop", () => null);
   const worker: Worker = queue.runWorker({ queues: ["default"] });
@@ -144,7 +144,7 @@ it("lists a running worker", async () => {
 });
 
 it("aggregates metrics after a job completes", async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dash-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dash-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   const id = queue.enqueue("add", [2, 3]);
@@ -171,7 +171,7 @@ it("aggregates metrics after a job completes", async () => {
 });
 
 it("serves workflow runs, detail, dag, and children", async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dash-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dash-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("a", () => 1);
   queue.task("b", () => 2);

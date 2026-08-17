@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_enqueue_with_depends_on(queue: Queue) -> None:

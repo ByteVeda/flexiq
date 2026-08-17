@@ -16,7 +16,7 @@ with the [middleware pattern](/java/guides/core/cancellation#getting-the-job-id-
 ```java
 for (int epoch = 1; epoch <= epochs; epoch++) {
     double loss = trainEpoch(epoch);
-    taskito.writeTaskLog(jobId, "train", "result",
+    flexiq.writeTaskLog(jobId, "train", "result",
             "{\"epoch\": " + epoch + ", \"loss\": " + loss + "}");
 }
 ```
@@ -33,17 +33,17 @@ the job is terminal:
 
 <Callout type="info">
   This loop assumes a worker is already running the `train` handler
-  elsewhere — e.g. `taskito.worker().handle(train, p -> runTraining(p))
+  elsewhere — e.g. `flexiq.worker().handle(train, p -> runTraining(p))
   .start()` in another process or thread. Without one, the job stays
   `PENDING` and the loop polls forever.
 </Callout>
 
 ```java
-String id = taskito.enqueue(train, config);
+String id = flexiq.enqueue(train, config);
 
 int seen = 0;
-while (taskito.getJob(id).map(j -> j.status == JobStatus.PENDING || j.status == JobStatus.RUNNING).orElse(false)) {
-    List<TaskLog> logs = taskito.getTaskLogs(id);
+while (flexiq.getJob(id).map(j -> j.status == JobStatus.PENDING || j.status == JobStatus.RUNNING).orElse(false)) {
+    List<TaskLog> logs = flexiq.getTaskLogs(id);
     for (TaskLog log : logs.subList(seen, logs.size())) {
         if ("result".equals(log.level)) {
             render(log.message);
@@ -53,7 +53,7 @@ while (taskito.getJob(id).map(j -> j.status == JobStatus.PENDING || j.status == 
     Thread.sleep(200);
 }
 
-int result = taskito.getResult(id, Integer.class).orElseThrow();
+int result = flexiq.getResult(id, Integer.class).orElseThrow();
 ```
 
 It works from any process sharing the storage, and a late consumer still reads

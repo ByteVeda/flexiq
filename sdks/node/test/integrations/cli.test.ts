@@ -29,10 +29,10 @@ function runCli(args: string[]): Promise<{ stdout: string; code: number }> {
 }
 
 function tempDb(): string {
-  return join(mkdtempSync(join(tmpdir(), "taskito-cli-")), "cli.db");
+  return join(mkdtempSync(join(tmpdir(), "flexiq-cli-")), "cli.db");
 }
 
-describe("taskito CLI", () => {
+describe("flexiq CLI", () => {
   it("enqueues and reports stats and jobs", async () => {
     const db = tempDb();
     await runCli(["--db", db, "enqueue", "add", "[2,3]"]);
@@ -52,7 +52,7 @@ describe("taskito CLI", () => {
   });
 
   it("runs a worker from an app module", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "taskito-cli-"));
+    const dir = mkdtempSync(join(tmpdir(), "flexiq-cli-"));
     const db = join(dir, "cli.db");
     const marker = join(dir, "done.txt");
     const app = join(dir, "app.mjs");
@@ -61,10 +61,10 @@ describe("taskito CLI", () => {
     writeFileSync(
       app,
       [
-        `const { Queue } = await import(process.env.TASKITO_INDEX);`,
+        `const { Queue } = await import(process.env.FLEXIQ_INDEX);`,
         `const { writeFileSync } = await import("node:fs");`,
-        `const queue = new Queue({ dbPath: process.env.TASKITO_DB });`,
-        `queue.task("mark", () => { writeFileSync(process.env.TASKITO_MARKER, "ok"); return "ok"; });`,
+        `const queue = new Queue({ dbPath: process.env.FLEXIQ_DB });`,
+        `queue.task("mark", () => { writeFileSync(process.env.FLEXIQ_MARKER, "ok"); return "ok"; });`,
         `queue.enqueue("mark");`,
         `export default queue;`,
       ].join("\n"),
@@ -74,7 +74,7 @@ describe("taskito CLI", () => {
     try {
       child = spawn(process.execPath, [cliPath, "run", app], {
         stdio: "ignore",
-        env: { ...process.env, TASKITO_INDEX: indexUrl, TASKITO_DB: db, TASKITO_MARKER: marker },
+        env: { ...process.env, FLEXIQ_INDEX: indexUrl, FLEXIQ_DB: db, FLEXIQ_MARKER: marker },
       });
       expect(await waitForFile(marker, 25_000)).toBe(true);
     } finally {

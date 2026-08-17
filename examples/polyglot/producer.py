@@ -13,13 +13,13 @@ from __future__ import annotations
 import argparse
 import sys
 
-from taskito import Queue
-from taskito.serializers import CborSerializer
+from flexiq import Queue
+from flexiq.serializers import CborSerializer
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="taskito.db", help="shared queue database")
+    parser.add_argument("--db", default="flexiq.db", help="shared queue database")
     parser.add_argument("--orders", type=int, default=3, help="how many orders to enqueue")
     args = parser.parse_args()
 

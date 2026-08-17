@@ -61,7 +61,7 @@ export function registerAutoscale(program: Command): void {
         nodeArgs: flags.nodeArg,
       };
       process.stdout.write(
-        `taskito autoscaler running (${options.minWorkers}-${options.maxWorkers} workers) — Ctrl-C to stop\n`,
+        `flexiq autoscaler running (${options.minWorkers}-${options.maxWorkers} workers) — Ctrl-C to stop\n`,
       );
       // Resolves once a signal arrives and every worker has drained.
       await serveAutoscaler(queue, options);

@@ -1,56 +1,56 @@
 ---
 title: Installation
-description: "Install taskito and prepare your environment."
+description: "Install flexiq and prepare your environment."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-<Callout title="New to taskito?" type="info">
-  See [**Capabilities at a glance**](/python/getting-started/capabilities) for everything taskito does —
+<Callout title="New to flexiq?" type="info">
+  See [**Capabilities at a glance**](/python/getting-started/capabilities) for everything flexiq does —
   workflows, retries, the dashboard, prefork pools — each with a link to its guide.
 </Callout>
 
 ## From PyPI
 
 ```bash
-pip install taskito
+pip install flexiq
 ```
 
-taskito has a single runtime dependency:
+flexiq has a single runtime dependency:
 [`cloudpickle`](https://github.com/cloudpipe/cloudpickle) for serializing task arguments
 and results. It is installed automatically.
 
 <Callout title="SQLite is bundled" type="info">
-  taskito ships with SQLite compiled in via Rust's `libsqlite3-sys` crate. You do
+  flexiq ships with SQLite compiled in via Rust's `libsqlite3-sys` crate. You do
   **not** need a system SQLite installation.
 </Callout>
 
 ## Framework & feature extras
 
-taskito exposes optional pip extras for backends and integrations — install
+flexiq exposes optional pip extras for backends and integrations — install
 only what you need:
 
 ```bash
-pip install "taskito[postgres]"    # Postgres storage backend
-pip install "taskito[redis]"       # Redis storage backend
-pip install "taskito[flask]"       # Flask integration
-pip install "taskito[fastapi]"     # FastAPI integration
-pip install "taskito[django]"      # Django integration
-pip install "taskito[otel]"        # OpenTelemetry tracing/metrics
-pip install "taskito[prometheus]"  # Prometheus metrics exporter
-pip install "taskito[sentry]"      # Sentry error reporting
-pip install "taskito[encryption]"  # EncryptedSerializer (cryptography)
-pip install "taskito[msgpack]"     # MsgPackSerializer
+pip install "flexiq[postgres]"    # Postgres storage backend
+pip install "flexiq[redis]"       # Redis storage backend
+pip install "flexiq[flask]"       # Flask integration
+pip install "flexiq[fastapi]"     # FastAPI integration
+pip install "flexiq[django]"      # Django integration
+pip install "flexiq[otel]"        # OpenTelemetry tracing/metrics
+pip install "flexiq[prometheus]"  # Prometheus metrics exporter
+pip install "flexiq[sentry]"      # Sentry error reporting
+pip install "flexiq[encryption]"  # EncryptedSerializer (cryptography)
+pip install "flexiq[msgpack]"     # MsgPackSerializer
 ```
 
-Extras can be combined, e.g. `pip install "taskito[postgres,otel,sentry]"`.
+Extras can be combined, e.g. `pip install "flexiq[postgres,otel,sentry]"`.
 
 ## Postgres backend
 
 To use PostgreSQL as the storage backend instead of SQLite:
 
 ```bash
-pip install taskito[postgres]
+pip install flexiq[postgres]
 ```
 
 See the [Postgres backend guide](/python/guides/operations/postgres) for configuration details.
@@ -64,8 +64,8 @@ Building from source requires a Rust toolchain (1.70+).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone and build
-git clone https://github.com/ByteVeda/taskito.git
-cd taskito
+git clone https://github.com/ByteVeda/flexiq.git
+cd flexiq
 python -m venv .venv
 source .venv/bin/activate
 pip install maturin
@@ -82,13 +82,13 @@ pip install -e ".[docs]"    # Documentation
 ## Verify
 
 ```python
-import taskito
-print(taskito.__version__)  # 0.19.0 (your version may differ)
+import flexiq
+print(flexiq.__version__)  # 0.19.0 (your version may differ)
 ```
 
 ## Requirements
 
 - Python 3.10+
 - Any OS with SQLite support (Linux, macOS, Windows)
-- PostgreSQL 12+ (optional, for `taskito[postgres]`)
+- PostgreSQL 12+ (optional, for `flexiq[postgres]`)
 - Rust toolchain only needed for building from source

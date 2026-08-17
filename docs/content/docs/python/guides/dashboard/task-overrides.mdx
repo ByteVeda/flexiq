@@ -84,7 +84,7 @@ The dashboard CRUD is a thin shell over the `Queue` API — you can
 script overrides the same way:
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
 
@@ -162,7 +162,7 @@ path (e.g. `myapp.middleware.LoggingMiddleware`) so it survives
 restarts. Override it to pin a shorter, user-facing name:
 
 ```python
-from taskito.middleware import TaskMiddleware
+from flexiq.middleware import TaskMiddleware
 
 class SentryMiddleware(TaskMiddleware):
     name = "sentry"  # shows up as "sentry" in the dashboard

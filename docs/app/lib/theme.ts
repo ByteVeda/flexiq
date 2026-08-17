@@ -32,7 +32,7 @@ export function toggleTheme(): void {
   const next: ThemeMode = readTheme() === "light" ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", next);
   try {
-    localStorage.setItem("taskito-theme", next);
+    localStorage.setItem("flexiq-theme", next);
   } catch {
     // ignore storage failures (private mode etc.)
   }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_cancel_pending_job(queue: Queue) -> None:

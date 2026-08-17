@@ -1,4 +1,4 @@
 {
-  "title": "Taskito",
+  "title": "FlexiQ",
   "pages": ["jobs", "queues", "workers", "resources", "events", "pubsub"]
 }

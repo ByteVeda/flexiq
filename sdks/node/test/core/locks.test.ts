@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { LockNotAcquiredError, Queue } from "../../src/index";
 
 function freshQueue(): Queue {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-lock-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-lock-")), "queue.db");
   return new Queue({ dbPath });
 }
 

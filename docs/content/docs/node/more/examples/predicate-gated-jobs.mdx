@@ -21,7 +21,7 @@ or a `Decision` when you need more than allow/reject. Compose with
 `allOf` / `anyOf` / `not`.
 
 ```ts
-import { Decision, type EnqueueGate, type Predicate, Recipes } from "@byteveda/taskito";
+import { Decision, type EnqueueGate, type Predicate, Recipes } from "@byteveda/flexiq";
 
 // A recipe: out-of-hours sends defer to the next 09:00 ET instead of failing.
 export const duringBusinessHours = Recipes.businessHours({ timeZone: "America/New_York" });
@@ -46,7 +46,7 @@ export const urgent: Predicate = ({ args }) => args[1] === true;
 order and the first non-allow decision wins.
 
 ```ts
-import { anyOf, Queue } from "@byteveda/taskito";
+import { anyOf, Queue } from "@byteveda/flexiq";
 import { duringBusinessHours, reindexEnabled, underQuota, urgent } from "./predicates";
 
 export const queue = new Queue({ dbPath: "gated.db" });
@@ -66,7 +66,7 @@ A rejection throws synchronously. A skip also throws from `enqueue` — use
 `tryEnqueue` when "not now" is an expected answer rather than an error.
 
 ```ts
-import { PredicateRejectedError } from "@byteveda/taskito";
+import { PredicateRejectedError } from "@byteveda/flexiq";
 
 try {
   // Out of hours this returns a job id scheduled for the next opening.

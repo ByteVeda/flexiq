@@ -5,21 +5,21 @@
 # pending tasks. Use this for batch/ETL workloads.
 #
 # Prerequisites:
-#   1. Deploy `taskito scaler --app myapp:queue --port 9091` as a Service
+#   1. Deploy `flexiq scaler --app myapp:queue --port 9091` as a Service
 #   2. Install KEDA
 apiVersion: keda.sh/v1alpha1
 kind: ScaledJob
 metadata:
-  name: taskito-batch-worker
+  name: flexiq-batch-worker
   namespace: default
 spec:
   jobTargetRef:
     template:
       spec:
         containers:
-          - name: taskito-worker
+          - name: flexiq-worker
             image: your-image:latest
-            command: ["taskito", "worker", "--app", "myapp:queue"]
+            command: ["flexiq", "worker", "--app", "myapp:queue"]
         restartPolicy: Never
   pollingInterval: 15
   successfulJobsHistoryLimit: 5
@@ -30,6 +30,6 @@ spec:
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://taskito-scaler:9091/api/scaler"
+        url: "http://flexiq-scaler:9091/api/scaler"
         valueLocation: "metricValue"
         targetValue: "5"          # one pod per 5 pending jobs

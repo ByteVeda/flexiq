@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from taskito.async_support.helpers import run_maybe_async
+from flexiq.async_support.helpers import run_maybe_async
 
 
 def test_run_maybe_async_passes_through_non_coroutine() -> None:
@@ -24,7 +24,7 @@ def test_run_maybe_async_runs_coroutine_in_sync_context() -> None:
 
 
 async def test_run_maybe_async_raises_clear_error_under_running_loop() -> None:
-    """Pytest-asyncio puts us in a running loop — must surface the taskito error."""
+    """Pytest-asyncio puts us in a running loop — must surface the flexiq error."""
 
     async def make_value() -> int:
         return 1

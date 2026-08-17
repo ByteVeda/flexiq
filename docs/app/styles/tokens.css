@@ -1,5 +1,5 @@
 /* ============================================================
-   Taskito · Midnight theme
+   FlexiQ · Midnight theme
    Dark-first, electric indigo, IBM Plex. Light mode via [data-theme].
    ============================================================ */
 
@@ -19,7 +19,7 @@
   --dim: #5c5c70;
   --faint: #3a3a48;
 
-  /* Taskito brand green (matches the product/dashboard). Var names kept for compatibility. */
+  /* FlexiQ brand green (matches the product/dashboard). Var names kept for compatibility. */
   --indigo: #1f9d54;
   --indigo-br: #3bbf72;
   --indigo-dk: #15803d;
@@ -45,7 +45,7 @@
 }
 
 [data-theme="light"] {
-  /* warm paper light mode — matches the Taskito console */
+  /* warm paper light mode — matches the FlexiQ console */
   --bg: #f6f4ee;
   --bg-soft: #fbf9f3;
   --panel: #ffffff;

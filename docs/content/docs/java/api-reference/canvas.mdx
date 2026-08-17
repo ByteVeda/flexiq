@@ -4,7 +4,7 @@ description: "Compact signature reference for Canvas.link, chain, group, and cho
 ---
 
 ```java
-import org.byteveda.taskito.workflows.Canvas;
+import org.byteveda.flexiq.workflows.Canvas;
 ```
 
 Shortcuts that build a [`Workflow`](/java/api-reference/workflows) from a few
@@ -36,7 +36,7 @@ Workflow etl = Canvas.chain("etl",
         Canvas.link("transform", transformTask, null),
         Canvas.link("load", loadTask, null));
 
-taskito.submitWorkflow(etl);
+flexiq.submitWorkflow(etl);
 ```
 
 ## `Canvas.group`
@@ -52,7 +52,7 @@ Workflow notify = Canvas.group("notify",
         Canvas.link("email", sendEmail, message),
         Canvas.link("sms", sendSms, message));
 
-taskito.submitWorkflow(notify);
+flexiq.submitWorkflow(notify);
 ```
 
 ## `Canvas.chord`
@@ -71,14 +71,14 @@ Workflow report = Canvas.chord("report",
         Canvas.link("q1", queryRegion, "east"),
         Canvas.link("q2", queryRegion, "west"));
 
-taskito.submitWorkflow(report);
+flexiq.submitWorkflow(report);
 ```
 
 ## Submitting
 
 Every `Canvas` constructor returns a full `Workflow` — there's no separate
 canvas-specific submit path. Submit it like any other workflow via
-[`Taskito.submitWorkflow`](/java/api-reference/queue), and build the worker
+[`FlexiQ.submitWorkflow`](/java/api-reference/queue), and build the worker
 with `.trackWorkflows()` so the run's state and node statuses are tracked.
 `chain`/`group`/`chord` steps are plain task nodes, so no deferred-node
 registration (`trackWorkflows(workflow)`) is required for them.

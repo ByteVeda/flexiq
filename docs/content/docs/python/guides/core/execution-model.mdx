@@ -41,7 +41,7 @@ queue.run_worker(workers=8)
 ```
 
 ```bash
-taskito worker --app myapp:queue --workers 8
+flexiq worker --app myapp:queue --workers 8
 ```
 
 Because threads share a single GIL, CPU-bound tasks block each other. For
@@ -58,7 +58,7 @@ queue.run_worker(pool="prefork", app="myapp:queue")
 ```
 
 ```bash
-taskito worker --app myapp:queue --pool prefork
+flexiq worker --app myapp:queue --pool prefork
 ```
 
 The `app` parameter tells each child process where to import your `Queue`

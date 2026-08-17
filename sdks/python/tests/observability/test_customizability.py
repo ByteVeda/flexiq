@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from taskito.app import Queue
-from taskito.events import EventType
-from taskito.middleware import TaskMiddleware
-from taskito.webhooks import WebhookManager
+from flexiq.app import Queue
+from flexiq.events import EventType
+from flexiq.middleware import TaskMiddleware
+from flexiq.webhooks import WebhookManager
 
 # ── Middleware Hooks ──────────────────────────────────────────────────
 
@@ -285,13 +285,13 @@ class TestQueueLevelLimits:
 
 class TestFlaskConfig:
     def test_cli_group_param(self) -> None:
-        from taskito.contrib.flask import Taskito
+        from flexiq.contrib.flask import FlexiQ
 
-        ext = Taskito(cli_group="jobs")
+        ext = FlexiQ(cli_group="jobs")
         assert ext._cli_group == "jobs"
 
     def test_cli_group_default(self) -> None:
-        from taskito.contrib.flask import Taskito
+        from flexiq.contrib.flask import FlexiQ
 
-        ext = Taskito()
-        assert ext._cli_group == "taskito"
+        ext = FlexiQ()
+        assert ext._cli_group == "flexiq"

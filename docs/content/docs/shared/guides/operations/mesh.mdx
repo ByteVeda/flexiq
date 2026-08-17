@@ -55,7 +55,7 @@ First worker — no seeds needed, it becomes the initial cluster node:
   <Tab sdk="python">
 
 ```python
-from taskito import Queue, MeshWorker
+from flexiq import Queue, MeshWorker
 
 queue = Queue(db_path="tasks.db")
 
@@ -72,7 +72,7 @@ queue.run_worker(queues=["default"], mesh=mesh)
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 
@@ -92,7 +92,7 @@ const worker = queue.runWorker({
 
 ```java
 // First worker — no seeds needed, becomes the initial cluster node
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .mesh(MeshOptions.builder().port(7946).build())
         .start();
@@ -132,7 +132,7 @@ const worker = queue.runWorker({
 
 ```java
 // Joins the cluster by seeding from the first worker
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .mesh(MeshOptions.builder()
                 .port(7946)
@@ -324,7 +324,7 @@ always `port + 1`, so pick gossip ports far enough apart:
 
 ```python
 # worker_a.py
-from taskito import Queue, MeshWorker
+from flexiq import Queue, MeshWorker
 
 queue = Queue(db_path="tasks.db")
 
@@ -349,7 +349,7 @@ queue.run_worker(mesh=mesh)
 
 ```ts
 // worker-a.ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 queue.task("sendEmail", (to: string, subject: string) => {
@@ -361,7 +361,7 @@ queue.runWorker({ mesh: { port: 7946 } });
 
 ```ts
 // worker-b.ts — same db file, second process
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 queue.task("sendEmail", (to: string, subject: string) => {
@@ -376,13 +376,13 @@ queue.runWorker({ mesh: { port: 7948, seeds: ["127.0.0.1:7946"] } });
 
 ```java
 // Worker A — first node, no seeds
-Worker workerA = taskito.worker()
+Worker workerA = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .mesh(MeshOptions.builder().port(7946).build())
         .start();
 
 // Worker B — same storage, seeds from A
-Worker workerB = taskito.worker()
+Worker workerB = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .mesh(MeshOptions.builder()
                 .port(7948)                       // steal port becomes 7949
@@ -444,7 +444,7 @@ List<String> seeds = List.of(
         "scheduler-1.internal:7946",
         "scheduler-2.internal:7946");
 
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(process, payload -> handle(payload))
         .queues("default", "emails")
         .mesh(MeshOptions.builder()
@@ -474,14 +474,14 @@ Set `advertiseAddr` so peers dial back the right host when `bindAddr` stays
 <SdkOnly sdk="node">
 
 <Callout type="info" title="No CLI flags for mesh">
-  The `taskito run ./app.js` CLI command has no mesh options — mesh is only
+  The `flexiq run ./app.js` CLI command has no mesh options — mesh is only
   enabled by passing `mesh` to `runWorker()` in your own code. Read the
   config from the environment in your entrypoint instead:
 </Callout>
 
 ```ts
 // worker-entry.ts — container entrypoint, reads mesh config from env vars
-import { Queue, type MeshWorkerConfig } from "@byteveda/taskito";
+import { Queue, type MeshWorkerConfig } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 queue.task("sendEmail", (to: string, subject: string) => {
@@ -502,7 +502,7 @@ queue.runWorker({ mesh: meshFromEnv() });
 ```
 
 ```bash
-node worker-entry.js  # not `taskito run` — the CLI has no mesh flags
+node worker-entry.js  # not `flexiq run` — the CLI has no mesh flags
 ```
 
 </SdkOnly>
@@ -515,7 +515,7 @@ node worker-entry.js  # not `taskito run` — the CLI has no mesh flags
 services:
   worker-1:
     build: .
-    command: taskito worker --app myapp:queue
+    command: flexiq worker --app myapp:queue
     environment:
       MESH_PORT: "7946"
       MESH_SEEDS: ""  # first node, no seeds
@@ -526,7 +526,7 @@ services:
 
   worker-2:
     build: .
-    command: taskito worker --app myapp:queue
+    command: flexiq worker --app myapp:queue
     environment:
       MESH_PORT: "7946"
       MESH_SEEDS: "worker-1:7946"
@@ -539,10 +539,10 @@ services:
 ```
 
 <Callout type="warn" title="Illustrative — the CLI can't consume MESH_* env vars">
-  This compose file is illustrative, not runnable as-is: the `taskito worker`
+  This compose file is illustrative, not runnable as-is: the `flexiq worker`
   CLI has no mesh flags and never reads `MESH_PORT`/`MESH_SEEDS`/`MESH_KEY`.
   Mesh is only enabled by calling `queue.run_worker(mesh=...)` in your own
-  Python code. Replace `command: taskito worker --app myapp:queue` with
+  Python code. Replace `command: flexiq worker --app myapp:queue` with
   `command: python -m myapp`, where `myapp` is a module like the one below —
   its `__main__` block starts the worker with the env-derived mesh config.
 </Callout>
@@ -550,7 +550,7 @@ services:
 ```python
 # myapp.py — reads mesh config from environment
 import os
-from taskito import Queue, MeshWorker
+from flexiq import Queue, MeshWorker
 
 queue = Queue(db_path="tasks.db")
 
@@ -787,10 +787,10 @@ Mesh activity appears in Rust log output at `debug` and `info` levels:
 
 ```bash
 # See all mesh activity
-RUST_LOG=taskito_mesh=debug taskito worker --app myapp:queue
+RUST_LOG=flexiq_mesh=debug flexiq worker --app myapp:queue
 
 # See only gossip membership changes
-RUST_LOG=taskito_mesh::swim=info taskito worker --app myapp:queue
+RUST_LOG=flexiq_mesh::swim=info flexiq worker --app myapp:queue
 ```
 
 Key log messages:
@@ -864,8 +864,8 @@ still manages its own resource pool and prefetch batch independently:
   <Tab sdk="python">
 
 ```python
-from taskito import Queue, MeshWorker
-from taskito.resources import ResourceDefinition, Scope
+from flexiq import Queue, MeshWorker
+from flexiq.resources import ResourceDefinition, Scope
 
 queue = Queue(db_path="tasks.db")
 
@@ -890,7 +890,7 @@ queue.run_worker(mesh=mesh)
   <Tab sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue({ dbPath: "tasks.db" });
 
@@ -916,9 +916,9 @@ queue.runWorker({
   <Tab sdk="java">
 
 ```java
-taskito.resource("db", ResourceScope.WORKER, ctx -> openPool(), pool -> pool.close());
+flexiq.resource("db", ResourceScope.WORKER, ctx -> openPool(), pool -> pool.close());
 
-try (Worker worker = taskito.worker()
+try (Worker worker = flexiq.worker()
         .handle(processOrder, orderId -> {
             DataSource db = Resources.use("db");
             return process(db, orderId);
@@ -993,10 +993,10 @@ queue.runWorker({ queues: ["default"], mesh: { port: 7946, seeds: ["10.0.0.2:794
 
 ```java
 // Standard worker — no mesh, polls storage directly
-taskito.worker().handle(process, this::handle).start();
+flexiq.worker().handle(process, this::handle).start();
 
 // Mesh worker — same storage, but prefetches + steals
-taskito.worker().handle(process, this::handle)
+flexiq.worker().handle(process, this::handle)
         .mesh(MeshOptions.builder().seed("other-mesh-node:7946").build())
         .start();
 ```

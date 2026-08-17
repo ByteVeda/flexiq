@@ -34,8 +34,8 @@ mixed-version deploy window you must take one of the following approaches:
   override.
 
 ```python
-from taskito import Queue
-from taskito.serializers import CloudpickleSerializer
+from flexiq import Queue
+from flexiq.serializers import CloudpickleSerializer
 
 # Pin during the rolling-upgrade window.
 # Remove this line once every worker is on 0.15.

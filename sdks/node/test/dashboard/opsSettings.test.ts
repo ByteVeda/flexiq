@@ -25,7 +25,7 @@ let base = "";
 let headers: Record<string, string> = {};
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashops-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashops-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   ({ headers } = await seedAdminAndSession(queue));
@@ -120,7 +120,7 @@ describe("ops endpoints", () => {
   });
 
   it("gates readiness behind the metrics token when set", async () => {
-    process.env.TASKITO_DASHBOARD_METRICS_TOKEN = "probe-secret";
+    process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN = "probe-secret";
     try {
       expect((await fetch(`${base}/readiness`)).status).toBe(401);
       const ok = await fetch(`${base}/readiness`, {
@@ -128,7 +128,7 @@ describe("ops endpoints", () => {
       });
       expect(ok.status).toBe(200);
     } finally {
-      delete process.env.TASKITO_DASHBOARD_METRICS_TOKEN;
+      delete process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN;
     }
   });
 
@@ -140,7 +140,7 @@ describe("ops endpoints", () => {
       isActive: boolean;
       perQueue: Record<string, { pending: number }>;
     };
-    expect(body.metricName).toBe("taskito_queue_depth");
+    expect(body.metricName).toBe("flexiq_queue_depth");
     expect(body.metricValue).toBe(1);
     expect(body.isActive).toBe(true);
     expect(body.perQueue.default?.pending).toBe(1);

@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any
 
-from taskito import Queue, TopicMessage
+from flexiq import Queue, TopicMessage
 
 PollUntil = Any  # the conftest fixture's runtime type
 

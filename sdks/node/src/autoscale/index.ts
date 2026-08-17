@@ -1,5 +1,5 @@
 /**
- * Bare-metal autoscaler for taskito worker processes.
+ * Bare-metal autoscaler for flexiq worker processes.
  *
  * A control loop that spawns and drains worker subprocesses to track queue
  * depth and utilisation — for bare metal, Docker, or systemd, i.e. anyone who

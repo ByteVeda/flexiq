@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-codel-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-codel-")), "queue.db");
   return new Queue({ dbPath });
 }
 

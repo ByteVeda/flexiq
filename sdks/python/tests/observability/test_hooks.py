@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from taskito import Queue
+from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
 

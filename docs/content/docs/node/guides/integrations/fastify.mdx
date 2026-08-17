@@ -3,28 +3,28 @@ title: Fastify Integration
 description: "Register the REST API and dashboard as Fastify plugins."
 ---
 
-Peer dependency: `fastify`. Import from the `@byteveda/taskito/contrib/fastify`
+Peer dependency: `fastify`. Import from the `@byteveda/flexiq/contrib/fastify`
 subpath.
 
 ```ts
 import Fastify from "fastify";
 import {
-  taskitoFastify,
-  taskitoDashboardPlugin,
-} from "@byteveda/taskito/contrib/fastify";
+  flexiqFastify,
+  flexiqDashboardPlugin,
+} from "@byteveda/flexiq/contrib/fastify";
 
 const app = Fastify();
 
 // REST API
-await app.register(taskitoFastify, { queue, prefix: "/tasks" });
+await app.register(flexiqFastify, { queue, prefix: "/tasks" });
 
 // Dashboard SPA
-await app.register(taskitoDashboardPlugin, { queue, prefix: "/admin" });
+await app.register(flexiqDashboardPlugin, { queue, prefix: "/admin" });
 
 await app.listen({ port: 3000 });
 ```
 
-`taskitoFastify` is a `FastifyPluginAsync`. It exposes the same twelve routes as
+`flexiqFastify` is a `FastifyPluginAsync`. It exposes the same twelve routes as
 the [Express router](/node/guides/integrations/express#rest-routes) — including
 the `/health` and `/readiness` probes — mounted under `prefix`.
 
@@ -34,7 +34,7 @@ The same `includeRoutes`, `excludeRoutes`, and `resultTimeoutMs` options are
 accepted, passed in the register options object alongside `queue`:
 
 ```ts
-await app.register(taskitoFastify, {
+await app.register(flexiqFastify, {
   queue,
   prefix: "/tasks",
   excludeRoutes: ["enqueue"], // read-only API
@@ -42,10 +42,10 @@ await app.register(taskitoFastify, {
 });
 ```
 
-`taskitoDashboardPlugin` accepts `queue`, `prefix`, and an optional `staticDir`:
+`flexiqDashboardPlugin` accepts `queue`, `prefix`, and an optional `staticDir`:
 
 ```ts
-await app.register(taskitoDashboardPlugin, {
+await app.register(flexiqDashboardPlugin, {
   queue,
   prefix: "/admin",
   staticDir: "/app/dashboard-assets",

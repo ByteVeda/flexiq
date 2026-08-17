@@ -269,15 +269,15 @@ describe("boolean recipes", () => {
   });
 
   it("envVarTruthy reads the process environment", () => {
-    const gate = envVarTruthy("TASKITO_TEST_FLAG");
+    const gate = envVarTruthy("FLEXIQ_TEST_FLAG");
     expect(gate(at(WED_NOON_UTC))).toBe(false);
     for (const value of ["1", "true", "YES", " on "]) {
-      process.env.TASKITO_TEST_FLAG = value;
+      process.env.FLEXIQ_TEST_FLAG = value;
       expect(gate(at(WED_NOON_UTC))).toBe(true);
     }
-    process.env.TASKITO_TEST_FLAG = "0";
+    process.env.FLEXIQ_TEST_FLAG = "0";
     expect(gate(at(WED_NOON_UTC))).toBe(false);
-    delete process.env.TASKITO_TEST_FLAG;
+    delete process.env.FLEXIQ_TEST_FLAG;
     expect(() => envVarTruthy("")).toThrow(PredicateValidationError);
   });
 });

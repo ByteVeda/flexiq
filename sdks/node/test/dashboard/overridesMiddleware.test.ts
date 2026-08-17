@@ -26,7 +26,7 @@ let base = "";
 let headers: Record<string, string> = {};
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashovr-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashovr-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b, { maxRetries: 2, rateLimit: "100/m" });
   ({ headers } = await seedAdminAndSession(queue));

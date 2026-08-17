@@ -1,7 +1,7 @@
-"""End-to-end tests for ``taskito executor``.
+"""End-to-end tests for ``flexiq executor``.
 
 A scheduler is played by a plain socket speaking the frame protocol, so these
-run in every CI job without building the Rust server binary. ``taskito-server``
+run in every CI job without building the Rust server binary. ``flexiq-server``
 is the real peer, and `test_executor_attach_server.py` runs the same assertions
 against it when one is available — that pairing is what keeps this fake honest.
 
@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from taskito.worker_protocol import WORKER_PROTOCOL_VERSION, read_frame, write_frame
+from flexiq.worker_protocol import WORKER_PROTOCOL_VERSION, read_frame, write_frame
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
@@ -201,23 +201,23 @@ def spawn_executor(
     executor_id: str | None = None,
     markers: Path | None = None,
 ) -> subprocess.Popen[str]:
-    """Run ``taskito executor`` against ``port`` as a real subprocess."""
+    """Run ``flexiq executor`` against ``port`` as a real subprocess."""
     env = dict(os.environ)
-    env["TASKITO_EXECUTOR_TEST_DB"] = str(db_path)
+    env["FLEXIQ_EXECUTOR_TEST_DB"] = str(db_path)
     if markers is not None:
         markers.mkdir(parents=True, exist_ok=True)
-        env["TASKITO_EXECUTOR_MARKERS"] = str(markers)
+        env["FLEXIQ_EXECUTOR_MARKERS"] = str(markers)
     # Prefork children default to `python` on PATH; point them at this
-    # interpreter so they import the same taskito build the test does.
-    env["TASKITO_PYTHON"] = sys.executable
-    env.pop("TASKITO_ATTACH_TOKEN", None)
+    # interpreter so they import the same flexiq build the test does.
+    env["FLEXIQ_PYTHON"] = sys.executable
+    env.pop("FLEXIQ_ATTACH_TOKEN", None)
     if token is not None:
-        env["TASKITO_ATTACH_TOKEN"] = token
+        env["FLEXIQ_ATTACH_TOKEN"] = token
 
     command = [
         sys.executable,
         "-m",
-        "taskito.cli",
+        "flexiq.cli",
         "executor",
         "--app",
         APP_PATH,
@@ -474,11 +474,11 @@ def test_an_unreachable_scheduler_exits_nonzero(tmp_path: Path) -> None:
 
 def test_missing_attach_address_is_reported(tmp_path: Path) -> None:
     env = dict(os.environ)
-    env["TASKITO_EXECUTOR_TEST_DB"] = str(tmp_path / "t.db")
-    env.pop("TASKITO_ATTACH", None)
+    env["FLEXIQ_EXECUTOR_TEST_DB"] = str(tmp_path / "t.db")
+    env.pop("FLEXIQ_ATTACH", None)
 
     result = subprocess.run(
-        [sys.executable, "-m", "taskito.cli", "executor", "--app", APP_PATH],
+        [sys.executable, "-m", "flexiq.cli", "executor", "--app", APP_PATH],
         cwd=str(APP_DIR),
         env=env,
         capture_output=True,
@@ -486,7 +486,7 @@ def test_missing_attach_address_is_reported(tmp_path: Path) -> None:
         timeout=60,
     )
     assert result.returncode != 0
-    assert "TASKITO_ATTACH" in result.stderr
+    assert "FLEXIQ_ATTACH" in result.stderr
 
 
 def test_the_attach_address_can_come_from_the_environment(
@@ -494,14 +494,14 @@ def test_the_attach_address_can_come_from_the_environment(
 ) -> None:
     """Deployments configure by env, not flags — the contract shared with the other SDKs."""
     env = dict(os.environ)
-    env["TASKITO_EXECUTOR_TEST_DB"] = str(tmp_path / "t.db")
-    env["TASKITO_PYTHON"] = sys.executable
-    env["TASKITO_ATTACH"] = f"127.0.0.1:{scheduler.port}"
-    env["TASKITO_SLOTS"] = "3"
-    env.pop("TASKITO_ATTACH_TOKEN", None)
+    env["FLEXIQ_EXECUTOR_TEST_DB"] = str(tmp_path / "t.db")
+    env["FLEXIQ_PYTHON"] = sys.executable
+    env["FLEXIQ_ATTACH"] = f"127.0.0.1:{scheduler.port}"
+    env["FLEXIQ_SLOTS"] = "3"
+    env.pop("FLEXIQ_ATTACH_TOKEN", None)
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "taskito.cli", "executor", "--app", APP_PATH],
+        [sys.executable, "-m", "flexiq.cli", "executor", "--app", APP_PATH],
         cwd=str(APP_DIR),
         env=env,
         stdout=subprocess.PIPE,
@@ -510,7 +510,7 @@ def test_the_attach_address_can_come_from_the_environment(
     )
     try:
         hello = scheduler.accept()
-        assert hello["slots"] == 3, "TASKITO_SLOTS must be honoured"
+        assert hello["slots"] == 3, "FLEXIQ_SLOTS must be honoured"
     finally:
         terminate(process)
 
@@ -543,15 +543,15 @@ def test_the_executor_opens_no_storage(scheduler: FakeScheduler, tmp_path: Path)
     storage could not even start; one that does not never notices.
     """
     env = dict(os.environ)
-    env["TASKITO_PYTHON"] = sys.executable
-    env["TASKITO_ATTACH"] = f"127.0.0.1:{scheduler.port}"
-    env.pop("TASKITO_ATTACH_TOKEN", None)
+    env["FLEXIQ_PYTHON"] = sys.executable
+    env["FLEXIQ_ATTACH"] = f"127.0.0.1:{scheduler.port}"
+    env.pop("FLEXIQ_ATTACH_TOKEN", None)
     # Port 1 on loopback is reserved and nothing listens there.
-    env["TASKITO_EXECUTOR_TEST_BACKEND"] = "postgres"
-    env["TASKITO_EXECUTOR_TEST_DB"] = "postgres://taskito:nope@127.0.0.1:1/absent"
+    env["FLEXIQ_EXECUTOR_TEST_BACKEND"] = "postgres"
+    env["FLEXIQ_EXECUTOR_TEST_DB"] = "postgres://flexiq:nope@127.0.0.1:1/absent"
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "taskito.cli", "executor", "--app", APP_PATH],
+        [sys.executable, "-m", "flexiq.cli", "executor", "--app", APP_PATH],
         cwd=str(APP_DIR),
         env=env,
         stdout=subprocess.PIPE,
@@ -575,7 +575,7 @@ def test_progress_and_logs_degrade_rather_than_failing_the_job(
 ) -> None:
     """A task calling `update_progress` must not fail for want of storage.
 
-    This scheduler advertises no side-channel — an older `taskito-server` —
+    This scheduler advertises no side-channel — an older `flexiq-server` —
     so the executor sends nothing it could not parse. Losing the progress bar
     is a degradation; failing the job over it would be a regression for anyone
     moving a worker to an executor.

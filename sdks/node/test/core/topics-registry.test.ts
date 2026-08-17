@@ -8,7 +8,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-topics-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-topics-")), "q.db") });
 }
 
 it("retains publishes to a declared log topic with no subscriber", async () => {

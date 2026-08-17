@@ -9,7 +9,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function sharedDb(): string {
-  return join(mkdtempSync(join(tmpdir(), "taskito-ns-")), "queue.db");
+  return join(mkdtempSync(join(tmpdir(), "flexiq-ns-")), "queue.db");
 }
 
 it("scopes the id-addressed surface to the queue's namespace", async () => {

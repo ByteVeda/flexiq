@@ -16,7 +16,7 @@ instead of polling in Python, see the
 Inside a task, call `current_job.publish(data)` to emit a partial result:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def process_batch(items):

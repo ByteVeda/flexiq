@@ -8,15 +8,15 @@ queue — no Python required. Build the SPA assets once, then serve.
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db taskito.db dashboard --port 8787
+flexiq --db flexiq.db dashboard --port 8787
 ```
 
 Or programmatically:
 
 ```ts
-import { Queue, serveDashboard } from "@byteveda/taskito";
+import { Queue, serveDashboard } from "@byteveda/flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 const server = serveDashboard(queue, { port: 8787 });
 // ... server.close() to stop
 ```
@@ -42,12 +42,12 @@ the dashboard on a private network behind their own auth):
 serveDashboard(queue, { port: 8787, authEnabled: true });
 ```
 
-(or `taskito dashboard --auth` from the CLI). With `authEnabled: true` the
+(or `flexiq dashboard --auth` from the CLI). With `authEnabled: true` the
 full session flow runs: a one-time setup screen creates the first admin —
-or bootstrap it headlessly with `TASKITO_DASHBOARD_ADMIN_USER` /
-`TASKITO_DASHBOARD_ADMIN_PASSWORD` — then password login with server-side
+or bootstrap it headlessly with `FLEXIQ_DASHBOARD_ADMIN_USER` /
+`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` — then password login with server-side
 sessions, CSRF protection on writes, and admin/viewer roles. OAuth/SSO
-providers configured via `TASKITO_DASHBOARD_OAUTH_*` env vars apply only in
+providers configured via `FLEXIQ_DASHBOARD_OAUTH_*` env vars apply only in
 this mode.
 
 The legacy shared-token gate is unchanged: pass `auth: { token }` to require
@@ -59,7 +59,7 @@ serveDashboard(queue, { port: 8787, auth: { token: process.env.DASH_TOKEN! } });
 ```
 
 API requests authenticate via `Authorization: Bearer <token>`, an
-`X-Taskito-Token` header, or the `taskito_token` cookie — a `?token=` query is
+`X-Flexiq-Token` header, or the `flexiq_token` cookie — a `?token=` query is
 never accepted on `/api/*` calls. Opening `/?token=<token>` once sets the
 httpOnly cookie and redirects with the token stripped from the URL, keeping
 the secret out of subsequent browser history and `Referer` propagation; the

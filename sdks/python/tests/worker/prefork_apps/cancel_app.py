@@ -2,7 +2,7 @@
 
 The Queue inside this module must be importable both in the parent test
 process and inside each prefork child interpreter. The DB path comes from
-``TASKITO_CANCEL_TEST_DB`` so each test run can use its own tmp file while
+``FLEXIQ_CANCEL_TEST_DB`` so each test run can use its own tmp file while
 still letting the parent and child build identical Queue instances from
 the same module path.
 """
@@ -12,10 +12,10 @@ from __future__ import annotations
 import os
 import time
 
-from taskito import Queue
-from taskito.context import current_job
+from flexiq import Queue
+from flexiq.context import current_job
 
-queue = Queue(db_path=os.environ.get("TASKITO_CANCEL_TEST_DB", "/tmp/taskito-cancel.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_CANCEL_TEST_DB", "/tmp/flexiq-cancel.db"))
 
 
 @queue.task(timeout=30, max_retries=0)

@@ -15,7 +15,7 @@ For usage and configuration, see the
 <div className="archstack">
   <div className="layer py"><span className="ltag t-py">Dispatch</span><div className="lbody"><div className="lt">Enhanced poller</div><div className="ld">Local deque · affinity routing · work-stealing.</div></div></div>
   <div className="bound"><span className="bdir">↓</span>overlay</div>
-  <div className="layer" style={{ borderColor: "color-mix(in oklch,var(--cyan) 38%,transparent)", background: "linear-gradient(100deg,color-mix(in oklch,var(--cyan) 8%,transparent),var(--panel))" }}><span className="ltag t-store" style={{ background: "var(--cyan)", color: "#04201e" }}>Mesh</span><div className="lbody"><div className="lt">taskito-mesh crate</div><div className="ld">SWIM gossip · membership · failure detection.</div></div></div>
+  <div className="layer" style={{ borderColor: "color-mix(in oklch,var(--cyan) 38%,transparent)", background: "linear-gradient(100deg,color-mix(in oklch,var(--cyan) 8%,transparent),var(--panel))" }}><span className="ltag t-store" style={{ background: "var(--cyan)", color: "#04201e" }}>Mesh</span><div className="lbody"><div className="lt">flexiq-mesh crate</div><div className="ld">SWIM gossip · membership · failure detection.</div></div></div>
   <div className="bound"><span className="bdir">↓</span>source of truth</div>
   <div className="layer rust"><span className="ltag t-rust">Durability</span><div className="lbody"><div className="lt">Storage backend (unchanged)</div><div className="ld">SQLite · Postgres · Redis — atomic claims guarantee exactly-once dispatch.</div></div></div>
 </div>
@@ -34,9 +34,9 @@ flood the queue.
 
 ## Crate structure
 
-The mesh is implemented as a standalone Rust crate (`crates/taskito-mesh/`)
+The mesh is implemented as a standalone Rust crate (`crates/flexiq-mesh/`)
 with no PyO3 dependency. Feature-gated via `mesh` cargo feature on
-`taskito-python`. Depends on `taskito-core` for the
+`flexiq-python`. Depends on `flexiq-core` for the
 [`Job`](/architecture/job-lifecycle) type only.
 
 ## SWIM gossip protocol
@@ -130,7 +130,7 @@ hash values to worker IDs:
 ### Verified properties
 
 The ring's properties are validated by unit tests in
-`crates/taskito-mesh/src/ring.rs`:
+`crates/flexiq-mesh/src/ring.rs`:
 
 - **Even distribution**: 150 virtual nodes across 3 workers distributes
   3000 keys within 700–1300 each (within ±2× of theoretical 1000)
@@ -309,4 +309,4 @@ to be idempotent — see the [failure model](/architecture/failure-model).
 - [Scheduler](/architecture/scheduler) — the poll loop that feeds jobs into the mesh bridge
 - [Worker Pool](/architecture/worker-pool) — the dispatcher that receives jobs from the mesh bridge
 - [Storage](/architecture/storage) — atomic claim mechanism that guarantees exactly-once dispatch
-- [Failure Model](/architecture/failure-model) — how taskito handles crashes and timeouts
+- [Failure Model](/architecture/failure-model) — how flexiq handles crashes and timeouts

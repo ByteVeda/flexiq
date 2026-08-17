@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.context import JobContext
-from taskito.dashboard import _make_handler
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
-from taskito.dashboard.middleware_store import MiddlewareDisableStore
-from taskito.middleware import TaskMiddleware
+from flexiq import Queue
+from flexiq.context import JobContext
+from flexiq.dashboard import _make_handler
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq.dashboard.middleware_store import MiddlewareDisableStore
+from flexiq.middleware import TaskMiddleware
 
 
 class RecordingMiddleware(TaskMiddleware):

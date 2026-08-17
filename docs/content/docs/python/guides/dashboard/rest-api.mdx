@@ -11,7 +11,7 @@ as the dashboard itself.
 
 <Callout type="warn" title="Auth-gated only when authentication is enabled">
   Authentication is opt-in (`serve_dashboard(auth_enabled=True)` /
-  `taskito dashboard --auth`) — by default every route serves openly.
+  `flexiq dashboard --auth`) — by default every route serves openly.
   With auth enabled, every route requires a valid session cookie obtained
   from `POST /api/auth/login` **except** this public set:
   `/api/auth/status`, `/api/auth/login`, `/api/auth/setup`,
@@ -48,7 +48,7 @@ Public, but locks itself after the first user is created. Body:
 ### `POST /api/auth/login`
 
 Body: `{"username": "...", "password": "..."}`. Sets the
-`taskito_session` (HttpOnly) and `taskito_csrf` cookies on success.
+`flexiq_session` (HttpOnly) and `flexiq_csrf` cookies on success.
 Returns `400 invalid_credentials` on failure.
 
 ### `POST /api/auth/logout`
@@ -670,7 +670,7 @@ s.post(
     "http://localhost:8080/api/auth/login",
     json={"username": "admin", "password": "..."},
 )
-csrf = s.cookies.get("taskito_csrf")
+csrf = s.cookies.get("flexiq_csrf")
 s.headers["X-CSRF-Token"] = csrf
 
 # Health check script.

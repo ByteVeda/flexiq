@@ -11,13 +11,13 @@ from unittest.mock import MagicMock
 import cloudpickle
 import pytest
 
-from taskito import Queue, TaskCancelledError, current_job
-from taskito.async_support.context import (
+from flexiq import Queue, TaskCancelledError, current_job
+from flexiq.async_support.context import (
     clear_async_context,
     get_async_context,
     set_async_context,
 )
-from taskito.middleware import TaskMiddleware
+from flexiq.middleware import TaskMiddleware
 
 PollUntil = Any  # the conftest fixture's runtime type
 
@@ -101,27 +101,27 @@ def _fake_queue(**overrides: Any) -> Any:
 
 
 def test_async_task_detected(tmp_path: Path) -> None:
-    """_taskito_is_async is True for async functions."""
+    """_flexiq_is_async is True for async functions."""
     queue = Queue(db_path=str(tmp_path / "test.db"))
 
     @queue.task()
     async def my_async_task() -> None:
         pass
 
-    assert my_async_task._taskito_is_async is True
-    assert hasattr(my_async_task, "_taskito_async_fn")
+    assert my_async_task._flexiq_is_async is True
+    assert hasattr(my_async_task, "_flexiq_async_fn")
 
 
 def test_sync_task_not_async(tmp_path: Path) -> None:
-    """_taskito_is_async is False for sync functions."""
+    """_flexiq_is_async is False for sync functions."""
     queue = Queue(db_path=str(tmp_path / "test.db"))
 
     @queue.task()
     def my_sync_task() -> None:
         pass
 
-    assert my_sync_task._taskito_is_async is False
-    assert my_sync_task._taskito_async_fn is None
+    assert my_sync_task._flexiq_is_async is False
+    assert my_sync_task._flexiq_async_fn is None
 
 
 # ── Async context (contextvars) ──────────────────────────────────
@@ -161,7 +161,7 @@ def test_async_context_isolated_between_tasks() -> None:
 
 def test_sync_context_unchanged(tmp_path: Path) -> None:
     """current_job still works via threading.local for sync tasks."""
-    from taskito.context import _clear_context, _set_context
+    from flexiq.context import _clear_context, _set_context
 
     _set_context("sync-job", "sync_task", 2, "high")
     assert current_job.id == "sync-job"
@@ -173,7 +173,7 @@ def test_sync_context_unchanged(tmp_path: Path) -> None:
 
 def test_async_context_fallback_to_sync() -> None:
     """_require_context falls back to threading.local when no async context."""
-    from taskito.context import _clear_context, _set_context
+    from flexiq.context import _clear_context, _set_context
 
     # No async context set
     assert get_async_context() is None
@@ -185,7 +185,7 @@ def test_async_context_fallback_to_sync() -> None:
 
 def test_async_context_preferred_over_sync() -> None:
     """When both async and sync contexts exist, async wins."""
-    from taskito.context import _clear_context, _set_context
+    from flexiq.context import _clear_context, _set_context
 
     _set_context("sync-id", "t", 0, "q")
     token = set_async_context("async-id", "t", 0, "q")
@@ -200,7 +200,7 @@ def test_async_context_preferred_over_sync() -> None:
 
 def test_async_executor_lifecycle() -> None:
     """Start/stop executor without errors."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
     registry: dict[str, Any] = {}
@@ -219,7 +219,7 @@ def test_stop_before_loop_runs_still_stops_the_thread() -> None:
     loop is provably not running when stop() checks it — the race window that
     ``is_running()`` misses and ``is_closed()`` does not.
     """
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     executor = AsyncTaskExecutor(MagicMock(), {}, MagicMock(), max_concurrency=10)
     executor._loop = asyncio.new_event_loop()
@@ -257,7 +257,7 @@ def test_stop_before_loop_runs_still_stops_the_thread() -> None:
 def test_stop_releases_result_sender() -> None:
     """stop() must drop the sender itself — a pinned frame can keep the
     executor alive indefinitely, so the release cannot wait for GC."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     executor = AsyncTaskExecutor(MagicMock(), {}, MagicMock(), max_concurrency=10)
     executor.start()
@@ -268,7 +268,7 @@ def test_stop_releases_result_sender() -> None:
 
 def test_async_executor_submit_and_execute(poll_until: PollUntil) -> None:
     """Basic async task produces correct result via executor."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
 
@@ -277,7 +277,7 @@ def test_async_executor_submit_and_execute(poll_until: PollUntil) -> None:
 
     # Build a minimal wrapper that the executor expects
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(my_task)
+        _flexiq_async_fn = staticmethod(my_task)
 
     registry: dict[str, Any] = {"test_mod.my_task": FakeWrapper()}
 
@@ -301,7 +301,7 @@ def test_async_executor_submit_and_execute(poll_until: PollUntil) -> None:
 
 def test_async_exception_reported(poll_until: PollUntil) -> None:
     """Exception in async task → failure result with traceback."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
 
@@ -309,7 +309,7 @@ def test_async_exception_reported(poll_until: PollUntil) -> None:
         raise ValueError("boom")
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(failing_task)
+        _flexiq_async_fn = staticmethod(failing_task)
 
     registry: dict[str, Any] = {"mod.failing_task": FakeWrapper()}
 
@@ -332,7 +332,7 @@ def test_async_exception_reported(poll_until: PollUntil) -> None:
 
 def test_async_cancellation(poll_until: PollUntil) -> None:
     """TaskCancelledError → cancelled result."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
 
@@ -340,7 +340,7 @@ def test_async_cancellation(poll_until: PollUntil) -> None:
         raise TaskCancelledError("cancelled")
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(cancelling_task)
+        _flexiq_async_fn = staticmethod(cancelling_task)
 
     registry: dict[str, Any] = {"mod.cancelling_task": FakeWrapper()}
 
@@ -362,7 +362,7 @@ def test_async_cancellation(poll_until: PollUntil) -> None:
 
 def test_async_retry_filter(poll_until: PollUntil) -> None:
     """Failed async task respects retry_on filter."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
 
@@ -370,7 +370,7 @@ def test_async_retry_filter(poll_until: PollUntil) -> None:
         raise TypeError("wrong type")
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(flaky_task)
+        _flexiq_async_fn = staticmethod(flaky_task)
 
     registry: dict[str, Any] = {"mod.flaky_task": FakeWrapper()}
 
@@ -396,7 +396,7 @@ def test_async_retry_filter(poll_until: PollUntil) -> None:
 
 def test_async_concurrency_limit(poll_until: PollUntil) -> None:
     """Semaphore bounds concurrent async tasks."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
     max_concurrent = 0
@@ -413,7 +413,7 @@ def test_async_concurrency_limit(poll_until: PollUntil) -> None:
             current -= 1
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(slow_task)
+        _flexiq_async_fn = staticmethod(slow_task)
 
     registry: dict[str, Any] = {"mod.slow_task": FakeWrapper()}
 
@@ -440,7 +440,7 @@ def test_async_concurrency_limit(poll_until: PollUntil) -> None:
 
 def test_async_middleware_hooks(poll_until: PollUntil) -> None:
     """Middleware before/after called for async tasks."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     before_called: list[str] = []
     after_called: list[str] = []
@@ -458,7 +458,7 @@ def test_async_middleware_hooks(poll_until: PollUntil) -> None:
         return 42
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(simple_task)
+        _flexiq_async_fn = staticmethod(simple_task)
 
     registry: dict[str, Any] = {"mod.simple_task": FakeWrapper()}
 
@@ -479,7 +479,7 @@ def test_async_middleware_hooks(poll_until: PollUntil) -> None:
 
 def test_async_task_with_injection(poll_until: PollUntil) -> None:
     """inject=["db"] works for async tasks via executor."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
 
@@ -487,7 +487,7 @@ def test_async_task_with_injection(poll_until: PollUntil) -> None:
         return f"got-{db}"
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(db_task)
+        _flexiq_async_fn = staticmethod(db_task)
 
     registry: dict[str, Any] = {"mod.db_task": FakeWrapper()}
 
@@ -517,7 +517,7 @@ def test_async_task_with_injection(poll_until: PollUntil) -> None:
 
 def test_async_context_available_inside_task(poll_until: PollUntil) -> None:
     """current_job.id works inside an async task via contextvars."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     sender = MagicMock()
     captured_id: list[str] = []
@@ -527,7 +527,7 @@ def test_async_context_available_inside_task(poll_until: PollUntil) -> None:
         return "ok"
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(ctx_task)
+        _flexiq_async_fn = staticmethod(ctx_task)
 
     registry: dict[str, Any] = {"mod.ctx_task": FakeWrapper()}
 
@@ -561,8 +561,8 @@ def test_async_executor_honors_per_task_serializer(poll_until: PollUntil) -> Non
     ``queue._deserialize_payload`` (honoring ``@task(serializer=...)``) and
     serializes results via ``queue._serialize_result`` rather than hardcoded
     cloudpickle in either direction."""
-    from taskito.async_support.executor import AsyncTaskExecutor
-    from taskito.serializers import JsonSerializer
+    from flexiq.async_support.executor import AsyncTaskExecutor
+    from flexiq.serializers import JsonSerializer
 
     sender = MagicMock()
     serializer = JsonSerializer()
@@ -571,7 +571,7 @@ def test_async_executor_honors_per_task_serializer(poll_until: PollUntil) -> Non
         return x + y
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(add)
+        _flexiq_async_fn = staticmethod(add)
 
     registry: dict[str, Any] = {"mod.add": FakeWrapper()}
 
@@ -610,10 +610,10 @@ class FakePermit:
 
 def _backpressure_executor(sender: Any, fn: Any, task_name: str) -> Any:
     """An executor wired to a single async `fn`, with everything else mocked out."""
-    from taskito.async_support.executor import AsyncTaskExecutor
+    from flexiq.async_support.executor import AsyncTaskExecutor
 
     class FakeWrapper:
-        _taskito_async_fn = staticmethod(fn)
+        _flexiq_async_fn = staticmethod(fn)
 
     queue_ref = _fake_queue()
 
@@ -790,7 +790,7 @@ def test_native_dispatch_emits_job_completed(poll_until: PollUntil) -> None:
     nothing downstream (notably the workflow tracker) ever learns the job
     finished, and a workflow with an async step hangs in `running` forever.
     """
-    from taskito.events import EventType
+    from flexiq.events import EventType
 
     sender = MagicMock()
     sender.try_report_success.return_value = True
@@ -812,7 +812,7 @@ def test_native_dispatch_emits_job_completed(poll_until: PollUntil) -> None:
 
 
 def test_native_dispatch_emits_job_failed(poll_until: PollUntil) -> None:
-    from taskito.events import EventType
+    from flexiq.events import EventType
 
     sender = MagicMock()
     sender.try_report_failure.return_value = True
@@ -839,7 +839,7 @@ def test_native_dispatch_does_not_emit_completed_on_cancel(poll_until: PollUntil
     the outcome loop adds JOB_CANCELLED. That pairing is the blocking path's
     long-standing behaviour — what must never appear is JOB_COMPLETED.
     """
-    from taskito.events import EventType
+    from flexiq.events import EventType
 
     sender = MagicMock()
     sender.try_report_cancelled.return_value = True

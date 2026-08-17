@@ -19,14 +19,14 @@ producer — jobs wait in storage either way.
 
 ```bash
 # 1. Python producer
-pip install taskito==0.23.0
-python producer.py --db taskito.db --orders 3
+pip install flexiq==1.0.0
+python producer.py --db flexiq.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications
-cd node-worker && npm install && TASKITO_DB=../taskito.db npm start
+cd node-worker && npm install && FLEXIQ_DB=../flexiq.db npm start
 
 # 3. Java worker — consumes notifications
-cd java-worker && TASKITO_DB=../taskito.db ./gradlew run
+cd java-worker && FLEXIQ_DB=../flexiq.db ./gradlew run
 ```
 
 Expected output:
@@ -51,7 +51,7 @@ Queue(db, serializer=CborSerializer())                 # Python
 new Queue({ dbPath, serializer: new CborSerializer() }) // Node
 ```
 ```java
-Taskito.builder().sqlite(db).serializer(new CborSerializer()).open()  // Java
+FlexiQ.builder().sqlite(db).serializer(new CborSerializer()).open()  // Java
 ```
 
 Leaving it unset is the single most likely reason a cross-language setup fails.
@@ -67,7 +67,7 @@ process here polls exactly one:
 queue.runWorker({ queues: ["process"] });   // Node
 ```
 ```java
-taskito.worker().queues("notify").start();  // Java
+flexiq.worker().queues("notify").start();  // Java
 ```
 
 ## Payload shape
@@ -105,7 +105,7 @@ started. The symlink target is relative to the directory holding the link —
 
 # Node — link the workspace SDK into the example
 (cd node-worker && mkdir -p node_modules/@byteveda \
-  && ln -s ../../../../../sdks/node node_modules/@byteveda/taskito)
+  && ln -s ../../../../../sdks/node node_modules/@byteveda/flexiq)
 
 # Java — publish locally, then Gradle resolves it from mavenLocal()
 (cd ../../sdks/java && ./gradlew publishToMavenLocal)
@@ -115,7 +115,7 @@ A locally built Java SDK stages a native library only for the host platform. If
 the runtime cannot find it, point at it directly:
 
 ```bash
-./gradlew run -Dtaskito.native.lib=/path/to/libtaskito_java.so
+./gradlew run -Dflexiq.native.lib=/path/to/libflexiq_java.so
 ```
 
 Once all three are wired up, `python scripts/polyglot_e2e.py` (from the

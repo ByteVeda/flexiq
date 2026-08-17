@@ -9,7 +9,7 @@ import { DEFAULT_SDK, isSdk, type Sdk } from "./sdk-registry";
 
 export type { Sdk };
 
-const KEY = "taskito-sdk";
+const KEY = "flexiq-sdk";
 const DEFAULT = DEFAULT_SDK;
 
 const listeners = new Set<() => void>();

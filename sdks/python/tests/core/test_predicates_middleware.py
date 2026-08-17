@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from taskito.app import Queue
-from taskito.context import JobContext
-from taskito.middleware import TaskMiddleware, legacy_task_filter_to_predicate
-from taskito.predicates import Predicate, PredicateContext
+from flexiq.app import Queue
+from flexiq.context import JobContext
+from flexiq.middleware import TaskMiddleware, legacy_task_filter_to_predicate
+from flexiq.predicates import Predicate, PredicateContext
 
 
 @dataclass(frozen=True)

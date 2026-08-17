@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from taskito.predicates import (
+from flexiq.predicates import (
     Defer,
     Predicate,
     PredicateContext,

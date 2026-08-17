@@ -481,7 +481,7 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 
 /**
  * Probe endpoints. `/health` is always public (liveness). `/readiness` and
- * `/metrics` accept the optional `TASKITO_DASHBOARD_METRICS_TOKEN` bearer or,
+ * `/metrics` accept the optional `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer or,
  * when dashboard auth is on, that mode's own credential — see
  * {@link probeAuthorized}.
  */
@@ -518,7 +518,7 @@ async function serveProbe(
 
 /**
  * Gate for `/readiness` and `/metrics`. Accepted credentials: the optional
- * `TASKITO_DASHBOARD_METRICS_TOKEN` bearer (scraper-friendly), the legacy
+ * `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer (scraper-friendly), the legacy
  * shared token in token mode, or a valid session in session mode. Open mode
  * with no metrics token stays public (probe-friendly default).
  */
@@ -527,7 +527,7 @@ function probeAuthorized(
   req: IncomingMessage,
   options: DashboardHandlerOptions,
 ): boolean {
-  const metricsToken = process.env.TASKITO_DASHBOARD_METRICS_TOKEN;
+  const metricsToken = process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN;
   if (metricsToken) {
     if (tokenMatches(`Bearer ${metricsToken}`, req.headers.authorization ?? "")) {
       return true;
@@ -549,8 +549,8 @@ function probeAuthorized(
 /** Token-mode session/CSRF cookies so the SPA proceeds without a login. */
 function setOpenAuthCookies(res: ServerResponse): void {
   res.setHeader("set-cookie", [
-    "taskito_session=open; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
-    "taskito_csrf=open; SameSite=Strict; Path=/; Max-Age=86400",
+    "flexiq_session=open; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
+    "flexiq_csrf=open; SameSite=Strict; Path=/; Max-Age=86400",
   ]);
 }
 

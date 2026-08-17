@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from taskito.events import EventType
-from taskito.webhooks import WebhookManager
+from flexiq.events import EventType
+from flexiq.webhooks import WebhookManager
 
 PollUntil = Any  # the conftest fixture's runtime type
 
@@ -25,7 +25,7 @@ def webhook_server(
     Delivery now validates the target URL and refuses private/loopback hosts,
     so the 127.0.0.1 test server needs the documented dev escape hatch.
     """
-    monkeypatch.setenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", "1")
+    monkeypatch.setenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", "1")
     received: list[dict[str, Any]] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -99,7 +99,7 @@ def test_webhook_hmac_signing(
     poll_until(lambda: len(received) >= 1, message="signed webhook not delivered")
 
     assert len(received) == 1
-    sig_header = received[0]["headers"].get("X-Taskito-Signature")
+    sig_header = received[0]["headers"].get("X-Flexiq-Signature")
     assert sig_header is not None
     assert sig_header.startswith("sha256=")
 

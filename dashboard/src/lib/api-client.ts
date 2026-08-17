@@ -1,6 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
-const CSRF_COOKIE = "taskito_csrf";
+const CSRF_COOKIE = "flexiq_csrf";
 const CSRF_HEADER = "X-CSRF-Token";
 
 export class ApiError extends Error {

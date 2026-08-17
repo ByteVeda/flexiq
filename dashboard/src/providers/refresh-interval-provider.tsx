@@ -9,7 +9,7 @@ const REFRESH_MS: Record<RefreshOption, number | false> = {
   off: false,
 };
 
-const STORAGE_KEY = "taskito.refresh";
+const STORAGE_KEY = "flexiq.refresh";
 const DEFAULT_OPTION: RefreshOption = "5s";
 
 interface RefreshContextValue {

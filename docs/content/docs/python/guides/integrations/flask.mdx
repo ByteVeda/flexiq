@@ -1,29 +1,29 @@
 ---
 title: Flask Integration
-description: "Taskito(app) extension with config-driven Queue setup and CLI commands."
+description: "FlexiQ(app) extension with config-driven Queue setup and CLI commands."
 ---
 
-taskito provides a first-class Flask extension that configures a `Queue`
+flexiq provides a first-class Flask extension that configures a `Queue`
 from your app config and registers CLI commands.
 
 ## Installation
 
 ```bash
-pip install taskito[flask]
+pip install flexiq[flask]
 ```
 
 ## Basic setup
 
 ```python
 from flask import Flask
-from taskito.contrib.flask import Taskito
+from flexiq.contrib.flask import FlexiQ
 
 app = Flask(__name__)
-app.config["TASKITO_DB_PATH"] = "myapp.db"
+app.config["FLEXIQ_DB_PATH"] = "myapp.db"
 
-taskito = Taskito(app)
+flexiq = FlexiQ(app)
 
-@taskito.queue.task()
+@flexiq.queue.task()
 def send_email(to: str, subject: str):
     ...
 ```
@@ -31,14 +31,14 @@ def send_email(to: str, subject: str):
 ## Factory pattern
 
 ```python
-from taskito.contrib.flask import Taskito
+from flexiq.contrib.flask import FlexiQ
 
-taskito = Taskito()
+flexiq = FlexiQ()
 
 def create_app():
     app = Flask(__name__)
-    app.config["TASKITO_DB_PATH"] = "myapp.db"
-    taskito.init_app(app)
+    app.config["FLEXIQ_DB_PATH"] = "myapp.db"
+    flexiq.init_app(app)
     return app
 ```
 
@@ -48,57 +48,57 @@ All configuration is read from `app.config`:
 
 | Config Key | Default | Description |
 |------------|---------|-------------|
-| `TASKITO_DB_PATH` | `.taskito/taskito.db` | SQLite database path |
-| `TASKITO_BACKEND` | `"sqlite"` | Storage backend: `"sqlite"` or `"postgres"` |
-| `TASKITO_DB_URL` | `None` | PostgreSQL connection URL (when backend is `"postgres"`) |
-| `TASKITO_WORKERS` | `0` (auto) | Number of worker threads |
-| `TASKITO_SCHEMA` | `"taskito"` | PostgreSQL schema name |
-| `TASKITO_DEFAULT_RETRY` | `3` | Default retry count for tasks |
-| `TASKITO_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
-| `TASKITO_DEFAULT_PRIORITY` | `0` | Default task priority |
-| `TASKITO_RESULT_TTL` | `None` | Auto-purge completed jobs after N seconds |
-| `TASKITO_DRAIN_TIMEOUT` | `30` | Seconds to wait for running tasks on shutdown |
+| `FLEXIQ_DB_PATH` | `.flexiq/flexiq.db` | SQLite database path |
+| `FLEXIQ_BACKEND` | `"sqlite"` | Storage backend: `"sqlite"` or `"postgres"` |
+| `FLEXIQ_DB_URL` | `None` | PostgreSQL connection URL (when backend is `"postgres"`) |
+| `FLEXIQ_WORKERS` | `0` (auto) | Number of worker threads |
+| `FLEXIQ_SCHEMA` | `"flexiq"` | PostgreSQL schema name |
+| `FLEXIQ_DEFAULT_RETRY` | `3` | Default retry count for tasks |
+| `FLEXIQ_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
+| `FLEXIQ_DEFAULT_PRIORITY` | `0` | Default task priority |
+| `FLEXIQ_RESULT_TTL` | `None` | Auto-purge completed jobs after N seconds |
+| `FLEXIQ_DRAIN_TIMEOUT` | `30` | Seconds to wait for running tasks on shutdown |
 
-Using `TASKITO_BACKEND = "postgres"` requires the `taskito[postgres]`
-extra (`pip install taskito[postgres]`) — see the
+Using `FLEXIQ_BACKEND = "postgres"` requires the `flexiq[postgres]`
+extra (`pip install flexiq[postgres]`) — see the
 [PostgreSQL guide](/python/guides/operations/postgres).
 
 ## Extension options
 
-The `Taskito` constructor accepts a `cli_group` parameter to rename the CLI
+The `FlexiQ` constructor accepts a `cli_group` parameter to rename the CLI
 command group:
 
 ```python
 # Commands will be under `flask tasks worker`, `flask tasks info`, etc.
-taskito = Taskito(app, cli_group="tasks")
+flexiq = FlexiQ(app, cli_group="tasks")
 ```
 
 ## CLI commands
 
-The extension registers commands under the `flask taskito` group
+The extension registers commands under the `flask flexiq` group
 (configurable via `cli_group`):
 
-### `flask taskito worker`
+### `flask flexiq worker`
 
-Start a taskito worker:
+Start a flexiq worker:
 
 ```bash
-flask taskito worker
-flask taskito worker --queues default,emails
+flask flexiq worker
+flask flexiq worker --queues default,emails
 ```
 
-### `flask taskito info`
+### `flask flexiq info`
 
 Show queue statistics. Supports `--format table` (default) and
 `--format json`:
 
 ```bash
-flask taskito info
-flask taskito info --format json
+flask flexiq info
+flask flexiq info --format json
 ```
 
 ```
-taskito queue statistics
+flexiq queue statistics
 ------------------------------
   pending      12
   running      3
@@ -114,10 +114,10 @@ taskito queue statistics
 
 ```python
 # Via the extension instance
-taskito.queue.stats()
+flexiq.queue.stats()
 
 # Via app extensions
-app.extensions["taskito"].queue.stats()
+app.extensions["flexiq"].queue.stats()
 ```
 
 ## Full example
@@ -126,22 +126,22 @@ A complete Flask application with task definitions and routes:
 
 ```python
 from flask import Flask, jsonify, request
-from taskito.contrib.flask import Taskito
+from flexiq.contrib.flask import FlexiQ
 
 app = Flask(__name__)
-app.config["TASKITO_DB_PATH"] = "myapp.db"
-app.config["TASKITO_DEFAULT_RETRY"] = 3
-app.config["TASKITO_RESULT_TTL"] = 86400  # 24h auto-cleanup
+app.config["FLEXIQ_DB_PATH"] = "myapp.db"
+app.config["FLEXIQ_DEFAULT_RETRY"] = 3
+app.config["FLEXIQ_RESULT_TTL"] = 86400  # 24h auto-cleanup
 
-taskito = Taskito(app)
+flexiq = FlexiQ(app)
 
-@taskito.queue.task()
+@flexiq.queue.task()
 def send_welcome_email(user_id: int):
     """Send a welcome email to a new user."""
     user = get_user(user_id)
     send_email(user.email, "Welcome!", "Thanks for signing up.")
 
-@taskito.queue.task(rate_limit="10/m")
+@flexiq.queue.task(rate_limit="10/m")
 def generate_report(report_type: str, params: dict):
     """Generate a report (rate-limited to 10/minute)."""
     return create_report(report_type, params)
@@ -162,14 +162,14 @@ def request_report():
 
 @app.route("/api/reports/<job_id>")
 def report_status(job_id: str):
-    job = taskito.queue.get_job(job_id)
+    job = flexiq.queue.get_job(job_id)
     if job is None:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"status": job.status, "progress": job.progress})
 
 @app.route("/api/queue/stats")
 def queue_stats():
-    return jsonify(taskito.queue.stats())
+    return jsonify(flexiq.queue.stats())
 ```
 
 Run the app and worker:
@@ -179,5 +179,5 @@ Run the app and worker:
 flask run
 
 # Terminal 2: Worker
-flask taskito worker
+flask flexiq worker
 ```

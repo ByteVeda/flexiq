@@ -22,8 +22,8 @@ Each channel is its own task so it retries and scales independently.
 
 ```java
 import java.time.Duration;
-import org.byteveda.taskito.task.RetryPolicy;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.task.RetryPolicy;
+import org.byteveda.flexiq.task.Task;
 
 public final class Tasks {
     public record Email(String to, String subject, String body) {}
@@ -49,50 +49,50 @@ The producer-facing helpers map application events onto enqueue options.
 ```java
 import java.time.Duration;
 import java.util.List;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.model.JobFilter;
-import org.byteveda.taskito.model.JobStatus;
-import org.byteveda.taskito.task.EnqueueOptions;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.model.JobFilter;
+import org.byteveda.flexiq.model.JobStatus;
+import org.byteveda.flexiq.task.EnqueueOptions;
 
 public final class Service {
-    private final Taskito taskito;
+    private final FlexiQ flexiq;
 
-    public Service(Taskito taskito) {
-        this.taskito = taskito;
+    public Service(FlexiQ flexiq) {
+        this.flexiq = flexiq;
     }
 
     // 1. Delayed scheduling — remind 24h from now.
     public String scheduleReminder(String email) {
-        return taskito.enqueue(Tasks.SEND_EMAIL, new Tasks.Email(email, "Reminder", "..."),
+        return flexiq.enqueue(Tasks.SEND_EMAIL, new Tasks.Email(email, "Reminder", "..."),
                 EnqueueOptions.builder().delay(Duration.ofHours(24)).build());
     }
 
     // 2. Idempotency — a duplicate enqueue with the same key is a no-op while
     //    the first is still pending or running.
     public String sendWelcomeOnce(String userId, String email) {
-        return taskito.enqueue(Tasks.SEND_EMAIL, new Tasks.Email(email, "Welcome", "..."),
+        return flexiq.enqueue(Tasks.SEND_EMAIL, new Tasks.Email(email, "Welcome", "..."),
                 EnqueueOptions.builder().uniqueKey("welcome:" + userId).build());
     }
 
     // 3. Priority — security alerts preempt routine mail.
     public String sendSecurityAlert(String phone, String text) {
-        return taskito.enqueue(Tasks.SEND_SMS, new Tasks.Sms(phone, text),
+        return flexiq.enqueue(Tasks.SEND_SMS, new Tasks.Sms(phone, text),
                 EnqueueOptions.builder().priority(100).build());
     }
 
     // 4. Batch fan-out — stage a whole digest run in one storage call.
     public List<String> sendDigests(List<Tasks.Email> due) {
-        return taskito.enqueueMany(Tasks.SEND_EMAIL, due);
+        return flexiq.enqueueMany(Tasks.SEND_EMAIL, due);
     }
 
     // 5. Cancellation — pull a not-yet-started send.
     public boolean cancelScheduled(String jobId) {
-        return taskito.cancel(jobId); // false if it already started
+        return flexiq.cancel(jobId); // false if it already started
     }
 
     // 6. Inspection — what's still pending?
-    public List<org.byteveda.taskito.model.Job> pendingSends() {
-        return taskito.listJobs(JobFilter.builder()
+    public List<org.byteveda.flexiq.model.Job> pendingSends() {
+        return flexiq.listJobs(JobFilter.builder()
                 .status(JobStatus.PENDING)
                 .task("send_email")
                 .limit(50)
@@ -108,21 +108,21 @@ America/New_York time.
 
 ```java
 import java.util.List;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.scheduling.PeriodicTask;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.scheduling.PeriodicTask;
+import org.byteveda.flexiq.worker.Worker;
 
 public final class WorkerMain {
     public static void main(String[] args) throws InterruptedException {
-        try (Taskito taskito = Taskito.builder().sqlite("notifications.db").open()) {
-            taskito.registerPeriodic(PeriodicTask.builder("daily-digest", "send_digest", "0 8 * * *")
+        try (FlexiQ flexiq = FlexiQ.builder().sqlite("notifications.db").open()) {
+            flexiq.registerPeriodic(PeriodicTask.builder("daily-digest", "send_digest", "0 8 * * *")
                     .timezone("America/New_York")
                     .build());
 
-            try (Worker worker = taskito.worker()
+            try (Worker worker = flexiq.worker()
                     .handle(Tasks.SEND_EMAIL, WorkerMain::deliverEmail)
                     .handle(Tasks.SEND_SMS, WorkerMain::deliverSms)
-                    .handle(Tasks.SEND_DIGEST, ignored -> buildAndFanOutDigests(taskito))
+                    .handle(Tasks.SEND_DIGEST, ignored -> buildAndFanOutDigests(flexiq))
                     .queues("default")
                     .start()) {
                 worker.awaitShutdown();
@@ -142,10 +142,10 @@ public final class WorkerMain {
         return null;
     }
 
-    private static Void buildAndFanOutDigests(Taskito taskito) {
+    private static Void buildAndFanOutDigests(FlexiQ flexiq) {
         // Build the due digest emails from your data store, then fan out.
         List<Tasks.Email> due = List.of();
-        taskito.enqueueMany(Tasks.SEND_EMAIL, due);
+        flexiq.enqueueMany(Tasks.SEND_EMAIL, due);
         return null;
     }
 }
@@ -161,7 +161,7 @@ public final class WorkerMain {
   </Tab>
   <Tab value="Terminal 2 — Producer">
     ```bash
-    jshell> new Service(taskito).sendSecurityAlert("+1...", "Login from a new device")
+    jshell> new Service(flexiq).sendSecurityAlert("+1...", "Login from a new device")
     ```
   </Tab>
 </Tabs>
@@ -173,7 +173,7 @@ public final class WorkerMain {
 | Delayed / scheduled send | `EnqueueOptions.builder().delay(...)` |
 | Idempotent send | `EnqueueOptions.builder().uniqueKey(...)` |
 | Priority lane | `EnqueueOptions.builder().priority(...)` |
-| Cancel a pending job | `taskito.cancel` |
+| Cancel a pending job | `flexiq.cancel` |
 | Recurring digest | `registerPeriodic` (cron + timezone) |
-| Batch fan-out | `taskito.enqueueMany` |
-| Pending-work inspection | `taskito.listJobs(JobFilter)` |
+| Batch fan-out | `flexiq.enqueueMany` |
+| Pending-work inspection | `flexiq.listJobs(JobFilter)` |

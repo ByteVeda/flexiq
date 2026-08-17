@@ -1,13 +1,13 @@
 ---
 title: Overview
-description: "The layered architecture behind the client — from the public Taskito interface down to the native core."
+description: "The layered architecture behind the client — from the public FlexiQ interface down to the native core."
 ---
 
 ```java
-import org.byteveda.taskito.Taskito;
+import org.byteveda.flexiq.FlexiQ;
 
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
-    // taskito is the client — every operation in this reference goes through it
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) {
+    // flexiq is the client — every operation in this reference goes through it
 }
 ```
 
@@ -19,19 +19,19 @@ the native boundary stays narrow.
 
 | Layer | Package | Role |
 |---|---|---|
-| `Taskito` | `org.byteveda.taskito` | The public entry point. An `AutoCloseable` interface built via `Taskito.builder()...open()`. Every method documented in this reference is declared here. |
-| `DefaultTaskito` | `org.byteveda.taskito` (package-private) | The only implementation of `Taskito`. Owns predicates, gates, interceptors, resources, and middleware; delegates producer/inspection/admin calls to a `QueueBackend` and job-await polling to `CoreFacade`. |
-| `CoreFacade` | `org.byteveda.taskito.core` | Translation and durable-emulation layer between the typed API and the backend's JSON wire views — e.g. `awaitJob` polls `getJobJson` until the job reaches a terminal status. |
-| `QueueBackend` | `org.byteveda.taskito.spi` | The SPI every backend implements. App code depends only on this interface; it's also what a test fake targets (see [Testing](/java/api-reference/testing)). |
-| `JniQueueBackend` | `org.byteveda.taskito.internal` (package-private) | The production `QueueBackend` — calls into the native shell over JNI. All scheduling, storage, and locking lives in the Rust core; this layer only marshals JSON and bytes across the boundary. |
+| `FlexiQ` | `org.byteveda.flexiq` | The public entry point. An `AutoCloseable` interface built via `FlexiQ.builder()...open()`. Every method documented in this reference is declared here. |
+| `DefaultFlexiQ` | `org.byteveda.flexiq` (package-private) | The only implementation of `FlexiQ`. Owns predicates, gates, interceptors, resources, and middleware; delegates producer/inspection/admin calls to a `QueueBackend` and job-await polling to `CoreFacade`. |
+| `CoreFacade` | `org.byteveda.flexiq.core` | Translation and durable-emulation layer between the typed API and the backend's JSON wire views — e.g. `awaitJob` polls `getJobJson` until the job reaches a terminal status. |
+| `QueueBackend` | `org.byteveda.flexiq.spi` | The SPI every backend implements. App code depends only on this interface; it's also what a test fake targets (see [Testing](/java/api-reference/testing)). |
+| `JniQueueBackend` | `org.byteveda.flexiq.internal` (package-private) | The production `QueueBackend` — calls into the native shell over JNI. All scheduling, storage, and locking lives in the Rust core; this layer only marshals JSON and bytes across the boundary. |
 
-A call like `taskito.enqueue(task, payload)` flows `Taskito` (interface) →
-`DefaultTaskito` (serializes the payload, runs gates/interceptors/middleware)
+A call like `flexiq.enqueue(task, payload)` flows `FlexiQ` (interface) →
+`DefaultFlexiQ` (serializes the payload, runs gates/interceptors/middleware)
 → `QueueBackend` (`JniQueueBackend` in production) → the native core.
 
 ## `Queue` is a handle, not the client
 
-`Taskito.queue(name)` returns a `Queue` — a handle to one *named queue*, not
+`FlexiQ.queue(name)` returns a `Queue` — a handle to one *named queue*, not
 the client itself:
 
 ```java
@@ -45,17 +45,17 @@ public interface Queue {
 
 <Callout type="info">
   Everything else — enqueue, inspect, workers, workflows, locks, periodics —
-  lives on `Taskito`. Reach for `Queue` only to pause or resume one named
-  queue; see [Taskito](/java/api-reference/queue).
+  lives on `FlexiQ`. Reach for `Queue` only to pause or resume one named
+  queue; see [FlexiQ](/java/api-reference/queue).
 </Callout>
 
 ## Packages
 
-Every package lives under `org.byteveda.taskito`:
+Every package lives under `org.byteveda.flexiq`:
 
 | Package | Contents |
 |---|---|
-| *(root)* | `Taskito`, `Queue`, `NamedQueue`, `TaskitoException` |
+| *(root)* | `FlexiQ`, `Queue`, `NamedQueue`, `FlexiQException` |
 | `task` | `Task`, `EnqueueOptions`, `RetryPolicy` |
 | `annotation` | `@TaskHandler`, `@Resource`, `@Compressed`, `@Encrypted` |
 | `worker` | `Worker`, `Worker.Builder`, `Handler`, `HandlerRegistry` |
@@ -68,7 +68,7 @@ Every package lives under `org.byteveda.taskito`:
 | `proxies` | Non-serializable argument proxies — `ProxyHandler`, `ProxySession` |
 | `middleware` | `Middleware`, `EnqueueContext`, `TaskContext` |
 | `events` | `EventName`, `OutcomeEvent` |
-| `errors` | The `TaskitoException` hierarchy |
+| `errors` | The `FlexiQException` hierarchy |
 | `model` | Wire-view records — `Job`, `QueueStats`, `WorkerInfo`, … |
 | `scheduling` | `PeriodicTask` |
 | `autoscale` | `AutoscaleOptions`, `Autoscaler` |
@@ -76,7 +76,7 @@ Every package lives under `org.byteveda.taskito`:
 | `webhooks` | `Webhook`, `WebhookManager` |
 | `contrib` | Optional integrations (Micrometer, Sentry) |
 | `dashboard` | Dashboard asset serving |
-| `cli` | The `taskito` command |
+| `cli` | The `flexiq` command |
 | `spi` | `QueueBackend` — the interface every backend implements |
 | `core` | `CoreFacade` — translation and durable emulation |
 | `internal` | `JniQueueBackend` and the JNI transport (package-private) |
@@ -85,6 +85,6 @@ Every package lives under `org.byteveda.taskito`:
 
 | Artifact | Contents |
 |---|---|
-| `org.byteveda:taskito` | The SDK itself. |
-| `org.byteveda:taskito-test` | `InMemoryTaskito` / `InMemoryQueueBackend` — see [Testing](/java/api-reference/testing). |
-| `org.byteveda:taskito-spring` | The Spring Boot 3 starter. |
+| `org.byteveda:flexiq` | The SDK itself. |
+| `org.byteveda:flexiq-test` | `InMemoryFlexiQ` / `InMemoryQueueBackend` — see [Testing](/java/api-reference/testing). |
+| `org.byteveda:flexiq-spring` | The Spring Boot 3 starter. |

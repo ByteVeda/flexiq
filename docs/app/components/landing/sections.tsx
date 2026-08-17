@@ -5,7 +5,7 @@ import { useActiveSdk } from "@/hooks";
 import { highlightPython } from "@/lib/highlight-lite";
 import {
   CODE_CELERY,
-  CODE_TASKITO,
+  CODE_FLEXIQ,
   DELTA,
   FEATURES,
   type IconCard,
@@ -247,7 +247,7 @@ export function UseCases() {
         <SectionHead
           kicker="Use cases"
           title="Built for the jobs you actually have"
-          lead="Pick the workload — taskito ships the primitives."
+          lead="Pick the workload — flexiq ships the primitives."
         />
         <div className="uc-grid">
           {USE_CASES.map((c) => {
@@ -289,7 +289,7 @@ export function Comparison() {
     <section className="section">
       <div className="wrap">
         <SectionHead
-          kicker="taskito vs Celery"
+          kicker="flexiq vs Celery"
           title="Less to operate"
           lead="The same task, two stacks. Side by side, with the operational delta."
         />
@@ -297,14 +297,11 @@ export function Comparison() {
           <div className="cmp-card win">
             <div className="cmp-head">
               <span className="nm">
-                taskito <span className="badge-win">brokerless</span>
+                flexiq <span className="badge-win">brokerless</span>
               </span>
               <span className="cap">single process</span>
             </div>
-            <RawHtml
-              className="cmp-code"
-              html={highlightPython(CODE_TASKITO)}
-            />
+            <RawHtml className="cmp-code" html={highlightPython(CODE_FLEXIQ)} />
           </div>
           <div className="cmp-card">
             <div className="cmp-head">
@@ -319,7 +316,7 @@ export function Comparison() {
             <thead>
               <tr>
                 <th>&nbsp;</th>
-                <th>taskito</th>
+                <th>flexiq</th>
                 <th>Celery + Redis</th>
               </tr>
             </thead>
@@ -327,7 +324,7 @@ export function Comparison() {
               {DELTA.map((d) => (
                 <tr key={d.label}>
                   <td>{d.label}</td>
-                  <RawHtml as="td" className="tk" html={d.taskito} />
+                  <RawHtml as="td" className="tk" html={d.flexiq} />
                   <RawHtml as="td" className="ce" html={d.celery} />
                 </tr>
               ))}
@@ -416,10 +413,10 @@ export function CTA() {
           broker, no config.
         </p>
         <div className="install-row">
-          <InstallPill cmd="pip install taskito" />
-          <InstallPill cmd="pnpm add @byteveda/taskito" />
+          <InstallPill cmd="pip install flexiq" />
+          <InstallPill cmd="pnpm add @byteveda/flexiq" />
           <InstallPill
-            cmd={`implementation("org.byteveda:taskito:${VERSION}")`}
+            cmd={`implementation("org.byteveda:flexiq:${VERSION}")`}
             prompt=""
           />
         </div>

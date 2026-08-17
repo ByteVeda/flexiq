@@ -39,7 +39,7 @@ heartbeat, so it answers for the whole deployment rather than the local
 process:
 
 ```ts
-import { resourceStatus } from "@byteveda/taskito";
+import { resourceStatus } from "@byteveda/flexiq";
 
 const status = await resourceStatus(queue);
 // [
@@ -71,7 +71,7 @@ dependency — one pod that can't reach the database, not a global outage.
 into any HTTP framework, a CLI check, or a container probe:
 
 ```ts
-import { checkHealth, checkReadiness } from "@byteveda/taskito";
+import { checkHealth, checkReadiness } from "@byteveda/flexiq";
 
 app.get("/healthz", (_req, res) => res.json(checkHealth()));       // { status: "ok" }
 app.get("/readyz", async (_req, res) => {

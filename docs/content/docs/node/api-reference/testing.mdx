@@ -4,8 +4,8 @@ description: "mockResource — swap a real dependency for a stub in tests."
 ---
 
 ```ts
-import { mockResource } from "@byteveda/taskito";
-import type { MockResource } from "@byteveda/taskito";
+import { mockResource } from "@byteveda/flexiq";
+import type { MockResource } from "@byteveda/flexiq";
 ```
 
 The Node SDK's testing model is: run a real in-process worker against a
@@ -26,7 +26,7 @@ Builds a [`MockResource`](#mockresource-1) wrapping `value`. Register its
 factory, then assert on `mock.resolutions` to confirm the resource was built.
 
 ```ts
-import { mockResource } from "@byteveda/taskito";
+import { mockResource } from "@byteveda/flexiq";
 
 const db = mockResource({ query: async () => [{ id: 1 }] });
 queue.resource("db", db.factory);

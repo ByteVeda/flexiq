@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { type EnqueuedEvent, Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-qev-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-qev-")), "q.db") });
 }
 
 it("emits queue.paused and queue.resumed", () => {

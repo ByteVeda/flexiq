@@ -1,11 +1,11 @@
 ---
 title: Failure Model
-description: "At-least-once delivery semantics and how taskito recovers from crashes, timeouts, and partial writes."
+description: "At-least-once delivery semantics and how flexiq recovers from crashes, timeouts, and partial writes."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Taskito provides **exactly-once dispatch** — `claim_execution` ensures two workers
+FlexiQ provides **exactly-once dispatch** — `claim_execution` ensures two workers
 never run the same job at once — but **at-least-once execution**: a crash mid-task
 is retried, so a task body can run more than once. (This is why the
 [mesh](/architecture/mesh) can promise no double-*dispatch* while a task may still

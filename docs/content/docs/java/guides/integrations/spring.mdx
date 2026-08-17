@@ -1,23 +1,23 @@
 ---
 title: Spring Boot Integration
-description: "Auto-configure a Taskito bean in Spring Boot 3 from taskito.* properties."
+description: "Auto-configure a FlexiQ bean in Spring Boot 3 from flexiq.* properties."
 ---
 
-The `taskito-spring` starter auto-configures a `Taskito` bean for Spring Boot 3
+The `flexiq-spring` starter auto-configures a `FlexiQ` bean for Spring Boot 3
 applications.
 
 ```kotlin
-implementation("org.byteveda:taskito-spring:0.23.0")
+implementation("org.byteveda:flexiq-spring:1.0.0")
 ```
 
-When the starter is on the classpath, `TaskitoAutoConfiguration` builds and
+When the starter is on the classpath, `FlexiQAutoConfiguration` builds and
 opens a client from your configuration and registers it as a singleton bean.
 The bean's destroy method is `close`, so the client shuts down with the
 application context.
 
 ```yaml
-taskito:
-  url: postgres://localhost/taskito   # SQLite path, postgres:// or redis:// URL
+flexiq:
+  url: postgres://localhost/flexiq   # SQLite path, postgres:// or redis:// URL
   pool-size: 8                        # optional; omit for the backend default
   namespace: my-app                   # optional; isolates this app's jobs in a shared store
 ```
@@ -27,14 +27,14 @@ Inject it anywhere:
 ```java
 @Service
 public class SignupService {
-    private final Taskito taskito;
+    private final FlexiQ flexiq;
 
-    public SignupService(Taskito taskito) {
-        this.taskito = taskito;
+    public SignupService(FlexiQ flexiq) {
+        this.flexiq = flexiq;
     }
 
     public void register(User user) {
-        taskito.enqueue("send_welcome_email", user.email());
+        flexiq.enqueue("send_welcome_email", user.email());
     }
 }
 ```
@@ -43,63 +43,63 @@ public class SignupService {
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `taskito.url` | `String` | SQLite under `.taskito/` | Connection string — SQLite path, `postgres://`, or `redis://` |
-| `taskito.pool-size` | `Integer` | backend default | Connection-pool size |
-| `taskito.namespace` | `String` | — | Namespace isolating this app's jobs in a shared store |
+| `flexiq.url` | `String` | SQLite under `.flexiq/` | Connection string — SQLite path, `postgres://`, or `redis://` |
+| `flexiq.pool-size` | `Integer` | backend default | Connection-pool size |
+| `flexiq.namespace` | `String` | — | Namespace isolating this app's jobs in a shared store |
 
 ## Overriding the bean
 
 The auto-configuration backs off (`@ConditionalOnMissingBean`) when you define
-your own `Taskito` bean — do that when you need middleware, codecs, or a custom
+your own `FlexiQ` bean — do that when you need middleware, codecs, or a custom
 serializer:
 
 ```java
 @Bean(destroyMethod = "close")
-Taskito taskito(TaskitoProperties properties) {
-    Taskito taskito = Taskito.builder().url(properties.getUrl()).open();
-    taskito.use(new SentryMiddleware()); // configure freely
-    return taskito;
+FlexiQ flexiq(FlexiQProperties properties) {
+    FlexiQ flexiq = FlexiQ.builder().url(properties.getUrl()).open();
+    flexiq.use(new SentryMiddleware()); // configure freely
+    return flexiq;
 }
 ```
 
 <Callout type="info">
   The starter configures only the client bean. Workers are yours to build and
-  start — construct one from the injected bean with `taskito.worker()` (for
+  start — construct one from the injected bean with `flexiq.worker()` (for
   example in an `ApplicationRunner` or a `SmartLifecycle` bean) and register
   your handlers on it.
 </Callout>
 
 ## Dashboard auto-configuration
 
-Set `taskito.dashboard.enabled=true` to auto-start a
+Set `flexiq.dashboard.enabled=true` to auto-start a
 [`DashboardServer`](/java/guides/operations/dashboard) bean over the
-`Taskito` bean. It's stopped with the application context
+`FlexiQ` bean. It's stopped with the application context
 (`destroyMethod = "close"`) and backs off (`@ConditionalOnMissingBean`) if you
 define your own `DashboardServer` bean.
 
 ```yaml
-taskito:
-  url: postgres://localhost/taskito
+flexiq:
+  url: postgres://localhost/flexiq
   dashboard:
     enabled: true
     port: 8080
     # auth-enabled: true         # opt in to session auth; the dashboard serves openly by default
     # token: ${DASH_TOKEN:}      # legacy shared-token mode; overrides auth-enabled
-    # static-dir: /opt/taskito/dashboard-static
+    # static-dir: /opt/flexiq/dashboard-static
     # secure-cookies: true       # false drops the Secure cookie attribute for local HTTP
 ```
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `taskito.dashboard.enabled` | `boolean` | `false` | Auto-start the dashboard server |
-| `taskito.dashboard.port` | `int` | `8081` | Bind port (`0` for ephemeral); defaults off Spring Boot's own `8080` |
-| `taskito.dashboard.auth-enabled` | `boolean` | `false` | Enable [session auth](/java/guides/operations/dashboard#session-auth-opt-in) (login/setup, CSRF, roles); off means the dashboard serves openly |
-| `taskito.dashboard.token` | `String` | none | Legacy shared token gating `/api/*`; overrides `auth-enabled` |
-| `taskito.dashboard.static-dir` | `String` | auto-discovered | Directory of a prebuilt SPA, overriding the jar's extracted copy |
-| `taskito.dashboard.secure-cookies` | `boolean` | `true` | Drop the `Secure` cookie attribute for local HTTP development |
+| `flexiq.dashboard.enabled` | `boolean` | `false` | Auto-start the dashboard server |
+| `flexiq.dashboard.port` | `int` | `8081` | Bind port (`0` for ephemeral); defaults off Spring Boot's own `8080` |
+| `flexiq.dashboard.auth-enabled` | `boolean` | `false` | Enable [session auth](/java/guides/operations/dashboard#session-auth-opt-in) (login/setup, CSRF, roles); off means the dashboard serves openly |
+| `flexiq.dashboard.token` | `String` | none | Legacy shared token gating `/api/*`; overrides `auth-enabled` |
+| `flexiq.dashboard.static-dir` | `String` | auto-discovered | Directory of a prebuilt SPA, overriding the jar's extracted copy |
+| `flexiq.dashboard.secure-cookies` | `boolean` | `true` | Drop the `Secure` cookie attribute for local HTTP development |
 
-OAuth/OIDC env vars (`TASKITO_DASHBOARD_OAUTH_*`, see
+OAuth/OIDC env vars (`FLEXIQ_DASHBOARD_OAUTH_*`, see
 [SSO](/java/guides/operations/sso)) and the admin bootstrap
-(`TASKITO_DASHBOARD_ADMIN_USER`/`_PASSWORD`) are read the same way regardless
+(`FLEXIQ_DASHBOARD_ADMIN_USER`/`_PASSWORD`) are read the same way regardless
 of Spring — they aren't Spring properties, and they only apply when
 `auth-enabled` is set.

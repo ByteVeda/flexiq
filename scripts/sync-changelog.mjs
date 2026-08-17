@@ -49,7 +49,7 @@ console.log(`synced ${versionTarget} (v${latest})`);
 const frontmatter = [
   "---",
   "title: Changelog",
-  'description: "Release history for taskito — every notable change, fix, and feature."',
+  'description: "Release history for flexiq — every notable change, fix, and feature."',
   "---",
   "",
   "{/* AUTO-GENERATED from /CHANGELOG.md by scripts/sync-changelog.mjs — do not edit directly. */}",

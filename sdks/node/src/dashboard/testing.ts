@@ -28,7 +28,7 @@ export async function seedAdminAndSession(
 /** Cookie + CSRF headers for an existing session. */
 export function authedHeaders(session: DashboardSession): Record<string, string> {
   return {
-    cookie: `taskito_session=${session.token}; taskito_csrf=${session.csrfToken}`,
+    cookie: `flexiq_session=${session.token}; flexiq_csrf=${session.csrfToken}`,
     "x-csrf-token": session.csrfToken,
   };
 }

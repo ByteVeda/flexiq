@@ -3,11 +3,11 @@ title: Installation
 description: "Install the Node.js SDK — prebuilt native binaries, dual ESM/CJS, three backends."
 ---
 
-The Node.js SDK is a thin [napi-rs](https://napi.rs) shell over the Taskito Rust
+The Node.js SDK is a thin [napi-rs](https://napi.rs) shell over the FlexiQ Rust
 core — peer to the Python SDK, with **no Python dependency**.
 
 ```bash
-pnpm add @byteveda/taskito
+pnpm add @byteveda/flexiq
 ```
 
 Requires Node.js >= 20. Ships as dual **ESM + CommonJS** with bundled type
@@ -16,7 +16,7 @@ definitions.
 ## Prebuilt native binaries
 
 A prebuilt native addon is installed automatically for your platform via an
-optional per-platform package (`@byteveda/taskito-<os>-<arch>`):
+optional per-platform package (`@byteveda/flexiq-<os>-<arch>`):
 
 - linux x64 / arm64 (gnu + musl)
 - macOS x64 / arm64
@@ -29,17 +29,17 @@ the napi-rs CLI:
 pnpm build:native
 ```
 
-The native crate lives at `crates/taskito-node`; `build:native` compiles it with
+The native crate lives at `crates/flexiq-node`; `build:native` compiles it with
 the `postgres,redis,workflows,mesh` cargo features enabled.
 
 ## Pick a backend
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
-new Queue({ dbPath: "taskito.db" });                                   // SQLite (default)
-new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
-new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
+new Queue({ dbPath: "flexiq.db" });                                   // SQLite (default)
+new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "flexiq" });
+new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "flexiq" });
 ```
 
 SQLite needs nothing else — the whole queue lives in one file. See

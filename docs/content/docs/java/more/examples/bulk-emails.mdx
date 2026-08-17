@@ -15,8 +15,8 @@ provider.
 
 ```java
 import java.time.Duration;
-import org.byteveda.taskito.task.RetryPolicy;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.task.RetryPolicy;
+import org.byteveda.flexiq.task.Task;
 
 public final class Tasks {
     public record Email(String to, String subject, String body) {}
@@ -37,10 +37,10 @@ very large list so each call stays a reasonable size.
 ```java
 import java.util.ArrayList;
 import java.util.List;
-import org.byteveda.taskito.Taskito;
+import org.byteveda.flexiq.FlexiQ;
 
 public final class Send {
-    public static List<String> sendCampaign(Taskito taskito, List<String> recipients,
+    public static List<String> sendCampaign(FlexiQ flexiq, List<String> recipients,
             String subject, String body) {
         List<String> ids = new ArrayList<>(recipients.size());
         for (int i = 0; i < recipients.size(); i += 1_000) {
@@ -48,7 +48,7 @@ public final class Send {
                     .stream()
                     .map(to -> new Tasks.Email(to, subject, body))
                     .toList();
-            ids.addAll(taskito.enqueueMany(Tasks.SEND_EMAIL, chunk));
+            ids.addAll(flexiq.enqueueMany(Tasks.SEND_EMAIL, chunk));
         }
         return ids; // one job id per recipient
     }
@@ -63,7 +63,7 @@ or `maxDelay` elapses:
 
 ```java
 try (Batcher<Tasks.Email> batcher =
-        Batcher.of(taskito, Tasks.SEND_EMAIL, 500, Duration.ofSeconds(2))) {
+        Batcher.of(flexiq, Tasks.SEND_EMAIL, 500, Duration.ofSeconds(2))) {
     events.forEach(event -> batcher.add(toEmail(event)));
 } // close() flushes what remains
 ```
@@ -81,8 +81,8 @@ The fixed pool is the pacing knob: at most 20 sends run at once. Swap
 when the backlog drains.
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("bulk-email.db").open();
-        Worker worker = taskito.worker()
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("bulk-email.db").open();
+        Worker worker = flexiq.worker()
                 .handle(Tasks.SEND_EMAIL, email -> provider.send(email))
                 .concurrency(20) // at most 20 in flight at once
                 .start()) {
@@ -95,10 +95,10 @@ try (Taskito taskito = Taskito.builder().sqlite("bulk-email.db").open();
 Watch the backlog drain and catch addresses that exhausted their retries.
 
 ```java
-QueueStats stats = taskito.statsByQueue("default");
+QueueStats stats = flexiq.statsByQueue("default");
 System.out.printf("pending=%d running=%d dead=%d%n", stats.pending, stats.running, stats.dead);
 
-for (DeadJob dead : taskito.listDeadByTask("send_email", 50, 0)) {
+for (DeadJob dead : flexiq.listDeadByTask("send_email", 50, 0)) {
     System.err.printf("gave up on %s: %s%n", dead.taskName, dead.error);
 }
 ```
@@ -107,8 +107,8 @@ for (DeadJob dead : taskito.listDeadByTask("send_email", 50, 0)) {
 
 | Pattern | Where |
 | --- | --- |
-| One round-trip per chunk | `taskito.enqueueMany` |
-| Buffered trickle staging | `Batcher.of(taskito, task, maxBatch, maxDelay)` |
+| One round-trip per chunk | `flexiq.enqueueMany` |
+| Buffered trickle staging | `Batcher.of(flexiq, task, maxBatch, maxDelay)` |
 | Concurrency cap | `worker().concurrency(20)` (or `autoscale`) |
 | Isolated failures | one job per recipient |
 | Drain + failure visibility | `statsByQueue` + `listDeadByTask` |

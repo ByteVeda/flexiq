@@ -1,10 +1,10 @@
 ---
 title: CLI
-description: "The standalone taskito command."
+description: "The standalone flexiq command."
 ---
 
 ```bash
-taskito [--db <path> | --backend <b> --dsn <dsn>] <command> [args] [--json]
+flexiq [--db <path> | --backend <b> --dsn <dsn>] <command> [args] [--json]
 ```
 
 Connect with `--db` (SQLite) or `--backend`/`--dsn` (Postgres/Redis). `--json`
@@ -27,9 +27,9 @@ on read commands prints machine-readable output.
 | `autoscale <module> [--min-workers <n>] [--max-workers <n>]` | Scale worker processes to queue depth — see [Autoscaling](/node/guides/operations/autoscaling). |
 
 ```bash
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db jobs --status failed --json
-taskito run ./app.js --queues default,emails
+flexiq --db flexiq.db enqueue add '[2,3]'
+flexiq --db flexiq.db jobs --status failed --json
+flexiq run ./app.js --queues default,emails
 ```
 
 The CLI ships in the package `bin`; see the [CLI guide](/node/guides/operations/cli)

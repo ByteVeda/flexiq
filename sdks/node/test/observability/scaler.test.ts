@@ -11,7 +11,7 @@ let base = "";
 let queue: Queue;
 
 beforeEach(async () => {
-  queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-scaler-")), "q.db") });
+  queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-scaler-")), "q.db") });
   queue.task("work", () => undefined);
   server = serveScaler(queue, { port: 0, host: "127.0.0.1", targetQueueDepth: 5 });
   await new Promise((r) => setTimeout(r, 60));

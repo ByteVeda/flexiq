@@ -2,7 +2,7 @@ import { Decoder, Encoder } from "cbor-x";
 import { SerializationError } from "../errors";
 import type { Serializer } from "./serializer";
 
-/** Wire-envelope tags (see taskito-core BINDING_CONTRACT.md "Wire envelope"). */
+/** Wire-envelope tags (see flexiq-core BINDING_CONTRACT.md "Wire envelope"). */
 const TAG_NATIVE = 0x00;
 const TAG_CBOR = 0x02;
 
@@ -15,7 +15,7 @@ function tagged(body: Uint8Array): Uint8Array {
 
 /**
  * CBOR serializer for cross-SDK payloads (RFC 8949), writing the `0x02`
- * wire-envelope tag. Use for tasks produced or consumed by another Taskito
+ * wire-envelope tag. Use for tasks produced or consumed by another FlexiQ
  * SDK: unlike JSON, CBOR round-trips integers beyond `Number.MAX_SAFE_INTEGER`
  * (as `BigInt`), `Date` (tag 1), and binary data losslessly across languages.
  *

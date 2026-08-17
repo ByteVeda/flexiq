@@ -25,15 +25,15 @@ jobs:
 
       - name: Lint Python with Ruff
         working-directory: sdks/python
-        run: uv run ruff check taskito/ tests/
+        run: uv run ruff check flexiq/ tests/
 
       - name: Check Python formatting with Ruff
         working-directory: sdks/python
-        run: uv run ruff format --check taskito/ tests/
+        run: uv run ruff format --check flexiq/ tests/
 
       - name: Type-check Python with mypy
         working-directory: sdks/python
-        run: uv run mypy taskito/ tests/ --no-incremental
+        run: uv run mypy flexiq/ tests/ --no-incremental
 
   test:
     name: Python Tests (${{ matrix.os }} / Python ${{ matrix.python-version }})

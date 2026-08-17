@@ -4,7 +4,7 @@ description: "Batcher — buffer payloads and flush them as one enqueueMany call
 ---
 
 ```java
-import org.byteveda.taskito.batch.Batcher;
+import org.byteveda.flexiq.batch.Batcher;
 ```
 
 `Batcher<T>` buffers payloads for one task and enqueues them in a single
@@ -21,8 +21,8 @@ producer-side batching, to cut round-trips when many small jobs share a task.
 ## Constructor
 
 ```java
-Batcher(Taskito queue, Task<T> task, int maxBatch, Duration maxDelay)
-static <T> Batcher<T> of(Taskito queue, Task<T> task, int maxBatch, Duration maxDelay)
+Batcher(FlexiQ queue, Task<T> task, int maxBatch, Duration maxDelay)
+static <T> Batcher<T> of(FlexiQ queue, Task<T> task, int maxBatch, Duration maxDelay)
 ```
 
 | Parameter | Description |
@@ -33,7 +33,7 @@ static <T> Batcher<T> of(Taskito queue, Task<T> task, int maxBatch, Duration max
 | `maxDelay` | Flush this long after the first buffered payload arrived, even if `maxBatch` isn't reached. Must be positive. |
 
 ```java
-try (Batcher<Email> batcher = Batcher.of(taskito, sendEmail, 100, Duration.ofMillis(500))) {
+try (Batcher<Email> batcher = Batcher.of(flexiq, sendEmail, 100, Duration.ofMillis(500))) {
     for (Email email : emails) {
         batcher.add(email);
     }
@@ -77,7 +77,7 @@ call from multiple threads.
 ## Underlying producer calls
 
 `Batcher` is a thin wrapper over the batch producer methods on
-[`Taskito`](/java/api-reference/queue):
+[`FlexiQ`](/java/api-reference/queue):
 
 ```java
 <T> List<String> enqueueMany(Task<T> task, List<T> payloads)

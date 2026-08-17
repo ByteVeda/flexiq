@@ -1,4 +1,4 @@
-// taskito-spring: a Spring Boot 3 starter that auto-configures a Taskito bean.
+// flexiq-spring: a Spring Boot 3 starter that auto-configures a FlexiQ bean.
 // Spring Boot 3 requires Java 17, which matches the SDK baseline.
 import net.ltgt.gradle.errorprone.CheckSeverity
 import net.ltgt.gradle.errorprone.errorprone
@@ -20,11 +20,11 @@ mavenPublishing {
     ) {
         signAllPublications()
     }
-    coordinates(group.toString(), "taskito-spring", version.toString())
+    coordinates(group.toString(), "flexiq-spring", version.toString())
     pom {
-        name.set("Taskito Spring")
-        description.set("Spring Boot 3 starter that auto-configures a Taskito bean.")
-        url.set("https://github.com/ByteVeda/taskito")
+        name.set("FlexiQ Spring")
+        description.set("Spring Boot 3 starter that auto-configures a FlexiQ bean.")
+        url.set("https://github.com/ByteVeda/flexiq")
         licenses {
             license {
                 name.set("MIT")
@@ -38,9 +38,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/ByteVeda/taskito")
-            connection.set("scm:git:https://github.com/ByteVeda/taskito.git")
-            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/taskito.git")
+            url.set("https://github.com/ByteVeda/flexiq")
+            connection.set("scm:git:https://github.com/ByteVeda/flexiq.git")
+            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/flexiq.git")
         }
     }
 }
@@ -60,7 +60,7 @@ dependencies {
     errorprone("com.google.errorprone:error_prone_core:${property("errorProneVersion")}")
     errorprone("com.uber.nullaway:nullaway:${property("nullAwayVersion")}")
     api(project(":"))
-    // The runtime jar is native-free; tests auto-configure a real Taskito bean,
+    // The runtime jar is native-free; tests auto-configure a real FlexiQ bean,
     // so stage the host-platform library from the root build.
     testRuntimeOnly(project(mapOf("path" to ":", "configuration" to "nativeRuntime")))
     compileOnly("org.springframework.boot:spring-boot-autoconfigure:$springBoot")

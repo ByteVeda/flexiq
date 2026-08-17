@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-prom-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-prom-")), "q.db") });
 }
 
 async function waitFor(
@@ -55,10 +55,10 @@ it("records job counters and a duration histogram", async () => {
   ).toBe(true);
 
   const text = await register.metrics();
-  expect(text).toContain('taskito_jobs_total{task="add",status="completed"} 1');
-  expect(text).toContain('taskito_jobs_total{task="boom",status="failed"} 1');
-  expect(text).toContain("taskito_job_duration_seconds_count");
-  expect(text).toContain("taskito_active_workers 0");
+  expect(text).toContain('flexiq_jobs_total{task="add",status="completed"} 1');
+  expect(text).toContain('flexiq_jobs_total{task="boom",status="failed"} 1');
+  expect(text).toContain("flexiq_job_duration_seconds_count");
+  expect(text).toContain("flexiq_active_workers 0");
 });
 
 it("shares one metric store per (registry, namespace)", () => {
@@ -89,13 +89,13 @@ it("samples queue depth and DLQ size", async () => {
   collector.start();
   await collector.sample();
   let text = await register.metrics();
-  expect(text).toContain('taskito_queue_depth{queue="default"} 2');
+  expect(text).toContain('flexiq_queue_depth{queue="default"} 2');
 
   // Drain to the DLQ, then re-sample.
   worker = queue.runWorker();
   expect(await waitFor(async () => (await queue.stats()).dead >= 2)).toBe(true);
   await collector.sample();
   text = await register.metrics();
-  expect(text).toContain("taskito_dlq_size 2");
+  expect(text).toContain("flexiq_dlq_size 2");
   collector.stop();
 });

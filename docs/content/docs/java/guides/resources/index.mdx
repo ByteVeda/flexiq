@@ -8,7 +8,7 @@ real dependencies (database pools, HTTP clients, cloud SDKs) are not. The Java
 SDK keeps those on the worker and passes only plain data through the queue.
 
 ```java
-try (Taskito queue = Taskito.builder().sqlite("tasks.db").open()) {
+try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open()) {
     queue.resource("db", ResourceScope.WORKER, ctx -> openPool(), pool -> pool.close());
 
     try (Worker worker = queue.worker()
@@ -26,7 +26,7 @@ try (Taskito queue = Taskito.builder().sqlite("tasks.db").open()) {
   <Card
     title="Dependency injection"
     href="/java/guides/resources/dependency-injection"
-    description="Taskito.resource(), the five scopes, Resources.use, annotation-driven injection, teardown, metrics"
+    description="FlexiQ.resource(), the five scopes, Resources.use, annotation-driven injection, teardown, metrics"
   />
   <Card
     title="Configuration"
@@ -51,7 +51,7 @@ try (Taskito queue = Taskito.builder().sqlite("tasks.db").open()) {
   <Card
     title="Testing"
     href="/java/guides/resources/testing"
-    description="Registering stub resources with InMemoryTaskito"
+    description="Registering stub resources with InMemoryFlexiQ"
   />
 </Cards>
 

@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 function openQueue(): { queue: Queue; dbPath: string } {
-  tempDir ??= mkdtempSync(join(tmpdir(), "taskito-contract-"));
+  tempDir ??= mkdtempSync(join(tmpdir(), "flexiq-contract-"));
   const dbPath = join(tempDir, "q.db");
   return { queue: new Queue({ dbPath }), dbPath };
 }

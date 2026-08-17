@@ -14,7 +14,7 @@ any patching machinery.
 it was built:
 
 ```ts
-import { mockResource, Queue } from "@byteveda/taskito";
+import { mockResource, Queue } from "@byteveda/flexiq";
 
 const db = mockResource({ query: async () => [{ id: 1 }] });
 queue.resource("db", db.factory);
@@ -45,7 +45,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { mockResource, Queue, useResource, type Worker } from "@byteveda/taskito";
+import { mockResource, Queue, useResource, type Worker } from "@byteveda/flexiq";
 
 let worker: Worker | undefined;
 afterEach(async () => {

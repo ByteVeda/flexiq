@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from taskito import (
+from flexiq import (
     CircularDependencyError,
     Queue,
     ResourceInitError,
     ResourceNotFoundError,
 )
-from taskito.resources import (
+from flexiq.resources import (
     ResourceDefinition,
     ResourceRuntime,
     detect_cycle,
@@ -302,8 +302,8 @@ def test_test_mode_restores_previous_runtime(queue: Queue) -> None:
 
 def test_health_check_recreation(poll_until: Any) -> None:
     """Unhealthy resource is recreated; permanent failure marks it unavailable."""
-    from taskito.exceptions import ResourceUnavailableError
-    from taskito.resources.health import HealthChecker
+    from flexiq.exceptions import ResourceUnavailableError
+    from flexiq.resources.health import HealthChecker
 
     call_count = 0
 

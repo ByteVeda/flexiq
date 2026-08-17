@@ -145,8 +145,7 @@ export function LoginForm() {
           <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
             No login methods are configured. Set{" "}
-            <code>TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED=true</code> or configure an OAuth
-            provider.
+            <code>FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=true</code> or configure an OAuth provider.
           </span>
         </div>
       ) : null}

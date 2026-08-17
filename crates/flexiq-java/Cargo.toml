@@ -1,0 +1,38 @@
+[package]
+name = "flexiq-java"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Java (JNI) bindings for the FlexiQ task-queue core"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]
+redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
+workflows = ["dep:flexiq-workflows"]
+mesh = ["dep:flexiq-mesh"]
+# Event-driven scheduler wakeups. OFF by default (not in the shipped library's
+# feature list); `pushDispatch` is accepted and ignored without it.
+push-dispatch = ["flexiq-core/push-dispatch"]
+
+[dependencies]
+flexiq-core = { workspace = true }
+flexiq-workflows = { workspace = true, optional = true }
+flexiq-mesh = { workspace = true, optional = true }
+base64 = "0.23"
+jni = "0.21"
+serde = { workspace = true }
+serde_json = { workspace = true }
+once_cell = "1"
+tokio = { workspace = true }
+async-trait = { workspace = true }
+crossbeam-channel = { workspace = true }
+uuid = { workspace = true }
+log = { workspace = true }
+gethostname = "1"

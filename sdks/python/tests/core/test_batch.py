@@ -3,8 +3,8 @@
 import threading
 from typing import Any
 
-from taskito import Queue
-from taskito.middleware import TaskMiddleware
+from flexiq import Queue
+from flexiq.middleware import TaskMiddleware
 
 
 def test_enqueue_many(queue: Queue) -> None:
@@ -135,7 +135,7 @@ def test_enqueue_many_logs_middleware_exceptions(tmp_path: Any, caplog: Any) -> 
     def my_task(n: int) -> int:
         return n
 
-    with caplog.at_level(logging.ERROR, logger="taskito.app"):
+    with caplog.at_level(logging.ERROR, logger="flexiq.app"):
         results = q.enqueue_many(task_name=my_task.name, args_list=[(1,), (2,)])
 
     # Jobs are still enqueued — middleware errors must not block enqueue

@@ -3,7 +3,7 @@ title: Installation
 description: "Install the Java SDK — Maven Central coordinates, per-platform native artifacts, three backends."
 ---
 
-The Java SDK is a typed shell over the Taskito Rust core, bound through a
+The Java SDK is a typed shell over the FlexiQ Rust core, bound through a
 hand-written JNI layer. Baseline: **Java 17**. The Rust core ships as a
 per-platform classifier artifact next to a native-free main jar — add both.
 
@@ -14,15 +14,15 @@ per-platform classifier artifact next to a native-free main jar — add both.
 plugins { id("com.google.osdetector") version "1.7.3" }
 
 dependencies {
-    implementation("org.byteveda:taskito:0.23.0")
-    runtimeOnly("org.byteveda:taskito:0.23.0:${osdetector.classifier}") // native library
-    annotationProcessor("org.byteveda:taskito-processor:0.23.0") // compile-time TaskHandler bindings
+    implementation("org.byteveda:flexiq:1.0.0")
+    runtimeOnly("org.byteveda:flexiq:1.0.0:${osdetector.classifier}") // native library
+    annotationProcessor("org.byteveda:flexiq-processor:1.0.0") // compile-time TaskHandler bindings
 }
 ```
 
 The [osdetector](https://github.com/google/osdetector-gradle-plugin) plugin
 resolves your platform's classifier; you can also write it literally, e.g.
-`runtimeOnly("org.byteveda:taskito:0.23.0:linux-x86_64")`.
+`runtimeOnly("org.byteveda:flexiq:1.0.0:linux-x86_64")`.
 
   </Tab>
   <Tab value="Maven">
@@ -41,13 +41,13 @@ resolves your platform's classifier; you can also write it literally, e.g.
 
 <dependency>
   <groupId>org.byteveda</groupId>
-  <artifactId>taskito</artifactId>
-  <version>0.23.0</version>
+  <artifactId>flexiq</artifactId>
+  <version>1.0.0</version>
 </dependency>
 <dependency>
   <groupId>org.byteveda</groupId>
-  <artifactId>taskito</artifactId>
-  <version>0.23.0</version>
+  <artifactId>flexiq</artifactId>
+  <version>1.0.0</version>
   <classifier>${os.detected.classifier}</classifier>
   <scope>runtime</scope>
 </dependency>
@@ -62,8 +62,8 @@ resolves your platform's classifier; you can also write it literally, e.g.
     <annotationProcessorPaths>
       <path>
         <groupId>org.byteveda</groupId>
-        <artifactId>taskito-processor</artifactId>
-        <version>0.23.0</version>
+        <artifactId>flexiq-processor</artifactId>
+        <version>1.0.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>
@@ -73,13 +73,13 @@ resolves your platform's classifier; you can also write it literally, e.g.
   </Tab>
 </Tabs>
 
-The `taskito-processor` artifact is optional but recommended: it turns
+The `flexiq-processor` artifact is optional but recommended: it turns
 `@TaskHandler`-annotated methods into typed `Task` constants at compile time —
 zero runtime reflection, GraalVM-native-image friendly. See
 [Tasks](/java/guides/core/tasks#typed-tasks-from-taskhandler).
 
-Companion artifacts: `org.byteveda:taskito-test` (in-memory backend for unit
-tests, no native library) and `org.byteveda:taskito-spring` (Spring Boot 3
+Companion artifacts: `org.byteveda:flexiq-test` (in-memory backend for unit
+tests, no native library) and `org.byteveda:flexiq-spring` (Spring Boot 3
 starter).
 
 ## Native library artifacts
@@ -98,14 +98,14 @@ Anything outside that list — Windows on ARM, or an OS beyond Linux, macOS, and
 Windows — has no published artifact. The loader fails at startup with an
 `UnsatisfiedLinkError` naming the platform it detected rather than trying a
 binary built for another one. Those platforms are still supported by building
-the native library from source and pointing `-Dtaskito.native.lib` at it.
+the native library from source and pointing `-Dflexiq.native.lib` at it.
 
 At runtime the platform binary is extracted (content-addressed, safe under
 concurrent processes) and loaded. Two system properties tune this:
-`-Dtaskito.native.lib=/abs/path` loads an explicit library instead — for local
+`-Dflexiq.native.lib=/abs/path` loads an explicit library instead — for local
 development against a fresh build, or a custom-feature build with no classifier
 artifact at all (the main jar is native-free and works standalone this way) —
-and `-Dtaskito.native.workdir=/var/lib/myapp/taskito-native` relocates
+and `-Dflexiq.native.workdir=/var/lib/myapp/flexiq-native` relocates
 extraction on hardened `noexec /tmp` hosts.
 
 <Callout type="info">
@@ -118,13 +118,13 @@ extraction on hardened `noexec /tmp` hosts.
 ## Pick a backend
 
 ```java
-import org.byteveda.taskito.Taskito;
+import org.byteveda.flexiq.FlexiQ;
 
-Taskito.builder().sqlite("taskito.db").open();                   // SQLite (default)
-Taskito.builder().postgres(System.getenv("PG_URL")).open();
-Taskito.builder().redis("redis://localhost").open();
+FlexiQ.builder().sqlite("flexiq.db").open();                   // SQLite (default)
+FlexiQ.builder().postgres(System.getenv("PG_URL")).open();
+FlexiQ.builder().redis("redis://localhost").open();
 ```
 
-`Taskito.builder().open()` with no backend configured uses SQLite at
-`.taskito/taskito.db`. SQLite needs nothing else — the whole queue lives in one
+`FlexiQ.builder().open()` with no backend configured uses SQLite at
+`.flexiq/flexiq.db`. SQLite needs nothing else — the whole queue lives in one
 file. Next: the [quickstart](/java/getting-started/quickstart).

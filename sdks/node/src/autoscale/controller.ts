@@ -301,9 +301,9 @@ export class Autoscaler {
  * Run the autoscaler until SIGTERM or SIGINT, then drain the pool.
  *
  * ```ts
- * import { Queue, serveAutoscaler } from "@byteveda/taskito";
+ * import { Queue, serveAutoscaler } from "@byteveda/flexiq";
  *
- * const queue = new Queue({ dbPath: "taskito.db" });
+ * const queue = new Queue({ dbPath: "flexiq.db" });
  * await serveAutoscaler(queue, { app: "./app.js", minWorkers: 2, maxWorkers: 20 });
  * ```
  */

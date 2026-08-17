@@ -1,6 +1,6 @@
-# Contributing to taskito
+# Contributing to flexiq
 
-Thanks for your interest in contributing! taskito is a hybrid Rust + Python project, so the dev setup involves both ecosystems.
+Thanks for your interest in contributing! flexiq is a hybrid Rust + Python project, so the dev setup involves both ecosystems.
 
 ## Development Setup
 
@@ -13,8 +13,8 @@ Thanks for your interest in contributing! taskito is a hybrid Rust + Python proj
 ### Clone and Install
 
 ```bash
-git clone https://github.com/ByteVeda/taskito.git
-cd taskito/sdks/python   # the Python SDK lives here; node/ and java/ are peers
+git clone https://github.com/ByteVeda/flexiq.git
+cd flexiq/sdks/python   # the Python SDK lives here; node/ and java/ are peers
 
 # Create a virtual environment
 python -m venv .venv
@@ -49,37 +49,37 @@ pytest tests/
 ### Rust Tests
 
 ```bash
-cargo test --manifest-path crates/taskito-core/Cargo.toml
+cargo test --manifest-path crates/flexiq-core/Cargo.toml
 ```
 
 ## Code Style
 
 ### Python
 
-taskito uses [ruff](https://github.com/astral-sh/ruff) for linting and formatting:
+flexiq uses [ruff](https://github.com/astral-sh/ruff) for linting and formatting:
 
 ```bash
 # Lint
-ruff check taskito/
+ruff check flexiq/
 
 # Format
-ruff format taskito/
+ruff format flexiq/
 
 # Auto-fix
-ruff check --fix taskito/
+ruff check --fix flexiq/
 ```
 
 Type checking with [mypy](https://mypy-lang.org/):
 
 ```bash
-mypy taskito/
+mypy flexiq/
 ```
 
 ### Rust
 
 ```bash
-cargo fmt --manifest-path crates/taskito-core/Cargo.toml
-cargo clippy --manifest-path crates/taskito-core/Cargo.toml
+cargo fmt --manifest-path crates/flexiq-core/Cargo.toml
+cargo clippy --manifest-path crates/flexiq-core/Cargo.toml
 ```
 
 ## Making Changes

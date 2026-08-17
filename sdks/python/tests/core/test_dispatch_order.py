@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def _run_and_record(queue: Queue, total: int) -> list[int]:

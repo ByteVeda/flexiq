@@ -993,6 +993,170 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
+name = "flexiq"
+version = "1.0.0"
+dependencies = [
+ "flexiq-core",
+ "flexiq-mesh",
+ "flexiq-workflows",
+]
+
+[[package]]
+name = "flexiq-core"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "cron",
+ "crossbeam-channel",
+ "diesel",
+ "libsqlite3-sys",
+ "log",
+ "openssl-sys",
+ "pq-sys",
+ "rand 0.10.2",
+ "redis",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "flexiq-java"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "crossbeam-channel",
+ "flexiq-core",
+ "flexiq-mesh",
+ "flexiq-workflows",
+ "gethostname",
+ "jni",
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "flexiq-mesh"
+version = "1.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "bincode",
+ "flexiq-core",
+ "log",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "flexiq-node"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "crossbeam-channel",
+ "flexiq-core",
+ "flexiq-mesh",
+ "flexiq-workflows",
+ "gethostname",
+ "log",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "flexiq-python"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "crossbeam-channel",
+ "flexiq-core",
+ "flexiq-mesh",
+ "flexiq-workflows",
+ "gethostname",
+ "log",
+ "pyo3",
+ "pyo3-log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "flexiq-server"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "base64 0.23.1",
+ "clap",
+ "env_logger",
+ "flexiq-core",
+ "flexiq-workflows",
+ "hmac",
+ "jsonwebtoken",
+ "log",
+ "pbkdf2",
+ "rand 0.10.2",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "flexiq-tui"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm 0.28.1",
+ "flexiq-core",
+ "flexiq-workflows",
+ "ratatui",
+]
+
+[[package]]
+name = "flexiq-workflows"
+version = "1.0.0"
+dependencies = [
+ "dagron-core",
+ "diesel",
+ "flexiq-core",
+ "log",
+ "redis",
+ "sea-query",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3154,170 +3318,6 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
-
-[[package]]
-name = "taskito"
-version = "0.23.0"
-dependencies = [
- "taskito-core",
- "taskito-mesh",
- "taskito-workflows",
-]
-
-[[package]]
-name = "taskito-core"
-version = "0.23.0"
-dependencies = [
- "async-trait",
- "chrono",
- "chrono-tz",
- "cron",
- "crossbeam-channel",
- "diesel",
- "libsqlite3-sys",
- "log",
- "openssl-sys",
- "pq-sys",
- "rand 0.10.2",
- "redis",
- "sea-query",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "taskito-java"
-version = "0.23.0"
-dependencies = [
- "async-trait",
- "base64 0.23.1",
- "crossbeam-channel",
- "gethostname",
- "jni",
- "log",
- "once_cell",
- "serde",
- "serde_json",
- "taskito-core",
- "taskito-mesh",
- "taskito-workflows",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "taskito-mesh"
-version = "0.23.0"
-dependencies = [
- "base64 0.23.1",
- "bincode",
- "log",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "taskito-core",
- "tokio",
- "xxhash-rust",
-]
-
-[[package]]
-name = "taskito-node"
-version = "0.23.0"
-dependencies = [
- "async-trait",
- "crossbeam-channel",
- "gethostname",
- "log",
- "napi",
- "napi-build",
- "napi-derive",
- "serde_json",
- "taskito-core",
- "taskito-mesh",
- "taskito-workflows",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "taskito-python"
-version = "0.23.0"
-dependencies = [
- "async-trait",
- "crossbeam-channel",
- "gethostname",
- "log",
- "pyo3",
- "pyo3-log",
- "serde",
- "serde_json",
- "taskito-core",
- "taskito-mesh",
- "taskito-workflows",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "taskito-server"
-version = "0.23.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "base64 0.23.1",
- "clap",
- "env_logger",
- "hmac",
- "jsonwebtoken",
- "log",
- "pbkdf2",
- "rand 0.10.2",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha2",
- "taskito-core",
- "taskito-workflows",
- "thiserror 2.0.20",
- "tokio",
- "tower",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "taskito-tui"
-version = "0.23.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm 0.28.1",
- "ratatui",
- "taskito-core",
- "taskito-workflows",
-]
-
-[[package]]
-name = "taskito-workflows"
-version = "0.23.0"
-dependencies = [
- "dagron-core",
- "diesel",
- "log",
- "redis",
- "sea-query",
- "serde",
- "serde_json",
- "taskito-core",
- "uuid",
-]
 
 [[package]]
 name = "tempfile"

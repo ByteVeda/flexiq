@@ -3,7 +3,7 @@ title: Prometheus Metrics
 description: "Per-task execution counters and a duration histogram from middleware, plus polled queue depth and dead-letter gauges."
 ---
 
-Taskito exports Prometheus metrics through two pieces — a middleware that
+FlexiQ exports Prometheus metrics through two pieces — a middleware that
 records per-task execution counters and a duration histogram, and a stats
 collector that polls queue depth and dead-letter size onto gauges on an
 interval. Both write into the same
@@ -13,7 +13,7 @@ registry, so one HTTP endpoint can serve everything.
 <SdkOnly sdk="java">
 
 Java has no Prometheus contrib. Metrics come from Micrometer: the
-`TaskitoObservation` middleware wraps each task execution in a Micrometer
+`FlexiQObservation` middleware wraps each task execution in a Micrometer
 `Observation`, which a `PrometheusMeterRegistry` turns into a timer (and, if you
 add a tracing bridge, a span). See the dedicated
 [Micrometer guide](/java/guides/integrations/micrometer) for the full API.
@@ -32,31 +32,31 @@ import io.micrometer.core.instrument.observation.DefaultMeterObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
-import org.byteveda.taskito.contrib.TaskitoObservation;
+import org.byteveda.flexiq.contrib.FlexiQObservation;
 
 PrometheusMeterRegistry prometheus = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
 ObservationRegistry observations = ObservationRegistry.create();
 observations.observationConfig()
         .observationHandler(new DefaultMeterObservationHandler(prometheus));
 
-taskito.use(new TaskitoObservation(observations));
+flexiq.use(new FlexiQObservation(observations));
 ```
 
 ## What's emitted
 
-Each execution attempt starts an observation named `taskito.task` (customizable
-via `new TaskitoObservation(registry, name, taskFilter)`) tagged with
-`taskito.task` = the task name. Micrometer's meter handler converts it into a
+Each execution attempt starts an observation named `flexiq.task` (customizable
+via `new FlexiQObservation(registry, name, taskFilter)`) tagged with
+`flexiq.task` = the task name. Micrometer's meter handler converts it into a
 timer on the Prometheus registry; the exposed series name and suffixes follow
 Micrometer's Prometheus naming convention (dots become underscores, a `_seconds`
-suffix is added), not a fixed `taskito_*` name from the contrib. Retries are
+suffix is added), not a fixed `flexiq_*` name from the contrib. Retries are
 separate attempts, each producing its own observation.
 
 ## Exposing metrics
 
 Serve `prometheus.scrape()` from any HTTP endpoint, or use Spring Boot Actuator's
-`/actuator/prometheus`, which wires the registry for you. The `taskito_jobs_total`
-/ `taskito_dlq_size` names and the polled queue-depth gauges below are Python/Node
+`/actuator/prometheus`, which wires the registry for you. The `flexiq_jobs_total`
+/ `flexiq_dlq_size` names and the polled queue-depth gauges below are Python/Node
 only — build Java dashboards and alerts on the timer series your
 Micrometer→Prometheus registry emits.
 
@@ -67,7 +67,7 @@ Micrometer→Prometheus registry emits.
 <SdkOnly sdk="python">
 
 ```bash
-pip install taskito[prometheus]
+pip install flexiq[prometheus]
 ```
 
 This installs `prometheus-client` as a dependency.
@@ -76,7 +76,7 @@ This installs `prometheus-client` as a dependency.
 
 <SdkOnly sdk="node">
 
-Peer dependency: `prom-client`. Import from the `taskito/contrib/prometheus`
+Peer dependency: `prom-client`. Import from the `flexiq/contrib/prometheus`
 subpath — it is not exported from the main barrel.
 
 </SdkOnly>
@@ -87,13 +87,13 @@ subpath — it is not exported from the main barrel.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `taskito_jobs_total` | Counter | `task`, `status` | Total jobs processed (`status` is `completed` or `failed`) |
-| `taskito_job_duration_seconds` | Histogram | `task` | Job execution duration |
-| `taskito_active_workers` | Gauge | — | Number of currently executing workers |
-| `taskito_retries_total` | Counter | `task` | Total retry attempts |
-| `taskito_queue_depth` | Gauge | `queue` | Number of pending jobs, polled by `PrometheusStatsCollector` |
-| `taskito_dlq_size` | Gauge | — | Number of dead-letter jobs, polled |
-| `taskito_worker_utilization` | Gauge | `queue` | Ratio of running jobs to total workers for that queue (0.0–1.0), polled |
+| `flexiq_jobs_total` | Counter | `task`, `status` | Total jobs processed (`status` is `completed` or `failed`) |
+| `flexiq_job_duration_seconds` | Histogram | `task` | Job execution duration |
+| `flexiq_active_workers` | Gauge | — | Number of currently executing workers |
+| `flexiq_retries_total` | Counter | `task` | Total retry attempts |
+| `flexiq_queue_depth` | Gauge | `queue` | Number of pending jobs, polled by `PrometheusStatsCollector` |
+| `flexiq_dlq_size` | Gauge | — | Number of dead-letter jobs, polled |
+| `flexiq_worker_utilization` | Gauge | `queue` | Ratio of running jobs to total workers for that queue (0.0–1.0), polled |
 
 The first four are written by `PrometheusMiddleware` as each job runs; the
 last three are polled by `PrometheusStatsCollector`. Metrics are created once
@@ -106,12 +106,12 @@ collector independently as long as they share a namespace.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `taskito_jobs_total` | Counter | `task`, `status` | Finished executions by outcome (`status` is `completed` or `failed`) |
-| `taskito_job_duration_seconds` | Histogram | `task` | Execution duration |
-| `taskito_active_workers` | Gauge | — | Jobs currently executing |
-| `taskito_retries_total` | Counter | `task` | Retry attempts |
-| `taskito_queue_depth` | Gauge | `queue` | Pending jobs per queue, polled by `PrometheusStatsCollector` |
-| `taskito_dlq_size` | Gauge | — | Dead-letter queue size, polled |
+| `flexiq_jobs_total` | Counter | `task`, `status` | Finished executions by outcome (`status` is `completed` or `failed`) |
+| `flexiq_job_duration_seconds` | Histogram | `task` | Execution duration |
+| `flexiq_active_workers` | Gauge | — | Jobs currently executing |
+| `flexiq_retries_total` | Counter | `task` | Retry attempts |
+| `flexiq_queue_depth` | Gauge | `queue` | Pending jobs per queue, polled by `PrometheusStatsCollector` |
+| `flexiq_dlq_size` | Gauge | — | Dead-letter queue size, polled |
 
 <Callout type="info">
   There's no `worker_utilization` gauge on Node — `PrometheusStatsCollector`
@@ -127,8 +127,8 @@ collector independently as long as they share a namespace.
 Add `PrometheusMiddleware` to your queue to track per-task execution metrics:
 
 ```python
-from taskito import Queue
-from taskito.contrib.prometheus import PrometheusMiddleware
+from flexiq import Queue
+from flexiq.contrib.prometheus import PrometheusMiddleware
 
 queue = Queue(db_path="myapp.db", middleware=[PrometheusMiddleware()])
 ```
@@ -143,7 +143,7 @@ PrometheusMiddleware(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `namespace` | `str` | `"taskito"` | Prefix for all metric names. |
+| `namespace` | `str` | `"flexiq"` | Prefix for all metric names. |
 | `extra_labels_fn` | `Callable[[JobContext], dict[str, str]] \| None` | `None` | Accepted for forward compatibility — not currently applied to any metric's labels. |
 | `disabled_metrics` | `set[str] \| None` | `None` | Metric groups or individual names to skip. Groups: `"jobs"`, `"queue"`, `"resource"`, `"proxy"`, `"intercept"`. |
 | `task_filter` | `Callable[[str], bool] \| None` | `None` | Predicate that receives a task name. Return `True` to export metrics for the task, `False` to skip it. `None` exports all tasks. |
@@ -156,14 +156,14 @@ Register `prometheusMiddleware` to record per-job counters and the duration
 histogram:
 
 ```ts
-import { prometheusMiddleware } from "@byteveda/taskito/contrib/prometheus";
+import { prometheusMiddleware } from "@byteveda/flexiq/contrib/prometheus";
 
 queue.use(prometheusMiddleware());
 ```
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `namespace` | `string` | `"taskito"` | Metric name prefix |
+| `namespace` | `string` | `"flexiq"` | Metric name prefix |
 | `register` | `Registry` | global `register` | prom-client registry to register metrics into |
 | `taskFilter` | `(taskName) => boolean` | — | Return `false` to skip a task |
 | `buckets` | `number[]` | prom-client defaults | Histogram bucket boundaries (seconds) |
@@ -178,7 +178,7 @@ For queue-level metrics, use the stats collector. It polls `queue.stats()`
 (and resource/proxy/interception stats) on a background thread:
 
 ```python
-from taskito.contrib.prometheus import PrometheusStatsCollector
+from flexiq.contrib.prometheus import PrometheusStatsCollector
 
 collector = PrometheusStatsCollector(queue, interval=10)
 collector.start()
@@ -197,7 +197,7 @@ PrometheusStatsCollector(
 |---|---|---|---|
 | `queue` | `Queue` | — | The Queue instance to poll. |
 | `interval` | `float` | `10.0` | Seconds between polls. |
-| `namespace` | `str` | `"taskito"` | Prefix for metric names. Must match `PrometheusMiddleware`'s namespace to share metric objects. |
+| `namespace` | `str` | `"flexiq"` | Prefix for metric names. Must match `PrometheusMiddleware`'s namespace to share metric objects. |
 | `disabled_metrics` | `set[str] \| None` | `None` | Metric groups or names to skip. Same groups as `PrometheusMiddleware`. |
 
 Call `collector.stop()` on shutdown — it signals the background thread and
@@ -210,7 +210,7 @@ joins it (up to 5s).
 `PrometheusStatsCollector` polls queue depth and DLQ size on an interval:
 
 ```ts
-import { PrometheusStatsCollector } from "@byteveda/taskito/contrib/prometheus";
+import { PrometheusStatsCollector } from "@byteveda/flexiq/contrib/prometheus";
 
 const collector = new PrometheusStatsCollector(queue);
 collector.start();
@@ -218,7 +218,7 @@ collector.start();
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `namespace` | `string` | `"taskito"` | Metric name prefix |
+| `namespace` | `string` | `"flexiq"` | Metric name prefix |
 | `register` | `Registry` | global `register` | Registry to write gauges into |
 | `intervalMs` | `number` | `10000` | Poll interval in milliseconds |
 
@@ -247,7 +247,7 @@ process.on("SIGTERM", () => {
 Start a standalone `/metrics` endpoint for Prometheus to scrape:
 
 ```python
-from taskito.contrib.prometheus import start_metrics_server
+from flexiq.contrib.prometheus import start_metrics_server
 
 start_metrics_server(port=9090)
 ```
@@ -303,8 +303,8 @@ app.get("/metrics", async (_req, res) => {
 <SdkOnly sdk="python">
 
 ```python
-from taskito import Queue
-from taskito.contrib.prometheus import (
+from flexiq import Queue
+from flexiq.contrib.prometheus import (
     PrometheusMiddleware,
     PrometheusStatsCollector,
     start_metrics_server,
@@ -325,11 +325,11 @@ collector.start()
 <SdkOnly sdk="node">
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 import {
   prometheusMiddleware,
   PrometheusStatsCollector,
-} from "@byteveda/taskito/contrib/prometheus";
+} from "@byteveda/flexiq/contrib/prometheus";
 import { register } from "prom-client";
 import express from "express";
 
@@ -353,7 +353,7 @@ Prometheus scrape config for either SDK:
 
 ```yaml
 scrape_configs:
-  - job_name: taskito
+  - job_name: flexiq
     static_configs:
       - targets: ["localhost:9090"]
 ```
@@ -362,43 +362,43 @@ scrape_configs:
 
 <SdkOnly sdk="python">
 
-- **Throughput** — `rate(taskito_jobs_total[5m])` by `task` and `status`
-- **Duration p95** — `histogram_quantile(0.95, rate(taskito_job_duration_seconds_bucket[5m]))`
-- **Queue depth** — `taskito_queue_depth` by `queue`
-- **DLQ size** — `taskito_dlq_size` with an alert threshold
-- **Worker utilization** — `taskito_worker_utilization` by `queue`
+- **Throughput** — `rate(flexiq_jobs_total[5m])` by `task` and `status`
+- **Duration p95** — `histogram_quantile(0.95, rate(flexiq_job_duration_seconds_bucket[5m]))`
+- **Queue depth** — `flexiq_queue_depth` by `queue`
+- **DLQ size** — `flexiq_dlq_size` with an alert threshold
+- **Worker utilization** — `flexiq_worker_utilization` by `queue`
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-- **Throughput** — `rate(taskito_jobs_total[5m])` by `task` and `status`
-- **Duration p95** — `histogram_quantile(0.95, rate(taskito_job_duration_seconds_bucket[5m]))`
-- **Queue depth** — `taskito_queue_depth` by `queue`
-- **DLQ size** — `taskito_dlq_size` with an alert threshold
+- **Throughput** — `rate(flexiq_jobs_total[5m])` by `task` and `status`
+- **Duration p95** — `histogram_quantile(0.95, rate(flexiq_job_duration_seconds_bucket[5m]))`
+- **Queue depth** — `flexiq_queue_depth` by `queue`
+- **DLQ size** — `flexiq_dlq_size` with an alert threshold
 
 </SdkOnly>
 
 ## Alerting on high DLQ size
 
 Using the same setup as the [full example](#full-example) above, a couple of
-alerting rules worth adding — `taskito_dlq_size` and `taskito_jobs_total`
+alerting rules worth adding — `flexiq_dlq_size` and `flexiq_jobs_total`
 carry the same names in the Python and Node exporters, so this rule file
 works unchanged for both:
 
 ```yaml
 groups:
-  - name: taskito
+  - name: flexiq
     rules:
       - alert: HighDLQSize
-        expr: taskito_dlq_size > 10
+        expr: flexiq_dlq_size > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "taskito dead letter queue has {{ $value }} entries"
+          summary: "flexiq dead letter queue has {{ $value }} entries"
       - alert: HighErrorRate
-        expr: rate(taskito_jobs_total{status="failed"}[5m]) > 0.1
+        expr: rate(flexiq_jobs_total{status="failed"}[5m]) > 0.1
         for: 2m
         labels:
           severity: critical
@@ -406,7 +406,7 @@ groups:
           summary: "High task failure rate: {{ $value }} failures/sec"
 ```
 
-These expressions assume the default `taskito` namespace. If you configured a
+These expressions assume the default `flexiq` namespace. If you configured a
 custom one (`namespace: "myapp"` in the [Options](#options) above), rewrite
 the prefixes to match — `myapp_dlq_size`, `myapp_jobs_total` — or the alerts
 silently match no series.
@@ -427,8 +427,8 @@ the names your Micrometer→Prometheus registry emits instead.
 `PrometheusMiddleware` composes with other middleware:
 
 ```python
-from taskito.contrib.otel import OpenTelemetryMiddleware
-from taskito.contrib.sentry import SentryMiddleware
+from flexiq.contrib.otel import OpenTelemetryMiddleware
+from flexiq.contrib.sentry import SentryMiddleware
 
 queue = Queue(
     db_path="myapp.db",
@@ -451,9 +451,9 @@ for more on combining middleware.
 its own `queue.use()` call, in the order you want their hooks to run:
 
 ```ts
-import { otelMiddleware } from "@byteveda/taskito/contrib/otel";
-import { sentryMiddleware } from "@byteveda/taskito/contrib/sentry";
-import { prometheusMiddleware } from "@byteveda/taskito/contrib/prometheus";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
+import { sentryMiddleware } from "@byteveda/flexiq/contrib/sentry";
+import { prometheusMiddleware } from "@byteveda/flexiq/contrib/prometheus";
 
 queue.use(otelMiddleware());
 queue.use(prometheusMiddleware());

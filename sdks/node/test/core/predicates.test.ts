@@ -15,7 +15,7 @@ import {
 } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-pred-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-pred-")), "q.db") });
 }
 
 it("enqueues when the gate passes", () => {

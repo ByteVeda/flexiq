@@ -3,7 +3,7 @@ title: Error Handling
 description: "What happens when a task fails — the retry, timeout, and dead-letter lifecycle, inspecting error history, and each SDK's exception hierarchy."
 ---
 
-When a <SdkSwap python={<>task raises an exception</>} node={<>task throws (or its promise rejects)</>} java={<>handler throws</>} />, Taskito decides
+When a <SdkSwap python={<>task raises an exception</>} node={<>task throws (or its promise rejects)</>} java={<>handler throws</>} />, FlexiQ decides
 the job's fate from its retry budget. Each failing attempt is recorded,
 then:
 
@@ -164,7 +164,7 @@ unresponsive</SdkLink> for offloading it.
 <SdkOnly sdk="java">
 
 Make long-running handlers cooperative: poll
-`taskito.isCancelRequested(jobId)` or bound their own blocking calls, so the
+`flexiq.isCancelRequested(jobId)` or bound their own blocking calls, so the
 underlying work actually stops. See
 <SdkLink to="guides/core/cancellation">Cancellation</SdkLink>.
 
@@ -179,7 +179,7 @@ a **soft timeout** lets the task itself react to time pressure — it's
 cooperative, so the task must call `check_timeout()` at safe points:
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task(soft_timeout=30)
 def long_task():
@@ -350,7 +350,7 @@ mid-execution. One that never checks runs to completion.
   <Tab sdk="python">
 
 ```python
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 def long_task(items):
@@ -366,7 +366,7 @@ queue.cancel_running_job(job_id)
   <Tab sdk="node">
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("download", async (url: string) => {
   const { signal } = currentJob() ?? {};
@@ -381,11 +381,11 @@ queue.requestCancel(jobId);
   <Tab sdk="java">
 
 ```java
-taskito.requestCancel(jobId); // caller side
+flexiq.requestCancel(jobId); // caller side
 
 // handler side: poll between units of work
 for (Chunk chunk : chunks) {
-    if (taskito.isCancelRequested(jobId)) {
+    if (flexiq.isCancelRequested(jobId)) {
         throw new InterruptedException("cancelled");
     }
     process(chunk);
@@ -418,7 +418,7 @@ Middleware and events fire as the core decides each outcome:
   <Tab sdk="python">
 
 ```python
-from taskito import Queue, TaskMiddleware, EventType
+from flexiq import Queue, TaskMiddleware, EventType
 
 class AlertOnFailure(TaskMiddleware):
     def after(self, ctx, result, error):
@@ -630,11 +630,11 @@ with queue.test_mode() as results:
 
 <SdkOnly sdk="python">
 
-All Taskito exceptions inherit from `TaskitoError`, so you can catch the
+All FlexiQ exceptions inherit from `FlexiQError`, so you can catch the
 base class for broad handling:
 
 ```
-TaskitoError (base)
+FlexiQError (base)
 ├── TaskTimeoutError        — hard timeout exceeded
 ├── SoftTimeoutError        — soft timeout exceeded (check_timeout)
 ├── TaskCancelledError      — task cancelled (check_cancelled)
@@ -647,25 +647,25 @@ TaskitoError (base)
 ```
 
 ```python
-from taskito import TaskitoError, SoftTimeoutError, TaskCancelledError
+from flexiq import FlexiQError, SoftTimeoutError, TaskCancelledError
 
 try:
     result = job.result(timeout=30)
-except TaskitoError as e:
-    print(f"Taskito error: {e}")
+except FlexiQError as e:
+    print(f"FlexiQ error: {e}")
 ```
 
-Import any exception directly from the `taskito` package:
+Import any exception directly from the `flexiq` package:
 
 ```python
-from taskito import TaskCancelledError, SoftTimeoutError, SerializationError
+from flexiq import TaskCancelledError, SoftTimeoutError, SerializationError
 ```
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-Every SDK error extends `TaskitoError`, so you can catch the base class for
+Every SDK error extends `FlexiQError`, so you can catch the base class for
 broad handling:
 
 | Error | Thrown when |
@@ -690,13 +690,13 @@ broad handling:
 | `InterceptionError` | An enqueue interceptor rejected, misbehaved, or redirected illegally. |
 
 ```ts
-import { TaskitoError, JobFailedError } from "@byteveda/taskito";
+import { FlexiQError, JobFailedError } from "@byteveda/flexiq";
 
 try {
   const result = await queue.result(jobId, { timeoutMs: 30_000 });
 } catch (err) {
-  if (err instanceof TaskitoError) {
-    console.error("Taskito error:", err.message);
+  if (err instanceof FlexiQError) {
+    console.error("FlexiQ error:", err.message);
   }
 }
 ```
@@ -705,7 +705,7 @@ try {
 
 <SdkOnly sdk="java">
 
-Every SDK error is an unchecked `TaskitoException`; the `errors` package
+Every SDK error is an unchecked `FlexiQException`; the `errors` package
 narrows it so callers can catch exactly what they care about:
 
 | Exception | Raised when |
@@ -725,8 +725,8 @@ narrows it so callers can catch exactly what they care about:
 ```java
 try {
     queue.enqueue(FETCH, url);
-} catch (TaskitoException e) {
-    log.error("Taskito error: {}", e.getMessage());
+} catch (FlexiQException e) {
+    log.error("FlexiQ error: {}", e.getMessage());
 }
 ```
 

@@ -1,6 +1,6 @@
 ---
 title: Capabilities at a glance
-description: Everything taskito already does, in one place — with a link to the deep-dive guide for each.
+description: Everything flexiq already does, in one place — with a link to the deep-dive guide for each.
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
@@ -14,7 +14,7 @@ import {
   Network,
 } from "lucide-react";
 
-taskito ships a broad feature set out of the box. If you're evaluating it — or
+flexiq ships a broad feature set out of the box. If you're evaluating it — or
 suspect a capability is missing — scan this page first. Every card links to the
 guide that documents it.
 
@@ -25,7 +25,7 @@ These are the capabilities most often assumed absent. They aren't.
 | You might assume… | Reality |
 | --- | --- |
 | No canvas / workflows — no chain, group, or chord | [`chain` / `group` / `chord`](/python/guides/workflows/canvas) are exported from the top-level package, backed by a full workflow DSL. |
-| No Flower-like dashboard | [`taskito dashboard --app myapp:queue`](/python/guides/dashboard) serves a built-in monitoring UI. |
+| No Flower-like dashboard | [`flexiq dashboard --app myapp:queue`](/python/guides/dashboard) serves a built-in monitoring UI. |
 | No retry backoff or per-exception retries | [`max_retries`, `retry_backoff`, `retry_on`, `dont_retry_on`](/python/guides/reliability/retries) are arguments on every task. |
 | No soft timeouts | [`current_job.check_timeout()`](/python/guides/reliability/error-handling) gives cooperative soft timeouts. |
 | GIL bottleneck with no escape hatch | [`--pool prefork`](/python/guides/advanced-execution/prefork) runs child processes with independent GILs for true CPU parallelism. |
@@ -93,6 +93,6 @@ def notify(user_id: int) -> None: ...
 ```
 
 ```bash
-taskito worker --pool prefork --app tasks:queue   # CPU-bound: true parallelism
-taskito dashboard --app tasks:queue               # Flower-style monitoring UI
+flexiq worker --pool prefork --app tasks:queue   # CPU-bound: true parallelism
+flexiq dashboard --app tasks:queue               # Flower-style monitoring UI
 ```

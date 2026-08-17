@@ -14,10 +14,10 @@ database. Redis still requires a Redis instance when you select it, but it's use
 directly as the queue's data store rather than as a separate broker.
 
 ```java
-Taskito.builder().open();                                    // SQLite at .taskito/taskito.db (default)
-Taskito.builder().sqlite("/var/lib/app/taskito.db").open();  // SQLite, explicit path
-Taskito.builder().postgres(System.getenv("PG_URL")).schema("taskito").open();
-Taskito.builder().redis("redis://localhost").prefix("taskito").open();
+FlexiQ.builder().open();                                    // SQLite at .flexiq/flexiq.db (default)
+FlexiQ.builder().sqlite("/var/lib/app/flexiq.db").open();  // SQLite, explicit path
+FlexiQ.builder().postgres(System.getenv("PG_URL")).schema("flexiq").open();
+FlexiQ.builder().redis("redis://localhost").prefix("flexiq").open();
 ```
 
 | Backend | Use when | Notes |

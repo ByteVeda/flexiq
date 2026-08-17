@@ -5,7 +5,7 @@ import { allDocPaths } from "./app/lib/doc-paths";
 import { redirectPaths } from "./app/lib/redirects";
 
 // Static docs site for GitHub Pages: no server runtime, every route prerendered
-// to HTML. `DOCS_BASE_PATH=/taskito` in CI deploys under docs.byteveda.org/taskito;
+// to HTML. `DOCS_BASE_PATH=/flexiq` in CI deploys under docs.byteveda.org/flexiq;
 // unset locally so `serve build/client` works from the root.
 const basename = process.env.DOCS_BASE_PATH || "/";
 
@@ -32,7 +32,7 @@ export default {
     ];
   },
   // Prerender nests every route under the basename dir, but Pages already serves
-  // this project under /taskito — hoist the tree so the artifact root is the site
+  // this project under /flexiq — hoist the tree so the artifact root is the site
   // root and the prefix isn't doubled. No-op locally where basename is "/".
   buildEnd({ reactRouterConfig }) {
     if (basename === "/") return;

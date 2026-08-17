@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from taskito.mesh import MeshWorker
+from flexiq.mesh import MeshWorker
 
 
 class TestMeshWorkerValidation:

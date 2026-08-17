@@ -14,7 +14,7 @@ replicas.
 driven by queue depth (pending + running, scoped to the worker's queues):
 
 ```java
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(task, handler)
         .autoscale(AutoscaleOptions.of(2, 16)) // min 2, max 16 threads
         .start();
@@ -33,8 +33,8 @@ new AutoscaleOptions(2, 16, 5, Duration.ofSeconds(1)); // 5 tasks/thread, 1s tic
 it by `targetQueueDepth` to pick a replica count:
 
 ```java
-try (Taskito taskito = Taskito.builder().postgres(System.getenv("DATABASE_URL")).open();
-        Scaler scaler = Scaler.start(taskito, ScalerOptions.onPort(9090))) {
+try (FlexiQ flexiq = FlexiQ.builder().postgres(System.getenv("DATABASE_URL")).open();
+        Scaler scaler = Scaler.start(flexiq, ScalerOptions.onPort(9090))) {
     // serves until closed
 }
 ```
@@ -58,16 +58,16 @@ Point KEDA's `metrics-api` scaler at the endpoint; it scales toward
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: taskito-workers
+  name: flexiq-workers
 spec:
   scaleTargetRef:
-    name: taskito-worker
+    name: flexiq-worker
   minReplicaCount: 1
   maxReplicaCount: 20
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://taskito-scaler:9090/api/scaler"
+        url: "http://flexiq-scaler:9090/api/scaler"
         valueLocation: "metricValue"
         targetValue: "10"
 ```

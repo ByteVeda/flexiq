@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from taskito.autoscale import AutoscaleConfig, compute_desired_workers
+from flexiq.autoscale import AutoscaleConfig, compute_desired_workers
 
 
 def _cfg(**overrides: Any) -> AutoscaleConfig:

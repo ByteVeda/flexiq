@@ -22,7 +22,7 @@ first:
 ```java
 Task<LogLine> ingest = Task.of("ingest_log", LogLine.class);
 
-try (Batcher<LogLine> batcher = Batcher.of(taskito, ingest, 100, Duration.ofMillis(500))) {
+try (Batcher<LogLine> batcher = Batcher.of(flexiq, ingest, 100, Duration.ofMillis(500))) {
     for (LogLine line : incoming()) {
         List<String> ids = batcher.add(line);
         // ids is empty unless this call crossed maxBatch (100 lines) —
@@ -59,10 +59,10 @@ timer down, so always use try-with-resources or close it in a `finally`.
 returns their ids in input order:
 
 ```java
-List<String> ids = taskito.enqueueMany(resize, List.of(imageA, imageB, imageC));
+List<String> ids = flexiq.enqueueMany(resize, List.of(imageA, imageB, imageC));
 
 // One EnqueueOptions applies to the whole batch — not a list of per-job options.
-List<String> ids2 = taskito.enqueueMany(resize, List.of(imageA, imageB, imageC),
+List<String> ids2 = flexiq.enqueueMany(resize, List.of(imageA, imageB, imageC),
         EnqueueOptions.builder().priority(5).queue("bulk").build());
 ```
 
@@ -84,7 +84,7 @@ scheduler claims from storage in one poll — it's a throughput knob for the
 claim query, not a payload grouping mechanism:
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(resize, p -> resizeImage(p))
         .batchSize(16) // claim up to 16 due jobs per poll (default 1)
         .start();

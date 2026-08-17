@@ -5,12 +5,12 @@ description: "The built-in leveled logger — levels, namespaces, and a pluggabl
 
 The SDK ships a tiny zero-dependency leveled logger. It writes to **stderr** by
 default, so it never pollutes stdout (the CLI's `--json` output and piped data
-stay clean). Taskito uses it internally; it is exported for your own use too.
+stay clean). FlexiQ uses it internally; it is exported for your own use too.
 
 ```ts
-import { createLogger } from "@byteveda/taskito";
+import { createLogger } from "@byteveda/flexiq";
 
-const log = createLogger("billing"); // tagged [taskito:billing]
+const log = createLogger("billing"); // tagged [flexiq:billing]
 
 queue.task("charge", async (amount: number) => {
   log.info("charging", { amount });
@@ -21,10 +21,10 @@ queue.task("charge", async (amount: number) => {
 ## Levels
 
 `debug < info < warn < error < silent`. The threshold defaults to `warn` and is
-read once from `TASKITO_LOG_LEVEL`; override it at runtime:
+read once from `FLEXIQ_LOG_LEVEL`; override it at runtime:
 
 ```ts
-import { setLogLevel } from "@byteveda/taskito";
+import { setLogLevel } from "@byteveda/flexiq";
 
 setLogLevel("debug"); // global, immediate
 ```
@@ -45,11 +45,11 @@ log.error("delivery failed", err, { webhookId });
 
 ## Namespaces
 
-`createLogger(ns)` tags every line `[taskito:ns]`; `child()` nests further:
+`createLogger(ns)` tags every line `[flexiq:ns]`; `child()` nests further:
 
 ```ts
-const log = createLogger("worker"); // [taskito:worker]
-const poolLog = log.child("pool"); // [taskito:worker:pool]
+const log = createLogger("worker"); // [flexiq:worker]
+const poolLog = log.child("pool"); // [flexiq:worker:pool]
 ```
 
 ## Custom sink
@@ -58,7 +58,7 @@ Replace the output sink to route logs to a file, JSON transport, or a test
 buffer — globally and immediately:
 
 ```ts
-import { setLogSink } from "@byteveda/taskito";
+import { setLogSink } from "@byteveda/flexiq";
 
 setLogSink((level, line) => myTransport.write({ level, line }));
 ```

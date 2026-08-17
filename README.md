@@ -5,23 +5,23 @@
 <p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/public/wordmark-dark.svg">
-    <img src="docs/public/wordmark-light.svg" alt="taskito" width="190">
+    <img src="docs/public/wordmark-light.svg" alt="flexiq" width="190">
   </picture>
 </p>
 
 A Rust-powered task queue with native SDKs. One engine — no broker required, just SQLite, Postgres, or Redis.
 
-[![PyPI version](https://img.shields.io/pypi/v/taskito.svg)](https://pypi.org/project/taskito/)
-[![npm version](https://img.shields.io/npm/v/@byteveda/taskito.svg)](https://www.npmjs.com/package/@byteveda/taskito)
-[![Maven Central](https://img.shields.io/maven-central/v/org.byteveda/taskito.svg)](https://central.sonatype.com/artifact/org.byteveda/taskito) <br>
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ByteVeda/taskito/blob/master/LICENSE)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ByteVeda/taskito)
-[![PyPI Downloads](https://img.shields.io/pepy/dt/taskito?label=downloads&color=ea7233)](https://pepy.tech/projects/taskito)
+[![PyPI version](https://img.shields.io/pypi/v/flexiq.svg)](https://pypi.org/project/flexiq/)
+[![npm version](https://img.shields.io/npm/v/@byteveda/flexiq.svg)](https://www.npmjs.com/package/@byteveda/flexiq)
+[![Maven Central](https://img.shields.io/maven-central/v/org.byteveda/flexiq.svg)](https://central.sonatype.com/artifact/org.byteveda/flexiq) <br>
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ByteVeda/flexiq/blob/master/LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ByteVeda/flexiq)
+[![PyPI Downloads](https://img.shields.io/pepy/dt/flexiq?label=downloads&color=ea7233)](https://pepy.tech/projects/flexiq)
 
 </div>
 
 Most task queues need a separate broker (Redis, RabbitMQ) even for single-machine workloads.
-taskito embeds storage, scheduling, and worker management into one install with no external
+flexiq embeds storage, scheduling, and worker management into one install with no external
 services. The engine is a single Rust core — a Tokio async scheduler, an OS-thread worker pool,
 and Diesel over SQLite in WAL mode — exposed to each language through a thin native SDK.
 
@@ -29,9 +29,9 @@ and Diesel over SQLite in WAL mode — exposed to each language through a thin n
 
 | Language | Install | Package | Docs |
 |----------|---------|---------|------|
-| **Python** | `pip install taskito` | [PyPI](https://pypi.org/project/taskito/) · [`sdks/python`](sdks/python) | [Python docs](https://docs.byteveda.org/taskito) |
-| **Node.js** | `npm install @byteveda/taskito` | [npm](https://www.npmjs.com/package/@byteveda/taskito) · [`sdks/node`](sdks/node) | [Node docs](https://docs.byteveda.org/taskito/node/getting-started/installation) |
-| **Java** | `org.byteveda:taskito` | [Maven Central](https://central.sonatype.com/artifact/org.byteveda/taskito) · [`sdks/java`](sdks/java) | [Java docs](https://docs.byteveda.org/taskito/java/getting-started/installation) |
+| **Python** | `pip install flexiq` | [PyPI](https://pypi.org/project/flexiq/) · [`sdks/python`](sdks/python) | [Python docs](https://docs.byteveda.org/flexiq) |
+| **Node.js** | `npm install @byteveda/flexiq` | [npm](https://www.npmjs.com/package/@byteveda/flexiq) · [`sdks/node`](sdks/node) | [Node docs](https://docs.byteveda.org/flexiq/node/getting-started/installation) |
+| **Java** | `org.byteveda:flexiq` | [Maven Central](https://central.sonatype.com/artifact/org.byteveda/flexiq) · [`sdks/java`](sdks/java) | [Java docs](https://docs.byteveda.org/flexiq/java/getting-started/installation) |
 
 Each SDK is self-contained — see its README for install, quickstart, and the full API.
 
@@ -39,8 +39,8 @@ Each SDK is self-contained — see its README for install, quickstart, and the f
 
 One Rust core (`crates/`), one thin SDK shell per language (`sdks/`). The DB is the source of
 truth; the GIL/event loop is held only during task execution. `WorkerDispatcher` in
-`taskito-core` is binding-free, so new language shells implement one trait against
-[`BINDING_CONTRACT.md`](crates/taskito-core/BINDING_CONTRACT.md).
+`flexiq-core` is binding-free, so new language shells implement one trait against
+[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md).
 
 ## Features
 
@@ -53,7 +53,7 @@ truth; the GIL/event loop is held only during task execution. `WorkerDispatcher`
 
 ## Comparison
 
-| Feature | taskito | Celery | RQ | Dramatiq | Huey |
+| Feature | flexiq | Celery | RQ | Dramatiq | Huey |
 |---|---|---|---|---|---|
 | Broker required | **No** | Yes | Yes | Yes | Yes |
 | Core language | **Rust** | Python | Python | Python | Python |
@@ -71,8 +71,8 @@ truth; the GIL/event loop is held only during task execution. `WorkerDispatcher`
 
 ## Documentation
 
-**[Read the docs →](https://docs.byteveda.org/taskito)** — guides, API reference, and architecture.
-Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/taskito/python/guides/operations/migration)**.
+**[Read the docs →](https://docs.byteveda.org/flexiq)** — guides, API reference, and architecture.
+Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/flexiq/python/guides/operations/migration)**.
 
 ## Contributing
 

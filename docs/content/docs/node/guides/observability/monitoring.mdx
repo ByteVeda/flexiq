@@ -40,7 +40,7 @@ A running task reports progress through its job context; inspection and the
 dashboard surface it live:
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("import", async (rows: Row[]) => {
   const job = currentJob();
@@ -72,7 +72,7 @@ HTTP server. Wire them into whatever already serves your probes, or call them
 from a script:
 
 ```ts
-import { checkHealth, checkReadiness } from "@byteveda/taskito";
+import { checkHealth, checkReadiness } from "@byteveda/flexiq";
 
 checkHealth(); // { status: "ok" } — liveness, never touches storage
 const report = await checkReadiness(queue);

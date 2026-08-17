@@ -5,7 +5,7 @@ description: "async def tasks dispatched directly onto a dedicated event loop."
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-taskito runs async task functions natively — no wrapping in `asyncio.run()`,
+flexiq runs async task functions natively — no wrapping in `asyncio.run()`,
 no thread-pool bridging. Define a coroutine (an `async def` function) and the worker dispatches it
 directly onto a dedicated event loop (the asyncio scheduler that runs coroutines).
 
@@ -13,7 +13,7 @@ Unlike Celery, this needs no `asgiref` or `sync_to_async` shims — the worker
 dispatches `async def` tasks natively.
 
 ```python
-from taskito import Queue
+from flexiq import Queue
 
 queue = Queue(db_path="myapp.db")
 
@@ -34,7 +34,7 @@ result = job.result(timeout=30)
 
 ## How it works
 
-When a task decorated with `@queue.task()` is an `async def`, taskito marks
+When a task decorated with `@queue.task()` is an `async def`, flexiq marks
 it for native dispatch. At worker startup, a `NativeAsyncPool` is initialized
 alongside the standard thread pool. When the scheduler dequeues an async job
 it routes it to the native pool instead of a sync worker thread.
@@ -81,7 +81,7 @@ than `threading.local`, so it's safe across `await` boundaries:
 
 ```python
 import asyncio
-from taskito import current_job
+from flexiq import current_job
 
 @queue.task()
 async def process(item_id: str) -> str:
@@ -150,7 +150,7 @@ async def fetch_with_retry(url: str) -> dict:
 ## Mixing sync and async tasks
 
 A single queue handles both sync and async tasks transparently. The worker
-dispatches each job to the correct pool based on the `_taskito_is_async`
+dispatches each job to the correct pool based on the `_flexiq_is_async`
 attribute set at registration time:
 
 ```python
@@ -170,7 +170,7 @@ Both are enqueued, retried, rate-limited, and monitored identically.
 
 ## Feature flag
 
-The native async dispatch path is compiled into the `taskito-async` Rust
+The native async dispatch path is compiled into the `flexiq-async` Rust
 crate and enabled via the `native-async` feature flag. Pre-built wheels on
 PyPI include it by default. If you build from source:
 

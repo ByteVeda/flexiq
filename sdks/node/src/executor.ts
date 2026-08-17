@@ -17,13 +17,13 @@ const log = createLogger("executor");
 /** How an executor attaches. Durations are milliseconds, per Node convention. */
 export interface ExecutorRunOptions {
   /**
-   * Scheduler address: `host:port`, `:port`, or `unix:/run/taskito.sock`.
-   * Defaults to `$TASKITO_ATTACH`.
+   * Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
+   * Defaults to `$FLEXIQ_ATTACH`.
    */
   attach?: string;
-  /** Jobs to run at once. Defaults to `$TASKITO_SLOTS`, then 1. */
+  /** Jobs to run at once. Defaults to `$FLEXIQ_SLOTS`, then 1. */
   slots?: number;
-  /** Shared secret, when the scheduler requires one. Defaults to `$TASKITO_ATTACH_TOKEN`. */
+  /** Shared secret, when the scheduler requires one. Defaults to `$FLEXIQ_ATTACH_TOKEN`. */
   token?: string;
   /** Identity announced to the scheduler. Defaults to one generated per process. */
   executorId?: string;
@@ -87,10 +87,10 @@ export class Executor {
   static async start(queue: NativeQueue, params: ExecutorStartParams): Promise<Executor> {
     const { tasks, serializer, codecs, middlewareFor, emitter, resources, run, onStopped } = params;
 
-    const address = run?.attach ?? process.env.TASKITO_ATTACH;
+    const address = run?.attach ?? process.env.FLEXIQ_ATTACH;
     if (!address) {
       throw new Error(
-        "no scheduler address: pass `attach` or set TASKITO_ATTACH (e.g. scheduler:7777)",
+        "no scheduler address: pass `attach` or set FLEXIQ_ATTACH (e.g. scheduler:7777)",
       );
     }
     const advertised = [...(run?.tasks ?? tasks.keys())];
@@ -124,7 +124,7 @@ export class Executor {
       queue,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
       // Overridden rather than left to `queue`, which is only the detached
-      // stand-in when this process is a `taskito executor`. An executor started
+      // stand-in when this process is a `flexiq executor`. An executor started
       // from a process that *does* have storage would otherwise write progress
       // into its own database, where the job it names does not exist — the row
       // belongs to the scheduler. `queue`'s own route to the scheduler is the
@@ -142,10 +142,10 @@ export class Executor {
     const native = await startNativeExecutor(taskCallback, {
       address,
       tasks: advertised,
-      slots: run?.slots ?? envInt("TASKITO_SLOTS"),
+      slots: run?.slots ?? envInt("FLEXIQ_SLOTS"),
       // Env by preference for the token: in argv it shows up in `ps` output and
       // shell history.
-      token: run?.token ?? process.env.TASKITO_ATTACH_TOKEN,
+      token: run?.token ?? process.env.FLEXIQ_ATTACH_TOKEN,
       executorId: run?.executorId,
       connectTimeoutMs: run?.connectTimeoutMs,
       heartbeatIntervalMs: run?.heartbeatIntervalMs,

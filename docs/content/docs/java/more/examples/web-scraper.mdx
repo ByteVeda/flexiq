@@ -32,10 +32,10 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import org.byteveda.taskito.middleware.Middleware;
-import org.byteveda.taskito.middleware.TaskContext;
-import org.byteveda.taskito.task.RetryPolicy;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.middleware.Middleware;
+import org.byteveda.flexiq.middleware.TaskContext;
+import org.byteveda.flexiq.task.RetryPolicy;
+import org.byteveda.flexiq.task.Task;
 
 public final class Tasks {
     public static final Task<String> FETCH_PAGE = Task.of("fetch_page", String.class)
@@ -102,22 +102,22 @@ then `aggregate` receives every fetched page as one list.
 ```java
 import java.time.Duration;
 import java.util.List;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.workflows.FanMode;
-import org.byteveda.taskito.workflows.Workflow;
-import org.byteveda.taskito.workflows.WorkflowRun;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.workflows.FanMode;
+import org.byteveda.flexiq.workflows.Workflow;
+import org.byteveda.flexiq.workflows.WorkflowRun;
 
 public final class Run {
     public static void main(String[] args) {
         List<String> urls = List.of("https://a.example", "https://b.example", "https://c.example");
 
-        try (Taskito taskito = Taskito.builder().sqlite("scraper.db").open()) {
+        try (FlexiQ flexiq = FlexiQ.builder().sqlite("scraper.db").open()) {
             Workflow scrape = Workflow.named("scrape")
                     .step("list", Tasks.LIST_URLS, urls)
                     .fanOut("fetch", Tasks.FETCH_PAGE, FanMode.EACH, "list")
                     .fanIn("aggregate", Tasks.AGGREGATE, FanMode.ALL, "fetch");
 
-            WorkflowRun run = taskito.submitWorkflow(scrape);
+            WorkflowRun run = flexiq.submitWorkflow(scrape);
             var status = run.await(Duration.ofMinutes(2));
             System.out.println(run.id() + " " + status.state.wire());
         }
@@ -139,26 +139,26 @@ queue and a wider one for everything else. A periodic sweep drops completed
 jobs older than a day.
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.scheduling.PeriodicTask;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.scheduling.PeriodicTask;
+import org.byteveda.flexiq.worker.Worker;
 
 public final class WorkerMain {
     public static void main(String[] args) throws InterruptedException {
-        try (Taskito taskito = Taskito.builder().sqlite("scraper.db").open()) {
-            taskito.use(Tasks.logging());
-            taskito.registerPeriodic(PeriodicTask.builder("cache-sweep", "cleanup_cache", "0 * * * *").build());
+        try (FlexiQ flexiq = FlexiQ.builder().sqlite("scraper.db").open()) {
+            flexiq.use(Tasks.logging());
+            flexiq.registerPeriodic(PeriodicTask.builder("cache-sweep", "cleanup_cache", "0 * * * *").build());
 
-            try (Worker network = taskito.worker()
+            try (Worker network = flexiq.worker()
                             .handle(Tasks.FETCH_PAGE, Tasks::fetch)
                             .queues("network")
                             .concurrency(2) // politeness: at most 2 fetches in flight
                             .start();
-                    Worker main = taskito.worker()
+                    Worker main = flexiq.worker()
                             .handle(Tasks.LIST_URLS, list -> list)
                             .handle(Tasks.AGGREGATE, Tasks::aggregate)
                             .handle("cleanup_cache", Long.class,
-                                    olderThanMs -> taskito.purgeCompleted(86_400_000L))
+                                    olderThanMs -> flexiq.purgeCompleted(86_400_000L))
                             .queues("default")
                             .trackWorkflows()
                             .start()) {
@@ -196,6 +196,6 @@ against the same database:
 | Transient-failure retries | `RetryPolicy.exponential` |
 | Workload isolation | `Task.queue("network")` + a dedicated worker |
 | Politeness via bounded parallelism | `worker().concurrency(2)` on the network worker |
-| Cross-cutting logging | `taskito.use(Middleware)` |
+| Cross-cutting logging | `flexiq.use(Middleware)` |
 | Expand-then-join | `fanOut(FanMode.EACH)` + `fanIn(FanMode.ALL)` |
 | Scheduled maintenance | `registerPeriodic` + `purgeCompleted` |

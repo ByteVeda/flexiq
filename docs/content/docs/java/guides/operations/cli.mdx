@@ -1,25 +1,25 @@
 ---
 title: CLI
-description: "Operate the queue from the terminal with the bundled taskito command."
+description: "Operate the queue from the terminal with the bundled flexiq command."
 ---
 
-The main artifact bundles a picocli-based CLI (`org.byteveda.taskito.cli.Cli`)
+The main artifact bundles a picocli-based CLI (`org.byteveda.flexiq.cli.Cli`)
 that operates any queue from the terminal. Connect with `--url <path-or-url>`,
 plus `--backend postgres|redis` for the non-SQLite backends; with no options it
-opens the default SQLite store at `.taskito/taskito.db`.
+opens the default SQLite store at `.flexiq/flexiq.db`.
 
 ```bash
-alias taskito='java -cp app.jar org.byteveda.taskito.cli.Cli'
+alias flexiq='java -cp app.jar org.byteveda.flexiq.cli.Cli'
 
-taskito --url taskito.db stats
-taskito --url taskito.db enqueue add '[2,3]'
-taskito --url taskito.db jobs --status failed --limit 50
-taskito --url taskito.db cancel <jobId>
-taskito --url taskito.db pause default
-taskito --url taskito.db resume default
-taskito --url taskito.db dlq list
-taskito --url taskito.db dlq retry <deadId>
-taskito --url taskito.db dlq delete <deadId>
+flexiq --url flexiq.db stats
+flexiq --url flexiq.db enqueue add '[2,3]'
+flexiq --url flexiq.db jobs --status failed --limit 50
+flexiq --url flexiq.db cancel <jobId>
+flexiq --url flexiq.db pause default
+flexiq --url flexiq.db resume default
+flexiq --url flexiq.db dlq list
+flexiq --url flexiq.db dlq retry <deadId>
+flexiq --url flexiq.db dlq delete <deadId>
 ```
 
 Read commands print pretty JSON, so the output pipes straight into `jq`.
@@ -29,7 +29,7 @@ Read commands print pretty JSON, so the output pipes straight into `jq`.
 ## Serving the dashboard
 
 ```bash
-taskito --url taskito.db dashboard --port 8080 --auth
+flexiq --url flexiq.db dashboard --port 8080 --auth
 ```
 
 Serves the bundled [dashboard](/java/guides/operations/dashboard) until
@@ -41,8 +41,8 @@ SPA assets.
 ## Other backends
 
 ```bash
-taskito --backend postgres --url "$DATABASE_URL" stats
-taskito --backend redis --url redis://localhost dlq list
+flexiq --backend postgres --url "$DATABASE_URL" stats
+flexiq --backend redis --url redis://localhost dlq list
 ```
 
 `--url` is required for every backend except SQLite.
@@ -51,5 +51,5 @@ taskito --backend redis --url redis://localhost dlq list
   The CLI is a class in the main jar, not a separate binary — put the jar (and
   its dependencies) on the classpath, or ship a small launcher script like the
   alias above. There is no worker subcommand: workers are code, built with
-  `taskito.worker()` in your application.
+  `flexiq.worker()` in your application.
 </Callout>

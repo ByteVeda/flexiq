@@ -1,5 +1,5 @@
-// Prometheus metrics for Taskito. Optional integration — import from
-// `taskito/contrib/prometheus`; requires `prom-client` as a peer.
+// Prometheus metrics for FlexiQ. Optional integration — import from
+// `flexiq/contrib/prometheus`; requires `prom-client` as a peer.
 //
 // Register the middleware with `queue.use(prometheusMiddleware())` to record per-job
 // counters/histograms, and run a `PrometheusStatsCollector` to poll queue depth / DLQ
@@ -13,7 +13,7 @@ import { createLogger } from "../utils";
 const log = createLogger("prometheus");
 
 /** The per-(registry, namespace) metric bundle, created once and reused. */
-interface TaskitoMetrics {
+interface FlexiQMetrics {
   jobsTotal: Counter<"task" | "status">;
   jobDuration: Histogram<"task">;
   activeWorkers: Gauge<string>;
@@ -24,9 +24,9 @@ interface TaskitoMetrics {
 
 // prom-client throws on duplicate registration, so a namespace's metrics must be built
 // exactly once per registry. Cache them — mirrors the Python contrib's `_metric_stores`.
-const stores = new WeakMap<Registry, Map<string, TaskitoMetrics>>();
+const stores = new WeakMap<Registry, Map<string, FlexiQMetrics>>();
 
-function getMetrics(register: Registry, namespace: string, buckets?: number[]): TaskitoMetrics {
+function getMetrics(register: Registry, namespace: string, buckets?: number[]): FlexiQMetrics {
   let byNamespace = stores.get(register);
   if (!byNamespace) {
     byNamespace = new Map();
@@ -37,7 +37,7 @@ function getMetrics(register: Registry, namespace: string, buckets?: number[]): 
     return cached;
   }
   const registers = [register];
-  const metrics: TaskitoMetrics = {
+  const metrics: FlexiQMetrics = {
     jobsTotal: new Counter({
       name: `${namespace}_jobs_total`,
       help: "Total finished jobs by task and outcome.",
@@ -80,7 +80,7 @@ function getMetrics(register: Registry, namespace: string, buckets?: number[]): 
 
 /** Options shared by the middleware and the stats collector. */
 interface CommonOptions {
-  /** Metric name prefix (default `"taskito"`). */
+  /** Metric name prefix (default `"flexiq"`). */
   namespace?: string;
   /** Registry to register on (default the prom-client global `register`). */
   register?: Registry;
@@ -99,7 +99,7 @@ export interface PrometheusMiddlewareOptions extends CommonOptions {
  * in-flight jobs as a gauge and retries as a counter.
  */
 export function prometheusMiddleware(options: PrometheusMiddlewareOptions = {}): Middleware {
-  const namespace = options.namespace ?? "taskito";
+  const namespace = options.namespace ?? "flexiq";
   const register = options.register ?? defaultRegister;
   const metrics = getMetrics(register, namespace, options.buckets);
   const tracked = (taskName: string): boolean => options.taskFilter?.(taskName) ?? true;
@@ -150,7 +150,7 @@ export interface PrometheusStatsCollectorOptions extends CommonOptions {
  * the process alive on its own).
  */
 export class PrometheusStatsCollector {
-  private readonly metrics: TaskitoMetrics;
+  private readonly metrics: FlexiQMetrics;
   private readonly intervalMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -158,7 +158,7 @@ export class PrometheusStatsCollector {
     private readonly queue: Queue,
     options: PrometheusStatsCollectorOptions = {},
   ) {
-    const namespace = options.namespace ?? "taskito";
+    const namespace = options.namespace ?? "flexiq";
     const register = options.register ?? defaultRegister;
     this.metrics = getMetrics(register, namespace);
     const intervalMs = options.intervalMs ?? 10_000;

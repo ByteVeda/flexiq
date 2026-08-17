@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 
 def test_periodic_workflow_registers_launcher(queue: Queue) -> None:

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard.oauth.state_store import (
+from flexiq import Queue
+from flexiq.dashboard.oauth.state_store import (
     DEFAULT_STATE_TTL_SECONDS,
     STATE_PREFIX,
     OAuthStateStore,

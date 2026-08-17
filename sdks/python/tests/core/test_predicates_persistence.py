@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from taskito.app import Queue
-from taskito.predicates import (
+from flexiq.app import Queue
+from flexiq.predicates import (
     Predicate,
     PredicateContext,
     PredicateValidationError,

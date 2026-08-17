@@ -8,7 +8,7 @@ gates, sub-workflows, and incremental runs.
 
 <Callout type="warn" title="These examples need a running worker">
   Each example builds and submits a workflow; the step jobs run only while a
-  worker is consuming the queue. Start one — `taskito worker --app app:queue`, or
+  worker is consuming the queue. Start one — `flexiq worker --app app:queue`, or
   `queue.run_worker()` in a background thread — before calling `run.wait()`.
   (`Queue(workers=4)` sets the worker *count*; it does not start a worker.)
 
@@ -24,8 +24,8 @@ A training pipeline that evaluates a model, gates deployment on accuracy,
 and has a rollback path.
 
 ```python
-from taskito import Queue
-from taskito.workflows import Workflow, WorkflowContext
+from flexiq import Queue
+from flexiq.workflows import Workflow, WorkflowContext
 
 queue = Queue(db_path="ml.db", workers=4)
 

@@ -1,10 +1,10 @@
 ---
 title: Testing Resources
-description: "Register a stub with the same resource() call used in production, paired with InMemoryTaskito."
+description: "Register a stub with the same resource() call used in production, paired with InMemoryFlexiQ."
 ---
 
 Resources are tested the same way they're built: register a stub factory
-under the resource's name with `taskito.resource(name, factory)`. Handlers
+under the resource's name with `flexiq.resource(name, factory)`. Handlers
 resolve by name — `Resources.use("db")` or a `@Resource("db")` parameter — so
 they can't tell a fake from the real thing.
 
@@ -12,70 +12,70 @@ There's no separate mock-resource type and no test-only override API.
 Anything a factory can return works as a fake — an `AtomicInteger` for call
 counts, a hand-written stub, or a mock from a library such as Mockito.
 
-## Pairing with `InMemoryTaskito`
+## Pairing with `InMemoryFlexiQ`
 
-`org.byteveda:taskito-test` opens a `Taskito` over a pure-JVM in-memory
+`org.byteveda:flexiq-test` opens a `FlexiQ` over a pure-JVM in-memory
 backend — no JNI, no disk. The resource runtime is backend-independent, so
 resources build, scope, and tear down exactly the same way over it:
 
 ```kotlin
-testImplementation("org.byteveda:taskito-test:0.23.0")
+testImplementation("org.byteveda:flexiq-test:1.0.0")
 ```
 
 ```java
-import org.byteveda.taskito.test.InMemoryTaskito;
+import org.byteveda.flexiq.test.InMemoryFlexiQ;
 
 @Test
 void injectsAFakeDatabase() throws Exception {
     AtomicInteger builds = new AtomicInteger();
 
-    try (Taskito taskito = InMemoryTaskito.open()) {
-        taskito.resource("db", ctx -> {
+    try (FlexiQ flexiq = InMemoryFlexiQ.open()) {
+        flexiq.resource("db", ctx -> {
             builds.incrementAndGet();
             return new FakeDatabase();
         });
 
-        try (Worker worker = taskito.worker()
+        try (Worker worker = flexiq.worker()
                 .handle("sync_user", String.class, userId -> {
                     FakeDatabase db = Resources.use("db");
                     return db.markSynced(userId);
                 })
                 .start()) {
-            String id = taskito.enqueue("sync_user", "u_123");
-            Job job = taskito.awaitJob(id, Duration.ofSeconds(5)).orElseThrow();
+            String id = flexiq.enqueue("sync_user", "u_123");
+            Job job = flexiq.awaitJob(id, Duration.ofSeconds(5)).orElseThrow();
             assertEquals(JobStatus.COMPLETE, job.status);
         }
 
         assertEquals(1, builds.get());
-        assertEquals(1, taskito.resourceMetrics().get("db").created());
+        assertEquals(1, flexiq.resourceMetrics().get("db").created());
     }
 }
 ```
 
 ## One registration per client
 
-`taskito.resource(name, ...)` throws `ResourceException` if `name` is
-already registered — registration is a one-time call per `Taskito` client,
+`flexiq.resource(name, ...)` throws `ResourceException` if `name` is
+already registered — registration is a one-time call per `FlexiQ` client,
 not something a later call can override:
 
 ```java
-taskito.resource("db", ctx -> realPool());
-taskito.resource("db", ctx -> new FakeDatabase()); // throws ResourceException
+flexiq.resource("db", ctx -> realPool());
+flexiq.resource("db", ctx -> new FakeDatabase()); // throws ResourceException
 ```
 
 That means you can't layer a fake over a resource your production wiring
 already registered on the same client — a shared `configureQueue()` helper,
-say, that also registers `"db"`. A test needs its **own** `Taskito` (and
+say, that also registers `"db"`. A test needs its **own** `FlexiQ` (and
 therefore its own `Worker`) with the stub registered from scratch:
 
 ```java
 // Don't — configureProduction() already registered "db"; this throws.
-Taskito taskito = configureProduction(InMemoryTaskito.open());
-taskito.resource("db", ctx -> new FakeDatabase());
+FlexiQ flexiq = configureProduction(InMemoryFlexiQ.open());
+flexiq.resource("db", ctx -> new FakeDatabase());
 
 // Do — build the test's own client and register the stub first.
-try (Taskito taskito = InMemoryTaskito.open()) {
-    taskito.resource("db", ctx -> new FakeDatabase());
+try (FlexiQ flexiq = InMemoryFlexiQ.open()) {
+    flexiq.resource("db", ctx -> new FakeDatabase());
     // ... register handlers, run the worker ...
 }
 ```
@@ -88,7 +88,7 @@ twice.
 <Callout type="info">
   See [dependency injection](/java/guides/resources/dependency-injection) for
   how `resource()` and scopes work, and
-  [testing](/java/guides/operations/testing) for the full `InMemoryTaskito`
+  [testing](/java/guides/operations/testing) for the full `InMemoryFlexiQ`
   worker setup — `awaitJob`, event listeners, and when to fall back to a real
   SQLite-backed integration test.
 </Callout>

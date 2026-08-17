@@ -1,34 +1,34 @@
-# taskito (Node.js)
+# flexiq (Node.js)
 
-[![npm version](https://img.shields.io/npm/v/@byteveda/taskito.svg)](https://www.npmjs.com/package/@byteveda/taskito)
-[![License](https://img.shields.io/npm/l/@byteveda/taskito.svg)](https://github.com/ByteVeda/taskito/blob/master/LICENSE)
+[![npm version](https://img.shields.io/npm/v/@byteveda/flexiq.svg)](https://www.npmjs.com/package/@byteveda/flexiq)
+[![License](https://img.shields.io/npm/l/@byteveda/flexiq.svg)](https://github.com/ByteVeda/flexiq/blob/master/LICENSE)
 
 Rust-powered task queue for Node.js — no broker required. A thin
-[napi-rs](https://napi.rs) shell over the Taskito Rust core, peer to the Python
+[napi-rs](https://napi.rs) shell over the FlexiQ Rust core, peer to the Python
 SDK. Enqueue work and run workers in the same process or across processes that
 share storage (SQLite, PostgreSQL, or Redis).
 
-Part of the [taskito](https://github.com/ByteVeda/taskito) project (Rust core + native
-SDKs for Python and Node). Full guides at the [Node docs](https://docs.byteveda.org/taskito/node).
+Part of the [flexiq](https://github.com/ByteVeda/flexiq) project (Rust core + native
+SDKs for Python and Node). Full guides at the [Node docs](https://docs.byteveda.org/flexiq/node).
 
 ## Install
 
 ```bash
-pnpm add @byteveda/taskito
+pnpm add @byteveda/flexiq
 ```
 
 Requires Node.js >= 18. Ships as dual ESM + CommonJS. A prebuilt native binary is
 installed automatically for your platform via an optional per-platform package
-(`@byteveda/taskito-<os>-<arch>`) — linux x64/arm64 (gnu + musl), macOS x64/arm64, and
+(`@byteveda/flexiq-<os>-<arch>`) — linux x64/arm64 (gnu + musl), macOS x64/arm64, and
 Windows x64. On a platform without a prebuilt, build from source with the Rust
 toolchain + napi-rs CLI (`pnpm build:native`).
 
 ## Quickstart
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 // Register a task with optional per-task config.
 queue.task("add", (a: number, b: number) => a + b, {
@@ -53,15 +53,15 @@ worker.stop();
 ## Backends
 
 ```ts
-new Queue();                                              // SQLite at .taskito/taskito.db (default)
-new Queue({ dbPath: "data/taskito.db" });                 // SQLite at a custom path (dirs created)
-new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
-new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
+new Queue();                                              // SQLite at .flexiq/flexiq.db (default)
+new Queue({ dbPath: "data/flexiq.db" });                 // SQLite at a custom path (dirs created)
+new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "flexiq" });
+new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "flexiq" });
 ```
 
-SQLite defaults to `.taskito/taskito.db` and creates the parent directory
+SQLite defaults to `.flexiq/flexiq.db` and creates the parent directory
 automatically. Postgres isolates its tables in the `schema` (default
-`"taskito"`); Redis isolates its keys under `prefix`. Override either to share
+`"flexiq"`); Redis isolates its keys under `prefix`. Override either to share
 or separate state.
 
 Scan-heavy methods (`stats*`, `listJobs`, `deadLetters*`, `purge*`,
@@ -81,7 +81,7 @@ pending/running), `metadata`, `namespace`.
 Cancellation is cooperative. A running task reads its context via `currentJob()`:
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("download", async (url: string) => {
   const { signal } = currentJob() ?? {};
@@ -123,26 +123,26 @@ Args and results are serialized with a pluggable `Serializer` (default
 payloads as opaque bytes.
 
 ```ts
-import { Queue, MsgpackSerializer } from "@byteveda/taskito";
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+import { Queue, MsgpackSerializer } from "@byteveda/flexiq";
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 ## CLI
 
-A standalone `taskito` command (no Python) operates the queue from the terminal:
+A standalone `flexiq` command (no Python) operates the queue from the terminal:
 
 ```bash
 # Connect with --db <path> (or --backend/--dsn for postgres/redis).
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db stats
-taskito --db taskito.db jobs --status failed
-taskito --db taskito.db dlq list
-taskito --db taskito.db dlq retry <deadId>
-taskito --db taskito.db pause default
-taskito --db taskito.db cancel <jobId>
+flexiq --db flexiq.db enqueue add '[2,3]'
+flexiq --db flexiq.db stats
+flexiq --db flexiq.db jobs --status failed
+flexiq --db flexiq.db dlq list
+flexiq --db flexiq.db dlq retry <deadId>
+flexiq --db flexiq.db pause default
+flexiq --db flexiq.db cancel <jobId>
 
 # Run a worker from a module that exports a configured Queue.
-taskito run ./app.js --queues default,emails
+flexiq run ./app.js --queues default,emails
 ```
 
 `--json` on any read command prints machine-readable output.
@@ -223,7 +223,7 @@ persisted across restarts:
 const hook = queue.webhooks.create({
   url: "https://hooks.example.com/jobs",
   events: ["job.dead", "job.completed"], // omit for all
-  secret: process.env.WEBHOOK_SECRET,    // signs X-Taskito-Signature: sha256=...
+  secret: process.env.WEBHOOK_SECRET,    // signs X-Flexiq-Signature: sha256=...
   taskFilter: ["send_email"],            // optional
 });
 
@@ -370,15 +370,15 @@ no Python required. Build the SPA assets once, then serve:
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db taskito.db dashboard --port 8787
+flexiq --db flexiq.db dashboard --port 8787
 ```
 
 Or programmatically:
 
 ```ts
-import { Queue, serveDashboard } from "@byteveda/taskito";
+import { Queue, serveDashboard } from "@byteveda/flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 const server = serveDashboard(queue, { port: 8787 });
 // ... server.close() to stop
 ```
@@ -413,18 +413,18 @@ Other tunables: `bindAddr`, `advertiseAddr` (NAT), `affinityWeight`,
 
 ## Contrib integrations
 
-Optional integrations live under the `taskito/contrib/*` subpaths. Each requires its
+Optional integrations live under the `flexiq/contrib/*` subpaths. Each requires its
 framework as a peer dependency you install yourself; none are pulled in by the main
-package or exported from the `taskito` barrel.
+package or exported from the `flexiq` barrel.
 
 ### Observability
 
 ```ts
-import { otelMiddleware } from "@byteveda/taskito/contrib/otel"; // peer: @opentelemetry/api
-import { prometheusMiddleware, PrometheusStatsCollector } from "@byteveda/taskito/contrib/prometheus"; // peer: prom-client
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel"; // peer: @opentelemetry/api
+import { prometheusMiddleware, PrometheusStatsCollector } from "@byteveda/flexiq/contrib/prometheus"; // peer: prom-client
 
-queue.use(otelMiddleware());        // one span per execution: taskito.execute.<task>
-queue.use(prometheusMiddleware());  // taskito_jobs_total, _job_duration_seconds, _active_workers, _retries_total
+queue.use(otelMiddleware());        // one span per execution: flexiq.execute.<task>
+queue.use(prometheusMiddleware());  // flexiq_jobs_total, _job_duration_seconds, _active_workers, _retries_total
 
 const collector = new PrometheusStatsCollector(queue); // polls queue depth + DLQ size
 collector.start();
@@ -436,7 +436,7 @@ OTel options: `tracerName`, `attributePrefix`, `spanName(ctx)`, `extraAttributes
 (metrics for one namespace are built once per registry, so multiple middlewares are safe).
 
 ```ts
-import { sentryMiddleware } from "@byteveda/taskito/contrib/sentry"; // peer: @sentry/node
+import { sentryMiddleware } from "@byteveda/flexiq/contrib/sentry"; // peer: @sentry/node
 queue.use(sentryMiddleware()); // call Sentry.init(...) yourself first
 ```
 
@@ -447,17 +447,17 @@ to also report each intermediate failure as a warning. Other options: `tagPrefix
 
 ### Web frameworks
 
-`taskitoRouter` / the Fastify plugin expose a JSON API (enqueue + inspection); a separate
+`flexiqRouter` / the Fastify plugin expose a JSON API (enqueue + inspection); a separate
 helper mounts the dashboard (SPA + `/api/*`) into your app.
 
 ```ts
-import { taskitoRouter, taskitoDashboard } from "@byteveda/taskito/contrib/express"; // peer: express
-app.use("/tasks", taskitoRouter(queue));   // POST /enqueue, GET /stats, /jobs/:id, ...
-app.use("/admin", taskitoDashboard(queue)); // dashboard SPA + /api/*
+import { flexiqRouter, flexiqDashboard } from "@byteveda/flexiq/contrib/express"; // peer: express
+app.use("/tasks", flexiqRouter(queue));   // POST /enqueue, GET /stats, /jobs/:id, ...
+app.use("/admin", flexiqDashboard(queue)); // dashboard SPA + /api/*
 
-import { taskitoFastify, taskitoDashboardPlugin } from "@byteveda/taskito/contrib/fastify"; // peer: fastify
-app.register(taskitoFastify, { queue, prefix: "/tasks" });
-app.register(taskitoDashboardPlugin, { queue, prefix: "/admin" });
+import { flexiqFastify, flexiqDashboardPlugin } from "@byteveda/flexiq/contrib/fastify"; // peer: fastify
+app.register(flexiqFastify, { queue, prefix: "/tasks" });
+app.register(flexiqDashboardPlugin, { queue, prefix: "/admin" });
 ```
 
 Both routers take `includeRoutes` / `excludeRoutes` (route names: `enqueue`, `stats`,
@@ -467,12 +467,12 @@ and `resultTimeoutMs`.
 NestJS exposes an injectable service:
 
 ```ts
-import { TaskitoModule, TaskitoService } from "@byteveda/taskito/contrib/nest"; // peers: @nestjs/common, reflect-metadata
+import { FlexiQModule, FlexiQService } from "@byteveda/flexiq/contrib/nest"; // peers: @nestjs/common, reflect-metadata
 
-@Module({ imports: [TaskitoModule.forRoot(queue)] })
+@Module({ imports: [FlexiQModule.forRoot(queue)] })
 export class AppModule {}
 
-// constructor(private readonly tasks: TaskitoService) {}
+// constructor(private readonly tasks: FlexiQService) {}
 // this.tasks.enqueue("add", [2, 3]); this.tasks.queue gives the full API
 ```
 
@@ -486,7 +486,7 @@ pnpm lint
 pnpm test
 ```
 
-The native crate lives at `crates/taskito-node`; this package builds it into
+The native crate lives at `crates/flexiq-node`; this package builds it into
 `native/` and wraps it with a typed TypeScript API. Postgres/Redis backends are
 compiled in via `--features postgres,redis`.
 

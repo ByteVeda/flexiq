@@ -32,11 +32,11 @@ after both transforms complete; a `quarantine` branch fires only when a step
 fails.
 
 ```java
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.workflows.Step;
-import org.byteveda.taskito.workflows.Workflow;
-import org.byteveda.taskito.workflows.WorkflowRun;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.workflows.Step;
+import org.byteveda.flexiq.workflows.Workflow;
+import org.byteveda.flexiq.workflows.WorkflowRun;
 
 public final class Pipeline {
     public static final Task<String> EXTRACT = Task.of("extract", String.class).maxRetries(3);
@@ -46,7 +46,7 @@ public final class Pipeline {
     public static final Task<String> QUARANTINE = Task.of("quarantine", String.class);
 
     /** Every step receives the same runId payload and coordinates via staging. */
-    public static WorkflowRun run(Taskito taskito, String runId) {
+    public static WorkflowRun run(FlexiQ flexiq, String runId) {
         Workflow etl = Workflow.named("etl")
                 .step("extract", EXTRACT, runId)
                 .step("clean", CLEAN, runId, "extract")
@@ -54,7 +54,7 @@ public final class Pipeline {
                 .step(Step.of("load", LOAD, runId).after("clean", "enrich").priority(10).build())
                 // Failure branch: fires only when an upstream step fails.
                 .step(Step.of("quarantine", QUARANTINE, runId).after("load").onFailure().build());
-        return taskito.submitWorkflow(etl);
+        return flexiq.submitWorkflow(etl);
     }
 
     private Pipeline() {}
@@ -69,10 +69,10 @@ underlying job.
 
 ```java
 import java.util.List;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.model.JobError;
-import org.byteveda.taskito.workflows.WorkflowAnalysis;
-import org.byteveda.taskito.workflows.Workflow;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.model.JobError;
+import org.byteveda.flexiq.workflows.WorkflowAnalysis;
+import org.byteveda.flexiq.workflows.Workflow;
 
 public final class Monitor {
 
@@ -85,12 +85,12 @@ public final class Monitor {
     }
 
     /** Inspect a run: which step failed, and why, attempt by attempt. */
-    public static void report(Taskito taskito, String runId) {
-        taskito.workflowStatus(runId).ifPresent(status -> {
+    public static void report(FlexiQ flexiq, String runId) {
+        flexiq.workflowStatus(runId).ifPresent(status -> {
             System.out.println("state: " + status.state.wire());
             status.failedStep().ifPresent(step -> {
                 status.node(step).ifPresent(node -> {
-                    List<JobError> errors = taskito.jobErrors(node.jobId);
+                    List<JobError> errors = flexiq.jobErrors(node.jobId);
                     errors.forEach(err ->
                             System.out.printf("%s attempt %d: %s%n", step, err.attempt, err.error));
                 });
@@ -115,8 +115,8 @@ The worker consumes both queues and tracks workflows so conditional nodes
 (the `quarantine` branch) are evaluated.
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("pipeline.db").open();
-        Worker worker = taskito.worker()
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("pipeline.db").open();
+        Worker worker = flexiq.worker()
                 .handle(Pipeline.EXTRACT, runId -> staging.write(runId, "raw", source.read()))
                 .handle(Pipeline.CLEAN, runId -> staging.transform(runId, "raw", "clean"))
                 .handle(Pipeline.ENRICH, runId -> staging.transform(runId, "raw", "enrich"))

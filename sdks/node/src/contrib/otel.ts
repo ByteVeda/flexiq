@@ -1,17 +1,17 @@
-// OpenTelemetry tracing for Taskito task execution. Optional integration —
-// import from `taskito/contrib/otel`; requires `@opentelemetry/api` as a peer.
+// OpenTelemetry tracing for FlexiQ task execution. Optional integration —
+// import from `flexiq/contrib/otel`; requires `@opentelemetry/api` as a peer.
 //
 // Register with `queue.use(otelMiddleware())`. Each execution attempt becomes one
-// span (`taskito.execute.<task>`); a retry is a fresh attempt and thus a new span.
+// span (`flexiq.execute.<task>`); a retry is a fresh attempt and thus a new span.
 
 import { type Attributes, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { Middleware, TaskContext } from "../middleware";
 
 /** Options for {@link otelMiddleware}. */
 export interface OtelMiddlewareOptions {
-  /** Tracer name passed to `trace.getTracer` (default `"taskito"`). */
+  /** Tracer name passed to `trace.getTracer` (default `"flexiq"`). */
   tracerName?: string;
-  /** Prefix for span attribute keys (default `"taskito"`). */
+  /** Prefix for span attribute keys (default `"flexiq"`). */
   attributePrefix?: string;
   /** Override the span name (default `"<prefix>.execute.<taskName>"`). */
   spanName?: (ctx: TaskContext) => string;
@@ -27,8 +27,8 @@ export interface OtelMiddlewareOptions {
  * exception) in `onError`.
  */
 export function otelMiddleware(options: OtelMiddlewareOptions = {}): Middleware {
-  const tracerName = options.tracerName ?? "taskito";
-  const prefix = options.attributePrefix ?? "taskito";
+  const tracerName = options.tracerName ?? "flexiq";
+  const prefix = options.attributePrefix ?? "flexiq";
   const tracer = trace.getTracer(tracerName);
   const spans = new Map<string, Span>();
 

@@ -32,8 +32,8 @@ export const HERO_PANES: LangPane[] = [
     sdk: "python",
     lang: "py",
     filename: "tasks.py",
-    install: "pip install taskito",
-    code: `from taskito import Queue
+    install: "pip install flexiq",
+    code: `from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
 
@@ -44,7 +44,7 @@ def add(a: int, b: int) -> int:
 job = add.delay(2, 3)
 print(job.result())   # → 5`,
     output: [
-      { glyph: "$", glyphKind: "p", text: "taskito worker --app tasks:queue" },
+      { glyph: "$", glyphKind: "p", text: "flexiq worker --app tasks:queue" },
       {
         glyph: "→",
         glyphKind: "p",
@@ -65,10 +65,10 @@ print(job.result())   # → 5`,
     sdk: "node",
     lang: "ts",
     filename: "tasks.ts",
-    install: "pnpm add taskito",
-    code: `import { Queue } from "taskito";
+    install: "pnpm add flexiq",
+    code: `import { Queue } from "flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 queue.task("add", (a: number, b: number) => a + b, {
   maxRetries: 3,
@@ -79,7 +79,7 @@ queue.runWorker();
 
 console.log(await queue.result(id)); // → 5`,
     output: [
-      { glyph: "$", glyphKind: "p", text: "taskito run ./tasks.js" },
+      { glyph: "$", glyphKind: "p", text: "flexiq run ./tasks.js" },
       { glyph: "→", glyphKind: "p", text: "runWorker() · Rust core attached" },
       {
         glyph: "✓",
@@ -96,13 +96,13 @@ console.log(await queue.result(id)); // → 5`,
     sdk: "java",
     lang: "java",
     filename: "Tasks.java",
-    install: 'implementation("org.byteveda:taskito")',
-    code: `import org.byteveda.taskito.*;
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.worker.Worker;
+    install: 'implementation("org.byteveda:flexiq")',
+    code: `import org.byteveda.flexiq.*;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.worker.Worker;
 
 Task<int[]> add = Task.of("add", int[].class).retries(3);
-try (Taskito queue = Taskito.builder().sqlite("tasks.db").open();
+try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
      Worker worker = queue.worker()
          .handle(add, p -> p[0] + p[1])
          .start()) {
@@ -204,29 +204,29 @@ export const USE_CASES: IconCard[] = [
 
 export interface DeltaRow {
   label: string;
-  taskito: string;
+  flexiq: string;
   celery: string;
 }
 
 export const DELTA: DeltaRow[] = [
   {
     label: "Install",
-    taskito: "pip install taskito",
+    flexiq: "pip install flexiq",
     celery: "pip install celery[redis] + run Redis daemon",
   },
   {
     label: "Background services",
-    taskito: "<b>1</b> (worker)",
+    flexiq: "<b>1</b> (worker)",
     celery: "3 (worker, beat, Redis)",
   },
   {
     label: "Default storage",
-    taskito: "SQLite file <b>(built-in)</b>",
+    flexiq: "SQLite file <b>(built-in)</b>",
     celery: "Redis (separate daemon)",
   },
   {
     label: "Retry config above",
-    taskito: "max_retries=3 <b>decorator arg</b>",
+    flexiq: "max_retries=3 <b>decorator arg</b>",
     celery: "try/except + self.retry(exc=…)",
   },
 ];
@@ -243,7 +243,7 @@ export const INTEGRATIONS: IntegrationGroup[] = [
   { group: "Observability", items: ["OpenTelemetry", "Sentry", "Prometheus"] },
 ];
 
-export const CODE_TASKITO = `from taskito import Queue
+export const CODE_FLEXIQ = `from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
 
@@ -253,7 +253,7 @@ def send_email(to, subject, body):
 
 # Enqueue + run
 send_email.delay("a@x.com", "Hi", "Body")
-# $ taskito worker --app tasks:queue`;
+# $ flexiq worker --app tasks:queue`;
 
 export const CODE_CELERY = `from celery import Celery
 

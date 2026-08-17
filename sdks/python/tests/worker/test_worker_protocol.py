@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from taskito.worker_protocol import ProtocolError, read_frame, write_frame
+from flexiq.worker_protocol import ProtocolError, read_frame, write_frame
 
 
 def _frame(header: bytes, payload: bytes = b"") -> io.BytesIO:

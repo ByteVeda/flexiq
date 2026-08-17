@@ -129,10 +129,10 @@ function parseBool(raw: string | undefined, fallback: boolean): boolean {
 export function oauthConfigFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): OAuthConfig | undefined {
-  const baseUrl = (env.TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL ?? "").trim();
-  const googleId = (env.TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID ?? "").trim();
-  const githubId = (env.TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID ?? "").trim();
-  const oidcSlotsRaw = (env.TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS ?? "").trim();
+  const baseUrl = (env.FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL ?? "").trim();
+  const googleId = (env.FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID ?? "").trim();
+  const githubId = (env.FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID ?? "").trim();
+  const oidcSlotsRaw = (env.FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS ?? "").trim();
 
   const anyProviderSignal = Boolean(googleId || githubId || oidcSlotsRaw);
   if (!anyProviderSignal && !baseUrl) {
@@ -140,7 +140,7 @@ export function oauthConfigFromEnv(
   }
   if (anyProviderSignal && !baseUrl) {
     throw new OAuthConfigError(
-      "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any OAuth provider is configured",
+      "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any OAuth provider is configured",
     );
   }
   validateRedirectBaseUrl(baseUrl);
@@ -150,8 +150,8 @@ export function oauthConfigFromEnv(
     google: googleId ? parseGoogle(env) : undefined,
     github: githubId ? parseGithub(env) : undefined,
     oidc: parseOidcSlots(env, oidcSlotsRaw),
-    passwordAuthEnabled: parseBool(env.TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED, true),
-    adminEmails: splitCsv(env.TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS),
+    passwordAuthEnabled: parseBool(env.FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED, true),
+    adminEmails: splitCsv(env.FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS),
   };
 
   const enabled = Boolean(config.google || config.github || config.oidc.length > 0);
@@ -164,11 +164,11 @@ export function oauthConfigFromEnv(
 }
 
 function parseGoogle(env: Record<string, string | undefined>): GoogleConfig {
-  const clientId = (env.TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID ?? "").trim();
-  const clientSecret = (env.TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET ?? "").trim();
+  const clientId = (env.FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID ?? "").trim();
+  const clientSecret = (env.FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET ?? "").trim();
   if (!clientSecret) {
     throw new OAuthConfigError(
-      "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET is required when google client_id is set",
+      "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET is required when google client_id is set",
     );
   }
   return {
@@ -177,16 +177,16 @@ function parseGoogle(env: Record<string, string | undefined>): GoogleConfig {
     label: "Google",
     clientId,
     clientSecret,
-    allowedDomains: splitCsv(env.TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS),
+    allowedDomains: splitCsv(env.FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS),
   };
 }
 
 function parseGithub(env: Record<string, string | undefined>): GitHubConfig {
-  const clientId = (env.TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID ?? "").trim();
-  const clientSecret = (env.TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET ?? "").trim();
+  const clientId = (env.FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID ?? "").trim();
+  const clientSecret = (env.FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET ?? "").trim();
   if (!clientSecret) {
     throw new OAuthConfigError(
-      "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET is required when github client_id is set",
+      "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET is required when github client_id is set",
     );
   }
   return {
@@ -195,7 +195,7 @@ function parseGithub(env: Record<string, string | undefined>): GitHubConfig {
     label: "GitHub",
     clientId,
     clientSecret,
-    allowedOrgs: splitCsv(env.TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS),
+    allowedOrgs: splitCsv(env.FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS),
   };
 }
 
@@ -211,7 +211,7 @@ function parseOidcSlots(env: Record<string, string | undefined>, slotsRaw: strin
     const slot = rawSlot.toLowerCase();
     if (seen.has(slot)) {
       throw new OAuthConfigError(
-        `OIDC slot '${slot}' listed twice in TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS`,
+        `OIDC slot '${slot}' listed twice in FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS`,
       );
     }
     seen.add(slot);
@@ -229,7 +229,7 @@ function parseOidcSlots(env: Record<string, string | undefined>, slotsRaw: strin
 }
 
 function envPrefix(slot: string): string {
-  return `TASKITO_DASHBOARD_OAUTH_OIDC_${slot.toUpperCase().replace(/-/g, "_")}`;
+  return `FLEXIQ_DASHBOARD_OAUTH_OIDC_${slot.toUpperCase().replace(/-/g, "_")}`;
 }
 
 function parseOidcSlot(env: Record<string, string | undefined>, slot: string): OidcConfig {

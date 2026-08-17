@@ -11,6 +11,7 @@ import {
 import { createDetachedNative, isDetached } from "./detached";
 import {
   EnqueueSkippedError,
+  FlexiQError,
   InterceptionError,
   JobCancelledError,
   JobFailedError,
@@ -22,7 +23,6 @@ import {
   ResourceError,
   ResultTimeoutError,
   SerializationError,
-  TaskitoError,
 } from "./errors";
 import { Emitter, type EventMap, type EventName, type PredicateEvent } from "./events";
 import { Executor, type ExecutorRunOptions } from "./executor";
@@ -121,7 +121,7 @@ const log = createLogger("queue");
 /** Construction options for a {@link Queue}. */
 export interface QueueOptions {
   /** SQLite file path — shorthand for `{ backend: "sqlite", dsn: path }`.
-   *  Defaults to `.taskito/taskito.db`; missing parent directories are created. */
+   *  Defaults to `.flexiq/flexiq.db`; missing parent directories are created. */
   dbPath?: string;
   /** `"sqlite"` (default), `"postgres"`, or `"redis"`. */
   backend?: "sqlite" | "postgres" | "redis";
@@ -129,7 +129,7 @@ export interface QueueOptions {
   dsn?: string;
   /** Connection pool size (SQLite/Postgres). */
   poolSize?: number;
-  /** Postgres schema (default `"taskito"`). */
+  /** Postgres schema (default `"flexiq"`). */
   schema?: string;
   /** Redis key prefix. */
   prefix?: string;
@@ -161,7 +161,7 @@ export interface QueueOptions {
 }
 
 /**
- * A Taskito queue: register tasks, enqueue work, read results, and run workers.
+ * A FlexiQ queue: register tasks, enqueue work, read results, and run workers.
  * Backed by the Rust core over SQLite, Postgres, or Redis.
  */
 /**
@@ -1154,7 +1154,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   /**
    * Await a job's terminal state and return its deserialized result. Rejects
    * with {@link JobFailedError} / {@link JobCancelledError} on failure, and with
-   * {@link TaskitoError} if the wait times out.
+   * {@link FlexiQError} if the wait times out.
    */
   async result(id: string, options?: ResultOptions): Promise<unknown> {
     const timeoutMs = options?.timeoutMs ?? 30_000;
@@ -1793,14 +1793,14 @@ function toNativeEnqueueOptions(options: EnqueueOptions): NativeEnqueueOptions {
   return notes === undefined ? rest : { ...rest, notes: encodeNotes(notes) };
 }
 
-/** Default on-disk SQLite location — mirrors the Python SDK's `.taskito/taskito.db`. */
-const DEFAULT_SQLITE_DB = ".taskito/taskito.db";
+/** Default on-disk SQLite location — mirrors the Python SDK's `.flexiq/flexiq.db`. */
+const DEFAULT_SQLITE_DB = ".flexiq/flexiq.db";
 
 /** Resolve a {@link QueueOptions} into the native open options. */
 function toOpenOptions(options: QueueOptions): OpenOptions {
   const backend = options.backend ?? "sqlite";
   if (backend === "sqlite") {
-    // Zero-config default, like Python: an on-disk DB under `.taskito/`.
+    // Zero-config default, like Python: an on-disk DB under `.flexiq/`.
     const dsn = options.dsn ?? options.dbPath ?? DEFAULT_SQLITE_DB;
     ensureSqliteParentDir(dsn);
     return {
@@ -1812,7 +1812,7 @@ function toOpenOptions(options: QueueOptions): OpenOptions {
     };
   }
   // Postgres/Redis have no sensible default endpoint — require an explicit dsn.
-  // The Postgres `schema` (default `"taskito"`, resolved in the addon) and the
+  // The Postgres `schema` (default `"flexiq"`, resolved in the addon) and the
   // Redis `prefix` give each backend its own isolated namespace.
   const dsn = options.dsn;
   if (!dsn) {

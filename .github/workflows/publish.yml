@@ -79,7 +79,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: dashboard-dist
-          path: sdks/python/taskito/static/dashboard
+          path: sdks/python/flexiq/static/dashboard
           if-no-files-found: error
           retention-days: 1
 
@@ -317,8 +317,8 @@ jobs:
 
           version = sys.argv[1]
           dist = Path("dist")
-          url = f"https://pypi.org/pypi/taskito/{version}/json"
-          req = urllib.request.Request(url, headers={"User-Agent": "taskito-release/1.0"})
+          url = f"https://pypi.org/pypi/flexiq/{version}/json"
+          req = urllib.request.Request(url, headers={"User-Agent": "flexiq-release/1.0"})
 
           try:
               resp = urllib.request.urlopen(req, timeout=30)
@@ -365,15 +365,15 @@ jobs:
           for _attempt in 1 2 3 4 5; do
             status=$(curl -s -o /dev/null -w '%{http_code}' --head \
               --connect-timeout 10 --max-time 30 \
-              -H "User-Agent: taskito-release/1.0" \
-              "https://pypi.org/pypi/taskito/${VERSION}/json")
+              -H "User-Agent: flexiq-release/1.0" \
+              "https://pypi.org/pypi/flexiq/${VERSION}/json")
             if [ "$status" = "200" ]; then
-              echo "taskito==${VERSION} live on PyPI"
+              echo "flexiq==${VERSION} live on PyPI"
               exit 0
             fi
             sleep 15
           done
-          echo "::error::taskito==${VERSION} not found on PyPI"
+          echo "::error::flexiq==${VERSION} not found on PyPI"
           exit 1
 
       - name: Create git tag

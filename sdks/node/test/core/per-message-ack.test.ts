@@ -9,7 +9,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-per-msg-ack-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-per-msg-ack-")), "q.db") });
 }
 
 /** Narrow an array element to non-undefined (strict indexed access). */

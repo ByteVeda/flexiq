@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-sc-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-sc-")), "q.db") });
 }
 
 /**

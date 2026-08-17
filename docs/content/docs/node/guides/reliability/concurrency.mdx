@@ -27,6 +27,6 @@ queue.configureQueue("video", { maxConcurrent: 4 });
 </Callout>
 
 > **Coming from BullMQ?** See the note on [workers](/node/guides/core/workers)
-> — BullMQ's `concurrency` option scales with worker-process count; taskito's
+> — BullMQ's `concurrency` option scales with worker-process count; flexiq's
 > `maxConcurrent` is a single global cap the scheduler enforces no matter how
 > many workers are running.

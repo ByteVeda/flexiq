@@ -9,7 +9,7 @@ cooperatively — the producer sets a flag, the handler observes it and stops.
 ## Cancel a pending job
 
 ```java
-boolean cancelled = taskito.cancel(jobId); // true if it was still pending
+boolean cancelled = flexiq.cancel(jobId); // true if it was still pending
 ```
 
 ## Cancel a running job
@@ -18,11 +18,11 @@ boolean cancelled = taskito.cancel(jobId); // true if it was still pending
 `isCancelRequested(jobId)` and unwinds:
 
 ```java
-taskito.requestCancel(jobId);              // caller side
+flexiq.requestCancel(jobId);              // caller side
 
 // handler side: poll between units of work
 for (Chunk chunk : chunks) {
-    if (taskito.isCancelRequested(jobId)) {
+    if (flexiq.isCancelRequested(jobId)) {
         throw new InterruptedException("cancelled");
     }
     process(chunk);
@@ -51,7 +51,7 @@ same thread as the handler, so a `ThreadLocal` carries the id across:
 ```java
 static final ThreadLocal<String> CURRENT_JOB = new ThreadLocal<>();
 
-taskito.use(new Middleware() {
+flexiq.use(new Middleware() {
     @Override public void before(TaskContext ctx) { CURRENT_JOB.set(ctx.jobId); }
     @Override public void after(TaskContext ctx, Object result) { CURRENT_JOB.remove(); }
     @Override public void onError(TaskContext ctx, Throwable t) { CURRENT_JOB.remove(); }
@@ -67,7 +67,7 @@ Report progress 0–100 against a job; it surfaces as `Job.progress`, on the
 dashboard, and via inspection:
 
 ```java
-taskito.setProgress(jobId, 40);
+flexiq.setProgress(jobId, 40);
 ```
 
 ## React to cancellations
@@ -76,7 +76,7 @@ Subscribe a worker listener to the `CANCELLED` outcome, or the `onCancel`
 middleware hook:
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(export, p -> run(p))
         .on(EventName.CANCELLED, e -> cleanup(e.jobId))
         .start();

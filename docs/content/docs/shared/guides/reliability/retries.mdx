@@ -67,7 +67,7 @@ Task<Order> CHARGE = Task.of("charge", Order.class)
 
 > **Coming from BullMQ?** Watch the off-by-one: BullMQ's `attempts` counts the
 > *total* tries including the first (`attempts: 3` = 1 try + 2 retries).
-> taskito's `maxRetries` counts only the retries *after* the first
+> flexiq's `maxRetries` counts only the retries *after* the first
 > (`maxRetries: 3` = 1 try + 3 retries = 4 total). BullMQ's
 > `backoff: { type: "exponential", delay }` maps to `retryBackoff.baseMs`.
 
@@ -125,7 +125,7 @@ def flaky_api_call(url):
 Retry 0 waits ~1s, retry 1 waits ~5s, retry 2 waits ~30s — each still gets
 jitter up to `retry_backoff` seconds added on top (`retry_backoff` isn't
 overridden, just not used to *compute* the listed delays). Once the list
-runs out (retries 3 and 4 here), taskito falls back to the exponential
+runs out (retries 3 and 4 here), flexiq falls back to the exponential
 formula above using `retry_backoff` and `max_retry_delay` as `B` and `M`.
 
 </SdkOnly>
@@ -196,7 +196,7 @@ In practice, use one or the other.
 
 > **Coming from Celery:** `retry_backoff` here is a **float** — the base
 > delay in seconds — not Celery's boolean flag. Celery's
-> `autoretry_for=(SomeError,)` maps to taskito's `retry_on=[SomeError]`.
+> `autoretry_for=(SomeError,)` maps to flexiq's `retry_on=[SomeError]`.
 
 </SdkOnly>
 
@@ -293,7 +293,7 @@ queue.worker().handle(CHARGE, (Order order) -> {
 | `NonRetryableException` | Dead-letters the job at once, whatever budget is left. |
 | `RetryableException` | Retries on the task's backoff curve until the budget is spent. |
 
-Both live in `org.byteveda.taskito.errors` and both beat `retryOn` — the throw
+Both live in `org.byteveda.flexiq.errors` and both beat `retryOn` — the throw
 site is more specific than the task-wide predicate, so it wins. They are
 honoured through the cause chain too, so a signal wrapped by framework code
 still counts; if a chain carries both, the outermost wins.
@@ -423,7 +423,7 @@ outcome hooks.
 Via middleware, or the `job.retrying` / `job.dead` events:
 
 ```python
-from taskito import EventType, TaskMiddleware
+from flexiq import EventType, TaskMiddleware
 
 class AlertOnRetry(TaskMiddleware):
     def on_retry(self, ctx, error, retry_count):

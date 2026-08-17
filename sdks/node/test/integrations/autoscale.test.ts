@@ -27,24 +27,24 @@ afterEach(() => {
 
 /** An app module that registers one task and enqueues a job for itself. */
 function writeApp(): { app: string; marker: string } {
-  const dir = mkdtempSync(join(tmpdir(), "taskito-autoscale-"));
+  const dir = mkdtempSync(join(tmpdir(), "flexiq-autoscale-"));
   const marker = join(dir, "done.txt");
   const app = join(dir, "app.mjs");
   // Static module body — paths arrive via env, never interpolated into source.
   writeFileSync(
     app,
     [
-      `const { Queue } = await import(process.env.TASKITO_INDEX);`,
+      `const { Queue } = await import(process.env.FLEXIQ_INDEX);`,
       `const { writeFileSync } = await import("node:fs");`,
-      `const queue = new Queue({ dbPath: process.env.TASKITO_DB });`,
-      `queue.task("mark", () => { writeFileSync(process.env.TASKITO_MARKER, "ok"); return "ok"; });`,
+      `const queue = new Queue({ dbPath: process.env.FLEXIQ_DB });`,
+      `queue.task("mark", () => { writeFileSync(process.env.FLEXIQ_MARKER, "ok"); return "ok"; });`,
       `queue.enqueue("mark");`,
       `export default queue;`,
     ].join("\n"),
   );
-  process.env.TASKITO_INDEX = indexUrl;
-  process.env.TASKITO_DB = join(dir, "autoscale.db");
-  process.env.TASKITO_MARKER = marker;
+  process.env.FLEXIQ_INDEX = indexUrl;
+  process.env.FLEXIQ_DB = join(dir, "autoscale.db");
+  process.env.FLEXIQ_MARKER = marker;
   return { app, marker };
 }
 

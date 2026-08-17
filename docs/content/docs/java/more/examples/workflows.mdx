@@ -45,7 +45,7 @@ Workflow scoreCorpus = Workflow.named("score-corpus")
         .fanOut("map", scoreChunk, FanMode.EACH, "split")
         .fanIn("reduce", reduce, FanMode.ALL, "map");
 
-WorkflowRun run = taskito.submitWorkflow(scoreCorpus);
+WorkflowRun run = flexiq.submitWorkflow(scoreCorpus);
 WorkflowStatus done = run.await(Duration.ofMinutes(5));
 System.out.println(done.state.wire());
 ```
@@ -65,7 +65,7 @@ Workflow publish = Workflow.named("publish")
                 "build")
         .step("deploy", deployArtifact, releaseId, "review");
 
-WorkflowRun run = taskito.submitWorkflow(publish);
+WorkflowRun run = flexiq.submitWorkflow(publish);
 
 // elsewhere, once a reviewer clicks "approve" (worker built with trackWorkflows(publish)):
 worker.approveGate(run.id(), "review");

@@ -1,11 +1,11 @@
 ---
 title: Bare-Metal Autoscaler
-description: "Automatically scale taskito worker processes on bare metal, Docker, or systemd — no Kubernetes required."
+description: "Automatically scale flexiq worker processes on bare metal, Docker, or systemd — no Kubernetes required."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-The bare-metal autoscaler spawns and drains `taskito worker` subprocesses
+The bare-metal autoscaler spawns and drains `flexiq worker` subprocesses
 based on queue depth and worker utilisation. It mirrors the Kubernetes HPA
 formula so the scaling behaviour is predictable if you're already familiar
 with KEDA or the Horizontal Pod Autoscaler.
@@ -16,10 +16,10 @@ use [KEDA + Kubernetes](/python/guides/operations/keda).
 ## Quick start
 
 ```python
-from taskito import Queue
-from taskito.autoscale import AutoscaleConfig, serve_autoscaler
+from flexiq import Queue
+from flexiq.autoscale import AutoscaleConfig, serve_autoscaler
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 serve_autoscaler(
     queue,
@@ -39,13 +39,13 @@ drains all worker processes gracefully before returning.
 The fastest way to run the autoscaler:
 
 ```bash
-taskito autoscale --app myapp.tasks:queue
+flexiq autoscale --app myapp.tasks:queue
 ```
 
 All `AutoscaleConfig` parameters are available as CLI flags:
 
 ```bash
-taskito autoscale --app myapp.tasks:queue \
+flexiq autoscale --app myapp.tasks:queue \
   --min-workers 2 --max-workers 20 \
   --target-queue-depth 25 --drain-timeout 60
 ```
@@ -54,11 +54,11 @@ taskito autoscale --app myapp.tasks:queue \
 
 ```ini
 [Unit]
-Description=taskito autoscaler
+Description=flexiq autoscaler
 After=network.target
 
 [Service]
-ExecStart=taskito autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
+ExecStart=flexiq autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
 Restart=always
 
 [Install]
@@ -109,7 +109,7 @@ the edge case where a worker has claimed jobs beyond its thread budget.
 ## `AutoscaleConfig` reference
 
 ```python
-from taskito.autoscale import AutoscaleConfig
+from flexiq.autoscale import AutoscaleConfig
 
 config = AutoscaleConfig(
     app_path="myapp:queue",           # Required. Passed as --app to workers.
@@ -163,7 +163,7 @@ Blocks until a signal arrives, then drains all workers in parallel.
 Lower-level class for embedding the control loop in a larger program:
 
 ```python
-from taskito.autoscale import AutoscaleConfig, AutoscaleController
+from flexiq.autoscale import AutoscaleConfig, AutoscaleController
 
 controller = AutoscaleController(queue, config)
 
@@ -213,10 +213,10 @@ Write a thin Python entry point that calls `serve_autoscaler`:
 
 ```python
 # autoscale_main.py
-from taskito import Queue
-from taskito.autoscale import AutoscaleConfig, serve_autoscaler
+from flexiq import Queue
+from flexiq.autoscale import AutoscaleConfig, serve_autoscaler
 
-queue = Queue(db_path="/var/lib/taskito/taskito.db")
+queue = Queue(db_path="/var/lib/flexiq/flexiq.db")
 serve_autoscaler(
     queue,
     AutoscaleConfig(
@@ -233,7 +233,7 @@ Then a systemd unit that manages the worker pool:
 
 ```ini
 [Unit]
-Description=Taskito Autoscaler
+Description=FlexiQ Autoscaler
 After=network.target
 
 [Service]
@@ -257,20 +257,20 @@ process — the autoscaler then handles draining its own worker pool.
 ```yaml
 services:
   autoscaler:
-    image: my-taskito-app:latest
+    image: my-flexiq-app:latest
     command: python autoscale_main.py
     volumes:
-      - taskito_data:/data
+      - flexiq_data:/data
     environment:
-      - TASKITO_DB_PATH=/data/taskito.db
+      - FLEXIQ_DB_PATH=/data/flexiq.db
     stop_grace_period: 60s
 
 volumes:
-  taskito_data:
+  flexiq_data:
 ```
 
 <Callout type="info">
-  The autoscaler logs to `taskito.autoscale` at INFO level. Each tick
+  The autoscaler logs to `flexiq.autoscale` at INFO level. Each tick
   produces one line: `pending=N running=M workers=X -> Y (rationale)`.
   Wire it into your log aggregator to track scaling history.
 </Callout>

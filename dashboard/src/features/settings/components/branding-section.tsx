@@ -56,7 +56,7 @@ export function BrandingSection({ settings }: { settings: SettingsSnapshot }) {
         >
           <Input
             id="brand-title"
-            placeholder="Taskito"
+            placeholder="FlexiQ"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={64}

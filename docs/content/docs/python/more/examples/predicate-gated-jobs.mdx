@@ -39,7 +39,7 @@ from typing import Any
 
 import httpx
 
-from taskito.predicates import Defer, Predicate, PredicateContext
+from flexiq.predicates import Defer, Predicate, PredicateContext
 
 
 class TenantQuotaUnder(Predicate):
@@ -93,8 +93,8 @@ class TenantIn(Predicate):
 ```python
 """Queue + tasks. All gates are composable, serializable predicates."""
 
-from taskito import Queue
-from taskito.predicates import (
+from flexiq import Queue
+from flexiq.predicates import (
     feature_flag,
     is_business_hours,
     queue_paused,
@@ -102,7 +102,7 @@ from taskito.predicates import (
 
 from .predicates import TenantIn, TenantQuotaUnder
 
-queue = Queue(db_path=".taskito/predicate_gated.db", workers=4)
+queue = Queue(db_path=".flexiq/predicate_gated.db", workers=4)
 
 # Register the custom predicate ops so they show up in JSON, the
 # string DSL, and queue.list_predicates().
@@ -144,7 +144,7 @@ async def index_document(tenant: str, doc_id: str) -> str:
 ```python
 """Submit jobs and watch each layer of the predicate system kick in."""
 
-from taskito.exceptions import PredicateRejectedError
+from flexiq.exceptions import PredicateRejectedError
 
 from .app import charge_card, index_document, queue, send_daily_report
 
@@ -202,7 +202,7 @@ if __name__ == "__main__":
 Any predicate is serializable in three equivalent forms:
 
 ```python
-from taskito.predicates import Predicate, format_predicate, parse
+from flexiq.predicates import Predicate, format_predicate, parse
 
 p = queue._task_predicates["app.send_daily_report"]
 
@@ -221,7 +221,7 @@ assert parse(text).to_dict() == blob
 ## Subscribing to predicate events
 
 ```python
-from taskito.events import EventType
+from flexiq.events import EventType
 
 def log_event(event_type: EventType, payload: dict) -> None:
     match event_type:

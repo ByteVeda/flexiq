@@ -1,0 +1,214 @@
+{{- include "flexiq-server.validate" . -}}
+{{- $fullname := include "flexiq-server.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "flexiq-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "flexiq-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # A rotated certificate only takes effect on a restart, because the
+        # server reads the PEM files once at boot.
+        {{- if .Values.webhook.enabled }}
+        checksum/webhook-tls: {{ include "flexiq-server.webhookCert" . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
+      {{- with .Values.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- if .Values.storage.existingSecret }}
+            - name: FLEXIQ_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.existingSecret }}
+                  key: {{ .Values.storage.existingSecretKey }}
+            {{- else if .Values.storage.dsn }}
+            - name: FLEXIQ_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: dsn
+            {{- end }}
+            {{- with .Values.storage.backend }}
+            - name: FLEXIQ_BACKEND
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.namespace }}
+            - name: FLEXIQ_NAMESPACE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FLEXIQ_QUEUES
+              value: {{ join "," .Values.queues | quote }}
+            {{- with .Values.workers }}
+            - name: FLEXIQ_WORKERS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FLEXIQ_MAINTENANCE
+              value: {{ ternary "on" "off" .Values.maintenance | quote }}
+            {{- if .Values.attach.enabled }}
+            - name: FLEXIQ_LISTEN
+              value: "0.0.0.0:{{ .Values.attach.port }}"
+            {{- if .Values.attach.existingSecret }}
+            - name: FLEXIQ_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.attach.existingSecret }}
+                  key: {{ .Values.attach.existingSecretKey }}
+            {{- else if .Values.attach.token }}
+            - name: FLEXIQ_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: attach-token
+            {{- end }}
+            {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            - name: FLEXIQ_DASHBOARD
+              value: "0.0.0.0:{{ .Values.dashboard.port }}"
+            - name: FLEXIQ_DASHBOARD_AUTH
+              value: {{ .Values.dashboard.auth | quote }}
+            {{- if .Values.dashboard.allowInsecure }}
+            - name: FLEXIQ_ALLOW_INSECURE
+              value: "1"
+            {{- end }}
+            {{- if .Values.dashboard.existingSecret }}
+            - name: FLEXIQ_DASHBOARD_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.existingSecret }}
+                  key: {{ .Values.dashboard.existingSecretKeyUser }}
+            - name: FLEXIQ_DASHBOARD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.existingSecret }}
+                  key: {{ .Values.dashboard.existingSecretKeyPassword }}
+            {{- else if .Values.dashboard.adminPassword }}
+            - name: FLEXIQ_DASHBOARD_ADMIN_USER
+              value: {{ .Values.dashboard.adminUser | quote }}
+            - name: FLEXIQ_DASHBOARD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: admin-password
+            {{- end }}
+            {{- if .Values.dashboard.metricsToken }}
+            - name: FLEXIQ_DASHBOARD_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: metrics-token
+            {{- end }}
+            {{- if .Values.dashboard.publicReadiness }}
+            - name: FLEXIQ_DASHBOARD_PUBLIC_READINESS
+              value: "1"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: FLEXIQ_WEBHOOK_LISTEN
+              value: "0.0.0.0:{{ .Values.webhook.port }}"
+            - name: FLEXIQ_WEBHOOK_TLS_CERT
+              value: /etc/flexiq/webhook-tls/tls.crt
+            - name: FLEXIQ_WEBHOOK_TLS_KEY
+              value: /etc/flexiq/webhook-tls/tls.key
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            {{- if .Values.attach.enabled }}
+            - name: attach
+              containerPort: {{ .Values.attach.port }}
+            {{- end }}
+            {{- if .Values.dashboard.enabled }}
+            - name: dashboard
+              containerPort: {{ .Values.dashboard.port }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+            {{- end }}
+          # Liveness and readiness answer different questions, so they differ
+          # where they can. Liveness is "is the process there" — /health, the one
+          # route that is never gated. Readiness is "can it serve" — /readiness,
+          # which checks storage, but only answers a bare probe when
+          # publicReadiness is on; otherwise it 401s and the pod never goes
+          # Ready, so it falls back to /health.
+          #
+          # One probe per type is all Kubernetes takes, and one is all liveness
+          # needs: every role is a listener in the *same* process, and a bind
+          # that fails takes the process down rather than leaving it
+          # half-served. The attach port has no HTTP, so a TCP connect stands in.
+          {{- if .Values.dashboard.enabled }}
+          livenessProbe:
+            httpGet: { path: /health, port: dashboard }
+          readinessProbe:
+            httpGet:
+              path: {{ ternary "/readiness" "/health" .Values.dashboard.publicReadiness }}
+              port: dashboard
+          {{- else if .Values.webhook.enabled }}
+          {{- $probe := dict "httpGet" (dict "path" "/health" "port" "webhook" "scheme" "HTTPS") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else }}
+          {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
+          livenessProbe: {{- toYaml $probe | nindent 12 }}
+          readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-tls
+              mountPath: /etc/flexiq/webhook-tls
+              readOnly: true
+          {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-tls
+          secret:
+            secretName: {{ include "flexiq-server.webhookSecretName" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

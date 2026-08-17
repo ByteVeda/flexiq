@@ -45,7 +45,7 @@ const id = queue.enqueue("sendEmail", [to, subject, body], { queue: "emails" });
 ```java
 Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class).queue("emails");
 
-String id = taskito.enqueue(sendEmail, payload);
+String id = flexiq.enqueue(sendEmail, payload);
 ```
 
   </Tab>
@@ -74,7 +74,7 @@ or override; every `enqueue()` call picks the queue independently.
 The queue can also be set per enqueue, overriding the task's default:
 
 ```java
-taskito.enqueue(sendEmail, payload, EnqueueOptions.builder().queue("urgent-emails").build());
+flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder().queue("urgent-emails").build());
 ```
 
 See <SdkLink to="guides/core/enqueue-options">enqueue options</SdkLink> for
@@ -105,7 +105,7 @@ queue.runWorker({ queues: ["emails", "default"] }); // serve two queues
   <Tab sdk="java">
 
 ```java
-taskito.worker()
+flexiq.worker()
         .handle(sendEmail, p -> deliver(p))
         .queues("emails", "default")   // serve two queues
         .start();
@@ -120,13 +120,13 @@ Or from the CLI:
 
 ```bash
 # Process only email tasks
-taskito worker --app myapp:queue --queues emails
+flexiq worker --app myapp:queue --queues emails
 
 # Process multiple queues
-taskito worker --app myapp:queue --queues emails,reports
+flexiq worker --app myapp:queue --queues emails,reports
 
 # Process all registered queues (default)
-taskito worker --app myapp:queue
+flexiq worker --app myapp:queue
 ```
 
 </SdkOnly>
@@ -136,7 +136,7 @@ taskito worker --app myapp:queue
 Or from the CLI:
 
 ```bash
-taskito run ./app.js --queues emails,reports
+flexiq run ./app.js --queues emails,reports
 ```
 
 </SdkOnly>
@@ -145,7 +145,7 @@ taskito run ./app.js --queues emails,reports
 
 <Callout type="info">
   There's no worker subcommand on the bundled CLI — workers are code,
-  started with `taskito.worker()`. The CLI does have `pause`/`resume`
+  started with `flexiq.worker()`. The CLI does have `pause`/`resume`
   subcommands for queue control; see
   <SdkLink to="guides/operations/cli">CLI</SdkLink>.
 </Callout>
@@ -182,7 +182,7 @@ queue.enqueue("report", [id], { priority: 10 }); // ahead of priority 0 jobs
   <Tab sdk="java">
 
 ```java
-taskito.enqueue(report, payload, EnqueueOptions.builder().priority(10).build());
+flexiq.enqueue(report, payload, EnqueueOptions.builder().priority(10).build());
 // ahead of priority 0 jobs
 ```
 
@@ -193,7 +193,7 @@ taskito.enqueue(report, payload, EnqueueOptions.builder().priority(10).build());
 
 <Callout type="warn" title="Coming from BullMQ?">
   Priority direction is **inverted**. BullMQ treats a *lower* `priority`
-  number as higher priority (`1` runs before `10`). taskito is the other way
+  number as higher priority (`1` runs before `10`). flexiq is the other way
   round — a *higher* `priority` number dequeues first. Porting a BullMQ
   priority scheme means inverting the numbers, not copying them.
 </Callout>
@@ -273,10 +273,10 @@ queue.resumeQueue("emails");
   <Tab sdk="java">
 
 ```java
-Queue emails = taskito.queue("emails");
+Queue emails = flexiq.queue("emails");
 emails.pause();
 emails.isPaused();              // true
-taskito.listPausedQueues();     // ["emails"]
+flexiq.listPausedQueues();     // ["emails"]
 emails.resume();
 ```
 
@@ -362,8 +362,8 @@ await queue.statsAllQueues();
   <Tab sdk="java">
 
 ```java
-long backlog = taskito.statsByQueue("emails").pending;
-Map<String, QueueStats> all = taskito.statsAllQueues();
+long backlog = flexiq.statsByQueue("emails").pending;
+Map<String, QueueStats> all = flexiq.statsAllQueues();
 ```
 
   </Tab>

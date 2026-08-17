@@ -6,8 +6,8 @@ import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 
@@ -49,7 +49,7 @@ def test_mermaid_diamond() -> None:
 
 def test_mermaid_with_status() -> None:
     """Mermaid output with status colors."""
-    from taskito.workflows.visualization import render_mermaid
+    from flexiq.workflows.visualization import render_mermaid
 
     output = render_mermaid(
         nodes=["a", "b", "c"],

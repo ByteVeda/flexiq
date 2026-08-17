@@ -20,9 +20,9 @@ export function registerExecutor(program: Command): void {
     )
     .option(
       "--attach <address>",
-      "scheduler address: host:port, :port, or unix:/path (env: TASKITO_ATTACH)",
+      "scheduler address: host:port, :port, or unix:/path (env: FLEXIQ_ATTACH)",
     )
-    .option("--slots <n>", "jobs to run concurrently (env: TASKITO_SLOTS)")
+    .option("--slots <n>", "jobs to run concurrently (env: FLEXIQ_SLOTS)")
     .option("--executor-id <id>", "identity announced to the scheduler")
     .option("--connect-timeout <ms>", "how long to wait for the connection")
     .option("--drain-timeout <ms>", "how long a drain waits for in-flight jobs")
@@ -43,7 +43,7 @@ export function registerExecutor(program: Command): void {
       });
 
       process.stdout.write(
-        `taskito executor ${executor.executorId} attached to ${executor.schedulerId} ` +
+        `flexiq executor ${executor.executorId} attached to ${executor.schedulerId} ` +
           `at ${executor.peer} — Ctrl-C to stop\n`,
       );
 
@@ -56,7 +56,7 @@ export function registerExecutor(program: Command): void {
         executor.stop().then(
           () => process.exit(0),
           (error: unknown) => {
-            process.stderr.write(`taskito executor failed to stop cleanly: ${String(error)}\n`);
+            process.stderr.write(`flexiq executor failed to stop cleanly: ${String(error)}\n`);
             process.exit(1);
           },
         );
@@ -64,7 +64,7 @@ export function registerExecutor(program: Command): void {
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
 
-      // Resolves when the scheduler ends the session, so a `taskito-server`
+      // Resolves when the scheduler ends the session, so a `flexiq-server`
       // shutting down takes its executors with it rather than stranding them.
       await executor.wait();
       await executor.stop();

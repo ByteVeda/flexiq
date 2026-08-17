@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq import Queue
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def test_setting_preserves_json(queue: Queue) -> None:
 def dashboard_server(queue: Queue) -> Generator[tuple[AuthedClient, Queue]]:
     from http.server import ThreadingHTTPServer
 
-    from taskito.dashboard import _make_handler
+    from flexiq.dashboard import _make_handler
 
     handler = _make_handler(queue)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -192,7 +192,7 @@ def test_put_setting_rejects_invalid_json_body(
         headers={
             "Content-Type": "application/json",
             "Cookie": (
-                f"taskito_session={client.session.token}; taskito_csrf={client.session.csrf_token}"
+                f"flexiq_session={client.session.token}; flexiq_csrf={client.session.csrf_token}"
             ),
             "X-CSRF-Token": client.session.csrf_token,
         },

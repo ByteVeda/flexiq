@@ -5,7 +5,7 @@ import pickle
 
 import pytest
 
-from taskito.serializers import (
+from flexiq.serializers import (
     CborSerializer,
     CloudpickleSerializer,
     JsonSerializer,
@@ -80,7 +80,7 @@ class TestSerializerProtocol:
 class TestMsgPackSerializer:
     def test_roundtrip(self) -> None:
         pytest.importorskip("msgpack")
-        from taskito.serializers import MsgPackSerializer
+        from flexiq.serializers import MsgPackSerializer
 
         s = MsgPackSerializer()
         data = {"key": "value", "num": 42}
@@ -88,7 +88,7 @@ class TestMsgPackSerializer:
 
     def test_dumps_returns_bytes(self) -> None:
         pytest.importorskip("msgpack")
-        from taskito.serializers import MsgPackSerializer
+        from flexiq.serializers import MsgPackSerializer
 
         s = MsgPackSerializer()
         assert isinstance(s.dumps([1, 2, 3]), bytes)
@@ -99,7 +99,7 @@ class TestEncryptedSerializer:
         pytest.importorskip("cryptography")
         import os
 
-        from taskito.serializers import EncryptedSerializer
+        from flexiq.serializers import EncryptedSerializer
 
         key = os.urandom(32)
         s = EncryptedSerializer(JsonSerializer(), key)
@@ -112,7 +112,7 @@ class TestEncryptedSerializer:
 
         from cryptography.exceptions import InvalidTag
 
-        from taskito.serializers import EncryptedSerializer
+        from flexiq.serializers import EncryptedSerializer
 
         s1 = EncryptedSerializer(JsonSerializer(), os.urandom(32))
         s2 = EncryptedSerializer(JsonSerializer(), os.urandom(32))
@@ -131,7 +131,7 @@ class TestEncryptedSerializer:
 
         from cryptography.exceptions import InvalidTag
 
-        from taskito.serializers import EncryptedSerializer
+        from flexiq.serializers import EncryptedSerializer
 
         key = os.urandom(32)
         s = EncryptedSerializer(JsonSerializer(), key)
@@ -150,7 +150,7 @@ class TestEncryptedSerializer:
         pytest.importorskip("cryptography")
         import os
 
-        from taskito.serializers import EncryptedSerializer
+        from flexiq.serializers import EncryptedSerializer
 
         s = EncryptedSerializer(JsonSerializer(), os.urandom(32))
         with pytest.raises(ValueError, match="too short"):

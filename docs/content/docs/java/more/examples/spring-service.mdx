@@ -3,7 +3,7 @@ title: Spring Boot Image Service
 description: "A REST API on the Spring Boot 3 starter that enqueues image jobs, reports status, and cancels work in flight."
 ---
 
-A thin Spring Boot front end accepts upload requests, enqueues a Taskito job,
+A thin Spring Boot front end accepts upload requests, enqueues a FlexiQ job,
 and hands back a job id immediately. The browser then polls the status
 endpoint (state, progress, error) and can cancel a job that hasn't started.
 
@@ -12,7 +12,7 @@ endpoint (state, progress, error) and can cancel a job that hasn't started.
 ```
 image-service/
   src/main/java/example/
-    ImageServiceApplication.java   # Spring Boot app + Taskito config
+    ImageServiceApplication.java   # Spring Boot app + FlexiQ config
     ImageTasks.java                # the processImage task + handler
     ImageController.java           # the REST surface
     WorkerRunner.java              # starts the worker with the app
@@ -21,20 +21,20 @@ image-service/
 
 ## Dependencies
 
-The starter auto-configures a single `Taskito` bean from `taskito.*`
+The starter auto-configures a single `FlexiQ` bean from `flexiq.*`
 properties and closes it with the application context.
 
 ```kotlin
 dependencies {
-    implementation("org.byteveda:taskito")
-    implementation("org.byteveda:taskito-spring")
+    implementation("org.byteveda:flexiq")
+    implementation("org.byteveda:flexiq-spring")
     implementation("org.springframework.boot:spring-boot-starter-web")
 }
 ```
 
 ```yaml
 # application.yaml
-taskito:
+flexiq:
   url: image-service.db   # SQLite; or a postgres:// / redis:// URL
 ```
 
@@ -48,7 +48,7 @@ package example;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.task.Task;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -87,23 +87,23 @@ Enqueue and return the job id with `202 Accepted`; report status from the
 package example;
 
 import java.util.Map;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.task.EnqueueOptions;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.task.EnqueueOptions;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/images")
 public class ImageController {
-    private final Taskito taskito;
+    private final FlexiQ flexiq;
 
-    public ImageController(Taskito taskito) {
-        this.taskito = taskito;
+    public ImageController(FlexiQ flexiq) {
+        this.flexiq = flexiq;
     }
 
     @PostMapping
     public ResponseEntity<Map<String, String>> submit(@RequestBody ImageTasks.ProcessImage request) {
-        String jobId = taskito.enqueue(
+        String jobId = flexiq.enqueue(
                 ImageTasks.PROCESS_IMAGE,
                 request,
                 EnqueueOptions.builder().priority(5).build());
@@ -112,7 +112,7 @@ public class ImageController {
 
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> status(@PathVariable String id) {
-        return taskito.getJob(id)
+        return flexiq.getJob(id)
                 .map(job -> ResponseEntity.ok(Map.<String, Object>of(
                         "status", job.status.wire(),
                         "progress", job.progress == null ? 0 : job.progress,
@@ -123,7 +123,7 @@ public class ImageController {
     @PostMapping("/{id}/cancel")
     public Map<String, Boolean> cancel(@PathVariable String id) {
         // cancel() pulls a pending job; requestCancel() flags a running one.
-        boolean cancelled = taskito.cancel(id) || taskito.requestCancel(id);
+        boolean cancelled = flexiq.cancel(id) || flexiq.requestCancel(id);
         return Map.of("cancelled", cancelled);
     }
 }
@@ -138,8 +138,8 @@ by the container on shutdown, draining in-flight jobs.
 ```java
 package example;
 
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.worker.Worker;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -147,8 +147,8 @@ import org.springframework.context.annotation.Configuration;
 public class WorkerRunner {
 
     @Bean(destroyMethod = "close")
-    public Worker worker(Taskito taskito, ImageTasks tasks) {
-        return taskito.worker()
+    public Worker worker(FlexiQ flexiq, ImageTasks tasks) {
+        return flexiq.worker()
                 .handle(ImageTasks.PROCESS_IMAGE, tasks::process)
                 .queues("default")
                 .concurrency(4)
@@ -167,7 +167,7 @@ public class WorkerRunner {
 
 <Callout type="info">
   The starter's `@ConditionalOnMissingBean` means you can define your own
-  `Taskito` bean (custom serializer, codecs, resources) and the
+  `FlexiQ` bean (custom serializer, codecs, resources) and the
   auto-configuration steps aside.
 </Callout>
 
@@ -175,8 +175,8 @@ public class WorkerRunner {
 
 | Pattern | Where |
 | --- | --- |
-| Auto-configured client | `taskito.url` property + `org.byteveda:taskito-spring` |
+| Auto-configured client | `flexiq.url` property + `org.byteveda:flexiq-spring` |
 | Enqueue and return a job id (`202 Accepted`) | `POST /images` |
-| Status polling | `taskito.getJob` → status / progress / error |
-| Cancel pending or running work | `taskito.cancel` / `taskito.requestCancel` |
+| Status polling | `flexiq.getJob` → status / progress / error |
+| Cancel pending or running work | `flexiq.cancel` / `flexiq.requestCancel` |
 | Graceful worker shutdown | `@Bean(destroyMethod = "close")` on the `Worker` |

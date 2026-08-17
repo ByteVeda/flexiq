@@ -1,0 +1,29 @@
+[package]
+name = "flexiq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Embeddable task queue for Rust — the `flexiq` entry point, re-exporting flexiq-core"
+keywords = ["task-queue", "jobs", "scheduler", "background", "worker"]
+categories = ["asynchronous", "database"]
+readme = "README.md"
+
+[features]
+default = []
+# Forwarded verbatim so `cargo add flexiq --features postgres` behaves exactly
+# as the same flag on flexiq-core does.
+postgres = ["flexiq-core/postgres", "flexiq-workflows?/postgres"]
+redis = ["flexiq-core/redis", "flexiq-workflows?/redis"]
+push-dispatch = ["flexiq-core/push-dispatch"]
+# The companion engines, off by default. The other SDKs ship them inside a single
+# compiled artifact; Rust resolves source crates, so the equivalent is an opt-in
+# dependency — no consumer pays for a DAG engine or a gossip mesh unasked.
+workflows = ["dep:flexiq-workflows"]
+mesh = ["dep:flexiq-mesh"]
+
+[dependencies]
+flexiq-core = { workspace = true }
+flexiq-workflows = { workspace = true, optional = true }
+flexiq-mesh = { workspace = true, optional = true }

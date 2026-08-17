@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: "Orchestrate multi-step DAGs in Node.js with the Taskito workflow builder."
+description: "Orchestrate multi-step DAGs in Node.js with the FlexiQ workflow builder."
 ---
 
 Orchestrate multi-step DAGs (directed acyclic graphs — steps with dependencies
@@ -36,10 +36,10 @@ Requires the addon built with the `workflows` cargo feature (enabled by
 <Callout type="info" title="Coming from BullMQ?">
   BullMQ's closest equivalent is `FlowProducer` — `.add({ name, queueName,
   data, children: [...] })` builds a parent/child job **tree**: one parent,
-  many children, no joins. taskito's workflow builder is a general **DAG**: a
+  many children, no joins. flexiq's workflow builder is a general **DAG**: a
   step's `after` can list multiple predecessors, so two branches can merge
   back into one step (a join `FlowProducer` can't express). Conditions, gates,
-  sagas, and caching are also taskito-only — there's no BullMQ equivalent for
+  sagas, and caching are also flexiq-only — there's no BullMQ equivalent for
   those.
 </Callout>
 

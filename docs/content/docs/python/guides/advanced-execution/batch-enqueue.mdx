@@ -61,7 +61,7 @@ individual result for each enqueued item rather than the whole batch list.
 Enable it with `per_item_results=True`:
 
 ```python
-from taskito import BatchItemResult
+from flexiq import BatchItemResult
 
 @queue.task(
     batch={"max_size": 50, "max_wait_ms": 500, "per_item_results": True}
@@ -94,7 +94,7 @@ assert h2.result(timeout=15) == 300
 ### `BatchItemResult`
 
 ```python
-from taskito import BatchItemResult
+from flexiq import BatchItemResult
 
 # Convenience constructors:
 item = BatchItemResult.success(item_index=2, result="done")

@@ -6,7 +6,7 @@ import json
 import threading
 from typing import Any
 
-from taskito import Queue
+from flexiq import Queue
 
 # ---------------------------------------------------------------------------
 # Direct storage-level tests (no worker needed)
@@ -38,7 +38,7 @@ class TestWorkerAdvertisement:
 
     def test_build_resource_health_reflects_unhealthy(self, tmp_path: Any) -> None:
         """_build_resource_health_json marks unhealthy resources."""
-        from taskito.resources.runtime import ResourceRuntime
+        from flexiq.resources.runtime import ResourceRuntime
 
         queue = Queue(db_path=str(tmp_path / "q.db"))
 

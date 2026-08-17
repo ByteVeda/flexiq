@@ -1,0 +1,174 @@
+---
+title: Migrating to FlexiQ
+description: "Taskito is now FlexiQ. Everything you need to change when upgrading from 0.23.x to 1.0.0."
+---
+
+Taskito was renamed to FlexiQ in 1.0.0. The rename is a clean break: package
+names, imports, environment variables, HTTP headers, and on-disk paths all
+change, and nothing reads the old names as a fallback. No API was added,
+removed, or changed in behaviour beyond its name.
+
+<Callout type="warn">
+Drain your queue before upgrading. Jobs enqueued by 0.23.x carry payload
+markers that 1.0.0 does not recognise, and 1.0.0 writes markers 0.23.x does not
+recognise. Never run mixed-version workers against one database.
+</Callout>
+
+## 1. Packages
+
+Uninstall the old package and install the new one. The old names receive no
+further releases.
+
+```bash
+# Python
+pip uninstall taskito && pip install flexiq
+
+# Node
+npm uninstall @byteveda/taskito && npm install @byteveda/flexiq
+
+# Rust
+cargo remove taskito && cargo add flexiq
+```
+
+For Gradle and Maven, the group is unchanged and only the artifact moves:
+
+```kotlin
+// build.gradle.kts
+implementation("org.byteveda:flexiq:1.0.0")
+```
+
+```xml
+<dependency>
+  <groupId>org.byteveda</groupId>
+  <artifactId>flexiq</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
+
+## 2. Imports and packages
+
+```python
+# before
+from taskito import Queue
+# after
+from flexiq import Queue
+```
+
+```typescript
+// before
+import { Queue } from "@byteveda/taskito";
+// after
+import { Queue } from "@byteveda/flexiq";
+```
+
+```java
+// before
+import org.byteveda.taskito.Taskito;
+import org.byteveda.taskito.TaskitoException;
+// after
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.FlexiQException;
+```
+
+```rust
+// before
+use taskito_core::Storage;
+// after
+use flexiq_core::Storage;
+```
+
+Java type names follow the same rule — `Taskito` is `FlexiQ`,
+`TaskitoException` is `FlexiQException`, `TaskitoLogger` is `FlexiQLogger`,
+`InMemoryTaskito` is `InMemoryFlexiQ`, and the Spring classes are
+`FlexiQAutoConfiguration` and `FlexiQProperties`.
+
+## 3. Environment variables
+
+Every `TASKITO_*` variable is now `FLEXIQ_*`. There is no fallback: an unset
+`FLEXIQ_*` variable takes its default, and a leftover `TASKITO_*` variable is
+ignored silently.
+
+```bash
+# before
+TASKITO_DSN=./jobs.db TASKITO_DASHBOARD_AUTH=session
+
+# after
+FLEXIQ_DSN=./jobs.db FLEXIQ_DASHBOARD_AUTH=session
+```
+
+Update your Kubernetes manifests, CI secrets, and `.env` files in the same
+pass. The Helm chart is now `flexiq-server`, so a `helm upgrade` against a
+release installed from `taskito-server` will not match — install the new chart
+and remove the old release.
+
+## 4. Data path
+
+The default database moves from `~/.taskito/taskito.db` to
+`~/.flexiq/flexiq.db`. Move the file yourself, or point `FLEXIQ_DB_PATH` at the
+existing one:
+
+```bash
+mkdir -p ~/.flexiq && mv ~/.taskito/taskito.db ~/.flexiq/flexiq.db
+```
+
+The schema is unchanged: table names never carried the product name, and the
+migration ledger is untouched. Only the default filename moves.
+
+## 5. Webhook receivers
+
+The signature header is now `X-Flexiq-Signature`, and the dashboard token
+header is `X-Flexiq-Token`. The signing algorithm and payload format are
+unchanged.
+
+```python
+# before
+signature = request.headers.get("X-Taskito-Signature", "")
+# after
+signature = request.headers.get("X-Flexiq-Signature", "")
+```
+
+<Callout>
+Header names are case-insensitive per RFC 9110, and the canonical spelling is
+`X-Flexiq-` rather than `X-FlexiQ-` so it survives the title-casing that HTTP
+clients apply to outgoing headers. Compare case-insensitively and either form
+works.
+</Callout>
+
+## 6. Dashboard sessions
+
+The session cookie is now `flexiq_session`. Existing sessions are not carried
+over, so everyone signs in once after the upgrade. Nothing else about
+authentication changes.
+
+## 7. Django
+
+The management commands and the template tag library are renamed:
+
+```bash
+# before
+python manage.py taskito_worker
+# after
+python manage.py flexiq_worker
+```
+
+`taskito_dashboard` and `taskito_info` become `flexiq_dashboard` and
+`flexiq_info`. If you override any of the admin templates, they now live under
+`templates/flexiq/` and load `{% load flexiq_admin %}`.
+
+## 8. Custom payload markers
+
+If you wrote a `ProxyHandler` or an argument interceptor that inspects the
+serialized payload directly, the reserved keys are renamed: `__taskito_ref__`,
+`__taskito_proxy__`, `__taskito_convert__`, `__taskito_redirect__`, and
+`__taskito_cache__` become `__flexiq_ref__` and so on. Code that uses the
+public interception and proxy APIs needs no change.
+
+## Checklist
+
+- [ ] Queue drained to empty on 0.23.x
+- [ ] Old package uninstalled, `flexiq` installed
+- [ ] Imports updated
+- [ ] `TASKITO_*` renamed to `FLEXIQ_*` everywhere, including CI and Kubernetes
+- [ ] Database file moved, or `FLEXIQ_DB_PATH` set
+- [ ] Webhook receivers accept `X-Flexiq-Signature`
+- [ ] Helm release reinstalled from the `flexiq-server` chart

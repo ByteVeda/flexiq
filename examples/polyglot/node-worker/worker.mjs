@@ -4,9 +4,9 @@
 // This process has no idea a Python producer exists. The task name and the CBOR
 // wire format are the entire contract between them.
 
-import { CborSerializer, Queue } from "@byteveda/taskito";
+import { CborSerializer, Queue } from "@byteveda/flexiq";
 
-const dbPath = process.env.TASKITO_DB ?? "../taskito.db";
+const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
 
 // Each SDK's own default serializer is same-language-only. CBOR is the
 // cross-SDK format, and every runtime here opts into it explicitly.

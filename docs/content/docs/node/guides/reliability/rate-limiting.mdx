@@ -59,7 +59,7 @@ Three things worth knowing:
 > **Coming from BullMQ?** BullMQ configures rate limiting on the `Worker`
 > (`limiter: { max, duration }`), but it's enforced storage-side across every
 > worker consuming that queue — not literally per process despite living on
-> the `Worker` constructor. taskito's `rateLimit` just moves that config to
+> the `Worker` constructor. flexiq's `rateLimit` just moves that config to
 > where the limit conceptually applies: the task (`queue.task(name, fn, {
 > rateLimit })`) or the queue (`configureQueue(name, { rateLimit })`),
 > enforced by the scheduler the same way regardless of worker count.

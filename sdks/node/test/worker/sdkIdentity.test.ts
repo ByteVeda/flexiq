@@ -50,7 +50,7 @@ describe("worker SDK identity", () => {
   it("records the SDK and its version on registration", async () => {
     // Bound locally as well as on the module-scoped handle the teardown uses,
     // so the closure below needs no non-null assertion.
-    tempDir = mkdtempSync(join(tmpdir(), "taskito-sdk-"));
+    tempDir = mkdtempSync(join(tmpdir(), "flexiq-sdk-"));
     const q = new Queue({ dbPath: join(tempDir, "q.db") });
     queue = q;
     q.task("noop", () => undefined);

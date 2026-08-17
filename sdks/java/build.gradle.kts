@@ -72,11 +72,11 @@ mavenPublishing {
     ) {
         signAllPublications()
     }
-    coordinates(group.toString(), "taskito", version.toString())
+    coordinates(group.toString(), "flexiq", version.toString())
     pom {
-        name.set("Taskito")
-        description.set("Rust-powered task queue for the JVM, via a JNI binding over the Taskito core.")
-        url.set("https://github.com/ByteVeda/taskito")
+        name.set("FlexiQ")
+        description.set("Rust-powered task queue for the JVM, via a JNI binding over the FlexiQ core.")
+        url.set("https://github.com/ByteVeda/flexiq")
         licenses {
             license {
                 name.set("MIT")
@@ -90,9 +90,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/ByteVeda/taskito")
-            connection.set("scm:git:https://github.com/ByteVeda/taskito.git")
-            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/taskito.git")
+            url.set("https://github.com/ByteVeda/flexiq")
+            connection.set("scm:git:https://github.com/ByteVeda/flexiq.git")
+            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/flexiq.git")
         }
     }
 }
@@ -169,12 +169,12 @@ dependencies {
 
 // --- Native (Rust cdylib) -------------------------------------------------
 // The main jar is native-free: each platform's cdylib ships as a classifier
-// artifact of the same coordinate (e.g. `taskito-<v>-linux-x86_64.jar`), and
+// artifact of the same coordinate (e.g. `flexiq-<v>-linux-x86_64.jar`), and
 // NativeLoader resolves the right one from the classpath at runtime. The
 // classifier-free jar stays usable for consumers that supply their own build
-// via `-Dtaskito.native.lib`.
+// via `-Dflexiq.native.lib`.
 
-val crateDir = layout.projectDirectory.dir("../../crates/taskito-java")
+val crateDir = layout.projectDirectory.dir("../../crates/flexiq-java")
 val cargoTargetDir = layout.projectDirectory.dir("../../target")
 val nativeStaging = layout.buildDirectory.dir("native")
 
@@ -195,9 +195,9 @@ val cargoBuild = tasks.register<Exec>("cargoBuild") {
 val copyNative = tasks.register<Copy>("copyNative") {
     dependsOn(cargoBuild)
     from(cargoTargetDir.dir("release")) {
-        include("libtaskito_java.so", "libtaskito_java.dylib", "taskito_java.dll")
+        include("libflexiq_java.so", "libflexiq_java.dylib", "flexiq_java.dll")
     }
-    into(nativeStaging.map { it.dir("org/byteveda/taskito/native/${platformClassifier()}") })
+    into(nativeStaging.map { it.dir("org/byteveda/flexiq/native/${platformClassifier()}") })
 }
 
 // Tests load the native through the same classpath lookup consumers use, so
@@ -216,7 +216,7 @@ val nativeRuntime by configurations.creating {
 artifacts.add(nativeRuntime.name, nativeStaging) { builtBy(copyNative) }
 
 fun stagedNativeDir(platform: String) =
-    nativeStaging.get().dir("org/byteveda/taskito/native/$platform").asFile
+    nativeStaging.get().dir("org/byteveda/flexiq/native/$platform").asFile
 
 /**
  * Platforms this invocation can actually package. CI stages every platform's
@@ -234,12 +234,12 @@ val nativeJars = publishablePlatforms.map { platform ->
     val camel = platform.split("-").joinToString("") { part -> part.replaceFirstChar(Char::uppercase) }
     tasks.register<Jar>("nativeJar$camel") {
         archiveClassifier.set(platform)
-        from(nativeStaging) { include("org/byteveda/taskito/native/$platform/**") }
+        from(nativeStaging) { include("org/byteveda/flexiq/native/$platform/**") }
         if (platform == platformClassifier()) {
             dependsOn(copyNative)
         }
         doFirst {
-            val staged = nativeStaging.get().dir("org/byteveda/taskito/native/$platform").asFile
+            val staged = nativeStaging.get().dir("org/byteveda/flexiq/native/$platform").asFile
             if (staged.listFiles().isNullOrEmpty()) {
                 throw GradleException(
                     "no native library staged for $platform under build/native — " +
@@ -288,7 +288,7 @@ publishing {
 
 // Sources jar ships sources only — the dashboard SPA ships in the main jar.
 tasks.withType<Jar>().matching { it.name == "sourcesJar" }.configureEach {
-    exclude("org/byteveda/taskito/dashboard/**")
+    exclude("org/byteveda/flexiq/dashboard/**")
 }
 
 // --- FFM fast-path overlay (Multi-Release JAR) ----------------------------

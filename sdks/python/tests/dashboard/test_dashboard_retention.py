@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue, Retention
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq import Queue, Retention
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
 
 DAY_MS = 86_400_000
 
@@ -35,7 +35,7 @@ def queue(tmp_path: Path) -> Queue:
 def dashboard_server(queue: Queue) -> Generator[tuple[AuthedClient, Queue]]:
     from http.server import ThreadingHTTPServer
 
-    from taskito.dashboard import _make_handler
+    from flexiq.dashboard import _make_handler
 
     handler = _make_handler(queue)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)

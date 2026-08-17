@@ -1,0 +1,13 @@
+[
+{
+  "name":"java.lang.Boolean",
+  "methods":[{"name":"getBoolean","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"java.lang.String"
+},
+{
+  "name":"org.byteveda.flexiq.worker.WorkerDispatchBridge",
+  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
+}
+]

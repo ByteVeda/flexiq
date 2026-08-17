@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.batching import BatchConfig, BatchedJobResult
+from flexiq import Queue
+from flexiq.batching import BatchConfig, BatchedJobResult
 
 PollUntil = Any  # the conftest fixture's runtime type
 

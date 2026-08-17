@@ -8,7 +8,7 @@ import { afterEach, expect, it } from "vitest";
 import { Queue, WebhookValidationError, type Worker } from "../../src/index";
 
 // These deliveries target a loopback receiver, which the SSRF guard blocks by default.
-process.env.TASKITO_WEBHOOKS_ALLOW_PRIVATE = "1";
+process.env.FLEXIQ_WEBHOOKS_ALLOW_PRIVATE = "1";
 
 let worker: Worker | undefined;
 let target: Server | undefined;
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-wh-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-wh-")), "q.db") });
 }
 
 interface Received {
@@ -37,7 +37,7 @@ function startTarget(received: Received[]): Promise<number> {
         body += chunk;
       });
       req.on("end", () => {
-        const signature = req.headers["x-taskito-signature"];
+        const signature = req.headers["x-flexiq-signature"];
         received.push({ body, signature: typeof signature === "string" ? signature : undefined });
         res.writeHead(200).end();
       });

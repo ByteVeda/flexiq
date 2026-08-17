@@ -1,17 +1,17 @@
 # Architecture
 
-This document is the map a contributor reads **before** changing Taskito. It
+This document is the map a contributor reads **before** changing FlexiQ. It
 explains how the codebase is layered, where each responsibility lives, the
 boundaries you must not cross, and the ordered steps for the changes people make
 most often.
 
-It is deliberately *not* a tutorial on running Taskito (see the
+It is deliberately *not* a tutorial on running FlexiQ (see the
 [docs site](docs/content/docs/architecture/overview.mdx)) nor a build/test guide
 (see [`CONTRIBUTING.md`](CONTRIBUTING.md)). Three audiences, three documents:
 
 | Document | Audience | Answers |
 |---|---|---|
-| `docs/content/docs/architecture/*` | end users | *How does Taskito behave?* — job lifecycle, failure model, scheduler semantics |
+| `docs/content/docs/architecture/*` | end users | *How does FlexiQ behave?* — job lifecycle, failure model, scheduler semantics |
 | `CONTRIBUTING.md` | new contributors | *How do I build and test it?* |
 | **`ARCHITECTURE.md`** (this file) | **contributors & maintainers** | ***How is the code organized, and where do I add things?*** |
 
@@ -19,59 +19,59 @@ It is deliberately *not* a tutorial on running Taskito (see the
 
 ## System at a glance
 
-Taskito is a polyglot system: **one Rust engine underneath, a thin language SDK shell
+FlexiQ is a polyglot system: **one Rust engine underneath, a thin language SDK shell
 on top per host language** — Python via [PyO3](https://pyo3.rs), Node via
 [napi-rs](https://napi.rs), Java via [JNI](https://github.com/jni-rs/jni-rs) (with an
 FFM fast-path on JDK 22+). Each shell owns ergonomics and extensibility for its
 language; Rust owns storage, scheduling, dispatch, rate limiting, and worker
 management. A shell talks to the core only through its compiled binding crate
-(`taskito._taskito` for Python, the `.node` addon for Node, the JNI `.so`/FFM for
+(`flexiq._flexiq` for Python, the `.node` addon for Node, the JNI `.so`/FFM for
 Java) — **a shell never reaches into core internals, and the core never imports a
 host-language type except at the binding edge.** The `WorkerDispatcher` trait in
-`taskito-core` is binding-free, so a new shell implements one trait against
-[`BINDING_CONTRACT.md`](crates/taskito-core/BINDING_CONTRACT.md).
+`flexiq-core` is binding-free, so a new shell implements one trait against
+[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md).
 
 ```text
 ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
 │ PYTHON  sdks/python   │ │ NODE      sdks/node   │ │ JAVA      sdks/java   │
-│ Queue = 15 mixins ·   │ │ Queue/Worker · CLI ·  │ │ Queue→DefaultTaskito  │
+│ Queue = 15 mixins ·   │ │ Queue/Worker · CLI ·  │ │ Queue→DefaultFlexiQ  │
 │ async · serializers   │ │ dashboard · events ·  │ │ workflows · DI ·      │
 │ interception ·        │ │ middleware · webhooks │ │ proxies · interception│
 │ resources · proxies   │ │ resources ·           │ │ codecs · spring ·     │
 │ workflows · contrib   │ │ serializers           │ │ processor (@Task)     │
 └───────────────────────┘ └───────────────────────┘ └───────────────────────┘
-    PyO3 (._taskito)           napi-rs (.node)           JNI + FFM (.so)
+    PyO3 (._flexiq)           napi-rs (.node)           JNI + FFM (.so)
 ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
-│ taskito-python        │ │ taskito-node          │ │ taskito-java          │
+│ flexiq-python        │ │ flexiq-node          │ │ flexiq-java          │
 │ py_queue/ ·           │ │ JsQueue/JsWorker ·    │ │ backend · dispatcher  │
 │ async_worker ·        │ │ dispatcher · convert  │ │ convert · ffi · jvm   │
 │ prefork bridge        │ │                       │ │ worker · mesh         │
 └───────────┬───────────┘ └───────────┬───────────┘ └───────────┬───────────┘
             └─ all three implement ───┬─ WorkerDispatcher ──────┘
 ┌─────────────────────────────────────┴─────────────────────────────────────┐
-│ RUST CORE        crates/taskito-core/   (no host language)                │
+│ RUST CORE        crates/flexiq-core/   (no host language)                │
 │ scheduler/ (poll · dispatch · retry · reap · wake)                        │
 │ worker.rs (WorkerDispatcher trait) · resilience/ · periodic.rs            │
 ├───────────────────────────────────────────────────────────────────────────┤
-│ STORAGE          crates/taskito-core/src/storage/                         │
+│ STORAGE          crates/flexiq-core/src/storage/                         │
 │ Storage trait (traits.rs) ──delegate!──▶ StorageBackend enum              │
 │   ├─ sqlite/      ┐ shared logic in diesel_common/ macros                 │
 │   ├─ postgres/    ┘                                                       │
 │   └─ redis_backend/   (own impl — no Diesel)                              │
 └───────────────────────────────────────────────────────────────────────────┘
 
-  WORKFLOWS    crates/taskito-workflows/ — separate crate, own schema & stores
+  WORKFLOWS    crates/flexiq-workflows/ — separate crate, own schema & stores
                (SQLite · Postgres · Redis), surfaced per shell (Python:
                py_queue/workflow_ops/ · Node & Java: bound in their crates)
-  MESH         crates/taskito-mesh/ — optional decentralized work-stealing
+  MESH         crates/flexiq-mesh/ — optional decentralized work-stealing
                overlay (SWIM gossip · hash ring · TCP steal); `mesh` feature
-  NATIVE ASYNC taskito-python/src/native_async/ — optional native-async pool
+  NATIVE ASYNC flexiq-python/src/native_async/ — optional native-async pool
                (Python-coupled; behind the `native-async` feature)
 ```
 
-The dependency arrows point **downward only**. `taskito-core` knows nothing about
-Python, Node, Java, PyO3, napi, or JNI; each binding crate (`taskito-python`,
-`taskito-node`, `taskito-java`) depends on `taskito-core`; each SDK package depends
+The dependency arrows point **downward only**. `flexiq-core` knows nothing about
+Python, Node, Java, PyO3, napi, or JNI; each binding crate (`flexiq-python`,
+`flexiq-node`, `flexiq-java`) depends on `flexiq-core`; each SDK package depends
 on its compiled addon. This acyclic shape is the property that keeps the codebase
 changeable — guard it.
 
@@ -82,7 +82,7 @@ changeable — guard it.
 > Sections 1–2 describe the **Python SDK** (the original, most complete shell).
 > Sections 6–10 cover the shared crates and the **Node** and **Java** SDKs.
 
-### 1. Python API surface — `sdks/python/taskito/`
+### 1. Python API surface — `sdks/python/flexiq/`
 
 The user-facing object is `Queue` in `app.py`. It is intentionally thin: a
 constructor, the core `enqueue` / `enqueue_many` path, and serializer/idempotency
@@ -112,7 +112,7 @@ forbids a top-level import, the code is split across modules rather than scoped
 inline (see `JobResult(AsyncJobResultMixin)`).
 
 **Must not know about:** Rust internals, specific storage backends, or the
-PyO3 struct layout. It talks to `taskito._taskito` through its public surface only.
+PyO3 struct layout. It talks to `flexiq._flexiq` through its public surface only.
 
 ### 2. Feature subsystems — pure-Python packages
 
@@ -131,7 +131,7 @@ layer depends on, not the reverse:
   `fastapi`, `django/`). All support `task_filter` and custom prefixes/attributes.
 - `batching/`, `autoscale/`, `prefork/`, `predicates/`, `dashboard/`.
 
-### 3. PyO3 bindings — `crates/taskito-python/`
+### 3. PyO3 bindings — `crates/flexiq-python/`
 
 The Python translation layer. `py_queue/` holds `PyQueue` plus partial
 `#[pymethods]` blocks split by concern (enabled by PyO3's `multiple-pymethods`
@@ -141,7 +141,7 @@ nodes, fan_out, gates, queries, saga). `async_worker.rs` drives the
 Python values to Rust and back; it holds **no business logic**. It implements the
 core's `WorkerDispatcher` trait — the same contract the Node and Java bindings implement.
 
-### 4. Rust core — `crates/taskito-core/`
+### 4. Rust core — `crates/flexiq-core/`
 
 The engine. `scheduler/` is split by concern — `poller.rs` (dequeue & dispatch),
 `result_handler.rs` (outcome → retry/dead-letter/cancel), `maintenance.rs`
@@ -153,7 +153,7 @@ config and the `run()` loop. `worker.rs` defines the `WorkerDispatcher` trait
 **Must not know about:** Python. Keep it that way — it's what lets the core be
 tested in pure Rust and reused behind other language bindings.
 
-### 5. Storage — `crates/taskito-core/src/storage/`
+### 5. Storage — `crates/flexiq-core/src/storage/`
 
 A `Storage` trait (`traits.rs`) with three backends behind a `StorageBackend`
 enum wired up by a `delegate!`-style macro in `mod.rs`. The trick that keeps this
@@ -168,7 +168,7 @@ The large size of `diesel_common/jobs.rs` is **a feature, not a smell**: it is o
 macro that erases SQLite/Postgres duplication. Don't "flatten" it into per-backend
 copies.
 
-### 6. Workflows crate — `crates/taskito-workflows/`
+### 6. Workflows crate — `crates/flexiq-workflows/`
 
 A separate crate with its own schema (`workflow_definitions`, `workflow_runs`,
 `workflow_nodes`) and migration path, kept apart so workflow state evolves
@@ -177,35 +177,35 @@ independently of the job queue. It now ships stores for **all three backends** �
 the `WorkflowStorageBackend` enum (`workflow_ops/mod.rs::workflow_storage`), with
 Postgres/Redis behind cargo features.
 
-### 7. Native async — `taskito-python/src/native_async/`
+### 7. Native async — `flexiq-python/src/native_async/`
 
 Optional (`native-async` feature). Python-specific binding code (was the separate
-`taskito-async` crate; folded in because every line is Python-coupled).
+`flexiq-async` crate; folded in because every line is Python-coupled).
 `NativeAsyncPool` dual-dispatches: async tasks run on the Python event loop, sync
 tasks via `spawn_blocking`. `PyResultSender` bridges the Python executor back to
 the Rust scheduler.
 
-### 8. Node SDK — `sdks/node/` + `crates/taskito-node/`
+### 8. Node SDK — `sdks/node/` + `crates/flexiq-node/`
 
-The second language shell, peer to Python. `crates/taskito-node/` is a
+The second language shell, peer to Python. `crates/flexiq-node/` is a
 [napi-rs](https://napi.rs) binding crate (`JsQueue`/`JsWorker`, `dispatcher.rs`,
 `convert/`) that implements the same core `WorkerDispatcher` trait — the Rust↔JS
 seam, holding no business logic. `sdks/node/` is the TypeScript package (dual
-ESM/CJS via tsup): `Queue`/`Worker`, serializers, a standalone `taskito` CLI, a
+ESM/CJS via tsup): `Queue`/`Worker`, serializers, a standalone `flexiq` CLI, a
 dashboard server reusing the existing React SPA, and Node-native events/middleware,
 webhooks, and resource DI. Python-idiom features (proxies, interception) get Node
 **equivalents**, not 1:1 ports. The DB stays the source of truth, so a Python and a
 Node worker can share one queue.
 
-### 9. Java SDK — `sdks/java/` + `crates/taskito-java/`
+### 9. Java SDK — `sdks/java/` + `crates/flexiq-java/`
 
-The third language shell, peer to Python and Node. `crates/taskito-java/` is a
+The third language shell, peer to Python and Node. `crates/flexiq-java/` is a
 [JNI](https://github.com/jni-rs/jni-rs) binding crate (`backend.rs`, `dispatcher.rs`,
 `convert.rs`, `queue/`, `workflows/`, `worker.rs`, `mesh.rs`) that implements the same
 core `WorkerDispatcher` trait, with an FFM fast-path (`ffi.rs`, `ffi_c.rs`) that
 bypasses JNI on JDK 22+. `sdks/java/` is the Gradle project (package
-`org.byteveda.taskito`, baseline JDK 17): a call on `Queue`/`Taskito` routes
-`DefaultTaskito → core.CoreFacade → spi.QueueBackend → internal.JniQueueBackend →
+`org.byteveda.flexiq`, baseline JDK 17): a call on `Queue`/`FlexiQ` routes
+`DefaultFlexiQ → core.CoreFacade → spi.QueueBackend → internal.JniQueueBackend →
 JNI`, so the JNI seam is the shell's single point of contact with Rust. Feature
 packages mirror the other shells — `workflows/`, `resources/` (DI), `proxies/`,
 `interception/`, `serialization/` (payload codecs), `middleware/`, `webhooks/`,
@@ -214,7 +214,7 @@ packages mirror the other shells — `workflows/`, `resources/` (DI), `proxies/`
 `InMemoryQueueBackend`), `:spring`, `:graalvm-smoke`. Python-idiom features get Java
 **equivalents**, not 1:1 ports; the DB stays the shared source of truth.
 
-### 10. Mesh — `crates/taskito-mesh/`
+### 10. Mesh — `crates/flexiq-mesh/`
 
 Optional (`mesh` feature). A decentralized work-stealing overlay — SWIM gossip
 (UDP), a consistent-hash ring, a local deque, and TCP work-stealing — composed
@@ -230,11 +230,11 @@ These invariants are what make the codebase easy to change. Treat a PR that
 violates one as a design regression, not a style nit.
 
 1. **Dependencies point downward only.** SDK → its binding crate → core → storage.
-   `taskito-core` must not depend on any binding crate (`taskito-python`,
-   `taskito-node`, `taskito-java`) or host-language type.
+   `flexiq-core` must not depend on any binding crate (`flexiq-python`,
+   `flexiq-node`, `flexiq-java`) or host-language type.
 2. **Each binding crate is its language's only seam.** A shell touches Rust solely
    via its compiled addon's public surface — no reaching into struct internals. Keep
-   the surface contract in sync: `_taskito.pyi` for Python, the generated `.d.ts` for
+   the surface contract in sync: `_flexiq.pyi` for Python, the generated `.d.ts` for
    Node, the `spi.QueueBackend` interface for Java. A new language implements
    `WorkerDispatcher` against `BINDING_CONTRACT.md`.
 3. **Asyncio is confined to `async_support/`** (plus the narrow, documented
@@ -262,9 +262,9 @@ detailed versions.
 3. Add any backend-specific delta in `sqlite/` and `postgres/`.
 4. Implement it for Redis in `redis_backend/`.
 5. Wire it through the `delegate!` macro in `storage/mod.rs`.
-6. Expose it on each shell that needs it: PyO3 in `crates/taskito-python/src/py_queue/`
-   (then add the signature to `sdks/python/taskito/_taskito.pyi`), napi in
-   `crates/taskito-node/src/queue/`, and/or JNI in `crates/taskito-java/src/queue/`.
+6. Expose it on each shell that needs it: PyO3 in `crates/flexiq-python/src/py_queue/`
+   (then add the signature to `sdks/python/flexiq/_flexiq.pyi`), napi in
+   `crates/flexiq-node/src/queue/`, and/or JNI in `crates/flexiq-java/src/queue/`.
 7. Test: a Rust test in `storage/sqlite/tests.rs` + the contract suite (runs against
    all three backends in CI).
 

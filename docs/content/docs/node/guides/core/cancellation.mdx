@@ -7,7 +7,7 @@ Cancellation is **cooperative**. A running task reads its context via
 `currentJob()` and watches the `AbortSignal`:
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("download", async (url: string) => {
   const { signal } = currentJob() ?? {};

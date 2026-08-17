@@ -12,7 +12,7 @@ import type { Route } from "./+types/root";
 import "./app.css";
 
 // `public/` assets are copied verbatim, so they need the deploy base prefix
-// (`/taskito/` on Pages, `/` locally) rather than a bare absolute path.
+// (`/flexiq/` on Pages, `/` locally) rather than a bare absolute path.
 const asset = (file: string) => `${import.meta.env.BASE_URL}${file}`;
 
 export const links: Route.LinksFunction = () => [
@@ -47,7 +47,7 @@ export const links: Route.LinksFunction = () => [
 ];
 
 // Apply the persisted theme before paint to avoid a light/dark flash.
-const THEME_INIT = `(function(){try{var t=localStorage.getItem('taskito-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();`;
+const THEME_INIT = `(function(){try{var t=localStorage.getItem('flexiq-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();`;
 
 // Registry ids + default + deploy base as inert JSON on the <html> data
 // attribute below; the base lets the boot script find the URL's SDK segment.
@@ -61,7 +61,7 @@ const SDK_CONFIG = JSON.stringify({
 // precedence as useActiveSdk, so shared pages (one file mounted per SDK) paint
 // the URL's SDK variants immediately. Static string (no interpolation); keeps
 // the SSR default on error.
-const SDK_INIT = `(function(){try{var c=JSON.parse(document.documentElement.getAttribute('data-sdk-config')),ids=c.ids,def=c.def;var seg=location.pathname.slice(c.base.length).split('/')[1];var u=new URLSearchParams(location.search).get('sdk');var s=ids.indexOf(seg)>=0?seg:ids.indexOf(u)>=0?u:(localStorage.getItem('taskito-sdk')||def);if(ids.indexOf(s)<0){s=def;}document.documentElement.setAttribute('data-sdk',s);}catch(e){}})();`;
+const SDK_INIT = `(function(){try{var c=JSON.parse(document.documentElement.getAttribute('data-sdk-config')),ids=c.ids,def=c.def;var seg=location.pathname.slice(c.base.length).split('/')[1];var u=new URLSearchParams(location.search).get('sdk');var s=ids.indexOf(seg)>=0?seg:ids.indexOf(u)>=0?u:(localStorage.getItem('flexiq-sdk')||def);if(ids.indexOf(s)<0){s=def;}document.documentElement.setAttribute('data-sdk',s);}catch(e){}})();`;
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (

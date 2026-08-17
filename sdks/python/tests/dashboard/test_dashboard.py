@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq import Queue
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
 
 
 @pytest.fixture
@@ -177,7 +177,7 @@ def _start_dashboard(queue: Queue, *, static_assets: Any = None) -> tuple[str, A
     """
     from http.server import ThreadingHTTPServer
 
-    from taskito.dashboard import _make_handler
+    from flexiq.dashboard import _make_handler
 
     handler = _make_handler(queue, static_assets=static_assets)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -299,7 +299,7 @@ def test_spa_html_served(
     Tests inject a ``StaticAssets`` rooted at a tmp directory so the test
     is self-contained — no dependency on a prior frontend build.
     """
-    from taskito.dashboard import StaticAssets
+    from flexiq.dashboard import StaticAssets
 
     tmp_path.joinpath("index.html").write_text(
         '<!doctype html><html><body><div id="app"></div></body></html>',
@@ -324,7 +324,7 @@ def test_spa_assets_resolved_under_root(
 ) -> None:
     """Hashed asset paths resolve under the bundle root and get long
     immutable cache headers."""
-    from taskito.dashboard import StaticAssets
+    from flexiq.dashboard import StaticAssets
 
     tmp_path.joinpath("index.html").write_text("<html><body></body></html>", encoding="utf-8")
     assets_dir = tmp_path / "assets"
@@ -349,7 +349,7 @@ def test_spa_unknown_route_falls_back_to_index(
 ) -> None:
     """Client-side routes (anything that's not /assets/* or a real file)
     resolve to index.html so deep links keep working."""
-    from taskito.dashboard import StaticAssets
+    from flexiq.dashboard import StaticAssets
 
     tmp_path.joinpath("index.html").write_text(
         '<!doctype html><html><body><div id="app"></div></body></html>',
@@ -371,7 +371,7 @@ def test_spa_missing_asset_under_assets_returns_404(
 ) -> None:
     """A miss inside ``/assets/`` returns 404 — never the index fallback,
     so a stale page can't confuse the browser into running old chunks."""
-    from taskito.dashboard import StaticAssets
+    from flexiq.dashboard import StaticAssets
 
     tmp_path.joinpath("index.html").write_text("<html></html>", encoding="utf-8")
     queue, _ = populated_queue
@@ -391,7 +391,7 @@ def test_spa_missing_assets_returns_503(
 ) -> None:
     """When the frontend build wasn't run, the dashboard returns 503 with
     actionable rebuild instructions rather than silently 404-ing."""
-    from taskito.dashboard import StaticAssets
+    from flexiq.dashboard import StaticAssets
 
     queue, _ = populated_queue
     url, server = _start_dashboard(queue, static_assets=StaticAssets(None))

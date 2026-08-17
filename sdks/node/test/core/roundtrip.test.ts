@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 it("enqueues, runs a task in a node worker, and reads the result back", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-")), "queue.db");
   const queue = new Queue({ dbPath });
   queue.task("add", (a: number, b: number) => a + b);
 

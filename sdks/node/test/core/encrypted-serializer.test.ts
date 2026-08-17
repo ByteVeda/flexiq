@@ -65,7 +65,7 @@ it("wraps any inner serializer", () => {
 
 it("works end to end as the queue serializer", async () => {
   const queue = new Queue({
-    dbPath: join(mkdtempSync(join(tmpdir(), "taskito-enc-")), "q.db"),
+    dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-enc-")), "q.db"),
     serializer: new EncryptedSerializer("shared-key"),
   });
   queue.task("echo", (x: number) => x + 1);

@@ -304,7 +304,7 @@ export default function SagaDemo(_props: DemoProps) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           role="img"
-          aria-label="A booking saga: reserve seat, charge card, book hotel, issue ticket. Each step has a compensating action. When a step fails, taskito runs the compensations of the committed steps in reverse order."
+          aria-label="A booking saga: reserve seat, charge card, book hotel, issue ticket. Each step has a compensating action. When a step fails, flexiq runs the compensations of the committed steps in reverse order."
         >
           <defs>
             <marker

@@ -1,5 +1,5 @@
 /* ============================================================
-   taskito docs — shared page styles (sidebar / article / toc)
+   flexiq docs — shared page styles (sidebar / article / toc)
    Loaded after theme.css on every docs page.
    ============================================================ */
 body {
@@ -872,7 +872,7 @@ body {
 .md-table .no {
   color: var(--mut);
 }
-/* feature-matrix taskito column highlight */
+/* feature-matrix flexiq column highlight */
 .md-table.matrix th:nth-child(2),
 .md-table.matrix td:nth-child(2) {
   background: var(--indigo-soft);

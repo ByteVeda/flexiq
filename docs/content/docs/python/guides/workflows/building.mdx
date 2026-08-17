@@ -10,7 +10,7 @@ scheduler handles execution.
 ## Defining steps
 
 ```python
-from taskito.workflows import Workflow
+from flexiq.workflows import Workflow
 
 wf = Workflow(name="etl", version=1)
 wf.step("extract", extract_task)
@@ -89,7 +89,7 @@ This creates a `WorkflowRun` handle. Under the hood:
 4. The run transitions to `RUNNING`
 
 A worker must be consuming the queue for those step jobs to execute — `run.wait()`
-blocks until they finish. Start one first: `taskito worker --app tasks:queue`, or
+blocks until they finish. Start one first: `flexiq worker --app tasks:queue`, or
 `queue.run_worker()` in a background thread.
 
 <Mermaid

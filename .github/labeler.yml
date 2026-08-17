@@ -41,15 +41,15 @@ ci:
 storage:
   - changed-files:
       - any-glob-to-any-file:
-          - "crates/taskito-core/src/storage/**"
+          - "crates/flexiq-core/src/storage/**"
 
 scheduler:
   - changed-files:
       - any-glob-to-any-file:
-          - "crates/taskito-core/src/scheduler/**"
+          - "crates/flexiq-core/src/scheduler/**"
 
 workflows:
   - changed-files:
       - any-glob-to-any-file:
-          - "crates/taskito-core/src/workflow*/**"
-          - "sdks/python/taskito/workflows/**"
+          - "crates/flexiq-core/src/workflow*/**"
+          - "sdks/python/flexiq/workflows/**"

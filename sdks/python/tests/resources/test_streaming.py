@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_publish_writes_result_log(tmp_path: Path) -> None:
@@ -15,7 +15,7 @@ def test_publish_writes_result_log(tmp_path: Path) -> None:
 
     @queue.task()
     def emit_data() -> str:
-        from taskito.context import current_job
+        from flexiq.context import current_job
 
         current_job.publish({"step": 1, "value": "hello"})
         current_job.publish({"step": 2, "value": "world"})
@@ -45,7 +45,7 @@ def test_stream_yields_partial_results(tmp_path: Path) -> None:
 
     @queue.task()
     def batch_process() -> str:
-        from taskito.context import current_job
+        from flexiq.context import current_job
 
         for i in range(3):
             current_job.publish({"item": i, "status": "processed"})
@@ -75,7 +75,7 @@ def test_stream_stops_on_completion(tmp_path: Path) -> None:
 
     @queue.task()
     def quick_task() -> int:
-        from taskito.context import current_job
+        from flexiq.context import current_job
 
         current_job.publish({"msg": "started"})
         return 42
@@ -98,7 +98,7 @@ async def test_astream_async(tmp_path: Path) -> None:
 
     @queue.task()
     def async_batch() -> str:
-        from taskito.context import current_job
+        from flexiq.context import current_job
 
         current_job.publish({"phase": "init"})
         current_job.publish({"phase": "done"})
@@ -129,7 +129,7 @@ def test_publish_non_dict_data(tmp_path: Path) -> None:
 
     @queue.task()
     def varied_output() -> str:
-        from taskito.context import current_job
+        from flexiq.context import current_job
 
         current_job.publish("plain string")
         current_job.publish([1, 2, 3])

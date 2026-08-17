@@ -1,0 +1,488 @@
+//! End-to-end: an executor dials the attach listener, the scheduler starts on
+//! that attach, and a queued job runs on the executor.
+//!
+//! The executor here is a hand-rolled frame speaker rather than an SDK, which
+//! is the point — it proves the wire contract is all an executor needs.
+
+mod support;
+
+use std::io::BufReader;
+use std::net::TcpStream;
+use std::sync::Arc;
+use std::time::Duration;
+
+use flexiq_core::worker::protocol::{FrameReader, FrameWriter, ProtocolError};
+use flexiq_core::{
+    ExecutorMessage, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
+    Storage, StorageSideChannel, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+};
+use flexiq_server::config::listen::AttachListen;
+use flexiq_server::runtime::listener;
+use flexiq_server::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
+use flexiq_server::runtime::shutdown::Shutdown;
+
+use support::{poll_until, temp_storage};
+
+/// A job that fails once still has retries left, so the second dispatch is
+/// what proves the retry path survives the network hop.
+const MAX_RETRIES: i32 = 3;
+
+/// The shared secret the authenticated harness expects.
+const ATTACH_TOKEN: &str = "attach-token-0123456789abcdef";
+
+#[test]
+fn an_attached_executor_runs_a_queued_job() {
+    let storage = temp_storage("attach-success");
+    let job = storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let mut executor = Executor::attach(harness.port(), &["greet"]);
+
+    let dispatched = executor.expect_job();
+    executor.succeed(&dispatched);
+
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must complete on the attached executor");
+
+    harness.stop();
+}
+
+#[test]
+fn a_failure_on_the_executor_is_retried() {
+    let storage = temp_storage("attach-retry");
+    let job = storage
+        .enqueue(new_job("flaky"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let mut executor = Executor::attach(harness.port(), &["flaky"]);
+
+    let first = executor.expect_job();
+    executor.fail(&first, 0);
+    // The scheduler reschedules with backoff, so the second dispatch is the
+    // assertion: the retry came back to the same attached executor.
+    let second = executor.expect_job();
+    assert_eq!(second.0, first.0, "the retry must be the same job");
+    assert_eq!(second.2, 1, "the retry must carry the incremented count");
+    executor.succeed(&second);
+
+    poll_until(Duration::from_secs(15), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the retried job must complete");
+
+    harness.stop();
+}
+
+#[test]
+fn the_scheduler_stays_off_until_an_executor_attaches() {
+    let storage = temp_storage("attach-lazy");
+    let harness = Harness::start(&storage);
+
+    assert!(
+        !harness.supervisor.is_running(),
+        "an idle listener must not claim jobs"
+    );
+
+    let _executor = Executor::attach(harness.port(), &["greet"]);
+    poll_until(Duration::from_secs(5), || harness.supervisor.is_running())
+        .expect("the first attach must start the scheduler");
+
+    harness.stop();
+}
+
+#[test]
+fn a_bad_token_is_refused_before_any_job_reaches_it() {
+    let storage = temp_storage("attach-bad-token");
+    let job = storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start_with_token(&storage, Some(ATTACH_TOKEN));
+    let mut impostor = Executor::dial(harness.port(), &["greet"], Some("wrong-token-0123456789"));
+    impostor.expect_refused();
+
+    // The listener stays usable: the same job runs on a peer that knows the
+    // secret, which also proves the queued job was never handed to the impostor.
+    let mut executor = Executor::attach_with_token(harness.port(), &["greet"], Some(ATTACH_TOKEN));
+    let dispatched = executor.expect_job();
+    assert_eq!(dispatched.0, job.id);
+    executor.succeed(&dispatched);
+
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must complete on the authenticated executor");
+
+    harness.stop();
+}
+
+#[test]
+fn a_missing_token_is_refused_and_starts_no_scheduler() {
+    let storage = temp_storage("attach-missing-token");
+    let harness = Harness::start_with_token(&storage, Some(ATTACH_TOKEN));
+
+    let mut impostor = Executor::dial(harness.port(), &["greet"], None);
+    impostor.expect_refused();
+
+    assert!(
+        !harness.supervisor.is_running(),
+        "a refused attach must not start the scheduler"
+    );
+
+    harness.stop();
+}
+
+fn new_job(task_name: &str) -> NewJob {
+    NewJob {
+        queue: "default".to_string(),
+        task_name: task_name.to_string(),
+        payload: b"payload".to_vec(),
+        priority: 0,
+        scheduled_at: flexiq_core::now_millis(),
+        max_retries: MAX_RETRIES,
+        timeout_ms: 30_000,
+        unique_key: None,
+        metadata: None,
+        notes: None,
+        depends_on: vec![],
+        expires_at: None,
+        result_ttl_ms: None,
+        namespace: None,
+        debounce_key: None,
+    }
+}
+
+/// A running listener + supervisor pair, torn down in the right order.
+struct Harness {
+    supervisor: Arc<SchedulerSupervisor>,
+    listener: Option<listener::ListenerHandle>,
+    shutdown: Shutdown,
+}
+
+impl Harness {
+    fn start(storage: &flexiq_core::StorageBackend) -> Self {
+        Self::start_with_token(storage, None)
+    }
+
+    fn start_with_token(storage: &flexiq_core::StorageBackend, token: Option<&str>) -> Self {
+        let dispatcher = RemoteDispatcher::new(RemoteConfig {
+            auth_token: token.map(Secret::new),
+            // Keep the tests quick: a job nobody advertises should fail back
+            // fast rather than hold the run open.
+            placement_timeout: Duration::from_secs(5),
+            // Exactly what `runtime::run` installs, so these tests exercise the
+            // wiring a deployment actually gets.
+            side_channel: Some(Arc::new(StorageSideChannel::new(storage.clone()))),
+            ..RemoteConfig::default()
+        });
+        let supervisor = Arc::new(SchedulerSupervisor::new(
+            storage.clone(),
+            dispatcher.clone(),
+            SchedulerSettings {
+                queues: vec!["default".to_string()],
+                namespace: None,
+                workers: Some(2),
+                maintenance: false,
+            },
+        ));
+        let shutdown = Shutdown::default();
+        let listener = listener::spawn(
+            // Port 0: the OS picks a free port, so parallel tests never clash.
+            AttachListen::Tcp("127.0.0.1:0".parse().expect("valid address")),
+            dispatcher,
+            supervisor.clone(),
+            shutdown.clone(),
+        )
+        .expect("the listener must bind");
+
+        Self {
+            supervisor,
+            listener: Some(listener),
+            shutdown,
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.listener
+            .as_ref()
+            .and_then(listener::ListenerHandle::local_addr)
+            .expect("a TCP listener always reports its port")
+            .port()
+    }
+
+    fn stop(mut self) {
+        self.shutdown.trigger();
+        if let Some(listener) = self.listener.take() {
+            listener.join();
+        }
+        self.supervisor.shutdown();
+    }
+}
+
+/// The executor side of the wire: handshake, then job frames in, result frames
+/// out.
+struct Executor {
+    reader: FrameReader<BufReader<TcpStream>>,
+    writer: FrameWriter<TcpStream>,
+}
+
+/// `(job_id, task_name, retry_count)` of a dispatched job.
+type Dispatched = (String, String, i32);
+
+impl Executor {
+    fn attach(port: u16, tasks: &[&str]) -> Self {
+        Self::attach_with_token(port, tasks, None)
+    }
+
+    /// Attach and wait for the ack, which only an accepted peer receives.
+    fn attach_with_token(port: u16, tasks: &[&str], token: Option<&str>) -> Self {
+        let mut executor = Self::dial(port, tasks, token);
+        let (ack, _) = executor
+            .reader
+            .read::<SchedulerMessage>()
+            .expect("the scheduler must answer the handshake");
+        assert!(
+            matches!(ack, SchedulerMessage::HelloAck { protocol_version, .. }
+                if protocol_version == PROTOCOL_VERSION),
+            "expected hello_ack, got {ack:?}"
+        );
+        executor
+    }
+
+    /// Connect and send `hello` without waiting for an answer — a refused peer
+    /// never gets one.
+    fn dial(port: u16, tasks: &[&str], token: Option<&str>) -> Self {
+        let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to the listener");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .expect("set a read timeout");
+        let mut writer =
+            FrameWriter::new(stream.try_clone().expect("clone the stream for writing"));
+        let reader = FrameReader::new(BufReader::new(stream));
+
+        writer
+            .write_header(&ExecutorMessage::Hello {
+                executor_id: format!("test-executor-{port}"),
+                sdk: "test".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                tasks: tasks.iter().map(|task| task.to_string()).collect(),
+                slots: 2,
+                protocol_version: PROTOCOL_VERSION,
+                token: token.map(Secret::new),
+            })
+            .expect("send hello");
+
+        Self { reader, writer }
+    }
+
+    /// Assert the scheduler closed the connection instead of answering.
+    fn expect_refused(&mut self) {
+        match self.reader.read::<SchedulerMessage>() {
+            Err(ProtocolError::Eof) | Err(ProtocolError::Io(_)) => {}
+            Ok((frame, _)) => panic!("a refused peer must receive nothing, got {frame:?}"),
+            Err(error) => panic!("expected the connection to close, got {error}"),
+        }
+    }
+
+    fn expect_job(&mut self) -> Dispatched {
+        let (frame, payload) = self
+            .reader
+            .read::<SchedulerMessage>()
+            .expect("read a scheduler frame");
+        match frame {
+            SchedulerMessage::Job {
+                id,
+                task_name,
+                retry_count,
+                payload_len,
+                ..
+            } => {
+                assert_eq!(payload.len(), payload_len, "declared length must hold");
+                (id, task_name, retry_count)
+            }
+            // The scheduler sends nothing else to an idle executor, so
+            // anything here is a protocol regression worth failing on.
+            other => panic!("expected a job frame, got {other:?}"),
+        }
+    }
+
+    fn succeed(&mut self, job: &Dispatched) {
+        self.writer
+            .write_header(&ExecutorMessage::Success {
+                job_id: job.0.clone(),
+                result_len: None,
+                task_name: job.1.clone(),
+                wall_time_ns: 1_000,
+            })
+            .expect("send the success frame");
+    }
+
+    fn fail(&mut self, job: &Dispatched, retry_count: i32) {
+        self.writer
+            .write_header(&ExecutorMessage::Failure {
+                job_id: job.0.clone(),
+                error: "deliberate failure".to_string(),
+                retry_count,
+                max_retries: MAX_RETRIES,
+                task_name: job.1.clone(),
+                wall_time_ns: 1_000,
+                should_retry: true,
+                timed_out: false,
+            })
+            .expect("send the failure frame");
+    }
+}
+
+impl Executor {
+    /// Attach and return what the scheduler advertised in its ack.
+    fn attach_reporting_capabilities(port: u16, tasks: &[&str]) -> (Self, Vec<String>) {
+        let mut executor = Self::dial(port, tasks, None);
+        match executor
+            .reader
+            .read::<SchedulerMessage>()
+            .expect("the scheduler must answer the handshake")
+            .0
+        {
+            SchedulerMessage::HelloAck { capabilities, .. } => (executor, capabilities),
+            other => panic!("expected hello_ack, got {other:?}"),
+        }
+    }
+
+    fn report_progress(&mut self, job: &Dispatched, progress: i32) {
+        self.writer
+            .write_header(&ExecutorMessage::Progress {
+                job_id: job.0.clone(),
+                progress,
+            })
+            .expect("send the progress frame");
+    }
+
+    fn report_log(&mut self, job: &Dispatched, level: &str, message: &str, extra: Option<&str>) {
+        let (frame, payload) =
+            ExecutorMessage::task_log(job.0.as_str(), job.1.as_str(), level, message, extra);
+        self.writer
+            .write(&frame, &payload)
+            .expect("send the task log frame");
+    }
+}
+
+#[test]
+fn an_executor_reports_progress_and_logs_through_the_scheduler() {
+    // The whole point of the side-channel: the executor holds no database
+    // credentials, so these rows can only reach storage via the scheduler.
+    let storage = temp_storage("attach-side-channel");
+    let job = storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let (mut executor, capabilities) =
+        Executor::attach_reporting_capabilities(harness.port(), &["greet"]);
+    assert_eq!(
+        capabilities,
+        [CAP_SIDE_CHANNEL],
+        "a scheduler with storage must advertise the side-channel"
+    );
+
+    let dispatched = executor.expect_job();
+    executor.report_progress(&dispatched, 50);
+    executor.report_log(&dispatched, "info", "halfway", None);
+    executor.report_log(&dispatched, "result", "", Some(r#"{"step":3}"#));
+
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.progress == Some(50)
+        )
+    })
+    .expect("the executor's progress must reach storage");
+
+    poll_until(Duration::from_secs(10), || {
+        storage
+            .get_task_logs(&job.id, None)
+            .expect("read the logs")
+            .len()
+            == 2
+    })
+    .expect("the executor's task logs must reach storage");
+
+    let logs = storage.get_task_logs(&job.id, None).expect("read the logs");
+    let info = logs
+        .iter()
+        .find(|entry| entry.level == "info")
+        .expect("the info line");
+    assert_eq!(info.message, "halfway");
+    assert_eq!(info.task_name, "greet");
+
+    // A published partial is a `result`-level log, which is what `job.stream()`
+    // consumers read.
+    let partial = logs
+        .iter()
+        .find(|entry| entry.level == "result")
+        .expect("the published partial");
+    assert_eq!(partial.extra.as_deref(), Some(r#"{"step":3}"#));
+
+    executor.succeed(&dispatched);
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must still complete after side-channel traffic");
+
+    harness.stop();
+}
+
+#[test]
+fn a_dashboard_toggle_rides_the_dispatch_frame() {
+    let storage = temp_storage("attach-toggles");
+    storage
+        .set_setting("middleware:disabled:greet", r#"["tracing"]"#)
+        .expect("disable a middleware the way a dashboard does");
+    storage
+        .enqueue(new_job("greet"))
+        .expect("enqueue the job under test");
+
+    let harness = Harness::start(&storage);
+    let mut executor = Executor::attach(harness.port(), &["greet"]);
+
+    let (frame, payload) = executor
+        .reader
+        .read::<SchedulerMessage>()
+        .expect("read a scheduler frame");
+    let dispatch = frame.into_dispatch(payload).expect("a job frame");
+    assert_eq!(
+        dispatch.disabled_middleware,
+        ["tracing"],
+        "an executor cannot read settings, so the toggle must arrive on the frame"
+    );
+
+    // Answered before teardown: a job left claimed keeps the scheduler's own
+    // shutdown waiting, which has nothing to do with what this test asserts.
+    let job = dispatch.job;
+    executor.succeed(&(job.id.clone(), job.task_name.clone(), job.retry_count));
+    poll_until(Duration::from_secs(10), || {
+        matches!(
+            storage.get_job(&job.id, None).expect("read the job back"),
+            Some(ref current) if current.status == JobStatus::Complete
+        )
+    })
+    .expect("the job must complete");
+
+    harness.stop();
+}

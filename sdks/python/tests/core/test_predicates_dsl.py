@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taskito.predicates import (
+from flexiq.predicates import (
     Predicate,
     PredicateValidationError,
     after,
@@ -121,7 +121,7 @@ def test_from_dict_non_dict_raises() -> None:
 
 
 def test_callable_predicate_cannot_serialize() -> None:
-    from taskito.predicates import coerce_predicate
+    from flexiq.predicates import coerce_predicate
 
     p = coerce_predicate(lambda ctx: True)
     assert p is not None

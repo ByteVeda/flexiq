@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from taskito.serializers import CborSerializer
+from flexiq.serializers import CborSerializer
 
 
 def _repo_root() -> Path:
@@ -28,7 +28,7 @@ def _repo_root() -> Path:
 
 REPO_ROOT = _repo_root()
 VECTORS = json.loads((REPO_ROOT / "contracts" / "wire-vectors.json").read_text(encoding="utf-8"))
-BINDING_CONTRACT = REPO_ROOT / "crates" / "taskito-core" / "BINDING_CONTRACT.md"
+BINDING_CONTRACT = REPO_ROOT / "crates" / "flexiq-core" / "BINDING_CONTRACT.md"
 
 # A run of space-separated hex byte pairs inside backticks, as the doc writes them.
 _DOCUMENTED_BYTES = re.compile(r"`((?:[0-9a-f]{2} )+[0-9a-f]{2})`")

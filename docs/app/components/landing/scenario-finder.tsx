@@ -64,7 +64,7 @@ const SCENARIOS: Scenario[] = [
     ),
     title: "Hand it off, return instantly, stream the progress back",
     blurb:
-      "Never make a user watch a spinner. Push the work into taskito, respond in milliseconds, and report a live percentage as it runs.",
+      "Never make a user watch a spinner. Push the work into flexiq, respond in milliseconds, and report a live percentage as it runs.",
     bullets: [
       {
         k: "Respond now",
@@ -106,7 +106,7 @@ const SCENARIOS: Scenario[] = [
     ),
     title: "Back off, retry, and keep everything else flowing",
     blurb:
-      "taskito catches the 429, waits with exponential backoff, and retries — while your other jobs keep draining. Add a rate limit and you never hammer them again.",
+      "flexiq catches the 429, waits with exponential backoff, and retries — while your other jobs keep draining. Add a rate limit and you never hammer them again.",
     bullets: [
       {
         k: "Auto-retry",
@@ -197,7 +197,7 @@ const SCENARIOS: Scenario[] = [
     code: `<span class="kw">for</span> email <span class="kw">in</span> mailing_list:        <span class="cmt"># 10,000 jobs, instantly</span>
     send_email.<span class="def">delay</span>(email)
 
-<span class="cmt"># $ taskito worker --workers 6 --concurrency 8</span>`,
+<span class="cmt"># $ flexiq worker --workers 6 --concurrency 8</span>`,
     demo: {
       id: "scaling",
       title: "Worker scaling playground",
@@ -217,9 +217,9 @@ const SCENARIOS: Scenario[] = [
         <path d="M7 7l3.5 9M17 7l-3.5 9" />
       </>
     ),
-    title: "Wire them into a workflow and taskito runs them in order",
+    title: "Wire them into a workflow and flexiq runs them in order",
     blurb:
-      "Chain tasks in sequence, fan them out in parallel, and join the results. taskito resolves the dependency graph and only starts a step once its inputs are ready.",
+      "Chain tasks in sequence, fan them out in parallel, and join the results. flexiq resolves the dependency graph and only starts a step once its inputs are ready.",
     bullets: [
       {
         k: "Sequential",
@@ -279,8 +279,8 @@ workflow.<span class="def">delay</span>()`,
     gpu.<span class="def">render</span>(frame)
 
 <span class="cmt"># each machine runs only the pool it is built for:</span>
-<span class="cmt"># $ taskito worker --queues gpu --concurrency 2   # GPU box</span>
-<span class="cmt"># $ taskito worker --queues default,email         # web box</span>`,
+<span class="cmt"># $ flexiq worker --queues gpu --concurrency 2   # GPU box</span>
+<span class="cmt"># $ flexiq worker --queues default,email         # web box</span>`,
     demo: {
       id: "mesh",
       title: "Mesh scheduling — route jobs across the worker mesh",
@@ -300,7 +300,7 @@ workflow.<span class="def">delay</span>()`,
     ),
     title: "Compensate as you go — roll back the steps that already ran",
     blurb:
-      "Model a distributed transaction as a workflow where every step carries a compensating action. If a later step fails, taskito runs the compensations in reverse order — so a half-finished booking never leaves a charged card or a reserved seat stranded.",
+      "Model a distributed transaction as a workflow where every step carries a compensating action. If a later step fails, flexiq runs the compensations in reverse order — so a half-finished booking never leaves a charged card or a reserved seat stranded.",
     bullets: [
       {
         k: "Per-step rollback",
@@ -340,7 +340,7 @@ saga.<span class="def">delay</span>()   <span class="cmt"># any failure → comp
     ),
     title: "Idle regions steal the backlog from busy ones — over HTTP",
     blurb:
-      "Run taskito in several regions and they gossip queue depth peer-to-peer. When one region's backlog spikes, an idle peer pulls a batch of jobs over HTTP and runs them. Load self-balances across the mesh — still with no central broker to stand up.",
+      "Run flexiq in several regions and they gossip queue depth peer-to-peer. When one region's backlog spikes, an idle peer pulls a batch of jobs over HTTP and runs them. Load self-balances across the mesh — still with no central broker to stand up.",
     bullets: [
       { k: "Gossip mesh", v: "regions share queue depth peer-to-peer" },
       {
@@ -353,7 +353,7 @@ saga.<span class="def">delay</span>()   <span class="cmt"># any failure → comp
 queue.<span class="def">mesh</span>(peers=[<span class="str">"us-west-2"</span>, <span class="str">"ap-south-1"</span>], steal=<span class="kw">True</span>)
 
 <span class="cmt"># idle workers pull from the busiest peer over HTTP</span>
-<span class="cmt"># $ taskito worker --mesh --steal-threshold 8</span>`,
+<span class="cmt"># $ flexiq worker --mesh --steal-threshold 8</span>`,
     demo: {
       id: "worksteal",
       title: "Work-stealing — balance load across regions",
@@ -487,7 +487,7 @@ export function ScenarioFinder() {
           <h2>Tell us what's going wrong</h2>
           <p>
             Not sure you need a task queue? Pick the problem that sounds like
-            yours — taskito shows you how it handles it, with the exact code and
+            yours — flexiq shows you how it handles it, with the exact code and
             a live demo you can try.
           </p>
         </div>
@@ -531,7 +531,7 @@ export function ScenarioFinder() {
                 <i />
                 <i />
               </span>
-              Pick a problem — see how taskito handles it.
+              Pick a problem — see how flexiq handles it.
             </div>
           </div>
 
@@ -548,7 +548,7 @@ export function ScenarioFinder() {
                   <FinderIcon>{active.icon}</FinderIcon>
                 </span>
                 <div className="fd-said">
-                  <span className="fd-saidlbl">taskito handles this</span>
+                  <span className="fd-saidlbl">flexiq handles this</span>
                   <span className="fd-tag">{active.tag}</span>
                 </div>
               </div>

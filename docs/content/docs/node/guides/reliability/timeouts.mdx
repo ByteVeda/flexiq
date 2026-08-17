@@ -31,5 +31,5 @@ worker slot indefinitely.
 
 > **Coming from BullMQ?** BullMQ has no first-class per-job timeout option —
 > processors typically race their own work against a manual `Promise.race` (or
-> rely on `lockDuration` as an indirect signal). taskito's `timeoutMs` is
+> rely on `lockDuration` as an indirect signal). flexiq's `timeoutMs` is
 > enforced by the dispatcher directly, no manual race needed.

@@ -3,29 +3,29 @@ title: Integrations
 description: "Flask, FastAPI, Django, OpenTelemetry, Prometheus, Sentry, encryption, msgpack, Postgres, Redis."
 ---
 
-taskito offers optional extras for popular frameworks and observability
+flexiq offers optional extras for popular frameworks and observability
 tools. Install only what you need.
 
 ## Available integrations
 
 | Extra | Install | What you get |
 |-------|---------|--------------|
-| **Flask** | `pip install taskito[flask]` | `Taskito(app)` extension, `flask taskito worker` CLI |
-| **FastAPI** | `pip install taskito[fastapi]` | `TaskitoRouter` for instant REST API over the queue |
-| **Django** | `pip install taskito[django]` | Admin integration, management commands |
-| **OpenTelemetry** | `pip install taskito[otel]` | Distributed tracing with span-per-task |
-| **Prometheus** | `pip install taskito[prometheus]` | `PrometheusMiddleware`, queue depth gauges, `/metrics` server |
-| **Sentry** | `pip install taskito[sentry]` | `SentryMiddleware` with auto error capture and task tags |
-| **Encryption** | `pip install taskito[encryption]` | `EncryptedSerializer` for at-rest payload encryption |
-| **MsgPack** | `pip install taskito[msgpack]` | `MsgPackSerializer` for compact binary serialization |
-| **Postgres** | `pip install taskito[postgres]` | Multi-machine workers via PostgreSQL backend |
-| **Redis** | `pip install taskito[redis]` | Redis storage backend |
+| **Flask** | `pip install flexiq[flask]` | `FlexiQ(app)` extension, `flask flexiq worker` CLI |
+| **FastAPI** | `pip install flexiq[fastapi]` | `FlexiQRouter` for instant REST API over the queue |
+| **Django** | `pip install flexiq[django]` | Admin integration, management commands |
+| **OpenTelemetry** | `pip install flexiq[otel]` | Distributed tracing with span-per-task |
+| **Prometheus** | `pip install flexiq[prometheus]` | `PrometheusMiddleware`, queue depth gauges, `/metrics` server |
+| **Sentry** | `pip install flexiq[sentry]` | `SentryMiddleware` with auto error capture and task tags |
+| **Encryption** | `pip install flexiq[encryption]` | `EncryptedSerializer` for at-rest payload encryption |
+| **MsgPack** | `pip install flexiq[msgpack]` | `MsgPackSerializer` for compact binary serialization |
+| **Postgres** | `pip install flexiq[postgres]` | Multi-machine workers via PostgreSQL backend |
+| **Redis** | `pip install flexiq[redis]` | Redis storage backend |
 
 <Callout type="info">
   Postgres and Redis here are **shared storage backends** — the queue itself,
   used to run workers across multiple machines. They are not message brokers
   (a separate server such as Redis or RabbitMQ that holds pending jobs):
-  taskito never needs a separate broker regardless of backend.
+  flexiq never needs a separate broker regardless of backend.
 </Callout>
 
 ## Framework integrations
@@ -74,10 +74,10 @@ All middleware-based integrations (`OpenTelemetryMiddleware`,
 `PrometheusMiddleware`, `SentryMiddleware`) compose together:
 
 ```python
-from taskito import Queue
-from taskito.contrib.otel import OpenTelemetryMiddleware
-from taskito.contrib.prometheus import PrometheusMiddleware
-from taskito.contrib.sentry import SentryMiddleware
+from flexiq import Queue
+from flexiq.contrib.otel import OpenTelemetryMiddleware
+from flexiq.contrib.prometheus import PrometheusMiddleware
+from flexiq.contrib.sentry import SentryMiddleware
 
 queue = Queue(
     db_path="myapp.db",

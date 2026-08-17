@@ -22,7 +22,7 @@ let server: Server | undefined;
 let base = "";
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashauth-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashauth-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   server = serveDashboard(queue, { port: 0, staticDir, auth: { token: TOKEN } });
@@ -50,8 +50,8 @@ it("accepts a Bearer token", async () => {
   expect(res.status).toBe(200);
 });
 
-it("accepts an X-Taskito-Token header", async () => {
-  const res = await fetch(`${base}/api/stats`, { headers: { "x-taskito-token": TOKEN } });
+it("accepts an X-Flexiq-Token header", async () => {
+  const res = await fetch(`${base}/api/stats`, { headers: { "x-flexiq-token": TOKEN } });
   expect(res.status).toBe(200);
 });
 
@@ -64,7 +64,7 @@ it("bootstraps a cookie from ?token= on a page load and strips it", async () => 
   const res = await fetch(`${base}/?token=${TOKEN}&tab=jobs`, { redirect: "manual" });
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe("/?tab=jobs");
-  expect(res.headers.get("set-cookie")).toContain("taskito_token=");
+  expect(res.headers.get("set-cookie")).toContain("flexiq_token=");
 });
 
 it("does not bootstrap from a wrong ?token= on a page load", async () => {
@@ -82,7 +82,7 @@ it("gates probes behind the legacy token; /health stays public", async () => {
   expect((await fetch(`${base}/health`)).status).toBe(200);
   expect((await fetch(`${base}/readiness`)).status).toBe(401);
   expect((await fetch(`${base}/metrics`)).status).toBe(401);
-  const ok = await fetch(`${base}/readiness`, { headers: { "x-taskito-token": TOKEN } });
+  const ok = await fetch(`${base}/readiness`, { headers: { "x-flexiq-token": TOKEN } });
   expect(ok.status).not.toBe(401);
 });
 

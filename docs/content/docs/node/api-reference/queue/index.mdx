@@ -17,7 +17,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 </Callout>
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
 const queue = new Queue(options);
 ```
@@ -30,7 +30,7 @@ const queue = new Queue(options);
 | `backend` | `"sqlite" \| "postgres" \| "redis"` | Storage backend. |
 | `dsn` | `string` | Connection string for postgres/redis. |
 | `poolSize` | `number` | Connection pool size (sqlite/postgres). |
-| `schema` | `string` | Postgres schema (default `taskito`). |
+| `schema` | `string` | Postgres schema (default `flexiq`). |
 | `prefix` | `string` | Redis key prefix. |
 | `namespace` | `string` | Namespace applied to enqueued jobs + the worker scheduler. |
 | `serializer` | `Serializer` | Arg/result serializer (default `JsonSerializer`). |

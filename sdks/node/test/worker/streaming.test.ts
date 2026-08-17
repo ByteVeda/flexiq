@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-stream-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-stream-")), "q.db") });
 }
 
 it("streams partial results published by a task, in order", async () => {

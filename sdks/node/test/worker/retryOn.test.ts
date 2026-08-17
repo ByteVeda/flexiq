@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-retryon-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-retryon-")), "q.db") });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {

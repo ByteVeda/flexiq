@@ -31,8 +31,8 @@ const quietProxy = (target: string): ProxyOptions => ({
         lastProxyErrorAt = now;
         const code = (err as NodeJS.ErrnoException).code ?? err.message;
         console.warn(
-          `[vite] taskito backend offline (${code}). Start it with: ` +
-            `'taskito dashboard --app myapp:queue'. Further proxy errors suppressed for 30s.`,
+          `[vite] flexiq backend offline (${code}). Start it with: ` +
+            `'flexiq dashboard --app myapp:queue'. Further proxy errors suppressed for 30s.`,
         );
       }
       // Mimic the original handler: respond with a 5xx so the browser
@@ -64,7 +64,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../sdks/python/taskito/static/dashboard",
+    outDir: "../sdks/python/flexiq/static/dashboard",
     emptyOutDir: true,
     sourcemap: false,
     target: "es2022",

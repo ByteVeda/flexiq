@@ -20,15 +20,15 @@ image-service/
 ## app.py
 
 ```python
-"""FastAPI image processing service with taskito."""
+"""FastAPI image processing service with flexiq."""
 
 import time
 
 from fastapi import FastAPI, HTTPException
-from taskito import Queue, current_job
-from taskito.contrib.fastapi import TaskitoRouter
+from flexiq import Queue, current_job
+from flexiq.contrib.fastapi import FlexiQRouter
 
-queue = Queue(db_path=".taskito/images.db", workers=4, result_ttl=3600)
+queue = Queue(db_path=".flexiq/images.db", workers=4, result_ttl=3600)
 
 # ── Tasks ────────────────────────────────────────────────
 
@@ -63,9 +63,9 @@ def apply_filters(image_url: str, filters: list[str]) -> dict:
 
 app = FastAPI(title="Image Processing Service")
 
-# Mount the taskito router — adds /tasks/stats, /tasks/jobs/{id},
+# Mount the flexiq router — adds /tasks/stats, /tasks/jobs/{id},
 # /tasks/jobs/{id}/progress (SSE), and more.
-app.include_router(TaskitoRouter(queue), prefix="/tasks")
+app.include_router(FlexiQRouter(queue), prefix="/tasks")
 
 @app.post("/process")
 async def submit_job(image_url: str, sizes: list[int] | None = None):
@@ -139,7 +139,7 @@ print(f"\nResult: {result.json()}")
   <Tab value="Terminal 1 — Worker">
 
 ```bash
-taskito worker --app app:queue
+flexiq worker --app app:queue
 ```
 
   </Tab>
@@ -182,10 +182,10 @@ source.onmessage = (event) => {
 
 | Pattern | Where |
 |---|---|
-| FastAPI integration | `TaskitoRouter(queue)` mounted at `/tasks` |
+| FastAPI integration | `FlexiQRouter(queue)` mounted at `/tasks` |
 | Progress tracking | `current_job.update_progress()` in `resize_image` and `apply_filters` |
 | Async result fetch | `await job.aresult(timeout=...)` in `get_result` endpoint |
 | Async cancellation | `await queue.acancel_job()` in `cancel_job` endpoint |
-| SSE streaming | `/tasks/jobs/{id}/progress` endpoint from `TaskitoRouter` |
+| SSE streaming | `/tasks/jobs/{id}/progress` endpoint from `FlexiQRouter` |
 | Retry with backoff | `generate_thumbnail` — 3 retries, 2x backoff |
 | Result TTL | `result_ttl=3600` — auto-cleanup after 1 hour |

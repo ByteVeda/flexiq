@@ -20,7 +20,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 ```python
 Queue(
-    db_path: str = ".taskito/taskito.db",
+    db_path: str = ".flexiq/flexiq.db",
     workers: int = 0,
     default_retry: int = 3,
     default_timeout: int = 300,
@@ -46,7 +46,7 @@ Queue(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `db_path` | `str` | `".taskito/taskito.db"` | Path to SQLite database file. Parent directories are created automatically. |
+| `db_path` | `str` | `".flexiq/flexiq.db"` | Path to SQLite database file. Parent directories are created automatically. |
 | `workers` | `int` | `0` | Number of worker threads (`0` = auto-detect CPU count) |
 | `default_retry` | `int` | `3` | Default max retry attempts for tasks |
 | `default_timeout` | `int` | `300` | Default task timeout in seconds |
@@ -57,7 +57,7 @@ Queue(
 | `drain_timeout` | `int` | `30` | Seconds to wait for in-flight tasks during graceful shutdown. |
 | `interception` | `str` | `"off"` | Argument interception mode: `"strict"`, `"lenient"`, or `"off"`. See [Resource System](/python/guides/resources). |
 | `max_intercept_depth` | `int` | `10` | Max recursion depth for argument walking. |
-| `recipe_signing_key` | `str \| None` | `None` | HMAC-SHA256 key for proxy recipe integrity. Falls back to `TASKITO_RECIPE_SECRET` env var. |
+| `recipe_signing_key` | `str \| None` | `None` | HMAC-SHA256 key for proxy recipe integrity. Falls back to `FLEXIQ_RECIPE_SECRET` env var. |
 | `max_reconstruction_timeout` | `int` | `10` | Max seconds allowed for proxy reconstruction. |
 | `file_path_allowlist` | `list[str] \| None` | `None` | Allowed file path prefixes for the file proxy handler. |
 | `disabled_proxies` | `Sequence[BuiltInProxy \| str] \| None` | `None` | Built-in proxy handlers to skip registering. An unknown id raises rather than silently leaving the handler registered. |

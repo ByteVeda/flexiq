@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.exceptions import MaxRetriesExceededError, TaskFailedError
-from taskito.result import _summarize_error
-from taskito.task_errors import decode_task_error, encode_from_parts, encode_task_error
+from flexiq import Queue
+from flexiq.exceptions import MaxRetriesExceededError, TaskFailedError
+from flexiq.result import _summarize_error
+from flexiq.task_errors import decode_task_error, encode_from_parts, encode_task_error
 
 
 def _raise_and_capture() -> BaseException:

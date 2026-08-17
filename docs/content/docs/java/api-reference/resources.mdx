@@ -10,13 +10,13 @@ a factory and handed to handlers by name — via `Resources.use("name")` or an
 ## Registration
 
 ```java
-Taskito taskito = Taskito.builder().sqlite("app.db").open();
+FlexiQ flexiq = FlexiQ.builder().sqlite("app.db").open();
 
-taskito.resource("smtp", context -> SmtpClient.connect(config));
-taskito.resource("tx", ResourceScope.TASK,
+flexiq.resource("smtp", context -> SmtpClient.connect(config));
+flexiq.resource("tx", ResourceScope.TASK,
         context -> context.<Database>use("db").begin(),
         tx -> tx.rollbackIfOpen());
-taskito.resource("db", PoolConfig.of(10).withMaxLifetime(Duration.ofMinutes(30)),
+flexiq.resource("db", PoolConfig.of(10).withMaxLifetime(Duration.ofMinutes(30)),
         context -> Database.connect(dsn),
         Database::close);
 ```
@@ -57,18 +57,18 @@ instead of reused). Part of the cross-SDK contract for pooled resources.
 
 ## Hot reload
 
-`taskito.reloadResources(names)` disposes what is cached and rebuilds it, so the
+`flexiq.reloadResources(names)` disposes what is cached and rebuilds it, so the
 next use sees a fresh instance — a programmatic SIGHUP for rotating credentials
 or picking up new config without a restart. Resources rebuild dependency-first,
 so a dependent resolves the fresh dependency rather than the retired one.
 
 ```java
-taskito.resource("db", ResourceDefinition
+flexiq.resource("db", ResourceDefinition
         .worker(context -> Database.connect(dsn))
         .withReloadable(true));
 
-taskito.reloadResources();                    // every reloadable resource
-taskito.reloadResources(List.of("db"));       // exactly these, flag or not
+flexiq.reloadResources();                    // every reloadable resource
+flexiq.reloadResources(List.of("db"));       // exactly these, flag or not
 ```
 
 The result is `Map<String, Boolean>` — a name maps to `false` when it isn't
@@ -79,11 +79,11 @@ built per invocation, so reloading one is a successful no-op.
 
 ## Metrics
 
-`taskito.resourceMetrics()` returns a `Map<String, ResourceStat>` of per-resource
+`flexiq.resourceMetrics()` returns a `Map<String, ResourceStat>` of per-resource
 counters — `created`, `disposed`, and `active` (`created − disposed`).
 
 <Callout type="info">
-  Registration happens on the `Taskito` client, but resources are built lazily
+  Registration happens on the `FlexiQ` client, but resources are built lazily
   on the worker — a producer-only process never constructs them. See
   [Context](/java/api-reference/context) for resolving resources inside a
   handler.

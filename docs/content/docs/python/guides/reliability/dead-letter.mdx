@@ -100,7 +100,7 @@ The `JOB_DEAD` event fires as a job lands in the DLQ, which is the hook for
 alerting:
 
 ```python
-from taskito import EventType
+from flexiq import EventType
 
 def alert_on_dead(event_type, payload):
     pager.notify(f"{payload['task_name']} dead-lettered: {payload['error']}")

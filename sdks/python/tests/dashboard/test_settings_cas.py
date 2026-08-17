@@ -17,12 +17,12 @@ from typing import Any, cast
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard.auth import AuthStore
-from taskito.dashboard.kv import MAX_ATTEMPTS, SettingConflictError, update
-from taskito.dashboard.middleware_store import MiddlewareDisableStore
-from taskito.dashboard.overrides_store import OverridesStore
-from taskito.dashboard.webhook_store import SUBSCRIPTIONS_KEY, WebhookSubscriptionStore
+from flexiq import Queue
+from flexiq.dashboard.auth import AuthStore
+from flexiq.dashboard.kv import MAX_ATTEMPTS, SettingConflictError, update
+from flexiq.dashboard.middleware_store import MiddlewareDisableStore
+from flexiq.dashboard.overrides_store import OverridesStore
+from flexiq.dashboard.webhook_store import SUBSCRIPTIONS_KEY, WebhookSubscriptionStore
 
 
 class _RacingQueue:

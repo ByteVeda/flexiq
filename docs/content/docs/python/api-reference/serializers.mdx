@@ -4,7 +4,7 @@ description: "SmartSerializer, JsonSerializer, CborSerializer, payload codecs, a
 ---
 
 ```python
-from taskito import Queue, JsonSerializer, CborSerializer
+from flexiq import Queue, JsonSerializer, CborSerializer
 ```
 
 The Rust core treats payloads as opaque bytes — serialization happens entirely
@@ -18,7 +18,7 @@ Python-side. Producers and workers must use a compatible serializer.
 | `CloudpickleSerializer` | Pure cloudpickle — handles any picklable Python object. Same-language only (not cross-SDK). |
 | `JsonSerializer` | Human-readable JSON bytes. Simple, cross-language, MsgPack-native types only. |
 | `MsgPackSerializer` | Compact binary (MsgPack). MsgPack-native types only. |
-| `CborSerializer` | Binary CBOR (RFC 8949), tagged with the `0x02` wire-envelope byte — the format for tasks produced or consumed by another Taskito SDK. Round-trips big integers, `datetime` (tz-aware), `bytes`, and `Decimal` losslessly. |
+| `CborSerializer` | Binary CBOR (RFC 8949), tagged with the `0x02` wire-envelope byte — the format for tasks produced or consumed by another FlexiQ SDK. Round-trips big integers, `datetime` (tz-aware), `bytes`, and `Decimal` losslessly. |
 | `SignedSerializer` | Wraps another serializer with an HMAC-SHA256 tag; the worker refuses to deserialize bytes not produced with the shared key. |
 | `EncryptedSerializer` | Wraps another serializer with AES-256-GCM; confidentiality **and** integrity. |
 
@@ -47,7 +47,7 @@ confidentiality.
 
 ```python
 import os
-from taskito import Queue, SignedSerializer, SmartSerializer
+from flexiq import Queue, SignedSerializer, SmartSerializer
 
 key = os.urandom(32)  # share across producers and workers
 queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
@@ -59,7 +59,7 @@ A `PayloadCodec` is a reversible byte transform layered *around* a serializer �
 compression, encryption, signing — rather than a replacement for it. Codecs
 compose: a chain encodes in list order on the producer and decodes in reverse on
 the worker. Wire formats are part of the cross-SDK contract, so a codec-framed
-payload decodes from any Taskito SDK.
+payload decodes from any FlexiQ SDK.
 
 | Class | Wire format | Description |
 |---|---|---|
@@ -73,7 +73,7 @@ opt individual tasks in with `@queue.task(codecs=[...])` (payload only — resul
 still use the plain serializer):
 
 ```python
-from taskito import Queue, GzipCodec, HmacCodec
+from flexiq import Queue, GzipCodec, HmacCodec
 
 queue = Queue(codec=[GzipCodec(), HmacCodec(hmac_key)])  # gzip, then hmac
 ```

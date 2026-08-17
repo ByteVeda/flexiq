@@ -1,3 +1,3 @@
 export const site = {
-  name: "Taskito",
+  name: "FlexiQ",
 } as const;

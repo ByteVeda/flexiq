@@ -4,7 +4,7 @@ description: "Task.of typed tasks, EnqueueOptions, RetryPolicy, and the annotati
 ---
 
 ```java
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.task.Task;
 
 Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class);
 ```
@@ -53,7 +53,7 @@ complete successfully; a failed or cancelled dependency cancels it — see
 [enqueue options](/java/guides/core/enqueue-options#job-dependencies)).
 
 ```java
-taskito.enqueue(sendEmail, payload, EnqueueOptions.builder()
+flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder()
         .delay(Duration.ofHours(24))
         .uniqueKey("welcome:" + userId)
         .build());
@@ -92,13 +92,13 @@ Task<ChargePayload> charge = Task.of("charge", ChargePayload.class)
                 .build());
 ```
 
-Inspect live breaker state with `taskito.listCircuitBreakers()`
+Inspect live breaker state with `flexiq.listCircuitBreakers()`
 ([workers & hooks](/java/api-reference/queue/workers#circuit-breakers)).
 
 ## Annotations
 
 `@TaskHandler` marks a method as a task handler. A compile-time processor
-(`org.byteveda:taskito` ships it as the `processor` artifact) generates a
+(`org.byteveda:flexiq` ships it as the `processor` artifact) generates a
 `FooTasks` companion per enclosing class `Foo` — a typed `Task` constant per
 handler plus `bind(Worker.Builder, Foo)` and `handlers(Foo)` — no runtime
 reflection.
@@ -111,7 +111,7 @@ class Mailer {
     }
 }
 
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .register(MailerTasks.handlers(new Mailer()))
         .start();
 ```

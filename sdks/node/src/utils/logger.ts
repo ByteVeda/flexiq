@@ -1,6 +1,6 @@
 // Tiny zero-dependency leveled logger. Writes to stderr by default so it never
 // pollutes stdout (the CLI's `--json` output and piped data stay clean). Level
-// is read once from `TASKITO_LOG_LEVEL` and is overridable at runtime; the sink
+// is read once from `FLEXIQ_LOG_LEVEL` and is overridable at runtime; the sink
 // is pluggable for tests or custom transports.
 
 /** Severity, from most to least verbose. `silent` disables all output. */
@@ -17,7 +17,7 @@ export interface Logger {
   info(message: LogMessage, ...meta: unknown[]): void;
   warn(message: LogMessage, ...meta: unknown[]): void;
   error(message: LogMessage, ...meta: unknown[]): void;
-  /** Derive a namespaced child logger (`[taskito:webhooks]`). */
+  /** Derive a namespaced child logger (`[flexiq:webhooks]`). */
   child(namespace: string): Logger;
 }
 
@@ -34,12 +34,12 @@ const defaultSink: LogSink = (_level, line) => {
 };
 
 function isLogLevel(value: unknown): value is LogLevel {
-  // `Object.hasOwn` avoids matching inherited props (e.g. `TASKITO_LOG_LEVEL=toString`).
+  // `Object.hasOwn` avoids matching inherited props (e.g. `FLEXIQ_LOG_LEVEL=toString`).
   return typeof value === "string" && Object.hasOwn(SEVERITY, value);
 }
 
 function levelFromEnv(): LogLevel {
-  const raw = process.env.TASKITO_LOG_LEVEL?.toLowerCase();
+  const raw = process.env.FLEXIQ_LOG_LEVEL?.toLowerCase();
   return isLogLevel(raw) ? raw : "warn";
 }
 
@@ -86,7 +86,7 @@ function emit(
   if (SEVERITY[level] < SEVERITY[config.level]) {
     return;
   }
-  const tag = namespace ? `taskito:${namespace}` : "taskito";
+  const tag = namespace ? `flexiq:${namespace}` : "flexiq";
   const text = typeof message === "function" ? message() : message;
   const parts = [new Date().toISOString(), `[${tag}]`, level.toUpperCase(), text];
   for (const item of meta) {
@@ -108,7 +108,7 @@ function make(namespace?: string): Logger {
 /** The root logger. Prefer {@link createLogger} for a namespaced one. */
 export const logger: Logger = make();
 
-/** Create a namespaced logger (`createLogger("worker")` → `[taskito:worker]`). */
+/** Create a namespaced logger (`createLogger("worker")` → `[flexiq:worker]`). */
 export function createLogger(namespace: string): Logger {
   return make(namespace);
 }

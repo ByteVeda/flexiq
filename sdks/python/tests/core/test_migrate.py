@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard.webhook_store import WebhookSubscriptionStore
+from flexiq import Queue
+from flexiq.dashboard.webhook_store import WebhookSubscriptionStore
 
 
 def test_an_unmigrated_queue_applies_its_own_schema(tmp_path: Any) -> None:

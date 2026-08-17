@@ -42,7 +42,7 @@ console.log(run.state); // "completed"
 ```
 
 > **Coming from BullMQ?** `FlowProducer` builds a **static** parent/child tree
-> — `children` is a fixed array at definition time. taskito's fan-out is
+> — `children` is a fixed array at definition time. flexiq's fan-out is
 > **dynamic**: the child count comes from `list`'s return value at run time, so
 > a batch of 3 files and a batch of 3,000 use the same workflow definition.
 

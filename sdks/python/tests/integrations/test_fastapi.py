@@ -12,15 +12,15 @@ httpx = pytest.importorskip("httpx")
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from taskito import Queue  # noqa: E402
-from taskito.contrib.fastapi import TaskitoRouter  # noqa: E402
+from flexiq import Queue  # noqa: E402
+from flexiq.contrib.fastapi import FlexiQRouter  # noqa: E402
 
 
 @pytest.fixture
 def app(queue: Queue) -> FastAPI:
-    """Create a FastAPI app with TaskitoRouter."""
+    """Create a FastAPI app with FlexiQRouter."""
     app = FastAPI()
-    app.include_router(TaskitoRouter(queue), prefix="/tasks")
+    app.include_router(FlexiQRouter(queue), prefix="/tasks")
     return app
 
 
@@ -175,15 +175,15 @@ def test_progress_stream_not_found(client: TestClient) -> None:
 
 
 def test_router_custom_tags(queue: Queue) -> None:
-    """TaskitoRouter accepts standard APIRouter kwargs."""
-    router = TaskitoRouter(queue, tags=["my-tasks"])
+    """FlexiQRouter accepts standard APIRouter kwargs."""
+    router = FlexiQRouter(queue, tags=["my-tasks"])
     assert "my-tasks" in router.tags
 
 
 def test_router_custom_prefix(queue: Queue) -> None:
     """Router can be mounted with a custom prefix."""
     app = FastAPI()
-    app.include_router(TaskitoRouter(queue), prefix="/api/v1/queue")
+    app.include_router(FlexiQRouter(queue), prefix="/api/v1/queue")
     client = TestClient(app)
 
     resp = client.get("/api/v1/queue/stats")

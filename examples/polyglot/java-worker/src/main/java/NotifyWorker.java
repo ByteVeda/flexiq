@@ -1,8 +1,8 @@
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.serialization.CborSerializer;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.serialization.CborSerializer;
+import org.byteveda.flexiq.worker.Worker;
 
 /**
  * Runs `orders.notify` jobs enqueued by a worker in another language.
@@ -13,7 +13,7 @@ import org.byteveda.taskito.worker.Worker;
 public final class NotifyWorker {
 
     public static void main(String[] args) throws Exception {
-        String db = System.getenv().getOrDefault("TASKITO_DB", "../taskito.db");
+        String db = System.getenv().getOrDefault("FLEXIQ_DB", "../flexiq.db");
 
         CountDownLatch stop = new CountDownLatch(1);
         CountDownLatch closed = new CountDownLatch(1);
@@ -32,11 +32,11 @@ public final class NotifyWorker {
 
         // Each SDK's own default serializer is same-language-only. CBOR is the
         // cross-SDK format, and every runtime here opts into it explicitly.
-        try (Taskito taskito = Taskito.builder()
+        try (FlexiQ flexiq = FlexiQ.builder()
                         .sqlite(db)
                         .serializer(new CborSerializer())
                         .open();
-                Worker worker = taskito.worker()
+                Worker worker = flexiq.worker()
                         .handle("orders.notify", Map.class, NotifyWorker::notifyCustomer)
                         // Poll only this stage's queue. A worker claims whatever is in
                         // the queues it polls, so sharing one queue would let this

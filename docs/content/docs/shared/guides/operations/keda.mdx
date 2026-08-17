@@ -1,10 +1,10 @@
 ---
 title: KEDA Autoscaling
-description: "Scale taskito worker replicas on Kubernetes by queue depth, using the bundled scaler server."
+description: "Scale flexiq worker replicas on Kubernetes by queue depth, using the bundled scaler server."
 ---
 
 [KEDA](https://keda.sh) (Kubernetes Event-driven Autoscaling) scales a worker
-`Deployment` up and down based on queue depth. taskito ships a dedicated
+`Deployment` up and down based on queue depth. flexiq ships a dedicated
 scaler server that KEDA's `metrics-api` trigger polls directly — no separate
 metrics pipeline required.
 
@@ -18,7 +18,7 @@ metrics pipeline required.
 <Callout type="info">
   Running on bare metal, Docker, or systemd without Kubernetes? Use the
   <SdkLink to="guides/operations/autoscaling">bare-metal autoscaler</SdkLink>
-  instead — it spawns and drains `taskito worker` subprocesses with the same
+  instead — it spawns and drains `flexiq worker` subprocesses with the same
   HPA-style formula.
 </Callout>
 
@@ -32,7 +32,7 @@ metrics pipeline required.
 
 <SdkOnly sdk="python">
 
-`taskito scaler` and `serve_scaler()` bind to `127.0.0.1` by default — see
+`flexiq scaler` and `serve_scaler()` bind to `127.0.0.1` by default — see
 <SdkLink to="guides/operations/security#scaler-bind-address">Security: Scaler
 bind address</SdkLink>. Widen to `0.0.0.0` only behind a trusted network
 boundary (e.g. the ClusterIP Service below).
@@ -61,13 +61,13 @@ ever run it outside a container on a shared host.
   <Tab sdk="python">
 
 ```bash
-taskito scaler --app myapp:queue --port 9091
+flexiq scaler --app myapp:queue --port 9091
 ```
 
 Or programmatically:
 
 ```python
-from taskito.scaler import serve_scaler
+from flexiq.scaler import serve_scaler
 
 serve_scaler(queue, host="0.0.0.0", port=9091, target_queue_depth=10)
 ```
@@ -76,7 +76,7 @@ serve_scaler(queue, host="0.0.0.0", port=9091, target_queue_depth=10)
   <Tab sdk="node">
 
 ```ts
-import { Queue, serveScaler } from "@byteveda/taskito";
+import { Queue, serveScaler } from "@byteveda/flexiq";
 
 const queue = new Queue({ backend: "postgres", dsn: process.env.DATABASE_URL });
 serveScaler(queue, { port: 9091, targetQueueDepth: 10 });
@@ -85,15 +85,15 @@ serveScaler(queue, { port: 9091, targetQueueDepth: 10 });
 Or from the CLI, over a backend:
 
 ```bash
-taskito --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
+flexiq --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
 ```
 
   </Tab>
   <Tab sdk="java">
 
 ```java
-try (Taskito taskito = Taskito.builder().postgres(System.getenv("DATABASE_URL")).open();
-        Scaler scaler = Scaler.start(taskito, ScalerOptions.onPort(9090))) {
+try (FlexiQ flexiq = FlexiQ.builder().postgres(System.getenv("DATABASE_URL")).open();
+        Scaler scaler = Scaler.start(flexiq, ScalerOptions.onPort(9090))) {
     Thread.currentThread().join(); // serve until the process is killed
 }
 ```
@@ -174,7 +174,7 @@ KEDA only reads the field named by `valueLocation` in the trigger config
 
 ```json
 {
-  "metricName": "taskito_queue_depth",
+  "metricName": "flexiq_queue_depth",
   "metricValue": 42,
   "isActive": true,
   "liveWorkers": 3,
@@ -188,7 +188,7 @@ KEDA only reads the field named by `valueLocation` in the trigger config
 ```
 
 Filtering with `?queue=emails` narrows `metricValue`, `isActive`, and
-`metricName` (suffixed `taskito_queue_depth_emails`) to that queue —
+`metricName` (suffixed `flexiq_queue_depth_emails`) to that queue —
 `perQueue` still reports every queue. There's no separate `queueName` field;
 the filter shows up in `metricName` instead.
 
@@ -224,16 +224,16 @@ Deploy the scaler as its own `Deployment`, exposed as a `ClusterIP` Service:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: taskito-scaler
+  name: flexiq-scaler
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: taskito-scaler
+      app: flexiq-scaler
   template:
     metadata:
       labels:
-        app: taskito-scaler
+        app: flexiq-scaler
     spec:
       containers:
         - name: scaler
@@ -245,10 +245,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: taskito-scaler
+  name: flexiq-scaler
 spec:
   selector:
-    app: taskito-scaler
+    app: flexiq-scaler
   ports:
     - port: 9091
       targetPort: 9091
@@ -266,22 +266,22 @@ Container command:
   <Tab sdk="python">
 
 ```yaml
-command: ["taskito", "scaler", "--app", "myapp:queue", "--port", "9091", "--host", "0.0.0.0"]
+command: ["flexiq", "scaler", "--app", "myapp:queue", "--port", "9091", "--host", "0.0.0.0"]
 ```
 
-The explicit `--host 0.0.0.0` matters — `taskito scaler` binds to
+The explicit `--host 0.0.0.0` matters — `flexiq scaler` binds to
 `127.0.0.1` by default, which the Service above can't reach.
 
   </Tab>
   <Tab sdk="node">
 
 ```yaml
-command: ["taskito", "--backend", "postgres", "--dsn", "$(DATABASE_URL)", "scaler", "--port", "9091"]
+command: ["flexiq", "--backend", "postgres", "--dsn", "$(DATABASE_URL)", "scaler", "--port", "9091"]
 env:
   - name: DATABASE_URL
     valueFrom:
       secretKeyRef:
-        name: taskito-db
+        name: flexiq-db
         key: dsn
 ```
 
@@ -294,7 +294,7 @@ env:
   - name: DATABASE_URL
     valueFrom:
       secretKeyRef:
-        name: taskito-db
+        name: flexiq-db
         key: dsn
 ```
 
@@ -304,8 +304,8 @@ match the Service above (Java's own default is `9090`, see [Options](#options)):
 ```java
 public final class ScalerMain {
     public static void main(String[] args) throws InterruptedException {
-        try (Taskito taskito = Taskito.builder().postgres(System.getenv("DATABASE_URL")).open();
-                Scaler scaler = Scaler.start(taskito, new ScalerOptions(9091, "0.0.0.0", 10, null))) {
+        try (FlexiQ flexiq = FlexiQ.builder().postgres(System.getenv("DATABASE_URL")).open();
+                Scaler scaler = Scaler.start(flexiq, new ScalerOptions(9091, "0.0.0.0", 10, null))) {
             Thread.currentThread().join(); // serve until the container is killed
         }
     }
@@ -325,11 +325,11 @@ to the HTTP endpoint above:
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: taskito-worker
+  name: flexiq-worker
   namespace: default
 spec:
   scaleTargetRef:
-    name: taskito-worker        # your worker Deployment name
+    name: flexiq-worker        # your worker Deployment name
   pollingInterval: 15           # seconds between KEDA polls
   cooldownPeriod: 60            # seconds before scaling to zero
   minReplicaCount: 0            # scale to zero when idle
@@ -337,7 +337,7 @@ spec:
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://taskito-scaler:9091/api/scaler"
+        url: "http://flexiq-scaler:9091/api/scaler"
         valueLocation: "metricValue"
         targetValue: "10"
 ```
@@ -345,7 +345,7 @@ spec:
 Filter to a specific queue name:
 
 ```yaml
-        url: "http://taskito-scaler:9091/api/scaler?queue=emails"
+        url: "http://flexiq-scaler:9091/api/scaler?queue=emails"
 ```
 
 <SdkOnly sdk="java">
@@ -365,14 +365,14 @@ Jobs — one pod per N pending tasks — instead of scaling a long-running
 apiVersion: keda.sh/v1alpha1
 kind: ScaledJob
 metadata:
-  name: taskito-batch-worker
+  name: flexiq-batch-worker
   namespace: default
 spec:
   jobTargetRef:
     template:
       spec:
         containers:
-          - name: taskito-worker
+          - name: flexiq-worker
             image: your-image:latest
             command: [ ] # see "Worker container command" below
         restartPolicy: Never
@@ -385,7 +385,7 @@ spec:
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://taskito-scaler:9091/api/scaler"
+        url: "http://flexiq-scaler:9091/api/scaler"
         valueLocation: "metricValue"
         targetValue: "5"      # one pod per 5 pending jobs
 ```
@@ -396,14 +396,14 @@ Worker container command:
   <Tab sdk="python">
 
 ```yaml
-command: ["taskito", "worker", "--app", "myapp:queue"]
+command: ["flexiq", "worker", "--app", "myapp:queue"]
 ```
 
   </Tab>
   <Tab sdk="node">
 
 ```yaml
-command: ["taskito", "run", "./worker.js"]
+command: ["flexiq", "run", "./worker.js"]
 ```
 
   </Tab>
@@ -413,8 +413,8 @@ command: ["taskito", "run", "./worker.js"]
 command: ["java", "-jar", "worker.jar"]
 ```
 
-Package a `main()` that opens a `Taskito`, registers handlers with
-`taskito.worker()`, and calls `worker.awaitShutdown()` — see
+Package a `main()` that opens a `FlexiQ`, registers handlers with
+`flexiq.worker()`, and calls `worker.awaitShutdown()` — see
 <SdkLink to="guides/operations/deployment">Deployment</SdkLink>.
 
   </Tab>
@@ -431,11 +431,11 @@ and point KEDA's `prometheus` trigger at it directly:
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: taskito-worker-prometheus
+  name: flexiq-worker-prometheus
   namespace: default
 spec:
   scaleTargetRef:
-    name: taskito-worker
+    name: flexiq-worker
   pollingInterval: 15
   cooldownPeriod: 60
   minReplicaCount: 0
@@ -444,14 +444,14 @@ spec:
     - type: prometheus
       metadata:
         serverAddress: "http://prometheus:9090"
-        metricName: taskito_queue_depth
-        query: sum(taskito_queue_depth{queue="default"})
+        metricName: flexiq_queue_depth
+        query: sum(flexiq_queue_depth{queue="default"})
         threshold: "10"
     - type: prometheus
       metadata:
         serverAddress: "http://prometheus:9090"
-        metricName: taskito_worker_utilization
-        query: taskito_worker_utilization{queue="default"}
+        metricName: flexiq_worker_utilization
+        query: flexiq_worker_utilization{queue="default"}
         threshold: "0.8"
 ```
 
@@ -469,11 +469,11 @@ and point KEDA's `prometheus` trigger at the queue-depth gauge directly:
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: taskito-worker-prometheus
+  name: flexiq-worker-prometheus
   namespace: default
 spec:
   scaleTargetRef:
-    name: taskito-worker
+    name: flexiq-worker
   pollingInterval: 15
   cooldownPeriod: 60
   minReplicaCount: 0
@@ -482,14 +482,14 @@ spec:
     - type: prometheus
       metadata:
         serverAddress: "http://prometheus:9090"
-        metricName: taskito_queue_depth
-        query: sum(taskito_queue_depth{queue="default"})
+        metricName: flexiq_queue_depth
+        query: sum(flexiq_queue_depth{queue="default"})
         threshold: "10"
 ```
 
 This metric comes from `PrometheusStatsCollector` — see the
 <SdkLink to="guides/integrations/prometheus">Prometheus integration</SdkLink>.
-There's no `taskito_worker_utilization` gauge yet, so a second trigger on
+There's no `flexiq_worker_utilization` gauge yet, so a second trigger on
 utilization isn't available — queue depth alone is the supported signal.
 
 </SdkOnly>

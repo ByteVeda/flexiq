@@ -1,27 +1,27 @@
-// NestJS integration for Taskito. Optional — import from `taskito/contrib/nest`;
+// NestJS integration for FlexiQ. Optional — import from `flexiq/contrib/nest`;
 // requires `@nestjs/common` (and `reflect-metadata`) as peers.
 //
-//   @Module({ imports: [TaskitoModule.forRoot(queue)] })
+//   @Module({ imports: [FlexiQModule.forRoot(queue)] })
 //   export class AppModule {}
 //
 //   // then inject anywhere:
-//   constructor(private readonly tasks: TaskitoService) {}
+//   constructor(private readonly tasks: FlexiQService) {}
 
 import "reflect-metadata";
 import { type DynamicModule, Inject, Injectable, Module } from "@nestjs/common";
 import type { Queue } from "../queue";
 import type { DeadJob, EnqueueOptions, Job, ResultOptions, Stats } from "../types";
 
-/** DI token for the underlying {@link Queue}. Provided by {@link TaskitoModule.forRoot}. */
-export const TASKITO_QUEUE = Symbol("TASKITO_QUEUE");
+/** DI token for the underlying {@link Queue}. Provided by {@link FlexiQModule.forRoot}. */
+export const FLEXIQ_QUEUE = Symbol("FLEXIQ_QUEUE");
 
 /**
- * Injectable wrapper over a Taskito {@link Queue}. Exposes the common producer/inspection
- * methods; reach the full API via {@link TaskitoService.queue}.
+ * Injectable wrapper over a FlexiQ {@link Queue}. Exposes the common producer/inspection
+ * methods; reach the full API via {@link FlexiQService.queue}.
  */
 @Injectable()
-export class TaskitoService {
-  constructor(@Inject(TASKITO_QUEUE) readonly queue: Queue) {}
+export class FlexiQService {
+  constructor(@Inject(FLEXIQ_QUEUE) readonly queue: Queue) {}
 
   /** Enqueue `task` with positional `args`. Returns the job id. */
   enqueue(task: string, args?: unknown[], options?: EnqueueOptions): string {
@@ -55,18 +55,18 @@ export class TaskitoService {
 }
 
 /**
- * Dynamic Nest module that provides {@link TaskitoService} bound to a queue. Register it
- * once at the root with {@link TaskitoModule.forRoot}.
+ * Dynamic Nest module that provides {@link FlexiQService} bound to a queue. Register it
+ * once at the root with {@link FlexiQModule.forRoot}.
  */
 @Module({})
 // biome-ignore lint/complexity/noStaticOnlyClass: Nest dynamic modules are decorated classes with a static forRoot factory.
-export class TaskitoModule {
-  /** Provide a {@link TaskitoService} backed by `queue`. */
+export class FlexiQModule {
+  /** Provide a {@link FlexiQService} backed by `queue`. */
   static forRoot(queue: Queue): DynamicModule {
     return {
-      module: TaskitoModule,
-      providers: [{ provide: TASKITO_QUEUE, useValue: queue }, TaskitoService],
-      exports: [TaskitoService],
+      module: FlexiQModule,
+      providers: [{ provide: FLEXIQ_QUEUE, useValue: queue }, FlexiQService],
+      exports: [FlexiQService],
     };
   }
 }

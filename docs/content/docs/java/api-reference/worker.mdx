@@ -4,13 +4,13 @@ description: "The Worker.Builder and the running worker handle."
 ---
 
 ```java
-Worker worker = taskito.worker()
+Worker worker = flexiq.worker()
         .handle(sendEmail, payload -> mailer.deliver(payload))
         .queues("default", "emails")
         .start();
 ```
 
-`taskito.worker()` returns a `Worker.Builder`; `start()` launches the native
+`flexiq.worker()` returns a `Worker.Builder`; `start()` launches the native
 scheduler and returns a running `Worker` (an `AutoCloseable`).
 
 ## `Worker.Builder`
@@ -58,7 +58,7 @@ pure throughput optimization.
 | `meshClusterInfo()` | `Optional<MeshClusterInfo>` — peer count, capacity, load (mesh workers only). |
 
 ```java
-try (Worker worker = taskito.worker()
+try (Worker worker = flexiq.worker()
         .handle(sendEmail, mailer::deliver)
         .concurrency(8)
         .on(EventName.DEAD, event -> log.warn("dead: {}", event.jobId))

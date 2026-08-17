@@ -3,7 +3,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useS
 export type Theme = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
-const STORAGE_KEY = "taskito.theme";
+const STORAGE_KEY = "flexiq.theme";
 
 interface ThemeContextValue {
   theme: Theme;

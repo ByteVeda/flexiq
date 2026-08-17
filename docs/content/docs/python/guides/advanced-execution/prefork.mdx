@@ -22,14 +22,14 @@ queue.run_worker(pool="prefork", app="myapp:queue")
 ```
 
 ```bash
-taskito worker --app myapp:queue --pool prefork
+flexiq worker --app myapp:queue --pool prefork
 ```
 
 The `app` parameter tells each child process how to import your Queue
 instance. It must be an importable path in `module:attribute` format.
 
-Mapping from Celery: `--pool prefork` / `--concurrency N` ≈ taskito's
-`--pool prefork` / `workers=N`. The default pool differs, though — taskito
+Mapping from Celery: `--pool prefork` / `--concurrency N` ≈ flexiq's
+`--pool prefork` / `workers=N`. The default pool differs, though — flexiq
 defaults to `thread`, while Celery defaults to `prefork`.
 
 ## How it works
@@ -92,7 +92,7 @@ Enable debug logging to see child lifecycle events:
 
 ```python
 import logging
-logging.getLogger("taskito.prefork.child").setLevel(logging.DEBUG)
+logging.getLogger("flexiq.prefork.child").setLevel(logging.DEBUG)
 ```
 
 Log output includes:

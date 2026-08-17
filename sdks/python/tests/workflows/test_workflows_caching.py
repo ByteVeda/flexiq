@@ -6,8 +6,8 @@ import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from taskito import Queue
-from taskito.workflows import NodeStatus, Workflow, WorkflowState
+from flexiq import Queue
+from flexiq.workflows import NodeStatus, Workflow, WorkflowState
 
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 
@@ -111,7 +111,7 @@ def test_incremental_reruns_failed(queue: Queue, workflow_worker: WorkflowWorker
 
 def test_dirty_propagation(queue: Queue) -> None:
     """If a root node is dirty, all downstream re-execute even if they were cached."""
-    from taskito.workflows.incremental import compute_dirty_set
+    from flexiq.workflows.incremental import compute_dirty_set
 
     successors = {"a": ["b"], "b": ["c"], "c": []}
     predecessors = {"a": [], "b": ["a"], "c": ["b"]}
@@ -190,7 +190,7 @@ def test_full_refresh_ignores_cache(queue: Queue, workflow_worker: WorkflowWorke
 
 def test_cache_ttl_expires() -> None:
     """Expired base run results trigger re-execution."""
-    from taskito.workflows.incremental import compute_dirty_set
+    from flexiq.workflows.incremental import compute_dirty_set
 
     base_nodes: list[tuple[str, str, str | None]] = [
         ("a", "completed", "hash_a"),

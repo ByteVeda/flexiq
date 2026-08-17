@@ -1,6 +1,6 @@
-# Taskito docs
+# FlexiQ docs
 
-The Taskito documentation site — a polyglot (Python + Node.js) docs site built with
+The FlexiQ documentation site — a polyglot (Python + Node.js) docs site built with
 [React Router v7](https://reactrouter.com) in framework mode, statically prerendered
 to HTML for GitHub Pages.
 
@@ -25,7 +25,7 @@ pnpm build        # static prerender → build/client/
 pnpm start        # serve the built output
 ```
 
-Set `DOCS_BASE_PATH=/taskito` to build under the GitHub Pages base path (CI does this).
+Set `DOCS_BASE_PATH=/flexiq` to build under the GitHub Pages base path (CI does this).
 
 ## Layout
 

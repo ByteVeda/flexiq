@@ -9,7 +9,7 @@ Workflow etl = Workflow.named("etl")
         .step("transform", transform, null, "extract")
         .step("load", load, null, "transform");
 
-WorkflowRun run = taskito.submitWorkflow(etl);
+WorkflowRun run = flexiq.submitWorkflow(etl);
 WorkflowStatus done = run.await(Duration.ofMinutes(5));
 ```
 
@@ -80,7 +80,7 @@ ends `COMPENSATED`, or `COMPENSATION_FAILED` if a rollback itself fails.
 with `status`, `jobId`, `fanOutCount`, timestamps, plus `durationMs()` and
 `compensationDurationMs()` — null while the leg hasn't both started and
 finished), `isTerminal()`, `node(name)`, and `failedStep()`.
-`taskito.workflowStatus(runId)` and `taskito.cancelWorkflow(runId)` work from
+`flexiq.workflowStatus(runId)` and `flexiq.cancelWorkflow(runId)` work from
 any process by run id.
 
 ## Analysis & visualization

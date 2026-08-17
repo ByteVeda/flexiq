@@ -3,7 +3,7 @@ title: Structured Task Logging
 description: "Per-task structured logs with current_job.log() — queryable and visible in the dashboard."
 ---
 
-taskito provides structured logging from within tasks via
+flexiq provides structured logging from within tasks via
 `current_job.log()`. Logs are stored in the database alongside job data,
 making them queryable and visible in the dashboard.
 
@@ -13,7 +13,7 @@ Use `current_job.log()` inside any task. Levels are members of the
 `LogLevel` enum — `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, `RESULT`:
 
 ```python
-from taskito import LogLevel, current_job
+from flexiq import LogLevel, current_job
 
 @queue.task()
 def process_order(order_id: int):
@@ -61,7 +61,7 @@ for log in logs:
 ### Cross-job log query
 
 ```python
-from taskito import LogLevel
+from flexiq import LogLevel
 
 logs = queue.query_logs(
     task_name="myapp.tasks.process_order",
@@ -98,7 +98,7 @@ curl http://localhost:8080/api/logs?limit=20
 ### ETL pipeline with progress logging
 
 ```python
-from taskito import LogLevel, current_job
+from flexiq import LogLevel, current_job
 
 @queue.task()
 def etl_pipeline(source: str, destination: str):

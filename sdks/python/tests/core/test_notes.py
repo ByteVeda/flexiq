@@ -1,6 +1,6 @@
 """Structured notes attached to jobs.
 
-Exercises both the standalone validator (``taskito.notes``) and the
+Exercises both the standalone validator (``flexiq.notes``) and the
 end-to-end round trip through ``Queue.enqueue`` /
 ``Queue.enqueue_many`` → storage → ``JobResult.notes``.
 """
@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from taskito import MAX_NOTE_FIELDS, NotesValidationError, Queue
-from taskito.notes import (
+from flexiq import MAX_NOTE_FIELDS, NotesValidationError, Queue
+from flexiq.notes import (
     MAX_NOTE_BYTES,
     MAX_NOTE_DEPTH,
     MAX_NOTE_KEY_LENGTH,

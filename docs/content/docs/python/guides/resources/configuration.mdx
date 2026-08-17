@@ -140,8 +140,8 @@ kill -HUP <worker-pid>
 Or via the CLI:
 
 ```bash
-taskito reload --pid <worker-pid>
-taskito reload --pid <worker-pid> --resource feature_flags  # reload one resource
+flexiq reload --pid <worker-pid>
+flexiq reload --pid <worker-pid> --resource feature_flags  # reload one resource
 ```
 
 Or programmatically from application code — reload everything reloadable, or
@@ -175,7 +175,7 @@ reloaded in dependency order.
 `register_resource()` internally. You can call it directly for full control:
 
 ```python
-from taskito.resources.definition import ResourceDefinition, ResourceScope
+from flexiq.resources.definition import ResourceDefinition, ResourceScope
 
 queue.register_resource(ResourceDefinition(
     name="db",

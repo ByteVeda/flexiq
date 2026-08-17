@@ -1,6 +1,6 @@
 ---
 title: Workflows
-description: "Orchestrate multi-step DAGs in Java with the Taskito workflow builder."
+description: "Orchestrate multi-step DAGs in Java with the FlexiQ workflow builder."
 ---
 
 Orchestrate multi-step DAGs (directed acyclic graphs — steps as nodes, `after`
@@ -14,7 +14,7 @@ Task<Integer> extract = Task.of("extract", Integer.class);
 Task<Integer> transform = Task.of("transform", Integer.class);
 Task<Integer> load = Task.of("load", Integer.class);
 
-try (Taskito queue = Taskito.builder().url("pipeline.db").open()) {
+try (FlexiQ queue = FlexiQ.builder().url("pipeline.db").open()) {
     Workflow etl = Workflow.named("etl")
             .step("extract", extract, 1)
             .step("transform", transform, 2, "extract")

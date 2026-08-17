@@ -1,16 +1,79 @@
 ---
 title: Changelog
-description: "Release history for taskito — every notable change, fix, and feature."
+description: "Release history for flexiq — every notable change, fix, and feature."
 ---
 
 {/* AUTO-GENERATED from /CHANGELOG.md by scripts/sync-changelog.mjs — do not edit directly. */}
 
 <Callout type="info">Code snippets below use the Python API for illustration. Every release ships all three SDKs — Python, Node, and Java — in lock-step; see each SDK's API reference for its exact syntax.</Callout>
 
-All notable changes to taskito are documented here. The format is based on
+All notable changes to FlexiQ are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). All SDKs (Python, Node, Java) and the
 underlying Rust crates are released together, in lock-step.
+
+Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
+their entries below keep that name.
+
+## 1.0.0
+
+The project is now **FlexiQ**. This is a rename, not a redesign — no API was added, removed, or
+changed in behaviour beyond its name — but it is a hard break with no compatibility shims.
+
+Published under new names on every registry: `flexiq` (PyPI), `@byteveda/flexiq` (npm),
+`org.byteveda:flexiq` (Maven), and `flexiq`/`flexiq-core` (crates.io). The former packages receive
+no further releases.
+
+- Imports move to `flexiq` / `@byteveda/flexiq` / `org.byteveda.flexiq` / `flexiq_core`, and Java
+  types follow: `Taskito` → `FlexiQ`, `TaskitoException` → `FlexiQException`.
+- Every `TASKITO_*` environment variable is now `FLEXIQ_*`, with no fallback.
+- The default database moves to `~/.flexiq/flexiq.db`; the schema is unchanged.
+- Webhook signatures ride in `X-Flexiq-Signature`, the dashboard token in `X-Flexiq-Token`, and
+  the session cookie is `flexiq_session`. The spelling is `X-Flexiq-`, not `X-FlexiQ-`, so the name
+  survives the title-casing HTTP clients apply to outgoing headers.
+- Django commands become `flexiq_worker`, `flexiq_dashboard`, `flexiq_info`.
+- The Helm chart is `flexiq-server`.
+
+**Drain your queue before upgrading.** Payload markers changed from `__taskito_*__` to
+`__flexiq_*__`, so 0.23.x and 1.0.0 workers must not share a database. Full instructions:
+[Migrating to FlexiQ](https://docs.byteveda.org/flexiq/resources/migrating-to-flexiq).
+
+## 0.23.0
+
+Version-skew release. A polyglot deployment can now say which SDK and release each worker runs,
+and the wire format the SDKs exchange is pinned by golden vectors instead of by convention.
+
+### Changed
+
+- **BREAKING (Rust core): `Storage::register_worker` takes a `WorkerRegistration` struct**, and
+  `WorkerInfo` carries two more fields. Registration was already nine positional arguments under a
+  `too_many_arguments` allow, so the SDK identity below would have made it eleven. Only direct
+  users of the `taskito-core` crate are affected — the Python, Node and Java APIs are unchanged.
+
+### Added
+
+- **Workers record the SDK and release that registered them.** `sdk` and `sdk_version` land on the
+  `workers` table (migration `0009_worker_sdk`), reach `list_workers` and `/api/workers` in every
+  SDK, and render as an SDK column in the dashboard. In a polyglot deployment the registry is the
+  only place an operator can tell a stale worker from a current one without going host by host.
+  A worker registered by an older shell reports null rather than a wrong version.
+- **Golden wire vectors.** `contracts/wire-vectors.json` pins the payload envelope byte for byte —
+  nine encode vectors and three decode-only ones — and every SDK suite asserts against the same
+  file, so a serializer that drifts fails in its own tests rather than in a mixed deployment.
+- **A polyglot example.** `examples/polyglot/` runs a Python producer with Node and Java workers
+  against one jobs table, documenting the two footguns that setup has: every SDK's default
+  serializer is same-language-only, and all three processes must opt into the same codec.
+- **The `taskito` facade re-exports the workflow and mesh crates**, so a Rust consumer depends on
+  one crate instead of three.
+
+### Fixed
+
+- **An unparseable per-task `rate_limit` now raises instead of silently disabling throttling.** A
+  typo like `"100/mn"` parsed to `None` and dropped the limit with no error, which is precisely
+  the failure the limit exists to prevent; `retry_budget` already rejected the same mistake.
+- **CBOR payloads are encoded with definite-length containers in every SDK.** One SDK emitted
+  indefinite-length maps, so the same arguments hashed differently across languages and automatic
+  idempotency keys did not match between a producer and a worker written in different languages.
 
 ## 0.22.0
 

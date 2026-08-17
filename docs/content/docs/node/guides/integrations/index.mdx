@@ -4,18 +4,18 @@ description: "Optional observability and web-framework helpers for the Node.js S
 ---
 
 Integrations are optional helpers that ship alongside the core SDK but are **not
-exported from the main `@byteveda/taskito` barrel**. Each lives behind its own
-`@byteveda/taskito/contrib/*` subpath and requires you to install its peer
+exported from the main `@byteveda/flexiq` barrel**. Each lives behind its own
+`@byteveda/flexiq/contrib/*` subpath and requires you to install its peer
 dependency.
 
 ```bash
 # Only install what you use.
-pnpm add @opentelemetry/api               # @byteveda/taskito/contrib/otel
-pnpm add prom-client                      # @byteveda/taskito/contrib/prometheus
-pnpm add @sentry/node                     # @byteveda/taskito/contrib/sentry
-pnpm add express                          # @byteveda/taskito/contrib/express
-pnpm add fastify                          # @byteveda/taskito/contrib/fastify
-pnpm add @nestjs/common reflect-metadata  # @byteveda/taskito/contrib/nest
+pnpm add @opentelemetry/api               # @byteveda/flexiq/contrib/otel
+pnpm add prom-client                      # @byteveda/flexiq/contrib/prometheus
+pnpm add @sentry/node                     # @byteveda/flexiq/contrib/sentry
+pnpm add express                          # @byteveda/flexiq/contrib/express
+pnpm add fastify                          # @byteveda/flexiq/contrib/fastify
+pnpm add @nestjs/common reflect-metadata  # @byteveda/flexiq/contrib/nest
 ```
 
 <Callout type="info">
@@ -60,6 +60,6 @@ pnpm add @nestjs/common reflect-metadata  # @byteveda/taskito/contrib/nest
   <Card
     title="NestJS"
     href="/node/guides/integrations/nest"
-    description="injectable TaskitoService."
+    description="injectable FlexiQService."
   />
 </Cards>

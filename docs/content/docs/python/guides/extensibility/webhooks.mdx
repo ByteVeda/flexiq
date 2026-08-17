@@ -54,8 +54,8 @@ Each row has a "⋯" menu:
 The same operations are available programmatically:
 
 ```python
-from taskito import Queue
-from taskito.events import EventType
+from flexiq import Queue
+from flexiq.events import EventType
 
 queue = Queue(db_path="tasks.db")
 
@@ -90,7 +90,7 @@ queue.remove_webhook(sub.id)
 ## HMAC signing
 
 When a `secret` is set, every webhook request includes
-`X-Taskito-Signature: sha256=<hex digest>`. Verify it on the receiving end:
+`X-Flexiq-Signature: sha256=<hex digest>`. Verify it on the receiving end:
 
 ```python
 import hashlib
@@ -107,7 +107,7 @@ logic.
 
 <Callout type="warn" title="Secrets are persisted in plaintext today">
   The secret column stores the value as-is in the dashboard settings table. The
-  DB is already trusted with everything else taskito persists (job payloads,
+  DB is already trusted with everything else flexiq persists (job payloads,
   error tracebacks). If you need at-rest encryption beyond filesystem-level
   (e.g. SQLite encrypted with SQLCipher), the dashboard never returns the raw
   secret after the initial create / rotate response — only a `has_secret`
@@ -127,7 +127,7 @@ either. The guard rejects:
 - Any address that resolves to a loopback, link-local, RFC1918, multicast, or
   unspecified range (including the AWS metadata service at `169.254.169.254`)
 
-`TASKITO_WEBHOOKS_ALLOW_PRIVATE=1` lifts the guard, for local development only.
+`FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1` lifts the guard, for local development only.
 Leave it unset in production so the guard stays active.
 
 ## Retry behaviour
@@ -181,10 +181,10 @@ matches what really happened.
 
 ```python
 queue.add_webhook(
-    url="https://monitoring.example.com/api/taskito-events",
+    url="https://monitoring.example.com/api/flexiq-events",
     events=[EventType.JOB_COMPLETED, EventType.JOB_FAILED, EventType.JOB_DEAD],
     secret="whsec_abc123",
-    headers={"X-Source": "taskito-prod"},
+    headers={"X-Source": "flexiq-prod"},
     description="Forward terminal job outcomes to the monitoring service",
 )
 ```
@@ -203,7 +203,7 @@ Payload shape received by the endpoint:
 
 ### Flask receiver
 
-A minimal Flask app that receives and verifies taskito webhooks:
+A minimal Flask app that receives and verifies flexiq webhooks:
 
 ```python
 from flask import Flask, request, abort
@@ -212,9 +212,9 @@ import hashlib, hmac
 app = Flask(__name__)
 WEBHOOK_SECRET = "whsec_my_signing_secret"
 
-@app.route("/hooks/taskito", methods=["POST"])
+@app.route("/hooks/flexiq", methods=["POST"])
 def receive_webhook():
-    signature = request.headers.get("X-Taskito-Signature", "")
+    signature = request.headers.get("X-Flexiq-Signature", "")
     expected = hmac.new(
         WEBHOOK_SECRET.encode(), request.data, hashlib.sha256
     ).hexdigest()

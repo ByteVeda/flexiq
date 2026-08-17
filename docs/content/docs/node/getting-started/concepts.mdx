@@ -14,14 +14,14 @@ concepts cover the surface.
 
 Most Node.js task queues — BullMQ, Bee-Queue, Agenda — need a standalone
 **broker** (a separate server that holds and dispatches jobs): you provision a
-Redis instance, secure it, and keep it running alongside your app. taskito has
+Redis instance, secure it, and keep it running alongside your app. flexiq has
 no broker. The queue, job results, and cron schedules all live in one embedded
 SQLite file — nothing extra to install or operate.
 
 ```ts
-import { Queue } from "@byteveda/taskito";
+import { Queue } from "@byteveda/flexiq";
 
-const queue = new Queue({ dbPath: "taskito.db" }); // that's the whole setup
+const queue = new Queue({ dbPath: "flexiq.db" }); // that's the whole setup
 ```
 
 <Callout type="info" title="Coming from BullMQ?">
@@ -50,7 +50,7 @@ through it. Multiple processes pointed at the same storage share one logical
 queue.
 
 ```ts
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 ```
 
 ## Task

@@ -6,7 +6,7 @@ description: "@queue.task(compensates=…), CompensationContext, current_compens
 Saga compensation primitives. Import paths:
 
 ```python
-from taskito.workflows.saga import (
+from flexiq.workflows.saga import (
     CompensationContext,
     SagaDepthExceededError,
     SagaOrchestrator,
@@ -65,7 +65,7 @@ Accepted: `TaskWrapper`, `str`, `None`, or the `INHERIT_COMPENSATOR` sentinel (t
 Returns the `CompensationContext` for the currently-executing compensator, or `None` outside of one. Useful for introspecting the forward execution without unpacking positional args.
 
 ```python
-from taskito.workflows.saga import current_compensation_context
+from flexiq.workflows.saga import current_compensation_context
 
 @queue.task
 def refund(forward_args, forward_kwargs, forward_result):

@@ -8,8 +8,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from taskito import log_config
-from taskito.log_config import (
+from flexiq import log_config
+from flexiq.log_config import (
     _PIPE_CLOSED_FILTER,
     DEFAULT_DATEFMT,
     DEFAULT_FORMAT,
@@ -19,17 +19,17 @@ from taskito.log_config import (
 )
 
 _MANAGED_LOGGERS = (
-    "taskito",
-    "taskito_core",
-    "taskito_python",
-    "taskito_async",
-    "taskito_workflows",
+    "flexiq",
+    "flexiq_core",
+    "flexiq_python",
+    "flexiq_async",
+    "flexiq_workflows",
 )
 
 
 @pytest.fixture(autouse=True)
-def _reset_taskito_loggers() -> Iterator[None]:
-    """Strip any handlers/state on the taskito loggers between tests.
+def _reset_flexiq_loggers() -> Iterator[None]:
+    """Strip any handlers/state on the flexiq loggers between tests.
 
     The module keeps a process-wide cache so tests must isolate themselves
     from each other (and from anything an earlier import may have set up).
@@ -55,7 +55,7 @@ def test_configure_attaches_handler_to_all_known_loggers() -> None:
 
     for name in _MANAGED_LOGGERS:
         logger = logging.getLogger(name)
-        managed = [h for h in logger.handlers if getattr(h, "_taskito_managed", False)]
+        managed = [h for h in logger.handlers if getattr(h, "_flexiq_managed", False)]
         assert len(managed) == 1, f"{name} should have exactly one managed handler"
         assert logger.level == logging.DEBUG
 
@@ -63,58 +63,58 @@ def test_configure_attaches_handler_to_all_known_loggers() -> None:
 def test_configure_is_idempotent_for_identical_calls() -> None:
     stream = io.StringIO()
     configure(level="INFO", stream=stream)
-    handler_before = logging.getLogger("taskito").handlers[0]
+    handler_before = logging.getLogger("flexiq").handlers[0]
 
     configure(level="INFO", stream=stream)
-    handler_after = logging.getLogger("taskito").handlers[0]
+    handler_after = logging.getLogger("flexiq").handlers[0]
 
     assert handler_before is handler_after, "no-op call must not rebuild the handler"
-    assert len(logging.getLogger("taskito").handlers) == 1
+    assert len(logging.getLogger("flexiq").handlers) == 1
 
 
 def test_configure_swaps_handler_when_level_changes() -> None:
     stream = io.StringIO()
     configure(level="INFO", stream=stream)
-    first = logging.getLogger("taskito").handlers[0]
+    first = logging.getLogger("flexiq").handlers[0]
 
     configure(level="DEBUG", stream=stream)
-    second = logging.getLogger("taskito").handlers[0]
+    second = logging.getLogger("flexiq").handlers[0]
 
     assert first is not second
-    assert logging.getLogger("taskito").level == logging.DEBUG
+    assert logging.getLogger("flexiq").level == logging.DEBUG
     # Still exactly one managed handler — the old one was detached.
-    assert len(logging.getLogger("taskito").handlers) == 1
+    assert len(logging.getLogger("flexiq").handlers) == 1
 
 
 def test_configure_leaves_caller_handlers_alone() -> None:
     stream = io.StringIO()
     foreign = logging.StreamHandler(io.StringIO())
-    logging.getLogger("taskito").addHandler(foreign)
+    logging.getLogger("flexiq").addHandler(foreign)
 
     configure(level="INFO", stream=stream)
-    handlers = logging.getLogger("taskito").handlers
+    handlers = logging.getLogger("flexiq").handlers
     assert foreign in handlers, "caller-installed handlers must be preserved"
-    managed = [h for h in handlers if getattr(h, "_taskito_managed", False)]
+    managed = [h for h in handlers if getattr(h, "_flexiq_managed", False)]
     assert len(managed) == 1
 
 
 def test_level_resolution_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TASKITO_LOG_LEVEL", "WARNING")
+    monkeypatch.setenv("FLEXIQ_LOG_LEVEL", "WARNING")
     configure()
-    assert logging.getLogger("taskito").level == logging.WARNING
+    assert logging.getLogger("flexiq").level == logging.WARNING
 
 
 def test_level_resolution_falls_back_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("FLEXIQ_LOG_LEVEL", raising=False)
     configure()
-    assert logging.getLogger("taskito").level == logging.INFO
+    assert logging.getLogger("flexiq").level == logging.INFO
 
 
 def test_default_format_emits_am_pm_timestamp() -> None:
     stream = io.StringIO()
     configure(level="INFO", stream=stream)
 
-    logging.getLogger("taskito").info("hello")
+    logging.getLogger("flexiq").info("hello")
     output = stream.getvalue()
 
     assert "INFO" in output

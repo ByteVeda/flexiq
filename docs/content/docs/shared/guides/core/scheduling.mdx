@@ -3,7 +3,7 @@ title: Scheduling
 description: "Delay a task to run once in the future, or register it on a recurring cron schedule."
 ---
 
-taskito supports two ways to schedule work ahead of time: **delayed tasks**
+flexiq supports two ways to schedule work ahead of time: **delayed tasks**
 (run once, at a specific point in the future) and **periodic tasks** (run
 repeatedly on a cron expression). Both ride the same scheduler that
 dispatches ordinary jobs — a delayed job just isn't eligible until its
@@ -41,7 +41,7 @@ queue.enqueue("send_email", ["user@example.com", "Reminder", "Don't forget!"], {
 
 ```java
 // Run 1 hour from now
-taskito.enqueue(sendEmail, payload, EnqueueOptions.builder()
+flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder()
         .delay(Duration.ofHours(1))
         .build());
 ```
@@ -110,7 +110,7 @@ queue.registerPeriodic("daily-digest", "digest", "0 0 9 * * *", {
   <Tab sdk="java">
 
 ```java
-long nextFire = taskito.registerPeriodic(
+long nextFire = flexiq.registerPeriodic(
         PeriodicTask.builder("daily-digest", "digest", "0 0 9 * * *")
                 .payload(Map.of("edition", "morning"))
                 .queue("emails")
@@ -175,7 +175,7 @@ def weekly_report(report_type):
 
 ### Cron expression format
 
-taskito uses **6-field cron expressions** (with seconds) — a 7th, optional
+flexiq uses **6-field cron expressions** (with seconds) — a 7th, optional
 year field is also accepted:
 
 ```
@@ -213,7 +213,7 @@ year field is also accepted:
 
 > **Coming from Celery:** Celery's `crontab()` only maps to the last 5 fields
 > (minute, hour, day of month, month, day of week) — prepend a seconds field
-> to get taskito's 6-field format.
+> to get flexiq's 6-field format.
 
 </SdkOnly>
 
@@ -221,7 +221,7 @@ year field is also accepted:
 
 > **Coming from BullMQ?** BullMQ attaches a repeat schedule to a job via
 > `add(name, data, { repeat: { pattern: cron } })` — the schedule lives
-> inside an enqueue call. taskito separates the two: `registerPeriodic(name,
+> inside an enqueue call. flexiq separates the two: `registerPeriodic(name,
 > taskName, cron, options?)` is its own call, independent of any single
 > `enqueue()`, and `deletePeriodic`/`pausePeriodic`/`resumePeriodic` manage it
 > by name afterward.
@@ -262,7 +262,7 @@ queue.registerPeriodic("hourly-cleanup", "cleanup", "0 0 * * * *", {
   <Tab sdk="java">
 
 ```java
-taskito.registerPeriodic(
+flexiq.registerPeriodic(
         PeriodicTask.builder("hourly-cleanup", "cleanup", "0 0 * * * *")
                 .payload(Map.of("olderThan", 3600))
                 .queue("maintenance")
@@ -334,11 +334,11 @@ queue.deletePeriodic("daily-digest"); // unschedule; false if unknown
 <SdkOnly sdk="java">
 
 ```java
-List<PeriodicInfo> all = taskito.listPeriodic(); // enabled and paused
+List<PeriodicInfo> all = flexiq.listPeriodic(); // enabled and paused
 
-taskito.pausePeriodic("daily-digest");   // stop firing, keep the registration
-taskito.resumePeriodic("daily-digest");
-taskito.deletePeriodic("daily-digest");  // unschedule; false if unknown
+flexiq.pausePeriodic("daily-digest");   // stop firing, keep the registration
+flexiq.resumePeriodic("daily-digest");
+flexiq.deletePeriodic("daily-digest");  // unschedule; false if unknown
 ```
 
 </SdkOnly>

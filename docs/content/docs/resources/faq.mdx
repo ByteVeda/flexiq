@@ -1,19 +1,19 @@
 ---
 title: FAQ
-description: "Frequently asked questions about taskito."
+description: "Frequently asked questions about flexiq."
 ---
 
 <SdkOnly sdk="python">
 
-## Can I use taskito with Django?
+## Can I use flexiq with Django?
 
 Yes. Create a `Queue` instance in one of your Django apps and import it where needed:
 
 ```python
 # myproject/tasks.py
-from taskito import Queue
+from flexiq import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task()
 def send_welcome_email(user_id: int):
@@ -26,18 +26,18 @@ Import tasks lazily inside the function body to avoid Django app registry
 issues. Start the worker separately:
 
 ```bash
-DJANGO_SETTINGS_MODULE=myproject.settings taskito worker --app myproject.tasks:queue
+DJANGO_SETTINGS_MODULE=myproject.settings flexiq worker --app myproject.tasks:queue
 ```
 
-## Can I use taskito with Flask?
+## Can I use flexiq with Flask?
 
 Yes. Same pattern — define a queue, decorate tasks, run the worker:
 
 ```python
 # tasks.py
-from taskito import Queue
+from flexiq import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task()
 def generate_report(report_id: int):
@@ -51,90 +51,90 @@ def generate_report(report_id: int):
 
 <SdkOnly sdk="node">
 
-## Can I use taskito with Express, Fastify, or NestJS?
+## Can I use flexiq with Express, Fastify, or NestJS?
 
 Yes — all three. Define the queue and tasks once, then mount the REST API and
 dashboard with the matching contrib helper. The worker runs the same way
 regardless of framework; each helper's peer (`express` / `fastify` /
 `@nestjs/common`) is installed separately.
 
-**Express** — `@byteveda/taskito/contrib/express`:
+**Express** — `@byteveda/flexiq/contrib/express`:
 
 ```ts
 import express from "express";
-import { taskitoRouter, taskitoDashboard } from "@byteveda/taskito/contrib/express";
+import { flexiqRouter, flexiqDashboard } from "@byteveda/flexiq/contrib/express";
 
 const app = express();
-app.use("/tasks", taskitoRouter(queue));     // REST API
-app.use("/admin", taskitoDashboard(queue));  // dashboard SPA
+app.use("/tasks", flexiqRouter(queue));     // REST API
+app.use("/admin", flexiqDashboard(queue));  // dashboard SPA
 app.listen(3000);
 ```
 
-**Fastify** — `@byteveda/taskito/contrib/fastify`:
+**Fastify** — `@byteveda/flexiq/contrib/fastify`:
 
 ```ts
 import Fastify from "fastify";
-import { taskitoFastify, taskitoDashboardPlugin } from "@byteveda/taskito/contrib/fastify";
+import { flexiqFastify, flexiqDashboardPlugin } from "@byteveda/flexiq/contrib/fastify";
 
 const app = Fastify();
-await app.register(taskitoFastify, { queue, prefix: "/tasks" });
-await app.register(taskitoDashboardPlugin, { queue, prefix: "/admin" });
+await app.register(flexiqFastify, { queue, prefix: "/tasks" });
+await app.register(flexiqDashboardPlugin, { queue, prefix: "/admin" });
 await app.listen({ port: 3000 });
 ```
 
-**NestJS** — `@byteveda/taskito/contrib/nest`:
+**NestJS** — `@byteveda/flexiq/contrib/nest`:
 
 ```ts
 import { Module } from "@nestjs/common";
-import { TaskitoModule } from "@byteveda/taskito/contrib/nest";
+import { FlexiQModule } from "@byteveda/flexiq/contrib/nest";
 
-@Module({ imports: [TaskitoModule.forRoot(queue)] })
+@Module({ imports: [FlexiQModule.forRoot(queue)] })
 export class AppModule {}
 ```
 
-Inject `TaskitoService` into your providers to enqueue and read results.
+Inject `FlexiQService` into your providers to enqueue and read results.
 
 </SdkOnly>
 
 <SdkOnly sdk="java">
 
-## Can I use taskito with Spring Boot?
+## Can I use flexiq with Spring Boot?
 
-Yes, via the `org.byteveda:taskito-spring` starter (Spring Boot 3). Add it and
-the auto-configuration builds a `Taskito` bean from your `taskito.*` properties
+Yes, via the `org.byteveda:flexiq-spring` starter (Spring Boot 3). Add it and
+the auto-configuration builds a `FlexiQ` bean from your `flexiq.*` properties
 — inject it anywhere:
 
 ```java
 @Service
 public class SignupService {
-    private final Taskito taskito;
-    public SignupService(Taskito taskito) { this.taskito = taskito; }
+    private final FlexiQ flexiq;
+    public SignupService(FlexiQ flexiq) { this.flexiq = flexiq; }
 
     public void register(User user) {
-        taskito.enqueue("send_welcome_email", user.email());
+        flexiq.enqueue("send_welcome_email", user.email());
     }
 }
 ```
 
 ```yaml
-taskito:
-  url: postgres://localhost/taskito
+flexiq:
+  url: postgres://localhost/flexiq
   pool-size: 8
   namespace: my-app
 ```
 
 The worker is not auto-started — build one from the injected bean in an
-`ApplicationRunner`, or set `taskito.dashboard.enabled=true` to auto-start the
-dashboard. Non-Spring apps just build a `Taskito` and `Worker` programmatically.
+`ApplicationRunner`, or set `flexiq.dashboard.enabled=true` to auto-start the
+dashboard. Non-Spring apps just build a `FlexiQ` and `Worker` programmatically.
 
 </SdkOnly>
 
 ## Can multiple processes share the same SQLite file?
 
 Yes, with caveats. SQLite in WAL mode allows concurrent readers and one writer
-at a time. taskito sets `busy_timeout=5000ms` to handle contention.
+at a time. flexiq sets `busy_timeout=5000ms` to handle contention.
 
-However, taskito is designed as a **single-process** task queue. Multiple
+However, flexiq is designed as a **single-process** task queue. Multiple
 worker processes against one database works but will see diminishing returns
 due to write lock contention. For most workloads, one worker process with
 multiple threads is sufficient.
@@ -178,7 +178,7 @@ Task<Data> process = Task.of("process", Data.class)
 ## How big can the SQLite database get?
 
 SQLite can handle databases up to 281 TB (theoretical limit). In practice,
-taskito databases stay small if you purge finished jobs. Without cleanup,
+flexiq databases stay small if you purge finished jobs. Without cleanup,
 expect ~1 KB per job — a million completed jobs ≈ 1 GB.
 
 <SdkOnly sdk="python">
@@ -208,7 +208,7 @@ There is no result-TTL knob; call `purgeCompleted` on a schedule (the argument
 is milliseconds):
 
 ```java
-taskito.purgeCompleted(Duration.ofHours(24).toMillis()); // keep 24h
+flexiq.purgeCompleted(Duration.ofHours(24).toMillis()); // keep 24h
 ```
 
 </SdkOnly>
@@ -234,8 +234,8 @@ For single-machine workloads, SQLite is simpler and requires zero setup.
 Install the extra, then point the queue at Postgres:
 
 ```python
-# pip install taskito[postgres]
-queue = Queue(db_url="postgres://localhost/taskito")
+# pip install flexiq[postgres]
+queue = Queue(db_url="postgres://localhost/flexiq")
 ```
 
 </SdkOnly>
@@ -246,7 +246,7 @@ Postgres is already compiled into the prebuilt native binary — no extra instal
 just switch the backend:
 
 ```ts
-new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
+new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "flexiq" });
 ```
 
 </SdkOnly>
@@ -257,39 +257,39 @@ Postgres ships inside the bundled native library — no extra dependency, just
 switch the backend:
 
 ```java
-Taskito.builder().postgres(System.getenv("PG_URL")).open();
+FlexiQ.builder().postgres(System.getenv("PG_URL")).open();
 ```
 
 </SdkOnly>
 
 See the <SdkLink to="guides/operations">Postgres backend guide</SdkLink>.
 
-## Is taskito production-ready?
+## Is flexiq production-ready?
 
-taskito is suitable for production workloads — background job processing,
+flexiq is suitable for production workloads — background job processing,
 periodic tasks, data pipelines, and similar use cases.
 
 For single-machine deployments, use the default SQLite backend. For
 multi-server setups, use the <SdkLink to="guides/operations">Postgres backend</SdkLink>.
 
-## What observability options does taskito support?
+## What observability options does flexiq support?
 
 <SdkOnly sdk="python">
 
-taskito offers three observability integrations, each implemented as a
+flexiq offers three observability integrations, each implemented as a
 `TaskMiddleware` and combinable:
 
 | Integration | Best for | Install |
 |-------------|----------|---------|
-| **<SdkLink to="guides/integrations">OpenTelemetry</SdkLink>** | Distributed tracing, correlating tasks with HTTP requests | `pip install taskito[otel]` |
-| **<SdkLink to="guides/integrations">Prometheus</SdkLink>** | Metrics dashboards, alerting on queue depth/error rates | `pip install taskito[prometheus]` |
-| **<SdkLink to="guides/integrations">Sentry</SdkLink>** | Error tracking with rich context and breadcrumbs | `pip install taskito[sentry]` |
+| **<SdkLink to="guides/integrations">OpenTelemetry</SdkLink>** | Distributed tracing, correlating tasks with HTTP requests | `pip install flexiq[otel]` |
+| **<SdkLink to="guides/integrations">Prometheus</SdkLink>** | Metrics dashboards, alerting on queue depth/error rates | `pip install flexiq[prometheus]` |
+| **<SdkLink to="guides/integrations">Sentry</SdkLink>** | Error tracking with rich context and breadcrumbs | `pip install flexiq[sentry]` |
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-taskito ships three observability middlewares under `@byteveda/taskito/contrib/*`.
+flexiq ships three observability middlewares under `@byteveda/flexiq/contrib/*`.
 Install the peer you use, then register with `queue.use(...)`:
 
 | Integration | Best for | Peer |
@@ -299,7 +299,7 @@ Install the peer you use, then register with `queue.use(...)`:
 | **<SdkLink to="guides/integrations">Sentry</SdkLink>** | Error tracking with rich context and breadcrumbs | `@sentry/node` |
 
 ```ts
-import { otelMiddleware } from "@byteveda/taskito/contrib/otel";
+import { otelMiddleware } from "@byteveda/flexiq/contrib/otel";
 queue.use(otelMiddleware());
 ```
 
@@ -307,16 +307,16 @@ queue.use(otelMiddleware());
 
 <SdkOnly sdk="java">
 
-taskito ships two contrib middlewares, registered with `taskito.use(...)`. Their
+flexiq ships two contrib middlewares, registered with `flexiq.use(...)`. Their
 third-party dependency is `compileOnly` — add the runtime dep yourself:
 
 | Integration | Best for | Runtime dep |
 |-------------|----------|-------------|
-| **<SdkLink to="guides/integrations">Micrometer</SdkLink>** (`TaskitoObservation`) | One instrumentation → both a metrics timer and a trace span | `io.micrometer:micrometer-observation` |
+| **<SdkLink to="guides/integrations">Micrometer</SdkLink>** (`FlexiQObservation`) | One instrumentation → both a metrics timer and a trace span | `io.micrometer:micrometer-observation` |
 | **<SdkLink to="guides/integrations">Sentry</SdkLink>** (`SentryMiddleware`) | Error tracking on failed attempts and dead-letters | `io.sentry:sentry` |
 
 ```java
-taskito.use(new TaskitoObservation(registry));
+flexiq.use(new FlexiQObservation(registry));
 ```
 
 OpenTelemetry and Prometheus are reached downstream of Micrometer — OTel as a
@@ -325,13 +325,13 @@ or a Micrometer `MeterRegistry`. There is no dedicated OTel/Prometheus class.
 
 </SdkOnly>
 
-## How does taskito compare to running Celery with SQLite?
+## How does flexiq compare to running Celery with SQLite?
 
 Celery can use SQLite as a result backend, but still requires a broker (Redis
-or RabbitMQ). taskito replaces **both** broker and backend with a single
+or RabbitMQ). flexiq replaces **both** broker and backend with a single
 SQLite database. Additionally:
 
-- taskito's scheduler runs in Rust (faster polling, lower overhead)
+- flexiq's scheduler runs in Rust (faster polling, lower overhead)
 - Worker threads are OS threads managed by Rust, not{" "}
   <SdkSwap python="Python processes" node="separate Node processes" java="separate JVM processes" />
 - No external dependencies beyond{" "}
@@ -414,14 +414,14 @@ including concurrency tuning and{" "}
 <SdkSwap python={<code>current_job</code>} node={<code>currentJob()</code>} java="middleware-provided job context" />{" "}
 context in async tasks.
 
-## What serialization format does taskito use?
+## What serialization format does flexiq use?
 
 By default, <SdkSwap python={<code>SmartSerializer</code>} node={<code>JsonSerializer</code>} java={<code>JsonSerializer</code>} /> — <SdkSwap python="which uses MessagePack with a cloudpickle fallback, so it handles most Python objects including lambdas and closures; switch to JsonSerializer for simpler, cross-language payloads" node="human-readable JSON bytes; switch to MsgpackSerializer for compact, binary payloads" java="human-readable JSON bytes via Jackson; switch to MsgpackSerializer for compact, binary payloads" /> — or provide a custom serializer:
 
 <SdkOnly sdk="python">
 
 ```python
-from taskito import Queue, JsonSerializer
+from flexiq import Queue, JsonSerializer
 
 queue = Queue(serializer=JsonSerializer())
 ```
@@ -434,9 +434,9 @@ Custom serializers implement the `Serializer` protocol with
 <SdkOnly sdk="node">
 
 ```ts
-import { Queue, MsgpackSerializer } from "@byteveda/taskito";
+import { Queue, MsgpackSerializer } from "@byteveda/flexiq";
 
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 Custom serializers implement the `Serializer` interface with
@@ -447,8 +447,8 @@ Custom serializers implement the `Serializer` interface with
 <SdkOnly sdk="java">
 
 ```java
-Taskito queue = Taskito.builder()
-    .sqlite("taskito.db")
+FlexiQ queue = FlexiQ.builder()
+    .sqlite("flexiq.db")
     .serializer(new MsgpackSerializer())
     .open();
 ```
@@ -469,13 +469,13 @@ They're designed to run as separate processes sharing the same database.
 
 ```bash
 # Terminal 1
-taskito worker --app myapp:queue
+flexiq worker --app myapp:queue
 
 # Terminal 2
-taskito dashboard --app myapp:queue
+flexiq dashboard --app myapp:queue
 ```
 
-For embedding in a FastAPI app, use `TaskitoRouter` instead — it provides the
+For embedding in a FastAPI app, use `FlexiQRouter` instead — it provides the
 same stats and job management as REST endpoints.
 
 </SdkOnly>
@@ -484,10 +484,10 @@ same stats and job management as REST endpoints.
 
 ```bash
 # Terminal 1 — run a worker over a module that exports a Queue
-taskito run ./app.js --queues default
+flexiq run ./app.js --queues default
 
 # Terminal 2 — serve the dashboard
-taskito --db taskito.db dashboard --port 8787
+flexiq --db flexiq.db dashboard --port 8787
 ```
 
 To embed the dashboard in an existing HTTP server, call `serveDashboard(queue, { port })`.
@@ -496,15 +496,15 @@ To embed the dashboard in an existing HTTP server, call `serveDashboard(queue, {
 
 <SdkOnly sdk="java">
 
-Workers are started programmatically (there is no `taskito worker` command);
+Workers are started programmatically (there is no `flexiq worker` command);
 the dashboard has both a programmatic API and a CLI command:
 
 ```java
 // In your app — start a worker
-Worker worker = taskito.worker().handle(myTask, ...).concurrency(4).start();
+Worker worker = flexiq.worker().handle(myTask, ...).concurrency(4).start();
 
 // Anywhere — start the dashboard
-taskito.dashboard(8081); // or DashboardServer.start(taskito, 8081)
+flexiq.dashboard(8081); // or DashboardServer.start(flexiq, 8081)
 ```
 
 </SdkOnly>
@@ -537,8 +537,8 @@ await queue.purgeDead(0);
 
 ```java
 // Purge all completed jobs and dead letters (argument is milliseconds; 0 = all)
-taskito.purgeCompleted(0L);
-taskito.purgeDead(0L);
+flexiq.purgeCompleted(0L);
+flexiq.purgeDead(0L);
 ```
 
 </SdkOnly>

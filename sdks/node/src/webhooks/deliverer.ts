@@ -35,7 +35,7 @@ export class Deliverer {
     };
     if (webhook.secret) {
       const signature = createHmac("sha256", webhook.secret).update(body).digest("hex");
-      headers["x-taskito-signature"] = `sha256=${signature}`;
+      headers["x-flexiq-signature"] = `sha256=${signature}`;
     }
 
     // Resolution is bounded by the same budget as the request it precedes.

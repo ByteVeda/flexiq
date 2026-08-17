@@ -13,7 +13,7 @@ Call `currentJob().publish(value)` from inside the task. The value must be
 JSON-serializable.
 
 ```ts
-import { currentJob } from "@byteveda/taskito";
+import { currentJob } from "@byteveda/flexiq";
 
 queue.task("train", async (epochs: number) => {
   const job = currentJob();

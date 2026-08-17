@@ -12,7 +12,7 @@ import {
   WebhookValidationError,
 } from "../../src/index";
 
-const ALLOW_ENV_VAR = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+const ALLOW_ENV_VAR = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE";
 
 let saved: string | undefined;
 let target: Server | undefined;
@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-ssrf-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-ssrf-")), "q.db") });
 }
 
 const UNSAFE_URLS = [

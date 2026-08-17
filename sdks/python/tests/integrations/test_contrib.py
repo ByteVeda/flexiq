@@ -41,7 +41,7 @@ class TestOpenTelemetryMiddleware:
 
         mw._tracer = mock_tracer
         mw._span_name_fn = None
-        mw._attr_prefix = "taskito"
+        mw._attr_prefix = "flexiq"
         mw._extra_attributes_fn = None
         mw._task_filter = None
         mw._spans = {}
@@ -64,7 +64,7 @@ class TestOpenTelemetryMiddleware:
 
         mw._tracer = MagicMock()
         mw._span_name_fn = None
-        mw._attr_prefix = "taskito"
+        mw._attr_prefix = "flexiq"
         mw._extra_attributes_fn = None
         mw._task_filter = None
         mw._spans = {"job-1": mock_span}
@@ -88,7 +88,7 @@ class TestOpenTelemetryMiddleware:
 
         mw._tracer = MagicMock()
         mw._span_name_fn = None
-        mw._attr_prefix = "taskito"
+        mw._attr_prefix = "flexiq"
         mw._extra_attributes_fn = None
         mw._task_filter = None
         mw._spans = {"job-1": mock_span}
@@ -119,9 +119,9 @@ def _try_import_otel() -> types.ModuleType | None:
                 "opentelemetry.trace": mock_trace,
             },
         ):
-            if "taskito.contrib.otel" in sys.modules:
-                del sys.modules["taskito.contrib.otel"]
-            from taskito.contrib import otel
+            if "flexiq.contrib.otel" in sys.modules:
+                del sys.modules["flexiq.contrib.otel"]
+            from flexiq.contrib import otel
 
             # Patch module-level references
             otel.trace = mock_trace
@@ -144,7 +144,7 @@ class TestSentryMiddleware:
         ctx = _make_ctx()
 
         mw = sentry_mod.SentryMiddleware.__new__(sentry_mod.SentryMiddleware)
-        mw._tag_prefix = "taskito"
+        mw._tag_prefix = "flexiq"
         mw._transaction_name_fn = None
         mw._task_filter = None
         mw._extra_tags_fn = None
@@ -161,7 +161,7 @@ class TestSentryMiddleware:
         ctx = _make_ctx()
 
         mw = sentry_mod.SentryMiddleware.__new__(sentry_mod.SentryMiddleware)
-        mw._tag_prefix = "taskito"
+        mw._tag_prefix = "flexiq"
         mw._transaction_name_fn = None
         mw._task_filter = None
         mw._extra_tags_fn = None
@@ -179,7 +179,7 @@ class TestSentryMiddleware:
         exc = RuntimeError("oops")
 
         mw = sentry_mod.SentryMiddleware.__new__(sentry_mod.SentryMiddleware)
-        mw._tag_prefix = "taskito"
+        mw._tag_prefix = "flexiq"
         mw._transaction_name_fn = None
         mw._task_filter = None
         mw._extra_tags_fn = None
@@ -194,9 +194,9 @@ def _try_import_sentry() -> types.ModuleType | None:
 
         mock_sdk = MagicMock()
         with patch.dict(sys.modules, {"sentry_sdk": mock_sdk}):
-            if "taskito.contrib.sentry" in sys.modules:
-                del sys.modules["taskito.contrib.sentry"]
-            from taskito.contrib import sentry
+            if "flexiq.contrib.sentry" in sys.modules:
+                del sys.modules["flexiq.contrib.sentry"]
+            from flexiq.contrib import sentry
 
             sentry.sentry_sdk = mock_sdk
             return sentry
@@ -316,9 +316,9 @@ def _try_import_prometheus() -> types.ModuleType | None:
                 ),
             },
         ):
-            if "taskito.contrib.prometheus" in sys.modules:
-                del sys.modules["taskito.contrib.prometheus"]
-            from taskito.contrib import prometheus
+            if "flexiq.contrib.prometheus" in sys.modules:
+                del sys.modules["flexiq.contrib.prometheus"]
+            from flexiq.contrib import prometheus
 
             return prometheus
     except Exception:

@@ -1,15 +1,15 @@
 ---
 title: Comparison
-description: "Taskito vs other task queues — feature matrix and decision guide."
+description: "FlexiQ vs other task queues — feature matrix and decision guide."
 ---
 
-**TL;DR**: Taskito is <SdkSwap python="Celery" node="BullMQ" java="a task queue" /> without the
+**TL;DR**: FlexiQ is <SdkSwap python="Celery" node="BullMQ" java="a task queue" /> without the
 broker (a separate server such as Redis or RabbitMQ that holds pending jobs). Rust scheduler, no broker required, lower latency, better concurrency.
 Start with SQLite; add Postgres or Redis as a backend when you scale out.
 
-## When to use taskito
+## When to use flexiq
 
-taskito is ideal when:
+flexiq is ideal when:
 
 - **Single-machine deployments** — no need for distributed workers across multiple servers
 - **Zero infrastructure** — you don't want to install, configure, or manage Redis or RabbitMQ
@@ -17,20 +17,20 @@ taskito is ideal when:
 - **Prototyping** — get a task queue running in 5 lines, iterate fast
 - **Low-to-medium throughput** — hundreds to thousands of jobs per second is plenty
 
-## When NOT to use taskito
+## When NOT to use flexiq
 
 Consider alternatives when:
 
-- **Multi-server workers** — you need workers on separate machines (taskito supports this with Postgres/Redis backends, but a broker-based queue has more mature distributed tooling)
+- **Multi-server workers** — you need workers on separate machines (flexiq supports this with Postgres/Redis backends, but a broker-based queue has more mature distributed tooling)
 - **Very high throughput** — millions of jobs/sec across a cluster (use a dedicated broker such as RabbitMQ or Kafka)
 - **Existing broker infrastructure** — if Redis/RabbitMQ is already in your stack, a broker-native queue may be simpler
-- **Complex routing** — you need topic exchanges, message filtering, or fan-out patterns beyond taskito's pub/sub
+- **Complex routing** — you need topic exchanges, message filtering, or fan-out patterns beyond flexiq's pub/sub
 
 <SdkOnly sdk="python">
 
 ## Feature matrix
 
-| Feature | taskito | Celery | RQ | Dramatiq | Huey | TaskIQ |
+| Feature | flexiq | Celery | RQ | Dramatiq | Huey | TaskIQ |
 |---|---|---|---|---|---|---|
 | Broker required | **No** | Redis / RabbitMQ | Redis | Redis / RabbitMQ | Redis | Redis / RabbitMQ / Nats |
 | Core language | **Rust + Python** | Python | Python | Python | Python | Python |
@@ -67,16 +67,16 @@ Consider alternatives when:
 Celery is the most popular Python task queue — battle-tested, feature-rich, and
 widely adopted.
 
-|  | taskito | Celery |
+|  | flexiq | Celery |
 |---|---|---|
-| **Setup** | `pip install taskito` | Install broker (Redis/RabbitMQ), result backend, Celery itself |
+| **Setup** | `pip install flexiq` | Install broker (Redis/RabbitMQ), result backend, Celery itself |
 | **Dependencies** | 1 (cloudpickle) | 10+ (kombu, billiard, vine, etc.) |
 | **Configuration** | Constructor params | Settings module or app config |
 | **Worker model** | Rust OS threads | prefork/eventlet/gevent pools |
 | **Distributed** | Single machine by default; multi-server via Postgres/Redis backend | Yes (multi-server) |
 | **Canvas** | chain, group, chord, starmap, chunks | chain, group, chord, starmap, chunks, and more |
 
-**Choose taskito** if you want zero-infrastructure simplicity on a single machine.
+**Choose flexiq** if you want zero-infrastructure simplicity on a single machine.
 **Choose Celery** if you need distributed workers, complex routing, or enterprise features.
 
 Looking to switch? See the{" "}
@@ -89,7 +89,7 @@ guide for a step-by-step walkthrough with side-by-side code examples.
 
 RQ focuses on simplicity — a minimal task queue built on Redis.
 
-|  | taskito | RQ |
+|  | flexiq | RQ |
 |---|---|---|
 | **Broker** | None (SQLite) | Redis required |
 | **Priority** | Yes (integer levels) | Separate queues for priority |
@@ -97,14 +97,14 @@ RQ focuses on simplicity — a minimal task queue built on Redis.
 | **Chaining** | Yes | No |
 | **Monitoring** | CLI + progress | rq-dashboard (web) |
 
-**Choose taskito** if you want similar simplicity without requiring Redis.
+**Choose flexiq** if you want similar simplicity without requiring Redis.
 **Choose RQ** if you already run Redis and want a web dashboard.
 
 ### vs Dramatiq
 
 Dramatiq is a reliable, performance-focused alternative to Celery.
 
-|  | taskito | Dramatiq |
+|  | flexiq | Dramatiq |
 |---|---|---|
 | **Broker** | None (SQLite) | Redis or RabbitMQ |
 | **Priority** | Yes | No (FIFO only) |
@@ -112,14 +112,14 @@ Dramatiq is a reliable, performance-focused alternative to Celery.
 | **DLQ** | Built-in | No |
 | **Middleware** | Hooks + per-task `TaskMiddleware` | Full middleware stack |
 
-**Choose taskito** if you want built-in DLQ and priority without a broker.
+**Choose flexiq** if you want built-in DLQ and priority without a broker.
 **Choose Dramatiq** if you need a middleware ecosystem and distributed workers.
 
 ### vs Huey
 
 Huey is a lightweight task queue with Redis or SQLite backends.
 
-|  | taskito | Huey |
+|  | flexiq | Huey |
 |---|---|---|
 | **Backend** | SQLite (Rust-native) | Redis or SQLite (Python) |
 | **Performance** | Rust scheduler + OS threads | Python threads |
@@ -128,7 +128,7 @@ Huey is a lightweight task queue with Redis or SQLite backends.
 | **DLQ** | Built-in | No |
 | **Progress** | Built-in | No |
 
-**Choose taskito** if you want higher performance and more features with SQLite.
+**Choose flexiq** if you want higher performance and more features with SQLite.
 **Choose Huey** if you need a mature, well-documented SQLite-backed queue.
 
 ### vs TaskIQ
@@ -136,30 +136,30 @@ Huey is a lightweight task queue with Redis or SQLite backends.
 TaskIQ is a modern, async-native task queue. It's a good fit if you're fully
 async and already have a broker.
 
-|  | taskito | TaskIQ |
+|  | flexiq | TaskIQ |
 |---|---|---|
 | **Broker** | None (DB-backed) | Redis / RabbitMQ / Nats |
 | **Async** | Native + sync | Async-first |
 | **Scheduler** | Rust (Tokio) | Python |
 | **GIL** (Global Interpreter Lock — only one thread runs Python bytecode at a time) | Rust scheduler bypasses GIL | Python scheduler competes for GIL |
-| **Setup** | `pip install taskito` | Install broker + taskiq + broker plugin |
+| **Setup** | `pip install flexiq` | Install broker + taskiq + broker plugin |
 
-Choose taskito if you want zero infrastructure. Choose TaskIQ if you're fully
+Choose flexiq if you want zero infrastructure. Choose TaskIQ if you're fully
 async and already have Redis/Nats.
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-## How taskito compares
+## How flexiq compares
 
 Most Node task queues — **BullMQ**, **Bee-Queue**, **Bull** — require a running
-Redis instance as the broker, and **Agenda** requires MongoDB. taskito embeds
+Redis instance as the broker, and **Agenda** requires MongoDB. flexiq embeds
 the queue in a Rust core with a pluggable backend (SQLite, Postgres, or Redis),
 so you can start with **zero infrastructure** and add Redis only when you scale
 out.
 
-|  | taskito | BullMQ / Bee-Queue | Agenda |
+|  | flexiq | BullMQ / Bee-Queue | Agenda |
 |---|---|---|---|
 | **Broker** | None (SQLite) — optional Postgres/Redis | Redis required | MongoDB required |
 | **Core** | Rust scheduler | JS + Redis Lua | JS + Mongo |
@@ -167,7 +167,7 @@ out.
 | **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | Flows (BullMQ) | No |
 | **Result streaming** | Yes (publish/stream) | No | No |
 
-**Choose taskito** for a broker-optional queue with a workflow engine built in.
+**Choose flexiq** for a broker-optional queue with a workflow engine built in.
 **Choose BullMQ** if Redis is already central to your stack and you want its
 mature ecosystem.
 
@@ -175,16 +175,16 @@ mature ecosystem.
 
 <SdkOnly sdk="java">
 
-## How taskito compares
+## How flexiq compares
 
 JVM background-job tools each specialize: **Quartz** for cron scheduling,
 **JobRunr** for background jobs (RDBMS or Redis), **Spring Batch** for
-batch/ETL pipelines. taskito is a general-purpose task queue with a Rust core:
+batch/ETL pipelines. flexiq is a general-purpose task queue with a Rust core:
 priorities, rate limits, dead-letter queues, workflows, and result streaming,
 backed by SQLite, Postgres, or Redis, usable standalone or via the Spring Boot
 starter.
 
-|  | taskito | Quartz | JobRunr | Spring Batch |
+|  | flexiq | Quartz | JobRunr | Spring Batch |
 |---|---|---|---|---|
 | **Focus** | Task queue + workflows | Cron scheduling | Background jobs | Batch/ETL pipelines |
 | **Backend** | SQLite / Postgres / Redis | Your RDBMS | Your RDBMS / Redis | Your RDBMS |
@@ -192,7 +192,7 @@ starter.
 | **Workflows** | Builder DAG, fan-out, sub-workflows, sagas | No | No | Step/chunk model |
 | **Result streaming** | Yes (publish/stream) | No | No | No |
 
-**Choose taskito** for a broker-optional queue with priorities, DLQ, and a
+**Choose flexiq** for a broker-optional queue with priorities, DLQ, and a
 workflow engine. **Choose Quartz/Spring Batch** for pure cron scheduling or
 chunk-oriented batch processing tightly coupled to Spring.
 

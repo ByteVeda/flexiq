@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Queue, useResource } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-shutdown-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-shutdown-")), "q.db") });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<boolean> {

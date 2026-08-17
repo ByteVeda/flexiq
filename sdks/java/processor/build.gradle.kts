@@ -21,11 +21,11 @@ mavenPublishing {
     ) {
         signAllPublications()
     }
-    coordinates(group.toString(), "taskito-processor", version.toString())
+    coordinates(group.toString(), "flexiq-processor", version.toString())
     pom {
-        name.set("Taskito Processor")
-        description.set("Compile-time annotation processor generating task-handler bindings for the Taskito JVM SDK.")
-        url.set("https://github.com/ByteVeda/taskito")
+        name.set("FlexiQ Processor")
+        description.set("Compile-time annotation processor generating task-handler bindings for the FlexiQ JVM SDK.")
+        url.set("https://github.com/ByteVeda/flexiq")
         licenses {
             license {
                 name.set("MIT")
@@ -39,9 +39,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/ByteVeda/taskito")
-            connection.set("scm:git:https://github.com/ByteVeda/taskito.git")
-            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/taskito.git")
+            url.set("https://github.com/ByteVeda/flexiq")
+            connection.set("scm:git:https://github.com/ByteVeda/flexiq.git")
+            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/flexiq.git")
         }
     }
 }
