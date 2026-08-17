@@ -26,8 +26,8 @@ services. The engine is a single Rust core — a Tokio async scheduler, an OS-th
 and Diesel over SQLite in WAL mode — exposed to each language through a thin native SDK.
 
 > **Formerly Taskito.** The project was renamed to FlexiQ in 1.0.0. Packages ship as `flexiq`
-> (PyPI), `@byteveda/flexiq` (npm) and `org.byteveda:flexiq` (Maven); the old `taskito` packages
-> receive no further releases. See
+> (PyPI), `@byteveda/flexiq` (npm), `org.byteveda:flexiq` (Maven) and `flexiq`/`flexiq-core`
+> (crates.io); the old `taskito` packages receive no further releases. See
 > [Migrating to FlexiQ](https://docs.byteveda.org/flexiq/resources/migrating-to-flexiq).
 
 ## SDKs
