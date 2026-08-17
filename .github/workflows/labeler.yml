@@ -17,6 +17,16 @@ jobs:
   label:
     runs-on: ubuntu-latest
     steps:
+      # Without a checkout the action fetches its config over the API on every
+      # run, which fails outright when the API is degraded. `pull_request_target`
+      # checks out the base branch, so the config still comes from the target
+      # branch and never from the PR head.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/labeler.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - uses: actions/labeler@v7
         with:
           configuration-path: .github/labeler.yml
