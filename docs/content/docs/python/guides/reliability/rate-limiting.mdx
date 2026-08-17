@@ -48,6 +48,36 @@ The token bucket algorithm:
   queue database (SQLite or Postgres). This means rate limits survive worker restarts.
 </Callout>
 
+## Shedding instead of deferring
+
+Deferral is the right default: the job keeps its place and runs once tokens are
+available. But some work is worth less than the backlog it would build — a
+metrics sample, a cache warm — and for that, `on_excess="drop"` sheds the job
+instead of rescheduling it:
+
+```python
+@queue.task(rate_limit="10/s", on_excess="drop")
+def record_sample(metric, value):
+    ...
+```
+
+A dropped job is **dead-lettered on the spot**, not silently deleted. Its
+reason is prefixed `rate_limit:` and its DLQ metadata is `{"shed":"rate_limit"}`,
+so shedding stays visible in the dashboard and countable in metrics — an
+operator can always tell shedding apart from data loss. The DLQ auto-retry
+sweep skips these entries: resurrecting a job the scheduler deliberately shed
+would undo the shed.
+
+Three things worth knowing:
+
+- `on_excess` applies to the limit on this task **and** to the limit on the
+  queue it runs in — either one rejecting means the same thing to the caller.
+- A tripped [circuit breaker](/python/guides/reliability/circuit-breakers)
+  always defers regardless. That is downstream failure, not excess load: the
+  job is fine, its dependency is not.
+- Dropping fires no middleware or event hooks. The job never ran, so there is
+  no outcome to report — the DLQ row is the record.
+
 ## Per-task, not per-queue
 
 Rate limits apply to the **task name**, regardless of which queue the job is in:
