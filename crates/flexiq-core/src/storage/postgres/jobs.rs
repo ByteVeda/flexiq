@@ -202,9 +202,14 @@ mod tests {
     /// The id is a cross-process contract, not an implementation detail: two
     /// builds that disagree stop excluding each other. Pinning one vector keeps
     /// a future "just use DefaultHasher" refactor from passing silently.
+    ///
+    /// The vector moved once, in 1.0.0, when the salt was renamed with the rest
+    /// of the project. A 0.23.x and a 1.0.0 process therefore do not exclude
+    /// each other on the same key — one more reason the upgrade requires a
+    /// drained queue rather than a rolling restart.
     #[test]
     fn debounce_lock_id_is_stable_and_key_scoped() {
-        assert_eq!(debounce_lock_id(None, "report:user-7"), -236338032995557549);
+        assert_eq!(debounce_lock_id(None, "report:user-7"), 3655878828092512785);
         assert_eq!(
             debounce_lock_id(None, "report:user-7"),
             debounce_lock_id(None, "report:user-7")
