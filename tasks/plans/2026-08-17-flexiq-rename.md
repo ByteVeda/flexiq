@@ -106,7 +106,7 @@ The helper is scratch tooling. Nothing to commit in this task.
 ## Task 1: Environment variables
 
 **Files:**
-- Modify: every tracked file containing `TASKITO_` — 63 distinct variables across the four SDKs, `crates/taskito-server`, `deploy/helm`, `deploy/keda`, `docker`, tests, and `docs/`.
+- Modify: every tracked file containing `TASKITO_` — 98 distinct variables across the four SDKs, `crates/taskito-server`, `deploy/helm`, `deploy/keda`, `docker`, tests, and `docs/`.
 
 **Interfaces:**
 - Produces: the `FLEXIQ_` env prefix. Every later task assumes no `TASKITO_` variable survives. Examples: `FLEXIQ_DSN`, `FLEXIQ_BACKEND`, `FLEXIQ_DASHBOARD_AUTH`, `FLEXIQ_ATTACH_TOKEN`, `FLEXIQ_POSTGRES_TEST_URL`, `FLEXIQ_REDIS_TEST_URL`.
@@ -129,8 +129,8 @@ git ls-files -z '*' ':!:tasks/**' ':!:CHANGELOG.md' \
 Run: `git grep -c 'TASKITO_' -- ':!:tasks/**' ':!:CHANGELOG.md' | wc -l`
 Expected: `0`.
 
-Run: `git grep -o 'FLEXIQ_[A-Z0-9_]*' | sort -u | wc -l`
-Expected: `63`.
+Run: `git grep -oh 'FLEXIQ_[A-Z0-9_]*' -- ':!:tasks/**' ':!:CHANGELOG.md' | sort -u | grep -vc '_$'`
+Expected: `98` — the full variable names. Three further tokens end in `_`; those are concatenation prefixes, not variables.
 
 - [ ] **Step 4: Commit**
 

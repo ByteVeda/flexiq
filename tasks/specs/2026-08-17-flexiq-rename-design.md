@@ -53,7 +53,7 @@ Per-area file counts:
 | Java package | `org.byteveda.taskito.*` | `org.byteveda.flexiq.*` |
 | Java artifact / rootProject | `taskito` | `flexiq` |
 | JNI symbols | `Java_org_byteveda_taskito_*` | `Java_org_byteveda_flexiq_*` |
-| Env vars (63 distinct) | `TASKITO_*` | `FLEXIQ_*` |
+| Env vars (98 distinct) | `TASKITO_*` | `FLEXIQ_*` |
 | Payload markers | `__taskito_ref__`, `__taskito_proxy__`, `__taskito_convert__`, `__taskito_redirect__`, `__taskito_cache__` | `__flexiq_*__` |
 | HTTP headers | `X-Taskito-Signature`, `X-Taskito-Token` | `X-FlexiQ-Signature`, `X-FlexiQ-Token` |
 | Session cookie | `taskito_session` | `flexiq_session` |
@@ -121,7 +121,7 @@ Each commit is one area. Only the branch tip builds.
    `package`/`import` declaration, JNI symbol names on both the Rust and Java
    side, `getResourceAsStream` paths, `settings.gradle.kts` `rootProject.name`,
    `build.gradle.kts` coordinates.
-6. `refactor: rename env vars to FLEXIQ prefix` — 63 variables across four
+6. `refactor: rename env vars to FLEXIQ prefix` — 98 variables across four
    SDKs, the server crate, helm, keda, docker, tests, and docs.
 7. `refactor: rename wire and http identifiers` — payload markers, headers,
    cookie, User-Agent, dashboard storage key; regenerate
