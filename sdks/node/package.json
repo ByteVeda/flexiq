@@ -1,6 +1,6 @@
 {
   "name": "@byteveda/flexiq",
-  "version": "0.23.0",
+  "version": "1.0.0",
   "description": "Rust-powered task queue for Node.js \u2014 no broker required.",
   "license": "MIT",
   "type": "module",

@@ -6,6 +6,6 @@
     "start": "node worker.mjs"
   },
   "dependencies": {
-    "@byteveda/flexiq": "0.23.0"
+    "@byteveda/flexiq": "1.0.0"
   }
 }

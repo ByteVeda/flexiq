@@ -19,7 +19,7 @@ producer — jobs wait in storage either way.
 
 ```bash
 # 1. Python producer
-pip install flexiq==0.23.0
+pip install flexiq==1.0.0
 python producer.py --db flexiq.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications

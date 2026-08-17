@@ -1,9 +1,17 @@
 # Changelog
 
-All notable changes to taskito are documented here. The format is based on
+All notable changes to FlexiQ are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). All SDKs (Python, Node, Java) and the
 underlying Rust crates are released together, in lock-step.
+
+Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
+their entries below keep that name.
+
+## 1.0.0
+
+The project is now **FlexiQ**. This is a rename, not a redesign — no API was added, removed, or
+changed in behaviour beyond its name — but it is a hard break with no compatibility shims.
 
 ## 0.23.0
 
