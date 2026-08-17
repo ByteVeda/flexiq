@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-17
 **Status:** Approved, pending implementation plan
-**Branch:** `rename/flexiq` off `dev` (created off `master` at `1a4b376f`)
+**Branch:** `rename/flexiq` off `dev` (created off `master` at `280f650c`)
 
 ## Goal
 

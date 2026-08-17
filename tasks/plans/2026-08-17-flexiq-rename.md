@@ -15,7 +15,7 @@
 - Casing: `taskito`→`flexiq`, `Taskito`→`FlexiQ`, `TASKITO`→`FLEXIQ`. Brand casing is preserved inside identifiers: `TaskitoError`→`FlexiQError`, `InMemoryTaskito`→`InMemoryFlexiQ`.
 - No compatibility shims, no dual-name reads, no deprecation fallbacks — anywhere, in any language.
 - `tasks/**` and `CHANGELOG.md` retain the old name deliberately and must never be swept.
-- Branch `rename/flexiq`, already created off `dev` (which is off `master` at `1a4b376f`). Spec commit `5fa7f748` is the branch's first commit.
+- Branch `rename/flexiq`, already created off `dev` (which is off `master` at `280f650c`). Spec commit `fa4f7243` is the branch's first commit.
 - Version moves `0.23.0` → `1.0.0`, via `node scripts/version.mjs --set 1.0.0`. Never hand-edit a version literal.
 - Commits: conventional prefix, subject ≤60 chars imperative, no `Co-Authored-By`, no AI/assistant attribution, no `@` in the subject.
 - Git identity is already `Pratyush Sharma <56130065+pratyush618@users.noreply.github.com>`, signing key `~/.ssh/id_ed25519_signing.pub`. The repo-local overrides were unset; do not re-add them.
