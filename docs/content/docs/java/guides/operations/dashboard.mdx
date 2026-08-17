@@ -167,7 +167,7 @@ DashboardServer.start(taskito, 8080, System.getenv("DASH_TOKEN"));
 ```
 
 API requests authenticate via `Authorization: Bearer <token>`, an
-`X-FlexiQ-Token` header, or the `taskito_token` cookie (compared in constant
+`X-Flexiq-Token` header, or the `taskito_token` cookie (compared in constant
 time). Opening `/?token=<token>` once sets the httpOnly cookie and redirects
 with the token stripped from the URL, keeping the secret out of subsequent
 browser history and `Referer` propagation — a `?token=` query is never

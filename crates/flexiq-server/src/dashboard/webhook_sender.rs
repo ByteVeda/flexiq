@@ -15,7 +15,7 @@ use crate::dashboard::stores::url_safety::validate_webhook_url;
 use crate::dashboard::stores::webhooks::WebhookSubscription;
 
 /// Header carrying the HMAC-SHA256 signature of the request body.
-const SIGNATURE_HEADER: &str = "X-FlexiQ-Signature";
+const SIGNATURE_HEADER: &str = "X-Flexiq-Signature";
 
 /// Longest response body read back into the delivery log.
 const MAX_RESPONSE_BYTES: usize = 8 * 1024;

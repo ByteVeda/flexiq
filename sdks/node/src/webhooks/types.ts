@@ -5,7 +5,7 @@ export interface WebhookInput {
   url: string;
   /** Events to deliver. Empty/omitted = all events. */
   events?: EventName[];
-  /** HMAC-SHA256 signing key. Sent as `X-FlexiQ-Signature: sha256=...`. */
+  /** HMAC-SHA256 signing key. Sent as `X-Flexiq-Signature: sha256=...`. */
   secret?: string;
   /** Extra request headers. */
   headers?: Record<string, string>;

@@ -234,7 +234,7 @@ class DashboardAuthTest {
 
     private static HttpResponse<String> rawWithToken(int port, String path, String token) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
-                .header("X-FlexiQ-Token", token)
+                .header("X-Flexiq-Token", token)
                 .GET()
                 .build();
         return HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());

@@ -59,7 +59,7 @@ serveDashboard(queue, { port: 8787, auth: { token: process.env.DASH_TOKEN! } });
 ```
 
 API requests authenticate via `Authorization: Bearer <token>`, an
-`X-FlexiQ-Token` header, or the `taskito_token` cookie — a `?token=` query is
+`X-Flexiq-Token` header, or the `taskito_token` cookie — a `?token=` query is
 never accepted on `/api/*` calls. Opening `/?token=<token>` once sets the
 httpOnly cookie and redirects with the token stripped from the URL, keeping
 the secret out of subsequent browser history and `Referer` propagation; the

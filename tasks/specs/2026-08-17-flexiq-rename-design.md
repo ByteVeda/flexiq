@@ -55,7 +55,7 @@ Per-area file counts:
 | JNI symbols | `Java_org_byteveda_taskito_*` | `Java_org_byteveda_flexiq_*` |
 | Env vars (98 distinct) | `TASKITO_*` | `FLEXIQ_*` |
 | Payload markers | `__taskito_ref__`, `__taskito_proxy__`, `__taskito_convert__`, `__taskito_redirect__`, `__taskito_cache__` | `__flexiq_*__` |
-| HTTP headers | `X-Taskito-Signature`, `X-Taskito-Token` | `X-FlexiQ-Signature`, `X-FlexiQ-Token` |
+| HTTP headers | `X-Taskito-Signature`, `X-Taskito-Token` | `X-Flexiq-Signature`, `X-Flexiq-Token` |
 | Session cookie | `taskito_session` | `flexiq_session` |
 | User-Agent | `taskito/<version>` | `flexiq/<version>` |
 | Dashboard storage key | `taskito.theme` | `flexiq.theme` |
@@ -64,6 +64,17 @@ Per-area file counts:
 | Helm chart | `deploy/helm/taskito-server` | `deploy/helm/flexiq-server` |
 | Docs path | `docs.byteveda.org/taskito` | `docs.byteveda.org/flexiq` |
 | Repository | `ByteVeda/taskito` | `ByteVeda/flexiq` |
+
+### Exception to D4: HTTP header casing
+
+The two headers use `X-Flexiq-*`, not `X-FlexiQ-*`. HTTP stacks canonicalise
+outgoing header names — Python's `urllib` applies `str.title()` — and `FlexiQ`
+does not survive that round trip: `"X-FlexiQ-Signature".title()` yields
+`"X-Flexiq-Signature"`, so the header arrives under a name no receiver matches.
+`X-Taskito-Signature` was title-case-stable by accident, which is why the
+problem is new. Header names are case-insensitive per RFC 9110, so the wire
+contract is unaffected; only the canonical spelling changes. This is the sole
+place the brand casing is not used.
 
 ### Explicitly unchanged
 

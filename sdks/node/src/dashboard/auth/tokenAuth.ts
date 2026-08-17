@@ -19,7 +19,7 @@ export function isPublicApiPath(path: string): boolean {
 
 /**
  * The token presented on a request, from (in order) the `Authorization: Bearer`
- * header, an `X-FlexiQ-Token` header, or the `taskito_token` cookie. A
+ * header, an `X-Flexiq-Token` header, or the `taskito_token` cookie. A
  * `?token=` query param is deliberately NOT accepted here — query strings leak
  * into access logs, browser history, and the Referer header; it is only
  * honoured once on a page load to bootstrap the cookie.

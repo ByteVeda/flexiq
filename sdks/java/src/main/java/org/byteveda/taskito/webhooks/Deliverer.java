@@ -100,7 +100,7 @@ final class Deliverer {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body));
         if (hook.secret != null) {
-            request.header("X-FlexiQ-Signature", "sha256=" + sign(hook.secret, body));
+            request.header("X-Flexiq-Signature", "sha256=" + sign(hook.secret, body));
         }
         hook.headers.forEach(request::header);
         return request.build();

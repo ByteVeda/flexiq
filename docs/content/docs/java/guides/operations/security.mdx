@@ -32,7 +32,7 @@ MessagePack](/java/guides/extensibility/serializers) and stored as plain bytes
 ## Webhooks
 
 Webhook deliveries are **HMAC-SHA256 signed** when the subscription has a
-secret; the signature rides in `X-FlexiQ-Signature: sha256=<hex>`. Verify it
+secret; the signature rides in `X-Flexiq-Signature: sha256=<hex>`. Verify it
 on the receiver — HMAC the raw body with the shared secret and compare in
 constant time — before trusting the body.
 

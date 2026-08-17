@@ -121,7 +121,7 @@ closes the DNS-rebinding SSRF (server-side request forgery) window, and redirect
 local development against `http://localhost`, set
 `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1`.
 
-Webhook payloads are signed with HMAC-SHA256 in the `X-FlexiQ-Signature`
+Webhook payloads are signed with HMAC-SHA256 in the `X-Flexiq-Signature`
 header (`sha256=<hex>`). Receivers must verify it with a constant-time
 comparison (`hmac.compare_digest`), never `==`.
 

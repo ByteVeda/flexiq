@@ -50,7 +50,7 @@ it("accepts a Bearer token", async () => {
   expect(res.status).toBe(200);
 });
 
-it("accepts an X-FlexiQ-Token header", async () => {
+it("accepts an X-Flexiq-Token header", async () => {
   const res = await fetch(`${base}/api/stats`, { headers: { "x-flexiq-token": TOKEN } });
   expect(res.status).toBe(200);
 });

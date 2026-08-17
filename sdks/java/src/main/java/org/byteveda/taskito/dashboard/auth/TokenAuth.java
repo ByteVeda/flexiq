@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
  * back-compat with {@code --token}; the session flow is the default.
  *
  * <p>The token is accepted, in order, from {@code Authorization: Bearer},
- * {@code X-FlexiQ-Token}, or the {@code taskito_token} cookie. A {@code ?token=}
+ * {@code X-Flexiq-Token}, or the {@code taskito_token} cookie. A {@code ?token=}
  * query param is deliberately NOT accepted here — query strings leak into access
  * logs, browser history, and the Referer header; it is only honoured once on a
  * page load to bootstrap the cookie.
@@ -32,7 +32,7 @@ public final class TokenAuth {
         if (authorization != null && authorization.startsWith("Bearer ")) {
             return authorization.substring("Bearer ".length()).trim();
         }
-        String header = exchange.getRequestHeaders().getFirst("X-FlexiQ-Token");
+        String header = exchange.getRequestHeaders().getFirst("X-Flexiq-Token");
         if (header != null && !header.isEmpty()) {
             return header;
         }

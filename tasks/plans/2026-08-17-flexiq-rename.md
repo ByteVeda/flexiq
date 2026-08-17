@@ -154,7 +154,7 @@ git commit -m "refactor: rename env vars to FLEXIQ prefix"
 - Modify: `contracts/wire-vectors.json` (a path reference in its header comment only)
 
 **Interfaces:**
-- Produces: payload markers `__flexiq_ref__`, `__flexiq_proxy__`, `__flexiq_convert__`, `__flexiq_redirect__`, `__flexiq_cache__`; headers `X-FlexiQ-Signature`, `X-FlexiQ-Token` (and their lowercase forms); session cookie `flexiq_session`; dashboard storage key `flexiq.theme`.
+- Produces: payload markers `__flexiq_ref__`, `__flexiq_proxy__`, `__flexiq_convert__`, `__flexiq_redirect__`, `__flexiq_cache__`; headers `X-Flexiq-Signature`, `X-Flexiq-Token` (and their lowercase forms); session cookie `flexiq_session`; dashboard storage key `flexiq.theme`.
 
 - [ ] **Step 1: Rewrite the contract literals**
 
@@ -164,7 +164,7 @@ git ls-files -z '*' ':!:tasks/**' ':!:CHANGELOG.md' \
                           -e 'taskito_session' -e 'taskito\.theme' \
   | xargs -0 -r sed -i \
       -e 's/__taskito_/__flexiq_/g' \
-      -e 's/X-Taskito-/X-FlexiQ-/g' \
+      -e 's/X-Taskito-/X-Flexiq-/g' \
       -e 's/x-taskito-/x-flexiq-/g' \
       -e 's/taskito_session/flexiq_session/g' \
       -e 's/taskito\.theme/flexiq.theme/g'
@@ -845,7 +845,7 @@ It must cover, each with a before/after example:
 3. Environment variables — the `TASKITO_` → `FLEXIQ_` prefix, noting there is no fallback.
 4. **Drain requirement** — jobs enqueued by 0.23.x carry `__taskito_*` payload markers that 1.0.0 does not understand. Drain the queue to empty before upgrading; do not run mixed-version workers against one database.
 5. Data path — move `~/.taskito/taskito.db` to `~/.flexiq/flexiq.db` (or set `FLEXIQ_DB_PATH`).
-6. Webhook receivers — `X-Taskito-Signature` becomes `X-FlexiQ-Signature`.
+6. Webhook receivers — `X-Taskito-Signature` becomes `X-Flexiq-Signature`.
 7. Dashboard sessions — the cookie changed name, so every session is invalidated and users re-login once.
 8. Django — `manage.py taskito_worker` becomes `manage.py flexiq_worker`; templates load `flexiq_admin`.
 9. Helm — the chart is `flexiq-server`; release names and value keys move with it.
