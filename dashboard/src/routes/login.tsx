@@ -29,7 +29,7 @@ function LoginPage() {
           <div className="grid place-items-center size-9 rounded-md bg-accent text-accent-fg">
             <AlertOctagon className="size-5" aria-hidden />
           </div>
-          <span className="text-base font-semibold tracking-tight">taskito</span>
+          <span className="text-base font-semibold tracking-tight">flexiq</span>
         </div>
         {loading ? (
           <div className="text-sm text-[var(--fg-muted)]">Loading…</div>

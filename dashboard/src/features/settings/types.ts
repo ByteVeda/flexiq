@@ -5,7 +5,7 @@
  * them by category and JSON-encodes structured values (lists, integration
  * blobs) before persisting; the server stores them as opaque strings.
  *
- * See `py_src/taskito/dashboard/handlers/settings.py` for the REST API.
+ * See `py_src/flexiq/dashboard/handlers/settings.py` for the REST API.
  */
 
 /** Settings keys used by the dashboard UI. Keep them in one place so the

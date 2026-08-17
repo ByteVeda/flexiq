@@ -25,7 +25,7 @@ function CircuitBreakersPage() {
       <PageHeader
         eyebrow="Reliability"
         title="Circuit breakers"
-        description="When a task fails too often, taskito trips its breaker to give the downstream a rest."
+        description="When a task fails too often, flexiq trips its breaker to give the downstream a rest."
       />
       <div className="grid gap-[var(--gap)] grid-cols-[repeat(auto-fit,minmax(186px,1fr))]">
         <StatCard

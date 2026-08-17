@@ -4,7 +4,7 @@ import { useTransition } from "react";
 import { Button } from "@/components/ui";
 
 /**
- * Shown when a route loader (or in-flight query) can't reach the Taskito
+ * Shown when a route loader (or in-flight query) can't reach the FlexiQ
  * backend — either the network request failed outright or the server
  * replied with a 502/503/504. Gives the user actionable next steps instead
  * of the generic "something went wrong" screen.
@@ -27,9 +27,7 @@ export function BackendOffline({ error }: { error: Error }) {
             <Power className="size-5" aria-hidden />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              Can't reach the Taskito backend
-            </h1>
+            <h1 className="text-lg font-semibold tracking-tight">Can't reach the FlexiQ backend</h1>
             <p className="text-sm text-[var(--fg-muted)]">
               The dashboard tried to fetch data but didn't get a response.
             </p>
@@ -47,7 +45,7 @@ export function BackendOffline({ error }: { error: Error }) {
               <span>
                 The dashboard process isn't running. Start it with:
                 <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs text-[var(--fg)]">
-                  taskito dashboard --app myapp:queue
+                  flexiq dashboard --app myapp:queue
                 </code>
               </span>
             </li>
@@ -59,7 +57,7 @@ export function BackendOffline({ error }: { error: Error }) {
               <span>
                 The worker process crashed. Tail its logs or restart it with:
                 <code className="ml-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-xs text-[var(--fg)]">
-                  taskito worker --app myapp:queue
+                  flexiq worker --app myapp:queue
                 </code>
               </span>
             </li>
@@ -94,7 +92,7 @@ export function BackendOffline({ error }: { error: Error }) {
             {pending ? "Retrying…" : "Retry"}
           </Button>
           <a
-            href="https://docs.byteveda.org/taskito/guide/observability/dashboard"
+            href="https://docs.byteveda.org/flexiq/guide/observability/dashboard"
             target="_blank"
             rel="noreferrer noopener"
             className="inline-flex items-center gap-1.5 text-sm text-[var(--fg-muted)] hover:text-[var(--fg)]"

@@ -1,5 +1,5 @@
 /**
- * The taskito mark — the same artwork the docs site and README use, bundled as
+ * The flexiq mark — the same artwork the docs site and README use, bundled as
  * an image rather than drawn inline.
  *
  * Unlike the drawn mark it replaced, this does not follow `--accent` (or an

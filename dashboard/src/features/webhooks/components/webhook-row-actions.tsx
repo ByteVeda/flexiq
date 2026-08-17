@@ -88,7 +88,7 @@ export function WebhookRowActions({ webhook }: Props) {
         open={confirmRotate}
         onOpenChange={setConfirmRotate}
         title="Rotate signing secret?"
-        description="The previous secret stops working immediately. Update your receiver before continuing — taskito will sign the next delivery with the new value."
+        description="The previous secret stops working immediately. Update your receiver before continuing — flexiq will sign the next delivery with the new value."
         confirmLabel="Rotate"
         onConfirm={() => {
           setConfirmRotate(false);

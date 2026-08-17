@@ -30,8 +30,8 @@ export function SecretReveal({ secret, hint }: Props) {
   return (
     <div className="flex flex-col gap-3">
       <Callout tone="warning" icon={<Shield aria-hidden />}>
-        For security, taskito stores only a hash of this secret. If you lose it you'll need to
-        rotate to a new one.
+        For security, flexiq stores only a hash of this secret. If you lose it you'll need to rotate
+        to a new one.
       </Callout>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2 text-xs font-medium text-[var(--fg)]">

@@ -168,7 +168,7 @@ describe("CSRF cookie forwarding", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ ok: true }));
     // Vitest's default env is node; api-client falls back to "no cookie" when
     // ``document`` is undefined, so stub a minimal document object here.
-    vi.stubGlobal("document", { cookie: "taskito_csrf=test-csrf-token; path=/" });
+    vi.stubGlobal("document", { cookie: "flexiq_csrf=test-csrf-token; path=/" });
   });
 
   afterEach(() => {

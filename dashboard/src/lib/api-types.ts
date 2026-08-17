@@ -1,9 +1,9 @@
 /**
- * Response shapes for the Taskito dashboard API.
+ * Response shapes for the FlexiQ dashboard API.
  *
  * These mirror the `to_dict()` output of the underlying Rust/Python models.
  * Keep in sync with:
- * - `py_src/taskito/dashboard.py` route handlers
+ * - `py_src/flexiq/dashboard.py` route handlers
  * - `docs/guide/observability/dashboard-api.md` (documented contract)
  *
  * **Timestamps**: every timestamp field exposed by the dashboard API is Unix
@@ -67,7 +67,7 @@ export interface Job {
 /**
  * One executor attached to a standalone scheduler.
  *
- * Only `taskito-server` serves `/api/executors`; an SDK dashboard answers 404
+ * Only `flexiq-server` serves `/api/executors`; an SDK dashboard answers 404
  * and the page hides itself.
  */
 export interface Executor {
