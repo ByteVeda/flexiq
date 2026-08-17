@@ -647,9 +647,10 @@ impl Scheduler {
         dispatched || had_maintenance
     }
 
-    /// Run one dispatch round (batch or single). Returns true if a job was
-    /// dispatched. Pulled out so the push loop can run dispatch independently
-    /// of the maintenance cadence.
+    /// Run one dispatch round (batch or single). Returns true if the round made
+    /// progress — a job dispatched, or one shed to the DLQ — which is what the
+    /// drain loops and the poll backoff key off. Pulled out so the push loop can
+    /// run dispatch independently of the maintenance cadence.
     fn tick_dispatch(&self, job_tx: &tokio::sync::mpsc::Sender<Job>) -> bool {
         let dispatch_result = if self.config.batch_size > 1 {
             self.try_dispatch_batch(job_tx)
@@ -1388,6 +1389,35 @@ mod tests {
             Some(shed::RATE_LIMIT_SHED_METADATA),
             "shed work must be countable without parsing the reason string"
         );
+    }
+
+    #[test]
+    fn test_shed_keeps_the_drain_loop_going() {
+        // A shed is progress: the job left the queue for good. Reporting it as
+        // idle would stop the caller's drain loop after one job — and the poll
+        // backoff would then double because the wake looked empty — so a burst
+        // would trickle out one job per (growing) interval instead of draining.
+        let scheduler = rate_limited_scheduler(shed::OnExcess::Drop, 1);
+        for _ in 0..4 {
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        }
+
+        let (tx, mut rx) = make_channel(16);
+        // The production drain, verbatim: keep dispatching while rounds report
+        // progress.
+        while scheduler.tick_dispatch(&tx) {}
+
+        assert_eq!(drain_dispatched(&mut rx), 1, "one token, one dispatch");
+        assert_eq!(
+            scheduler.storage.list_dead(10, 0, None).unwrap().len(),
+            3,
+            "one drain must shed the whole excess, not one job per wake"
+        );
+        assert!(scheduler
+            .storage
+            .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

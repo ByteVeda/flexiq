@@ -286,8 +286,9 @@ impl Scheduler {
 
     /// Run the post-dequeue pipeline for a single job: soft pre-claim gates,
     /// exactly-once claim, then the shared post-claim tail. Returns `Ok(true)`
-    /// if the job was dispatched, `Ok(false)` if it was gated/rolled back. Used
-    /// by the single-dispatch path and as the batch path's per-job fallback.
+    /// when the job made progress — dispatched, or shed to the DLQ — and
+    /// `Ok(false)` when it went back on the queue. Used by the single-dispatch
+    /// path and as the batch path's per-job fallback.
     fn gate_and_dispatch(
         &self,
         job: Job,
@@ -309,10 +310,14 @@ impl Scheduler {
                 counts.release(&job.task_name, &job.queue);
                 return Ok(false);
             }
+            // Progress, not a rejection: the job is terminal and gone from the
+            // queue. Reporting it as idle would stop the caller's drain loop
+            // and shed only one job per poll wake — against a backoff that
+            // doubles because it saw no progress.
             GateDecision::Shed(reason) => {
                 self.shed_rate_limited(&job, &reason, false)?;
                 counts.release(&job.task_name, &job.queue);
-                return Ok(false);
+                return Ok(true);
             }
         }
 
@@ -345,7 +350,7 @@ impl Scheduler {
     /// written — the batch path claims the whole batch up front). Runs the same
     /// soft gates and post-claim tail as [`Self::gate_and_dispatch`] but skips
     /// the claim step; because a claim already exists, every rejection clears it
-    /// rather than merely rescheduling.
+    /// rather than merely rescheduling. Same `Ok(true)` = progress contract.
     fn dispatch_claimed(
         &self,
         job: Job,
@@ -360,10 +365,11 @@ impl Scheduler {
                 self.rollback_claim_and_reschedule(&job.id, now + desync_delay(delay_ms))?;
                 return Ok(false);
             }
+            // Progress, like the single path's shed — see there for why.
             GateDecision::Shed(reason) => {
                 counts.release(&job.task_name, &job.queue);
                 self.shed_rate_limited(&job, &reason, true)?;
-                return Ok(false);
+                return Ok(true);
             }
         }
 
