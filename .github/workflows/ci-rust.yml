@@ -45,10 +45,10 @@ jobs:
         # the Python, Node, and Java shells can all reuse them. A pyo3, napi, OR
         # jni dep would let binding-specific code creep back in. cargo tree is
         # authoritative — you cannot `use pyo3`/`use napi`/`use jni` without
-        # depending on it. See crates/taskito-core/BINDING_CONTRACT.md.
+        # depending on it. See crates/flexiq-core/BINDING_CONTRACT.md.
         run: |
           set -euo pipefail
-          for crate in taskito taskito-core taskito-workflows taskito-mesh; do
+          for crate in flexiq flexiq-core flexiq-workflows flexiq-mesh; do
             # Capture first so a `cargo tree` failure aborts (set -e) instead of
             # being swallowed by the pipe and silently passing the check.
             tree_output="$(cargo tree -p "$crate" -e normal --all-features)"
@@ -73,7 +73,7 @@ jobs:
         run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace
 
       - name: Run mesh crate tests
-        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test -p taskito-mesh
+        run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test -p flexiq-mesh
 
       - name: Check build with native-async features
         run: cargo check --workspace --features native-async
@@ -98,7 +98,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: taskito_test
+          POSTGRES_DB: flexiq_test
         ports:
           - 5432:5432
         options: >-
@@ -111,12 +111,12 @@ jobs:
       - uses: ./.github/actions/rust-prelude
 
       - name: Run Rust test suite (PostgreSQL backend)
-        # Drop LD_LIBRARY_PATH + exclude taskito-python: Python's OpenSSL (on that
+        # Drop LD_LIBRARY_PATH + exclude flexiq-python: Python's OpenSSL (on that
         # path) and libpq's duel at-exit → flaky SIGSEGV. PG contract is in
-        # taskito-core/taskito-workflows; python's Rust tests run in the SQLite job.
-        run: cargo test --workspace --exclude taskito-python --features postgres,workflows
+        # flexiq-core/flexiq-workflows; python's Rust tests run in the SQLite job.
+        run: cargo test --workspace --exclude flexiq-python --features postgres,workflows
         env:
-          FLEXIQ_POSTGRES_TEST_URL: postgres://postgres:test@localhost:5432/taskito_test
+          FLEXIQ_POSTGRES_TEST_URL: postgres://postgres:test@localhost:5432/flexiq_test
 
   rust-test-redis:
     name: Rust Tests (Redis)
@@ -145,15 +145,15 @@ jobs:
   # publish dry-run, and (once a baseline exists on crates.io) the public API
   # hasn't broken semver.
   #
-  # The three are checked as a set, never one at a time: taskito-workflows and
-  # taskito-mesh depend on taskito-core by path + version, so verifying either
-  # alone would try to resolve taskito-core from the registry. Packaged
+  # The three are checked as a set, never one at a time: flexiq-workflows and
+  # flexiq-mesh depend on flexiq-core by path + version, so verifying either
+  # alone would try to resolve flexiq-core from the registry. Packaged
   # together, cargo resolves them against each other through a temp registry.
   publish-readiness:
     name: Publish Readiness (Rust crates)
     runs-on: ubuntu-latest
     env:
-      CRATES: -p taskito -p taskito-core -p taskito-workflows -p taskito-mesh
+      CRATES: -p flexiq -p flexiq-core -p flexiq-workflows -p flexiq-mesh
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -203,7 +203,7 @@ jobs:
           # Cargo's own index format, no rate limits, no User-Agent policy
           # (the API 403s UA-less requests). Index path scheme for names of
           # 4+ chars: /{first-two}/{next-two}/{name}, lowercase.
-          for crate in taskito taskito-core taskito-workflows taskito-mesh; do
+          for crate in flexiq flexiq-core flexiq-workflows flexiq-mesh; do
             prefix="${crate:0:2}/${crate:2:2}"
             # Fail closed: only an explicit 404 means "no baseline" — a transient
             # network error must not silently skip the semver check. Retries
@@ -221,26 +221,26 @@ jobs:
             esac
           done
 
-      - name: Semver check taskito
-        if: steps.baseline.outputs.taskito == 'true'
+      - name: Semver check flexiq
+        if: steps.baseline.outputs.flexiq == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: taskito
+          package: flexiq
 
-      - name: Semver check taskito-core
-        if: steps.baseline.outputs.taskito-core == 'true'
+      - name: Semver check flexiq-core
+        if: steps.baseline.outputs.flexiq-core == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: taskito-core
+          package: flexiq-core
 
-      - name: Semver check taskito-workflows
-        if: steps.baseline.outputs.taskito-workflows == 'true'
+      - name: Semver check flexiq-workflows
+        if: steps.baseline.outputs.flexiq-workflows == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: taskito-workflows
+          package: flexiq-workflows
 
-      - name: Semver check taskito-mesh
-        if: steps.baseline.outputs.taskito-mesh == 'true'
+      - name: Semver check flexiq-mesh
+        if: steps.baseline.outputs.flexiq-mesh == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: taskito-mesh
+          package: flexiq-mesh

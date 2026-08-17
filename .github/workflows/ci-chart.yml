@@ -15,7 +15,7 @@ jobs:
     name: Helm chart
     runs-on: ubuntu-latest
     env:
-      CHART: deploy/helm/taskito-server
+      CHART: deploy/helm/flexiq-server
       # Long enough to clear the server's own 16-character floor.
       TOKEN: 0123456789abcdef0123
     steps:
@@ -28,7 +28,7 @@ jobs:
           version: v3.16.4
 
       - name: Lint
-        run: helm lint "$CHART" --set storage.dsn=postgres://taskito:secret@db:5432/app --set attach.token="$TOKEN"
+        run: helm lint "$CHART" --set storage.dsn=postgres://flexiq:secret@db:5432/app --set attach.token="$TOKEN"
 
       - name: Every role combination renders
         run: |
@@ -127,7 +127,7 @@ jobs:
           ).stdout
           # The API server dials the Service DNS name, so that is what has to be
           # in the certificate.
-          if "t-taskito-server-webhook.default.svc" not in sans:
+          if "t-flexiq-server-webhook.default.svc" not in sans:
               sys.exit(f"the certificate does not cover the Service DNS name: {sans}")
 
           print("caBundle matches, the CA signs the leaf, and the SANs cover the Service")

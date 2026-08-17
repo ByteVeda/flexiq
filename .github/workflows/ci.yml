@@ -94,7 +94,7 @@ jobs:
             # already turns the Rust suite red. What only this suite covers is
             # the Dockerfile and the SPA it embeds.
             server:
-              - 'crates/taskito-server/**'
+              - 'crates/flexiq-server/**'
               - 'dashboard/**'
               - 'docker/**'
               - 'Cargo.toml'

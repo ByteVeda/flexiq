@@ -13,7 +13,7 @@ runs:
       continue-on-error: true
       with:
         name: dashboard-dist
-        path: sdks/python/taskito/static/dashboard
+        path: sdks/python/flexiq/static/dashboard
 
     - name: Retry download via GitHub CLI
       if: steps.primary.outcome == 'failure'
@@ -22,11 +22,11 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         echo "::warning::download-artifact failed — retrying via gh CLI"
-        rm -rf sdks/python/taskito/static/dashboard
+        rm -rf sdks/python/flexiq/static/dashboard
         for _attempt in 1 2 3; do
           gh run download "$GITHUB_RUN_ID" \
             -n dashboard-dist \
-            -D sdks/python/taskito/static/dashboard && exit 0
+            -D sdks/python/flexiq/static/dashboard && exit 0
           sleep 10
         done
         echo "::error::Dashboard artifact download failed after all retries"
@@ -34,4 +34,4 @@ runs:
 
     - name: Verify dashboard assets
       shell: bash
-      run: test -f sdks/python/taskito/static/dashboard/index.html
+      run: test -f sdks/python/flexiq/static/dashboard/index.html

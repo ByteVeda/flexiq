@@ -33,11 +33,11 @@ env:
   # "HTTP2 framing layer" / "unexpected eof" failures the CI jobs hit. See ci.yml.
   CARGO_HTTP_MULTIPLEXING: "false"
   CARGO_NET_RETRY: "10"
-  # The publishable crates, in no particular order: taskito-workflows and
-  # taskito-mesh both depend on taskito-core, so the set goes up together and
+  # The publishable crates, in no particular order: flexiq-workflows and
+  # flexiq-mesh both depend on flexiq-core, so the set goes up together and
   # cargo works out the upload order and the index waits itself. Every other
   # workspace member is `publish = false` — binding shells and binaries.
-  CRATES: taskito taskito-core taskito-workflows taskito-mesh
+  CRATES: flexiq flexiq-core flexiq-workflows flexiq-mesh
 
 jobs:
   publish:

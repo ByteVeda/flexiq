@@ -73,19 +73,19 @@ jobs:
         include:
           - classifier: linux-x86_64
             runner: ubuntu-22.04
-            libname: libtaskito_java.so
+            libname: libflexiq_java.so
           - classifier: linux-aarch64
             runner: ubuntu-22.04-arm
-            libname: libtaskito_java.so
+            libname: libflexiq_java.so
           - classifier: osx-x86_64
             runner: macos-15-intel
-            libname: libtaskito_java.dylib
+            libname: libflexiq_java.dylib
           - classifier: osx-aarch64
             runner: macos-15
-            libname: libtaskito_java.dylib
+            libname: libflexiq_java.dylib
           - classifier: windows-x86_64
             runner: windows-latest
-            libname: taskito_java.dll
+            libname: flexiq_java.dll
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -98,12 +98,12 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Build cdylib
-        run: cargo build -p taskito-java --release --features postgres,redis,workflows,mesh
+        run: cargo build -p flexiq-java --release --features postgres,redis,workflows,mesh
 
       - name: Stage native binary under its classifier
         shell: bash
         run: |
-          dest="native/org/byteveda/taskito/native/${{ matrix.classifier }}"
+          dest="native/org/byteveda/flexiq/native/${{ matrix.classifier }}"
           mkdir -p "$dest"
           cp "target/release/${{ matrix.libname }}" "$dest/"
 
@@ -139,7 +139,7 @@ jobs:
       - name: Build dashboard SPA
         uses: ./.github/actions/dashboard-build
         with:
-          out-dir: ../sdks/java/src/main/resources/org/byteveda/taskito/dashboard
+          out-dir: ../sdks/java/src/main/resources/org/byteveda/flexiq/dashboard
 
       - name: Download all native binaries
         uses: actions/download-artifact@v8
@@ -169,25 +169,25 @@ jobs:
         if: inputs.dry-run
         working-directory: sdks/java
         run: |
-          jar=$(ls build/libs/taskito-*[0-9].jar)
+          jar=$(ls build/libs/flexiq-*[0-9].jar)
           echo "checking $jar"
           unzip -p "$jar" META-INF/MANIFEST.MF | grep -q "Multi-Release: true"
-          unzip -l "$jar" | grep -q "META-INF/versions/22/org/byteveda/taskito/internal/FfmTransport.class"
-          unzip -l "$jar" | grep -q "META-INF/native-image/org.byteveda/taskito/" \
+          unzip -l "$jar" | grep -q "META-INF/versions/22/org/byteveda/flexiq/internal/FfmTransport.class"
+          unzip -l "$jar" | grep -q "META-INF/native-image/org.byteveda/flexiq/" \
             || { echo "missing GraalVM reachability metadata"; exit 1; }
-          if unzip -l "$jar" | grep -q "org/byteveda/taskito/native/"; then
+          if unzip -l "$jar" | grep -q "org/byteveda/flexiq/native/"; then
             echo "main jar must not bundle native libraries"; exit 1
           fi
           for platform in linux-x86_64 linux-aarch64 osx-x86_64 osx-aarch64 windows-x86_64; do
-            njar="build/libs/taskito-${VERSION}-${platform}.jar"
+            njar="build/libs/flexiq-${VERSION}-${platform}.jar"
             echo "checking $njar"
-            unzip -l "$njar" | grep -q "org/byteveda/taskito/native/$platform/" \
+            unzip -l "$njar" | grep -q "org/byteveda/flexiq/native/$platform/" \
               || { echo "missing native library for $platform"; exit 1; }
             libs=$(unzip -l "$njar" | grep -c "\(\.so\|\.dylib\|\.dll\)$")
             [ "$libs" = "1" ] || { echo "$njar must contain exactly one library, found $libs"; exit 1; }
           done
-          sources=$(ls build/libs/taskito-*-sources.jar)
-          if unzip -l "$sources" | grep -qE "org/byteveda/taskito/(native|dashboard)/"; then
+          sources=$(ls build/libs/flexiq-*-sources.jar)
+          if unzip -l "$sources" | grep -qE "org/byteveda/flexiq/(native|dashboard)/"; then
             echo "sources jar must not bundle natives or dashboard assets"; exit 1
           fi
 
@@ -228,6 +228,6 @@ jobs:
             echo "::notice::Release java-v${VERSION} already exists — skipping"
           else
             gh release create "java-v${VERSION}" \
-              --title "taskito (Java) v${VERSION}" \
+              --title "flexiq (Java) v${VERSION}" \
               --generate-notes
           fi

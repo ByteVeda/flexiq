@@ -55,7 +55,7 @@ runs:
         if [ -n "${{ inputs.out-dir }}" ]; then
           target="dashboard/${{ inputs.out-dir }}/index.html"
         else
-          target="sdks/python/taskito/static/dashboard/index.html"
+          target="sdks/python/flexiq/static/dashboard/index.html"
         fi
         if [ ! -f "$target" ]; then
           echo "::error::Dashboard build did not produce $target"

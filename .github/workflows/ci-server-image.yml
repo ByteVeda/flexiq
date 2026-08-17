@@ -46,7 +46,7 @@ jobs:
           file: docker/scheduler.Dockerfile
           platforms: ${{ matrix.platform }}
           build-args: VERSION=${{ steps.version.outputs.version }}
-          tags: taskito-server:ci
+          tags: flexiq-server:ci
           load: true
           cache-from: type=gha,scope=server-image-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=server-image-${{ matrix.arch }}
@@ -56,8 +56,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          reported="$(docker run --rm taskito-server:ci --version)"
-          if [ "$reported" != "taskito-server ${VERSION}" ]; then
-            echo "::error::Image reports '${reported}', expected 'taskito-server ${VERSION}'"
+          reported="$(docker run --rm flexiq-server:ci --version)"
+          if [ "$reported" != "flexiq-server ${VERSION}" ]; then
+            echo "::error::Image reports '${reported}', expected 'flexiq-server ${VERSION}'"
             exit 1
           fi

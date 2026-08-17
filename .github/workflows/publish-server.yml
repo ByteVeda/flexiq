@@ -1,6 +1,6 @@
 name: Publish server image
 
-# Publishes the taskito-server container image to GHCR. Each architecture is
+# Publishes the flexiq-server container image to GHCR. Each architecture is
 # built on its own native runner — a Rust build under QEMU takes the better part
 # of an hour — and the two are merged into a manifest list at the end, so
 # `docker pull` resolves the right one automatically.
@@ -31,7 +31,7 @@ permissions:
 
 env:
   # GHCR requires a lowercase path, and `github.repository_owner` is `ByteVeda`.
-  IMAGE: ghcr.io/byteveda/taskito-server
+  IMAGE: ghcr.io/byteveda/flexiq-server
 
 jobs:
   preflight:
@@ -148,8 +148,8 @@ jobs:
         run: |
           set -euo pipefail
           reported="$(docker run --rm "${IMAGE}:${TAG}" --version)"
-          if [ "$reported" != "taskito-server ${VERSION}" ]; then
-            echo "::error::Image reports '${reported}', expected 'taskito-server ${VERSION}'"
+          if [ "$reported" != "flexiq-server ${VERSION}" ]; then
+            echo "::error::Image reports '${reported}', expected 'flexiq-server ${VERSION}'"
             exit 1
           fi
           label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${IMAGE}:${TAG}")"
@@ -228,6 +228,6 @@ jobs:
             echo "::notice::Release server-v${VERSION} already exists — skipping"
           else
             gh release create "server-v${VERSION}" \
-              --title "taskito-server v${VERSION}" \
+              --title "flexiq-server v${VERSION}" \
               --generate-notes
           fi

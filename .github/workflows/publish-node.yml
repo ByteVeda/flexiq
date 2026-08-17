@@ -2,8 +2,8 @@ name: Publish to npm
 
 # Builds the napi addon as prebuilt per-platform `.node` binaries on native
 # runners (no cross-compilation — the same approach the Python publish.yml uses
-# for wheels), then publishes the per-platform `@byteveda/taskito-<triple>`
-# packages plus the main `@byteveda/taskito` package to npm via OIDC trusted
+# for wheels), then publishes the per-platform `@byteveda/flexiq-<triple>`
+# packages plus the main `@byteveda/flexiq` package to npm via OIDC trusted
 # publishing + provenance. The npm scope sidesteps the spam-detection 403 that
 # unscoped per-platform names trip on first publish.
 
@@ -308,8 +308,8 @@ jobs:
         if: ${{ !inputs.dry-run }}
         working-directory: sdks/node
         run: |
-          if npm view "@byteveda/taskito@${VERSION}" version >/dev/null 2>&1; then
-            echo "::notice::@byteveda/taskito@${VERSION} already published — skipping"
+          if npm view "@byteveda/flexiq@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@byteveda/flexiq@${VERSION} already published — skipping"
           else
             npm publish --provenance --access public
           fi
@@ -323,13 +323,13 @@ jobs:
         if: ${{ !inputs.dry-run }}
         run: |
           for _attempt in 1 2 3 4 5; do
-            if npm view "@byteveda/taskito@${VERSION}" version >/dev/null 2>&1; then
-              echo "@byteveda/taskito@${VERSION} live on npm"
+            if npm view "@byteveda/flexiq@${VERSION}" version >/dev/null 2>&1; then
+              echo "@byteveda/flexiq@${VERSION} live on npm"
               exit 0
             fi
             sleep 15
           done
-          echo "::error::@byteveda/taskito@${VERSION} not found on npm"
+          echo "::error::@byteveda/flexiq@${VERSION} not found on npm"
           exit 1
 
       - name: Create git tag
@@ -350,7 +350,7 @@ jobs:
             echo "::notice::Release node-v${VERSION} already exists — skipping"
           else
             gh release create "node-v${VERSION}" \
-              --title "taskito (Node) v${VERSION}" \
+              --title "flexiq (Node) v${VERSION}" \
               --generate-notes
           fi
 

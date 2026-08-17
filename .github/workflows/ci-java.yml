@@ -26,13 +26,13 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Build the JNI cdylib
-        run: cargo build --release --features postgres,redis,workflows,mesh -p taskito-java
+        run: cargo build --release --features postgres,redis,workflows,mesh -p flexiq-java
 
       - name: Upload the cdylib
         uses: actions/upload-artifact@v7
         with:
-          name: taskito-java-native
-          path: target/release/libtaskito_java.so
+          name: flexiq-java-native
+          path: target/release/libflexiq_java.so
           if-no-files-found: error
           retention-days: 1
 
@@ -62,7 +62,7 @@ jobs:
       - name: Download the cdylib
         uses: actions/download-artifact@v8
         with:
-          name: taskito-java-native
+          name: flexiq-java-native
           path: target/release
 
       # -x cargoBuild skips the Rust compile; copyNative still stages the .so.
@@ -113,7 +113,7 @@ jobs:
         run: ./gradlew build --no-daemon
 
   # Prove the SDK works under GraalVM native-image using only the reachability
-  # metadata the runtime jar ships (META-INF/native-image/org.byteveda/taskito/):
+  # metadata the runtime jar ships (META-INF/native-image/org.byteveda/flexiq/):
   # build the smoke into a native image — no tracing agent — and run the binary.
   # A failure means the shipped metadata went stale; regenerate it with
   # `-Pagent :graalvm-smoke:run` + `:graalvm-smoke:metadataCopy` and commit.

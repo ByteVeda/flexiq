@@ -58,10 +58,10 @@ jobs:
             echo
             echo "| File | Size | Gzipped |"
             echo "|------|-----:|--------:|"
-            find sdks/python/taskito/static/dashboard -type f \( -name "*.js" -o -name "*.css" -o -name "*.html" \) | sort | while read -r f; do
+            find sdks/python/flexiq/static/dashboard -type f \( -name "*.js" -o -name "*.css" -o -name "*.html" \) | sort | while read -r f; do
               raw=$(stat -c%s "$f")
               gz=$(gzip -c "$f" | wc -c)
-              printf "| \`%s\` | %s | %s |\n" "${f#sdks/python/taskito/static/dashboard/}" "$(numfmt --to=iec --suffix=B "$raw")" "$(numfmt --to=iec --suffix=B "$gz")"
+              printf "| \`%s\` | %s | %s |\n" "${f#sdks/python/flexiq/static/dashboard/}" "$(numfmt --to=iec --suffix=B "$raw")" "$(numfmt --to=iec --suffix=B "$gz")"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -69,6 +69,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: dashboard-dist
-          path: sdks/python/taskito/static/dashboard/
+          path: sdks/python/flexiq/static/dashboard/
           retention-days: 7
           if-no-files-found: error

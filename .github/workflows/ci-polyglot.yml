@@ -81,9 +81,9 @@ jobs:
         uses: ./.github/actions/provision-gradle
 
       - name: Build the JNI cdylib
-        run: cargo build --release --features postgres,redis,workflows,mesh -p taskito-java
+        run: cargo build --release --features postgres,redis,workflows,mesh -p flexiq-java
 
-      # The example resolves org.byteveda:taskito from mavenLocal(), so this
+      # The example resolves org.byteveda:flexiq from mavenLocal(), so this
       # tree's build has to land there. -x cargoBuild reuses the cdylib above;
       # copyNative still stages it into the classifier jar.
       - name: Publish the Java SDK to the local Maven repository
@@ -91,17 +91,17 @@ jobs:
         run: ./gradlew publishToMavenLocal -x cargoBuild --no-daemon
 
       - name: Pack the local Maven repository
-        run: tar -czf taskito-m2.tar.gz -C ~/.m2/repository org/byteveda
+        run: tar -czf flexiq-m2.tar.gz -C ~/.m2/repository org/byteveda
 
       - name: Upload the built SDKs
         uses: actions/upload-artifact@v7
         with:
-          name: taskito-polyglot-sdks
+          name: flexiq-polyglot-sdks
           path: |
             sdks/python/dist
             sdks/node/native
             sdks/node/dist
-            taskito-m2.tar.gz
+            flexiq-m2.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -146,7 +146,7 @@ jobs:
       - name: Download the built SDKs
         uses: actions/download-artifact@v8
         with:
-          name: taskito-polyglot-sdks
+          name: flexiq-polyglot-sdks
 
       - name: Install the Python wheel
         env:
@@ -160,12 +160,12 @@ jobs:
       - name: Link the workspace Node SDK into the example
         run: |
           mkdir -p examples/polyglot/node-worker/node_modules/@byteveda
-          ln -sfn "$GITHUB_WORKSPACE/sdks/node" examples/polyglot/node-worker/node_modules/@byteveda/taskito
+          ln -sfn "$GITHUB_WORKSPACE/sdks/node" examples/polyglot/node-worker/node_modules/@byteveda/flexiq
 
       - name: Unpack the local Maven repository
         run: |
           mkdir -p ~/.m2/repository
-          tar -xzf taskito-m2.tar.gz -C ~/.m2/repository
+          tar -xzf flexiq-m2.tar.gz -C ~/.m2/repository
 
       - name: Provision Gradle for the example
         uses: ./.github/actions/provision-gradle
