@@ -26,6 +26,7 @@ class PyTaskConfig:
     circuit_breaker_half_open_success_rate: float | None
     max_in_flight_per_task: int | None
     retry_budget: str | None
+    on_excess: str | None
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class PyTaskConfig:
         circuit_breaker_half_open_success_rate: float | None = None,
         max_in_flight_per_task: int | None = None,
         retry_budget: str | None = None,
+        on_excess: str | None = None,
     ) -> None: ...
 
 class PyJob:

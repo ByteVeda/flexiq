@@ -15,7 +15,7 @@ from taskito.codecs import (
     PayloadCodec,
 )
 from taskito.context import LogLevel, current_job
-from taskito.enums import StorageBackend
+from taskito.enums import OnExcess, StorageBackend
 from taskito.events import EventType
 from taskito.exceptions import (
     CircuitBreakerOpenError,
@@ -100,6 +100,7 @@ __all__ = [
     "MsgPackSerializer",
     "NoProxy",
     "NotesValidationError",
+    "OnExcess",
     "PayloadCodec",
     "PeriodicInfo",
     "PredicateAction",

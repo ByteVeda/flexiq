@@ -21,7 +21,7 @@ from taskito.context import _clear_context
 from taskito.dashboard.middleware_store import MiddlewareDisableStore
 from taskito.detached import disabled_middleware as dispatched_disabled_middleware
 from taskito.detached import is_detached
-from taskito.enums import coerce_enum
+from taskito.enums import OnExcess, coerce_enum
 from taskito.inject import Inject, _InjectAlias
 from taskito.middleware import middleware_key
 from taskito.predicates.core import coerce_predicate
@@ -223,6 +223,7 @@ class QueueDecoratorMixin:
         # positional arguments after it.
         max_in_flight_per_task: int | None = None,
         retry_budget: str | None = None,
+        on_excess: OnExcess | str = OnExcess.DEFER,
     ) -> Callable[[Callable[..., Any]], TaskWrapper]:
         """Decorator to register a function as a background task.
 
@@ -271,6 +272,21 @@ class QueueDecoratorMixin:
                 Distinct from ``max_retries``, which bounds one job rather than the
                 rate, and from ``circuit_breaker``, which trips on hard failure
                 rather than aggregate retry rate. ``None`` means no cap.
+            on_excess: What a saturated rate limit does to this task's jobs.
+                ``"defer"`` (the default) reschedules the job for a later
+                dispatch cycle. ``"drop"`` sheds it instead: the job is
+                dead-lettered on the spot with a reserved ``rate_limit:``
+                reason, so shedding stays visible in the dashboard and
+                countable in metrics, and the DLQ auto-retry sweep never
+                resurrects it. Suits traffic whose value expires with the
+                moment — metrics samples, cache warms — where a backlog is
+                worth less than nothing. Applies to the limit on this task
+                *and* to the one on the queue it runs in, since either
+                rejecting means the same thing to the caller. A tripped
+                ``circuit_breaker`` always defers regardless: that is
+                downstream failure, not excess load. Dropping fires no
+                middleware or event hooks — the job never ran — exactly like
+                a CoDel shed.
             compensates: Optional reference to a task that compensates this
                 one. When this task runs as part of a workflow saga and a
                 later step fails, the framework enqueues the compensation
@@ -319,10 +335,13 @@ class QueueDecoratorMixin:
 
         Raises:
             ValueError: ``on_false`` is neither a :class:`PredicateAction` nor one
-                of its wire strings (``"defer"``/``"cancel"``), or
-                ``default_defer_seconds`` is negative.
+                of its wire strings (``"defer"``/``"cancel"``), ``on_excess`` is
+                neither an :class:`OnExcess` nor one of its wire strings
+                (``"defer"``/``"drop"``), or ``default_defer_seconds`` is
+                negative.
         """
         on_false_action = coerce_enum(PredicateAction, on_false, param="on_false")
+        on_excess_action = coerce_enum(OnExcess, on_excess, param="on_excess")
         if default_defer_seconds < 0:
             raise ValueError("default_defer_seconds must be >= 0")
         batch_config = BatchConfig.normalize(batch)
@@ -484,6 +503,7 @@ class QueueDecoratorMixin:
                 circuit_breaker_half_open_success_rate=cb_half_open_success_rate,
                 max_in_flight_per_task=max_in_flight_per_task,
                 retry_budget=retry_budget,
+                on_excess=on_excess_action.value,
             )
             self._task_configs.append(config)
 
