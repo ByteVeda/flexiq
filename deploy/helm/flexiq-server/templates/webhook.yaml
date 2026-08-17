@@ -1,5 +1,5 @@
 {{- if .Values.webhook.enabled }}
-{{- $fullname := include "taskito-server.fullname" . -}}
+{{- $fullname := include "flexiq-server.fullname" . -}}
 {{- $service := printf "%s-webhook" $fullname -}}
 {{- if .Values.webhook.certManager.enabled }}
 {{- if not .Values.webhook.certManager.issuerRef }}
@@ -8,7 +8,7 @@ kind: Issuer
 metadata:
   name: {{ $fullname }}-webhook
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
 spec:
   selfSigned: {}
 ---
@@ -18,9 +18,9 @@ kind: Certificate
 metadata:
   name: {{ $fullname }}-webhook
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
 spec:
-  secretName: {{ include "taskito-server.webhookSecretName" . }}
+  secretName: {{ include "flexiq-server.webhookSecretName" . }}
   dnsNames:
     - {{ printf "%s.%s.svc" $service .Release.Namespace }}
     - {{ printf "%s.%s.svc.cluster.local" $service .Release.Namespace }}
@@ -32,13 +32,13 @@ spec:
     kind: Issuer
     {{- end }}
 {{- else }}
-{{- $cert := include "taskito-server.webhookCert" . | fromYaml }}
+{{- $cert := include "flexiq-server.webhookCert" . | fromYaml }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "taskito-server.webhookSecretName" . }}
+  name: {{ include "flexiq-server.webhookSecretName" . }}
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
 type: kubernetes.io/tls
 data:
   # Kept alongside the pair so `helm upgrade` can read the CA back out and leave
@@ -53,13 +53,13 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: {{ $fullname }}
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
   {{- if .Values.webhook.certManager.enabled }}
   annotations:
     cert-manager.io/inject-ca-from: {{ printf "%s/%s-webhook" .Release.Namespace $fullname }}
   {{- end }}
 webhooks:
-  - name: executor-injector.taskito.dev
+  - name: executor-injector.flexiq.dev
     admissionReviewVersions: ["v1"]
     sideEffects: None
     # Ignore by default: an injector that is down or wedged must not stop every
@@ -89,7 +89,7 @@ webhooks:
         path: /mutate
         port: 443
       {{- if not .Values.webhook.certManager.enabled }}
-      {{- $cert := include "taskito-server.webhookCert" . | fromYaml }}
+      {{- $cert := include "flexiq-server.webhookCert" . | fromYaml }}
       caBundle: {{ $cert.caCert }}
       {{- end }}
 {{- end }}

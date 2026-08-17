@@ -1,15 +1,15 @@
 apiVersion: v2
-name: taskito-server
-description: The Taskito scheduler, dashboard, and executor sidecar injector
+name: flexiq-server
+description: The FlexiQ scheduler, dashboard, and executor sidecar injector
 type: application
 # Chart version and appVersion move together: the chart only ever ships the
 # image built from the same commit, and `node scripts/version.mjs --check`
 # enforces that in CI.
 version: 0.23.0
 appVersion: "0.23.0"
-home: https://taskito.grigori.in
+home: https://flexiq.grigori.in
 sources:
-  - https://github.com/ByteVeda/taskito
+  - https://github.com/ByteVeda/flexiq
 keywords:
   - task-queue
   - scheduler

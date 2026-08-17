@@ -2,11 +2,11 @@
 Names and labels, plus the two secret lookups every template shares.
 */}}
 
-{{- define "taskito-server.name" -}}
+{{- define "flexiq-server.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "taskito-server.fullname" -}}
+{{- define "flexiq-server.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -19,40 +19,40 @@ Names and labels, plus the two secret lookups every template shares.
 {{- end -}}
 {{- end -}}
 
-{{- define "taskito-server.labels" -}}
+{{- define "flexiq-server.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{ include "taskito-server.selectorLabels" . }}
+{{ include "flexiq-server.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "taskito-server.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "taskito-server.name" . }}
+{{- define "flexiq-server.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "flexiq-server.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "taskito-server.serviceAccountName" -}}
+{{- define "flexiq-server.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "taskito-server.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "flexiq-server.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
 {{/* Secret this release creates for the values that were given inline. */}}
-{{- define "taskito-server.secretName" -}}
-{{- printf "%s-config" (include "taskito-server.fullname" .) -}}
+{{- define "flexiq-server.secretName" -}}
+{{- printf "%s-config" (include "flexiq-server.fullname" .) -}}
 {{- end -}}
 
-{{- define "taskito-server.webhookSecretName" -}}
-{{- printf "%s-webhook-tls" (include "taskito-server.fullname" .) -}}
+{{- define "flexiq-server.webhookSecretName" -}}
+{{- printf "%s-webhook-tls" (include "flexiq-server.fullname" .) -}}
 {{- end -}}
 
 {{/*
 Whether the release has to create a Secret at all: only when a sensitive value
 was supplied inline rather than pointed at an existing Secret.
 */}}
-{{- define "taskito-server.createsSecret" -}}
+{{- define "flexiq-server.createsSecret" -}}
 {{- $create := false -}}
 {{- if and .Values.storage.dsn (not .Values.storage.existingSecret) -}}{{- $create = true -}}{{- end -}}
 {{- if and .Values.attach.token (not .Values.attach.existingSecret) -}}{{- $create = true -}}{{- end -}}
@@ -74,10 +74,10 @@ fail TLS verification.
 An existing Secret wins over generating, so `helm upgrade` does not mint a new
 CA and leave the API server trusting the old one.
 */}}
-{{- define "taskito-server.webhookCert" -}}
+{{- define "flexiq-server.webhookCert" -}}
 {{- $cached := index .Values "__webhookCert" -}}
 {{- if not $cached -}}
-  {{- $name := include "taskito-server.webhookSecretName" . -}}
+  {{- $name := include "flexiq-server.webhookSecretName" . -}}
   {{- $existing := lookup "v1" "Secret" .Release.Namespace $name -}}
   {{- if and $existing $existing.data (index $existing.data "ca.crt") -}}
     {{- $cached = dict
@@ -85,7 +85,7 @@ CA and leave the API server trusting the old one.
           "tlsCert" (index $existing.data "tls.crt")
           "tlsKey" (index $existing.data "tls.key") -}}
   {{- else -}}
-    {{- $service := printf "%s-webhook" (include "taskito-server.fullname" .) -}}
+    {{- $service := printf "%s-webhook" (include "flexiq-server.fullname" .) -}}
     {{- $altNames := list
           (printf "%s.%s.svc" $service .Release.Namespace)
           (printf "%s.%s.svc.cluster.local" $service .Release.Namespace) -}}

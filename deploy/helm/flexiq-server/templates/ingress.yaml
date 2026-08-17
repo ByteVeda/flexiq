@@ -1,11 +1,11 @@
 {{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled }}
-{{- $fullname := include "taskito-server.fullname" . -}}
+{{- $fullname := include "flexiq-server.fullname" . -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ $fullname }}-dashboard
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
   {{- with .Values.dashboard.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}

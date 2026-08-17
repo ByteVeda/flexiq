@@ -1,11 +1,11 @@
-# taskito-server
+# flexiq-server
 
-The Taskito scheduler, dashboard, and executor sidecar injector — one binary,
+The FlexiQ scheduler, dashboard, and executor sidecar injector — one binary,
 one image, up to three roles.
 
 ```bash
-helm install taskito ./deploy/helm/taskito-server \
-  --set storage.dsn='postgres://taskito:secret@postgres:5432/myapp' \
+helm install flexiq ./deploy/helm/flexiq-server \
+  --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
   --set attach.token="$(openssl rand -base64 32)"
 ```
 
@@ -43,19 +43,19 @@ example points at the attach listener the same release runs, so it assumes
 ```yaml
 metadata:
   annotations:
-    taskito.dev/inject: "true"
-    taskito.dev/attach: "taskito-taskito-server-attach.default.svc:7777"
-    taskito.dev/command: "taskito executor --app myapp:queue"
-    taskito.dev/slots: "4"
-    taskito.dev/token-secret: "taskito-taskito-server-config"
-    taskito.dev/token-key: "attach-token"
+    flexiq.dev/inject: "true"
+    flexiq.dev/attach: "flexiq-flexiq-server-attach.default.svc:7777"
+    flexiq.dev/command: "flexiq executor --app myapp:queue"
+    flexiq.dev/slots: "4"
+    flexiq.dev/token-secret: "flexiq-flexiq-server-config"
+    flexiq.dev/token-key: "attach-token"
 ```
 
 An injector can also run on its own — no listener, no dashboard, no database —
 alongside schedulers deployed elsewhere:
 
 ```bash
-helm install taskito-injector ./deploy/helm/taskito-server \
+helm install flexiq-injector ./deploy/helm/flexiq-server \
   --set attach.enabled=false --set dashboard.enabled=false \
   --set webhook.enabled=true
 ```
@@ -66,11 +66,11 @@ Secret holding its token:
 ```yaml
 metadata:
   annotations:
-    taskito.dev/inject: "true"
-    taskito.dev/attach: "taskito-eu.platform.svc:7777"
-    taskito.dev/command: "taskito executor --app myapp:queue"
-    taskito.dev/token-secret: "taskito-eu-attach"
-    taskito.dev/token-key: "token"
+    flexiq.dev/inject: "true"
+    flexiq.dev/attach: "flexiq-eu.platform.svc:7777"
+    flexiq.dev/command: "flexiq executor --app myapp:queue"
+    flexiq.dev/token-secret: "flexiq-eu-attach"
+    flexiq.dev/token-key: "token"
 ```
 
 The injected container reuses **the pod's own image reference**, so the image is
@@ -79,15 +79,15 @@ auto-instrumentation uses, and the reason this works for any language.
 
 | Annotation | Required | Meaning |
 |---|---|---|
-| `taskito.dev/inject` | yes | `true` opts the pod in |
-| `taskito.dev/attach` | yes | Scheduler address: `host:port`, `:port`, or `unix:/path` |
-| `taskito.dev/command` | yes | Argv that runs an executor. A JSON array when an argument contains spaces, otherwise whitespace-split |
-| `taskito.dev/slots` | no | Concurrent jobs (default `1`) |
-| `taskito.dev/container` | no | Container to copy the image and environment from (default: the first) |
-| `taskito.dev/token-secret` | no | Secret holding the attach token |
-| `taskito.dev/token-key` | no | Key within it (default `token`) |
-| `taskito.dev/socket-volume` | no | Volume carrying the socket; required for a `unix:` address |
-| `taskito.dev/inherit-env` | no | `false` to skip copying the source container's `env`/`envFrom` |
+| `flexiq.dev/inject` | yes | `true` opts the pod in |
+| `flexiq.dev/attach` | yes | Scheduler address: `host:port`, `:port`, or `unix:/path` |
+| `flexiq.dev/command` | yes | Argv that runs an executor. A JSON array when an argument contains spaces, otherwise whitespace-split |
+| `flexiq.dev/slots` | no | Concurrent jobs (default `1`) |
+| `flexiq.dev/container` | no | Container to copy the image and environment from (default: the first) |
+| `flexiq.dev/token-secret` | no | Secret holding the attach token |
+| `flexiq.dev/token-key` | no | Key within it (default `token`) |
+| `flexiq.dev/socket-volume` | no | Volume carrying the socket; required for a `unix:` address |
+| `flexiq.dev/inherit-env` | no | `false` to skip copying the source container's `env`/`envFrom` |
 
 Notes worth knowing:
 
@@ -95,7 +95,7 @@ Notes worth knowing:
   handler reading the same config as the app keeps working. `FLEXIQ_ATTACH`,
   `FLEXIQ_SLOTS` and `FLEXIQ_ATTACH_TOKEN` are always the injector's, never an
   inherited value.
-- Injection is idempotent. A pod that already has a `taskito-executor` container
+- Injection is idempotent. A pod that already has a `flexiq-executor` container
   is admitted unchanged — a second sidecar would silently double its slots.
 - A pod that opts in and gets an annotation wrong is **rejected**, with the
   annotation named in the `kubectl` error. Admitting it would produce a

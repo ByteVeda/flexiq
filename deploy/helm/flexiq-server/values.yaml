@@ -1,11 +1,11 @@
-# Default values for taskito-server.
+# Default values for flexiq-server.
 #
 # The chart installs one Deployment that plays up to three roles — scheduler,
 # dashboard, and sidecar injector — because they are one binary and one image.
 # Turn off what you do not want; at least one role has to stay on.
 
 image:
-  repository: ghcr.io/byteveda/taskito-server
+  repository: ghcr.io/byteveda/flexiq-server
   # Defaults to .Chart.AppVersion, so an upgrade moves the image with the chart.
   tag: ""
   pullPolicy: IfNotPresent
@@ -86,7 +86,7 @@ dashboard:
     enabled: false
     className: ""
     annotations: {}
-    host: taskito.example.com
+    host: flexiq.example.com
     path: /
     pathType: Prefix
     tls: []

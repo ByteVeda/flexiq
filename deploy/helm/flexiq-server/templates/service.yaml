@@ -1,4 +1,4 @@
-{{- $fullname := include "taskito-server.fullname" . -}}
+{{- $fullname := include "flexiq-server.fullname" . -}}
 {{- if .Values.attach.enabled }}
 apiVersion: v1
 kind: Service
@@ -8,7 +8,7 @@ metadata:
   # LoadBalancer annotation can widen by accident.
   name: {{ $fullname }}-attach
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
   {{- with .Values.attach.service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -16,7 +16,7 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+    {{- include "flexiq-server.selectorLabels" . | nindent 4 }}
   ports:
     - name: attach
       port: {{ .Values.attach.port }}
@@ -29,7 +29,7 @@ kind: Service
 metadata:
   name: {{ $fullname }}-dashboard
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
   {{- with .Values.dashboard.service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -37,7 +37,7 @@ metadata:
 spec:
   type: {{ .Values.dashboard.service.type }}
   selector:
-    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+    {{- include "flexiq-server.selectorLabels" . | nindent 4 }}
   ports:
     - name: dashboard
       port: {{ .Values.dashboard.port }}
@@ -52,11 +52,11 @@ metadata:
   # regenerating the Secret.
   name: {{ $fullname }}-webhook
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "taskito-server.selectorLabels" . | nindent 4 }}
+    {{- include "flexiq-server.selectorLabels" . | nindent 4 }}
   ports:
     - name: webhook
       port: 443

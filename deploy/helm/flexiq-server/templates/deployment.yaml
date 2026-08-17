@@ -1,20 +1,20 @@
-{{- include "taskito-server.validate" . -}}
-{{- $fullname := include "taskito-server.fullname" . -}}
+{{- include "flexiq-server.validate" . -}}
+{{- $fullname := include "flexiq-server.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $fullname }}
   labels:
-    {{- include "taskito-server.labels" . | nindent 4 }}
+    {{- include "flexiq-server.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "taskito-server.selectorLabels" . | nindent 6 }}
+      {{- include "flexiq-server.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "taskito-server.selectorLabels" . | nindent 8 }}
+        {{- include "flexiq-server.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -22,13 +22,13 @@ spec:
         # A rotated certificate only takes effect on a restart, because the
         # server reads the PEM files once at boot.
         {{- if .Values.webhook.enabled }}
-        checksum/webhook-tls: {{ include "taskito-server.webhookCert" . | sha256sum }}
+        checksum/webhook-tls: {{ include "flexiq-server.webhookCert" . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "taskito-server.serviceAccountName" . }}
+      serviceAccountName: {{ include "flexiq-server.serviceAccountName" . }}
       {{- with .Values.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -52,7 +52,7 @@ spec:
             - name: FLEXIQ_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "taskito-server.secretName" . }}
+                  name: {{ include "flexiq-server.secretName" . }}
                   key: dsn
             {{- end }}
             {{- with .Values.storage.backend }}
@@ -84,7 +84,7 @@ spec:
             - name: FLEXIQ_ATTACH_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "taskito-server.secretName" . }}
+                  name: {{ include "flexiq-server.secretName" . }}
                   key: attach-token
             {{- end }}
             {{- end }}
@@ -114,14 +114,14 @@ spec:
             - name: FLEXIQ_DASHBOARD_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "taskito-server.secretName" . }}
+                  name: {{ include "flexiq-server.secretName" . }}
                   key: admin-password
             {{- end }}
             {{- if .Values.dashboard.metricsToken }}
             - name: FLEXIQ_DASHBOARD_METRICS_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "taskito-server.secretName" . }}
+                  name: {{ include "flexiq-server.secretName" . }}
                   key: metrics-token
             {{- end }}
             {{- if .Values.dashboard.publicReadiness }}
@@ -133,9 +133,9 @@ spec:
             - name: FLEXIQ_WEBHOOK_LISTEN
               value: "0.0.0.0:{{ .Values.webhook.port }}"
             - name: FLEXIQ_WEBHOOK_TLS_CERT
-              value: /etc/taskito/webhook-tls/tls.crt
+              value: /etc/flexiq/webhook-tls/tls.crt
             - name: FLEXIQ_WEBHOOK_TLS_KEY
-              value: /etc/taskito/webhook-tls/tls.key
+              value: /etc/flexiq/webhook-tls/tls.key
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -187,14 +187,14 @@ spec:
           {{- if .Values.webhook.enabled }}
           volumeMounts:
             - name: webhook-tls
-              mountPath: /etc/taskito/webhook-tls
+              mountPath: /etc/flexiq/webhook-tls
               readOnly: true
           {{- end }}
       {{- if .Values.webhook.enabled }}
       volumes:
         - name: webhook-tls
           secret:
-            secretName: {{ include "taskito-server.webhookSecretName" . }}
+            secretName: {{ include "flexiq-server.webhookSecretName" . }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

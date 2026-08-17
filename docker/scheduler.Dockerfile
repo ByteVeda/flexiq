@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 
-# taskito-server with no language runtime: one static musl binary on distroless,
+# flexiq-server with no language runtime: one static musl binary on distroless,
 # so the same image schedules for apps written in any SDK. glibc/musl variants
 # would be indistinguishable here — nothing in the image links libc.
 #
-#   docker build -f docker/scheduler.Dockerfile -t taskito-server .
+#   docker build -f docker/scheduler.Dockerfile -t flexiq-server .
 #
 # Releases additionally pass `--build-arg VERSION=$(node scripts/version.mjs
 # --current)` for the OCI label, and build one architecture per native runner
@@ -13,7 +13,7 @@
 
 # --- dashboard ---------------------------------------------------------------
 # The SPA is embedded into the binary at compile time
-# (crates/taskito-server/build.rs), so it has to exist before cargo runs.
+# (crates/flexiq-server/build.rs), so it has to exist before cargo runs.
 FROM node:22-alpine AS dashboard
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src/dashboard
@@ -29,7 +29,7 @@ RUN pnpm exec tsr generate && pnpm exec vite build --outDir dist --emptyOutDir
 FROM rust:1-alpine AS builder
 # build-base: the C toolchain the bundled SQLite, libpq and OpenSSL sources
 # need. perl + linux-headers: OpenSSL's configure. git: the dagron-core git
-# dependency of taskito-workflows.
+# dependency of flexiq-workflows.
 RUN apk add --no-cache build-base perl linux-headers pkgconfig git
 # Cargo's downloader hits "HTTP2 framing layer" errors often enough to fail a
 # release build; the CI workflows pin the same two settings.
@@ -46,10 +46,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
-    cargo build --release --locked -p taskito-server --features postgres,redis \
-    && cp target/release/taskito-server /taskito-server \
-    && if readelf -l /taskito-server | grep -q INTERP; then \
-         echo "taskito-server is dynamically linked — distroless/static cannot run it" >&2; \
+    cargo build --release --locked -p flexiq-server --features postgres,redis \
+    && cp target/release/flexiq-server /flexiq-server \
+    && if readelf -l /flexiq-server | grep -q INTERP; then \
+         echo "flexiq-server is dynamically linked — distroless/static cannot run it" >&2; \
          exit 1; \
        fi
 
@@ -58,14 +58,14 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 # Overridden per release; a literal here would outrank scripts/version.mjs,
 # which is why `--check` guards against one.
 ARG VERSION=dev
-LABEL org.opencontainers.image.title="taskito-server" \
-      org.opencontainers.image.description="Taskito scheduler, executor attach listener, and dashboard" \
-      org.opencontainers.image.source="https://github.com/ByteVeda/taskito" \
+LABEL org.opencontainers.image.title="flexiq-server" \
+      org.opencontainers.image.description="FlexiQ scheduler, executor attach listener, and dashboard" \
+      org.opencontainers.image.source="https://github.com/ByteVeda/flexiq" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
-COPY --from=builder /taskito-server /usr/local/bin/taskito-server
+COPY --from=builder /flexiq-server /usr/local/bin/flexiq-server
 # Attach listener and dashboard. Both stay off until FLEXIQ_LISTEN /
 # FLEXIQ_DASHBOARD are set, so this documents the ports rather than opening them.
 EXPOSE 7777 8080
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/taskito-server"]
+ENTRYPOINT ["/usr/local/bin/flexiq-server"]

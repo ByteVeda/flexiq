@@ -1,10 +1,10 @@
-{{ include "taskito-server.fullname" . }} is installed.
+{{ include "flexiq-server.fullname" . }} is installed.
 
 {{- if .Values.attach.enabled }}
 
 Executors attach to:
 
-    FLEXIQ_ATTACH={{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}
+    FLEXIQ_ATTACH={{ include "flexiq-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}
 
 The scheduler starts on the first attach — with nothing attached it would claim
 jobs no executor advertises, and each would fail once placement timed out.
@@ -14,7 +14,7 @@ jobs no executor advertises, and each would fail once placement timed out.
 
 Reach the dashboard with:
 
-    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "taskito-server.fullname" . }}-dashboard {{ .Values.dashboard.port }}:{{ .Values.dashboard.port }}
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "flexiq-server.fullname" . }}-dashboard {{ .Values.dashboard.port }}:{{ .Values.dashboard.port }}
 {{- if and (eq .Values.dashboard.auth "session") (not .Values.dashboard.adminPassword) (not .Values.dashboard.existingSecret) }}
 
 No admin was bootstrapped, so the first visit runs the SPA's setup flow.
@@ -27,23 +27,23 @@ Sidecar injection is on. Annotate a pod template:
 
     metadata:
       annotations:
-        taskito.dev/inject: "true"
-        taskito.dev/command: "<the command that runs an executor in your image>"
-        taskito.dev/slots: "4"
+        flexiq.dev/inject: "true"
+        flexiq.dev/command: "<the command that runs an executor in your image>"
+        flexiq.dev/slots: "4"
 {{- if .Values.attach.enabled }}
-        taskito.dev/attach: "{{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
+        flexiq.dev/attach: "{{ include "flexiq-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}"
 {{- if or .Values.attach.token .Values.attach.existingSecret }}
-        taskito.dev/token-secret: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecret }}{{ else }}{{ include "taskito-server.secretName" . }}{{ end }}"
-        taskito.dev/token-key: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecretKey }}{{ else }}attach-token{{ end }}"
+        flexiq.dev/token-secret: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecret }}{{ else }}{{ include "flexiq-server.secretName" . }}{{ end }}"
+        flexiq.dev/token-key: "{{ if .Values.attach.existingSecret }}{{ .Values.attach.existingSecretKey }}{{ else }}attach-token{{ end }}"
 {{- end }}
 {{- else }}
         # This release runs no attach listener, so point these at the scheduler
         # that does — another release, or one outside the cluster — along with
         # the Secret holding its token. An address with nothing behind it
         # injects sidecars that can never connect.
-        taskito.dev/attach: "<scheduler host:port>"
-        taskito.dev/token-secret: "<secret holding its attach token>"
-        taskito.dev/token-key: "<key within it>"
+        flexiq.dev/attach: "<scheduler host:port>"
+        flexiq.dev/token-secret: "<secret holding its attach token>"
+        flexiq.dev/token-key: "<key within it>"
 {{- end }}
 
 The sidecar reuses the pod's own image, so nothing new is pulled.
