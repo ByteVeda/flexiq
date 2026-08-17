@@ -92,8 +92,8 @@ auto-instrumentation uses, and the reason this works for any language.
 Notes worth knowing:
 
 - The sidecar **inherits the app container's environment** by default, so a
-  handler reading the same config as the app keeps working. `TASKITO_ATTACH`,
-  `TASKITO_SLOTS` and `TASKITO_ATTACH_TOKEN` are always the injector's, never an
+  handler reading the same config as the app keeps working. `FLEXIQ_ATTACH`,
+  `FLEXIQ_SLOTS` and `FLEXIQ_ATTACH_TOKEN` are always the injector's, never an
   inherited value.
 - Injection is idempotent. A pod that already has a `taskito-executor` container
   is admitted unchanged — a second sidecar would silently double its slots.
@@ -129,7 +129,7 @@ is up. Readiness uses `/readiness`, which checks that storage answers.
 carries no credential, and cannot be given one, since a probe header is a
 literal string in the manifest — would get `401` and the pod would never go
 Ready. `dashboard.publicReadiness` (on by default) sets
-`TASKITO_DASHBOARD_PUBLIC_READINESS`, which answers that one route without a
+`FLEXIQ_DASHBOARD_PUBLIC_READINESS`, which answers that one route without a
 credential. `/metrics` stays gated either way.
 
 What that publishes to anything that can reach the port: whether storage

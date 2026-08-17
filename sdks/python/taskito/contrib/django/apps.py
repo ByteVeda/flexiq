@@ -21,10 +21,10 @@ class TaskitoConfig(AppConfig):
         """Auto-discover task modules in all installed apps.
 
         The module name defaults to ``"tasks"`` but can be overridden via the
-        ``TASKITO_AUTODISCOVER_MODULE`` Django setting.
+        ``FLEXIQ_AUTODISCOVER_MODULE`` Django setting.
         """
         from django.conf import settings
         from django.utils.module_loading import autodiscover_modules
 
-        module_name = getattr(settings, "TASKITO_AUTODISCOVER_MODULE", "tasks")
+        module_name = getattr(settings, "FLEXIQ_AUTODISCOVER_MODULE", "tasks")
         autodiscover_modules(module_name)

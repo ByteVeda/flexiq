@@ -31,13 +31,13 @@ pub struct WebhookConfig {
 
 /// Parse the webhook block, or `None` when the webhook is disabled.
 pub fn from_env(env: &Env) -> Result<Option<WebhookConfig>> {
-    let Some(spec) = value(env, "TASKITO_WEBHOOK_LISTEN") else {
+    let Some(spec) = value(env, "FLEXIQ_WEBHOOK_LISTEN") else {
         return Ok(None);
     };
     let bind = resolve(&spec)?;
 
-    let cert = required_path(env, "TASKITO_WEBHOOK_TLS_CERT")?;
-    let key = required_path(env, "TASKITO_WEBHOOK_TLS_KEY")?;
+    let cert = required_path(env, "FLEXIQ_WEBHOOK_TLS_CERT")?;
+    let key = required_path(env, "FLEXIQ_WEBHOOK_TLS_KEY")?;
 
     Ok(Some(WebhookConfig { bind, cert, key }))
 }
@@ -48,7 +48,7 @@ pub fn from_env(env: &Env) -> Result<Option<WebhookConfig>> {
 fn required_path(env: &Env, key: &str) -> Result<PathBuf> {
     let raw = value(env, key).with_context(|| {
         format!(
-            "{key} is required when TASKITO_WEBHOOK_LISTEN is set — the API server \
+            "{key} is required when FLEXIQ_WEBHOOK_LISTEN is set — the API server \
              only calls a webhook over HTTPS, so there is no plaintext mode"
         )
     })?;
@@ -89,10 +89,10 @@ mod tests {
 
     #[test]
     fn a_listen_address_needs_both_tls_paths() {
-        for present in ["TASKITO_WEBHOOK_TLS_CERT", "TASKITO_WEBHOOK_TLS_KEY"] {
+        for present in ["FLEXIQ_WEBHOOK_TLS_CERT", "FLEXIQ_WEBHOOK_TLS_KEY"] {
             let file = touch("partial");
             let error = from_env(&env(&[
-                ("TASKITO_WEBHOOK_LISTEN", "0.0.0.0:9443"),
+                ("FLEXIQ_WEBHOOK_LISTEN", "0.0.0.0:9443"),
                 (present, file.to_str().expect("utf-8")),
             ]))
             .expect_err("must refuse a half-configured webhook");
@@ -104,9 +104,9 @@ mod tests {
     fn a_missing_certificate_file_is_rejected() {
         let key = touch("key-only");
         let error = from_env(&env(&[
-            ("TASKITO_WEBHOOK_LISTEN", "0.0.0.0:9443"),
-            ("TASKITO_WEBHOOK_TLS_CERT", "/no/such/cert.pem"),
-            ("TASKITO_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
+            ("FLEXIQ_WEBHOOK_LISTEN", "0.0.0.0:9443"),
+            ("FLEXIQ_WEBHOOK_TLS_CERT", "/no/such/cert.pem"),
+            ("FLEXIQ_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
         ]))
         .expect_err("must refuse an unreadable path");
         assert!(error.to_string().contains("not a readable file"));
@@ -117,9 +117,9 @@ mod tests {
         let cert = touch("cert");
         let key = touch("key");
         let config = from_env(&env(&[
-            ("TASKITO_WEBHOOK_LISTEN", "0.0.0.0:9443"),
-            ("TASKITO_WEBHOOK_TLS_CERT", cert.to_str().expect("utf-8")),
-            ("TASKITO_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
+            ("FLEXIQ_WEBHOOK_LISTEN", "0.0.0.0:9443"),
+            ("FLEXIQ_WEBHOOK_TLS_CERT", cert.to_str().expect("utf-8")),
+            ("FLEXIQ_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
         ]))
         .expect("valid")
         .expect("configured");
@@ -133,9 +133,9 @@ mod tests {
         let cert = touch("bare-cert");
         let key = touch("bare-key");
         let config = from_env(&env(&[
-            ("TASKITO_WEBHOOK_LISTEN", ":9443"),
-            ("TASKITO_WEBHOOK_TLS_CERT", cert.to_str().expect("utf-8")),
-            ("TASKITO_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
+            ("FLEXIQ_WEBHOOK_LISTEN", ":9443"),
+            ("FLEXIQ_WEBHOOK_TLS_CERT", cert.to_str().expect("utf-8")),
+            ("FLEXIQ_WEBHOOK_TLS_KEY", key.to_str().expect("utf-8")),
         ]))
         .expect("valid")
         .expect("configured");

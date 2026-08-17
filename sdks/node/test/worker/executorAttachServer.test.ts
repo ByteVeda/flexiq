@@ -1,13 +1,13 @@
 /**
  * The same attach assertions, against the real `taskito-server` binary.
  *
- * Gated on `TASKITO_SERVER_BIN` so the default suite needs no Rust build. Its
+ * Gated on `FLEXIQ_SERVER_BIN` so the default suite needs no Rust build. Its
  * job is to keep `executorAttach.test.ts`'s hand-rolled scheduler honest: that
  * file proves the executor speaks the protocol it was told to, this one proves
  * the protocol it was told to is the one the server actually speaks.
  *
  *   cargo build -p taskito-server
- *   TASKITO_SERVER_BIN=../../target/debug/taskito-server npx vitest run
+ *   FLEXIQ_SERVER_BIN=../../target/debug/taskito-server npx vitest run
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { currentJob, type Executor, Queue } from "../../src/index";
 
-const SERVER_BIN = process.env.TASKITO_SERVER_BIN;
+const SERVER_BIN = process.env.FLEXIQ_SERVER_BIN;
 const SETTLE_MS = 60_000;
 
 let executor: Executor | undefined;
@@ -57,15 +57,15 @@ async function startScheduler(options?: { token?: string }): Promise<{
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TASKITO_BACKEND: "sqlite",
-    TASKITO_DSN: dbPath,
-    TASKITO_LISTEN: `127.0.0.1:${port}`,
+    FLEXIQ_BACKEND: "sqlite",
+    FLEXIQ_DSN: dbPath,
+    FLEXIQ_LISTEN: `127.0.0.1:${port}`,
   };
   // Unset, not "off": the dashboard is disabled by having no bind address.
-  delete env.TASKITO_DASHBOARD;
-  delete env.TASKITO_ATTACH_TOKEN;
+  delete env.FLEXIQ_DASHBOARD;
+  delete env.FLEXIQ_ATTACH_TOKEN;
   if (options?.token) {
-    env.TASKITO_ATTACH_TOKEN = options.token;
+    env.FLEXIQ_ATTACH_TOKEN = options.token;
   }
 
   // Discarded, not piped: nothing reads these, and a scheduler that logs per

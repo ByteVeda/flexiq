@@ -62,25 +62,25 @@ The following settings can be defined in your Django `settings.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `TASKITO_AUTODISCOVER_MODULE` | `"tasks"` | Module name auto-discovered in each installed app on startup. |
-| `TASKITO_ADMIN_PER_PAGE` | `50` | Rows per page in the admin jobs and dead letters views. |
-| `TASKITO_ADMIN_TITLE` | `"Taskito"` | Browser tab title for `TaskitoAdminSite`. |
-| `TASKITO_ADMIN_HEADER` | `"Taskito Admin"` | Site header shown in `TaskitoAdminSite`. |
-| `TASKITO_WATCH_INTERVAL` | `2` | Polling interval in seconds for `manage.py taskito_info --watch`. |
-| `TASKITO_DASHBOARD_HOST` | `"127.0.0.1"` | Default bind host for `manage.py taskito_dashboard`. |
-| `TASKITO_DASHBOARD_PORT` | `8080` | Default bind port for `manage.py taskito_dashboard`. |
-| `TASKITO_DASHBOARD_AUTH` | `False` | Enable dashboard session authentication by default (same as passing `--auth` to `manage.py taskito_dashboard`). |
+| `FLEXIQ_AUTODISCOVER_MODULE` | `"tasks"` | Module name auto-discovered in each installed app on startup. |
+| `FLEXIQ_ADMIN_PER_PAGE` | `50` | Rows per page in the admin jobs and dead letters views. |
+| `FLEXIQ_ADMIN_TITLE` | `"Taskito"` | Browser tab title for `TaskitoAdminSite`. |
+| `FLEXIQ_ADMIN_HEADER` | `"Taskito Admin"` | Site header shown in `TaskitoAdminSite`. |
+| `FLEXIQ_WATCH_INTERVAL` | `2` | Polling interval in seconds for `manage.py taskito_info --watch`. |
+| `FLEXIQ_DASHBOARD_HOST` | `"127.0.0.1"` | Default bind host for `manage.py taskito_dashboard`. |
+| `FLEXIQ_DASHBOARD_PORT` | `8080` | Default bind port for `manage.py taskito_dashboard`. |
+| `FLEXIQ_DASHBOARD_AUTH` | `False` | Enable dashboard session authentication by default (same as passing `--auth` to `manage.py taskito_dashboard`). |
 
 Example:
 
 ```python
 # settings.py
-TASKITO_AUTODISCOVER_MODULE = "jobs"   # import myapp.jobs instead of myapp.tasks
-TASKITO_ADMIN_PER_PAGE = 25
-TASKITO_ADMIN_TITLE = "MyApp Tasks"
-TASKITO_ADMIN_HEADER = "MyApp Task Queue"
-TASKITO_DASHBOARD_HOST = "0.0.0.0"
-TASKITO_DASHBOARD_PORT = 9000
+FLEXIQ_AUTODISCOVER_MODULE = "jobs"   # import myapp.jobs instead of myapp.tasks
+FLEXIQ_ADMIN_PER_PAGE = 25
+FLEXIQ_ADMIN_TITLE = "MyApp Tasks"
+FLEXIQ_ADMIN_HEADER = "MyApp Task Queue"
+FLEXIQ_DASHBOARD_HOST = "0.0.0.0"
+FLEXIQ_DASHBOARD_PORT = 9000
 ```
 
 ## Queue configuration
@@ -104,16 +104,16 @@ def send_welcome_email(user_id: int):
 
 Task modules are located via Django's standard app autodiscovery:
 `taskito.contrib.django`'s `AppConfig.ready()` imports a `tasks` module
-(the name is configurable via `TASKITO_AUTODISCOVER_MODULE`) from every
+(the name is configurable via `FLEXIQ_AUTODISCOVER_MODULE`) from every
 installed app, which registers any `@queue.task()`-decorated functions
 it imports.
 
 <Callout type="info" title="get_queue() is a separate Queue instance">
   `taskito.contrib.django.settings.get_queue()` — used internally by the
   admin views and the `manage.py taskito_*` commands — builds its own
-  `Queue` from the `TASKITO_*` Django settings. It is **not** the same
+  `Queue` from the `FLEXIQ_*` Django settings. It is **not** the same
   Python object as the `queue` you create in `myproject/tasks.py`. Point
-  both at the same `TASKITO_DB_PATH` / `TASKITO_BACKEND` / `TASKITO_DB_URL`
+  both at the same `FLEXIQ_DB_PATH` / `FLEXIQ_BACKEND` / `FLEXIQ_DB_URL`
   so they read the same underlying storage — otherwise the admin views
   show an empty or different queue than the one your worker is
   processing.

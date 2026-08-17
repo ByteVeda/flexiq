@@ -4,8 +4,8 @@
 //! how the rest of the repo tests hosted backends:
 //!
 //! ```bash
-//! TASKITO_POSTGRES_TEST_URL=postgres://… cargo test -p taskito-server --features postgres
-//! TASKITO_REDIS_TEST_URL=redis://…       cargo test -p taskito-server --features redis
+//! FLEXIQ_POSTGRES_TEST_URL=postgres://… cargo test -p taskito-server --features postgres
+//! FLEXIQ_REDIS_TEST_URL=redis://…       cargo test -p taskito-server --features redis
 //! ```
 //!
 //! Rows are namespaced per run so a shared hosted database can be reused
@@ -148,8 +148,8 @@ async fn exercise_dashboard(state: SharedState, task_name: String) {
 #[cfg(feature = "postgres")]
 #[tokio::test]
 async fn the_dashboard_serves_postgres() {
-    let Some((state, namespace)) = backend_state("TASKITO_POSTGRES_TEST_URL") else {
-        eprintln!("skipped: TASKITO_POSTGRES_TEST_URL is not set");
+    let Some((state, namespace)) = backend_state("FLEXIQ_POSTGRES_TEST_URL") else {
+        eprintln!("skipped: FLEXIQ_POSTGRES_TEST_URL is not set");
         return;
     };
     exercise_dashboard(state, namespace).await;
@@ -158,8 +158,8 @@ async fn the_dashboard_serves_postgres() {
 #[cfg(feature = "redis")]
 #[tokio::test]
 async fn the_dashboard_serves_redis() {
-    let Some((state, namespace)) = backend_state("TASKITO_REDIS_TEST_URL") else {
-        eprintln!("skipped: TASKITO_REDIS_TEST_URL is not set");
+    let Some((state, namespace)) = backend_state("FLEXIQ_REDIS_TEST_URL") else {
+        eprintln!("skipped: FLEXIQ_REDIS_TEST_URL is not set");
         return;
     };
     exercise_dashboard(state, namespace).await;

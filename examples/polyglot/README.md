@@ -23,10 +23,10 @@ pip install taskito==0.23.0
 python producer.py --db taskito.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications
-cd node-worker && npm install && TASKITO_DB=../taskito.db npm start
+cd node-worker && npm install && FLEXIQ_DB=../taskito.db npm start
 
 # 3. Java worker — consumes notifications
-cd java-worker && TASKITO_DB=../taskito.db ./gradlew run
+cd java-worker && FLEXIQ_DB=../taskito.db ./gradlew run
 ```
 
 Expected output:

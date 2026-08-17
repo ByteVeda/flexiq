@@ -4,7 +4,7 @@
 
 Executors attach to:
 
-    TASKITO_ATTACH={{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}
+    FLEXIQ_ATTACH={{ include "taskito-server.fullname" . }}-attach.{{ .Release.Namespace }}.svc:{{ .Values.attach.port }}
 
 The scheduler starts on the first attach — with nothing attached it would claim
 jobs no executor advertises, and each would fail once placement timed out.

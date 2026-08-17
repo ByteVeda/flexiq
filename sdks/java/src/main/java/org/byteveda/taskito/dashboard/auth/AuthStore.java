@@ -29,8 +29,8 @@ public final class AuthStore {
     public static final String SESSION_PREFIX = "auth:session:";
     public static final long DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 
-    public static final String ENV_ADMIN_USER = "TASKITO_DASHBOARD_ADMIN_USER";
-    public static final String ENV_ADMIN_PASSWORD = "TASKITO_DASHBOARD_ADMIN_PASSWORD";
+    public static final String ENV_ADMIN_USER = "FLEXIQ_DASHBOARD_ADMIN_USER";
+    public static final String ENV_ADMIN_PASSWORD = "FLEXIQ_DASHBOARD_ADMIN_PASSWORD";
 
     private static final int USERNAME_MAX_LEN = 64;
     private static final int PASSWORD_MIN_LEN = 8;
@@ -329,7 +329,7 @@ public final class AuthStore {
     // ---- env bootstrap -----------------------------------------------------
 
     /**
-     * Seed an admin from {@code TASKITO_DASHBOARD_ADMIN_USER}/{@code _PASSWORD}
+     * Seed an admin from {@code FLEXIQ_DASHBOARD_ADMIN_USER}/{@code _PASSWORD}
      * if set and the user does not yet exist. Idempotent; safe every startup.
      *
      * <p>Unlike Python/Node, the JVM cannot scrub the password out of its own

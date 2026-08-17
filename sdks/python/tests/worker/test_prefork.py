@@ -97,16 +97,16 @@ def timeout_app(tmp_path: Path) -> Iterator[object]:
     """Set up the module-level timeout-test app with a per-test DB path.
 
     The Queue inside ``prefork_apps.timeout_app`` is constructed at import time
-    from ``$TASKITO_TIMEOUT_TEST_DB``, and the prefork child re-imports the
+    from ``$FLEXIQ_TIMEOUT_TEST_DB``, and the prefork child re-imports the
     same module fresh in its own interpreter — so the env var must be set in
     the parent process before that import happens, and propagates to the
     child via inherited env.
     """
     db_path = str(tmp_path / "timeout.db")
-    prev_db = os.environ.get("TASKITO_TIMEOUT_TEST_DB")
+    prev_db = os.environ.get("FLEXIQ_TIMEOUT_TEST_DB")
     prev_pythonpath = os.environ.get("PYTHONPATH")
 
-    os.environ["TASKITO_TIMEOUT_TEST_DB"] = db_path
+    os.environ["FLEXIQ_TIMEOUT_TEST_DB"] = db_path
     # Make `prefork_apps.timeout_app` importable in both parent and (inherited)
     # child without depending on pytest's rootdir manipulation.
     os.environ["PYTHONPATH"] = (
@@ -126,9 +126,9 @@ def timeout_app(tmp_path: Path) -> Iterator[object]:
         with contextlib.suppress(Exception):
             module.queue._inner.request_shutdown()
         if prev_db is None:
-            os.environ.pop("TASKITO_TIMEOUT_TEST_DB", None)
+            os.environ.pop("FLEXIQ_TIMEOUT_TEST_DB", None)
         else:
-            os.environ["TASKITO_TIMEOUT_TEST_DB"] = prev_db
+            os.environ["FLEXIQ_TIMEOUT_TEST_DB"] = prev_db
         if prev_pythonpath is None:
             os.environ.pop("PYTHONPATH", None)
         else:
@@ -262,10 +262,10 @@ def cancel_app(tmp_path: Path) -> Iterator[object]:
     parent's Queue construction and the child's re-import see the same DB.
     """
     db_path = str(tmp_path / "cancel.db")
-    prev_db = os.environ.get("TASKITO_CANCEL_TEST_DB")
+    prev_db = os.environ.get("FLEXIQ_CANCEL_TEST_DB")
     prev_pythonpath = os.environ.get("PYTHONPATH")
 
-    os.environ["TASKITO_CANCEL_TEST_DB"] = db_path
+    os.environ["FLEXIQ_CANCEL_TEST_DB"] = db_path
     os.environ["PYTHONPATH"] = (
         f"{PREFORK_APP_DIR}{os.pathsep}{prev_pythonpath}" if prev_pythonpath else PREFORK_APP_DIR
     )
@@ -282,9 +282,9 @@ def cancel_app(tmp_path: Path) -> Iterator[object]:
         with contextlib.suppress(Exception):
             module.queue._inner.request_shutdown()
         if prev_db is None:
-            os.environ.pop("TASKITO_CANCEL_TEST_DB", None)
+            os.environ.pop("FLEXIQ_CANCEL_TEST_DB", None)
         else:
-            os.environ["TASKITO_CANCEL_TEST_DB"] = prev_db
+            os.environ["FLEXIQ_CANCEL_TEST_DB"] = prev_db
         if prev_pythonpath is None:
             os.environ.pop("PYTHONPATH", None)
         else:

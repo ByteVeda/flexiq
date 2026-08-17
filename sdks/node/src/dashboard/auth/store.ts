@@ -500,15 +500,15 @@ function rowToUser(username: string, row: UserRow): DashboardUser {
 // ── Bootstrap from environment ──────────────────────────────────────────
 
 /**
- * Idempotently create the first admin from `TASKITO_DASHBOARD_ADMIN_USER` /
- * `TASKITO_DASHBOARD_ADMIN_PASSWORD`. The password is removed from the
+ * Idempotently create the first admin from `FLEXIQ_DASHBOARD_ADMIN_USER` /
+ * `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`. The password is removed from the
  * process environment immediately after it is read so it cannot later be
  * harvested from `/proc/<pid>/environ` or a crash reporter.
  */
 export async function bootstrapAdminFromEnv(queue: Queue): Promise<DashboardUser | undefined> {
-  const username = process.env.TASKITO_DASHBOARD_ADMIN_USER;
-  const password = process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD;
-  delete process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD;
+  const username = process.env.FLEXIQ_DASHBOARD_ADMIN_USER;
+  const password = process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD;
+  delete process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD;
   if (!username || !password) {
     return undefined;
   }

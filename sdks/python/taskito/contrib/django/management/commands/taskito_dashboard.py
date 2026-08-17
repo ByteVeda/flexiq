@@ -16,9 +16,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):  # type: ignore[no-untyped-def]
         from django.conf import settings
 
-        default_host = getattr(settings, "TASKITO_DASHBOARD_HOST", "127.0.0.1")
-        default_port = getattr(settings, "TASKITO_DASHBOARD_PORT", 8080)
-        default_auth = getattr(settings, "TASKITO_DASHBOARD_AUTH", False)
+        default_host = getattr(settings, "FLEXIQ_DASHBOARD_HOST", "127.0.0.1")
+        default_port = getattr(settings, "FLEXIQ_DASHBOARD_PORT", 8080)
+        default_auth = getattr(settings, "FLEXIQ_DASHBOARD_AUTH", False)
 
         parser.add_argument(
             "--host",

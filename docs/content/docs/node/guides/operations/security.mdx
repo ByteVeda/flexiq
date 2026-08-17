@@ -52,7 +52,7 @@ attempt-chain instead of walking past the guard. A blocked delivery is recorded
 with status `failed` and is not retried.
 
 ```bash
-TASKITO_WEBHOOKS_ALLOW_PRIVATE=1   # disable the guard for local development
+FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1   # disable the guard for local development
 ```
 
 The address check runs inside the resolver the socket dials with, so the address
@@ -85,7 +85,7 @@ can't be framed), and `Referrer-Policy: same-origin`.
 - [ ] Enqueue behind your own authn/authz — never expose storage to clients.
 - [ ] No secrets in task args; fetch them inside the handler.
 - [ ] Webhook receivers verify the HMAC signature, and
-      `TASKITO_WEBHOOKS_ALLOW_PRIVATE` is unset in production.
+      `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` is unset in production.
 - [ ] Dashboard auth enabled (`authEnabled: true` / `--auth`), and the port
       bound to localhost or behind auth.
 - [ ] Logs don't echo sensitive payloads (use `onEnqueue` to

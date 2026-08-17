@@ -160,7 +160,7 @@ predicates, retry policy and the full event taxonomy in Node and Java.
 - **A readiness probe that can actually run.** `/readiness` is gated alongside `/metrics`, so a
   Kubernetes probe — which carries no credential, and cannot be given one, since a probe header is
   a literal string in the manifest — got `401` and the pod never went Ready.
-  `TASKITO_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a credential; `/metrics`
+  `FLEXIQ_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a credential; `/metrics`
   stays gated. The Helm chart sets it by default and probes `/readiness`; turn it off and readiness
   falls back to `/health`.
 
@@ -570,7 +570,7 @@ Security-hardening release. No breaking changes.
 - **Dashboard authorization is enforced server-side.** Mutating API routes now
   require the `admin` role; `viewer` sessions are read-only. Session and CSRF
   cookies carry `Secure`, and `/metrics` / `/readiness` can be gated behind
-  `TASKITO_DASHBOARD_METRICS_TOKEN`.
+  `FLEXIQ_DASHBOARD_METRICS_TOKEN`.
 - **Scaler binds to `127.0.0.1` by default.** Use `--host 0.0.0.0` only behind a
   trusted network boundary.
 
@@ -701,7 +701,7 @@ migration steps, rolling-upgrade notes, and the downgrade floor.
 
 ### Added
 
-- **Dashboard SSO (OAuth & OIDC).** Native sign-in for Google, GitHub, and any OIDC-compliant provider (Okta, Auth0, Keycloak, Microsoft Entra) sits alongside the existing password login. Multiple named OIDC providers run side-by-side, each rendered as its own button on the login screen. Configuration is env-var driven (`TASKITO_DASHBOARD_OAUTH_*`); the `oauth` extra (`pip install 'taskito[oauth]'`) pulls in `authlib`, `joserfc`, and `requests`. Security: PKCE S256, single-use server-side `state` (5-min TTL), nonce verification, JWKS-validated ID tokens, issuer/audience/expiry checks, open-redirect protection on the post-login `next` URL, HTTPS-only redirect URIs outside `localhost`. Allowlists by Google Workspace domain, GitHub org, or OIDC email domain. Promote OAuth users to `admin` via an explicit `TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS` list, with a first-user-wins fallback for empty deployments. Password login can be disabled entirely with `TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED=false`.
+- **Dashboard SSO (OAuth & OIDC).** Native sign-in for Google, GitHub, and any OIDC-compliant provider (Okta, Auth0, Keycloak, Microsoft Entra) sits alongside the existing password login. Multiple named OIDC providers run side-by-side, each rendered as its own button on the login screen. Configuration is env-var driven (`FLEXIQ_DASHBOARD_OAUTH_*`); the `oauth` extra (`pip install 'taskito[oauth]'`) pulls in `authlib`, `joserfc`, and `requests`. Security: PKCE S256, single-use server-side `state` (5-min TTL), nonce verification, JWKS-validated ID tokens, issuer/audience/expiry checks, open-redirect protection on the post-login `next` URL, HTTPS-only redirect URIs outside `localhost`. Allowlists by Google Workspace domain, GitHub org, or OIDC email domain. Promote OAuth users to `admin` via an explicit `FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` list, with a first-user-wins fallback for empty deployments. Password login can be disabled entirely with `FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false`.
 - **Dashboard SSO operator guide.** New `Dashboard › SSO (OAuth & OIDC)` doc walks through registering OAuth clients with Google, GitHub, and generic OIDC providers, plus the full env-var reference, allowlist semantics, security model, and troubleshooting cookbook. Includes a Mermaid sequence diagram of the end-to-end flow.
 
 ### Changed
@@ -988,7 +988,7 @@ migration steps, rolling-upgrade notes, and the downgrade floor.
 - **Prometheus customization** -- `PrometheusMiddleware` and `PrometheusStatsCollector` add `namespace`, `extra_labels_fn`, and `disabled_metrics` parameters; metrics grouped by category (`"jobs"`, `"queue"`, `"resource"`, `"proxy"`, `"intercept"`)
 - **FastAPI route selection** -- `TaskitoRouter` adds `include_routes`/`exclude_routes`, `dependencies`, `sse_poll_interval`, `result_timeout`, `default_page_size`, `max_page_size`, and `result_serializer` parameters; new endpoints: `/health`, `/readiness`, `/resources`, `/stats/queues`
 - **Flask CLI group** -- `Taskito(app, cli_group="tasks")` renames the CLI command group; `flask taskito info --format json` outputs machine-readable stats
-- **Django settings** -- `TASKITO_AUTODISCOVER_MODULE`, `TASKITO_ADMIN_PER_PAGE`, `TASKITO_ADMIN_TITLE`, `TASKITO_ADMIN_HEADER`, `TASKITO_DASHBOARD_HOST`, `TASKITO_DASHBOARD_PORT` control autodiscovery, admin pagination, branding, and dashboard bind address
+- **Django settings** -- `FLEXIQ_AUTODISCOVER_MODULE`, `FLEXIQ_ADMIN_PER_PAGE`, `FLEXIQ_ADMIN_TITLE`, `FLEXIQ_ADMIN_HEADER`, `FLEXIQ_DASHBOARD_HOST`, `FLEXIQ_DASHBOARD_PORT` control autodiscovery, admin pagination, branding, and dashboard bind address
 - **`max_retry_delay` on `@queue.task()`** -- caps exponential backoff at a configurable ceiling in seconds (defaults to 300 s)
 - **`max_concurrent` on `@queue.task()`** -- limits how many instances of a task run simultaneously across all workers
 - **`serializer` on `@queue.task()`** -- per-task serializer override; falls back to queue-level serializer
@@ -1020,7 +1020,7 @@ migration steps, rolling-upgrade notes, and the downgrade floor.
 - **Hot reload** -- `reloadable=True` marks a resource for reload on `SIGHUP`; `taskito reload --app myapp:queue` CLI subcommand; `queue._resource_runtime.reload()` programmatic reload
 - **TOML resource config** -- `queue.load_resources("resources.toml")` loads resource definitions from a TOML file; factory, teardown, and health_check are dotted import paths; Python 3.11+ built-in `tomllib`, older versions need `tomli`
 - **Resource proxies** -- transparent deconstruct/reconstruct of non-serializable objects; built-in handlers: `file`, `logger`, `requests_session`, `httpx_client`, `boto3_client`, `gcs_client`
-- **Proxy security** -- HMAC-SHA256 recipe signing via `recipe_signing_key=` on `Queue()` or `TASKITO_RECIPE_SECRET` env var; reconstruction timeout via `max_reconstruction_timeout=`; file path allowlist via `file_path_allowlist=`; per-handler opt-out via `disabled_proxies=`
+- **Proxy security** -- HMAC-SHA256 recipe signing via `recipe_signing_key=` on `Queue()` or `FLEXIQ_RECIPE_SECRET` env var; reconstruction timeout via `max_reconstruction_timeout=`; file path allowlist via `file_path_allowlist=`; per-handler opt-out via `disabled_proxies=`
 - **`NoProxy` wrapper** -- `from taskito import NoProxy`; opt out of proxy handling for a specific argument, letting the serializer handle it directly
 - **Custom type rules** -- `queue.register_type(MyType, "redirect", resource="my_resource")` registers custom types with any strategy (requires interception enabled)
 - **Interception metrics** -- `queue.interception_stats()` returns total calls, per-strategy counts, average duration, and max depth reached
@@ -1093,7 +1093,7 @@ migration steps, rolling-upgrade notes, and the downgrade floor.
 ### Features
 
 - **Postgres storage backend** — optional PostgreSQL backend for multi-machine workers and higher write throughput (`pip install taskito[postgres]`); full feature parity with SQLite
-- **Django integration** — `TASKITO_BACKEND`, `TASKITO_DB_URL`, `TASKITO_SCHEMA` settings for configuring the backend from Django projects
+- **Django integration** — `FLEXIQ_BACKEND`, `FLEXIQ_DB_URL`, `FLEXIQ_SCHEMA` settings for configuring the backend from Django projects
 
 ### Critical Fixes
 

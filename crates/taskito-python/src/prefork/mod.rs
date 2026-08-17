@@ -76,7 +76,7 @@ pub struct PreforkPool {
 
 impl PreforkPool {
     pub fn new(num_workers: usize, app_path: String) -> Self {
-        let python = std::env::var("TASKITO_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let python = std::env::var("FLEXIQ_PYTHON").unwrap_or_else(|_| "python".to_string());
 
         Self {
             num_workers,

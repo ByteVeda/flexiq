@@ -153,7 +153,7 @@ def _handshake(queue: Any) -> None:
     if theirs != WORKER_PROTOCOL_VERSION:
         raise ProtocolError(
             f"worker protocol mismatch: parent speaks {theirs}, "
-            f"we speak {WORKER_PROTOCOL_VERSION} — check TASKITO_PYTHON points "
+            f"we speak {WORKER_PROTOCOL_VERSION} — check FLEXIQ_PYTHON points "
             f"at the interpreter holding the same taskito install"
         )
 

@@ -1,5 +1,5 @@
 //! SPA delivery: the bundle embedded at build time, or a directory named by
-//! `TASKITO_DASHBOARD_ASSETS`.
+//! `FLEXIQ_DASHBOARD_ASSETS`.
 //!
 //! Serving the SPA here is the point of the server crate — the SDK packages
 //! each ship their own 1.6 MB copy today. A build with no bundle serves the
@@ -25,7 +25,7 @@ pub const MISSING_ASSETS_HTML: &str = concat!(
     "<p>This taskito-server build does not embed the compiled dashboard. ",
     "Build the SPA and point the server at it:</p>",
     "<pre>pnpm --dir dashboard install &amp;&amp; pnpm --dir dashboard build\n",
-    "TASKITO_DASHBOARD_ASSETS=/path/to/dist taskito-server</pre>",
+    "FLEXIQ_DASHBOARD_ASSETS=/path/to/dist taskito-server</pre>",
     "</body></html>"
 );
 

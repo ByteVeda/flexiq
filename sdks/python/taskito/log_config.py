@@ -58,9 +58,9 @@ _LAST_CONFIG: tuple[int, int] | None = None
 
 
 def _resolve_level(level: int | str | None) -> int:
-    """Resolve a level argument or ``TASKITO_LOG_LEVEL`` env var to a logging int."""
+    """Resolve a level argument or ``FLEXIQ_LOG_LEVEL`` env var to a logging int."""
     if level is None:
-        level = os.environ.get("TASKITO_LOG_LEVEL", "INFO")
+        level = os.environ.get("FLEXIQ_LOG_LEVEL", "INFO")
     if isinstance(level, str):
         try:
             return int(level)
@@ -99,7 +99,7 @@ def configure(
 
     Args:
         level: Logging level as an int (e.g. ``logging.DEBUG``) or string
-            (``"INFO"``). Falls back to ``TASKITO_LOG_LEVEL``, then ``INFO``.
+            (``"INFO"``). Falls back to ``FLEXIQ_LOG_LEVEL``, then ``INFO``.
         stream: Where to write log lines. Defaults to ``sys.stderr``.
 
     Returns:

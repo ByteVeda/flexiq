@@ -2,7 +2,7 @@
 
 We refuse to deliver to loopback, link-local, and RFC1918 addresses by
 default — an operator who can write to ``dashboard_settings`` could
-otherwise turn the worker into an SSRF proxy. The ``TASKITO_WEBHOOKS_ALLOW_PRIVATE``
+otherwise turn the worker into an SSRF proxy. The ``FLEXIQ_WEBHOOKS_ALLOW_PRIVATE``
 environment variable disables the guard for local development.
 """
 
@@ -27,7 +27,7 @@ _BLOCKED_HOSTNAMES = frozenset(
     {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 )
 
-_ALLOW_ENV_VAR = "TASKITO_WEBHOOKS_ALLOW_PRIVATE"
+_ALLOW_ENV_VAR = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE"
 
 
 class UnsafeWebhookUrl(ValueError):
@@ -59,7 +59,7 @@ def _hostname_is_blocked(hostname: str) -> bool:
 def validate_webhook_url(url: str) -> None:
     """Reject ``url`` if it targets a private/loopback/link-local destination.
 
-    Set ``TASKITO_WEBHOOKS_ALLOW_PRIVATE=1`` in the environment to disable
+    Set ``FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1`` in the environment to disable
     the guard (intended for local development against ``http://localhost``).
 
     Raises:

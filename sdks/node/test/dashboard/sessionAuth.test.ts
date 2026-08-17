@@ -203,18 +203,18 @@ describe("rbac", () => {
 
 describe("env bootstrap", () => {
   it("creates the admin once and scrubs the password from the environment", async () => {
-    process.env.TASKITO_DASHBOARD_ADMIN_USER = "envadmin";
-    process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD = "password123";
+    process.env.FLEXIQ_DASHBOARD_ADMIN_USER = "envadmin";
+    process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD = "password123";
     try {
       const user = await bootstrapAdminFromEnv(queue);
       expect(user?.username).toBe("envadmin");
-      expect(process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD).toBeUndefined();
+      expect(process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD).toBeUndefined();
       // Idempotent: second call is a no-op.
-      process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD = "password123";
+      process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD = "password123";
       expect(await bootstrapAdminFromEnv(queue)).toBeUndefined();
     } finally {
-      delete process.env.TASKITO_DASHBOARD_ADMIN_USER;
-      delete process.env.TASKITO_DASHBOARD_ADMIN_PASSWORD;
+      delete process.env.FLEXIQ_DASHBOARD_ADMIN_USER;
+      delete process.env.FLEXIQ_DASHBOARD_ADMIN_PASSWORD;
     }
   });
 });
@@ -238,8 +238,8 @@ describe("probes", () => {
   });
 
   it("accepts the metrics bearer token alongside sessions", async () => {
-    const previous = process.env.TASKITO_DASHBOARD_METRICS_TOKEN;
-    process.env.TASKITO_DASHBOARD_METRICS_TOKEN = "scrape-secret";
+    const previous = process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN;
+    process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN = "scrape-secret";
     try {
       const ok = await fetch(`${base}/readiness`, {
         headers: { authorization: "Bearer scrape-secret" },
@@ -250,9 +250,9 @@ describe("probes", () => {
       ).toBe(401);
     } finally {
       if (previous === undefined) {
-        delete process.env.TASKITO_DASHBOARD_METRICS_TOKEN;
+        delete process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN;
       } else {
-        process.env.TASKITO_DASHBOARD_METRICS_TOKEN = previous;
+        process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN = previous;
       }
     }
   });

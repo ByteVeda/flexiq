@@ -9,12 +9,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Directories searched for a built SPA, first hit wins. `TASKITO_DASHBOARD_ASSETS_DIR`
+/// Directories searched for a built SPA, first hit wins. `FLEXIQ_DASHBOARD_ASSETS_DIR`
 /// overrides all of them (the deploy image sets it explicitly).
 const CANDIDATE_DIRS: [&str; 2] = ["dashboard/dist", "sdks/python/taskito/static/dashboard"];
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=TASKITO_DASHBOARD_ASSETS_DIR");
+    println!("cargo:rerun-if-env-changed=FLEXIQ_DASHBOARD_ASSETS_DIR");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("cargo always sets OUT_DIR"));
     let generated = match locate_assets() {
@@ -35,7 +35,7 @@ fn main() {
 /// Resolve the asset root, preferring an explicit override over the two
 /// in-repo build outputs. Returns `None` when nothing has been built.
 fn locate_assets() -> Option<PathBuf> {
-    if let Ok(explicit) = env::var("TASKITO_DASHBOARD_ASSETS_DIR") {
+    if let Ok(explicit) = env::var("FLEXIQ_DASHBOARD_ASSETS_DIR") {
         let path = PathBuf::from(explicit);
         return path.join("index.html").is_file().then_some(path);
     }

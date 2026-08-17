@@ -2330,7 +2330,7 @@ fn redis_storage_tests() {
     use taskito_core::RedisStorage;
 
     // Use DB 15 to avoid interfering with other data.
-    let url = std::env::var("TASKITO_REDIS_TEST_URL")
+    let url = std::env::var("FLEXIQ_REDIS_TEST_URL")
         .unwrap_or_else(|_| "redis://localhost:6379/15".to_string());
 
     let storage = match RedisStorage::new(&url) {
@@ -2864,10 +2864,10 @@ fn postgres_storage_tests() {
     use diesel::{Connection, PgConnection};
     use taskito_core::PostgresStorage;
 
-    let url = match std::env::var("TASKITO_POSTGRES_TEST_URL") {
+    let url = match std::env::var("FLEXIQ_POSTGRES_TEST_URL") {
         Ok(u) => u,
         Err(_) => {
-            eprintln!("Skipping Postgres tests (TASKITO_POSTGRES_TEST_URL not set)");
+            eprintln!("Skipping Postgres tests (FLEXIQ_POSTGRES_TEST_URL not set)");
             return;
         }
     };

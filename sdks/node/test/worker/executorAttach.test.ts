@@ -537,14 +537,14 @@ it("requires an attach address", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previous = process.env.TASKITO_ATTACH;
-  process.env.TASKITO_ATTACH = undefined;
-  delete process.env.TASKITO_ATTACH;
+  const previous = process.env.FLEXIQ_ATTACH;
+  process.env.FLEXIQ_ATTACH = undefined;
+  delete process.env.FLEXIQ_ATTACH;
   try {
-    await expect(queue.runExecutor()).rejects.toThrow(/TASKITO_ATTACH/);
+    await expect(queue.runExecutor()).rejects.toThrow(/FLEXIQ_ATTACH/);
   } finally {
     if (previous !== undefined) {
-      process.env.TASKITO_ATTACH = previous;
+      process.env.FLEXIQ_ATTACH = previous;
     }
   }
 });
@@ -554,17 +554,17 @@ it("takes the attach address and slot count from the environment", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previousAttach = process.env.TASKITO_ATTACH;
-  const previousSlots = process.env.TASKITO_SLOTS;
-  process.env.TASKITO_ATTACH = `127.0.0.1:${scheduler.port}`;
-  process.env.TASKITO_SLOTS = "3";
+  const previousAttach = process.env.FLEXIQ_ATTACH;
+  const previousSlots = process.env.FLEXIQ_SLOTS;
+  process.env.FLEXIQ_ATTACH = `127.0.0.1:${scheduler.port}`;
+  process.env.FLEXIQ_SLOTS = "3";
   try {
     executor = await queue.runExecutor();
     const hello = await scheduler.attached();
     expect(hello.slots).toBe(3);
   } finally {
-    restoreEnv("TASKITO_ATTACH", previousAttach);
-    restoreEnv("TASKITO_SLOTS", previousSlots);
+    restoreEnv("FLEXIQ_ATTACH", previousAttach);
+    restoreEnv("FLEXIQ_SLOTS", previousSlots);
   }
 });
 
@@ -572,12 +572,12 @@ it("rejects a non-numeric slot count from the environment", async () => {
   const queue = newQueue();
   queue.task("echo", (value: string) => value);
 
-  const previous = process.env.TASKITO_SLOTS;
-  process.env.TASKITO_SLOTS = "many";
+  const previous = process.env.FLEXIQ_SLOTS;
+  process.env.FLEXIQ_SLOTS = "many";
   try {
     await expect(queue.runExecutor({ attach: "127.0.0.1:1" })).rejects.toThrow(RangeError);
   } finally {
-    restoreEnv("TASKITO_SLOTS", previous);
+    restoreEnv("FLEXIQ_SLOTS", previous);
   }
 });
 

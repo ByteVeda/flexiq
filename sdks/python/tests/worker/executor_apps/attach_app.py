@@ -22,10 +22,10 @@ from taskito.middleware import TaskMiddleware
 # The backend is configurable so one test can point this at a database that
 # does not exist, proving an executor never connects to it.
 queue = Queue(
-    backend=os.environ.get("TASKITO_EXECUTOR_TEST_BACKEND", "sqlite"),
-    db_path=os.environ.get("TASKITO_EXECUTOR_TEST_DB", "/tmp/taskito-executor.db"),
-    db_url=os.environ.get("TASKITO_EXECUTOR_TEST_DB")
-    if os.environ.get("TASKITO_EXECUTOR_TEST_BACKEND")
+    backend=os.environ.get("FLEXIQ_EXECUTOR_TEST_BACKEND", "sqlite"),
+    db_path=os.environ.get("FLEXIQ_EXECUTOR_TEST_DB", "/tmp/taskito-executor.db"),
+    db_url=os.environ.get("FLEXIQ_EXECUTOR_TEST_DB")
+    if os.environ.get("FLEXIQ_EXECUTOR_TEST_BACKEND")
     else None,
 )
 
@@ -37,7 +37,7 @@ def _markers() -> Path | None:
     job has *started*. A file can, without adding a protocol frame that exists
     only for tests.
     """
-    configured = os.environ.get("TASKITO_EXECUTOR_MARKERS")
+    configured = os.environ.get("FLEXIQ_EXECUTOR_MARKERS")
     return Path(configured) if configured else None
 
 

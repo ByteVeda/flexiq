@@ -13,7 +13,7 @@ import type { Queue } from "../queue";
 import type { DeadJob, EnqueueOptions, Job, ResultOptions, Stats } from "../types";
 
 /** DI token for the underlying {@link Queue}. Provided by {@link TaskitoModule.forRoot}. */
-export const TASKITO_QUEUE = Symbol("TASKITO_QUEUE");
+export const FLEXIQ_QUEUE = Symbol("FLEXIQ_QUEUE");
 
 /**
  * Injectable wrapper over a Taskito {@link Queue}. Exposes the common producer/inspection
@@ -21,7 +21,7 @@ export const TASKITO_QUEUE = Symbol("TASKITO_QUEUE");
  */
 @Injectable()
 export class TaskitoService {
-  constructor(@Inject(TASKITO_QUEUE) readonly queue: Queue) {}
+  constructor(@Inject(FLEXIQ_QUEUE) readonly queue: Queue) {}
 
   /** Enqueue `task` with positional `args`. Returns the job id. */
   enqueue(task: string, args?: unknown[], options?: EnqueueOptions): string {
@@ -65,7 +65,7 @@ export class TaskitoModule {
   static forRoot(queue: Queue): DynamicModule {
     return {
       module: TaskitoModule,
-      providers: [{ provide: TASKITO_QUEUE, useValue: queue }, TaskitoService],
+      providers: [{ provide: FLEXIQ_QUEUE, useValue: queue }, TaskitoService],
       exports: [TaskitoService],
     };
   }

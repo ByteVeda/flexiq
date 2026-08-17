@@ -134,38 +134,38 @@ impl OAuthConfig {
 /// operator who set a client id and forgot the secret must find out at
 /// startup, not when the first person tries to log in.
 pub fn from_env(env: &Env) -> Result<Option<OAuthConfig>> {
-    let base_url = value(env, "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL");
+    let base_url = value(env, "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL");
     let mut providers = Vec::new();
 
-    if let Some(client_id) = value(env, "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID") {
+    if let Some(client_id) = value(env, "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID") {
         providers.push(ProviderConfig {
             slot: "google".into(),
             label: "Google".into(),
             kind: ProviderKind::Google,
-            client_secret: require_secret(env, "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET")?,
+            client_secret: require_secret(env, "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET")?,
             client_id,
             discovery_url: Some(GOOGLE_DISCOVERY_URL.to_string()),
-            allowed_domains: csv(env, "TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS"),
+            allowed_domains: csv(env, "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS"),
             allowed_orgs: Vec::new(),
             github: GitHubEndpoints::default(),
         });
     }
 
-    if let Some(client_id) = value(env, "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID") {
+    if let Some(client_id) = value(env, "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID") {
         providers.push(ProviderConfig {
             slot: "github".into(),
             label: "GitHub".into(),
             kind: ProviderKind::GitHub,
-            client_secret: require_secret(env, "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET")?,
+            client_secret: require_secret(env, "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET")?,
             client_id,
             discovery_url: None,
             allowed_domains: Vec::new(),
-            allowed_orgs: csv(env, "TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS"),
+            allowed_orgs: csv(env, "FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS"),
             github: GitHubEndpoints::default(),
         });
     }
 
-    for slot in csv(env, "TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS") {
+    for slot in csv(env, "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS") {
         providers.push(oidc_provider(env, &slot, &providers)?);
     }
 
@@ -175,25 +175,25 @@ pub fn from_env(env: &Env) -> Result<Option<OAuthConfig>> {
 
     let Some(redirect_base_url) = base_url else {
         bail!(
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any OAuth \
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any OAuth \
              provider is configured — it is what every callback URL is built from"
         );
     };
     validate_base_url(&redirect_base_url)?;
 
-    let admin_emails = csv(env, "TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS");
+    let admin_emails = csv(env, "FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS");
     if admin_emails.is_empty() {
         // Provider logins only ever get the viewer role without an allowlist,
         // so an OAuth-only deployment would come up with no admins at all.
         log::warn!(
-            "OAuth is configured without TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS: \
+            "OAuth is configured without FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS: \
              every provider login gets the viewer role"
         );
     }
 
     Ok(Some(OAuthConfig {
         redirect_base_url,
-        password_auth_enabled: flag(env, "TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED", true),
+        password_auth_enabled: flag(env, "FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED", true),
         admin_emails,
         providers,
     }))
@@ -205,7 +205,7 @@ fn oidc_provider(env: &Env, slot: &str, existing: &[ProviderConfig]) -> Result<P
         bail!("OIDC slot '{slot}' is listed twice");
     }
     let prefix = format!(
-        "TASKITO_DASHBOARD_OAUTH_OIDC_{}",
+        "FLEXIQ_DASHBOARD_OAUTH_OIDC_{}",
         slot.to_ascii_uppercase().replace('-', "_")
     );
     let Some(client_id) = value(env, &format!("{prefix}_CLIENT_ID")) else {
@@ -262,11 +262,11 @@ fn validate_slot(slot: &str) -> Result<()> {
 /// here is a login that lands somewhere else entirely.
 fn validate_base_url(url: &str) -> Result<()> {
     let Some((scheme, rest)) = url.split_once("://") else {
-        bail!("TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be http(s)");
+        bail!("FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be http(s)");
     };
     let scheme = scheme.to_ascii_lowercase();
     if !matches!(scheme.as_str(), "http" | "https") {
-        bail!("TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be http(s), got '{scheme}'");
+        bail!("FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be http(s), got '{scheme}'");
     }
     let host = rest
         .split(['/', '?', '#'])
@@ -280,11 +280,11 @@ fn validate_base_url(url: &str) -> Result<()> {
         })
         .filter(|host| !host.is_empty());
     let Some(host) = host else {
-        bail!("TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must include a hostname");
+        bail!("FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must include a hostname");
     };
     if scheme == "http" && !LOCAL_HOSTS.contains(&host.as_str()) {
         bail!(
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must use https for non-local hosts \
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must use https for non-local hosts \
              (got http://{host}) — an OAuth code returned over plain http is interceptable"
         );
     }
@@ -316,7 +316,7 @@ mod tests {
         assert!(from_env(&env(&[])).expect("valid").is_none());
         // A base URL alone configures nothing.
         assert!(from_env(&env(&[(
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
             "https://ops.example.com"
         )]))
         .expect("valid")
@@ -326,8 +326,8 @@ mod tests {
     #[test]
     fn a_provider_without_a_base_url_is_an_error() {
         let error = from_env(&env(&[
-            ("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "id"),
-            ("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "secret"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "id"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "secret"),
         ]))
         .expect_err("must refuse");
         assert!(error.to_string().contains("REDIRECT_BASE_URL"));
@@ -337,10 +337,10 @@ mod tests {
     fn a_client_id_without_its_secret_is_an_error() {
         let error = from_env(&env(&[
             (
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
                 "https://ops.example.com",
             ),
-            ("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "id"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "id"),
         ]))
         .expect_err("must refuse");
         assert!(error.to_string().contains("CLIENT_SECRET"));
@@ -350,19 +350,19 @@ mod tests {
     fn google_and_github_parse_with_their_allowlists() {
         let config = from_env(&env(&[
             (
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
                 "https://ops.example.com/",
             ),
-            ("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "gid"),
-            ("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "gsecret"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "gid"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "gsecret"),
             (
-                "TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS",
+                "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS",
                 "example.com, other.com",
             ),
-            ("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "hid"),
-            ("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET", "hsecret"),
-            ("TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS", "byteveda"),
-            ("TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS", "ops@example.com"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "hid"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET", "hsecret"),
+            ("FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS", "byteveda"),
+            ("FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS", "ops@example.com"),
         ]))
         .expect("valid")
         .expect("configured");
@@ -387,21 +387,21 @@ mod tests {
     fn an_oidc_slot_needs_its_own_variables() {
         let base = [
             (
-                "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
+                "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL",
                 "https://ops.example.com",
             ),
-            ("TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS", "acme-okta"),
+            ("FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS", "acme-okta"),
         ];
         assert!(from_env(&env(&base)).is_err());
 
         let mut full = base.to_vec();
-        full.push(("TASKITO_DASHBOARD_OAUTH_OIDC_ACME_OKTA_CLIENT_ID", "id"));
+        full.push(("FLEXIQ_DASHBOARD_OAUTH_OIDC_ACME_OKTA_CLIENT_ID", "id"));
         full.push((
-            "TASKITO_DASHBOARD_OAUTH_OIDC_ACME_OKTA_CLIENT_SECRET",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_ACME_OKTA_CLIENT_SECRET",
             "secret",
         ));
         full.push((
-            "TASKITO_DASHBOARD_OAUTH_OIDC_ACME_OKTA_DISCOVERY_URL",
+            "FLEXIQ_DASHBOARD_OAUTH_OIDC_ACME_OKTA_DISCOVERY_URL",
             "https://acme.okta.com/.well-known/openid-configuration",
         ));
         let config = from_env(&env(&full)).expect("valid").expect("configured");

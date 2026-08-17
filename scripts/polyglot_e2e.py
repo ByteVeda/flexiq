@@ -79,7 +79,7 @@ class Worker:
         self.name = name
         self.log_path = log_path
         self._log = log_path.open("w")
-        env = {**os.environ, "TASKITO_DB": str(db)}
+        env = {**os.environ, "FLEXIQ_DB": str(db)}
         try:
             # Own session so the whole tree (Gradle's JVM, node's threads) can be
             # signalled as one group at teardown.

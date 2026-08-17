@@ -202,8 +202,8 @@ def test_prune_expired_sessions(queue: Queue) -> None:
 
 
 def test_bootstrap_admin_from_env(queue: Queue, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TASKITO_DASHBOARD_ADMIN_USER", "envadmin")
-    monkeypatch.setenv("TASKITO_DASHBOARD_ADMIN_PASSWORD", "from-environ-pass")
+    monkeypatch.setenv("FLEXIQ_DASHBOARD_ADMIN_USER", "envadmin")
+    monkeypatch.setenv("FLEXIQ_DASHBOARD_ADMIN_PASSWORD", "from-environ-pass")
     user = bootstrap_admin_from_env(queue)
     assert user is not None
     assert user.username == "envadmin"
@@ -214,8 +214,8 @@ def test_bootstrap_admin_from_env(queue: Queue, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_bootstrap_admin_noop_without_env(queue: Queue, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_DASHBOARD_ADMIN_USER", raising=False)
-    monkeypatch.delenv("TASKITO_DASHBOARD_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("FLEXIQ_DASHBOARD_ADMIN_USER", raising=False)
+    monkeypatch.delenv("FLEXIQ_DASHBOARD_ADMIN_PASSWORD", raising=False)
     assert bootstrap_admin_from_env(queue) is None
     assert AuthStore(queue).count_users() == 0
 
@@ -715,7 +715,7 @@ def test_probe_accepts_metrics_bearer_when_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base, queue = dashboard_server
-    monkeypatch.setenv("TASKITO_DASHBOARD_METRICS_TOKEN", "scraper-token")
+    monkeypatch.setenv("FLEXIQ_DASHBOARD_METRICS_TOKEN", "scraper-token")
     store = AuthStore(queue)
     user = store.create_user("alice", "hunter2-secret")
 
@@ -812,7 +812,7 @@ def test_auth_disabled_probe_honours_metrics_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base, _ = open_dashboard_server
-    monkeypatch.setenv("TASKITO_DASHBOARD_METRICS_TOKEN", "scraper-token")
+    monkeypatch.setenv("FLEXIQ_DASHBOARD_METRICS_TOKEN", "scraper-token")
     status, _, _ = _get(f"{base}/readiness")
     assert status == 401
     status, _, _ = _get(f"{base}/readiness", headers={"Authorization": "Bearer scraper-token"})

@@ -475,7 +475,7 @@ _DUMMY_HASH = (
 def bootstrap_admin_from_env(queue: Queue) -> User | None:
     """Idempotently create the first admin from environment variables.
 
-    If ``TASKITO_DASHBOARD_ADMIN_USER`` and ``TASKITO_DASHBOARD_ADMIN_PASSWORD``
+    If ``FLEXIQ_DASHBOARD_ADMIN_USER`` and ``FLEXIQ_DASHBOARD_ADMIN_PASSWORD``
     are set AND the user does not exist yet, create it. Safe to call on every
     startup — does nothing if the user already exists.
 
@@ -483,8 +483,8 @@ def bootstrap_admin_from_env(queue: Queue) -> User | None:
     it cannot later be harvested via ``/proc/<pid>/environ``, ``ps``, or a
     crash reporter.
     """
-    username = os.environ.get("TASKITO_DASHBOARD_ADMIN_USER")
-    password = os.environ.pop("TASKITO_DASHBOARD_ADMIN_PASSWORD", None)
+    username = os.environ.get("FLEXIQ_DASHBOARD_ADMIN_USER")
+    password = os.environ.pop("FLEXIQ_DASHBOARD_ADMIN_PASSWORD", None)
     if not username or not password:
         return None
     store = AuthStore(queue)

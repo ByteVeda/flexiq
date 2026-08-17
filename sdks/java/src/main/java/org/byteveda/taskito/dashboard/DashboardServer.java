@@ -57,14 +57,14 @@ import org.jspecify.annotations.Nullable;
  *   <li><b>Session</b> ({@code authEnabled=true}): password users + sessions in
  *       the settings KV, CSRF double-submit, admin/viewer RBAC, first-run
  *       setup. Bootstrap an admin with
- *       {@code TASKITO_DASHBOARD_ADMIN_USER}/{@code _PASSWORD}.
+ *       {@code FLEXIQ_DASHBOARD_ADMIN_USER}/{@code _PASSWORD}.
  *   <li><b>Legacy token</b>: pass a shared {@code token} to gate {@code /api/*}
  *       as a fixed admin identity (no users/sessions). Kept for back-compat.
  * </ul>
  */
 public final class DashboardServer implements AutoCloseable {
     private static final TaskitoLogger LOG = TaskitoLogger.create("dashboard");
-    private static final String METRICS_TOKEN_ENV = "TASKITO_DASHBOARD_METRICS_TOKEN";
+    private static final String METRICS_TOKEN_ENV = "FLEXIQ_DASHBOARD_METRICS_TOKEN";
 
     /**
      * Defense-in-depth headers on every response. The CSP assumes a fully
@@ -482,7 +482,7 @@ public final class DashboardServer implements AutoCloseable {
 
     /**
      * Gate for {@code /readiness} and {@code /metrics}. Accepted credentials: the
-     * optional {@code TASKITO_DASHBOARD_METRICS_TOKEN} bearer (scraper-friendly),
+     * optional {@code FLEXIQ_DASHBOARD_METRICS_TOKEN} bearer (scraper-friendly),
      * the legacy shared token in token mode, or a valid session in session mode.
      * Open mode with no metrics token stays public (probe-friendly default).
      */

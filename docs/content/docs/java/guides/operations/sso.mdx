@@ -92,11 +92,11 @@ the provider's JWKS) are all enforced server-side.
 2. **Set env vars** before starting the dashboard:
 
    ```bash
-   export TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
-   export TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
-   export TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
    # Restrict logins to your Google Workspace domain:
-   export TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=your-company.com
    ```
 
 3. **Start the dashboard.** The login screen now shows a "Continue with
@@ -115,10 +115,10 @@ GitHub has no OIDC id-token, so identity comes from `GET /user` and
 2. Env vars:
 
    ```bash
-   export TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
-   export TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
    # Restrict logins to members of these GitHub orgs:
-   export TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=your-org,partner-org
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=your-org,partner-org
    ```
 
 When `_ALLOWED_ORGS` is set, the requested scope automatically grows to
@@ -128,7 +128,7 @@ private orgs.
 <Callout type="warning" title="Verified primary email only">
   A GitHub account with no `primary && verified` email (from
   `GET /user/emails`) always lands in the `viewer` role, even if listed in
-  `TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS` — an unverified email can't be
+  `FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` — an unverified email can't be
   trusted to grant admin.
 </Callout>
 
@@ -138,22 +138,22 @@ Generic OIDC providers are **named slots** — each gets its own callback URL,
 its own namespaced users, and its own button on the login screen.
 
 ```bash
-export TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.your-company.com
 
 # List the slots first.
-export TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
 
 # Then per-slot config (slot name uppercased; '-' becomes '_').
-export TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
-export TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
-export TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
-export TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_LABEL="Acme SSO"
-export TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL="Acme SSO"
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=your-company.com
 
-export TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID=...
-export TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET=...
-export TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration
-export TASKITO_DASHBOARD_OAUTH_OIDC_MICROSOFT_LABEL="Microsoft 365"
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_LABEL="Microsoft 365"
 ```
 
 The callback URL for each slot is
@@ -170,14 +170,14 @@ subject values never collide.
 The first time someone signs in via any provider, the dashboard decides their
 role with this precedence:
 
-1. **`TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS` match** — case-insensitive match
+1. **`FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` match** — case-insensitive match
    against a verified email → `admin`.
 2. **Everyone else** → `viewer`. There is no first-user fallback: admin
    access comes only from the allowlist, the setup flow, or the env
    bootstrap.
 
 ```bash
-export TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@your-company.com,bob@your-company.com
+export FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@your-company.com,bob@your-company.com
 ```
 
 A user's role is **not** re-evaluated on later logins — change it from the
@@ -189,7 +189,7 @@ login's claims.
 Disable password login entirely:
 
 ```bash
-export TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED=false
+export FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false
 ```
 
 Startup **fails** if you disable password auth without configuring at least
@@ -252,29 +252,29 @@ rather than failing to start.
 
 ```bash
 # Required when any provider is configured.
-TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.company.com
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://taskito.company.com
 
 # Google.
-TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...
-TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
-TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=company.com,partner.com   # optional
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=company.com,partner.com   # optional
 
 # GitHub.
-TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
-TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
-TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=org1,org2                     # optional
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=org1,org2                     # optional
 
 # Generic OIDC — list slots, then configure each one.
-TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
-TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
-TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
-TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
-TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_LABEL=Acme SSO                          # optional
-TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=company.com             # optional
+FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL=Acme SSO                          # optional
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=company.com             # optional
 
 # Role bootstrap.
-TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@company.com,bob@company.com    # optional
+FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@company.com,bob@company.com    # optional
 
 # Disable password login (OAuth-only mode). Defaults to true.
-TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED=false                             # optional
+FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false                             # optional
 ```

@@ -285,11 +285,11 @@ public final class Cli {
 
         @Option(
                 names = "--attach",
-                description = "Scheduler address: host:port, :port, or unix:/path (env: TASKITO_ATTACH).")
+                description = "Scheduler address: host:port, :port, or unix:/path (env: FLEXIQ_ATTACH).")
         @Nullable
         String attach;
 
-        @Option(names = "--slots", description = "Jobs to run concurrently (env: TASKITO_SLOTS).")
+        @Option(names = "--slots", description = "Jobs to run concurrently (env: FLEXIQ_SLOTS).")
         @Nullable
         Integer slots;
 
@@ -299,9 +299,9 @@ public final class Cli {
 
         @Override
         public Integer call() throws Exception {
-            String address = attach != null ? attach : System.getenv("TASKITO_ATTACH");
+            String address = attach != null ? attach : System.getenv("FLEXIQ_ATTACH");
             if (address == null || address.isBlank()) {
-                System.err.println("--attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7777");
+                System.err.println("--attach is required (or set FLEXIQ_ATTACH), e.g. --attach scheduler:7777");
                 return 1;
             }
 
@@ -314,7 +314,7 @@ public final class Cli {
                     .slots(slotCount)
                     // Env only, never a flag: a token in argv is visible in `ps`
                     // output and lands in shell history.
-                    .token(envOrNull("TASKITO_ATTACH_TOKEN"))
+                    .token(envOrNull("FLEXIQ_ATTACH_TOKEN"))
                     .executorId(executorId);
 
             if (builder.tasks().isEmpty()) {
@@ -389,7 +389,7 @@ public final class Cli {
             if (slots != null) {
                 return atLeastOne(slots, "--slots");
             }
-            String raw = System.getenv("TASKITO_SLOTS");
+            String raw = System.getenv("FLEXIQ_SLOTS");
             if (raw == null || raw.isBlank()) {
                 return 1;
             }
@@ -398,9 +398,9 @@ public final class Cli {
                 parsed = Integer.parseInt(raw.trim());
             } catch (NumberFormatException e) {
                 throw new CommandLine.ParameterException(
-                        spec.commandLine(), "TASKITO_SLOTS must be an integer, got '" + raw + "'");
+                        spec.commandLine(), "FLEXIQ_SLOTS must be an integer, got '" + raw + "'");
             }
-            return atLeastOne(parsed, "TASKITO_SLOTS");
+            return atLeastOne(parsed, "FLEXIQ_SLOTS");
         }
 
         /**

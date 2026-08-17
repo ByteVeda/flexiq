@@ -60,16 +60,16 @@ impl Config {
 
     /// Read and validate configuration from an explicit map.
     pub fn from_map(env: &Env) -> Result<Self> {
-        let allow_insecure = flag(env, "TASKITO_ALLOW_INSECURE", false);
+        let allow_insecure = flag(env, "FLEXIQ_ALLOW_INSECURE", false);
 
         let config = Self {
-            dsn: value(env, "TASKITO_DSN"),
-            backend: value(env, "TASKITO_BACKEND"),
-            namespace: value(env, "TASKITO_NAMESPACE"),
+            dsn: value(env, "FLEXIQ_DSN"),
+            backend: value(env, "FLEXIQ_BACKEND"),
+            namespace: value(env, "FLEXIQ_NAMESPACE"),
             queues: queues(env),
-            workers: usize_value(env, "TASKITO_WORKERS")?,
-            maintenance: flag(env, "TASKITO_MAINTENANCE", true),
-            auto_migrate: flag(env, "TASKITO_AUTO_MIGRATE", true),
+            workers: usize_value(env, "FLEXIQ_WORKERS")?,
+            maintenance: flag(env, "FLEXIQ_MAINTENANCE", true),
+            auto_migrate: flag(env, "FLEXIQ_AUTO_MIGRATE", true),
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,
@@ -77,8 +77,8 @@ impl Config {
 
         if config.attach.is_none() && config.dashboard.is_none() && config.webhook.is_none() {
             bail!(
-                "nothing to run: set TASKITO_LISTEN (executor attach), \
-                 TASKITO_DASHBOARD (dashboard), TASKITO_WEBHOOK_LISTEN (sidecar \
+                "nothing to run: set FLEXIQ_LISTEN (executor attach), \
+                 FLEXIQ_DASHBOARD (dashboard), FLEXIQ_WEBHOOK_LISTEN (sidecar \
                  injection), or any combination"
             );
         }
@@ -86,8 +86,8 @@ impl Config {
         // specs and never reads a job — so it alone may run without a DSN.
         if config.dsn.is_none() && (config.attach.is_some() || config.dashboard.is_some()) {
             bail!(
-                "TASKITO_DSN is required — the storage connection string. Only a \
-                 webhook-only deployment (TASKITO_WEBHOOK_LISTEN alone) can omit it."
+                "FLEXIQ_DSN is required — the storage connection string. Only a \
+                 webhook-only deployment (FLEXIQ_WEBHOOK_LISTEN alone) can omit it."
             );
         }
         Ok(config)
@@ -97,7 +97,7 @@ impl Config {
     pub fn require_dsn(&self) -> Result<&str> {
         self.dsn
             .as_deref()
-            .context("TASKITO_DSN is required — the storage connection string")
+            .context("FLEXIQ_DSN is required — the storage connection string")
     }
 }
 
@@ -138,7 +138,7 @@ fn usize_value(env: &Env, key: &str) -> Result<Option<usize>> {
 }
 
 fn queues(env: &Env) -> Vec<String> {
-    match value(env, "TASKITO_QUEUES") {
+    match value(env, "FLEXIQ_QUEUES") {
         None => vec!["default".to_string()],
         Some(raw) => {
             let parsed: Vec<String> = raw
@@ -169,23 +169,23 @@ mod tests {
 
     #[test]
     fn dsn_is_required() {
-        let error = Config::from_map(&env(&[("TASKITO_DASHBOARD", "127.0.0.1:8080")]))
+        let error = Config::from_map(&env(&[("FLEXIQ_DASHBOARD", "127.0.0.1:8080")]))
             .expect_err("must reject a missing DSN");
-        assert!(error.to_string().contains("TASKITO_DSN"));
+        assert!(error.to_string().contains("FLEXIQ_DSN"));
     }
 
     #[test]
     fn an_attach_listener_still_needs_a_dsn() {
-        let error = Config::from_map(&env(&[("TASKITO_LISTEN", "127.0.0.1:7777")]))
+        let error = Config::from_map(&env(&[("FLEXIQ_LISTEN", "127.0.0.1:7777")]))
             .expect_err("must reject a missing DSN");
-        assert!(error.to_string().contains("TASKITO_DSN"));
+        assert!(error.to_string().contains("FLEXIQ_DSN"));
     }
 
     #[test]
     fn defaults_fill_in_around_the_dsn() {
         let config = Config::from_map(&env(&[
-            ("TASKITO_DSN", ":memory:"),
-            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
         ]))
         .expect("valid config");
         assert_eq!(config.queues, vec!["default".to_string()]);
@@ -197,9 +197,9 @@ mod tests {
     #[test]
     fn queues_split_on_commas_and_ignore_blanks() {
         let config = Config::from_map(&env(&[
-            ("TASKITO_DSN", ":memory:"),
-            ("TASKITO_QUEUES", " high , ,default "),
-            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_QUEUES", " high , ,default "),
+            ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
         ]))
         .expect("valid config");
         assert_eq!(
@@ -211,9 +211,9 @@ mod tests {
     #[test]
     fn an_empty_value_reads_as_unset() {
         let config = Config::from_map(&env(&[
-            ("TASKITO_DSN", ":memory:"),
-            ("TASKITO_NAMESPACE", "   "),
-            ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_NAMESPACE", "   "),
+            ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
         ]))
         .expect("valid config");
         assert!(config.namespace.is_none());
@@ -221,8 +221,7 @@ mod tests {
 
     #[test]
     fn a_config_that_runs_nothing_is_rejected() {
-        let error =
-            Config::from_map(&env(&[("TASKITO_DSN", ":memory:")])).expect_err("must reject");
+        let error = Config::from_map(&env(&[("FLEXIQ_DSN", ":memory:")])).expect_err("must reject");
         assert!(error.to_string().contains("nothing to run"));
     }
 
@@ -230,12 +229,12 @@ mod tests {
     fn worker_count_must_be_a_positive_integer() {
         for bad in ["0", "-1", "many"] {
             let error = Config::from_map(&env(&[
-                ("TASKITO_DSN", ":memory:"),
-                ("TASKITO_DASHBOARD", "127.0.0.1:8080"),
-                ("TASKITO_WORKERS", bad),
+                ("FLEXIQ_DSN", ":memory:"),
+                ("FLEXIQ_DASHBOARD", "127.0.0.1:8080"),
+                ("FLEXIQ_WORKERS", bad),
             ]))
             .expect_err("must reject");
-            assert!(error.to_string().contains("TASKITO_WORKERS"));
+            assert!(error.to_string().contains("FLEXIQ_WORKERS"));
         }
     }
 }

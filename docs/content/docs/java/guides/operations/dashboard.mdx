@@ -106,15 +106,15 @@ and Redis.
   `GET /api/auth/status` reports
   `{"auth_enabled": true, "setup_required": bool}` so the SPA knows which
   screen to show.
-- **Env-admin bootstrap.** Set both `TASKITO_DASHBOARD_ADMIN_USER` and
-  `TASKITO_DASHBOARD_ADMIN_PASSWORD` before starting the process to seed the
+- **Env-admin bootstrap.** Set both `FLEXIQ_DASHBOARD_ADMIN_USER` and
+  `FLEXIQ_DASHBOARD_ADMIN_PASSWORD` before starting the process to seed the
   first admin without visiting a browser — useful for containers. It's
   idempotent: once a user with that name exists, later restarts skip
   creation.
 
   ```bash
-  export TASKITO_DASHBOARD_ADMIN_USER=admin
-  export TASKITO_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
+  export FLEXIQ_DASHBOARD_ADMIN_USER=admin
+  export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
   taskito --url taskito.db dashboard --port 8080 --auth
   ```
 
@@ -189,7 +189,7 @@ Three routes sit outside `/api/*`:
 
 With session or token auth enabled, `/readiness` and `/metrics` require either
 that mode's own credential (a valid session, or the shared token) or a
-`TASKITO_DASHBOARD_METRICS_TOKEN` bearer header (checked in constant time) —
+`FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer header (checked in constant time) —
 point scrapers at the bearer token. In open mode they stay public unless that
 env token is set. `/health` always stays open for liveness probes.
 

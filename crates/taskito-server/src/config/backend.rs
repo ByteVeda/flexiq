@@ -1,7 +1,7 @@
-//! Open a `StorageBackend` (+ matching workflow store) from `TASKITO_DSN`.
+//! Open a `StorageBackend` (+ matching workflow store) from `FLEXIQ_DSN`.
 //!
 //! Same dispatch as `crates/taskito-tui/src/backend.rs`, plus the explicit
-//! `TASKITO_BACKEND` override the deployment contract exposes: a DSN whose
+//! `FLEXIQ_BACKEND` override the deployment contract exposes: a DSN whose
 //! scheme is ambiguous (a bare SQLite path, a proxy URL) can still name its
 //! backend. Postgres/Redis arms are `#[cfg]`-gated and a DSN for a backend that
 //! was not compiled in fails with the feature to rebuild with.
@@ -27,8 +27,8 @@ pub struct Backend {
     pub workflows: WorkflowStorageBackend,
 }
 
-/// Open the backend named by `dsn`. `hint` is `TASKITO_BACKEND` when set;
-/// otherwise the URL scheme decides. `namespace` is `TASKITO_NAMESPACE`: it
+/// Open the backend named by `dsn`. `hint` is `FLEXIQ_BACKEND` when set;
+/// otherwise the URL scheme decides. `namespace` is `FLEXIQ_NAMESPACE`: it
 /// scopes the workflow store the same way it already scopes the scheduler and
 /// every dashboard view.
 pub fn open(
@@ -41,7 +41,7 @@ pub fn open(
         Some("sqlite") => open_sqlite(dsn, namespace, auto_migrate),
         Some("postgres") | Some("postgresql") => open_postgres(dsn, namespace, auto_migrate),
         Some("redis") => open_redis(dsn, namespace),
-        Some(other) => bail!("TASKITO_BACKEND must be sqlite, postgres, or redis, got '{other}'"),
+        Some(other) => bail!("FLEXIQ_BACKEND must be sqlite, postgres, or redis, got '{other}'"),
         None => open_by_scheme(dsn, namespace, auto_migrate),
     }?;
     // The server joins the deployment like any SDK process, so it is held to
@@ -50,7 +50,7 @@ pub fn open(
     // of band — say so rather than leaking a bare "no such table".
     if !auto_migrate && !backend.storage.is_migrated()? {
         bail!(
-            "TASKITO_AUTO_MIGRATE is off, so this server applies no schema, and this \
+            "FLEXIQ_AUTO_MIGRATE is off, so this server applies no schema, and this \
              database has none — run an SDK's `taskito migrate` against it first"
         );
     }
@@ -151,7 +151,7 @@ mod tests {
         let error = open(":memory:", Some("mysql"), None, true)
             .err()
             .expect("must reject");
-        assert!(error.to_string().contains("TASKITO_BACKEND"));
+        assert!(error.to_string().contains("FLEXIQ_BACKEND"));
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn a_gated_open_applies_no_ddl_and_says_so_when_the_schema_is_absent() {
-        // TASKITO_AUTO_MIGRATE=off is for a deployment whose credentials do not
+        // FLEXIQ_AUTO_MIGRATE=off is for a deployment whose credentials do not
         // permit DDL: the schema must already be there, applied out of band by
         // an SDK's `migrate`. Against an empty database that is an operator
         // error, and the message has to name it.
@@ -183,7 +183,7 @@ mod tests {
 
         let error = open(dsn, None, None, false).err().expect("must refuse");
         assert!(
-            error.to_string().contains("TASKITO_AUTO_MIGRATE"),
+            error.to_string().contains("FLEXIQ_AUTO_MIGRATE"),
             "unexpected message: {error}"
         );
         assert!(

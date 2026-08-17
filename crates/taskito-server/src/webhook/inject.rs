@@ -170,7 +170,7 @@ fn socket_dir(attach: &str) -> Result<String> {
 }
 
 /// The sidecar's environment: what the app container had, then what the
-/// executor needs. Ours go last so a `TASKITO_ATTACH` inherited from the app
+/// executor needs. Ours go last so a `FLEXIQ_ATTACH` inherited from the app
 /// cannot override the address the annotation asked for.
 fn environment(spec: &InjectionSpec, source: &Value) -> Vec<Value> {
     let mut env: Vec<Value> = if spec.inherit_env {
@@ -185,7 +185,7 @@ fn environment(spec: &InjectionSpec, source: &Value) -> Vec<Value> {
             .filter(|entry| {
                 !matches!(
                     entry.get("name").and_then(Value::as_str),
-                    Some("TASKITO_ATTACH") | Some("TASKITO_SLOTS") | Some("TASKITO_ATTACH_TOKEN")
+                    Some("FLEXIQ_ATTACH") | Some("FLEXIQ_SLOTS") | Some("FLEXIQ_ATTACH_TOKEN")
                 )
             })
             .collect()
@@ -193,11 +193,11 @@ fn environment(spec: &InjectionSpec, source: &Value) -> Vec<Value> {
         Vec::new()
     };
 
-    env.push(json!({ "name": "TASKITO_ATTACH", "value": spec.attach }));
-    env.push(json!({ "name": "TASKITO_SLOTS", "value": spec.slots.to_string() }));
+    env.push(json!({ "name": "FLEXIQ_ATTACH", "value": spec.attach }));
+    env.push(json!({ "name": "FLEXIQ_SLOTS", "value": spec.slots.to_string() }));
     if let Some(token) = &spec.token {
         env.push(json!({
-            "name": "TASKITO_ATTACH_TOKEN",
+            "name": "FLEXIQ_ATTACH_TOKEN",
             "valueFrom": { "secretKeyRef": { "name": token.name, "key": token.key } },
         }));
     }
@@ -289,9 +289,9 @@ mod tests {
             .expect("patched");
         let env = sidecar(&ops)["env"].as_array().expect("env").clone();
         assert!(
-            env.contains(&json!({ "name": "TASKITO_ATTACH", "value": "taskito-scheduler:7777" }))
+            env.contains(&json!({ "name": "FLEXIQ_ATTACH", "value": "taskito-scheduler:7777" }))
         );
-        assert!(env.contains(&json!({ "name": "TASKITO_SLOTS", "value": "4" })));
+        assert!(env.contains(&json!({ "name": "FLEXIQ_SLOTS", "value": "4" })));
     }
 
     #[test]
@@ -303,7 +303,7 @@ mod tests {
             .expect("patched");
         let env = sidecar(&ops)["env"].as_array().expect("env").clone();
         assert!(env.contains(&json!({
-            "name": "TASKITO_ATTACH_TOKEN",
+            "name": "FLEXIQ_ATTACH_TOKEN",
             "valueFrom": { "secretKeyRef": { "name": "taskito", "key": "token" } },
         })));
     }
@@ -333,7 +333,7 @@ mod tests {
         let containers = json!([{
             "name": "app",
             "image": "myapp:1.4.2",
-            "env": [{ "name": "TASKITO_ATTACH", "value": "wrong:1234" }],
+            "env": [{ "name": "FLEXIQ_ATTACH", "value": "wrong:1234" }],
         }]);
         let ops = patch_for(&pod(opted_in(), containers))
             .expect("valid")
@@ -341,7 +341,7 @@ mod tests {
         let env = sidecar(&ops)["env"].as_array().expect("env").clone();
         let addresses: Vec<_> = env
             .iter()
-            .filter(|entry| entry["name"] == "TASKITO_ATTACH")
+            .filter(|entry| entry["name"] == "FLEXIQ_ATTACH")
             .collect();
         assert_eq!(addresses.len(), 1, "no duplicate key may survive");
         assert_eq!(addresses[0]["value"], "taskito-scheduler:7777");

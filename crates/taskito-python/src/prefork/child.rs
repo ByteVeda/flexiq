@@ -70,7 +70,7 @@ impl ChildProcess {
 ///
 /// Returns the three split halves: writer, reader, and process handle. The ack
 /// is sent even on a version mismatch so both sides can log both versions —
-/// `TASKITO_PYTHON` lets the child run from a different interpreter, so a
+/// `FLEXIQ_PYTHON` lets the child run from a different interpreter, so a
 /// mismatched taskito install is reachable in practice.
 pub fn spawn_child(
     python: &str,
@@ -134,7 +134,7 @@ fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), S
     if protocol_version != PROTOCOL_VERSION {
         return Err(format!(
             "child speaks worker protocol {protocol_version}, we speak {PROTOCOL_VERSION} \
-             (child is {sdk} {version}; check TASKITO_PYTHON points at the same install)"
+             (child is {sdk} {version}; check FLEXIQ_PYTHON points at the same install)"
         ));
     }
 

@@ -1,6 +1,6 @@
 """The same attach assertions, against the real ``taskito-server`` binary.
 
-Gated on ``TASKITO_SERVER_BIN`` so the default suite needs no Rust build. Its
+Gated on ``FLEXIQ_SERVER_BIN`` so the default suite needs no Rust build. Its
 job is to keep `test_executor_attach.py`'s hand-rolled scheduler honest: that
 file proves the executor speaks the protocol it was told to, this one proves the
 protocol it was told to is the one the server actually speaks.
@@ -8,7 +8,7 @@ protocol it was told to is the one the server actually speaks.
 Build the binary with::
 
     cargo build -p taskito-server
-    TASKITO_SERVER_BIN=target/debug/taskito-server uv run pytest tests/worker
+    FLEXIQ_SERVER_BIN=target/debug/taskito-server uv run pytest tests/worker
 """
 
 from __future__ import annotations
@@ -41,12 +41,12 @@ from test_executor_attach import (
 
 from taskito import Queue
 
-SERVER_BIN = os.environ.get("TASKITO_SERVER_BIN")
+SERVER_BIN = os.environ.get("FLEXIQ_SERVER_BIN")
 
 pytestmark = [
     pytest.mark.skipif(
         not SERVER_BIN,
-        reason="set TASKITO_SERVER_BIN to a built taskito-server to run these",
+        reason="set FLEXIQ_SERVER_BIN to a built taskito-server to run these",
     ),
     pytest.mark.skipif(
         sys.platform == "win32",
@@ -72,12 +72,12 @@ def scheduler(tmp_path: Path) -> Iterator[tuple[int, Path]]:
     port = free_port()
 
     env = dict(os.environ)
-    env["TASKITO_BACKEND"] = "sqlite"
-    env["TASKITO_DSN"] = str(db_path)
-    env["TASKITO_LISTEN"] = f"127.0.0.1:{port}"
+    env["FLEXIQ_BACKEND"] = "sqlite"
+    env["FLEXIQ_DSN"] = str(db_path)
+    env["FLEXIQ_LISTEN"] = f"127.0.0.1:{port}"
     # Unset, not "off": the dashboard is disabled by having no bind address.
-    env.pop("TASKITO_DASHBOARD", None)
-    env.pop("TASKITO_ATTACH_TOKEN", None)
+    env.pop("FLEXIQ_DASHBOARD", None)
+    env.pop("FLEXIQ_ATTACH_TOKEN", None)
 
     assert SERVER_BIN is not None
     process = subprocess.Popen(
@@ -285,11 +285,11 @@ def test_a_bad_token_is_refused_by_the_real_listener(tmp_path: Path) -> None:
     port = free_port()
 
     env = dict(os.environ)
-    env["TASKITO_BACKEND"] = "sqlite"
-    env["TASKITO_DSN"] = str(db_path)
-    env["TASKITO_LISTEN"] = f"127.0.0.1:{port}"
-    env.pop("TASKITO_DASHBOARD", None)
-    env["TASKITO_ATTACH_TOKEN"] = "correct-token-0123456789"
+    env["FLEXIQ_BACKEND"] = "sqlite"
+    env["FLEXIQ_DSN"] = str(db_path)
+    env["FLEXIQ_LISTEN"] = f"127.0.0.1:{port}"
+    env.pop("FLEXIQ_DASHBOARD", None)
+    env["FLEXIQ_ATTACH_TOKEN"] = "correct-token-0123456789"
 
     assert SERVER_BIN is not None
     server = subprocess.Popen(

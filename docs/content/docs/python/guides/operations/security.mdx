@@ -84,7 +84,7 @@ deployments should enable it (or keep the dashboard on a private network
 behind their own auth). With auth enabled, the dashboard enforces sessions
 once at least one user exists; until then every API route returns
 `503 setup_required`. Bootstrap the first admin with
-`TASKITO_DASHBOARD_ADMIN_USER` / `TASKITO_DASHBOARD_ADMIN_PASSWORD`
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`
 (the password is removed from the environment after first use).
 
 - **Roles.** Mutating routes (cancel/replay jobs, purge dead-letters, pause
@@ -95,7 +95,7 @@ once at least one user exists; until then every API route returns
   plain HTTP to the backend you may need `serve_dashboard(secure_cookies=False)`
   or `taskito dashboard --insecure-cookies` — only on a trusted network.
 - **Metrics.** With auth enabled, `/metrics` and `/readiness` require a valid
-  session or the `TASKITO_DASHBOARD_METRICS_TOKEN` bearer (give scrapers the
+  session or the `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer (give scrapers the
   token). Without auth they stay public unless that token is set; `/health`
   is always open for liveness probes.
 - **Settings.** The settings API never exposes or accepts keys under the
@@ -119,7 +119,7 @@ Outbound webhook URLs are validated against private/loopback/link-local and
 cloud-metadata addresses **at delivery time** (not just registration), which
 closes the DNS-rebinding SSRF (server-side request forgery) window, and redirects are not followed. For
 local development against `http://localhost`, set
-`TASKITO_WEBHOOKS_ALLOW_PRIVATE=1`.
+`FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1`.
 
 Webhook payloads are signed with HMAC-SHA256 in the `X-Taskito-Signature`
 header (`sha256=<hex>`). Receivers must verify it with a constant-time
@@ -130,7 +130,7 @@ comparison (`hmac.compare_digest`), never `==`.
 These features reconstruct objects from the (untrusted) payload, so they have
 their own guards:
 
-- **Recipe signing.** Set `recipe_signing_key=` (or `TASKITO_RECIPE_SECRET`)
+- **Recipe signing.** Set `recipe_signing_key=` (or `FLEXIQ_RECIPE_SECRET`)
   whenever proxy handlers are registered. Without a key, recipes are
   reconstructed unverified and a one-time warning is logged.
 - **File proxy allowlist.** `file_path_allowlist` is enforced by path-component
@@ -160,8 +160,8 @@ network boundary (e.g. a KEDA sidecar on a private network).
 - [ ] Set `recipe_signing_key` if any proxy handler is registered.
 - [ ] Enable dashboard auth (`--auth` / `auth_enabled=True`) and create an
       admin; serve the dashboard over TLS.
-- [ ] Set `TASKITO_DASHBOARD_METRICS_TOKEN` if metrics are network-reachable.
+- [ ] Set `FLEXIQ_DASHBOARD_METRICS_TOKEN` if metrics are network-reachable.
 - [ ] Auth-gate any mounted FastAPI/Flask contrib routers.
 - [ ] Leave `max_payload_bytes` enabled (default 1 MiB) unless you need larger.
 - [ ] Keep the scaler bound to loopback (or behind a network policy).
-- [ ] Do **not** set `TASKITO_WEBHOOKS_ALLOW_PRIVATE` in production.
+- [ ] Do **not** set `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` in production.

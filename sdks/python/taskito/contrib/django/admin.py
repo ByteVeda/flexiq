@@ -64,7 +64,7 @@ def _jobs_view(request: HttpRequest, site: Any) -> HttpResponse:
     page = max(page, 1)
     from django.conf import settings as django_settings
 
-    per_page = getattr(django_settings, "TASKITO_ADMIN_PER_PAGE", 50)
+    per_page = getattr(django_settings, "FLEXIQ_ADMIN_PER_PAGE", 50)
 
     try:
         jobs = queue.list_jobs(
@@ -125,7 +125,7 @@ def _dead_letters_view(request: HttpRequest, site: Any) -> HttpResponse:
     page = max(page, 1)
     from django.conf import settings as django_settings
 
-    per_page = getattr(django_settings, "TASKITO_ADMIN_PER_PAGE", 50)
+    per_page = getattr(django_settings, "FLEXIQ_ADMIN_PER_PAGE", 50)
     dead = queue.dead_letters(limit=per_page, offset=(page - 1) * per_page)
     context = _base_context(
         request,
@@ -147,17 +147,17 @@ def _get_admin_setting(name: str, default: str) -> str:
 class TaskitoAdminSite(admin.AdminSite):
     """Custom admin site with taskito queue views.
 
-    Reads ``TASKITO_ADMIN_TITLE`` and ``TASKITO_ADMIN_HEADER`` from Django
+    Reads ``FLEXIQ_ADMIN_TITLE`` and ``FLEXIQ_ADMIN_HEADER`` from Django
     settings to customize the admin site branding.
     """
 
     @property
     def site_header(self) -> str:
-        return _get_admin_setting("TASKITO_ADMIN_HEADER", "Taskito Admin")
+        return _get_admin_setting("FLEXIQ_ADMIN_HEADER", "Taskito Admin")
 
     @property
     def site_title(self) -> str:
-        return _get_admin_setting("TASKITO_ADMIN_TITLE", "Taskito")
+        return _get_admin_setting("FLEXIQ_ADMIN_TITLE", "Taskito")
 
     def get_urls(self) -> list:
         urls = super().get_urls()

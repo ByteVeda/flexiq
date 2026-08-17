@@ -3,7 +3,7 @@
 //!
 //! An attach connection receives jobs, so the listener is deliberately harder
 //! to expose than the dashboard: there is no insecure escape hatch. A bind
-//! reachable off-host requires `TASKITO_ATTACH_TOKEN`, and the token is a
+//! reachable off-host requires `FLEXIQ_ATTACH_TOKEN`, and the token is a
 //! bearer credential, not transport security — for production, terminate mTLS
 //! in front of the listener (sidecar proxy or service mesh) and keep the token
 //! as the second factor.
@@ -22,7 +22,7 @@ const MIN_TOKEN_LEN: usize = 16;
 
 /// TLS variables the listener does not yet terminate. Accepting them would let
 /// an operator believe the connection is encrypted when it is not.
-const UNHONOURED_TLS_VARS: [&str; 2] = ["TASKITO_LISTEN_TLS_CERT", "TASKITO_LISTEN_TLS_KEY"];
+const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_LISTEN_TLS_CERT", "FLEXIQ_LISTEN_TLS_KEY"];
 
 /// The attach listener's address and credential.
 #[derive(Debug, Clone)]
@@ -55,7 +55,7 @@ impl std::fmt::Display for AttachListen {
 
 /// Parse the attach block, or `None` when the listener is disabled.
 pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
-    let Some(spec) = value(env, "TASKITO_LISTEN") else {
+    let Some(spec) = value(env, "FLEXIQ_LISTEN") else {
         return Ok(None);
     };
     for name in UNHONOURED_TLS_VARS {
@@ -63,7 +63,7 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
             bail!(
                 "{name} is set, but this build does not terminate TLS on the attach \
                  listener. Terminate mTLS in a proxy in front of it and authenticate \
-                 executors with TASKITO_ATTACH_TOKEN, rather than running with a \
+                 executors with FLEXIQ_ATTACH_TOKEN, rather than running with a \
                  security control that does nothing."
             );
         }
@@ -74,8 +74,8 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
     if let AttachListen::Tcp(addr) = &listen {
         if !addr.ip().is_loopback() && token.is_none() {
             bail!(
-                "TASKITO_LISTEN={spec} binds a non-loopback address, and an attach port \
-                 dispatches code. Set TASKITO_ATTACH_TOKEN, bind loopback (127.0.0.1), \
+                "FLEXIQ_LISTEN={spec} binds a non-loopback address, and an attach port \
+                 dispatches code. Set FLEXIQ_ATTACH_TOKEN, bind loopback (127.0.0.1), \
                  or use a Unix socket (unix:/run/taskito.sock)."
             );
         }
@@ -83,15 +83,15 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
     Ok(Some(AttachConfig { listen, token }))
 }
 
-/// Parse `TASKITO_ATTACH_TOKEN`, rejecting one too short to be a secret.
+/// Parse `FLEXIQ_ATTACH_TOKEN`, rejecting one too short to be a secret.
 fn token(env: &Env) -> Result<Option<Secret>> {
-    let Some(raw) = value(env, "TASKITO_ATTACH_TOKEN") else {
+    let Some(raw) = value(env, "FLEXIQ_ATTACH_TOKEN") else {
         return Ok(None);
     };
     let token = Secret::new(raw);
     if token.len() < MIN_TOKEN_LEN {
         bail!(
-            "TASKITO_ATTACH_TOKEN must be at least {MIN_TOKEN_LEN} characters — a \
+            "FLEXIQ_ATTACH_TOKEN must be at least {MIN_TOKEN_LEN} characters — a \
              guessable one is not a control. Generate it with `openssl rand -base64 32`."
         );
     }
@@ -103,7 +103,7 @@ fn token(env: &Env) -> Result<Option<Secret>> {
 pub fn scrub_attach_token() {
     // Called once from `main`, before any thread that reads the environment
     // has been spawned.
-    std::env::remove_var("TASKITO_ATTACH_TOKEN");
+    std::env::remove_var("FLEXIQ_ATTACH_TOKEN");
 }
 
 /// Parse one listen spec: `unix:/path`, `host:port`, or `:port`.
@@ -112,7 +112,7 @@ pub fn parse(spec: &str) -> Result<AttachListen> {
         #[cfg(unix)]
         {
             if path.is_empty() {
-                bail!("TASKITO_LISTEN=unix: needs a socket path, e.g. unix:/run/taskito.sock");
+                bail!("FLEXIQ_LISTEN=unix: needs a socket path, e.g. unix:/run/taskito.sock");
             }
             return Ok(AttachListen::Unix(PathBuf::from(path)));
         }
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn loopback_tcp_is_accepted() {
-        let config = attach(&[("TASKITO_LISTEN", "127.0.0.1:7777")]);
+        let config = attach(&[("FLEXIQ_LISTEN", "127.0.0.1:7777")]);
         assert_eq!(
             config.listen,
             AttachListen::Tcp("127.0.0.1:7777".parse().unwrap())
@@ -169,15 +169,15 @@ mod tests {
 
     #[test]
     fn non_loopback_tcp_without_a_token_refuses_to_start() {
-        let error = from_env(&env(&[("TASKITO_LISTEN", "0.0.0.0:7777")])).expect_err("must refuse");
-        assert!(error.to_string().contains("TASKITO_ATTACH_TOKEN"));
+        let error = from_env(&env(&[("FLEXIQ_LISTEN", "0.0.0.0:7777")])).expect_err("must refuse");
+        assert!(error.to_string().contains("FLEXIQ_ATTACH_TOKEN"));
     }
 
     #[test]
     fn a_token_unlocks_a_non_loopback_bind() {
         let config = attach(&[
-            ("TASKITO_LISTEN", "0.0.0.0:7777"),
-            ("TASKITO_ATTACH_TOKEN", TOKEN),
+            ("FLEXIQ_LISTEN", "0.0.0.0:7777"),
+            ("FLEXIQ_ATTACH_TOKEN", TOKEN),
         ]);
         assert_eq!(
             config.listen,
@@ -192,8 +192,8 @@ mod tests {
     #[test]
     fn a_short_token_is_rejected() {
         let error = from_env(&env(&[
-            ("TASKITO_LISTEN", "0.0.0.0:7777"),
-            ("TASKITO_ATTACH_TOKEN", "s3cret"),
+            ("FLEXIQ_LISTEN", "0.0.0.0:7777"),
+            ("FLEXIQ_ATTACH_TOKEN", "s3cret"),
         ]))
         .expect_err("must refuse");
         assert!(error.to_string().contains("at least"));
@@ -202,15 +202,15 @@ mod tests {
     #[test]
     fn a_token_is_honoured_on_a_loopback_bind_too() {
         let config = attach(&[
-            ("TASKITO_LISTEN", "127.0.0.1:7777"),
-            ("TASKITO_ATTACH_TOKEN", TOKEN),
+            ("FLEXIQ_LISTEN", "127.0.0.1:7777"),
+            ("FLEXIQ_ATTACH_TOKEN", TOKEN),
         ]);
         assert!(config.token.is_some());
     }
 
     #[test]
     fn a_bare_port_binds_loopback() {
-        let config = attach(&[("TASKITO_LISTEN", ":7777")]);
+        let config = attach(&[("FLEXIQ_LISTEN", ":7777")]);
         assert_eq!(
             config.listen,
             AttachListen::Tcp("127.0.0.1:7777".parse().unwrap())
@@ -220,7 +220,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_sockets_skip_the_loopback_check() {
-        let config = attach(&[("TASKITO_LISTEN", "unix:/run/taskito.sock")]);
+        let config = attach(&[("FLEXIQ_LISTEN", "unix:/run/taskito.sock")]);
         assert_eq!(
             config.listen,
             AttachListen::Unix(PathBuf::from("/run/taskito.sock"))
@@ -231,7 +231,7 @@ mod tests {
     fn an_unhonoured_tls_variable_fails_loudly() {
         for name in UNHONOURED_TLS_VARS {
             let error = from_env(&env(&[
-                ("TASKITO_LISTEN", "127.0.0.1:7777"),
+                ("FLEXIQ_LISTEN", "127.0.0.1:7777"),
                 (name, "/certs/x"),
             ]))
             .expect_err("must refuse");

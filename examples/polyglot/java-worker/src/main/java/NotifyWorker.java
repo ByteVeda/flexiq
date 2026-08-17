@@ -13,7 +13,7 @@ import org.byteveda.taskito.worker.Worker;
 public final class NotifyWorker {
 
     public static void main(String[] args) throws Exception {
-        String db = System.getenv().getOrDefault("TASKITO_DB", "../taskito.db");
+        String db = System.getenv().getOrDefault("FLEXIQ_DB", "../taskito.db");
 
         CountDownLatch stop = new CountDownLatch(1);
         CountDownLatch closed = new CountDownLatch(1);

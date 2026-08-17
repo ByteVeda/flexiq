@@ -120,7 +120,7 @@ describe("ops endpoints", () => {
   });
 
   it("gates readiness behind the metrics token when set", async () => {
-    process.env.TASKITO_DASHBOARD_METRICS_TOKEN = "probe-secret";
+    process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN = "probe-secret";
     try {
       expect((await fetch(`${base}/readiness`)).status).toBe(401);
       const ok = await fetch(`${base}/readiness`, {
@@ -128,7 +128,7 @@ describe("ops endpoints", () => {
       });
       expect(ok.status).toBe(200);
     } finally {
-      delete process.env.TASKITO_DASHBOARD_METRICS_TOKEN;
+      delete process.env.FLEXIQ_DASHBOARD_METRICS_TOKEN;
     }
   });
 

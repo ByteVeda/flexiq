@@ -20,9 +20,9 @@ export function registerExecutor(program: Command): void {
     )
     .option(
       "--attach <address>",
-      "scheduler address: host:port, :port, or unix:/path (env: TASKITO_ATTACH)",
+      "scheduler address: host:port, :port, or unix:/path (env: FLEXIQ_ATTACH)",
     )
-    .option("--slots <n>", "jobs to run concurrently (env: TASKITO_SLOTS)")
+    .option("--slots <n>", "jobs to run concurrently (env: FLEXIQ_SLOTS)")
     .option("--executor-id <id>", "identity announced to the scheduler")
     .option("--connect-timeout <ms>", "how long to wait for the connection")
     .option("--drain-timeout <ms>", "how long a drain waits for in-flight jobs")

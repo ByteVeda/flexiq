@@ -1,6 +1,6 @@
 // Tiny zero-dependency leveled logger. Writes to stderr by default so it never
 // pollutes stdout (the CLI's `--json` output and piped data stay clean). Level
-// is read once from `TASKITO_LOG_LEVEL` and is overridable at runtime; the sink
+// is read once from `FLEXIQ_LOG_LEVEL` and is overridable at runtime; the sink
 // is pluggable for tests or custom transports.
 
 /** Severity, from most to least verbose. `silent` disables all output. */
@@ -34,12 +34,12 @@ const defaultSink: LogSink = (_level, line) => {
 };
 
 function isLogLevel(value: unknown): value is LogLevel {
-  // `Object.hasOwn` avoids matching inherited props (e.g. `TASKITO_LOG_LEVEL=toString`).
+  // `Object.hasOwn` avoids matching inherited props (e.g. `FLEXIQ_LOG_LEVEL=toString`).
   return typeof value === "string" && Object.hasOwn(SEVERITY, value);
 }
 
 function levelFromEnv(): LogLevel {
-  const raw = process.env.TASKITO_LOG_LEVEL?.toLowerCase();
+  const raw = process.env.FLEXIQ_LOG_LEVEL?.toLowerCase();
   return isLogLevel(raw) ? raw : "warn";
 }
 

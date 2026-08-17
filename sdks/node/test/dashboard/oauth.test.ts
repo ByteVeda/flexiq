@@ -29,7 +29,7 @@ beforeEach(() => {
 });
 
 const BASE_ENV = {
-  TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "https://ops.example.com",
+  FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "https://ops.example.com",
 };
 
 describe("oauthConfigFromEnv", () => {
@@ -38,34 +38,34 @@ describe("oauthConfigFromEnv", () => {
   });
 
   it("fails fast on a provider without a base url", () => {
-    expect(() => oauthConfigFromEnv({ TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid" })).toThrow(
+    expect(() => oauthConfigFromEnv({ FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid" })).toThrow(
       OAuthConfigError,
     );
   });
 
   it("fails fast on a client id without a secret", () => {
     expect(() =>
-      oauthConfigFromEnv({ ...BASE_ENV, TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid" }),
+      oauthConfigFromEnv({ ...BASE_ENV, FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid" }),
     ).toThrow(/CLIENT_SECRET/);
   });
 
   it("parses google, github, and multiple oidc slots", () => {
     const config = oauthConfigFromEnv({
       ...BASE_ENV,
-      TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "gid",
-      TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "gsec",
-      TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS: "corp.com, example.org",
-      TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID: "hid",
-      TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET: "hsec",
-      TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS: "byteveda",
-      TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS: "okta,keycloak",
-      TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID: "oid",
-      TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET: "osec",
-      TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL: "https://okta/.well-known/x",
-      TASKITO_DASHBOARD_OAUTH_OIDC_KEYCLOAK_CLIENT_ID: "kid",
-      TASKITO_DASHBOARD_OAUTH_OIDC_KEYCLOAK_CLIENT_SECRET: "ksec",
-      TASKITO_DASHBOARD_OAUTH_OIDC_KEYCLOAK_DISCOVERY_URL: "https://kc/.well-known/x",
-      TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS: "boss@corp.com",
+      FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "gid",
+      FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "gsec",
+      FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS: "corp.com, example.org",
+      FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID: "hid",
+      FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET: "hsec",
+      FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS: "byteveda",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS: "okta,keycloak",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID: "oid",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET: "osec",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL: "https://okta/.well-known/x",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_KEYCLOAK_CLIENT_ID: "kid",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_KEYCLOAK_CLIENT_SECRET: "ksec",
+      FLEXIQ_DASHBOARD_OAUTH_OIDC_KEYCLOAK_DISCOVERY_URL: "https://kc/.well-known/x",
+      FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS: "boss@corp.com",
     });
     expect(config?.google?.allowedDomains).toEqual(["corp.com", "example.org"]);
     expect(config?.github?.allowedOrgs).toEqual(["byteveda"]);
@@ -79,16 +79,16 @@ describe("oauthConfigFromEnv", () => {
   it("rejects http base urls for non-local hosts but allows localhost", () => {
     expect(() =>
       oauthConfigFromEnv({
-        TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "http://ops.example.com",
-        TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid",
-        TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "sec",
+        FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "http://ops.example.com",
+        FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid",
+        FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "sec",
       }),
     ).toThrow(/https/);
     expect(
       oauthConfigFromEnv({
-        TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "http://localhost:8787",
-        TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid",
-        TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "sec",
+        FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL: "http://localhost:8787",
+        FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID: "cid",
+        FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET: "sec",
       }),
     ).toBeDefined();
   });
@@ -97,19 +97,19 @@ describe("oauthConfigFromEnv", () => {
     expect(() =>
       oauthConfigFromEnv({
         ...BASE_ENV,
-        TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS: "google",
-        TASKITO_DASHBOARD_OAUTH_OIDC_GOOGLE_CLIENT_ID: "x",
-        TASKITO_DASHBOARD_OAUTH_OIDC_GOOGLE_CLIENT_SECRET: "y",
-        TASKITO_DASHBOARD_OAUTH_OIDC_GOOGLE_DISCOVERY_URL: "https://z",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS: "google",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_GOOGLE_CLIENT_ID: "x",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_GOOGLE_CLIENT_SECRET: "y",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_GOOGLE_DISCOVERY_URL: "https://z",
       }),
     ).toThrow(/collides/);
     expect(() =>
       oauthConfigFromEnv({
         ...BASE_ENV,
-        TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS: "okta,okta",
-        TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID: "oid",
-        TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET: "osec",
-        TASKITO_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL: "https://okta/.well-known/x",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS: "okta,okta",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID: "oid",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET: "osec",
+        FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL: "https://okta/.well-known/x",
       }),
     ).toThrow(/twice/);
   });
@@ -118,7 +118,7 @@ describe("oauthConfigFromEnv", () => {
     expect(() =>
       oauthConfigFromEnv({
         ...BASE_ENV,
-        TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED: "false",
+        FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED: "false",
       }),
     ).toThrow(/no way to log in/);
   });

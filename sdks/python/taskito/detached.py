@@ -46,7 +46,7 @@ __all__ = [
 ]
 
 #: Marks this process as an executor, so a ``Queue`` built here opens no storage.
-DETACHED_ENV = "TASKITO_DETACHED_EXECUTOR"
+DETACHED_ENV = "FLEXIQ_DETACHED_EXECUTOR"
 
 
 class ExecutorSink(Protocol):

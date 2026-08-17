@@ -10,7 +10,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 
 /// Escape hatch for local development against `http://localhost`, read once
 /// into configuration rather than per call.
-pub const ALLOW_PRIVATE_VAR: &str = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+pub const ALLOW_PRIVATE_VAR: &str = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE";
 
 /// Names that mean "this host" or "this network" whatever DNS says.
 const BLOCKED_HOSTNAMES: [&str; 4] = [

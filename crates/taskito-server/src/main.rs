@@ -11,33 +11,33 @@ use taskito_server::runtime;
 /// no flags to document instead.
 const ENV_HELP: &str = "\
 Configuration (environment only):
-  TASKITO_DSN                    storage connection string (required, except for
+  FLEXIQ_DSN                    storage connection string (required, except for
                                  a webhook-only deployment)
-  TASKITO_BACKEND                sqlite | postgres | redis (default: from the DSN)
-  TASKITO_NAMESPACE              tenant namespace scoping the scheduler and
+  FLEXIQ_BACKEND                sqlite | postgres | redis (default: from the DSN)
+  FLEXIQ_NAMESPACE              tenant namespace scoping the scheduler and
                                  every dashboard view (unset = all namespaces)
-  TASKITO_QUEUES                 comma-separated queues (default: default)
-  TASKITO_WORKERS                dispatch concurrency (default: attached slots)
-  TASKITO_MAINTENANCE            on | off — run retention and cleanup (default: on)
-  TASKITO_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
+  FLEXIQ_QUEUES                 comma-separated queues (default: default)
+  FLEXIQ_WORKERS                dispatch concurrency (default: attached slots)
+  FLEXIQ_MAINTENANCE            on | off — run retention and cleanup (default: on)
+  FLEXIQ_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
                                  or unix:/run/taskito.sock (default: off)
-  TASKITO_ATTACH_TOKEN           shared secret executors present when attaching;
-                                 required for a non-loopback TASKITO_LISTEN
-  TASKITO_DASHBOARD              dashboard address, e.g. 127.0.0.1:8080 (default: off)
-  TASKITO_DASHBOARD_AUTH         off | session (default: off)
-  TASKITO_DASHBOARD_ASSETS       serve the SPA from this directory
-  TASKITO_DASHBOARD_METRICS_TOKEN  bearer token for /metrics and /readiness
-  TASKITO_DASHBOARD_PUBLIC_READINESS  1 to answer /readiness without a
+  FLEXIQ_ATTACH_TOKEN           shared secret executors present when attaching;
+                                 required for a non-loopback FLEXIQ_LISTEN
+  FLEXIQ_DASHBOARD              dashboard address, e.g. 127.0.0.1:8080 (default: off)
+  FLEXIQ_DASHBOARD_AUTH         off | session (default: off)
+  FLEXIQ_DASHBOARD_ASSETS       serve the SPA from this directory
+  FLEXIQ_DASHBOARD_METRICS_TOKEN  bearer token for /metrics and /readiness
+  FLEXIQ_DASHBOARD_PUBLIC_READINESS  1 to answer /readiness without a
                                  credential, for an orchestrator probe that
                                  cannot carry one (/metrics stays gated)
-  TASKITO_ALLOW_INSECURE         1 to allow an unauthenticated off-host dashboard
-  TASKITO_WEBHOOK_LISTEN         admission webhook address for executor sidecar
+  FLEXIQ_ALLOW_INSECURE         1 to allow an unauthenticated off-host dashboard
+  FLEXIQ_WEBHOOK_LISTEN         admission webhook address for executor sidecar
                                  injection, e.g. 0.0.0.0:9443 (default: off)
-  TASKITO_WEBHOOK_TLS_CERT       PEM chain the webhook serves; required with it
-  TASKITO_WEBHOOK_TLS_KEY        PEM key for that chain; required with it
+  FLEXIQ_WEBHOOK_TLS_CERT       PEM chain the webhook serves; required with it
+  FLEXIQ_WEBHOOK_TLS_KEY        PEM key for that chain; required with it
 
-At least one of TASKITO_LISTEN, TASKITO_DASHBOARD or TASKITO_WEBHOOK_LISTEN must
-be set. TASKITO_DSN is required for all but a webhook-only deployment.";
+At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD or FLEXIQ_WEBHOOK_LISTEN must
+be set. FLEXIQ_DSN is required for all but a webhook-only deployment.";
 
 #[derive(Parser)]
 #[command(

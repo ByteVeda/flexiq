@@ -37,7 +37,7 @@ producers and workers must share it.
 ```ts
 new Queue({
   dbPath: "taskito.db",
-  serializer: new EncryptedSerializer(process.env.TASKITO_SECRET!),
+  serializer: new EncryptedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
 

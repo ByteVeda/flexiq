@@ -14,7 +14,7 @@ This is explicit — you call `deconstruct` and `reconstruct` yourself, and a
 
 ```java
 String secret = Objects.requireNonNull(
-        System.getenv("TASKITO_PROXY_KEY"), "TASKITO_PROXY_KEY is not set");
+        System.getenv("FLEXIQ_PROXY_KEY"), "FLEXIQ_PROXY_KEY is not set");
 byte[] key = secret.getBytes(StandardCharsets.UTF_8);
 Proxies proxies = new Proxies(key).register(new FileProxyHandler());
 

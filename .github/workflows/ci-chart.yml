@@ -79,7 +79,7 @@ jobs:
               container = doc["spec"]["template"]["spec"]["containers"][0]
               env = {e["name"] for e in container.get("env", [])}
               print(container["readinessProbe"]["httpGet"]["path"],
-                    "TASKITO_DASHBOARD_PUBLIC_READINESS" in env)
+                    "FLEXIQ_DASHBOARD_PUBLIC_READINESS" in env)
           '
           }
           on="$(probe)"

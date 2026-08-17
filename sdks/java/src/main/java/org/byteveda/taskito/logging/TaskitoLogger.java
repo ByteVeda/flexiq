@@ -100,7 +100,7 @@ public final class TaskitoLogger {
     }
 
     private static LogLevel envLevel() {
-        LogLevel parsed = LogLevel.parseOrNull(System.getenv("TASKITO_LOG_LEVEL"));
+        LogLevel parsed = LogLevel.parseOrNull(System.getenv("FLEXIQ_LOG_LEVEL"));
         return parsed == null ? LogLevel.WARN : parsed;
     }
 

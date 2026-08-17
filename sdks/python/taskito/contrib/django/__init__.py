@@ -8,14 +8,14 @@ via Django settings::
         "taskito.contrib.django",
     ]
 
-    TASKITO_DB_PATH = ".taskito/taskito.db"
-    TASKITO_BACKEND = "sqlite"       # or "postgres"
-    TASKITO_DB_URL = None            # required for postgres
-    TASKITO_WORKERS = 0              # 0 = auto-detect
-    TASKITO_DEFAULT_RETRY = 3
-    TASKITO_DEFAULT_TIMEOUT = 300
-    TASKITO_DEFAULT_PRIORITY = 0
-    TASKITO_RESULT_TTL = None        # seconds, or None to disable
+    FLEXIQ_DB_PATH = ".taskito/taskito.db"
+    FLEXIQ_BACKEND = "sqlite"       # or "postgres"
+    FLEXIQ_DB_URL = None            # required for postgres
+    FLEXIQ_WORKERS = 0              # 0 = auto-detect
+    FLEXIQ_DEFAULT_RETRY = 3
+    FLEXIQ_DEFAULT_TIMEOUT = 300
+    FLEXIQ_DEFAULT_PRIORITY = 0
+    FLEXIQ_RESULT_TTL = None        # seconds, or None to disable
 
 Requires the ``django`` optional dependency::
 

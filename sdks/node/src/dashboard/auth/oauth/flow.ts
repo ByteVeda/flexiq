@@ -56,7 +56,7 @@ export class OAuthFlow {
       log.warn(
         () =>
           "OAuth is configured without admin emails: every OAuth login gets the " +
-          "viewer role. Set TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS (or " +
+          "viewer role. Set FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS (or " +
           "OAuthConfig.adminEmails) to grant admin access.",
       );
     }

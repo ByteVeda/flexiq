@@ -4,7 +4,7 @@ use jni::JNIEnv;
 use taskito_core::QueueError;
 
 /// Fully-qualified JNI name (slashes, not dots) of the SDK's exception class.
-pub const TASKITO_EXCEPTION: &str = "org/byteveda/taskito/TaskitoException";
+pub const FLEXIQ_EXCEPTION: &str = "org/byteveda/taskito/TaskitoException";
 
 /// A deferred Java exception. The binding builds one of these on failure and
 /// throws it at the FFI boundary instead of unwinding a Rust panic across it.
@@ -18,7 +18,7 @@ impl BindingError {
     /// A `TaskitoException` carrying `message`.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
-            class: TASKITO_EXCEPTION,
+            class: FLEXIQ_EXCEPTION,
             message: message.into(),
         }
     }

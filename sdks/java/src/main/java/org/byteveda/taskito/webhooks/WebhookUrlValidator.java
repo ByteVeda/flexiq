@@ -15,7 +15,7 @@ import org.byteveda.taskito.errors.WebhookException;
  * webhook at {@code http://169.254.169.254/...} and turn the worker into an SSRF
  * proxy for cloud metadata, loopback services, or the RFC1918 intranet. We
  * refuse to deliver to loopback, link-local, RFC1918, CGNAT, and ULA addresses
- * by default. Set {@code TASKITO_WEBHOOKS_ALLOW_PRIVATE} (truthy) to disable the
+ * by default. Set {@code FLEXIQ_WEBHOOKS_ALLOW_PRIVATE} (truthy) to disable the
  * guard for local development against {@code http://localhost}.
  *
  * <p>Mirrors the cross-SDK {@code validate_webhook_url} contract. Java's
@@ -23,7 +23,7 @@ import org.byteveda.taskito.errors.WebhookException;
  * reference relies on implicitly, so those three ranges are checked by hand.
  */
 public final class WebhookUrlValidator {
-    private static final String ALLOW_ENV_VAR = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+    private static final String ALLOW_ENV_VAR = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE";
 
     // Names that never leave this host regardless of DNS, which a raw IP check
     // (run only after resolution) would otherwise miss for unresolvable names.

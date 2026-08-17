@@ -29,7 +29,7 @@ from taskito.events import EventType
 def queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Queue:
     # Tests in this file create webhooks against 127.0.0.1 servers, which the
     # SSRF guard would otherwise reject.
-    monkeypatch.setenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", "1")
+    monkeypatch.setenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", "1")
     return Queue(db_path=str(tmp_path / "webhooks.db"))
 
 
@@ -76,7 +76,7 @@ def dashboard(queue: Queue) -> Generator[tuple[AuthedClient, Queue]]:
 
 
 def test_url_safety_rejects_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", raising=False)
+    monkeypatch.delenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", raising=False)
     with pytest.raises(UnsafeWebhookUrl):
         validate_webhook_url("http://127.0.0.1:8080/x")
     with pytest.raises(UnsafeWebhookUrl):
@@ -86,7 +86,7 @@ def test_url_safety_rejects_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_url_safety_rejects_private_ranges(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", raising=False)
+    monkeypatch.delenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", raising=False)
     with pytest.raises(UnsafeWebhookUrl):
         validate_webhook_url("http://10.0.0.5/x")
     with pytest.raises(UnsafeWebhookUrl):
@@ -96,7 +96,7 @@ def test_url_safety_rejects_private_ranges(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_url_safety_rejects_bad_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", raising=False)
+    monkeypatch.delenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", raising=False)
     with pytest.raises(UnsafeWebhookUrl):
         validate_webhook_url("ftp://example.com/x")
     with pytest.raises(UnsafeWebhookUrl):
@@ -104,7 +104,7 @@ def test_url_safety_rejects_bad_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_url_safety_allows_private_with_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", "1")
+    monkeypatch.setenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", "1")
     # No exception
     validate_webhook_url("http://127.0.0.1:8080/x")
     validate_webhook_url("http://10.0.0.5/x")
@@ -132,7 +132,7 @@ def test_subscriptions_persist_across_queue_instances(tmp_path: Path) -> None:
     """A fresh Queue against the same DB sees prior subscriptions."""
     import os
 
-    os.environ["TASKITO_WEBHOOKS_ALLOW_PRIVATE"] = "1"
+    os.environ["FLEXIQ_WEBHOOKS_ALLOW_PRIVATE"] = "1"
     try:
         db = str(tmp_path / "persist.db")
         q1 = Queue(db_path=db)
@@ -142,7 +142,7 @@ def test_subscriptions_persist_across_queue_instances(tmp_path: Path) -> None:
         all_subs = q2.list_webhooks()
         assert any(s.id == sub.id for s in all_subs)
     finally:
-        del os.environ["TASKITO_WEBHOOKS_ALLOW_PRIVATE"]
+        del os.environ["FLEXIQ_WEBHOOKS_ALLOW_PRIVATE"]
 
 
 def test_update_webhook(queue: Queue) -> None:
@@ -272,17 +272,17 @@ def test_create_webhook_endpoint(
 
 def test_create_webhook_rejects_unsafe_url(dashboard: tuple[AuthedClient, Queue]) -> None:
     client, _ = dashboard
-    # The fixture has TASKITO_WEBHOOKS_ALLOW_PRIVATE=1; remove it for this test only.
+    # The fixture has FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1; remove it for this test only.
     import os
 
-    saved = os.environ.pop("TASKITO_WEBHOOKS_ALLOW_PRIVATE", None)
+    saved = os.environ.pop("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", None)
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             client.post("/api/webhooks", {"url": "http://127.0.0.1/x"})
         assert exc_info.value.code == 400
     finally:
         if saved is not None:
-            os.environ["TASKITO_WEBHOOKS_ALLOW_PRIVATE"] = saved
+            os.environ["FLEXIQ_WEBHOOKS_ALLOW_PRIVATE"] = saved
 
 
 def test_create_webhook_rejects_unknown_event(

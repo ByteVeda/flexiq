@@ -12,7 +12,7 @@ import {
   WebhookValidationError,
 } from "../../src/index";
 
-const ALLOW_ENV_VAR = "TASKITO_WEBHOOKS_ALLOW_PRIVATE";
+const ALLOW_ENV_VAR = "FLEXIQ_WEBHOOKS_ALLOW_PRIVATE";
 
 let saved: string | undefined;
 let target: Server | undefined;

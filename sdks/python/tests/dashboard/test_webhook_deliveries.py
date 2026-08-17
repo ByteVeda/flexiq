@@ -22,7 +22,7 @@ from taskito.events import EventType
 
 @pytest.fixture
 def queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Queue:
-    monkeypatch.setenv("TASKITO_WEBHOOKS_ALLOW_PRIVATE", "1")
+    monkeypatch.setenv("FLEXIQ_WEBHOOKS_ALLOW_PRIVATE", "1")
     return Queue(db_path=str(tmp_path / "deliveries.db"))
 
 

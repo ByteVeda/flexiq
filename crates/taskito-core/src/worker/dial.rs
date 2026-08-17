@@ -2,7 +2,7 @@
 //!
 //! The listener parses the same grammar on the bind side
 //! (`taskito-server`'s `config::listen`), so the two stay readable against each
-//! other: whatever `TASKITO_LISTEN` accepts, `TASKITO_ATTACH` dials. Every SDK
+//! other: whatever `FLEXIQ_LISTEN` accepts, `FLEXIQ_ATTACH` dials. Every SDK
 //! shares this rather than reimplementing the grammar in its own language,
 //! where `unix:` support would inevitably drift.
 

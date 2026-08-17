@@ -34,7 +34,7 @@ export interface DashboardOptions {
   secureCookies?: boolean;
   /**
    * OAuth login flow. When omitted, one is built from the
-   * `TASKITO_DASHBOARD_OAUTH_*` environment variables if they are set.
+   * `FLEXIQ_DASHBOARD_OAUTH_*` environment variables if they are set.
    */
   oauth?: OAuthFlow;
 }
@@ -49,8 +49,8 @@ const defaultStaticDir = (): string => fileURLToPath(new URL(STATIC_REL, import.
  * By default the dashboard serves openly with no authentication. Pass
  * `authEnabled: true` to run the full session flow: first-run setup, password
  * login, CSRF protection, and admin/viewer roles. An initial admin can be
- * bootstrapped from `TASKITO_DASHBOARD_ADMIN_USER` /
- * `TASKITO_DASHBOARD_ADMIN_PASSWORD`.
+ * bootstrapped from `FLEXIQ_DASHBOARD_ADMIN_USER` /
+ * `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`.
  * Returns the listening HTTP server; call `.close()` to stop it.
  */
 export function serveDashboard(queue: Queue, options: DashboardOptions = {}): Server {

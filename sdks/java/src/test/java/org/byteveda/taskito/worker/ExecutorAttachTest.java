@@ -519,7 +519,7 @@ class ExecutorAttachTest {
     void anAddressIsRequired() {
         IllegalStateException error =
                 assertThrows(IllegalStateException.class, () -> greeter().start());
-        assertTrue(error.getMessage().contains("TASKITO_ATTACH"), error.getMessage());
+        assertTrue(error.getMessage().contains("FLEXIQ_ATTACH"), error.getMessage());
     }
 
     @Test

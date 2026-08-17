@@ -32,17 +32,17 @@ public record OAuthConfig(
 
     // ---- env var names (cross-SDK contract — do not rename) ----------------
 
-    public static final String ENV_REDIRECT_BASE_URL = "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL";
-    public static final String ENV_PASSWORD_AUTH_ENABLED = "TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED";
-    public static final String ENV_ADMIN_EMAILS = "TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS";
-    public static final String ENV_GOOGLE_CLIENT_ID = "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID";
-    public static final String ENV_GOOGLE_CLIENT_SECRET = "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET";
-    public static final String ENV_GOOGLE_ALLOWED_DOMAINS = "TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS";
-    public static final String ENV_GITHUB_CLIENT_ID = "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID";
-    public static final String ENV_GITHUB_CLIENT_SECRET = "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET";
-    public static final String ENV_GITHUB_ALLOWED_ORGS = "TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS";
-    public static final String ENV_OIDC_PROVIDERS = "TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS";
-    public static final String ENV_OIDC_PREFIX = "TASKITO_DASHBOARD_OAUTH_OIDC_";
+    public static final String ENV_REDIRECT_BASE_URL = "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL";
+    public static final String ENV_PASSWORD_AUTH_ENABLED = "FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED";
+    public static final String ENV_ADMIN_EMAILS = "FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS";
+    public static final String ENV_GOOGLE_CLIENT_ID = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID";
+    public static final String ENV_GOOGLE_CLIENT_SECRET = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET";
+    public static final String ENV_GOOGLE_ALLOWED_DOMAINS = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS";
+    public static final String ENV_GITHUB_CLIENT_ID = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID";
+    public static final String ENV_GITHUB_CLIENT_SECRET = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET";
+    public static final String ENV_GITHUB_ALLOWED_ORGS = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS";
+    public static final String ENV_OIDC_PROVIDERS = "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS";
+    public static final String ENV_OIDC_PREFIX = "FLEXIQ_DASHBOARD_OAUTH_OIDC_";
 
     static final Pattern SLOT_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{0,31}$");
     static final Set<String> RESERVED_SLOTS = Set.of("google", "github");

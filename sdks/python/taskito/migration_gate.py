@@ -17,7 +17,7 @@ import os
 __all__ = ["MIGRATION_GATE_ENV", "migrations_withheld", "withhold_migrations"]
 
 #: Set by ``taskito migrate`` before it imports the application.
-MIGRATION_GATE_ENV = "TASKITO_WITHHOLD_MIGRATIONS"
+MIGRATION_GATE_ENV = "FLEXIQ_WITHHOLD_MIGRATIONS"
 
 
 def migrations_withheld() -> bool:

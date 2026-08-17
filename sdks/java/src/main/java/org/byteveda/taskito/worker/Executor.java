@@ -281,7 +281,7 @@ public final class Executor implements AutoCloseable {
         public Executor start() {
             if (address == null || address.isBlank()) {
                 throw new IllegalStateException(
-                        "no scheduler address: call attach(...) or set TASKITO_ATTACH (e.g. scheduler:7777)");
+                        "no scheduler address: call attach(...) or set FLEXIQ_ATTACH (e.g. scheduler:7777)");
             }
             if (handlers.isEmpty()) {
                 // The scheduler only dispatches task names an executor

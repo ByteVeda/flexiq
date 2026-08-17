@@ -1,8 +1,8 @@
 //! Multi-backend contract suite for the `WorkflowStorage` trait.
 //!
 //! Every test body takes `&impl WorkflowStorage` so the same scenarios can
-//! run against SQLite (always), PostgreSQL (when `TASKITO_POSTGRES_TEST_URL`
-//! is set + `--features postgres`), and Redis (when `TASKITO_REDIS_TEST_URL`
+//! run against SQLite (always), PostgreSQL (when `FLEXIQ_POSTGRES_TEST_URL`
+//! is set + `--features postgres`), and Redis (when `FLEXIQ_REDIS_TEST_URL`
 //! is set + `--features redis`). The three entry-point tests live at the
 //! bottom of this file and select the right storage handle for the active
 //! feature set, mirroring the per-backend pattern in
@@ -767,10 +767,10 @@ fn postgres_storage_contract() {
     use taskito_core::storage::postgres::PostgresStorage;
     use taskito_workflows::WorkflowPostgresStorage;
 
-    let url = match std::env::var("TASKITO_POSTGRES_TEST_URL") {
+    let url = match std::env::var("FLEXIQ_POSTGRES_TEST_URL") {
         Ok(u) => u,
         Err(_) => {
-            eprintln!("skipping postgres_storage_contract: TASKITO_POSTGRES_TEST_URL not set");
+            eprintln!("skipping postgres_storage_contract: FLEXIQ_POSTGRES_TEST_URL not set");
             return;
         }
     };
@@ -788,10 +788,10 @@ fn redis_storage_contract() {
     use taskito_core::storage::redis_backend::RedisStorage;
     use taskito_workflows::WorkflowRedisStorage;
 
-    let url = match std::env::var("TASKITO_REDIS_TEST_URL") {
+    let url = match std::env::var("FLEXIQ_REDIS_TEST_URL") {
         Ok(u) => u,
         Err(_) => {
-            eprintln!("skipping redis_storage_contract: TASKITO_REDIS_TEST_URL not set");
+            eprintln!("skipping redis_storage_contract: FLEXIQ_REDIS_TEST_URL not set");
             return;
         }
     };

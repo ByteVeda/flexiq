@@ -274,7 +274,7 @@ import { Queue, SignedSerializer } from "@byteveda/taskito";
 
 new Queue({
   dbPath: "taskito.db",
-  serializer: new SignedSerializer(process.env.TASKITO_SECRET!),
+  serializer: new SignedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
 
@@ -287,7 +287,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.serialization.JsonSerializer;
 import org.byteveda.taskito.serialization.SignedSerializer;
 
-byte[] key = System.getenv("TASKITO_SIGNING_KEY").getBytes(StandardCharsets.UTF_8);
+byte[] key = System.getenv("FLEXIQ_SIGNING_KEY").getBytes(StandardCharsets.UTF_8);
 
 Taskito taskito = Taskito.builder()
         .sqlite("taskito.db")
@@ -344,7 +344,7 @@ import { Queue, EncryptedSerializer } from "@byteveda/taskito";
 
 new Queue({
   dbPath: "taskito.db",
-  serializer: new EncryptedSerializer(process.env.TASKITO_SECRET!),
+  serializer: new EncryptedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
 
@@ -357,7 +357,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.serialization.JsonSerializer;
 import org.byteveda.taskito.serialization.EncryptedSerializer;
 
-byte[] key = Base64.getDecoder().decode(System.getenv("TASKITO_ENC_KEY")); // 16, 24, or 32 bytes
+byte[] key = Base64.getDecoder().decode(System.getenv("FLEXIQ_ENC_KEY")); // 16, 24, or 32 bytes
 
 Taskito taskito = Taskito.builder()
         .sqlite("taskito.db")

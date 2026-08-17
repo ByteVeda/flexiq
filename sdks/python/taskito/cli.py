@@ -79,14 +79,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Scheduler address: host:port, :port, or unix:/run/taskito.sock "
-            "(default: $TASKITO_ATTACH)"
+            "(default: $FLEXIQ_ATTACH)"
         ),
     )
     exec_parser.add_argument(
         "--slots",
         type=int,
         default=None,
-        help=("Jobs to run concurrently, one prefork child each (default: $TASKITO_SLOTS, or 1)"),
+        help=("Jobs to run concurrently, one prefork child each (default: $FLEXIQ_SLOTS, or 1)"),
     )
     exec_parser.add_argument(
         "--executor-id",
@@ -361,10 +361,10 @@ def run_executor(args: argparse.Namespace) -> None:
     runs whatever it is sent. Only the transport differs — jobs execute on the
     same prefork pool, one child per slot.
     """
-    address = args.attach or os.environ.get("TASKITO_ATTACH")
+    address = args.attach or os.environ.get("FLEXIQ_ATTACH")
     if not address:
         print(
-            "Error: --attach is required (or set TASKITO_ATTACH), e.g. --attach scheduler:7777",
+            "Error: --attach is required (or set FLEXIQ_ATTACH), e.g. --attach scheduler:7777",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -387,7 +387,7 @@ def run_executor(args: argparse.Namespace) -> None:
             slots,
             # Env only, never a flag: a token in argv is visible in `ps` output
             # and lands in shell history.
-            os.environ.get("TASKITO_ATTACH_TOKEN"),
+            os.environ.get("FLEXIQ_ATTACH_TOKEN"),
             args.executor_id,
         )
     except (RuntimeError, ValueError) as exc:
@@ -425,14 +425,14 @@ def _executor_slots(flag: int | None) -> int:
     if flag is not None:
         value = flag
     else:
-        raw = os.environ.get("TASKITO_SLOTS")
+        raw = os.environ.get("FLEXIQ_SLOTS")
         if raw is None:
             return _EXECUTOR_DEFAULT_SLOTS
         try:
             value = int(raw)
         except ValueError:
             print(
-                f"Error: TASKITO_SLOTS must be an integer, got '{raw}'",
+                f"Error: FLEXIQ_SLOTS must be an integer, got '{raw}'",
                 file=sys.stderr,
             )
             sys.exit(1)

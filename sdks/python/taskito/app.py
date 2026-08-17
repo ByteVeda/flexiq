@@ -211,7 +211,7 @@ class Queue(
             max_intercept_depth: Maximum recursion depth for argument walking.
                 Defaults to 10.
             recipe_signing_key: HMAC-SHA256 key for proxy recipe integrity.
-                Falls back to ``TASKITO_RECIPE_SECRET`` env var.
+                Falls back to ``FLEXIQ_RECIPE_SECRET`` env var.
             max_reconstruction_timeout: Max seconds for proxy reconstruction.
             file_path_allowlist: Allowed file paths for the file proxy handler.
             disabled_proxies: Built-in proxy handlers to skip registering —
@@ -385,7 +385,7 @@ class Queue(
             file_path_allowlist=file_path_allowlist,
         )
         self._proxy_metrics = ProxyMetrics()
-        self._recipe_signing_key = recipe_signing_key or os.environ.get("TASKITO_RECIPE_SECRET")
+        self._recipe_signing_key = recipe_signing_key or os.environ.get("FLEXIQ_RECIPE_SECRET")
         self._max_reconstruction_timeout = max_reconstruction_timeout
         # Reject oversized serialized payloads at enqueue time (0 disables).
         self.max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES

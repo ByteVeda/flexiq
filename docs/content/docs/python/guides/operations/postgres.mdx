@@ -54,9 +54,9 @@ Configure the Postgres backend via Django settings:
 
 ```python
 # settings.py
-TASKITO_BACKEND = "postgres"
-TASKITO_DB_URL = "postgresql://user:password@localhost:5432/myapp"
-TASKITO_SCHEMA = "taskito"
+FLEXIQ_BACKEND = "postgres"
+FLEXIQ_DB_URL = "postgresql://user:password@localhost:5432/myapp"
+FLEXIQ_SCHEMA = "taskito"
 ```
 
 Then use the Django integration as normal:
@@ -71,18 +71,18 @@ All Django settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `TASKITO_BACKEND` | `"sqlite"` | Storage backend (`"sqlite"` or `"postgres"`) |
-| `TASKITO_DB_URL` | `None` | PostgreSQL connection URL |
-| `TASKITO_SCHEMA` | `"taskito"` | PostgreSQL schema name |
-| `TASKITO_DB_PATH` | `".taskito/taskito.db"` | SQLite database path (ignored with Postgres) |
-| `TASKITO_WORKERS` | `0` | Worker thread count (0 = auto-detect) |
-| `TASKITO_DEFAULT_RETRY` | `3` | Default max retries |
-| `TASKITO_DEFAULT_TIMEOUT` | `300` | Default task timeout in seconds |
-| `TASKITO_DEFAULT_PRIORITY` | `0` | Default task priority |
-| `TASKITO_RESULT_TTL` | `None` | Legacy queue-wide result TTL in seconds |
+| `FLEXIQ_BACKEND` | `"sqlite"` | Storage backend (`"sqlite"` or `"postgres"`) |
+| `FLEXIQ_DB_URL` | `None` | PostgreSQL connection URL |
+| `FLEXIQ_SCHEMA` | `"taskito"` | PostgreSQL schema name |
+| `FLEXIQ_DB_PATH` | `".taskito/taskito.db"` | SQLite database path (ignored with Postgres) |
+| `FLEXIQ_WORKERS` | `0` | Worker thread count (0 = auto-detect) |
+| `FLEXIQ_DEFAULT_RETRY` | `3` | Default max retries |
+| `FLEXIQ_DEFAULT_TIMEOUT` | `300` | Default task timeout in seconds |
+| `FLEXIQ_DEFAULT_PRIORITY` | `0` | Default task priority |
+| `FLEXIQ_RESULT_TTL` | `None` | Legacy queue-wide result TTL in seconds |
 
 <Callout type="info">
-  Retention is on by default: leaving `TASKITO_RESULT_TTL` unset does **not**
+  Retention is on by default: leaving `FLEXIQ_RESULT_TTL` unset does **not**
   disable auto-cleanup — the queue applies the recommended per-table
   retention windows automatically. See [Retention &
   auto-cleanup](/python/guides/operations/job-management#retention--auto-cleanup)
@@ -183,8 +183,8 @@ services:
   worker:
     build: .
     environment:
-      TASKITO_BACKEND: postgres
-      TASKITO_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_BACKEND: postgres
+      FLEXIQ_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
     depends_on:
       - postgres
     stop_signal: SIGINT
@@ -194,8 +194,8 @@ services:
     build: .
     command: taskito dashboard --app myapp:queue --host 0.0.0.0
     environment:
-      TASKITO_BACKEND: postgres
-      TASKITO_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_BACKEND: postgres
+      FLEXIQ_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
     depends_on:
       - postgres
     ports:
@@ -228,8 +228,8 @@ KillSignal=SIGINT
 TimeoutStopSec=35
 
 Environment=PYTHONPATH=/opt/myapp
-Environment=TASKITO_BACKEND=postgres
-Environment=TASKITO_DB_URL=postgresql://taskito:secret@db.internal:5432/myapp
+Environment=FLEXIQ_BACKEND=postgres
+Environment=FLEXIQ_DB_URL=postgresql://taskito:secret@db.internal:5432/myapp
 
 [Install]
 WantedBy=multi-user.target

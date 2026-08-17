@@ -8,7 +8,7 @@ import { afterEach, expect, it } from "vitest";
 import { Queue, WebhookValidationError, type Worker } from "../../src/index";
 
 // These deliveries target a loopback receiver, which the SSRF guard blocks by default.
-process.env.TASKITO_WEBHOOKS_ALLOW_PRIVATE = "1";
+process.env.FLEXIQ_WEBHOOKS_ALLOW_PRIVATE = "1";
 
 let worker: Worker | undefined;
 let target: Server | undefined;

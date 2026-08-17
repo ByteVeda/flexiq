@@ -38,7 +38,7 @@ taskito dashboard --app myapp:queue --auth
 python manage.py taskito_dashboard --auth
 ```
 
-Or set `TASKITO_DASHBOARD_AUTH = True` in `settings.py` to make it the
+Or set `FLEXIQ_DASHBOARD_AUTH = True` in `settings.py` to make it the
 management command's default.
 
   </Tab>
@@ -95,8 +95,8 @@ want to visit a browser just to register the first user. Set both env
 vars before starting the dashboard:
 
 ```bash
-export TASKITO_DASHBOARD_ADMIN_USER=admin
-export TASKITO_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
+export FLEXIQ_DASHBOARD_ADMIN_USER=admin
+export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
 taskito dashboard --app myapp:queue --auth
 ```
 
@@ -150,7 +150,7 @@ All routes live under `/api/auth/`:
 Every other route under `/api/` is auth-gated. Public exceptions:
 `/health` (liveness — always open) and the static SPA assets. With auth
 enabled, `/readiness` and `/metrics` (Prometheus) require either a valid
-session or the `TASKITO_DASHBOARD_METRICS_TOKEN` bearer — point scrapers
+session or the `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer — point scrapers
 at the token via `Authorization: Bearer <token>`. Without auth they stay
 public unless that token is set.
 
@@ -194,7 +194,7 @@ delivery happens. By default the server rejects:
   multicast range (including the AWS metadata service at
   `169.254.169.254`)
 
-Set `TASKITO_WEBHOOKS_ALLOW_PRIVATE=1` to disable the guard for local
+Set `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1` to disable the guard for local
 development against `http://localhost`. Production should keep the
 guard on.
 
@@ -204,7 +204,7 @@ Native sign-in with Google, GitHub, and any OIDC-compliant provider
 (Okta, Auth0, Keycloak, Microsoft Entra) is available alongside
 password auth — see [SSO (OAuth & OIDC)](/python/guides/dashboard/sso).
 Operators can mix-and-match providers or run an OAuth-only deployment
-by setting `TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED=false`.
+by setting `FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false`.
 
 ## Roles
 

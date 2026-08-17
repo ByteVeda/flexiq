@@ -41,7 +41,7 @@ link-local, RFC1918, multicast, CGNAT, and IPv6 unique-local addresses are
 rejected by default), and every delivery re-validates the URL again right
 before sending, closing the DNS-rebinding gap. `WebhookManager.create(...)`
 called directly from your own code is trusted input and isn't pre-validated
-at creation — only at delivery time. Set `TASKITO_WEBHOOKS_ALLOW_PRIVATE` to
+at creation — only at delivery time. Set `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` to
 disable the guard for local development. See
 [Webhooks: SSRF guard](/java/guides/extensibility/webhooks#ssrf-guard).
 

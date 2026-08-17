@@ -135,24 +135,24 @@ def _validate_redirect_base_url(url: str) -> None:
 def from_env(environ: Mapping[str, str] | None = None) -> OAuthConfig | None:
     """Parse :class:`OAuthConfig` from the environment.
 
-    Returns ``None`` when neither ``TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL``
+    Returns ``None`` when neither ``FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL``
     nor any provider client-id env var is set — i.e. OAuth is not configured.
     Raises :class:`OAuthConfigError` if some but not all required vars are set
     for a configured provider (fail-fast on partial configuration).
     """
     env = environ if environ is not None else os.environ
 
-    base_url = env.get("TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL", "").strip()
-    google_id = env.get("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "").strip()
-    github_id = env.get("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "").strip()
-    oidc_slots_raw = env.get("TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS", "").strip()
+    base_url = env.get("FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL", "").strip()
+    google_id = env.get("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "").strip()
+    github_id = env.get("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "").strip()
+    oidc_slots_raw = env.get("FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS", "").strip()
 
     any_provider_signal = bool(google_id or github_id or oidc_slots_raw)
     if not any_provider_signal and not base_url:
         return None
     if any_provider_signal and not base_url:
         raise OAuthConfigError(
-            "TASKITO_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any "
+            "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL must be set when any "
             "OAuth provider is configured"
         )
 
@@ -160,9 +160,9 @@ def from_env(environ: Mapping[str, str] | None = None) -> OAuthConfig | None:
     github = _parse_github(env) if github_id else None
     oidc = _parse_oidc_slots(env, oidc_slots_raw)
     password_enabled = _parse_bool(
-        env.get("TASKITO_DASHBOARD_PASSWORD_AUTH_ENABLED", "true"), default=True
+        env.get("FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED", "true"), default=True
     )
-    admin_emails = _split_csv(env.get("TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS"))
+    admin_emails = _split_csv(env.get("FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS"))
 
     config = OAuthConfig(
         redirect_base_url=base_url,
@@ -182,30 +182,30 @@ def from_env(environ: Mapping[str, str] | None = None) -> OAuthConfig | None:
 
 
 def _parse_google(env: Mapping[str, str]) -> GoogleConfig:
-    cid = env.get("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "").strip()
-    secret = env.get("TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "").strip()
+    cid = env.get("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID", "").strip()
+    secret = env.get("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET", "").strip()
     if not secret:
         raise OAuthConfigError(
-            "TASKITO_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET is required when google client_id is set"
+            "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET is required when google client_id is set"
         )
     return GoogleConfig(
         client_id=cid,
         client_secret=secret,
-        allowed_domains=_split_csv(env.get("TASKITO_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS")),
+        allowed_domains=_split_csv(env.get("FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS")),
     )
 
 
 def _parse_github(env: Mapping[str, str]) -> GitHubConfig:
-    cid = env.get("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "").strip()
-    secret = env.get("TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET", "").strip()
+    cid = env.get("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID", "").strip()
+    secret = env.get("FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET", "").strip()
     if not secret:
         raise OAuthConfigError(
-            "TASKITO_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET is required when github client_id is set"
+            "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET is required when github client_id is set"
         )
     return GitHubConfig(
         client_id=cid,
         client_secret=secret,
-        allowed_orgs=_split_csv(env.get("TASKITO_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS")),
+        allowed_orgs=_split_csv(env.get("FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS")),
     )
 
 
@@ -219,7 +219,7 @@ def _parse_oidc_slots(env: Mapping[str, str], slots_raw: str) -> tuple[OIDCConfi
         slot = raw_slot.lower()
         if slot in seen:
             raise OAuthConfigError(
-                f"OIDC slot {slot!r} listed twice in TASKITO_DASHBOARD_OAUTH_OIDC_PROVIDERS"
+                f"OIDC slot {slot!r} listed twice in FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS"
             )
         seen.add(slot)
         out.append(_parse_oidc_slot(env, slot))
@@ -227,7 +227,7 @@ def _parse_oidc_slots(env: Mapping[str, str], slots_raw: str) -> tuple[OIDCConfi
 
 
 def _parse_oidc_slot(env: Mapping[str, str], slot: str) -> OIDCConfig:
-    prefix = f"TASKITO_DASHBOARD_OAUTH_OIDC_{slot.upper().replace('-', '_')}"
+    prefix = f"FLEXIQ_DASHBOARD_OAUTH_OIDC_{slot.upper().replace('-', '_')}"
     cid = env.get(f"{prefix}_CLIENT_ID", "").strip()
     secret = env.get(f"{prefix}_CLIENT_SECRET", "").strip()
     discovery = env.get(f"{prefix}_DISCOVERY_URL", "").strip()

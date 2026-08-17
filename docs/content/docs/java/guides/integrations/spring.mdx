@@ -98,8 +98,8 @@ taskito:
 | `taskito.dashboard.static-dir` | `String` | auto-discovered | Directory of a prebuilt SPA, overriding the jar's extracted copy |
 | `taskito.dashboard.secure-cookies` | `boolean` | `true` | Drop the `Secure` cookie attribute for local HTTP development |
 
-OAuth/OIDC env vars (`TASKITO_DASHBOARD_OAUTH_*`, see
+OAuth/OIDC env vars (`FLEXIQ_DASHBOARD_OAUTH_*`, see
 [SSO](/java/guides/operations/sso)) and the admin bootstrap
-(`TASKITO_DASHBOARD_ADMIN_USER`/`_PASSWORD`) are read the same way regardless
+(`FLEXIQ_DASHBOARD_ADMIN_USER`/`_PASSWORD`) are read the same way regardless
 of Spring — they aren't Spring properties, and they only apply when
 `auth-enabled` is set.

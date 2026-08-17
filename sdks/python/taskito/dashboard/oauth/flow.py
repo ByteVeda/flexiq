@@ -78,7 +78,7 @@ class OAuthFlow:
             # so an OAuth-only deployment would silently have zero admins.
             logger.warning(
                 "OAuth is configured without admin emails: every OAuth login "
-                "gets the viewer role. Set TASKITO_DASHBOARD_OAUTH_ADMIN_EMAILS "
+                "gets the viewer role. Set FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS "
                 "(or OAuthConfig.admin_emails) to grant admin access."
             )
 

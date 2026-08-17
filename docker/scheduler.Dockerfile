@@ -45,7 +45,7 @@ COPY --from=dashboard /src/dashboard/dist ./dashboard/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
-    TASKITO_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
+    FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
     cargo build --release --locked -p taskito-server --features postgres,redis \
     && cp target/release/taskito-server /taskito-server \
     && if readelf -l /taskito-server | grep -q INTERP; then \
@@ -64,8 +64,8 @@ LABEL org.opencontainers.image.title="taskito-server" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /taskito-server /usr/local/bin/taskito-server
-# Attach listener and dashboard. Both stay off until TASKITO_LISTEN /
-# TASKITO_DASHBOARD are set, so this documents the ports rather than opening them.
+# Attach listener and dashboard. Both stay off until FLEXIQ_LISTEN /
+# FLEXIQ_DASHBOARD are set, so this documents the ports rather than opening them.
 EXPOSE 7777 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/taskito-server"]

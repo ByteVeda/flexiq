@@ -1,6 +1,6 @@
 //! Namespace scoping across the dashboard-facing listings and aggregates.
 //!
-//! `TASKITO_NAMESPACE` is meant to be a tenancy boundary, so a caller scoped to
+//! `FLEXIQ_NAMESPACE` is meant to be a tenancy boundary, so a caller scoped to
 //! one namespace must not see another's jobs, dead letters, logs, metrics, or
 //! totals — and must not be able to act on their ids. `None` stays unscoped,
 //! matching `list_jobs`, so a single-tenant deployment is unaffected.

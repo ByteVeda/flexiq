@@ -5,7 +5,7 @@ the same database has to agree. Reading both implementations side by side is
 how drift creeps in; this compares them.
 
 Skipped unless the ``taskito-server`` binary is available — set
-``TASKITO_SERVER_BIN`` or build it first::
+``FLEXIQ_SERVER_BIN`` or build it first::
 
     cargo build -p taskito-server
     uv run python -m pytest tests/dashboard/test_rust_server_parity.py -v
@@ -85,7 +85,7 @@ DIVERGENT_ROUTES: tuple[str, ...] = (
 
 def _server_binary() -> Path | None:
     """Locate the standalone server, or ``None`` when it is not built."""
-    explicit = os.environ.get("TASKITO_SERVER_BIN")
+    explicit = os.environ.get("FLEXIQ_SERVER_BIN")
     if explicit:
         candidate = Path(explicit)
         return candidate if candidate.is_file() else None
@@ -199,9 +199,9 @@ def parity_servers(seeded_queue: tuple[Queue, str]) -> Generator[tuple[str, str]
         [str(binary)],
         env={
             **os.environ,
-            "TASKITO_DSN": db_path,
-            "TASKITO_BACKEND": "sqlite",
-            "TASKITO_DASHBOARD": f"127.0.0.1:{rust_port}",
+            "FLEXIQ_DSN": db_path,
+            "FLEXIQ_BACKEND": "sqlite",
+            "FLEXIQ_DASHBOARD": f"127.0.0.1:{rust_port}",
             "RUST_LOG": "warn",
         },
         stdout=subprocess.PIPE,

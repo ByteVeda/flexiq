@@ -44,10 +44,10 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
 
 (or `taskito dashboard --auth` from the CLI). With `authEnabled: true` the
 full session flow runs: a one-time setup screen creates the first admin —
-or bootstrap it headlessly with `TASKITO_DASHBOARD_ADMIN_USER` /
-`TASKITO_DASHBOARD_ADMIN_PASSWORD` — then password login with server-side
+or bootstrap it headlessly with `FLEXIQ_DASHBOARD_ADMIN_USER` /
+`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` — then password login with server-side
 sessions, CSRF protection on writes, and admin/viewer roles. OAuth/SSO
-providers configured via `TASKITO_DASHBOARD_OAUTH_*` env vars apply only in
+providers configured via `FLEXIQ_DASHBOARD_OAUTH_*` env vars apply only in
 this mode.
 
 The legacy shared-token gate is unchanged: pass `auth: { token }` to require

@@ -46,7 +46,7 @@ class Command(BaseCommand):
     def _watch(self, queue):  # type: ignore[no-untyped-def]
         from django.conf import settings
 
-        interval = getattr(settings, "TASKITO_WATCH_INTERVAL", 2)
+        interval = getattr(settings, "FLEXIQ_WATCH_INTERVAL", 2)
 
         prev_completed = 0
         try:

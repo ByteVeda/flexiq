@@ -51,7 +51,7 @@ queue = Queue(
 ```
 
 If `recipe_signing_key` is not set on the constructor, it falls back to
-the `TASKITO_RECIPE_SECRET` environment variable. Signed recipes are
+the `FLEXIQ_RECIPE_SECRET` environment variable. Signed recipes are
 verified at reconstruction time — a modified or forged recipe raises
 `ProxyReconstructionError`.
 

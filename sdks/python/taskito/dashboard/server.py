@@ -6,7 +6,7 @@ auth is enabled and at least one user has been registered with
 :class:`taskito.dashboard.auth.AuthStore`, sessions are enforced. Until the
 first user is created, all API routes return ``503 setup_required`` so the
 SPA can guide the operator through one-time setup.
-``TASKITO_DASHBOARD_ADMIN_USER`` / ``TASKITO_DASHBOARD_ADMIN_PASSWORD``
+``FLEXIQ_DASHBOARD_ADMIN_USER`` / ``FLEXIQ_DASHBOARD_ADMIN_PASSWORD``
 environment variables bootstrap a user idempotently on server start.
 """
 
@@ -641,13 +641,13 @@ def _make_handler(
         def _probe_authorized(self, ctx: RequestContext) -> bool:
             """Gate ``/metrics`` and ``/readiness``.
 
-            Accepted credentials: the optional ``TASKITO_DASHBOARD_METRICS_TOKEN``
+            Accepted credentials: the optional ``FLEXIQ_DASHBOARD_METRICS_TOKEN``
             bearer token (scraper-friendly) or, when session auth is enabled, a
             valid dashboard session. Open mode with no token configured stays
             public (probe-friendly default). Writes a 401 and returns ``False``
             when every applicable check fails.
             """
-            token = os.environ.get("TASKITO_DASHBOARD_METRICS_TOKEN")
+            token = os.environ.get("FLEXIQ_DASHBOARD_METRICS_TOKEN")
             if token:
                 header = self.headers.get("Authorization", "")
                 if hmac.compare_digest(header, f"Bearer {token}"):

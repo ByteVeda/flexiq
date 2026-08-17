@@ -24,9 +24,9 @@ serviceAccount:
 # Storage the scheduler and dashboard read. Required unless the deployment runs
 # the webhook alone.
 storage:
-  # Passed as TASKITO_DSN. Prefer existingSecret over a value in git.
+  # Passed as FLEXIQ_DSN. Prefer existingSecret over a value in git.
   dsn: ""
-  # Read TASKITO_DSN from an existing Secret instead.
+  # Read FLEXIQ_DSN from an existing Secret instead.
   existingSecret: ""
   existingSecretKey: dsn
   # sqlite | postgres | redis. Empty lets the DSN's scheme decide.

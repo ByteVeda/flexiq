@@ -43,45 +43,45 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
             {{- if .Values.storage.existingSecret }}
-            - name: TASKITO_DSN
+            - name: FLEXIQ_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.storage.existingSecret }}
                   key: {{ .Values.storage.existingSecretKey }}
             {{- else if .Values.storage.dsn }}
-            - name: TASKITO_DSN
+            - name: FLEXIQ_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "taskito-server.secretName" . }}
                   key: dsn
             {{- end }}
             {{- with .Values.storage.backend }}
-            - name: TASKITO_BACKEND
+            - name: FLEXIQ_BACKEND
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.namespace }}
-            - name: TASKITO_NAMESPACE
+            - name: FLEXIQ_NAMESPACE
               value: {{ . | quote }}
             {{- end }}
-            - name: TASKITO_QUEUES
+            - name: FLEXIQ_QUEUES
               value: {{ join "," .Values.queues | quote }}
             {{- with .Values.workers }}
-            - name: TASKITO_WORKERS
+            - name: FLEXIQ_WORKERS
               value: {{ . | quote }}
             {{- end }}
-            - name: TASKITO_MAINTENANCE
+            - name: FLEXIQ_MAINTENANCE
               value: {{ ternary "on" "off" .Values.maintenance | quote }}
             {{- if .Values.attach.enabled }}
-            - name: TASKITO_LISTEN
+            - name: FLEXIQ_LISTEN
               value: "0.0.0.0:{{ .Values.attach.port }}"
             {{- if .Values.attach.existingSecret }}
-            - name: TASKITO_ATTACH_TOKEN
+            - name: FLEXIQ_ATTACH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.attach.existingSecret }}
                   key: {{ .Values.attach.existingSecretKey }}
             {{- else if .Values.attach.token }}
-            - name: TASKITO_ATTACH_TOKEN
+            - name: FLEXIQ_ATTACH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "taskito-server.secretName" . }}
@@ -89,52 +89,52 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.dashboard.enabled }}
-            - name: TASKITO_DASHBOARD
+            - name: FLEXIQ_DASHBOARD
               value: "0.0.0.0:{{ .Values.dashboard.port }}"
-            - name: TASKITO_DASHBOARD_AUTH
+            - name: FLEXIQ_DASHBOARD_AUTH
               value: {{ .Values.dashboard.auth | quote }}
             {{- if .Values.dashboard.allowInsecure }}
-            - name: TASKITO_ALLOW_INSECURE
+            - name: FLEXIQ_ALLOW_INSECURE
               value: "1"
             {{- end }}
             {{- if .Values.dashboard.existingSecret }}
-            - name: TASKITO_DASHBOARD_ADMIN_USER
+            - name: FLEXIQ_DASHBOARD_ADMIN_USER
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.dashboard.existingSecret }}
                   key: {{ .Values.dashboard.existingSecretKeyUser }}
-            - name: TASKITO_DASHBOARD_ADMIN_PASSWORD
+            - name: FLEXIQ_DASHBOARD_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.dashboard.existingSecret }}
                   key: {{ .Values.dashboard.existingSecretKeyPassword }}
             {{- else if .Values.dashboard.adminPassword }}
-            - name: TASKITO_DASHBOARD_ADMIN_USER
+            - name: FLEXIQ_DASHBOARD_ADMIN_USER
               value: {{ .Values.dashboard.adminUser | quote }}
-            - name: TASKITO_DASHBOARD_ADMIN_PASSWORD
+            - name: FLEXIQ_DASHBOARD_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "taskito-server.secretName" . }}
                   key: admin-password
             {{- end }}
             {{- if .Values.dashboard.metricsToken }}
-            - name: TASKITO_DASHBOARD_METRICS_TOKEN
+            - name: FLEXIQ_DASHBOARD_METRICS_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "taskito-server.secretName" . }}
                   key: metrics-token
             {{- end }}
             {{- if .Values.dashboard.publicReadiness }}
-            - name: TASKITO_DASHBOARD_PUBLIC_READINESS
+            - name: FLEXIQ_DASHBOARD_PUBLIC_READINESS
               value: "1"
             {{- end }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
-            - name: TASKITO_WEBHOOK_LISTEN
+            - name: FLEXIQ_WEBHOOK_LISTEN
               value: "0.0.0.0:{{ .Values.webhook.port }}"
-            - name: TASKITO_WEBHOOK_TLS_CERT
+            - name: FLEXIQ_WEBHOOK_TLS_CERT
               value: /etc/taskito/webhook-tls/tls.crt
-            - name: TASKITO_WEBHOOK_TLS_KEY
+            - name: FLEXIQ_WEBHOOK_TLS_KEY
               value: /etc/taskito/webhook-tls/tls.key
             {{- end }}
             {{- with .Values.extraEnv }}

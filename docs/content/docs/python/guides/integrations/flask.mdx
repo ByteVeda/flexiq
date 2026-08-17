@@ -19,7 +19,7 @@ from flask import Flask
 from taskito.contrib.flask import Taskito
 
 app = Flask(__name__)
-app.config["TASKITO_DB_PATH"] = "myapp.db"
+app.config["FLEXIQ_DB_PATH"] = "myapp.db"
 
 taskito = Taskito(app)
 
@@ -37,7 +37,7 @@ taskito = Taskito()
 
 def create_app():
     app = Flask(__name__)
-    app.config["TASKITO_DB_PATH"] = "myapp.db"
+    app.config["FLEXIQ_DB_PATH"] = "myapp.db"
     taskito.init_app(app)
     return app
 ```
@@ -48,18 +48,18 @@ All configuration is read from `app.config`:
 
 | Config Key | Default | Description |
 |------------|---------|-------------|
-| `TASKITO_DB_PATH` | `.taskito/taskito.db` | SQLite database path |
-| `TASKITO_BACKEND` | `"sqlite"` | Storage backend: `"sqlite"` or `"postgres"` |
-| `TASKITO_DB_URL` | `None` | PostgreSQL connection URL (when backend is `"postgres"`) |
-| `TASKITO_WORKERS` | `0` (auto) | Number of worker threads |
-| `TASKITO_SCHEMA` | `"taskito"` | PostgreSQL schema name |
-| `TASKITO_DEFAULT_RETRY` | `3` | Default retry count for tasks |
-| `TASKITO_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
-| `TASKITO_DEFAULT_PRIORITY` | `0` | Default task priority |
-| `TASKITO_RESULT_TTL` | `None` | Auto-purge completed jobs after N seconds |
-| `TASKITO_DRAIN_TIMEOUT` | `30` | Seconds to wait for running tasks on shutdown |
+| `FLEXIQ_DB_PATH` | `.taskito/taskito.db` | SQLite database path |
+| `FLEXIQ_BACKEND` | `"sqlite"` | Storage backend: `"sqlite"` or `"postgres"` |
+| `FLEXIQ_DB_URL` | `None` | PostgreSQL connection URL (when backend is `"postgres"`) |
+| `FLEXIQ_WORKERS` | `0` (auto) | Number of worker threads |
+| `FLEXIQ_SCHEMA` | `"taskito"` | PostgreSQL schema name |
+| `FLEXIQ_DEFAULT_RETRY` | `3` | Default retry count for tasks |
+| `FLEXIQ_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
+| `FLEXIQ_DEFAULT_PRIORITY` | `0` | Default task priority |
+| `FLEXIQ_RESULT_TTL` | `None` | Auto-purge completed jobs after N seconds |
+| `FLEXIQ_DRAIN_TIMEOUT` | `30` | Seconds to wait for running tasks on shutdown |
 
-Using `TASKITO_BACKEND = "postgres"` requires the `taskito[postgres]`
+Using `FLEXIQ_BACKEND = "postgres"` requires the `taskito[postgres]`
 extra (`pip install taskito[postgres]`) — see the
 [PostgreSQL guide](/python/guides/operations/postgres).
 
@@ -129,9 +129,9 @@ from flask import Flask, jsonify, request
 from taskito.contrib.flask import Taskito
 
 app = Flask(__name__)
-app.config["TASKITO_DB_PATH"] = "myapp.db"
-app.config["TASKITO_DEFAULT_RETRY"] = 3
-app.config["TASKITO_RESULT_TTL"] = 86400  # 24h auto-cleanup
+app.config["FLEXIQ_DB_PATH"] = "myapp.db"
+app.config["FLEXIQ_DEFAULT_RETRY"] = 3
+app.config["FLEXIQ_RESULT_TTL"] = 86400  # 24h auto-cleanup
 
 taskito = Taskito(app)
 

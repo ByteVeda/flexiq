@@ -99,13 +99,13 @@ def test_configure_leaves_caller_handlers_alone() -> None:
 
 
 def test_level_resolution_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TASKITO_LOG_LEVEL", "WARNING")
+    monkeypatch.setenv("FLEXIQ_LOG_LEVEL", "WARNING")
     configure()
     assert logging.getLogger("taskito").level == logging.WARNING
 
 
 def test_level_resolution_falls_back_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TASKITO_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("FLEXIQ_LOG_LEVEL", raising=False)
     configure()
     assert logging.getLogger("taskito").level == logging.INFO
 

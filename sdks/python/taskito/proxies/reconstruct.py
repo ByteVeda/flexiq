@@ -38,7 +38,7 @@ def _warn_unsigned_once() -> None:
     _UNSIGNED_WARNED = True
     logger.warning(
         "Reconstructing proxy recipes without integrity verification; set "
-        "recipe_signing_key= or TASKITO_RECIPE_SECRET to enable HMAC signing."
+        "recipe_signing_key= or FLEXIQ_RECIPE_SECRET to enable HMAC signing."
     )
 
 

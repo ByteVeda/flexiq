@@ -151,17 +151,17 @@ mod tests {
 
     /// Postgres lost-update guard: under concurrency the row is seeded once and
     /// read `FOR UPDATE`, so a fresh bucket must admit exactly `max_tokens` — not
-    /// more. Skips unless `TASKITO_POSTGRES_TEST_URL` is set (CI Postgres job).
+    /// more. Skips unless `FLEXIQ_POSTGRES_TEST_URL` is set (CI Postgres job).
     #[cfg(feature = "postgres")]
     #[test]
     fn test_postgres_concurrent_token_acquisition_no_over_admit() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Barrier};
 
-        let url = match std::env::var("TASKITO_POSTGRES_TEST_URL") {
+        let url = match std::env::var("FLEXIQ_POSTGRES_TEST_URL") {
             Ok(u) => u,
             Err(_) => {
-                eprintln!("Skipping Postgres rate-limit test (TASKITO_POSTGRES_TEST_URL not set)");
+                eprintln!("Skipping Postgres rate-limit test (FLEXIQ_POSTGRES_TEST_URL not set)");
                 return;
             }
         };

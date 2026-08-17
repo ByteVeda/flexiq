@@ -101,7 +101,7 @@ async fn an_annotated_pod_is_admitted_with_a_sidecar_patch() {
     assert!(container["value"]["env"]
         .as_array()
         .expect("env")
-        .contains(&json!({ "name": "TASKITO_SLOTS", "value": "4" })));
+        .contains(&json!({ "name": "FLEXIQ_SLOTS", "value": "4" })));
 }
 
 #[tokio::test]

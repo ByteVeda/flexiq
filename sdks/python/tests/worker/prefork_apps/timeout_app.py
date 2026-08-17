@@ -5,7 +5,7 @@ must live at a module path resolvable inside the child interpreter — that's
 why this module exists as a sibling of ``test_prefork.py`` rather than being
 defined inline in the test.
 
-The DB path comes from ``TASKITO_TIMEOUT_TEST_DB`` so each test run can use a
+The DB path comes from ``FLEXIQ_TIMEOUT_TEST_DB`` so each test run can use a
 unique tmp file while still letting the parent and child build identical
 Queue instances from this same module.
 """
@@ -17,7 +17,7 @@ import time
 
 from taskito import Queue
 
-queue = Queue(db_path=os.environ.get("TASKITO_TIMEOUT_TEST_DB", "/tmp/taskito-timeout.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_TIMEOUT_TEST_DB", "/tmp/taskito-timeout.db"))
 
 
 @queue.task(timeout=2, max_retries=0)

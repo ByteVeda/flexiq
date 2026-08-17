@@ -116,7 +116,7 @@ jobs:
         # taskito-core/taskito-workflows; python's Rust tests run in the SQLite job.
         run: cargo test --workspace --exclude taskito-python --features postgres,workflows
         env:
-          TASKITO_POSTGRES_TEST_URL: postgres://postgres:test@localhost:5432/taskito_test
+          FLEXIQ_POSTGRES_TEST_URL: postgres://postgres:test@localhost:5432/taskito_test
 
   rust-test-redis:
     name: Rust Tests (Redis)
@@ -138,7 +138,7 @@ jobs:
       - name: Run Rust test suite (Redis backend)
         run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features redis,workflows
         env:
-          TASKITO_REDIS_TEST_URL: redis://localhost:6379/15
+          FLEXIQ_REDIS_TEST_URL: redis://localhost:6379/15
 
   # Everything a crates.io release of the Rust crates depends on: the declared
   # MSRV actually builds, the rustdoc is warning-free, the packages pass a

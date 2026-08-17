@@ -22,7 +22,7 @@ pub async fn health() -> Json<Value> {
 
 /// Readiness: storage answers and the worker registry is reachable.
 ///
-/// Gated like `/metrics` unless `TASKITO_DASHBOARD_PUBLIC_READINESS` says
+/// Gated like `/metrics` unless `FLEXIQ_DASHBOARD_PUBLIC_READINESS` says
 /// otherwise. That switch exists because the caller is an orchestrator probe:
 /// it carries no credential, and a Kubernetes probe header is a literal string
 /// in the manifest, so authenticating it would mean copying the token out of
@@ -155,7 +155,7 @@ pub async fn metrics(
 
 /// Gate `/readiness` and `/metrics`.
 ///
-/// A configured `TASKITO_DASHBOARD_METRICS_TOKEN` is the scraper-friendly
+/// A configured `FLEXIQ_DASHBOARD_METRICS_TOKEN` is the scraper-friendly
 /// credential. With no token set, open mode stays public (probes must work out
 /// of the box) while session mode requires a dashboard session.
 fn require_probe_access(

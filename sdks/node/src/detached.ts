@@ -8,7 +8,7 @@ const log = createLogger("executor");
  * storage. Set by `taskito executor` before it imports the app. Internal:
  * applications should not set it.
  */
-export const DETACHED_ENV = "TASKITO_DETACHED_EXECUTOR";
+export const DETACHED_ENV = "FLEXIQ_DETACHED_EXECUTOR";
 
 /** Whether this process runs task bodies without any storage of its own. */
 export function isDetached(): boolean {

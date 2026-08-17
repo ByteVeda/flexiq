@@ -59,11 +59,11 @@ class OAuthConfigTest {
                 "https://dash.example",
                 OAuthConfig.ENV_OIDC_PROVIDERS,
                 "corp",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_CORP_CLIENT_ID",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_CORP_CLIENT_ID",
                 "cid",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_CORP_CLIENT_SECRET",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_CORP_CLIENT_SECRET",
                 "csec",
-                "TASKITO_DASHBOARD_OAUTH_OIDC_CORP_DISCOVERY_URL",
+                "FLEXIQ_DASHBOARD_OAUTH_OIDC_CORP_DISCOVERY_URL",
                 "https://idp.example/.well-known/openid-configuration");
         OAuthConfig config = OAuthConfig.fromEnv(env).orElseThrow();
         assertEquals(1, config.oidc().size());

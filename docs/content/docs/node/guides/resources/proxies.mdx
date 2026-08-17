@@ -16,7 +16,7 @@ when the *producer* is the one that knows which resource to use.
 ```ts
 import { FileProxyHandler, FileReference, Proxies, type ProxyRef } from "@byteveda/taskito";
 
-const proxies = new Proxies(Buffer.from(process.env.TASKITO_PROXY_KEY!, "utf8"))
+const proxies = new Proxies(Buffer.from(process.env.FLEXIQ_PROXY_KEY!, "utf8"))
   .register(new FileProxyHandler(["/srv/uploads"]));
 
 // Producer — reduce the resource to a signed ref and enqueue that.

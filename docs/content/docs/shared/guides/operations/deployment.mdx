@@ -271,11 +271,11 @@ VOLUME /data
 CMD ["taskito", "worker", "--app", "myapp:queue"]
 ```
 
-<Callout type="warn" title="TASKITO_DB_PATH is not read automatically">
-  The `taskito` CLI and the `Queue` constructor do not read a `TASKITO_DB_PATH`
+<Callout type="warn" title="FLEXIQ_DB_PATH is not read automatically">
+  The `taskito` CLI and the `Queue` constructor do not read a `FLEXIQ_DB_PATH`
   environment variable — that env var name is only recognized by the Flask and
   Django integrations. If your `myapp:queue` module builds the `Queue`
-  directly, read the path yourself (and keep the `ENV TASKITO_DB_PATH=...`
+  directly, read the path yourself (and keep the `ENV FLEXIQ_DB_PATH=...`
   line in the Dockerfile above), as shown below.
 </Callout>
 
@@ -284,7 +284,7 @@ CMD ["taskito", "worker", "--app", "myapp:queue"]
 import os
 from taskito import Queue
 
-queue = Queue(db_path=os.environ.get("TASKITO_DB_PATH", "/data/taskito.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_DB_PATH", "/data/taskito.db"))
 ```
 
 </SdkOnly>
@@ -542,11 +542,11 @@ services:
   scheduler:
     image: ghcr.io/byteveda/taskito-server:0.21.0
     environment:
-      TASKITO_DSN: postgresql://taskito:secret@postgres:5432/myapp
-      TASKITO_LISTEN: 0.0.0.0:7777
-      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?generate with openssl rand -base64 32}
-      TASKITO_DASHBOARD: 0.0.0.0:8080
-      TASKITO_DASHBOARD_AUTH: session
+      FLEXIQ_DSN: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_LISTEN: 0.0.0.0:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?generate with openssl rand -base64 32}
+      FLEXIQ_DASHBOARD: 0.0.0.0:8080
+      FLEXIQ_DASHBOARD_AUTH: session
     ports:
       - "8080:8080" # dashboard only — 7777 stays on the compose network
     depends_on:
@@ -565,9 +565,9 @@ services:
     build: . # the app image from the Dockerfile above, unchanged
     command: taskito executor --app myapp:queue
     environment:
-      TASKITO_ATTACH: scheduler:7777
-      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
-      TASKITO_SLOTS: "4"
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
     depends_on:
       - scheduler
     restart: unless-stopped
@@ -582,9 +582,9 @@ services:
     build: . # the app image from the Dockerfile above, unchanged
     command: node_modules/.bin/taskito executor ./app.js
     environment:
-      TASKITO_ATTACH: scheduler:7777
-      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
-      TASKITO_SLOTS: "4"
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
     depends_on:
       - scheduler
     restart: unless-stopped
@@ -599,9 +599,9 @@ services:
     build: . # the app image from the Dockerfile above, unchanged
     command: java --enable-native-access=ALL-UNNAMED -cp app.jar org.byteveda.taskito.cli.Cli executor
     environment:
-      TASKITO_ATTACH: scheduler:7777
-      TASKITO_ATTACH_TOKEN: ${TASKITO_ATTACH_TOKEN:?}
-      TASKITO_SLOTS: "4"
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
     depends_on:
       - scheduler
     restart: unless-stopped
@@ -610,8 +610,8 @@ services:
   </Tab>
 </CodeTabs>
 
-`TASKITO_SLOTS` is how many jobs the executor runs at once. There is no
-`TASKITO_DSN` here — that is the point.
+`FLEXIQ_SLOTS` is how many jobs the executor runs at once. There is no
+`FLEXIQ_DSN` here — that is the point.
 
 <Callout type="info" title="restart is what reconnects">
   An executor dials once and exits when the session ends, so a scheduler restart
@@ -657,10 +657,10 @@ spec:
           image: ghcr.io/byteveda/taskito-server:0.21.0
           restartPolicy: Always
           env:
-            - name: TASKITO_DSN
+            - name: FLEXIQ_DSN
               valueFrom:
                 secretKeyRef: { name: taskito, key: dsn }
-            - name: TASKITO_LISTEN
+            - name: FLEXIQ_LISTEN
               value: unix:/run/taskito/attach.sock
           volumeMounts:
             - name: attach
@@ -673,9 +673,9 @@ spec:
           # command: required — see below. Leave it out and this container runs
           # the app image's default entrypoint, a second app that never attaches.
           env:
-            - name: TASKITO_ATTACH
+            - name: FLEXIQ_ATTACH
               value: unix:/run/taskito/attach.sock
-            - name: TASKITO_SLOTS
+            - name: FLEXIQ_SLOTS
               value: "4"
           volumeMounts:
             - name: attach
@@ -723,7 +723,7 @@ This puts one scheduler in every replica, each holding its own database
 connection. They coordinate through storage, so duplicate execution isn't a
 risk: a job is claimed by exactly one, retention sweeps under a lease only one
 holds at a time, and a dead worker's in-flight jobs are rescued by exactly one
-survivor. The connection count is what to watch — set `TASKITO_MAINTENANCE=off`
+survivor. The connection count is what to watch — set `FLEXIQ_MAINTENANCE=off`
 on the sidecars and keep retention on a single separate replica if the sweeps
 are the part you'd rather not multiply. On Kubernetes older than 1.29, drop
 `initContainers` and run the scheduler as an ordinary container: startup
@@ -756,19 +756,19 @@ spec:
         - name: scheduler
           image: ghcr.io/byteveda/taskito-server:0.21.0
           env:
-            - name: TASKITO_DSN
+            - name: FLEXIQ_DSN
               valueFrom:
                 secretKeyRef: { name: taskito, key: dsn }
-            - name: TASKITO_LISTEN
+            - name: FLEXIQ_LISTEN
               value: 0.0.0.0:7777
-            - name: TASKITO_ATTACH_TOKEN
+            - name: FLEXIQ_ATTACH_TOKEN
               valueFrom:
                 secretKeyRef: { name: taskito, key: attach-token }
-            - name: TASKITO_DASHBOARD
+            - name: FLEXIQ_DASHBOARD
               value: 0.0.0.0:8080
-            - name: TASKITO_DASHBOARD_AUTH
+            - name: FLEXIQ_DASHBOARD_AUTH
               value: session
-            - name: TASKITO_DASHBOARD_PUBLIC_READINESS
+            - name: FLEXIQ_DASHBOARD_PUBLIC_READINESS
               value: "1"
           ports:
             - { name: attach, containerPort: 7777 }
@@ -776,7 +776,7 @@ spec:
           livenessProbe:
             httpGet: { path: /health, port: dashboard }
           readinessProbe:
-            # Needs TASKITO_DASHBOARD_PUBLIC_READINESS above; without it this
+            # Needs FLEXIQ_DASHBOARD_PUBLIC_READINESS above; without it this
             # route 401s at a credential-less probe and the pod never goes Ready.
             httpGet: { path: /readiness, port: dashboard }
 ---
@@ -791,8 +791,8 @@ spec:
     - { name: attach, port: 7777, targetPort: attach }
 ```
 
-Executors then set `TASKITO_ATTACH: taskito-scheduler:7777` and read
-`TASKITO_ATTACH_TOKEN` from the same Secret. Everything else about the sidecar
+Executors then set `FLEXIQ_ATTACH: taskito-scheduler:7777` and read
+`FLEXIQ_ATTACH_TOKEN` from the same Secret. Everything else about the sidecar
 is unchanged. The Service publishes `attach` and nothing else — give the
 dashboard its own Service or Ingress when you want it reachable, so the port
 that dispatches code and the port people browse are never the same object.
@@ -801,20 +801,20 @@ that dispatches code and the port people browse are never the same object.
   `/health` is never gated, and reports only that the process is up — which
   makes it a liveness probe and nothing more. `/readiness` is the one that
   checks storage, and it is gated alongside `/metrics`: with
-  `TASKITO_DASHBOARD_AUTH=session`, or with `TASKITO_DASHBOARD_METRICS_TOKEN`
+  `FLEXIQ_DASHBOARD_AUTH=session`, or with `FLEXIQ_DASHBOARD_METRICS_TOKEN`
   set, a bare probe gets `401` and the pod never goes Ready.
 
   A kubelet probe carries no credential and cannot be given one — a probe header
   is a literal string in the manifest, so authenticating it would mean copying
   the token out of its Secret into the Deployment spec.
-  `TASKITO_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a
+  `FLEXIQ_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a
   credential instead; `/metrics` stays gated. What it publishes to anything that
   can reach the port is whether storage answers and how many workers are
   registered. Leave it off and probe `/health` for both if that is too much.
 
   On an attach deployment `/readiness` reports `workers: none` — executors are
   not workers — and still answers 200. Both routes are dashboard routes, so any
-  probing needs `TASKITO_DASHBOARD` set; a listener-only server has no HTTP
+  probing needs `FLEXIQ_DASHBOARD` set; a listener-only server has no HTTP
   port, and a `tcpSocket` probe on the attach port is the fallback.
 </Callout>
 
@@ -920,15 +920,15 @@ Worth knowing before you rely on it:
 
 The attach port dispatches code. These are requirements, not options:
 
-- **A routable bind needs a token.** `TASKITO_LISTEN` on anything but loopback
-  refuses to start without `TASKITO_ATTACH_TOKEN`, and a token under 16
+- **A routable bind needs a token.** `FLEXIQ_LISTEN` on anything but loopback
+  refuses to start without `FLEXIQ_ATTACH_TOKEN`, and a token under 16
   characters is rejected. Generate it with `openssl rand -base64 32`.
 - **The token comes from the environment, never `argv`.** No SDK offers a flag
   for it — a secret in `argv` shows up in `ps` output and shell history. Mount it
   from a Secret or a compose `.env`, not a `command:` line.
 - **Off loopback, terminate mTLS in front of the listener.** The token is a
   bearer credential, not transport security. `taskito-server` does not terminate
-  TLS itself, and setting `TASKITO_LISTEN_TLS_CERT`/`TASKITO_LISTEN_TLS_KEY`
+  TLS itself, and setting `FLEXIQ_LISTEN_TLS_CERT`/`FLEXIQ_LISTEN_TLS_KEY`
   fails at startup rather than being quietly ignored — a deployment can't come up
   believing it is encrypted when it isn't.
 - **Never publish the attach port.** Keep it on the pod or compose network. The
@@ -952,7 +952,7 @@ is the smaller change; an executor is the one that reclaims the RAM.
 
 - **CPU-heavy tasks compete with request latency.** The executor shares a
   container with your app, so a task that saturates a core is a task that
-  saturates a core your request handler wanted. Cap `TASKITO_SLOTS`, or run a
+  saturates a core your request handler wanted. Cap `FLEXIQ_SLOTS`, or run a
   second replica set from the same image with the HTTP server off — you still
   pay one image, and the two sets scale independently.
 - **A network hop per job.** Every dispatch and every result crosses a socket. A
@@ -1027,8 +1027,8 @@ services:
   worker:
     build: .
     environment:
-      TASKITO_BACKEND: postgres
-      TASKITO_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_BACKEND: postgres
+      FLEXIQ_DB_URL: postgresql://taskito:secret@postgres:5432/myapp
     depends_on:
       - postgres
     stop_signal: SIGINT
@@ -1039,10 +1039,10 @@ volumes:
 ```
 
 <Callout type="info">
-  `TASKITO_BACKEND`/`TASKITO_DB_URL` above are only read automatically by the
+  `FLEXIQ_BACKEND`/`FLEXIQ_DB_URL` above are only read automatically by the
   Flask and Django integrations — if `myapp:queue` builds the `Queue` directly,
   read them yourself, the same way the [Dockerfile](#dockerfile) section above
-  does for `TASKITO_DB_PATH`.
+  does for `FLEXIQ_DB_PATH`.
 </Callout>
 
   </Tab>
@@ -1062,7 +1062,7 @@ services:
   worker:
     build: .
     environment:
-      TASKITO_PG_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_PG_URL: postgresql://taskito:secret@postgres:5432/myapp
     depends_on:
       - postgres
     stop_signal: SIGTERM
@@ -1073,8 +1073,8 @@ volumes:
 ```
 
 <Callout type="info">
-  `TASKITO_PG_URL` above is illustrative — read it in your own entrypoint
-  (`new Queue({ backend: "postgres", dsn: process.env.TASKITO_PG_URL })`); the
+  `FLEXIQ_PG_URL` above is illustrative — read it in your own entrypoint
+  (`new Queue({ backend: "postgres", dsn: process.env.FLEXIQ_PG_URL })`); the
   `taskito` CLI and `runWorker()` don't read it automatically.
 </Callout>
 
@@ -1095,7 +1095,7 @@ services:
   worker:
     build: .
     environment:
-      TASKITO_PG_URL: postgresql://taskito:secret@postgres:5432/myapp
+      FLEXIQ_PG_URL: postgresql://taskito:secret@postgres:5432/myapp
     depends_on:
       - postgres
     stop_signal: SIGTERM
@@ -1106,8 +1106,8 @@ volumes:
 ```
 
 <Callout type="info">
-  `TASKITO_PG_URL` above is illustrative — read it yourself (e.g.
-  `Taskito.builder().postgres(System.getenv("TASKITO_PG_URL")).open()`); the
+  `FLEXIQ_PG_URL` above is illustrative — read it yourself (e.g.
+  `Taskito.builder().postgres(System.getenv("FLEXIQ_PG_URL")).open()`); the
   builder has no automatic env-var lookup.
 </Callout>
 
@@ -1263,7 +1263,7 @@ taskito --url taskito.db dashboard --port 8080
 The dashboard serves **openly by default** — enable session authentication
 for production with `--auth` (or `serve_dashboard(auth_enabled=True)`).
 With auth enabled, bootstrap the first admin with
-`TASKITO_DASHBOARD_ADMIN_USER` / `TASKITO_DASHBOARD_ADMIN_PASSWORD`, or
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or
 create one through the SPA's first-run setup. Serve it over TLS — see
 [Security: Dashboard](/python/guides/operations/security#dashboard) for the
 full auth, cookie, and role model.
@@ -1290,7 +1290,7 @@ The dashboard serves **openly by default** — enable session authentication
 `DashboardServer.start(queue, port, true)`); pass a `token` to
 `start(...)`/`dashboard(...)` for the legacy single-credential mode
 instead. With auth enabled, bootstrap the first admin with
-`TASKITO_DASHBOARD_ADMIN_USER` / `TASKITO_DASHBOARD_ADMIN_PASSWORD`, or
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or
 through the SPA's first-run setup. See
 [Dashboard: Auth](/java/guides/operations/dashboard#auth) for the full model.
 
@@ -1499,7 +1499,7 @@ app.get("/readyz", async (_req, res) => {
 
 There's no lightweight REST-framework helper — use the dashboard's `/health`
 and `/readiness` probes above (public by default; gate them with
-`TASKITO_DASHBOARD_METRICS_TOKEN`), or add a route in your own web framework
+`FLEXIQ_DASHBOARD_METRICS_TOKEN`), or add a route in your own web framework
 that calls `taskito.stats()`.
 
 </SdkOnly>
@@ -1747,7 +1747,7 @@ schema to apply and it reports that instead of failing.
 
 <Callout type="warn" title="Migrate before you serve">
   A gated queue has no tables until the command runs, so every query fails until
-  then. `taskito-server` honors the same switch through `TASKITO_AUTO_MIGRATE`
+  then. `taskito-server` honors the same switch through `FLEXIQ_AUTO_MIGRATE`
   and refuses to start when the **core** schema is absent, naming the variable
   rather than leaking a bare "no such table". Workflow tables are not part of
   that check — a deployment that never runs workflows does not need them — so
@@ -1801,5 +1801,5 @@ already held to one.
 - [ ] Put the dashboard behind TLS and enable auth — it serves openly by default
       (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" />)
 - [ ] Running [attached executors](#attached-executors)? Keep the attach port off
-      the host network, set `TASKITO_ATTACH_TOKEN` for any bind but loopback, and
+      the host network, set `FLEXIQ_ATTACH_TOKEN` for any bind but loopback, and
       terminate mTLS in front of it

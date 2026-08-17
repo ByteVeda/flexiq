@@ -41,9 +41,9 @@ Unix socket, and the security requirements that go with the attach port — see
 flags. At minimum it needs a DSN and an attach address:
 
 ```bash
-TASKITO_DSN=postgres://user:pass@db/taskito \
-TASKITO_LISTEN=0.0.0.0:7777 \
-TASKITO_ATTACH_TOKEN=$(openssl rand -hex 32) \
+FLEXIQ_DSN=postgres://user:pass@db/taskito \
+FLEXIQ_LISTEN=0.0.0.0:7777 \
+FLEXIQ_ATTACH_TOKEN=$(openssl rand -hex 32) \
 taskito-server
 ```
 
@@ -57,8 +57,8 @@ placement timeout elapsed — a retry storm against an idle deployment.
   <Tab sdk="python">
 
 ```bash
-TASKITO_ATTACH=scheduler:7777 \
-TASKITO_ATTACH_TOKEN=... \
+FLEXIQ_ATTACH=scheduler:7777 \
+FLEXIQ_ATTACH_TOKEN=... \
 taskito executor --app myapp:queue --slots 4
 ```
 
@@ -66,8 +66,8 @@ taskito executor --app myapp:queue --slots 4
   <Tab sdk="node">
 
 ```bash
-TASKITO_ATTACH=scheduler:7777 \
-TASKITO_ATTACH_TOKEN=... \
+FLEXIQ_ATTACH=scheduler:7777 \
+FLEXIQ_ATTACH_TOKEN=... \
 taskito executor ./app.js --slots 4
 ```
 
@@ -75,8 +75,8 @@ taskito executor ./app.js --slots 4
   <Tab sdk="java">
 
 ```bash
-TASKITO_ATTACH=scheduler:7777 \
-TASKITO_ATTACH_TOKEN=... \
+FLEXIQ_ATTACH=scheduler:7777 \
+FLEXIQ_ATTACH_TOKEN=... \
 java -cp app.jar org.byteveda.taskito.cli.Cli executor --slots 4
 ```
 
@@ -92,15 +92,15 @@ job that never reaches it.
 
 <Callout type="warn" title="The token is read from the environment, never a flag">
   A secret in `argv` shows up in `ps` output and shell history. Every SDK reads
-  `TASKITO_ATTACH_TOKEN` from the environment and offers no flag for it.
+  `FLEXIQ_ATTACH_TOKEN` from the environment and offers no flag for it.
 </Callout>
 
 ## Security
 
 The attach port dispatches code, so the defaults are strict:
 
-- A **non-loopback** `TASKITO_LISTEN` refuses to start without
-  `TASKITO_ATTACH_TOKEN`.
+- A **non-loopback** `FLEXIQ_LISTEN` refuses to start without
+  `FLEXIQ_ATTACH_TOKEN`.
 - The shared secret is compared in constant time, and never logged — an attach
   failure is logged with the executor id and peer only.
 - `hello` must arrive before any other frame; an unauthenticated socket is
@@ -116,7 +116,7 @@ a Unix socket, terminate mTLS in a proxy in front of the listener and treat the
 token as the second factor.
 
 `taskito-server` does not terminate TLS itself. Setting
-`TASKITO_LISTEN_TLS_CERT` or `TASKITO_LISTEN_TLS_KEY` fails at startup rather
+`FLEXIQ_LISTEN_TLS_CERT` or `FLEXIQ_LISTEN_TLS_KEY` fails at startup rather
 than being ignored, so a deployment cannot come up believing it is encrypted
 when it is not.
 </Callout>
