@@ -169,8 +169,13 @@ jobs:
         if: inputs.dry-run
         working-directory: sdks/java
         run: |
-          jar=$(ls build/libs/flexiq-*[0-9].jar)
+          # Name the main jar outright. A `flexiq-*[0-9].jar` glob also matches
+          # every classifier jar, because each ends in a digit
+          # (`-linux-x86_64.jar`), so `$jar` became the whole list and the first
+          # unzip ran against a platform jar instead.
+          jar="build/libs/flexiq-${VERSION}.jar"
           echo "checking $jar"
+          [ -f "$jar" ] || { echo "main jar not found at $jar"; exit 1; }
           unzip -p "$jar" META-INF/MANIFEST.MF | grep -q "Multi-Release: true"
           unzip -l "$jar" | grep -q "META-INF/versions/22/org/byteveda/flexiq/internal/FfmTransport.class"
           unzip -l "$jar" | grep -q "META-INF/native-image/org.byteveda/flexiq/" \
@@ -186,7 +191,8 @@ jobs:
             libs=$(unzip -l "$njar" | grep -c "\(\.so\|\.dylib\|\.dll\)$")
             [ "$libs" = "1" ] || { echo "$njar must contain exactly one library, found $libs"; exit 1; }
           done
-          sources=$(ls build/libs/flexiq-*-sources.jar)
+          sources="build/libs/flexiq-${VERSION}-sources.jar"
+          [ -f "$sources" ] || { echo "sources jar not found at $sources"; exit 1; }
           if unzip -l "$sources" | grep -qE "org/byteveda/flexiq/(native|dashboard)/"; then
             echo "sources jar must not bundle natives or dashboard assets"; exit 1
           fi
