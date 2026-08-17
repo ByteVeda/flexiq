@@ -27,7 +27,7 @@ export function registerRun(program: Command): void {
       });
 
       process.stdout.write(
-        `taskito worker running (queues: ${queues?.join(",") ?? "default"}) — Ctrl-C to stop\n`,
+        `flexiq worker running (queues: ${queues?.join(",") ?? "default"}) — Ctrl-C to stop\n`,
       );
       // `stop()` only signals shutdown; give in-flight results a moment to drain
       // before exiting so completed work isn't lost, then wait for worker-scoped

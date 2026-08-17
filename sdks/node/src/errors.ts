@@ -1,17 +1,17 @@
 import { decodeTaskError } from "./task-error";
 
-/** Base class for all Taskito SDK errors. Every error below extends this. */
-export class TaskitoError extends Error {
+/** Base class for all FlexiQ SDK errors. Every error below extends this. */
+export class FlexiQError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "TaskitoError";
+    this.name = "FlexiQError";
   }
 }
 
 // ── Tasks & jobs ────────────────────────────────────────────────────────────
 
 /** Thrown when a worker dequeues a job whose task name was never registered. */
-export class TaskNotRegisteredError extends TaskitoError {
+export class TaskNotRegisteredError extends FlexiQError {
   constructor(readonly taskName: string) {
     super(`No task registered with name "${taskName}"`);
     this.name = "TaskNotRegisteredError";
@@ -23,7 +23,7 @@ export class TaskNotRegisteredError extends TaskitoError {
  * A structured (cross-SDK JSON) reason exposes `errtype`/`traceback`; a plain
  * legacy/system string is surfaced verbatim with those fields undefined.
  */
-export class JobFailedError extends TaskitoError {
+export class JobFailedError extends FlexiQError {
   /** The task exception's class name, when the reason is structured. */
   readonly errtype?: string;
   /** Best-effort stack lines from the failing worker, when structured. */
@@ -51,7 +51,7 @@ export class JobFailedError extends TaskitoError {
 }
 
 /** Thrown by {@link Queue.result} when the awaited job was cancelled. */
-export class JobCancelledError extends TaskitoError {
+export class JobCancelledError extends FlexiQError {
   constructor(readonly jobId: string) {
     super(`Job ${jobId} was cancelled`);
     this.name = "JobCancelledError";
@@ -59,7 +59,7 @@ export class JobCancelledError extends TaskitoError {
 }
 
 /** Thrown by {@link Queue.result} when a job doesn't settle within the timeout. */
-export class ResultTimeoutError extends TaskitoError {
+export class ResultTimeoutError extends FlexiQError {
   constructor(
     readonly jobId: string,
     readonly timeoutMs: number,
@@ -72,7 +72,7 @@ export class ResultTimeoutError extends TaskitoError {
 // ── Queue & locks ───────────────────────────────────────────────────────────
 
 /** Thrown on queue-level configuration or operational errors. */
-export class QueueError extends TaskitoError {
+export class QueueError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "QueueError";
@@ -92,7 +92,7 @@ export class QueueFullError extends QueueError {
 }
 
 /** Thrown by {@link Queue.withLock} when the lock is held by another owner. */
-export class LockNotAcquiredError extends TaskitoError {
+export class LockNotAcquiredError extends FlexiQError {
   constructor(readonly lockName: string) {
     super(`Could not acquire lock "${lockName}"`);
     this.name = "LockNotAcquiredError";
@@ -100,7 +100,7 @@ export class LockNotAcquiredError extends TaskitoError {
 }
 
 /** Thrown when a held lock's lease was lost before the guarded section finished. */
-export class LockLostError extends TaskitoError {
+export class LockLostError extends FlexiQError {
   constructor(readonly lockName: string) {
     super(`Lost lock "${lockName}" before the guarded section completed`);
     this.name = "LockLostError";
@@ -110,7 +110,7 @@ export class LockLostError extends TaskitoError {
 // ── Serialization & validation ──────────────────────────────────────────────
 
 /** Thrown on serialization, deserialization, or payload-integrity failures. */
-export class SerializationError extends TaskitoError {
+export class SerializationError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "SerializationError";
@@ -126,7 +126,7 @@ export class CryptoError extends SerializationError {
 }
 
 /** Thrown when a `notes` object violates the structured-notes contract. */
-export class NotesValidationError extends TaskitoError {
+export class NotesValidationError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "NotesValidationError";
@@ -136,7 +136,7 @@ export class NotesValidationError extends TaskitoError {
 // ── Resources ───────────────────────────────────────────────────────────────
 
 /** Base class for resource dependency-injection errors. */
-export class ResourceError extends TaskitoError {
+export class ResourceError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "ResourceError";
@@ -176,7 +176,7 @@ export class ResourceUnavailableError extends ResourceError {
 // ── Workflows ───────────────────────────────────────────────────────────────
 
 /** Thrown on workflow definition, submission, or query errors. */
-export class WorkflowError extends TaskitoError {
+export class WorkflowError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "WorkflowError";
@@ -186,7 +186,7 @@ export class WorkflowError extends TaskitoError {
 // ── Predicates ──────────────────────────────────────────────────────────────
 
 /** Thrown when an enqueue-time predicate gate rejects the submission. */
-export class PredicateRejectedError extends TaskitoError {
+export class PredicateRejectedError extends FlexiQError {
   constructor(
     readonly taskName: string,
     readonly reason?: string,
@@ -205,7 +205,7 @@ export class PredicateRejectedError extends TaskitoError {
  * failure — callers that expect it should use `Queue.tryEnqueue`, which returns
  * `null` instead of throwing.
  */
-export class EnqueueSkippedError extends TaskitoError {
+export class EnqueueSkippedError extends FlexiQError {
   constructor(
     readonly taskName: string,
     readonly reason?: string,
@@ -223,7 +223,7 @@ export class EnqueueSkippedError extends TaskitoError {
  * Thrown when a predicate is misconfigured: an unknown registry name, a bad
  * recipe argument, or a gate returning an unrecognized decision.
  */
-export class PredicateValidationError extends TaskitoError {
+export class PredicateValidationError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "PredicateValidationError";
@@ -233,7 +233,7 @@ export class PredicateValidationError extends TaskitoError {
 // ── Proxies ─────────────────────────────────────────────────────────────────
 
 /** Thrown on proxy handler, signature, expiry, purpose, or allowlist failures. */
-export class ProxyError extends TaskitoError {
+export class ProxyError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "ProxyError";
@@ -241,7 +241,7 @@ export class ProxyError extends TaskitoError {
 }
 
 /** Thrown when an enqueue interceptor rejects, misbehaves, or redirects illegally. */
-export class InterceptionError extends TaskitoError {
+export class InterceptionError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "InterceptionError";

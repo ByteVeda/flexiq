@@ -33,7 +33,7 @@ describe("Queue with a custom serializer", () => {
   });
 
   it("runs a job end-to-end using msgpack", async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-")), "queue.db");
+    const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-")), "queue.db");
     const queue = new Queue({ dbPath, serializer: new MsgpackSerializer() });
     queue.task("concat", (a: string, b: string) => a + b);
 

@@ -12,7 +12,7 @@ beforeEach(() => {
 it("emits namespaced, leveled lines", () => {
   createLogger("worker").info("hello");
   expect(lines).toHaveLength(1);
-  expect(lines[0]).toContain("[taskito:worker]");
+  expect(lines[0]).toContain("[flexiq:worker]");
   expect(lines[0]).toContain("INFO");
   expect(lines[0]).toContain("hello");
 });
@@ -30,7 +30,7 @@ it("drops messages below the threshold without evaluating the thunk", () => {
 
 it("nests child namespaces", () => {
   createLogger("a").child("b").error("boom");
-  expect(lines[0]).toContain("[taskito:a:b]");
+  expect(lines[0]).toContain("[flexiq:a:b]");
 });
 
 it("serializes Error meta", () => {

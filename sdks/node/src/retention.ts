@@ -1,7 +1,7 @@
 // Parses the retention document the elected cleaner publishes. Retention runs
 // in the worker process, so this is how any other process — a dashboard, an
 // admin script — learns the policy that governs the deletes.
-// See `crates/taskito-core/BINDING_CONTRACT.md`.
+// See `crates/flexiq-core/BINDING_CONTRACT.md`.
 
 import type { EffectiveRetention, RetentionPreview } from "./types";
 

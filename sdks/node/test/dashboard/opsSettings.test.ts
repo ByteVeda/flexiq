@@ -25,7 +25,7 @@ let base = "";
 let headers: Record<string, string> = {};
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashops-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashops-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   ({ headers } = await seedAdminAndSession(queue));
@@ -140,7 +140,7 @@ describe("ops endpoints", () => {
       isActive: boolean;
       perQueue: Record<string, { pending: number }>;
     };
-    expect(body.metricName).toBe("taskito_queue_depth");
+    expect(body.metricName).toBe("flexiq_queue_depth");
     expect(body.metricValue).toBe(1);
     expect(body.isActive).toBe(true);
     expect(body.perQueue.default?.pending).toBe(1);

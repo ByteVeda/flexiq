@@ -9,7 +9,7 @@ import type { Serializer } from "./serializer";
  * Codecs compose: a chain encodes in list order and decodes in reverse, so
  * `[gzip, hmac]` verifies integrity *before* decompressing. Wire formats are
  * part of the cross-SDK contract, so codec-framed payloads decode from any
- * Taskito SDK.
+ * FlexiQ SDK.
  */
 export interface PayloadCodec {
   /** Transform serialized bytes on the producer (compress, encrypt, sign). */

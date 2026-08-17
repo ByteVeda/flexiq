@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { afterEach, expect, it } from "vitest";
-import { TaskitoModule, TaskitoService } from "../../src/contrib/nest";
+import { FlexiQModule, FlexiQService } from "../../src/contrib/nest";
 import { Queue, type Worker } from "../../src/index";
 
 let worker: Worker | undefined;
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-nest-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-nest-")), "q.db") });
 }
 
 async function waitFor(
@@ -34,14 +34,14 @@ async function waitFor(
   return false;
 }
 
-it("injects TaskitoService bound to the queue", async () => {
+it("injects FlexiQService bound to the queue", async () => {
   const queue = newQueue();
   queue.task("add", (a: number, b: number) => a + b);
 
   moduleRef = await Test.createTestingModule({
-    imports: [TaskitoModule.forRoot(queue)],
+    imports: [FlexiQModule.forRoot(queue)],
   }).compile();
-  const service = moduleRef.get(TaskitoService);
+  const service = moduleRef.get(FlexiQService);
 
   expect(service.queue).toBe(queue);
 

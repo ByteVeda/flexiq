@@ -8,7 +8,7 @@ import { expect, it } from "vitest";
 import { Queue, QueueError, QueueFullError } from "../../src/index";
 
 function newQueue(): Queue {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-adm-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-adm-")), "queue.db");
   return new Queue({ dbPath });
 }
 

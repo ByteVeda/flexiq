@@ -1,13 +1,13 @@
 /**
- * The same attach assertions, against the real `taskito-server` binary.
+ * The same attach assertions, against the real `flexiq-server` binary.
  *
  * Gated on `FLEXIQ_SERVER_BIN` so the default suite needs no Rust build. Its
  * job is to keep `executorAttach.test.ts`'s hand-rolled scheduler honest: that
  * file proves the executor speaks the protocol it was told to, this one proves
  * the protocol it was told to is the one the server actually speaks.
  *
- *   cargo build -p taskito-server
- *   FLEXIQ_SERVER_BIN=../../target/debug/taskito-server npx vitest run
+ *   cargo build -p flexiq-server
+ *   FLEXIQ_SERVER_BIN=../../target/debug/flexiq-server npx vitest run
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -52,7 +52,7 @@ async function startScheduler(options?: { token?: string }): Promise<{
   port: number;
   dbPath: string;
 }> {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-server-")), "server.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-server-")), "server.db");
   const port = await freePort();
 
   const env: NodeJS.ProcessEnv = {
@@ -105,7 +105,7 @@ async function waitFor(predicate: () => Promise<boolean>, what: string): Promise
   throw new Error(what);
 }
 
-describe.skipIf(!SERVER_BIN)("against a real taskito-server", () => {
+describe.skipIf(!SERVER_BIN)("against a real flexiq-server", () => {
   it("runs a job the real scheduler dispatched", async () => {
     const { port, dbPath } = await startScheduler();
     const queue = new Queue({ dbPath });

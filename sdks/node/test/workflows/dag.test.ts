@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function freshQueue(): Queue {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-wf-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-wf-")), "queue.db");
   return new Queue({ dbPath });
 }
 

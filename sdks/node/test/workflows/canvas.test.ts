@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  const queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-canvas-")), "q.db") });
+  const queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-canvas-")), "q.db") });
   queue.task("noop", () => undefined);
   return queue;
 }

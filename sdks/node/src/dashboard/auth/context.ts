@@ -7,7 +7,7 @@ import type { DashboardSession } from "./store";
 // Session cookie: HttpOnly + SameSite=Strict — never readable from JS.
 export const SESSION_COOKIE = "flexiq_session";
 // CSRF cookie: NOT HttpOnly — the SPA reads it and echoes it in the header.
-export const CSRF_COOKIE = "taskito_csrf";
+export const CSRF_COOKIE = "flexiq_csrf";
 export const CSRF_HEADER = "x-csrf-token";
 
 /** Auth state attached to a single HTTP request. */

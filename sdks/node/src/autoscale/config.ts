@@ -16,7 +16,7 @@
 export interface AutoscaleOptions {
   /**
    * Module exporting the configured `Queue` (default export or `queue`), the
-   * same shape `taskito run <app>` loads. Each spawned worker imports it.
+   * same shape `flexiq run <app>` loads. Each spawned worker imports it.
    */
   app: string;
   /** Never scale below this count (default 1; 0 allows idle scale-to-zero). */

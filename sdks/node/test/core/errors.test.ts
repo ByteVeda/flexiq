@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
+  FlexiQError,
   NotesValidationError,
   Queue,
   QueueError,
@@ -12,7 +13,6 @@ import {
   ResultTimeoutError,
   SerializationError,
   SignedSerializer,
-  TaskitoError,
   type Worker,
   WorkflowError,
 } from "../../src/index";
@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-err-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-err-")), "q.db") });
 }
 
 it("specific errors extend the right bases and carry a name", () => {
@@ -36,12 +36,12 @@ it("specific errors extend the right bases and carry a name", () => {
     new ResultTimeoutError("id", 1),
     new ResourceError("x"),
   ]) {
-    expect(err).toBeInstanceOf(TaskitoError);
+    expect(err).toBeInstanceOf(FlexiQError);
   }
   // resource errors nest under ResourceError
   expect(new ResourceNotFoundError("db")).toBeInstanceOf(ResourceError);
   expect(new ResourceScopeError("db")).toBeInstanceOf(ResourceError);
-  expect(new ResourceNotFoundError("db")).toBeInstanceOf(TaskitoError);
+  expect(new ResourceNotFoundError("db")).toBeInstanceOf(FlexiQError);
 
   expect(new QueueError("x").name).toBe("QueueError");
   expect(new ResourceNotFoundError("db").resourceName).toBe("db");

@@ -29,10 +29,10 @@ function runCli(args: string[]): Promise<{ stdout: string; code: number }> {
 }
 
 function tempDb(): string {
-  return join(mkdtempSync(join(tmpdir(), "taskito-cli-")), "cli.db");
+  return join(mkdtempSync(join(tmpdir(), "flexiq-cli-")), "cli.db");
 }
 
-describe("taskito CLI", () => {
+describe("flexiq CLI", () => {
   it("enqueues and reports stats and jobs", async () => {
     const db = tempDb();
     await runCli(["--db", db, "enqueue", "add", "[2,3]"]);
@@ -52,7 +52,7 @@ describe("taskito CLI", () => {
   });
 
   it("runs a worker from an app module", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "taskito-cli-"));
+    const dir = mkdtempSync(join(tmpdir(), "flexiq-cli-"));
     const db = join(dir, "cli.db");
     const marker = join(dir, "done.txt");
     const app = join(dir, "app.mjs");

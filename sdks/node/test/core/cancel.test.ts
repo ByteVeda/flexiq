@@ -23,7 +23,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<bool
 }
 
 it("cancels a running task cooperatively via the abort signal", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-")), "queue.db");
   const queue = new Queue({ dbPath });
 
   let observedAbort = false;

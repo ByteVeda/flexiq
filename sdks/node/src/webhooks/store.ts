@@ -6,7 +6,7 @@ import type { Webhook } from "./types";
 /**
  * Cross-SDK contract: every runtime persists subscriptions as ONE JSON array
  * under this key, with snake_case fields, Unix-ms timestamps and the timeout in
- * seconds. See `crates/taskito-core/BINDING_CONTRACT.md`.
+ * seconds. See `crates/flexiq-core/BINDING_CONTRACT.md`.
  */
 const SUBSCRIPTIONS_KEY = "webhooks:subscriptions";
 

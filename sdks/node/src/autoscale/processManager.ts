@@ -19,7 +19,7 @@ const KILL_REAP_MS = 5_000;
  * the child independent of how this package was built or installed — there is
  * no `dist/` layout to locate from a bundled module. It imports the user's app
  * module and drives it through the public `Queue` API only, so it never has to
- * import taskito itself.
+ * import flexiq itself.
  *
  * `argv[1]` is the app module's file URL and `argv[2]` its run options as JSON;
  * neither is interpolated into the source, so this is not a dynamic-code sink.

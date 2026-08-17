@@ -3,7 +3,7 @@
  *
  * A scheduler is played by a plain socket speaking the frame protocol, so these
  * run without building the Rust server binary. `executorAttachServer.test.ts`
- * runs the same assertions against the real `taskito-server` when one is
+ * runs the same assertions against the real `flexiq-server` when one is
  * available — that pairing is what keeps this fake honest.
  */
 
@@ -273,7 +273,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-exec-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-exec-")), "q.db") });
 }
 
 /** Uses the job-scoped conveniences that need storage in a worker. */
@@ -612,7 +612,7 @@ it("opens no storage", async () => {
 });
 
 it("degrades progress and publish rather than failing the job", async () => {
-  // This scheduler advertises no side-channel — an older `taskito-server` —
+  // This scheduler advertises no side-channel — an older `flexiq-server` —
   // so the executor sends nothing it could not parse. Losing the progress bar
   // is a degradation; failing the job over it would be a regression for anyone
   // moving a worker to an executor.

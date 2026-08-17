@@ -23,7 +23,7 @@ export async function scaler(queue: Queue, url: URL) {
   const totalCapacity = workers.reduce((sum, w) => sum + (w.threads ?? 0), 0);
 
   const response: Record<string, unknown> = {
-    metricName: "taskito_queue_depth",
+    metricName: "flexiq_queue_depth",
     metricValue: stats.pending,
     isActive: stats.pending > 0,
     liveWorkers: workers.length,
@@ -38,7 +38,7 @@ export async function scaler(queue: Queue, url: URL) {
     const queueStats = await queue.statsByQueue(queueName);
     response.metricValue = queueStats.pending;
     response.isActive = queueStats.pending > 0;
-    response.metricName = `taskito_queue_depth_${queueName}`;
+    response.metricName = `flexiq_queue_depth_${queueName}`;
   }
 
   const perQueue: Record<string, { pending: number; running: number }> = {};

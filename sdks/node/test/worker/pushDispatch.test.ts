@@ -16,7 +16,7 @@ afterEach(() => {
 // ignored (polling kept) when it doesn't. Either way a job must run to
 // completion, so this covers both builds of the addon.
 it("processes jobs with push dispatch requested", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-push-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-push-")), "queue.db");
   const queue = new Queue({ dbPath });
   queue.task("add", (a: number, b: number) => a + b);
 
@@ -30,7 +30,7 @@ it("processes jobs with push dispatch requested", async () => {
 // timer (push builds) and the poll loop (default builds) must both still pick it
 // up, so an early enqueue can never strand.
 it("still dispatches work enqueued before the worker started", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-push-pre-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-push-pre-")), "queue.db");
   const queue = new Queue({ dbPath });
   queue.task("echo", (value: string) => value);
 

@@ -45,7 +45,7 @@ const ROOT = repoRoot();
 const vectors: { encode: EncodeCase[]; decode_only: DecodeCase[] } = JSON.parse(
   readFileSync(join(ROOT, "contracts", "wire-vectors.json"), "utf8"),
 );
-const BINDING_CONTRACT = join(ROOT, "crates", "taskito-core", "BINDING_CONTRACT.md");
+const BINDING_CONTRACT = join(ROOT, "crates", "flexiq-core", "BINDING_CONTRACT.md");
 
 // A run of space-separated hex byte pairs inside backticks, as the doc writes them.
 const DOCUMENTED_BYTES = /`((?:[0-9a-f]{2} )+[0-9a-f]{2})`/;

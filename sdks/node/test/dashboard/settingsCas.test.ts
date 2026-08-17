@@ -25,7 +25,7 @@ let queue: Queue;
 let reads = 0;
 
 beforeEach(() => {
-  queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-cas-")), "q.db") });
+  queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-cas-")), "q.db") });
   reads = 0;
 });
 

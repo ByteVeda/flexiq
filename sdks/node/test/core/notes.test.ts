@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-notes-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-notes-")), "q.db") });
 }
 
 it("stores structured notes at enqueue and reads them back", () => {

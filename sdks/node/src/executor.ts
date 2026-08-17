@@ -124,7 +124,7 @@ export class Executor {
       queue,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
       // Overridden rather than left to `queue`, which is only the detached
-      // stand-in when this process is a `taskito executor`. An executor started
+      // stand-in when this process is a `flexiq executor`. An executor started
       // from a process that *does* have storage would otherwise write progress
       // into its own database, where the job it names does not exist — the row
       // belongs to the scheduler. `queue`'s own route to the scheduler is the

@@ -42,6 +42,6 @@ export function registerDashboard(program: Command): void {
           throw error;
         }),
       ]);
-      process.stdout.write(`taskito dashboard on http://${host}:${port}\n`);
+      process.stdout.write(`flexiq dashboard on http://${host}:${port}\n`);
     });
 }

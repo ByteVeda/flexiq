@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { Batcher, Queue, QueueError } from "../../src/index";
 
 function newQueue() {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-batcher-")), "q.db") }).task(
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-batcher-")), "q.db") }).task(
     "collect",
     (n: number) => n,
   );

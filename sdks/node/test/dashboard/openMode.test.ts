@@ -27,7 +27,7 @@ let queue: Queue;
 let base = "";
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashopen-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashopen-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   server = serveDashboard(queue, { port: 0, staticDir, secureCookies: false });

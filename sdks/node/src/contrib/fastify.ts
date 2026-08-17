@@ -1,8 +1,8 @@
-// Fastify integration for Taskito. Optional — import from `taskito/contrib/fastify`;
+// Fastify integration for FlexiQ. Optional — import from `flexiq/contrib/fastify`;
 // requires `fastify` as a peer.
 //
-//   app.register(taskitoFastify, { queue, prefix: "/tasks" });           // JSON API
-//   app.register(taskitoDashboardPlugin, { queue, prefix: "/admin" });   // dashboard SPA + /api/*
+//   app.register(flexiqFastify, { queue, prefix: "/tasks" });           // JSON API
+//   app.register(flexiqDashboardPlugin, { queue, prefix: "/admin" });   // dashboard SPA + /api/*
 
 import { fileURLToPath } from "node:url";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -10,14 +10,14 @@ import { createDashboardHandler } from "../dashboard";
 import type { Queue } from "../queue";
 import { buildRestRoutes, flattenQueryParams, type RestOptions, type RestRequest } from "./rest";
 
-/** Options for {@link taskitoFastify}. */
-export interface TaskitoFastifyOptions extends RestOptions {
+/** Options for {@link flexiqFastify}. */
+export interface FlexiQFastifyOptions extends RestOptions {
   /** The queue to operate over. */
   queue: Queue;
 }
 
-/** Options for {@link taskitoDashboardPlugin}. */
-export interface TaskitoDashboardPluginOptions {
+/** Options for {@link flexiqDashboardPlugin}. */
+export interface FlexiQDashboardPluginOptions {
   /** The queue to operate over. */
   queue: Queue;
   /** Path to the built SPA assets (defaults to the package's bundled `static/dashboard`). */
@@ -29,13 +29,10 @@ export interface TaskitoDashboardPluginOptions {
 }
 
 /**
- * Fastify plugin exposing the Taskito REST API (enqueue, stats, job lookup, cancel,
+ * Fastify plugin exposing the FlexiQ REST API (enqueue, stats, job lookup, cancel,
  * dead-letters). Register with a `prefix` to mount the routes under a base path.
  */
-export const taskitoFastify: FastifyPluginAsync<TaskitoFastifyOptions> = async (
-  fastify,
-  options,
-) => {
+export const flexiqFastify: FastifyPluginAsync<FlexiQFastifyOptions> = async (fastify, options) => {
   const { queue } = options;
   for (const route of buildRestRoutes(options)) {
     fastify.route({
@@ -62,11 +59,11 @@ function defaultStaticDir(): string {
 }
 
 /**
- * Fastify plugin that serves the Taskito dashboard (SPA + `/api/*`). Register with a
+ * Fastify plugin that serves the FlexiQ dashboard (SPA + `/api/*`). Register with a
  * `prefix`; the plugin strips it from the raw URL so the dashboard handler sees `/api/*`
  * and SPA paths, then hands the raw request/response to the handler via `reply.hijack()`.
  */
-export const taskitoDashboardPlugin: FastifyPluginAsync<TaskitoDashboardPluginOptions> = async (
+export const flexiqDashboardPlugin: FastifyPluginAsync<FlexiQDashboardPluginOptions> = async (
   fastify,
   options,
 ) => {

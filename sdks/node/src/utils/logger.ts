@@ -17,7 +17,7 @@ export interface Logger {
   info(message: LogMessage, ...meta: unknown[]): void;
   warn(message: LogMessage, ...meta: unknown[]): void;
   error(message: LogMessage, ...meta: unknown[]): void;
-  /** Derive a namespaced child logger (`[taskito:webhooks]`). */
+  /** Derive a namespaced child logger (`[flexiq:webhooks]`). */
   child(namespace: string): Logger;
 }
 
@@ -86,7 +86,7 @@ function emit(
   if (SEVERITY[level] < SEVERITY[config.level]) {
     return;
   }
-  const tag = namespace ? `taskito:${namespace}` : "taskito";
+  const tag = namespace ? `flexiq:${namespace}` : "flexiq";
   const text = typeof message === "function" ? message() : message;
   const parts = [new Date().toISOString(), `[${tag}]`, level.toUpperCase(), text];
   for (const item of meta) {
@@ -108,7 +108,7 @@ function make(namespace?: string): Logger {
 /** The root logger. Prefer {@link createLogger} for a namespaced one. */
 export const logger: Logger = make();
 
-/** Create a namespaced logger (`createLogger("worker")` → `[taskito:worker]`). */
+/** Create a namespaced logger (`createLogger("worker")` → `[flexiq:worker]`). */
 export function createLogger(namespace: string): Logger {
   return make(namespace);
 }

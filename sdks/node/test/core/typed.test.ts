@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 it("infers enqueue argument types from the registered task", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-typed-")), "q.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-typed-")), "q.db");
   const queue = new Queue({ dbPath })
     .task("add", (a: number, b: number) => a + b)
     .task("greet", (name: string) => `hi ${name}`);

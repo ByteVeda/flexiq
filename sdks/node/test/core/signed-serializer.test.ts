@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
+  FlexiQError,
   JsonSerializer,
   MsgpackSerializer,
   Queue,
   SignedSerializer,
-  TaskitoError,
   type Worker,
 } from "../../src/index";
 
@@ -49,7 +49,7 @@ it("rejects a payload too short to be signed", () => {
 });
 
 it("requires a non-empty secret", () => {
-  expect(() => new SignedSerializer("")).toThrow(TaskitoError);
+  expect(() => new SignedSerializer("")).toThrow(FlexiQError);
 });
 
 it("wraps any inner serializer", () => {
@@ -59,7 +59,7 @@ it("wraps any inner serializer", () => {
 
 it("works end to end as the queue serializer", async () => {
   const queue = new Queue({
-    dbPath: join(mkdtempSync(join(tmpdir(), "taskito-signed-")), "q.db"),
+    dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-signed-")), "q.db"),
     serializer: new SignedSerializer("shared-key"),
   });
   queue.task("echo", (x: number) => x + 1);

@@ -30,7 +30,7 @@ let queue: Queue;
 let base = "";
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashsess-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashsess-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   server = serveDashboard(queue, { port: 0, staticDir, secureCookies: false, authEnabled: true });
@@ -109,9 +109,7 @@ describe("login and sessions", () => {
     expect(cookies.some((c) => c.startsWith("flexiq_session=") && c.includes("HttpOnly"))).toBe(
       true,
     );
-    expect(cookies.some((c) => c.startsWith("taskito_csrf=") && !c.includes("HttpOnly"))).toBe(
-      true,
-    );
+    expect(cookies.some((c) => c.startsWith("flexiq_csrf=") && !c.includes("HttpOnly"))).toBe(true);
     const body = (await res.json()) as { session: Record<string, unknown> };
     expect(body.session.token).toBeUndefined();
     expect(typeof body.session.csrf_token).toBe("string");
@@ -160,7 +158,7 @@ describe("csrf", () => {
       "/api/queues/emails/pause",
       {},
       {
-        cookie: `flexiq_session=${session.token}; taskito_csrf=${session.csrfToken}`,
+        cookie: `flexiq_session=${session.token}; flexiq_csrf=${session.csrfToken}`,
         "x-csrf-token": "attacker-value",
       },
     );

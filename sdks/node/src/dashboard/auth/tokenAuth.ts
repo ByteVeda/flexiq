@@ -8,7 +8,7 @@ export interface DashboardAuth {
 }
 
 /** Cookie the SPA carries once a valid `?token=` has bootstrapped a session. */
-const TOKEN_COOKIE = "taskito_token";
+const TOKEN_COOKIE = "flexiq_token";
 
 /** API paths reachable without a token, so the SPA can detect that auth is on. */
 const PUBLIC_API_PATHS = new Set(["/api/auth/status"]);
@@ -19,7 +19,7 @@ export function isPublicApiPath(path: string): boolean {
 
 /**
  * The token presented on a request, from (in order) the `Authorization: Bearer`
- * header, an `X-Flexiq-Token` header, or the `taskito_token` cookie. A
+ * header, an `X-Flexiq-Token` header, or the `flexiq_token` cookie. A
  * `?token=` query param is deliberately NOT accepted here — query strings leak
  * into access logs, browser history, and the Referer header; it is only
  * honoured once on a page load to bootstrap the cookie.

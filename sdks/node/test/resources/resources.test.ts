@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  FlexiQError,
   Queue,
   ResourceUnavailableError,
-  TaskitoError,
   useResource,
   type Worker,
 } from "../../src/index";
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-res-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-res-")), "q.db") });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<boolean> {
@@ -647,7 +647,7 @@ describe("resource injection in a worker", () => {
   });
 
   it("throws when useResource is called outside a task", () => {
-    expect(() => useResource("anything")).toThrow(TaskitoError);
+    expect(() => useResource("anything")).toThrow(FlexiQError);
   });
 
   it("strips the injected deps arg from typed enqueue", () => {

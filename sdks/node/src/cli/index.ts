@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 // The version is read from the manifest — tsup inlines it at build time — so
-// `taskito --version` can never drift from the package it shipped in.
+// `flexiq --version` can never drift from the package it shipped in.
 import manifest from "../../package.json" with { type: "json" };
 import {
   registerAutoscale,
@@ -21,8 +21,8 @@ import {
 const program = new Command();
 
 program
-  .name("taskito")
-  .description("Taskito task queue — Node CLI")
+  .name("flexiq")
+  .description("FlexiQ task queue — Node CLI")
   .version(manifest.version)
   .option("--db <path>", "SQLite database path (shorthand for --backend sqlite --dsn <path>)")
   .option("--backend <name>", "backend: sqlite | postgres | redis")

@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 function dbPath(): string {
-  tempDir ??= mkdtempSync(join(tmpdir(), "taskito-migrate-"));
+  tempDir ??= mkdtempSync(join(tmpdir(), "flexiq-migrate-"));
   return join(tempDir, "q.db");
 }
 

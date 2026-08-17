@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterEach, expect, it } from "vitest";
-import { taskitoDashboard, taskitoRouter } from "../../src/contrib/express";
+import { flexiqDashboard, flexiqRouter } from "../../src/contrib/express";
 import { Queue, type Worker } from "../../src/index";
 
 let worker: Worker | undefined;
@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-exp-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-exp-")), "q.db") });
 }
 
 /** Mount `configure` on a fresh Express app and return its base URL. */
@@ -49,7 +49,7 @@ async function waitFor(
 it("enqueues, runs, and reports results over the REST router", async () => {
   const queue = newQueue();
   queue.task("add", (a: number, b: number) => a + b);
-  const base = await serve((app) => app.use("/tasks", taskitoRouter(queue)));
+  const base = await serve((app) => app.use("/tasks", flexiqRouter(queue)));
 
   const enqueued = await fetch(`${base}/tasks/enqueue`, {
     method: "POST",
@@ -79,7 +79,7 @@ it("enqueues, runs, and reports results over the REST router", async () => {
 
 it("rejects an enqueue without a task name", async () => {
   const queue = newQueue();
-  const base = await serve((app) => app.use("/tasks", taskitoRouter(queue)));
+  const base = await serve((app) => app.use("/tasks", flexiqRouter(queue)));
   const res = await fetch(`${base}/tasks/enqueue`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -91,7 +91,7 @@ it("rejects an enqueue without a task name", async () => {
 it("honors excludeRoutes", async () => {
   const queue = newQueue();
   const base = await serve((app) =>
-    app.use("/tasks", taskitoRouter(queue, { excludeRoutes: ["stats"] })),
+    app.use("/tasks", flexiqRouter(queue, { excludeRoutes: ["stats"] })),
   );
   expect((await fetch(`${base}/tasks/stats`)).status).toBe(404);
   expect((await fetch(`${base}/tasks/dead-letters`)).status).toBe(200);
@@ -99,7 +99,7 @@ it("honors excludeRoutes", async () => {
 
 it("mounts the dashboard JSON API", async () => {
   const queue = newQueue();
-  const base = await serve((app) => app.use("/admin", taskitoDashboard(queue)));
+  const base = await serve((app) => app.use("/admin", flexiqDashboard(queue)));
   const res = await fetch(`${base}/admin/api/auth/status`);
   expect(res.status).toBe(200);
   expect(await res.json()).toMatchObject({ auth_enabled: false, setup_required: false });

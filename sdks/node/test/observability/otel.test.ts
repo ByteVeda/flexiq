@@ -59,7 +59,7 @@ function installRecorder(): RecordedSpan[] {
 }
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-otel-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-otel-")), "q.db") });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<boolean> {
@@ -94,9 +94,9 @@ it("opens an OK span per successful task execution", async () => {
 
   expect(await waitFor(() => spans.length > 0 && spans[0]?.ended === true)).toBe(true);
   const span = spans[0];
-  expect(span?.name).toBe("taskito.execute.add");
-  expect(span?.attributes["taskito.task_name"]).toBe("add");
-  expect(typeof span?.attributes["taskito.job_id"]).toBe("string");
+  expect(span?.name).toBe("flexiq.execute.add");
+  expect(span?.attributes["flexiq.task_name"]).toBe("add");
+  expect(typeof span?.attributes["flexiq.job_id"]).toBe("string");
   expect(span?.status?.code).toBe(SpanStatusCode.OK);
 });
 

@@ -33,6 +33,7 @@ export { DetachedStorageError } from "./detached";
 export {
   CryptoError,
   EnqueueSkippedError,
+  FlexiQError,
   InterceptionError,
   JobCancelledError,
   JobFailedError,
@@ -50,7 +51,6 @@ export {
   ResourceUnavailableError,
   ResultTimeoutError,
   SerializationError,
-  TaskitoError,
   TaskNotRegisteredError,
   WorkflowError,
 } from "./errors";

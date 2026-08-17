@@ -62,7 +62,7 @@ let provider: FakeProvider;
 let base = "";
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-oauthep-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-oauthep-")), "q.db");
   queue = new Queue({ dbPath: db });
   provider = new FakeProvider();
   const flow = new OAuthFlow(
@@ -129,7 +129,7 @@ it("callback creates a session, sets cookies, and redirects to next", async () =
   expect(res.headers.get("location")).toBe("/jobs");
   const cookies = res.headers.getSetCookie();
   expect(cookies.some((c) => c.startsWith("flexiq_session=") && c.includes("HttpOnly"))).toBe(true);
-  expect(cookies.some((c) => c.startsWith("taskito_csrf="))).toBe(true);
+  expect(cookies.some((c) => c.startsWith("flexiq_csrf="))).toBe(true);
 
   const user = new AuthStore(queue).getUser("fake:sub-9");
   expect(user?.role).toBe("viewer"); // admin comes only from the allowlist

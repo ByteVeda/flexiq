@@ -14,7 +14,7 @@ import {
 } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-preg-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-preg-")), "q.db") });
 }
 
 const positive: EnqueueGate = ({ args }) => (args[0] as number) > 0;

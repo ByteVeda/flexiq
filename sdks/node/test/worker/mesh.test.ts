@@ -15,7 +15,7 @@ afterEach(() => {
 // scheduler -> affinity-sorted local deque -> dispatcher. Stealing is a no-op
 // without peers, so a job must complete exactly as on the plain path.
 it("processes jobs through the mesh bridge on a single node", async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-node-mesh-")), "queue.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-node-mesh-")), "queue.db");
   const queue = new Queue({ dbPath });
   queue.task("add", (a: number, b: number) => a + b);
 

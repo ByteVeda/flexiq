@@ -25,7 +25,7 @@ export function registerScaler(program: Command): void {
           targetQueueDepth: positiveIntFlag(options.targetQueueDepth, "target-queue-depth"),
           queue: options.queue,
         });
-        process.stdout.write(`taskito scaler on http://${host}:${port}/api/scaler\n`);
+        process.stdout.write(`flexiq scaler on http://${host}:${port}/api/scaler\n`);
       },
     );
 }

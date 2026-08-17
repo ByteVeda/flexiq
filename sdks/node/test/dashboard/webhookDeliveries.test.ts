@@ -44,7 +44,7 @@ beforeEach(async () => {
   await once(receiver, "listening");
   sinkUrl = `http://127.0.0.1:${(receiver.address() as AddressInfo).port}/hook`;
 
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashdel-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashdel-")), "q.db");
   queue = new Queue({ dbPath: db });
   queue.task("noop", () => null);
   ({ headers } = await seedAdminAndSession(queue));

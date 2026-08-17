@@ -23,7 +23,7 @@ afterEach(async () => {
 
 function newQueue(): Queue {
   activeQueue = new Queue({
-    dbPath: join(mkdtempSync(join(tmpdir(), "taskito-pubsub-log-")), "q.db"),
+    dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-pubsub-log-")), "q.db"),
   });
   return activeQueue;
 }

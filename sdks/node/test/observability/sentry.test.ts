@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-sentry-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-sentry-")), "q.db") });
 }
 
 /** Init Sentry with a beforeSend hook that records events instead of sending them. */
@@ -65,8 +65,8 @@ it("captures one event with the stack and tags when a job dead-letters", async (
   expect(events).toHaveLength(1);
   const event = events[0];
   expect(event?.level).toBe("error");
-  expect(event?.tags?.["taskito.task_name"]).toBe("boom");
-  expect(typeof event?.tags?.["taskito.job_id"]).toBe("string");
+  expect(event?.tags?.["flexiq.task_name"]).toBe("boom");
+  expect(typeof event?.tags?.["flexiq.job_id"]).toBe("string");
   expect(event?.exception?.values?.[0]?.value).toBe("kaboom");
 });
 

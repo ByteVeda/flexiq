@@ -27,7 +27,7 @@ afterEach(() => {
 
 /** An app module that registers one task and enqueues a job for itself. */
 function writeApp(): { app: string; marker: string } {
-  const dir = mkdtempSync(join(tmpdir(), "taskito-autoscale-"));
+  const dir = mkdtempSync(join(tmpdir(), "flexiq-autoscale-"));
   const marker = join(dir, "done.txt");
   const app = join(dir, "app.mjs");
   // Static module body — paths arrive via env, never interpolated into source.

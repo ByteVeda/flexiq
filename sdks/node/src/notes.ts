@@ -8,7 +8,7 @@ const MAX_BYTES = 4096;
 /**
  * Validate structured job notes against the storage contract and return their
  * canonical JSON encoding. Bounds: at most {@link MAX_FIELDS} top-level fields
- * and {@link MAX_BYTES} bytes encoded. Throws {@link TaskitoError} on violation.
+ * and {@link MAX_BYTES} bytes encoded. Throws {@link FlexiQError} on violation.
  */
 export function encodeNotes(notes: Record<string, unknown>): string {
   const fields = Object.keys(notes).length;

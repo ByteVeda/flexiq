@@ -8,7 +8,7 @@ import { Queue } from "../../src/index";
 const SUBSCRIPTIONS_KEY = "webhooks:subscriptions";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-whs-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-whs-")), "q.db") });
 }
 
 function rows(queue: Queue): Record<string, unknown>[] {

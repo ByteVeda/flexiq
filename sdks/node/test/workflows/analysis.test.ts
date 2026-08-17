@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { Queue, WorkflowAnalysis } from "../../src/index";
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-wf-an-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-wf-an-")), "q.db") });
 }
 
 /** Diamond: a → b, a → c, b → d, c → d. */

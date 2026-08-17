@@ -5,7 +5,7 @@ const log = createLogger("executor");
 
 /**
  * Marks this process as an executor, so a {@link Queue} built here opens no
- * storage. Set by `taskito executor` before it imports the app. Internal:
+ * storage. Set by `flexiq executor` before it imports the app. Internal:
  * applications should not set it.
  */
 export const DETACHED_ENV = "FLEXIQ_DETACHED_EXECUTOR";
@@ -105,7 +105,7 @@ const RUNTIME_PROBES = new Set([
  * returns and callers already handle it. Progress and task logs are forwarded
  * to the installed {@link ExecutorSink}: the executor has no storage, but the
  * scheduler does, and it applies them on this process's behalf. Without a sink
- * — an app imported outside `taskito executor`, or a scheduler that advertised
+ * — an app imported outside `flexiq executor`, or a scheduler that advertised
  * no side-channel — they degrade to one warning rather than throwing, because a
  * task that only wanted to report progress must not fail for running detached.
  */

@@ -24,7 +24,7 @@ import { Queue } from "../../src/index";
 let queue: Queue;
 
 beforeEach(() => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-oauth-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-oauth-")), "q.db");
   queue = new Queue({ dbPath: db });
 });
 

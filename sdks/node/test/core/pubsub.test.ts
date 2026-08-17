@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function newQueue(): Queue {
-  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "taskito-pubsub-")), "q.db") });
+  return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-pubsub-")), "q.db") });
 }
 
 async function waitFor(
@@ -102,7 +102,7 @@ it("persists a subscriber's delivery settings for a producer-only publisher", as
   // Two Queue instances on the same DB: the consumer registers the subscriber
   // (persisting its maxRetries on the subscription row), the producer only
   // publishes and never registers the task — yet the delivery must honor 7.
-  const dbPath = join(mkdtempSync(join(tmpdir(), "taskito-pubsub-")), "q.db");
+  const dbPath = join(mkdtempSync(join(tmpdir(), "flexiq-pubsub-")), "q.db");
   const consumer = new Queue({ dbPath });
   consumer.subscriber("orders", "send_email", () => undefined, {
     subscriptionName: "email",

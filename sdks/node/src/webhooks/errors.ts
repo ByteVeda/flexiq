@@ -1,7 +1,7 @@
-import { TaskitoError } from "../errors";
+import { FlexiQError } from "../errors";
 
 /** Thrown when a webhook definition fails validation. Dashboard maps it to 400. */
-export class WebhookValidationError extends TaskitoError {
+export class WebhookValidationError extends FlexiQError {
   constructor(message: string) {
     super(message);
     this.name = "WebhookValidationError";

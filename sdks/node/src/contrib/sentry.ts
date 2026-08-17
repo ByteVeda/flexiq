@@ -1,5 +1,5 @@
-// Sentry error reporting for Taskito. Optional integration — import from
-// `taskito/contrib/sentry`; requires `@sentry/node` as a peer (and `Sentry.init(...)`
+// Sentry error reporting for FlexiQ. Optional integration — import from
+// `flexiq/contrib/sentry`; requires `@sentry/node` as a peer (and `Sentry.init(...)`
 // called by your app first).
 //
 // Register with `queue.use(sentryMiddleware())`. The real exception (with its stack) is
@@ -13,7 +13,7 @@ import type { Middleware } from "../middleware";
 
 /** Options for {@link sentryMiddleware}. */
 export interface SentryMiddlewareOptions {
-  /** Prefix for Sentry tag keys (default `"taskito"`). */
+  /** Prefix for Sentry tag keys (default `"flexiq"`). */
   tagPrefix?: string;
   /** Also capture each retried failure as a `"warning"` event (default false). */
   captureRetries?: boolean;
@@ -31,7 +31,7 @@ export interface SentryMiddlewareOptions {
  * yields a single event carrying the original stack trace plus job/queue tags.
  */
 export function sentryMiddleware(options: SentryMiddlewareOptions = {}): Middleware {
-  const prefix = options.tagPrefix ?? "taskito";
+  const prefix = options.tagPrefix ?? "flexiq";
   const deadLevel = options.level ?? "error";
   const captureRetries = options.captureRetries ?? false;
   const tracked = (taskName: string): boolean => options.taskFilter?.(taskName) ?? true;

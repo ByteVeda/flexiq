@@ -134,7 +134,7 @@ describe("ResourceRuntime.reload", () => {
 describe("Queue.reloadResources", () => {
   it("rebuilds a reloadable resource a running worker then sees", async () => {
     const queue = new Queue({
-      dbPath: join(mkdtempSync(join(tmpdir(), "taskito-reload-")), "q.db"),
+      dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-reload-")), "q.db"),
     });
     let version = 1;
     queue.resource("cfg", () => ({ version }), { reloadable: true });

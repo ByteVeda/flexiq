@@ -22,7 +22,7 @@ let server: Server | undefined;
 let base = "";
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashauth-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashauth-")), "q.db");
   const queue = new Queue({ dbPath: db });
   queue.task("add", (a: number, b: number) => a + b);
   server = serveDashboard(queue, { port: 0, staticDir, auth: { token: TOKEN } });
@@ -64,7 +64,7 @@ it("bootstraps a cookie from ?token= on a page load and strips it", async () => 
   const res = await fetch(`${base}/?token=${TOKEN}&tab=jobs`, { redirect: "manual" });
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe("/?tab=jobs");
-  expect(res.headers.get("set-cookie")).toContain("taskito_token=");
+  expect(res.headers.get("set-cookie")).toContain("flexiq_token=");
 });
 
 it("does not bootstrap from a wrong ?token= on a page load", async () => {

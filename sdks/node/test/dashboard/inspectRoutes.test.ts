@@ -25,7 +25,7 @@ let base = "";
 let headers: Record<string, string> = {};
 
 beforeEach(async () => {
-  const db = join(mkdtempSync(join(tmpdir(), "taskito-dashinsp-")), "q.db");
+  const db = join(mkdtempSync(join(tmpdir(), "flexiq-dashinsp-")), "q.db");
   queue = new Queue({ dbPath: db });
   ({ headers } = await seedAdminAndSession(queue));
   server = serveDashboard(queue, { port: 0, staticDir, secureCookies: false });

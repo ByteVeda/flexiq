@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 function tempDb(): string {
-  return join(mkdtempSync(join(tmpdir(), "taskito-intercept-")), "queue.db");
+  return join(mkdtempSync(join(tmpdir(), "flexiq-intercept-")), "queue.db");
 }
 
 async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promise<T> {
