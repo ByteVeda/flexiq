@@ -97,8 +97,20 @@ jobs:
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
 
+      # A macOS arm64 runner once wrote build-script binaries that wouldn't exec
+      # (exit 126). This job runs on real tags too, so absorb a fault that does
+      # not reproduce: clear the build-script outputs and retry once.
       - name: Build cdylib
-        run: cargo build -p flexiq-java --release --features postgres,redis,workflows,mesh
+        shell: bash
+        run: |
+          build() {
+            cargo build -p flexiq-java --release --features postgres,redis,workflows,mesh
+          }
+          if ! build; then
+            echo "::warning::native build failed; clearing build-script outputs and retrying once"
+            rm -rf target/release/build
+            build
+          fi
 
       - name: Stage native binary under its classifier
         shell: bash
