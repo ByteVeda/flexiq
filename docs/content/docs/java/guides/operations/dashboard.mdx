@@ -132,7 +132,7 @@ and Redis.
 - **Passwords** are hashed with PBKDF2-HMAC-SHA256 — 600,000 iterations, a
   16-byte random salt — no third-party crypto dependency.
 - **Sessions** are opaque tokens with a 24-hour TTL, carried in an `HttpOnly`,
-  `SameSite=Strict` `taskito_session` cookie (plus `Secure` unless disabled —
+  `SameSite=Strict` `flexiq_session` cookie (plus `Secure` unless disabled —
   see below).
 - **CSRF** uses the double-submit pattern: a non-HttpOnly `taskito_csrf`
   cookie must match both the token bound to the session and the
@@ -167,7 +167,7 @@ DashboardServer.start(taskito, 8080, System.getenv("DASH_TOKEN"));
 ```
 
 API requests authenticate via `Authorization: Bearer <token>`, an
-`X-Taskito-Token` header, or the `taskito_token` cookie (compared in constant
+`X-FlexiQ-Token` header, or the `taskito_token` cookie (compared in constant
 time). Opening `/?token=<token>` once sets the httpOnly cookie and redirects
 with the token stripped from the URL, keeping the secret out of subsequent
 browser history and `Referer` propagation — a `?token=` query is never

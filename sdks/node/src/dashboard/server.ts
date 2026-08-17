@@ -549,7 +549,7 @@ function probeAuthorized(
 /** Token-mode session/CSRF cookies so the SPA proceeds without a login. */
 function setOpenAuthCookies(res: ServerResponse): void {
   res.setHeader("set-cookie", [
-    "taskito_session=open; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
+    "flexiq_session=open; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
     "taskito_csrf=open; SameSite=Strict; Path=/; Max-Age=86400",
   ]);
 }

@@ -298,9 +298,9 @@ def test_callback_creates_session_and_sets_cookies(
     assert cb_headers["Location"] == ["/dashboard"]
 
     cookies = _parse_set_cookies(cb_headers.get("Set-Cookie", []))
-    assert "taskito_session" in cookies
+    assert "flexiq_session" in cookies
     assert "taskito_csrf" in cookies
-    assert cookies["taskito_session"]
+    assert cookies["flexiq_session"]
 
     # A user was created in the AuthStore with the OAuth username scheme.
     user = AuthStore(queue).get_user("google:118420987654321")

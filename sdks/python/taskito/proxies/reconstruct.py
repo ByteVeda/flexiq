@@ -42,8 +42,8 @@ def _warn_unsigned_once() -> None:
     )
 
 
-_PROXY_KEY = "__taskito_proxy__"
-_REF_KEY = "__taskito_ref__"
+_PROXY_KEY = "__flexiq_proxy__"
+_REF_KEY = "__flexiq_ref__"
 
 
 class _ReconstructionTimeout(Exception):
@@ -99,7 +99,7 @@ def reconstruct_proxies(
     max_timeout: int = 10,
     metrics: ProxyMetrics | None = None,
 ) -> tuple[tuple, dict, list[tuple[ProxyHandler, Any]]]:
-    """Walk args/kwargs, reconstruct ``__taskito_proxy__`` markers.
+    """Walk args/kwargs, reconstruct ``__flexiq_proxy__`` markers.
 
     Returns:
         (args, kwargs, cleanup_list) where cleanup_list contains
@@ -191,7 +191,7 @@ def _reconstruct_one(
     max_timeout: int,
     metrics: ProxyMetrics | None,
 ) -> Any:
-    """Reconstruct a single __taskito_proxy__ marker."""
+    """Reconstruct a single __flexiq_proxy__ marker."""
     handler_name = marker["handler"]
     version = marker["version"]
     recipe = marker["recipe"]

@@ -28,7 +28,7 @@ class AuthedClient:
     @property
     def _cookies(self) -> dict[str, str]:
         return {
-            "taskito_session": self.session.token,
+            "flexiq_session": self.session.token,
             "taskito_csrf": self.session.csrf_token,
         }
 

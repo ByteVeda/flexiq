@@ -88,7 +88,7 @@ class TestConvertStrategy:
     def test_uuid_round_trip(self, strict: ArgumentInterceptor) -> None:
         original = uuid.UUID("12345678-1234-5678-1234-567812345678")
         args, _kw = strict.intercept((original,), {})
-        assert args[0]["__taskito_convert__"] is True
+        assert args[0]["__flexiq_convert__"] is True
         assert args[0]["type_key"] == "uuid"
         # Reconstruct
         restored = reconstruct_converted(args[0])
@@ -161,7 +161,7 @@ class TestConvertStrategy:
 
         original = Point(x=1, y=2)
         args, _ = strict.intercept((original,), {})
-        assert args[0]["__taskito_convert__"] is True
+        assert args[0]["__flexiq_convert__"] is True
         assert args[0]["type_key"] == "dataclass"
         assert args[0]["value"] == {"x": 1, "y": 2}
 
@@ -268,12 +268,12 @@ class TestRecursiveWalking:
     def test_nested_uuid_in_dict(self, strict: ArgumentInterceptor) -> None:
         uid = uuid.uuid4()
         _, kwargs = strict.intercept((), {"config": {"user_id": uid}})
-        assert kwargs["config"]["user_id"]["__taskito_convert__"] is True
+        assert kwargs["config"]["user_id"]["__flexiq_convert__"] is True
 
     def test_uuid_in_list(self, strict: ArgumentInterceptor) -> None:
         uid = uuid.uuid4()
         args, _ = strict.intercept(([uid],), {})
-        assert args[0][0]["__taskito_convert__"] is True
+        assert args[0][0]["__flexiq_convert__"] is True
 
     def test_depth_limit(self, registry: Any) -> None:
         interceptor = ArgumentInterceptor(registry, mode="strict", max_depth=2)
@@ -446,7 +446,7 @@ class TestCustomRegistration:
 
         def convert_money(obj: Money) -> dict[str, Any]:
             return {
-                "__taskito_convert__": True,
+                "__flexiq_convert__": True,
                 "type_key": "money",
                 "value": {"amount": obj.amount, "currency": obj.currency},
             }
@@ -459,7 +459,7 @@ class TestCustomRegistration:
             type_key="money",
         )
         args, _ = strict.intercept((Money(100, "USD"),), {})
-        assert args[0]["__taskito_convert__"] is True
+        assert args[0]["__flexiq_convert__"] is True
         assert args[0]["value"]["amount"] == 100
 
 

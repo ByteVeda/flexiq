@@ -7,7 +7,7 @@ use axum::http::HeaderMap;
 use crate::dashboard::auth::model::{Role, Session};
 
 /// Cookie carrying the session token. HttpOnly — JavaScript must never read it.
-pub const SESSION_COOKIE: &str = "taskito_session";
+pub const SESSION_COOKIE: &str = "flexiq_session";
 /// Cookie carrying the CSRF token. Readable by the SPA, which echoes it back.
 pub const CSRF_COOKIE: &str = "taskito_csrf";
 /// Header the SPA echoes the CSRF token in.
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn the_session_token_comes_from_its_own_cookie() {
-        let request = headers(&[("cookie", "other=1; taskito_session=tok; taskito_csrf=abc")]);
+        let request = headers(&[("cookie", "other=1; flexiq_session=tok; taskito_csrf=abc")]);
         assert_eq!(session_token(&request).as_deref(), Some("tok"));
         assert_eq!(session_token(&HeaderMap::new()), None);
     }

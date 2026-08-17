@@ -48,7 +48,7 @@ class TestNamedTupleConvert:
     def test_round_trip(self) -> None:
         p = Point(3, 7)
         data = convert_named_tuple(p)
-        assert data["__taskito_convert__"] is True
+        assert data["__flexiq_convert__"] is True
         assert data["type_key"] == "named_tuple"
         result = reconstruct_named_tuple(data)
         assert result == p
@@ -64,7 +64,7 @@ class TestOrderedDictConvert:
     def test_round_trip(self) -> None:
         od = collections.OrderedDict([("b", 2), ("a", 1)])
         data = convert_ordered_dict(od)
-        assert data["__taskito_convert__"] is True
+        assert data["__flexiq_convert__"] is True
         assert data["type_key"] == "ordered_dict"
         result = reconstruct_ordered_dict(data)
         assert result == od
@@ -81,7 +81,7 @@ class TestWalkerPhaseA:
         walker = self._make_walker()
         args = (Point(10, 20),)
         new_args, _, _result = walker.walk(args, {})
-        assert new_args[0]["__taskito_convert__"] is True
+        assert new_args[0]["__flexiq_convert__"] is True
         assert new_args[0]["type_key"] == "named_tuple"
 
     def test_lambda_rejected(self) -> None:
@@ -104,7 +104,7 @@ class TestWalkerPhaseA:
         walker = self._make_walker()
         od = collections.OrderedDict([("x", 1)])
         new_args, _, _ = walker.walk((od,), {})
-        assert new_args[0]["__taskito_convert__"] is True
+        assert new_args[0]["__flexiq_convert__"] is True
         assert new_args[0]["type_key"] == "ordered_dict"
 
     def test_contextvars_context_rejected(self) -> None:

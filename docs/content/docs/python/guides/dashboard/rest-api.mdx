@@ -48,7 +48,7 @@ Public, but locks itself after the first user is created. Body:
 ### `POST /api/auth/login`
 
 Body: `{"username": "...", "password": "..."}`. Sets the
-`taskito_session` (HttpOnly) and `taskito_csrf` cookies on success.
+`flexiq_session` (HttpOnly) and `taskito_csrf` cookies on success.
 Returns `400 invalid_credentials` on failure.
 
 ### `POST /api/auth/logout`

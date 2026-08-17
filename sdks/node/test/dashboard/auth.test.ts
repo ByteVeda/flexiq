@@ -50,8 +50,8 @@ it("accepts a Bearer token", async () => {
   expect(res.status).toBe(200);
 });
 
-it("accepts an X-Taskito-Token header", async () => {
-  const res = await fetch(`${base}/api/stats`, { headers: { "x-taskito-token": TOKEN } });
+it("accepts an X-FlexiQ-Token header", async () => {
+  const res = await fetch(`${base}/api/stats`, { headers: { "x-flexiq-token": TOKEN } });
   expect(res.status).toBe(200);
 });
 
@@ -82,7 +82,7 @@ it("gates probes behind the legacy token; /health stays public", async () => {
   expect((await fetch(`${base}/health`)).status).toBe(200);
   expect((await fetch(`${base}/readiness`)).status).toBe(401);
   expect((await fetch(`${base}/metrics`)).status).toBe(401);
-  const ok = await fetch(`${base}/readiness`, { headers: { "x-taskito-token": TOKEN } });
+  const ok = await fetch(`${base}/readiness`, { headers: { "x-flexiq-token": TOKEN } });
   expect(ok.status).not.toBe(401);
 });
 

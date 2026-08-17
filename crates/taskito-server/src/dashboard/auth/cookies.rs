@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(cookies.len(), 2);
 
         let session_cookie = &cookies[0];
-        assert!(session_cookie.starts_with("taskito_session=sess"));
+        assert!(session_cookie.starts_with("flexiq_session=sess"));
         assert!(session_cookie.contains("HttpOnly"));
         assert!(session_cookie.contains("SameSite=Strict"));
         assert!(session_cookie.contains("Secure"));

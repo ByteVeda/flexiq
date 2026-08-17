@@ -106,7 +106,7 @@ describe("login and sessions", () => {
     const res = await post("/api/auth/login", { username: "root", password: "password123" });
     expect(res.status).toBe(200);
     const cookies = res.headers.getSetCookie();
-    expect(cookies.some((c) => c.startsWith("taskito_session=") && c.includes("HttpOnly"))).toBe(
+    expect(cookies.some((c) => c.startsWith("flexiq_session=") && c.includes("HttpOnly"))).toBe(
       true,
     );
     expect(cookies.some((c) => c.startsWith("taskito_csrf=") && !c.includes("HttpOnly"))).toBe(
@@ -151,7 +151,7 @@ describe("login and sessions", () => {
 describe("csrf", () => {
   it("rejects state-changing requests without or with a mismatched token", async () => {
     const { session } = await seedAdminAndSession(queue);
-    const cookieOnly = { cookie: `taskito_session=${session.token}` };
+    const cookieOnly = { cookie: `flexiq_session=${session.token}` };
     const missing = await post("/api/queues/emails/pause", {}, cookieOnly);
     expect(missing.status).toBe(403);
     expect(((await missing.json()) as { error: string }).error).toBe("csrf_failed");
@@ -160,7 +160,7 @@ describe("csrf", () => {
       "/api/queues/emails/pause",
       {},
       {
-        cookie: `taskito_session=${session.token}; taskito_csrf=${session.csrfToken}`,
+        cookie: `flexiq_session=${session.token}; taskito_csrf=${session.csrfToken}`,
         "x-csrf-token": "attacker-value",
       },
     );

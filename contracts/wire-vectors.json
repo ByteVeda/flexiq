@@ -2,7 +2,7 @@
   "$schema_version": 1,
   "$comment": [
     "Golden wire vectors for the cross-SDK call envelope defined in",
-    "crates/taskito-core/BINDING_CONTRACT.md: one tag byte (0x02 = CBOR) followed",
+    "crates/flexiq-core/BINDING_CONTRACT.md: one tag byte (0x02 = CBOR) followed",
     "by a CBOR-encoded [args, kwargs] pair.",
     "",
     "Every SDK asserts this file in its own test suite, so a change to any one",

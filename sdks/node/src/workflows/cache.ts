@@ -3,7 +3,7 @@
  * single argument (the cached value) verbatim. Handled inline by the worker, so
  * it never needs registering. The double-underscore name avoids user collisions.
  */
-export const CACHE_TASK = "__taskito_cache__";
+export const CACHE_TASK = "__flexiq_cache__";
 
 /** Settings-KV prefix for stored workflow step results. */
 const KEY_PREFIX = "wf:cache:";

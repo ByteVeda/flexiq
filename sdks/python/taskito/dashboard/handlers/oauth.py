@@ -37,7 +37,7 @@ class OAuthRedirect:
     """Server adapter: emit ``302 Location: url``.
 
     ``session`` is set on a successful callback so the server can attach
-    the same ``taskito_session`` + ``taskito_csrf`` cookies it sets for
+    the same ``flexiq_session`` + ``taskito_csrf`` cookies it sets for
     password login. On the ``/start`` redirect ``session`` is ``None``.
     """
 
@@ -87,7 +87,7 @@ def handle_callback(
     """Land an OAuth login: verify state, create a session, redirect home.
 
     The returned :class:`OAuthRedirect` carries the new :class:`Session`;
-    the server attaches the standard ``taskito_session`` + ``taskito_csrf``
+    the server attaches the standard ``flexiq_session`` + ``taskito_csrf``
     cookies before sending the 302.
     """
     if flow is None:

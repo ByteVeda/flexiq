@@ -7,9 +7,9 @@ from typing import Any
 from taskito.interception.converters import reconstruct_converted
 
 # Sentinel keys used to identify interceptor markers in deserialized payloads
-_CONVERT_KEY = "__taskito_convert__"
-_REDIRECT_KEY = "__taskito_redirect__"
-_PROXY_KEY = "__taskito_proxy__"
+_CONVERT_KEY = "__flexiq_convert__"
+_REDIRECT_KEY = "__flexiq_redirect__"
+_PROXY_KEY = "__flexiq_proxy__"
 
 
 def is_marker(obj: Any) -> bool:

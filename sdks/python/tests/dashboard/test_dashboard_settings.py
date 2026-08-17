@@ -192,7 +192,7 @@ def test_put_setting_rejects_invalid_json_body(
         headers={
             "Content-Type": "application/json",
             "Cookie": (
-                f"taskito_session={client.session.token}; taskito_csrf={client.session.csrf_token}"
+                f"flexiq_session={client.session.token}; taskito_csrf={client.session.csrf_token}"
             ),
             "X-CSRF-Token": client.session.csrf_token,
         },

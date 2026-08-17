@@ -223,7 +223,7 @@ persisted across restarts:
 const hook = queue.webhooks.create({
   url: "https://hooks.example.com/jobs",
   events: ["job.dead", "job.completed"], // omit for all
-  secret: process.env.WEBHOOK_SECRET,    // signs X-Taskito-Signature: sha256=...
+  secret: process.env.WEBHOOK_SECRET,    // signs X-FlexiQ-Signature: sha256=...
   taskFilter: ["send_email"],            // optional
 });
 

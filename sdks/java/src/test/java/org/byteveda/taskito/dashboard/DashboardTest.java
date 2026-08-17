@@ -38,7 +38,7 @@ class DashboardTest {
         return HttpClient.newHttpClient()
                 .send(
                         HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
-                                .header("X-Taskito-Token", token)
+                                .header("X-FlexiQ-Token", token)
                                 .GET()
                                 .build(),
                         HttpResponse.BodyHandlers.ofString());

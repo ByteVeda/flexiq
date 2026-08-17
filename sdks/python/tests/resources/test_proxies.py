@@ -176,7 +176,7 @@ class TestReconstruct:
         reg.register(FileHandler())
 
         marker = {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": "file",
             "version": 1,
             "identity": "id-1",
@@ -202,7 +202,7 @@ class TestReconstruct:
         reg.register(FileHandler())
 
         marker = {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": "file",
             "version": 1,
             "identity": "id-2",
@@ -232,7 +232,7 @@ class TestReconstruct:
 
         markers = [
             {
-                "__taskito_proxy__": True,
+                "__flexiq_proxy__": True,
                 "handler": "file",
                 "version": 1,
                 "identity": f"id-{i}",
@@ -278,7 +278,7 @@ class TestReconstruct:
     def test_missing_handler_raises(self) -> None:
         reg = ProxyRegistry()
         marker = {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": "nonexistent",
             "version": 1,
             "recipe": {},
@@ -315,10 +315,10 @@ class TestIdentityTracking:
             args, _kw, _res = walker.walk((f, f), {})
 
             # First should be a full proxy marker
-            assert args[0].get("__taskito_proxy__") is True
+            assert args[0].get("__flexiq_proxy__") is True
             # Second should be a reference to the first
-            assert "__taskito_ref__" in args[1]
-            assert args[1]["__taskito_ref__"] == args[0]["identity"]
+            assert "__flexiq_ref__" in args[1]
+            assert args[1]["__flexiq_ref__"] == args[0]["identity"]
         finally:
             f.close()
 
@@ -331,7 +331,7 @@ class TestIdentityTracking:
 
         identity = "shared-id"
         marker = {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": "file",
             "version": 1,
             "identity": identity,
@@ -342,7 +342,7 @@ class TestIdentityTracking:
                 "position": 0,
             },
         }
-        ref = {"__taskito_ref__": identity}
+        ref = {"__flexiq_ref__": identity}
 
         args, _, cleanup = reconstruct_proxies((marker, ref), {}, reg)
         try:
@@ -365,8 +365,8 @@ class TestIdentityTracking:
             assert queue._interceptor is not None
             walker = queue._interceptor._walker
             args, _, _ = walker.walk((f1, f2), {})
-            assert args[0].get("__taskito_proxy__") is True
-            assert args[1].get("__taskito_proxy__") is True
+            assert args[0].get("__flexiq_proxy__") is True
+            assert args[1].get("__flexiq_proxy__") is True
             assert args[0]["identity"] != args[1]["identity"]
         finally:
             f1.close()
@@ -390,7 +390,7 @@ def test_proxy_in_nested_dict(tmp_path: Any) -> None:
         walker = queue._interceptor._walker
         _, kwargs, _ = walker.walk((), {"config": {"file": f}})
         inner = kwargs["config"]["file"]
-        assert inner.get("__taskito_proxy__") is True
+        assert inner.get("__flexiq_proxy__") is True
         assert inner["handler"] == "file"
     finally:
         f.close()
@@ -426,7 +426,7 @@ def test_logger_proxy_marker_production(tmp_path: Any) -> None:
     assert queue._interceptor is not None
     walker = queue._interceptor._walker
     args, _, _ = walker.walk((lgr,), {})
-    assert args[0].get("__taskito_proxy__") is True
+    assert args[0].get("__flexiq_proxy__") is True
     assert args[0]["handler"] == "logger"
     assert args[0]["recipe"]["name"] == "test.proxy.marker"
 
@@ -473,7 +473,7 @@ class TestReconstructionTimeout:
         reg = ProxyRegistry()
         reg.register(SlowHandler())
         marker = {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": "slow",
             "version": 1,
             "recipe": {},

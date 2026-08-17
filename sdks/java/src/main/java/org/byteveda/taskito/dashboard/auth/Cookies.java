@@ -10,11 +10,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * Cookie parsing and {@code Set-Cookie} formatting. The JDK has no cookie
  * builder, so attributes are hand-formatted. Names and attributes match the
- * reference contract: {@code taskito_session} (HttpOnly) and {@code taskito_csrf}
+ * reference contract: {@code flexiq_session} (HttpOnly) and {@code taskito_csrf}
  * (readable by the SPA), both {@code SameSite=Strict; Path=/}.
  */
 public final class Cookies {
-    public static final String SESSION = "taskito_session";
+    public static final String SESSION = "flexiq_session";
     public static final String CSRF = "taskito_csrf";
     public static final String CSRF_HEADER = "X-CSRF-Token";
     public static final String LEGACY_TOKEN = "taskito_token";

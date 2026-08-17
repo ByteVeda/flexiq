@@ -54,7 +54,7 @@ impl Credentials {
 
     fn cookie_header(&self) -> String {
         format!(
-            "taskito_session={}; taskito_csrf={}",
+            "flexiq_session={}; taskito_csrf={}",
             self.session, self.csrf
         )
     }
@@ -68,7 +68,7 @@ fn credentials_from(headers: &HeaderMap) -> Credentials {
         let cookie = value.to_str().expect("ascii cookie");
         let (pair, _) = cookie.split_once(';').unwrap_or((cookie, ""));
         match pair.split_once('=') {
-            Some(("taskito_session", token)) => session = Some(token.to_string()),
+            Some(("flexiq_session", token)) => session = Some(token.to_string()),
             Some(("taskito_csrf", token)) => csrf = Some(token.to_string()),
             _ => {}
         }

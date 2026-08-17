@@ -41,7 +41,7 @@ def _type_path(cls: type) -> str:
 
 
 def convert_uuid(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "uuid", "value": str(obj)}
+    return {"__flexiq_convert__": True, "type_key": "uuid", "value": str(obj)}
 
 
 def reconstruct_uuid(data: dict[str, Any]) -> Any:
@@ -53,7 +53,7 @@ def reconstruct_uuid(data: dict[str, Any]) -> Any:
 
 
 def convert_datetime(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "datetime", "value": obj.isoformat()}
+    return {"__flexiq_convert__": True, "type_key": "datetime", "value": obj.isoformat()}
 
 
 def reconstruct_datetime(data: dict[str, Any]) -> Any:
@@ -65,7 +65,7 @@ def reconstruct_datetime(data: dict[str, Any]) -> Any:
 
 
 def convert_date(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "date", "value": obj.isoformat()}
+    return {"__flexiq_convert__": True, "type_key": "date", "value": obj.isoformat()}
 
 
 def reconstruct_date(data: dict[str, Any]) -> Any:
@@ -77,7 +77,7 @@ def reconstruct_date(data: dict[str, Any]) -> Any:
 
 
 def convert_time(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "time", "value": obj.isoformat()}
+    return {"__flexiq_convert__": True, "type_key": "time", "value": obj.isoformat()}
 
 
 def reconstruct_time(data: dict[str, Any]) -> Any:
@@ -89,7 +89,7 @@ def reconstruct_time(data: dict[str, Any]) -> Any:
 
 
 def convert_timedelta(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "timedelta", "value": obj.total_seconds()}
+    return {"__flexiq_convert__": True, "type_key": "timedelta", "value": obj.total_seconds()}
 
 
 def reconstruct_timedelta(data: dict[str, Any]) -> Any:
@@ -101,7 +101,7 @@ def reconstruct_timedelta(data: dict[str, Any]) -> Any:
 
 
 def convert_decimal(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "decimal", "value": str(obj)}
+    return {"__flexiq_convert__": True, "type_key": "decimal", "value": str(obj)}
 
 
 def reconstruct_decimal(data: dict[str, Any]) -> Any:
@@ -113,7 +113,7 @@ def reconstruct_decimal(data: dict[str, Any]) -> Any:
 
 
 def convert_path(obj: Any) -> dict[str, Any]:
-    return {"__taskito_convert__": True, "type_key": "path", "value": str(obj)}
+    return {"__flexiq_convert__": True, "type_key": "path", "value": str(obj)}
 
 
 def reconstruct_path(data: dict[str, Any]) -> Any:
@@ -126,7 +126,7 @@ def reconstruct_path(data: dict[str, Any]) -> Any:
 
 def convert_enum(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "enum",
         "type_path": _type_path(type(obj)),
         "value": obj.value,
@@ -145,7 +145,7 @@ def reconstruct_enum(data: dict[str, Any]) -> Any:
 
 def convert_pydantic(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "pydantic",
         "type_path": _type_path(type(obj)),
         "value": obj.model_dump(mode="json"),
@@ -166,7 +166,7 @@ def reconstruct_pydantic(data: dict[str, Any]) -> Any:
 
 def convert_dataclass(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "dataclass",
         "type_path": _type_path(type(obj)),
         "value": dataclasses.asdict(obj),
@@ -185,7 +185,7 @@ def reconstruct_dataclass(data: dict[str, Any]) -> Any:
 
 def convert_pattern(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "pattern",
         "value": obj.pattern,
         "flags": obj.flags,
@@ -202,7 +202,7 @@ def reconstruct_pattern(data: dict[str, Any]) -> Any:
 
 def convert_named_tuple(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "named_tuple",
         "type_path": _type_path(type(obj)),
         "fields": list(obj._asdict().values()),
@@ -221,7 +221,7 @@ def reconstruct_named_tuple(data: dict[str, Any]) -> Any:
 
 def convert_ordered_dict(obj: Any) -> dict[str, Any]:
     return {
-        "__taskito_convert__": True,
+        "__flexiq_convert__": True,
         "type_key": "ordered_dict",
         "pairs": list(obj.items()),
     }

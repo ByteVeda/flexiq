@@ -215,7 +215,7 @@ def test_subscription_secret_signs_payload(
     queue._webhook_manager.notify(EventType.JOB_COMPLETED, {"job_id": "x"})
     poll_until(lambda: len(received) >= 1)
 
-    sig_header = received[0]["headers"].get("X-Taskito-Signature")
+    sig_header = received[0]["headers"].get("X-FlexiQ-Signature")
     assert sig_header is not None
     body_bytes = json.dumps(received[0]["body"], default=str).encode("utf-8")
     expected = hmac.new(b"signing-key", body_bytes, hashlib.sha256).hexdigest()

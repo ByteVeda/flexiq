@@ -108,7 +108,7 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
         .get_all("set-cookie")
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .find(|cookie| cookie.starts_with("taskito_session="))
+        .find(|cookie| cookie.starts_with("flexiq_session="))
         .map(str::to_string)
 }
 
@@ -140,7 +140,7 @@ async fn a_valid_id_token_creates_a_session() {
     // The session the cookie names is real, and the SPA can read it back.
     let cookie = session_cookie(&headers).expect("a session cookie");
     let value = cookie
-        .trim_start_matches("taskito_session=")
+        .trim_start_matches("flexiq_session=")
         .split(';')
         .next()
         .expect("a cookie value");
@@ -148,7 +148,7 @@ async fn a_valid_id_token_creates_a_session() {
         &state,
         axum::http::Request::builder()
             .uri("/api/auth/whoami")
-            .header("cookie", format!("taskito_session={value}"))
+            .header("cookie", format!("flexiq_session={value}"))
             .body(axum::body::Body::empty())
             .expect("valid request"),
     )

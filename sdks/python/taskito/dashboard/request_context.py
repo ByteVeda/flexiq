@@ -16,7 +16,7 @@ from taskito.dashboard.auth import Session
 # Cookie name used for the session token. HttpOnly + SameSite=Strict — the
 # session cookie must never be readable from JavaScript or sent on
 # third-party requests.
-SESSION_COOKIE = "taskito_session"
+SESSION_COOKIE = "flexiq_session"
 
 # Cookie name for the CSRF token. NOT HttpOnly — the SPA reads it and
 # echoes it in the X-CSRF-Token header on state-changing requests.

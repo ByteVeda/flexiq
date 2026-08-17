@@ -37,7 +37,7 @@ function startTarget(received: Received[]): Promise<number> {
         body += chunk;
       });
       req.on("end", () => {
-        const signature = req.headers["x-taskito-signature"];
+        const signature = req.headers["x-flexiq-signature"];
         received.push({ body, signature: typeof signature === "string" ? signature : undefined });
         res.writeHead(200).end();
       });

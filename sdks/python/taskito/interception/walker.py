@@ -213,7 +213,7 @@ class ArgumentWalker:
         if strategy == Strategy.REDIRECT:
             resource = entry.redirect_resource or "unknown"
             result.redirects[path] = resource
-            return {"__taskito_redirect__": True, "resource": resource}
+            return {"__flexiq_redirect__": True, "resource": resource}
 
         if strategy == Strategy.PROXY:
             return self._apply_proxy(obj, entry, proxy_identity)
@@ -249,13 +249,13 @@ class ArgumentWalker:
         # Identity tracking: same object in multiple positions → single recipe
         obj_id = id(obj)
         if obj_id in proxy_identity:
-            return {"__taskito_ref__": proxy_identity[obj_id]}
+            return {"__flexiq_ref__": proxy_identity[obj_id]}
 
         identity = str(uuid.uuid4())
         proxy_identity[obj_id] = identity
         recipe = handler.deconstruct(obj)
         return {
-            "__taskito_proxy__": True,
+            "__flexiq_proxy__": True,
             "handler": handler_name,
             "version": handler.version,
             "identity": identity,

@@ -73,7 +73,7 @@ class DashboardAuthTest {
                     raw(port, "POST", "/api/auth/login", "{\"username\":\"root\",\"password\":\"password123\"}");
             assertEquals(200, login.statusCode());
             List<String> cookies = login.headers().allValues("set-cookie");
-            assertTrue(cookies.stream().anyMatch(c -> c.startsWith("taskito_session=") && c.contains("HttpOnly")));
+            assertTrue(cookies.stream().anyMatch(c -> c.startsWith("flexiq_session=") && c.contains("HttpOnly")));
             assertTrue(cookies.stream().anyMatch(c -> c.startsWith("taskito_csrf=") && !c.contains("HttpOnly")));
             // Raw session token never leaks into the JSON body.
             assertFalse(login.body().contains("\"token\""));
@@ -234,7 +234,7 @@ class DashboardAuthTest {
 
     private static HttpResponse<String> rawWithToken(int port, String path, String token) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
-                .header("X-Taskito-Token", token)
+                .header("X-FlexiQ-Token", token)
                 .GET()
                 .build();
         return HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());

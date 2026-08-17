@@ -86,7 +86,7 @@ the public set requires a valid session.
 
 Pass `auth: { token }` instead for the **legacy token mode**: every `/api/*`
 request except `GET /api/auth/status` must present the token via
-`Authorization: Bearer <token>`, an `X-Taskito-Token` header, or the
+`Authorization: Bearer <token>`, an `X-FlexiQ-Token` header, or the
 `taskito_token` cookie; otherwise it returns `401`. A `?token=` query is only
 honoured once on a page load, where it sets the cookie and redirects with the
 token stripped. This is a single shared token — no per-user login or roles —

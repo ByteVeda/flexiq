@@ -73,7 +73,7 @@ final class DashboardClient {
         if (sessionToken == null) {
             return;
         }
-        String cookie = "taskito_session=" + sessionToken;
+        String cookie = "flexiq_session=" + sessionToken;
         if (csrfToken != null) {
             cookie += "; taskito_csrf=" + csrfToken;
         }

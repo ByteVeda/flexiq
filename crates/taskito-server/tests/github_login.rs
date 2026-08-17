@@ -99,7 +99,7 @@ fn has_session(headers: &HeaderMap) -> bool {
         .get_all("set-cookie")
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .any(|cookie| cookie.starts_with("taskito_session="))
+        .any(|cookie| cookie.starts_with("flexiq_session="))
 }
 
 #[tokio::test]

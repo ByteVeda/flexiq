@@ -65,7 +65,7 @@ Quick glossary for the acronyms used on this page:
     D->>P: POST /token (code + code_verifier)
     P-->>D: { id_token, access_token }
     Note over D: verify JWKS / nonce / aud / iss<br/>enforce allowlist<br/>get_or_create User<br/>create Session
-    D-->>B: 302 to /<br/>Set-Cookie: taskito_session, taskito_csrf`}
+    D-->>B: 302 to /<br/>Set-Cookie: flexiq_session, taskito_csrf`}
 />
 
 State is **single-use** and **time-bounded** (5-min default TTL). PKCE
@@ -237,7 +237,7 @@ domain/org allowlist too.
 | `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
 | `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges code, enforces allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
 
-The callback uses the same `taskito_session` + `taskito_csrf` cookies
+The callback uses the same `flexiq_session` + `taskito_csrf` cookies
 as password login — every other dashboard route works identically once
 you're signed in.
 

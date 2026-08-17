@@ -68,7 +68,7 @@ describes the auth-enabled dashboard.
 - **Sessions** are stored server-side under
   `auth:session:<random_token>` with a 24-hour TTL. The token rides in
   an `HttpOnly` + `SameSite=Strict` + `Secure` cookie named
-  `taskito_session` (the `Secure` flag means HTTPS-only; for local HTTP
+  `flexiq_session` (the `Secure` flag means HTTPS-only; for local HTTP
   dev use `serve_dashboard(secure_cookies=False)` or
   `taskito dashboard --insecure-cookies`).
 - **CSRF** uses the double-submit pattern: a non-HttpOnly cookie named
@@ -160,8 +160,8 @@ The same endpoints work for any HTTP client — Slack bots,
 deployment scripts, custom dashboards. The minimal workflow:
 
 1. `POST /api/auth/login` — save the `Set-Cookie` values
-2. For every read: send the `taskito_session` cookie
-3. For every write: send the `taskito_session` cookie + `taskito_csrf`
+2. For every read: send the `flexiq_session` cookie
+3. For every write: send the `flexiq_session` cookie + `taskito_csrf`
    cookie + matching `X-CSRF-Token` header
 
 ```python

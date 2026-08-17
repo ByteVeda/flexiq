@@ -33,12 +33,12 @@ default **not encrypted.** Anyone who can read the storage can read them.
 ## Webhooks
 
 Webhook deliveries are **HMAC-SHA256 signed** when the subscription has a secret;
-the signature rides in `x-taskito-signature: sha256=…`. Verify it on the
+the signature rides in `x-flexiq-signature: sha256=…`. Verify it on the
 receiver before trusting the body.
 
 ```ts
 const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
-// timing-safe compare against the x-taskito-signature header
+// timing-safe compare against the x-flexiq-signature header
 ```
 
 Delivery targets are checked against an **SSRF (server-side request forgery)

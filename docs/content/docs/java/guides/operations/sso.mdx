@@ -68,7 +68,7 @@ implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
     D->>P: POST token endpoint (code + code_verifier)
     P-->>D: { id_token, access_token }
     Note over D: verify JWKS signature / iss / aud / exp / nonce<br/>enforce allowlist<br/>get-or-create user, create session
-    D-->>B: 302 to next<br/>Set-Cookie: taskito_session, taskito_csrf`}
+    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, taskito_csrf`}
 />
 
 State is single-use — `OAuthStateStore.consume` deletes the row before
@@ -219,7 +219,7 @@ form and renders only the provider buttons.
 | `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
 | `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges the code, enforces the allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
 
-The callback sets the same `taskito_session` + `taskito_csrf` cookies as
+The callback sets the same `flexiq_session` + `taskito_csrf` cookies as
 password login — every other dashboard route works identically once you're
 signed in.
 

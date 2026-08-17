@@ -215,7 +215,7 @@ class WebhookManager:
 
         if wh["secret"]:
             sig = hmac.new(wh["secret"], body, hashlib.sha256).hexdigest()
-            headers["X-Taskito-Signature"] = f"sha256={sig}"
+            headers["X-FlexiQ-Signature"] = f"sha256={sig}"
 
         max_retries: int = wh.get("max_retries", 3)
         timeout: float = wh.get("timeout", 10.0)

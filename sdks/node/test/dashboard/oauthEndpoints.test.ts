@@ -128,9 +128,7 @@ it("callback creates a session, sets cookies, and redirects to next", async () =
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe("/jobs");
   const cookies = res.headers.getSetCookie();
-  expect(cookies.some((c) => c.startsWith("taskito_session=") && c.includes("HttpOnly"))).toBe(
-    true,
-  );
+  expect(cookies.some((c) => c.startsWith("flexiq_session=") && c.includes("HttpOnly"))).toBe(true);
   expect(cookies.some((c) => c.startsWith("taskito_csrf="))).toBe(true);
 
   const user = new AuthStore(queue).getUser("fake:sub-9");
@@ -138,10 +136,10 @@ it("callback creates a session, sets cookies, and redirects to next", async () =
   expect(user?.email).toBe("dev@corp.com");
 
   // The session cookie authenticates API calls.
-  const session = cookies.find((c) => c.startsWith("taskito_session=")) ?? "";
+  const session = cookies.find((c) => c.startsWith("flexiq_session=")) ?? "";
   const token = session.split(";")[0]?.split("=")[1] ?? "";
   const stats = await fetch(`${base}/api/stats`, {
-    headers: { cookie: `taskito_session=${token}` },
+    headers: { cookie: `flexiq_session=${token}` },
   });
   expect(stats.status).toBe(200);
 });

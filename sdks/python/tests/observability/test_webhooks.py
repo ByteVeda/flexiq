@@ -99,7 +99,7 @@ def test_webhook_hmac_signing(
     poll_until(lambda: len(received) >= 1, message="signed webhook not delivered")
 
     assert len(received) == 1
-    sig_header = received[0]["headers"].get("X-Taskito-Signature")
+    sig_header = received[0]["headers"].get("X-FlexiQ-Signature")
     assert sig_header is not None
     assert sig_header.startswith("sha256=")
 

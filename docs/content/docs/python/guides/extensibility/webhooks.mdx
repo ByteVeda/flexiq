@@ -90,7 +90,7 @@ queue.remove_webhook(sub.id)
 ## HMAC signing
 
 When a `secret` is set, every webhook request includes
-`X-Taskito-Signature: sha256=<hex digest>`. Verify it on the receiving end:
+`X-FlexiQ-Signature: sha256=<hex digest>`. Verify it on the receiving end:
 
 ```python
 import hashlib
@@ -214,7 +214,7 @@ WEBHOOK_SECRET = "whsec_my_signing_secret"
 
 @app.route("/hooks/taskito", methods=["POST"])
 def receive_webhook():
-    signature = request.headers.get("X-Taskito-Signature", "")
+    signature = request.headers.get("X-FlexiQ-Signature", "")
     expected = hmac.new(
         WEBHOOK_SECRET.encode(), request.data, hashlib.sha256
     ).hexdigest()

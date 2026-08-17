@@ -70,7 +70,7 @@ async fn a_test_send_is_signed_and_reported() {
         "the body is JSON and must say so"
     );
     assert_eq!(
-        delivery.header("x-taskito-signature"),
+        delivery.header("x-flexiq-signature"),
         Some(expected_signature(&secret, &delivery.raw_body).as_str()),
         "the signature must cover the exact bytes sent"
     );
@@ -102,7 +102,7 @@ async fn a_subscription_without_a_secret_is_sent_unsigned() {
     let received = receiver.received();
     assert_eq!(received.len(), 1);
     assert!(
-        received[0].header("x-taskito-signature").is_none(),
+        received[0].header("x-flexiq-signature").is_none(),
         "nothing to sign with means no signature header, not an empty one"
     );
 }
