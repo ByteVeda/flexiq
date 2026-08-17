@@ -194,7 +194,7 @@ export function SiteNav({
           aria-hidden="true"
         />
         <span>
-          task<span className="bto">ito</span>
+          Flexi<span className="bto">Q</span>
         </span>
       </Link>
       <div className="navlinks">
