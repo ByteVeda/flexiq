@@ -34,7 +34,7 @@ export function Sidebar() {
           <div className="text-[1.18rem] font-semibold tracking-[-0.02em]">
             {isDefaultBrand ? (
               <>
-                task<span className="text-[var(--accent-ink)]">ito</span>
+                Flexi<span className="text-[var(--accent-ink)]">Q</span>
               </>
             ) : (
               title
