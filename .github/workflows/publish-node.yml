@@ -1,11 +1,10 @@
 name: Publish to npm
 
 # Builds the napi addon as prebuilt per-platform `.node` binaries on native
-# runners (no cross-compilation — the same approach the Python publish.yml uses
-# for wheels), then publishes the per-platform `@byteveda/flexiq-<triple>`
-# packages plus the main `@byteveda/flexiq` package to npm via OIDC trusted
-# publishing + provenance. The npm scope sidesteps the spam-detection 403 that
-# unscoped per-platform names trip on first publish.
+# runners (no cross-compilation), then publishes the per-platform
+# `@byteveda/flexiq-<triple>` packages plus the main `@byteveda/flexiq` package
+# to npm via OIDC trusted publishing + provenance. The npm scope sidesteps the
+# spam-detection 403 that unscoped per-platform names trip on first publish.
 
 on:
   push:
