@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 import { Queue } from "../../src/index";
 
 describe("Queue construction", () => {
-  it("defaults SQLite to .taskito/taskito.db and creates the directory", () => {
+  it("defaults SQLite to .flexiq/flexiq.db and creates the directory", () => {
     const cwd = process.cwd();
     const tmp = mkdtempSync(join(tmpdir(), "taskito-default-"));
     try {
       process.chdir(tmp);
       new Queue();
-      expect(existsSync(join(tmp, ".taskito", "taskito.db"))).toBe(true);
+      expect(existsSync(join(tmp, ".taskito", "flexiq.db"))).toBe(true);
     } finally {
       process.chdir(cwd);
     }

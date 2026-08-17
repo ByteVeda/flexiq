@@ -53,7 +53,7 @@ impl AttachAddress {
             {
                 if path.is_empty() {
                     return Err(invalid(
-                        "a unix attach address needs a socket path, e.g. unix:/run/taskito.sock",
+                        "a unix attach address needs a socket path, e.g. unix:/run/flexiq.sock",
                     ));
                 }
                 return Ok(Self::Unix(std::path::PathBuf::from(path)));
@@ -77,7 +77,7 @@ impl AttachAddress {
         if !target.contains(':') {
             return Err(invalid(format!(
                 "'{spec}' has no port — an attach address looks like host:port or \
-                 unix:/run/taskito.sock"
+                 unix:/run/flexiq.sock"
             )));
         }
         Ok(Self::Tcp(target))
@@ -182,12 +182,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_unix_path_parses_and_prints_back() {
-        let address = AttachAddress::parse("unix:/run/taskito.sock").expect("parse");
+        let address = AttachAddress::parse("unix:/run/flexiq.sock").expect("parse");
         assert_eq!(
             address,
-            AttachAddress::Unix(std::path::PathBuf::from("/run/taskito.sock"))
+            AttachAddress::Unix(std::path::PathBuf::from("/run/flexiq.sock"))
         );
-        assert_eq!(address.to_string(), "unix:/run/taskito.sock");
+        assert_eq!(address.to_string(), "unix:/run/flexiq.sock");
     }
 
     #[cfg(unix)]

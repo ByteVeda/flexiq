@@ -31,7 +31,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u32 = 10_000;
 /// How an executor attaches. Durations are milliseconds, per Node convention.
 #[napi(object)]
 pub struct ExecutorOptions {
-    /// Scheduler address: `host:port`, `:port`, or `unix:/run/taskito.sock`.
+    /// Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
     pub address: String,
     /// Task names this executor can run. The scheduler sends it nothing else,
     /// so a name missing here is a job that never arrives.

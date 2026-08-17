@@ -18,7 +18,7 @@ already know KEDA.
 ```ts
 import { Queue, serveAutoscaler } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 await serveAutoscaler(queue, {
   app: "./app.js",
@@ -37,7 +37,7 @@ drained.
 ## CLI
 
 ```bash
-taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+taskito --db flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 ```
 
 Every option below has a matching flag (`--target-queue-depth`,
@@ -55,7 +55,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/opt/myapp
-ExecStart=/usr/bin/npx taskito --db /var/lib/taskito/taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+ExecStart=/usr/bin/npx taskito --db /var/lib/taskito/flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 Restart=always
 KillMode=process
 TimeoutStopSec=120

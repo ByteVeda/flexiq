@@ -8,7 +8,7 @@ via Django settings::
         "taskito.contrib.django",
     ]
 
-    FLEXIQ_DB_PATH = ".taskito/taskito.db"
+    FLEXIQ_DB_PATH = ".flexiq/flexiq.db"
     FLEXIQ_BACKEND = "sqlite"       # or "postgres"
     FLEXIQ_DB_URL = None            # required for postgres
     FLEXIQ_WORKERS = 0              # 0 = auto-detect

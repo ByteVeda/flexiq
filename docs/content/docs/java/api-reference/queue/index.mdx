@@ -8,7 +8,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 ```java
 import org.byteveda.taskito.Taskito;
 
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
     // ...
 }
 ```
@@ -32,7 +32,7 @@ try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
 |---|---|
 | `backend(String)` | `"sqlite"` (default) \| `"postgres"` \| `"redis"`. |
 | `url(String)` | Connection string: a file path for SQLite, a URL for Postgres/Redis. |
-| `sqlite()` / `sqlite(path)` / `postgres(url)` / `redis(url)` | Backend shortcuts. SQLite defaults to `.taskito/taskito.db`. |
+| `sqlite()` / `sqlite(path)` / `postgres(url)` / `redis(url)` | Backend shortcuts. SQLite defaults to `.flexiq/flexiq.db`. |
 | `poolSize(int)` | Connection pool size (SQLite/Postgres). |
 | `schema(String)` | Postgres schema (default `taskito`). |
 | `prefix(String)` | Redis key prefix. |

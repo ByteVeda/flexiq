@@ -23,8 +23,8 @@ await queue.getJobErrors(jobId); // per-attempt error history
 From the CLI:
 
 ```bash
-taskito --db taskito.db dlq list
-taskito --db taskito.db dlq retry <deadId>
+taskito --db flexiq.db dlq list
+taskito --db flexiq.db dlq retry <deadId>
 ```
 
 <Callout type="info">

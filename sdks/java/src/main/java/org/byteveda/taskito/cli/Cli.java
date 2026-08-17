@@ -43,7 +43,7 @@ public final class Cli {
     @Option(names = "--backend", description = "Storage backend (default sqlite).", defaultValue = "sqlite")
     String backend;
 
-    @Option(names = "--url", description = "Connection string (SQLite path or URL); defaults to .taskito/taskito.db.")
+    @Option(names = "--url", description = "Connection string (SQLite path or URL); defaults to .flexiq/flexiq.db.")
     @Nullable
     String url;
 

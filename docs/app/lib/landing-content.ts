@@ -68,7 +68,7 @@ print(job.result())   # → 5`,
     install: "pnpm add taskito",
     code: `import { Queue } from "taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 queue.task("add", (a: number, b: number) => a + b, {
   maxRetries: 3,

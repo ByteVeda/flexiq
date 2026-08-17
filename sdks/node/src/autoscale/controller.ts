@@ -303,7 +303,7 @@ export class Autoscaler {
  * ```ts
  * import { Queue, serveAutoscaler } from "@byteveda/taskito";
  *
- * const queue = new Queue({ dbPath: "taskito.db" });
+ * const queue = new Queue({ dbPath: "flexiq.db" });
  * await serveAutoscaler(queue, { app: "./app.js", minWorkers: 2, maxWorkers: 20 });
  * ```
  */

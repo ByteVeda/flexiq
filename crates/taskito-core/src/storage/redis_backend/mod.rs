@@ -27,9 +27,9 @@ pub struct RedisStorage {
 }
 
 impl RedisStorage {
-    /// Connect to Redis at the given URL with default prefix `"taskito:"`.
+    /// Connect to Redis at the given URL with default prefix `"flexiq:"`.
     pub fn new(redis_url: &str) -> Result<Self> {
-        Self::with_prefix(redis_url, "taskito:")
+        Self::with_prefix(redis_url, "flexiq:")
     }
 
     /// Connect with a custom key prefix.

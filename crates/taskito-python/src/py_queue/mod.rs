@@ -122,7 +122,7 @@ fn build_retention_config(
 )]
 impl PyQueue {
     #[new]
-    #[pyo3(signature = (db_path=".taskito/taskito.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="taskito", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=1, namespace=None, push_dispatch=false, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
+    #[pyo3(signature = (db_path=".flexiq/flexiq.db", workers=0, default_retry=3, default_timeout=300, default_priority=0, result_ttl=None, backend="sqlite", db_url=None, schema="taskito", pool_size=None, scheduler_poll_interval_ms=50, scheduler_reap_interval=100, scheduler_cleanup_interval=1200, scheduler_batch_size=1, namespace=None, push_dispatch=false, dlq_auto_retry_delay=None, dlq_auto_retry_max=1, retention=None, auto_migrate=true))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         py: Python<'_>,

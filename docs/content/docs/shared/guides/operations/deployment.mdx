@@ -25,7 +25,7 @@ processes that claim and run them:
 # myapp.py
 from taskito import Queue
 
-queue = Queue(db_path="/var/lib/myapp/taskito.db")
+queue = Queue(db_path="/var/lib/myapp/flexiq.db")
 
 @queue.task()
 def send_email(to: str, subject: str):
@@ -43,7 +43,7 @@ taskito worker --app myapp:queue --queues default,emails
 // app.ts — the module `taskito run` loads
 import { Queue } from "@byteveda/taskito";
 
-export const queue = new Queue({ dbPath: "/var/lib/myapp/taskito.db" });
+export const queue = new Queue({ dbPath: "/var/lib/myapp/flexiq.db" });
 
 queue.task("sendEmail", (to: string, subject: string) => {
   // ...
@@ -58,7 +58,7 @@ taskito run ./app.js --queues default,emails
   <Tab sdk="java">
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("/var/lib/myapp/taskito.db").open();
+try (Taskito taskito = Taskito.builder().sqlite("/var/lib/myapp/flexiq.db").open();
         Worker worker = taskito.worker()
                 .handle(sendEmail, handlers::sendEmail)
                 .queues("default", "emails")
@@ -101,21 +101,21 @@ Choose a persistent, backed-up location for the database:
   <Tab sdk="python">
 
 ```python
-queue = Queue(db_path="/var/lib/myapp/taskito.db")
+queue = Queue(db_path="/var/lib/myapp/flexiq.db")
 ```
 
   </Tab>
   <Tab sdk="node">
 
 ```ts
-const queue = new Queue({ dbPath: "/var/lib/myapp/taskito.db" });
+const queue = new Queue({ dbPath: "/var/lib/myapp/flexiq.db" });
 ```
 
   </Tab>
   <Tab sdk="java">
 
 ```java
-Taskito taskito = Taskito.builder().sqlite("/var/lib/myapp/taskito.db").open();
+Taskito taskito = Taskito.builder().sqlite("/var/lib/myapp/flexiq.db").open();
 ```
 
   </Tab>
@@ -131,7 +131,7 @@ proceed concurrently with the one writer.
 - Use an absolute path — relative paths depend on the working directory
 - Place the database on local storage (not NFS or network mounts) — SQLite file locking doesn't work reliably over network filesystems
 - Ensure the directory exists and the worker process has read/write permissions
-- The database file, WAL file (`taskito.db-wal`), and shared memory file (`taskito.db-shm`) must all be on the same filesystem
+- The database file, WAL file (`flexiq.db-wal`), and shared memory file (`flexiq.db-shm`) must all be on the same filesystem
 
 ## Running the worker as a service
 
@@ -284,7 +284,7 @@ CMD ["taskito", "worker", "--app", "myapp:queue"]
 import os
 from taskito import Queue
 
-queue = Queue(db_path=os.environ.get("FLEXIQ_DB_PATH", "/data/taskito.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_DB_PATH", "/data/flexiq.db"))
 ```
 
 </SdkOnly>
@@ -391,7 +391,7 @@ services:
 
   dashboard:
     build: .
-    command: node_modules/.bin/taskito --db /data/taskito.db dashboard --host 0.0.0.0
+    command: node_modules/.bin/taskito --db /data/flexiq.db dashboard --host 0.0.0.0
     volumes:
       - taskito-data:/data
     ports:
@@ -415,7 +415,7 @@ services:
 
   dashboard:
     build: .
-    command: java -cp app.jar org.byteveda.taskito.cli.Cli --url /data/taskito.db dashboard --port 8080
+    command: java -cp app.jar org.byteveda.taskito.cli.Cli --url /data/flexiq.db dashboard --port 8080
     volumes:
       - taskito-data:/data
     ports:
@@ -977,10 +977,10 @@ get a corrupted backup if the WAL hasn't been checkpointed.
 
 ```bash
 # Option 1: sqlite3 .backup command (safe, online)
-sqlite3 /var/lib/myapp/taskito.db ".backup /backups/taskito-$(date +%Y%m%d).db"
+sqlite3 /var/lib/myapp/flexiq.db ".backup /backups/taskito-$(date +%Y%m%d).db"
 
 # Option 2: SQLite VACUUM INTO command
-sqlite3 /var/lib/myapp/taskito.db "VACUUM INTO '/backups/taskito-$(date +%Y%m%d).db';"
+sqlite3 /var/lib/myapp/flexiq.db "VACUUM INTO '/backups/taskito-$(date +%Y%m%d).db';"
 ```
 
 ## Postgres deployment
@@ -1155,7 +1155,7 @@ Set `result_ttl` to automatically purge old completed jobs:
 
 ```python
 queue = Queue(
-    db_path="/var/lib/myapp/taskito.db",
+    db_path="/var/lib/myapp/flexiq.db",
     result_ttl=86400,  # Purge completed/dead jobs older than 24 hours
 )
 ```
@@ -1222,7 +1222,7 @@ steady growth; with regular purging (above) the database stays compact. You
 can also periodically run `VACUUM` to reclaim space:
 
 ```bash
-sqlite3 /var/lib/myapp/taskito.db "VACUUM;"
+sqlite3 /var/lib/myapp/flexiq.db "VACUUM;"
 ```
 
 <Callout type="info">
@@ -1245,14 +1245,14 @@ taskito dashboard --app myapp:queue --host 0.0.0.0 --port 8080
   <Tab sdk="node">
 
 ```bash
-taskito --db taskito.db dashboard --host 0.0.0.0 --port 8787
+taskito --db flexiq.db dashboard --host 0.0.0.0 --port 8787
 ```
 
   </Tab>
   <Tab sdk="java">
 
 ```bash
-taskito --url taskito.db dashboard --port 8080
+taskito --url flexiq.db dashboard --port 8080
 ```
 
   </Tab>

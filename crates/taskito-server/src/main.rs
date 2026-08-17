@@ -20,7 +20,7 @@ Configuration (environment only):
   FLEXIQ_WORKERS                dispatch concurrency (default: attached slots)
   FLEXIQ_MAINTENANCE            on | off — run retention and cleanup (default: on)
   FLEXIQ_LISTEN                 executor attach address, e.g. 127.0.0.1:7777
-                                 or unix:/run/taskito.sock (default: off)
+                                 or unix:/run/flexiq.sock (default: off)
   FLEXIQ_ATTACH_TOKEN           shared secret executors present when attaching;
                                  required for a non-loopback FLEXIQ_LISTEN
   FLEXIQ_DASHBOARD              dashboard address, e.g. 127.0.0.1:8080 (default: off)

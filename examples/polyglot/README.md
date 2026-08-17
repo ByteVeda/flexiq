@@ -20,13 +20,13 @@ producer — jobs wait in storage either way.
 ```bash
 # 1. Python producer
 pip install taskito==0.23.0
-python producer.py --db taskito.db --orders 3
+python producer.py --db flexiq.db --orders 3
 
 # 2. Node worker — processes orders, enqueues notifications
-cd node-worker && npm install && FLEXIQ_DB=../taskito.db npm start
+cd node-worker && npm install && FLEXIQ_DB=../flexiq.db npm start
 
 # 3. Java worker — consumes notifications
-cd java-worker && FLEXIQ_DB=../taskito.db ./gradlew run
+cd java-worker && FLEXIQ_DB=../flexiq.db ./gradlew run
 ```
 
 Expected output:

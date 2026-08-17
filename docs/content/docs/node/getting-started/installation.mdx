@@ -37,7 +37,7 @@ the `postgres,redis,workflows,mesh` cargo features enabled.
 ```ts
 import { Queue } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db" });                                   // SQLite (default)
+new Queue({ dbPath: "flexiq.db" });                                   // SQLite (default)
 new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
 new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
 ```

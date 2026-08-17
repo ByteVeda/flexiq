@@ -1,6 +1,6 @@
-taskito.db
-taskito.db-*
-.taskito/
+flexiq.db
+flexiq.db-*
+.flexiq/
 node-worker/node_modules/
 java-worker/.gradle/
 java-worker/build/

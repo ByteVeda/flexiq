@@ -9,7 +9,7 @@ client-scoped `taskito.onEvent(...)` sees everything — queue-level events plus
 every event raised by workers built from the same `Taskito`.
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
     taskito.onEvent(EventName.WORKER_OFFLINE, event -> alertOps(event));
     taskito.onEvent(EventName.WORKFLOW_FAILED, event -> {
         if (event instanceof WorkflowEvent workflow) {

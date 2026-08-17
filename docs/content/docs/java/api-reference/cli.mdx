@@ -9,7 +9,7 @@ taskito [--backend <b>] [--url <dsn>] <command> [args]
 
 `org.byteveda.taskito.cli.Cli` is a picocli command (`Cli.main`) over a
 `Taskito` client. `--backend` defaults to `sqlite`; `--url` is the connection
-string (a SQLite path, defaulting to `.taskito/taskito.db`, or a
+string (a SQLite path, defaulting to `.flexiq/flexiq.db`, or a
 Postgres/Redis URL — required for those backends). Read commands print JSON.
 
 ## Commands
@@ -25,13 +25,13 @@ Postgres/Redis URL — required for those backends). Read commands print JSON.
 | `dashboard [--port <n>] [--token <t>] [--static <dir>]` | Serve the dashboard until interrupted. |
 
 ```bash
-taskito --url taskito.db enqueue add '{"a":2,"b":3}'
-taskito --url taskito.db jobs --status failed --limit 20
+taskito --url flexiq.db enqueue add '{"a":2,"b":3}'
+taskito --url flexiq.db jobs --status failed --limit 20
 taskito --backend postgres --url postgres://localhost/taskito stats
 ```
 
 Run it from your application's classpath, e.g.:
 
 ```bash
-java -cp app.jar org.byteveda.taskito.cli.Cli --url taskito.db stats
+java -cp app.jar org.byteveda.taskito.cli.Cli --url flexiq.db stats
 ```

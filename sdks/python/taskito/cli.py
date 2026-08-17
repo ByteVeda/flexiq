@@ -78,7 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--attach",
         default=None,
         help=(
-            "Scheduler address: host:port, :port, or unix:/run/taskito.sock "
+            "Scheduler address: host:port, :port, or unix:/run/flexiq.sock "
             "(default: $FLEXIQ_ATTACH)"
         ),
     )

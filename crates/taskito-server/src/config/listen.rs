@@ -76,7 +76,7 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
             bail!(
                 "FLEXIQ_LISTEN={spec} binds a non-loopback address, and an attach port \
                  dispatches code. Set FLEXIQ_ATTACH_TOKEN, bind loopback (127.0.0.1), \
-                 or use a Unix socket (unix:/run/taskito.sock)."
+                 or use a Unix socket (unix:/run/flexiq.sock)."
             );
         }
     }
@@ -112,7 +112,7 @@ pub fn parse(spec: &str) -> Result<AttachListen> {
         #[cfg(unix)]
         {
             if path.is_empty() {
-                bail!("FLEXIQ_LISTEN=unix: needs a socket path, e.g. unix:/run/taskito.sock");
+                bail!("FLEXIQ_LISTEN=unix: needs a socket path, e.g. unix:/run/flexiq.sock");
             }
             return Ok(AttachListen::Unix(PathBuf::from(path)));
         }
@@ -220,10 +220,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_sockets_skip_the_loopback_check() {
-        let config = attach(&[("FLEXIQ_LISTEN", "unix:/run/taskito.sock")]);
+        let config = attach(&[("FLEXIQ_LISTEN", "unix:/run/flexiq.sock")]);
         assert_eq!(
             config.listen,
-            AttachListen::Unix(PathBuf::from("/run/taskito.sock"))
+            AttachListen::Unix(PathBuf::from("/run/flexiq.sock"))
         );
     }
 

@@ -804,8 +804,8 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
     /** Configures and opens a {@link Taskito} client. */
     final class Builder {
         private static final ObjectMapper JSON = new ObjectMapper();
-        // Mirrors the Python/Node SDKs: a brokerless SQLite store under .taskito/.
-        private static final String DEFAULT_SQLITE_DB = ".taskito/taskito.db";
+        // Mirrors the Python/Node SDKs: a brokerless SQLite store under .flexiq/.
+        private static final String DEFAULT_SQLITE_DB = ".flexiq/flexiq.db";
 
         private final Map<String, Object> options = new LinkedHashMap<>();
         private Serializer serializer = new JsonSerializer();
@@ -833,7 +833,7 @@ public interface Taskito extends AutoCloseable, ConditionalSettings {
             return this;
         }
 
-        /** Shortcut for {@code backend("sqlite")} using the default {@code .taskito/taskito.db}. */
+        /** Shortcut for {@code backend("sqlite")} using the default {@code .flexiq/flexiq.db}. */
         public Builder sqlite() {
             return backend("sqlite");
         }

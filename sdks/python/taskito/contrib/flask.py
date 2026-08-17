@@ -10,7 +10,7 @@ Usage::
     from taskito.contrib.flask import Taskito
 
     app = Flask(__name__)
-    app.config["FLEXIQ_DB_PATH"] = ".taskito/taskito.db"
+    app.config["FLEXIQ_DB_PATH"] = ".flexiq/flexiq.db"
     taskito = Taskito(app)
 
     # or with the factory pattern:
@@ -37,7 +37,7 @@ class Taskito:
 
     Reads configuration from ``app.config``:
 
-    - ``FLEXIQ_DB_PATH`` — SQLite database path (default: ``.taskito/taskito.db``)
+    - ``FLEXIQ_DB_PATH`` — SQLite database path (default: ``.flexiq/flexiq.db``)
     - ``FLEXIQ_BACKEND`` — ``"sqlite"`` or ``"postgres"`` (default: ``"sqlite"``)
     - ``FLEXIQ_DB_URL`` — PostgreSQL connection URL
     - ``FLEXIQ_WORKERS`` — Number of worker threads (default: 0 = auto)
@@ -62,7 +62,7 @@ class Taskito:
     def init_app(self, app: flask.Flask) -> None:
         """Initialize the extension with a Flask app."""
         self.queue = Queue(
-            db_path=app.config.get("FLEXIQ_DB_PATH", ".taskito/taskito.db"),
+            db_path=app.config.get("FLEXIQ_DB_PATH", ".flexiq/flexiq.db"),
             workers=app.config.get("FLEXIQ_WORKERS", 0),
             default_retry=app.config.get("FLEXIQ_DEFAULT_RETRY", 3),
             default_timeout=app.config.get("FLEXIQ_DEFAULT_TIMEOUT", 300),

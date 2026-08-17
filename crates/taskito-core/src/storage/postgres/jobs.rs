@@ -183,7 +183,7 @@ fn debounce_lock_id(namespace: Option<&str>, debounce_key: &str) -> i64 {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
     let mut hash = FNV_OFFSET_BASIS;
-    for byte in b"taskito:debounce:"
+    for byte in b"flexiq:debounce:"
         .iter()
         .chain(namespace.unwrap_or("").as_bytes())
         .chain(b"\x1f")

@@ -126,7 +126,7 @@ class Queue(
 
     def __init__(
         self,
-        db_path: str = ".taskito/taskito.db",
+        db_path: str = ".flexiq/flexiq.db",
         workers: int = 0,
         default_retry: int = 3,
         default_timeout: int = 300,
@@ -165,7 +165,7 @@ class Queue(
 
         Args:
             db_path: Path to the SQLite database file. Defaults to
-                ``.taskito/taskito.db``. Parent directories are created
+                ``.flexiq/flexiq.db``. Parent directories are created
                 automatically. Ignored when backend is ``"postgres"``.
             workers: Number of worker threads (0 = auto-detect CPU count).
             default_retry: Default max retry attempts for tasks.

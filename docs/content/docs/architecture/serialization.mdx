@@ -33,7 +33,7 @@ queue = Queue(serializer=JsonSerializer())
 import { Queue, MsgpackSerializer } from "@byteveda/taskito";
 
 // Use msgpack for compact, binary payloads
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 </SdkOnly>
@@ -46,7 +46,7 @@ import org.byteveda.taskito.serialization.MsgpackSerializer;
 
 // Use msgpack for compact, binary payloads
 Taskito queue = Taskito.builder()
-    .sqlite("taskito.db")
+    .sqlite("flexiq.db")
     .serializer(new MsgpackSerializer())
     .open();
 ```

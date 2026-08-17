@@ -18,7 +18,7 @@ from pathlib import Path
 from taskito import Queue
 
 # Mirror of `REAPER_LOCK` in crates/taskito-core/src/storage/mod.rs.
-REAPER_LOCK = "taskito:reaper"
+REAPER_LOCK = "flexiq:reaper"
 
 
 def test_reaper_lock_is_free_on_a_fresh_queue(tmp_path: Path) -> None:

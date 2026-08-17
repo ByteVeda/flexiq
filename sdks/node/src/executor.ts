@@ -17,7 +17,7 @@ const log = createLogger("executor");
 /** How an executor attaches. Durations are milliseconds, per Node convention. */
 export interface ExecutorRunOptions {
   /**
-   * Scheduler address: `host:port`, `:port`, or `unix:/run/taskito.sock`.
+   * Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
    * Defaults to `$FLEXIQ_ATTACH`.
    */
   attach?: string;

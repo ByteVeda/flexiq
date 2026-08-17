@@ -91,7 +91,7 @@ queue = Queue(serializer=JsonSerializer())
 ```ts
 import { Queue, JsonSerializer } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db", serializer: new JsonSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new JsonSerializer() });
 ```
 
   </Tab>
@@ -102,7 +102,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.serialization.JsonSerializer;
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new JsonSerializer())
         .open();
 ```
@@ -130,7 +130,7 @@ queue = Queue(serializer=MsgPackSerializer())
 ```ts
 import { Queue, MsgpackSerializer } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
   </Tab>
@@ -141,7 +141,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.serialization.MsgpackSerializer;
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new MsgpackSerializer())
         .open();
 ```
@@ -199,7 +199,7 @@ queue = Queue(serializer=CborSerializer())
 ```ts
 import { Queue, CborSerializer } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db", serializer: new CborSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
 ```
 
   </Tab>
@@ -210,7 +210,7 @@ import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.serialization.CborSerializer;
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new CborSerializer())
         .open();
 ```
@@ -273,7 +273,7 @@ queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
 import { Queue, SignedSerializer } from "@byteveda/taskito";
 
 new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   serializer: new SignedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
@@ -290,7 +290,7 @@ import org.byteveda.taskito.serialization.SignedSerializer;
 byte[] key = System.getenv("FLEXIQ_SIGNING_KEY").getBytes(StandardCharsets.UTF_8);
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new SignedSerializer(new JsonSerializer(), key))
         .open();
 ```
@@ -343,7 +343,7 @@ queue = Queue(serializer=EncryptedSerializer(CloudpickleSerializer(), key))
 import { Queue, EncryptedSerializer } from "@byteveda/taskito";
 
 new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   serializer: new EncryptedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
@@ -360,7 +360,7 @@ import org.byteveda.taskito.serialization.EncryptedSerializer;
 byte[] key = Base64.getDecoder().decode(System.getenv("FLEXIQ_ENC_KEY")); // 16, 24, or 32 bytes
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new EncryptedSerializer(new JsonSerializer(), key))
         .open();
 ```
@@ -431,7 +431,7 @@ const mySerializer: Serializer = {
   deserialize: (bytes) => JSON.parse(Buffer.from(bytes).toString()),
 };
 
-new Queue({ dbPath: "taskito.db", serializer: mySerializer });
+new Queue({ dbPath: "flexiq.db", serializer: mySerializer });
 ```
 
   </Tab>
@@ -582,7 +582,7 @@ queue = Queue(codec=[GzipCodec(), AesGcmCodec(key)])  # compress, then encrypt
 import { Queue, GzipCodec, AesGcmCodec } from "@byteveda/taskito";
 
 new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   codec: [new GzipCodec(), new AesGcmCodec(key)], // compress, then encrypt
 });
 ```
@@ -592,7 +592,7 @@ new Queue({
 
 ```java
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .codec(new GzipCodec(), new AesGcmCodec(key)) // compress, then encrypt
         .open();
 ```
@@ -631,7 +631,7 @@ def export_report(report_id: int):
 import { Queue, AesGcmCodec } from "@byteveda/taskito";
 
 const queue = new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   codecs: { secret: new AesGcmCodec(key) },
 });
 
@@ -649,7 +649,7 @@ queue.task(
 
 ```java
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .codec("secret", new AesGcmCodec(key))
         .open();
 

@@ -6,7 +6,7 @@
 
 import { CborSerializer, Queue } from "@byteveda/taskito";
 
-const dbPath = process.env.FLEXIQ_DB ?? "../taskito.db";
+const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
 
 // Each SDK's own default serializer is same-language-only. CBOR is the
 // cross-SDK format, and every runtime here opts into it explicitly.

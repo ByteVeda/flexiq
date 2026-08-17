@@ -233,7 +233,7 @@ def main() -> int:
         else Path(tempfile.mkdtemp(prefix="taskito-polyglot-"))
     )
     workdir.mkdir(parents=True, exist_ok=True)
-    db = workdir / "taskito.db"
+    db = workdir / "flexiq.db"
 
     print(f"running the polyglot pipeline in {workdir}")
     try:

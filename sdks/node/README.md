@@ -28,7 +28,7 @@ toolchain + napi-rs CLI (`pnpm build:native`).
 ```ts
 import { Queue } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 // Register a task with optional per-task config.
 queue.task("add", (a: number, b: number) => a + b, {
@@ -53,13 +53,13 @@ worker.stop();
 ## Backends
 
 ```ts
-new Queue();                                              // SQLite at .taskito/taskito.db (default)
-new Queue({ dbPath: "data/taskito.db" });                 // SQLite at a custom path (dirs created)
+new Queue();                                              // SQLite at .flexiq/flexiq.db (default)
+new Queue({ dbPath: "data/flexiq.db" });                 // SQLite at a custom path (dirs created)
 new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
 new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
 ```
 
-SQLite defaults to `.taskito/taskito.db` and creates the parent directory
+SQLite defaults to `.flexiq/flexiq.db` and creates the parent directory
 automatically. Postgres isolates its tables in the `schema` (default
 `"taskito"`); Redis isolates its keys under `prefix`. Override either to share
 or separate state.
@@ -124,7 +124,7 @@ payloads as opaque bytes.
 
 ```ts
 import { Queue, MsgpackSerializer } from "@byteveda/taskito";
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 ## CLI
@@ -133,13 +133,13 @@ A standalone `taskito` command (no Python) operates the queue from the terminal:
 
 ```bash
 # Connect with --db <path> (or --backend/--dsn for postgres/redis).
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db stats
-taskito --db taskito.db jobs --status failed
-taskito --db taskito.db dlq list
-taskito --db taskito.db dlq retry <deadId>
-taskito --db taskito.db pause default
-taskito --db taskito.db cancel <jobId>
+taskito --db flexiq.db enqueue add '[2,3]'
+taskito --db flexiq.db stats
+taskito --db flexiq.db jobs --status failed
+taskito --db flexiq.db dlq list
+taskito --db flexiq.db dlq retry <deadId>
+taskito --db flexiq.db pause default
+taskito --db flexiq.db cancel <jobId>
 
 # Run a worker from a module that exports a configured Queue.
 taskito run ./app.js --queues default,emails
@@ -370,7 +370,7 @@ no Python required. Build the SPA assets once, then serve:
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db taskito.db dashboard --port 8787
+taskito --db flexiq.db dashboard --port 8787
 ```
 
 Or programmatically:
@@ -378,7 +378,7 @@ Or programmatically:
 ```ts
 import { Queue, serveDashboard } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 const server = serveDashboard(queue, { port: 8787 });
 // ... server.close() to stop
 ```

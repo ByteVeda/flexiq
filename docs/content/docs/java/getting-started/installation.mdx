@@ -120,11 +120,11 @@ extraction on hardened `noexec /tmp` hosts.
 ```java
 import org.byteveda.taskito.Taskito;
 
-Taskito.builder().sqlite("taskito.db").open();                   // SQLite (default)
+Taskito.builder().sqlite("flexiq.db").open();                   // SQLite (default)
 Taskito.builder().postgres(System.getenv("PG_URL")).open();
 Taskito.builder().redis("redis://localhost").open();
 ```
 
 `Taskito.builder().open()` with no backend configured uses SQLite at
-`.taskito/taskito.db`. SQLite needs nothing else — the whole queue lives in one
+`.flexiq/flexiq.db`. SQLite needs nothing else — the whole queue lives in one
 file. Next: the [quickstart](/java/getting-started/quickstart).

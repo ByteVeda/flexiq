@@ -50,7 +50,7 @@ pub(crate) fn dead_worker_cutoff(now: i64) -> i64 {
 
 /// Cluster-wide election lock for the dead-worker reap. Not namespaced — the
 /// `workers` table is cluster-global, so one worker per cluster should reap.
-pub(crate) const REAPER_LOCK: &str = "taskito:reaper";
+pub(crate) const REAPER_LOCK: &str = "flexiq:reaper";
 
 /// Reaper lease. Longer than the 5s heartbeat cadence so the leader keeps the
 /// lock across ticks, but under [`DEAD_WORKER_THRESHOLD_MS`] so a dead leader's
@@ -59,7 +59,7 @@ pub(crate) const REAPER_LOCK_TTL_MS: i64 = 15_000;
 
 /// Cluster-wide election lock for the retention purge. Separate from the reaper
 /// lock so a long cleanup sweep can never starve worker-death detection.
-pub(crate) const RETENTION_LOCK: &str = "taskito:retention";
+pub(crate) const RETENTION_LOCK: &str = "flexiq:retention";
 
 /// Retention lease. Must exceed the worst-case sweep, which the per-tick batch
 /// cap bounds — the first sweep after a retention default flip is the long one.

@@ -27,8 +27,8 @@ on read commands prints machine-readable output.
 | `autoscale <module> [--min-workers <n>] [--max-workers <n>]` | Scale worker processes to queue depth — see [Autoscaling](/node/guides/operations/autoscaling). |
 
 ```bash
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db jobs --status failed --json
+taskito --db flexiq.db enqueue add '[2,3]'
+taskito --db flexiq.db jobs --status failed --json
 taskito run ./app.js --queues default,emails
 ```
 

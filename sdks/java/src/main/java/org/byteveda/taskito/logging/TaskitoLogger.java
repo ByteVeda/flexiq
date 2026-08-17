@@ -20,7 +20,7 @@ public final class TaskitoLogger {
     private final String tag;
 
     private TaskitoLogger(@Nullable String namespace) {
-        this.tag = namespace == null ? "taskito" : "taskito:" + namespace;
+        this.tag = namespace == null ? "taskito" : "flexiq:" + namespace;
     }
 
     /** The root {@code [taskito]} logger. Prefer {@link #create} for a namespaced one. */

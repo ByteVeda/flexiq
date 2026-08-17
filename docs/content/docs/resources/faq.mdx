@@ -13,7 +13,7 @@ Yes. Create a `Queue` instance in one of your Django apps and import it where ne
 # myproject/tasks.py
 from taskito import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task()
 def send_welcome_email(user_id: int):
@@ -37,7 +37,7 @@ Yes. Same pattern — define a queue, decorate tasks, run the worker:
 # tasks.py
 from taskito import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task()
 def generate_report(report_id: int):
@@ -436,7 +436,7 @@ Custom serializers implement the `Serializer` protocol with
 ```ts
 import { Queue, MsgpackSerializer } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 Custom serializers implement the `Serializer` interface with
@@ -448,7 +448,7 @@ Custom serializers implement the `Serializer` interface with
 
 ```java
 Taskito queue = Taskito.builder()
-    .sqlite("taskito.db")
+    .sqlite("flexiq.db")
     .serializer(new MsgpackSerializer())
     .open();
 ```
@@ -487,7 +487,7 @@ same stats and job management as REST endpoints.
 taskito run ./app.js --queues default
 
 # Terminal 2 — serve the dashboard
-taskito --db taskito.db dashboard --port 8787
+taskito --db flexiq.db dashboard --port 8787
 ```
 
 To embed the dashboard in an existing HTTP server, call `serveDashboard(queue, { port })`.

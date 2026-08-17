@@ -21,7 +21,7 @@ SQLite file — nothing extra to install or operate.
 ```ts
 import { Queue } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" }); // that's the whole setup
+const queue = new Queue({ dbPath: "flexiq.db" }); // that's the whole setup
 ```
 
 <Callout type="info" title="Coming from BullMQ?">
@@ -50,7 +50,7 @@ through it. Multiple processes pointed at the same storage share one logical
 queue.
 
 ```ts
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 ```
 
 ## Task

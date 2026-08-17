@@ -8,7 +8,7 @@ queue — no Python required. Build the SPA assets once, then serve.
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db taskito.db dashboard --port 8787
+taskito --db flexiq.db dashboard --port 8787
 ```
 
 Or programmatically:
@@ -16,7 +16,7 @@ Or programmatically:
 ```ts
 import { Queue, serveDashboard } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 const server = serveDashboard(queue, { port: 8787 });
 // ... server.close() to stop
 ```

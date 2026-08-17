@@ -621,7 +621,7 @@ impl PyQueue {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    log::error!("taskito: failed to build tokio runtime: {e}");
+                    log::error!("flexiq: failed to build tokio runtime: {e}");
                     return;
                 }
             };

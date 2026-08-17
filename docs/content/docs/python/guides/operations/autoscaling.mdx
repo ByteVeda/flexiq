@@ -19,7 +19,7 @@ use [KEDA + Kubernetes](/python/guides/operations/keda).
 from taskito import Queue
 from taskito.autoscale import AutoscaleConfig, serve_autoscaler
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 serve_autoscaler(
     queue,
@@ -216,7 +216,7 @@ Write a thin Python entry point that calls `serve_autoscaler`:
 from taskito import Queue
 from taskito.autoscale import AutoscaleConfig, serve_autoscaler
 
-queue = Queue(db_path="/var/lib/taskito/taskito.db")
+queue = Queue(db_path="/var/lib/taskito/flexiq.db")
 serve_autoscaler(
     queue,
     AutoscaleConfig(
@@ -262,7 +262,7 @@ services:
     volumes:
       - taskito_data:/data
     environment:
-      - FLEXIQ_DB_PATH=/data/taskito.db
+      - FLEXIQ_DB_PATH=/data/flexiq.db
     stop_grace_period: 60s
 
 volumes:

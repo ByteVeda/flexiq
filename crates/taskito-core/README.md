@@ -15,7 +15,7 @@ use taskito_core::{
 };
 
 fn main() -> taskito_core::Result<()> {
-    let storage = StorageBackend::Sqlite(SqliteStorage::new("taskito.db")?);
+    let storage = StorageBackend::Sqlite(SqliteStorage::new("flexiq.db")?);
 
     // A worker executes registered handlers for dequeued jobs.
     let handle = Worker::new(storage.clone())

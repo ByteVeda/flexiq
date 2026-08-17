@@ -22,7 +22,7 @@ schedules together. There's no broker to install, secure, or monitor —
 
 <Callout type="info" title="Coming from a brokered queue or Spring @Async?">
   Your `ConnectionFactory` / `spring.rabbitmq.*` / JMS listener config
-  disappears — a single `Taskito.builder().sqlite("taskito.db").open()`
+  disappears — a single `Taskito.builder().sqlite("flexiq.db").open()`
   replaces the broker, the result store, and the connection pool. Unlike
   `@Async`, jobs survive an app restart: they're rows in storage, not
   in-memory tasks.
@@ -48,7 +48,7 @@ logical queue. `taskito.queue(name)` returns a handle to a single named queue
 (pause / resume).
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) { ... }
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) { ... }
 ```
 
 ## Task

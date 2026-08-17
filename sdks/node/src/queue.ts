@@ -121,7 +121,7 @@ const log = createLogger("queue");
 /** Construction options for a {@link Queue}. */
 export interface QueueOptions {
   /** SQLite file path — shorthand for `{ backend: "sqlite", dsn: path }`.
-   *  Defaults to `.taskito/taskito.db`; missing parent directories are created. */
+   *  Defaults to `.flexiq/flexiq.db`; missing parent directories are created. */
   dbPath?: string;
   /** `"sqlite"` (default), `"postgres"`, or `"redis"`. */
   backend?: "sqlite" | "postgres" | "redis";
@@ -1793,14 +1793,14 @@ function toNativeEnqueueOptions(options: EnqueueOptions): NativeEnqueueOptions {
   return notes === undefined ? rest : { ...rest, notes: encodeNotes(notes) };
 }
 
-/** Default on-disk SQLite location — mirrors the Python SDK's `.taskito/taskito.db`. */
-const DEFAULT_SQLITE_DB = ".taskito/taskito.db";
+/** Default on-disk SQLite location — mirrors the Python SDK's `.flexiq/flexiq.db`. */
+const DEFAULT_SQLITE_DB = ".flexiq/flexiq.db";
 
 /** Resolve a {@link QueueOptions} into the native open options. */
 function toOpenOptions(options: QueueOptions): OpenOptions {
   const backend = options.backend ?? "sqlite";
   if (backend === "sqlite") {
-    // Zero-config default, like Python: an on-disk DB under `.taskito/`.
+    // Zero-config default, like Python: an on-disk DB under `.flexiq/`.
     const dsn = options.dsn ?? options.dbPath ?? DEFAULT_SQLITE_DB;
     ensureSqliteParentDir(dsn);
     return {

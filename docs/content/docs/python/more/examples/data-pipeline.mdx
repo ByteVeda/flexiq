@@ -31,7 +31,7 @@ import httpx
 from taskito import Queue, current_job
 
 queue = Queue(
-    db_path=".taskito/pipeline.db",
+    db_path=".flexiq/pipeline.db",
     workers=6,
     default_retry=3,
     default_timeout=120,

@@ -33,9 +33,9 @@ List<JobError> history = queue.jobErrors(dead.originalJobId);
 From the CLI:
 
 ```bash
-taskito --url taskito.db dlq list
-taskito --url taskito.db dlq retry <deadId>
-taskito --url taskito.db dlq delete <deadId>
+taskito --url flexiq.db dlq list
+taskito --url flexiq.db dlq retry <deadId>
+taskito --url flexiq.db dlq delete <deadId>
 ```
 
 <Callout type="info">

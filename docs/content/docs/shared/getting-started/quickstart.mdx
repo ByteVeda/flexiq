@@ -41,7 +41,7 @@ def send_email(to: str, subject: str, body: str) -> str:
 ```ts
 import { Queue } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 
 // Register a task with optional per-task config.
 queue.task("add", (a: number, b: number) => a + b, {
@@ -68,7 +68,7 @@ Task<Map<String, Integer>> add =
                 .retries(3)
                 .timeout(Duration.ofSeconds(30));
 
-Taskito taskito = Taskito.builder().sqlite("taskito.db").open();
+Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
 ```
 
   </Tab>
@@ -256,7 +256,7 @@ await queue.stats(); // { pending, running, completed, failed, dead, cancelled }
 Or the CLI:
 
 ```bash
-taskito --db taskito.db stats
+taskito --db flexiq.db stats
 ```
 
   </Tab>
@@ -269,7 +269,7 @@ QueueStats stats = taskito.stats(); // pending, running, completed, failed, dead
 Or the CLI:
 
 ```bash
-taskito --url taskito.db stats
+taskito --url flexiq.db stats
 ```
 
   </Tab>
@@ -301,7 +301,7 @@ Open `http://localhost:8080` in your browser.
 
 ```bash
 pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
-taskito --db taskito.db dashboard --port 8787
+taskito --db flexiq.db dashboard --port 8787
 ```
 
 Open `http://localhost:8787` in your browser.
@@ -316,7 +316,7 @@ Open `http://localhost:8787` in your browser.
   <Tab sdk="java">
 
 ```bash
-taskito --url taskito.db dashboard --port 8080 --token "$DASH_TOKEN"
+taskito --url flexiq.db dashboard --port 8080 --token "$DASH_TOKEN"
 ```
 
 Open `http://localhost:8080` in your browser.

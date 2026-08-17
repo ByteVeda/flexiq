@@ -65,7 +65,7 @@ environment variables. Invalid or partial config is logged and OAuth is disabled
 ```ts
 import { Queue, serveDashboard } from "@byteveda/taskito";
 
-const queue = new Queue({ dbPath: "taskito.db" });
+const queue = new Queue({ dbPath: "flexiq.db" });
 // authEnabled turns on session auth; OAuth is built from the
 // FLEXIQ_DASHBOARD_OAUTH_* env vars when they are set.
 serveDashboard(queue, { port: 8787, authEnabled: true });
@@ -78,7 +78,7 @@ serveDashboard(queue, { port: 8787, authEnabled: true });
   ```ts
   import { Queue, OAuthFlow, oauthConfigFromEnv, serveDashboard } from "@byteveda/taskito";
 
-  const queue = new Queue({ dbPath: "taskito.db" });
+  const queue = new Queue({ dbPath: "flexiq.db" });
   const config = oauthConfigFromEnv(); // or hand-build an OAuthConfig
   serveDashboard(queue, {
     authEnabled: true,

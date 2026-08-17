@@ -19,13 +19,13 @@ import type { Serializer } from "@byteveda/taskito";
 | `EncryptedSerializer` | Wraps another codec with AES-256-GCM; encrypts + authenticates. |
 
 ```ts
-new Queue({ dbPath: "taskito.db", serializer: new MsgpackSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new MsgpackSerializer() });
 ```
 
 ```ts
 import { Queue, CborSerializer } from "@byteveda/taskito";
 
-new Queue({ dbPath: "taskito.db", serializer: new CborSerializer() });
+new Queue({ dbPath: "flexiq.db", serializer: new CborSerializer() });
 ```
 
 `SignedSerializer(secret, inner?)` prefixes each payload with a 32-byte HMAC tag
@@ -36,7 +36,7 @@ producers and workers must share it.
 
 ```ts
 new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   serializer: new EncryptedSerializer(process.env.FLEXIQ_SECRET!),
 });
 ```
@@ -71,7 +71,7 @@ covers every payload and result), or register named codecs via
 import { Queue, GzipCodec, HmacCodec } from "@byteveda/taskito";
 
 const queue = new Queue({
-  dbPath: "taskito.db",
+  dbPath: "flexiq.db",
   codec: [new GzipCodec(), new HmacCodec(hmacKey)], // encodes gzip, then hmac
 });
 ```

@@ -6,7 +6,7 @@ description: "The layered architecture behind the client — from the public Tas
 ```java
 import org.byteveda.taskito.Taskito;
 
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
     // taskito is the client — every operation in this reference goes through it
 }
 ```

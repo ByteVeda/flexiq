@@ -102,7 +102,7 @@ from taskito.predicates import (
 
 from .predicates import TenantIn, TenantQuotaUnder
 
-queue = Queue(db_path=".taskito/predicate_gated.db", workers=4)
+queue = Queue(db_path=".flexiq/predicate_gated.db", workers=4)
 
 # Register the custom predicate ops so they show up in JSON, the
 # string DSL, and queue.list_predicates().

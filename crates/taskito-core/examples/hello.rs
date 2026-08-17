@@ -46,7 +46,7 @@ fn wait_until_completed(storage: &StorageBackend, job_id: &str) -> Job {
 }
 
 fn main() {
-    let storage = StorageBackend::Sqlite(SqliteStorage::new("hello_taskito.db").expect("storage"));
+    let storage = StorageBackend::Sqlite(SqliteStorage::new("hello_flexiq.db").expect("storage"));
 
     let handle = Worker::new(storage.clone())
         .num_workers(2)
@@ -80,5 +80,5 @@ fn main() {
 
     handle.shutdown().expect("clean shutdown");
     println!("both jobs completed.");
-    let _ = std::fs::remove_file("hello_taskito.db");
+    let _ = std::fs::remove_file("hello_flexiq.db");
 }

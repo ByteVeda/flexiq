@@ -32,7 +32,7 @@ use crate::handle::{self, into_handle};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecutorOptions {
-    /// Scheduler address: `host:port`, `:port`, or `unix:/run/taskito.sock`.
+    /// Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`.
     address: String,
     /// Task names this executor can run. The scheduler sends it nothing else.
     tasks: Vec<String>,

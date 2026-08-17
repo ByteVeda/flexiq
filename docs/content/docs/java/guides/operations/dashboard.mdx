@@ -12,7 +12,7 @@ REST API over the queue — no separate service, no asset build step.
   <Tab value="Programmatic">
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open();
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
         DashboardServer server = DashboardServer.start(taskito, 8080)) {
     System.out.println("dashboard on http://localhost:" + server.port());
     // ...
@@ -29,7 +29,7 @@ try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open();
   <Tab value="Taskito.dashboard()">
 
 ```java
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open();
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open();
         DashboardServer server = taskito.dashboard(8080)) {
     // ...
 }
@@ -49,7 +49,7 @@ taskito.dashboard(8080, System.getenv("DASH_TOKEN"));
   <Tab value="CLI">
 
 ```bash
-taskito --url taskito.db dashboard --port 8080
+taskito --url flexiq.db dashboard --port 8080
 ```
 
 | Flag | Default | Description |
@@ -115,7 +115,7 @@ and Redis.
   ```bash
   export FLEXIQ_DASHBOARD_ADMIN_USER=admin
   export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
-  taskito --url taskito.db dashboard --port 8080 --auth
+  taskito --url flexiq.db dashboard --port 8080 --auth
   ```
 
   The env vars are only read when session auth is enabled.

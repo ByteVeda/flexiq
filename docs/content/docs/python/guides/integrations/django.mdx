@@ -93,7 +93,7 @@ against (`--app myproject.tasks:queue`).
 # myproject/tasks.py
 from taskito import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task()
 def send_welcome_email(user_id: int):
@@ -159,7 +159,7 @@ myproject/
 ```python
 from taskito import Queue
 
-queue = Queue(db_path="taskito.db")
+queue = Queue(db_path="flexiq.db")
 
 @queue.task(max_retries=3)
 def send_welcome_email(user_id: int):

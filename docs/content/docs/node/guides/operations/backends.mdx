@@ -14,7 +14,7 @@ itself. Start on SQLite with zero infrastructure and move to Postgres or Redis
 later without changing task code.
 
 ```ts
-new Queue({ dbPath: "taskito.db" });                                   // SQLite (default)
+new Queue({ dbPath: "flexiq.db" });                                   // SQLite (default)
 new Queue({ backend: "postgres", dsn: process.env.PG_URL, schema: "taskito" });
 new Queue({ backend: "redis", dsn: "redis://localhost", prefix: "taskito" });
 ```

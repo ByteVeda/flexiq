@@ -105,7 +105,7 @@ The attach port dispatches code, so the defaults are strict:
   failure is logged with the executor id and peer only.
 - `hello` must arrive before any other frame; an unauthenticated socket is
   dropped rather than queued, and never receives an acknowledgement.
-- Use a Unix socket (`unix:/run/taskito.sock`) for a same-pod sidecar; it needs
+- Use a Unix socket (`unix:/run/flexiq.sock`) for a same-pod sidecar; it needs
   no token because the filesystem permissions are the boundary.
 
 <Callout type="warn">

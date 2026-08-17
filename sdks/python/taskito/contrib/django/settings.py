@@ -31,7 +31,7 @@ def get_queue() -> Queue:
         from taskito.app import Queue
 
         _queue_instance = Queue(
-            db_path=_get_setting("FLEXIQ_DB_PATH", ".taskito/taskito.db"),
+            db_path=_get_setting("FLEXIQ_DB_PATH", ".flexiq/flexiq.db"),
             workers=_get_setting("FLEXIQ_WORKERS", 0),
             default_retry=_get_setting("FLEXIQ_DEFAULT_RETRY", 3),
             default_timeout=_get_setting("FLEXIQ_DEFAULT_TIMEOUT", 300),

@@ -7,15 +7,15 @@ A standalone `taskito` command (no Python) operates the queue from the terminal.
 Connect with `--db <path>`, or `--backend`/`--dsn` for Postgres/Redis.
 
 ```bash
-taskito --db taskito.db enqueue add '[2,3]'
-taskito --db taskito.db stats
-taskito --db taskito.db jobs --status failed
-taskito --db taskito.db dlq list
-taskito --db taskito.db dlq retry <deadId>
-taskito --db taskito.db pause default
-taskito --db taskito.db resume default
-taskito --db taskito.db paused
-taskito --db taskito.db cancel <jobId>
+taskito --db flexiq.db enqueue add '[2,3]'
+taskito --db flexiq.db stats
+taskito --db flexiq.db jobs --status failed
+taskito --db flexiq.db dlq list
+taskito --db flexiq.db dlq retry <deadId>
+taskito --db flexiq.db pause default
+taskito --db flexiq.db resume default
+taskito --db flexiq.db paused
+taskito --db flexiq.db cancel <jobId>
 ```
 
 Add `--json` to any read command for machine-readable output.
@@ -34,7 +34,7 @@ over them. Use it as your container entrypoint for worker processes.
 ## Serving the dashboard
 
 ```bash
-taskito --db taskito.db dashboard --port 8787
+taskito --db flexiq.db dashboard --port 8787
 ```
 
 Serves openly by default. `--auth` enables session authentication
@@ -52,7 +52,7 @@ Serves the queue-depth metric for [KEDA](/node/guides/operations/keda).
 ## Autoscaling worker processes
 
 ```bash
-taskito --db taskito.db autoscale ./app.js --min-workers 2 --max-workers 20
+taskito --db flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
 ```
 
 Spawns and drains `run`-style workers to track queue depth, for hosts without

@@ -8,7 +8,7 @@ import org.byteveda.taskito.serialization.JsonSerializer;
 import org.byteveda.taskito.serialization.MsgpackSerializer;
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new MsgpackSerializer())
         .open();
 ```
@@ -30,7 +30,7 @@ treats payloads as opaque bytes.
 import org.byteveda.taskito.serialization.CborSerializer;
 
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .serializer(new CborSerializer())
         .open();
 ```
@@ -54,7 +54,7 @@ decompressing:
 
 ```java
 Taskito taskito = Taskito.builder()
-        .sqlite("taskito.db")
+        .sqlite("flexiq.db")
         .codec(new GzipCodec(), new HmacCodec(secret))   // global chain
         .codec("encrypted", new AesGcmCodec(key))        // named, per-task
         .open();

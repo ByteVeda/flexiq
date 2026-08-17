@@ -84,7 +84,7 @@ class PyQueue:
 
     def __init__(
         self,
-        db_path: str = ".taskito/taskito.db",
+        db_path: str = ".flexiq/flexiq.db",
         workers: int = 0,
         default_retry: int = 3,
         default_timeout: int = 300,

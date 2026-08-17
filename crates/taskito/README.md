@@ -20,7 +20,7 @@ documented there.
 use taskito::{now_millis, Job, NewJob, SqliteStorage, Storage, StorageBackend, Worker};
 
 fn main() -> taskito::Result<()> {
-    let storage = StorageBackend::Sqlite(SqliteStorage::new("taskito.db")?);
+    let storage = StorageBackend::Sqlite(SqliteStorage::new("flexiq.db")?);
 
     // A worker executes registered handlers for dequeued jobs.
     let handle = Worker::new(storage.clone())

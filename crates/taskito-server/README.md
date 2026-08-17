@@ -25,7 +25,7 @@ Run `taskito-server --help` for the full list; the essentials:
 | `FLEXIQ_DSN` | Storage connection string (required) |
 | `FLEXIQ_BACKEND` | `sqlite` \| `postgres` \| `redis`; defaults to the DSN's scheme |
 | `FLEXIQ_QUEUES` | Comma-separated queues (default `default`) |
-| `FLEXIQ_LISTEN` | Executor attach address, or `unix:/run/taskito.sock` |
+| `FLEXIQ_LISTEN` | Executor attach address, or `unix:/run/flexiq.sock` |
 | `FLEXIQ_DASHBOARD` | Dashboard address |
 | `FLEXIQ_DASHBOARD_AUTH` | `off` (default) or `session` |
 | `FLEXIQ_MAINTENANCE` | `off` to leave retention to another replica |

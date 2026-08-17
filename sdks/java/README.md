@@ -124,7 +124,7 @@ Task<Map<String, Object>> sendEmail =
                 .queue("emails")
                 .priority(5);
 
-try (Taskito taskito = Taskito.builder().sqlite("taskito.db").open()) {
+try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
     String id = taskito.enqueue(sendEmail, Map.of("to", "a@b.c"));
     Job job = taskito.getJob(id).orElseThrow();   // job.status == JobStatus.PENDING
     QueueStats stats = taskito.stats();
@@ -147,7 +147,7 @@ import org.byteveda.taskito.worker.Worker;
 
 Task<Map> add = Task.of("add", Map.class);
 
-Taskito taskito = Taskito.builder().backend("sqlite").url("taskito.db").open();
+Taskito taskito = Taskito.builder().backend("sqlite").url("flexiq.db").open();
 Worker worker = taskito.worker()
         .handle(add, p -> ((Number) p.get("a")).intValue() + ((Number) p.get("b")).intValue())
         .concurrency(4)
@@ -306,7 +306,7 @@ try (DashboardServer dashboard = DashboardServer.start(queue, 8080, token, stati
 ```java
 byte[] key = ...; // 16/24/32 bytes for AES
 Taskito secure = Taskito.builder()
-        .backend("sqlite").url("taskito.db")
+        .backend("sqlite").url("flexiq.db")
         .serializer(new EncryptedSerializer(new JsonSerializer(), key))
         .open();
 ```
