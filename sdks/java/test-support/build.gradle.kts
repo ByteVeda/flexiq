@@ -1,4 +1,4 @@
-// taskito-test: a pure-Java in-memory QueueBackend for fast unit tests (no JNI,
+// flexiq-test: a pure-Java in-memory QueueBackend for fast unit tests (no JNI,
 // no disk). Depends on the runtime for the SPI + models; the runtime does NOT
 // depend on it (its own tests live here), so there is no cycle.
 plugins {
@@ -17,11 +17,11 @@ mavenPublishing {
     ) {
         signAllPublications()
     }
-    coordinates(group.toString(), "taskito-test", version.toString())
+    coordinates(group.toString(), "flexiq-test", version.toString())
     pom {
-        name.set("Taskito Test Support")
-        description.set("In-memory queue backend for testing Taskito JVM applications without the native runtime.")
-        url.set("https://github.com/ByteVeda/taskito")
+        name.set("FlexiQ Test Support")
+        description.set("In-memory queue backend for testing FlexiQ JVM applications without the native runtime.")
+        url.set("https://github.com/ByteVeda/flexiq")
         licenses {
             license {
                 name.set("MIT")
@@ -35,9 +35,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/ByteVeda/taskito")
-            connection.set("scm:git:https://github.com/ByteVeda/taskito.git")
-            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/taskito.git")
+            url.set("https://github.com/ByteVeda/flexiq")
+            connection.set("scm:git:https://github.com/ByteVeda/flexiq.git")
+            developerConnection.set("scm:git:ssh://git@github.com/ByteVeda/flexiq.git")
         }
     }
 }

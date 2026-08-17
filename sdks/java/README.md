@@ -1,7 +1,7 @@
-# Taskito Java SDK
+# FlexiQ Java SDK
 
-A typed Java 17+ client over the Taskito Rust core, via a hand-written JNI shell
-(`crates/taskito-java`).
+A typed Java 17+ client over the FlexiQ Rust core, via a hand-written JNI shell
+(`crates/flexiq-java`).
 
 Feature-complete: producer + inspection + admin + logs, worker task execution,
 middleware, JSON/signed/encrypted/MessagePack serializers, dashboard, webhooks,
@@ -20,9 +20,9 @@ your platform (`linux-x86_64`, `linux-aarch64`, `osx-x86_64`, `osx-aarch64`,
 
 ```kotlin
 // Gradle
-implementation("org.byteveda:taskito:0.23.0")
-runtimeOnly("org.byteveda:taskito:0.23.0:linux-x86_64") // native library for your platform
-annotationProcessor("org.byteveda:taskito-processor:0.23.0") // compile-time TaskHandler bindings
+implementation("org.byteveda:flexiq:0.23.0")
+runtimeOnly("org.byteveda:flexiq:0.23.0:linux-x86_64") // native library for your platform
+annotationProcessor("org.byteveda:flexiq-processor:0.23.0") // compile-time TaskHandler bindings
 ```
 
 To pick the classifier automatically, use the
@@ -32,7 +32,7 @@ To pick the classifier automatically, use the
 plugins { id("com.google.osdetector") version "1.7.3" }
 
 dependencies {
-    runtimeOnly("org.byteveda:taskito:0.23.0:${osdetector.classifier}")
+    runtimeOnly("org.byteveda:flexiq:0.23.0:${osdetector.classifier}")
 }
 ```
 
@@ -50,12 +50,12 @@ dependencies {
 
 <dependency>
   <groupId>org.byteveda</groupId>
-  <artifactId>taskito</artifactId>
+  <artifactId>flexiq</artifactId>
   <version>0.23.0</version>
 </dependency>
 <dependency>
   <groupId>org.byteveda</groupId>
-  <artifactId>taskito</artifactId>
+  <artifactId>flexiq</artifactId>
   <version>0.23.0</version>
   <classifier>${os.detected.classifier}</classifier>
   <scope>runtime</scope>
@@ -66,7 +66,7 @@ Deploying one artifact to several platforms? Add multiple classifier
 dependencies — each jar carries only its own library, and the loader picks the
 right one at runtime. Supplying your own build instead (e.g. a custom feature
 set, or a platform with no published artifact such as Windows on ARM): skip the
-classifier and point `-Dtaskito.native.lib=/path/to/library` at it — the
+classifier and point `-Dflexiq.native.lib=/path/to/library` at it — the
 classifier-free main jar works with no bundled native. On an unpublished
 platform the loader fails at startup naming the platform it detected, rather
 than loading a binary built for a different one.
@@ -80,7 +80,7 @@ than loading a binary built for a different one.
     <annotationProcessorPaths>
       <path>
         <groupId>org.byteveda</groupId>
-        <artifactId>taskito-processor</artifactId>
+        <artifactId>flexiq-processor</artifactId>
         <version>0.23.0</version>
       </path>
     </annotationProcessorPaths>
@@ -88,18 +88,18 @@ than loading a binary built for a different one.
 </plugin>
 ```
 
-Companion artifacts: `org.byteveda:taskito-test` (in-memory backend for unit
-tests) and `org.byteveda:taskito-spring` (Boot 3 starter).
+Companion artifacts: `org.byteveda:flexiq-test` (in-memory backend for unit
+tests) and `org.byteveda:flexiq-spring` (Boot 3 starter).
 
 ## Migration
 
 **0.18 — source-breaking (pre-1.0):** the client interface was renamed and the
 name `Queue` now denotes a single named queue.
 
-- The client you open is now `Taskito`, not `Queue`:
-  `Taskito client = Taskito.builder()…open();` (was `Queue queue = …`).
-  `Taskito.builder()` is unchanged.
-- `Queue` is a per-queue handle from `Taskito.queue(name)`, exposing
+- The client you open is now `FlexiQ`, not `Queue`:
+  `FlexiQ client = FlexiQ.builder()…open();` (was `Queue queue = …`).
+  `FlexiQ.builder()` is unchanged.
+- `Queue` is a per-queue handle from `FlexiQ.queue(name)`, exposing
   `pause()` / `resume()` / `isPaused()`.
 - `client.pauseQueue("emails")` → `client.queue("emails").pause()` (likewise
   `resume`). `listPausedQueues()` stays on the client as the global view.
@@ -110,11 +110,11 @@ name `Queue` now denotes a single named queue.
 
 ```java
 import com.fasterxml.jackson.core.type.TypeReference;
-import org.byteveda.taskito.Taskito;
-import org.byteveda.taskito.model.Job;
-import org.byteveda.taskito.model.JobStatus;
-import org.byteveda.taskito.model.QueueStats;
-import org.byteveda.taskito.task.Task;
+import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.model.Job;
+import org.byteveda.flexiq.model.JobStatus;
+import org.byteveda.flexiq.model.QueueStats;
+import org.byteveda.flexiq.task.Task;
 import java.util.Map;
 
 // TypeReference preserves generics that a Class token can't; fluent options
@@ -124,31 +124,31 @@ Task<Map<String, Object>> sendEmail =
                 .queue("emails")
                 .priority(5);
 
-try (Taskito taskito = Taskito.builder().sqlite("flexiq.db").open()) {
-    String id = taskito.enqueue(sendEmail, Map.of("to", "a@b.c"));
-    Job job = taskito.getJob(id).orElseThrow();   // job.status == JobStatus.PENDING
-    QueueStats stats = taskito.stats();
-    taskito.cancel(id);
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) {
+    String id = flexiq.enqueue(sendEmail, Map.of("to", "a@b.c"));
+    Job job = flexiq.getJob(id).orElseThrow();   // job.status == JobStatus.PENDING
+    QueueStats stats = flexiq.stats();
+    flexiq.cancel(id);
 
     // Pause/resume are scoped to one named queue:
-    taskito.queue("emails").pause();
-    taskito.queue("emails").resume();
+    flexiq.queue("emails").pause();
+    flexiq.queue("emails").resume();
 }
 ```
 
-`Taskito.builder()` also has `.postgres(url)` / `.redis(url)` shortcuts.
+`FlexiQ.builder()` also has `.postgres(url)` / `.redis(url)` shortcuts.
 
 ### Run a worker
 
 ```java
-import org.byteveda.taskito.events.EventName;
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.worker.Worker;
+import org.byteveda.flexiq.events.EventName;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.worker.Worker;
 
 Task<Map> add = Task.of("add", Map.class);
 
-Taskito taskito = Taskito.builder().backend("sqlite").url("flexiq.db").open();
-Worker worker = taskito.worker()
+FlexiQ flexiq = FlexiQ.builder().backend("sqlite").url("flexiq.db").open();
+Worker worker = flexiq.worker()
         .handle(add, p -> ((Number) p.get("a")).intValue() + ((Number) p.get("b")).intValue())
         .concurrency(4)
         .on(EventName.SUCCESS, e -> System.out.println("done: " + e.jobId))
@@ -159,7 +159,7 @@ Worker worker = taskito.worker()
 // exit to trigger close(), so it would deadlock.)
 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
     worker.close();
-    taskito.close();
+    flexiq.close();
 }));
 worker.awaitShutdown();
 ```
@@ -169,7 +169,7 @@ worker.awaitShutdown();
 Annotate handler methods; a compile-time processor generates a `<Class>Tasks`
 companion with a typed `Task` constant per method (full generics, name declared
 once) plus a `bind(...)`. Add the processor with
-`annotationProcessor("org.byteveda:taskito-processor")`.
+`annotationProcessor("org.byteveda:flexiq-processor")`.
 
 ```java
 class EmailTasks {
@@ -181,9 +181,9 @@ class EmailTasks {
 }
 
 // generated EmailTasksTasks:
-String id = taskito.enqueue(EmailTasksTasks.SEND, payload);
+String id = flexiq.enqueue(EmailTasksTasks.SEND, payload);
 
-taskito.worker()
+flexiq.worker()
         .apply(b -> EmailTasksTasks.bind(b, new EmailTasks()))
         .start();
 ```
@@ -198,11 +198,11 @@ finishes. Attach `trackWorkflows()` to the worker so node and run state advance
 as jobs complete.
 
 ```java
-import org.byteveda.taskito.task.Task;
-import org.byteveda.taskito.worker.Worker;
-import org.byteveda.taskito.workflows.Workflow;
-import org.byteveda.taskito.workflows.WorkflowRun;
-import org.byteveda.taskito.workflows.WorkflowStatus;
+import org.byteveda.flexiq.task.Task;
+import org.byteveda.flexiq.worker.Worker;
+import org.byteveda.flexiq.workflows.Workflow;
+import org.byteveda.flexiq.workflows.WorkflowRun;
+import org.byteveda.flexiq.workflows.WorkflowStatus;
 
 Task<Integer> extract = Task.of("extract", Integer.class);
 Task<Integer> transform = Task.of("transform", Integer.class);
@@ -213,9 +213,9 @@ Workflow wf = Workflow.named("etl")
         .step("transform", transform, 2, "extract")
         .step("load", load, 3, "transform");
 
-WorkflowRun run = taskito.submitWorkflow(wf);
+WorkflowRun run = flexiq.submitWorkflow(wf);
 
-try (Worker worker = taskito.worker()
+try (Worker worker = flexiq.worker()
         .handle(extract, p -> p * 10)
         .handle(transform, p -> p + 1)
         .handle(load, p -> p)
@@ -238,7 +238,7 @@ Workflow etl = Workflow.named("etl")
         .stepAfter("transform", transform, "extract")
         .stepAfter("load", load, "transform");
 
-taskito.submitWorkflow(etl, Map.of("extract", 5, "transform", 6, "load", 7));
+flexiq.submitWorkflow(etl, Map.of("extract", 5, "transform", 6, "load", 7));
 ```
 
 A step's effective payload is `map.get(name)` when present, else the one baked
@@ -266,7 +266,7 @@ Workflow wf = Workflow.named("deploy")
         .step("build", build, 1)
         .gate("approve", GateConfig.timeout(Duration.ofMinutes(30), GateAction.REJECT), "build")
         .step("ship", ship, 2, "approve");
-try (Worker w = taskito.worker().handle(build, ...).handle(ship, ...).trackWorkflows(wf).start()) {
+try (Worker w = flexiq.worker().handle(build, ...).handle(ship, ...).trackWorkflows(wf).start()) {
     w.approveGate(run.runId(), "approve");   // or w.rejectGate(runId, "approve", reason)
 }
 ```
@@ -285,7 +285,7 @@ round out the engine.
 ### Middleware
 
 ```java
-taskito.use(new Middleware() {
+flexiq.use(new Middleware() {
     @Override public void onEnqueue(EnqueueContext ctx) { /* validate / rewrite */ }
     @Override public void before(TaskContext ctx) { /* trace */ }
     @Override public void onDeadLetter(OutcomeEvent e) { /* alert */ }
@@ -305,7 +305,7 @@ try (DashboardServer dashboard = DashboardServer.start(queue, 8080, token, stati
 
 ```java
 byte[] key = ...; // 16/24/32 bytes for AES
-Taskito secure = Taskito.builder()
+FlexiQ secure = FlexiQ.builder()
         .backend("sqlite").url("flexiq.db")
         .serializer(new EncryptedSerializer(new JsonSerializer(), key))
         .open();
@@ -318,9 +318,9 @@ handler: register it once and resolve it inside the worker. Scopes: `WORKER`
 (built once, shared) and `TASK` (built + disposed per invocation).
 
 ```java
-taskito.resource("db", ctx -> openPool());                       // WORKER
-taskito.resource("tx", ResourceScope.TASK, ctx -> ctx.<Pool>use("db").begin(), Tx::close);
-taskito.worker().handle(save, p -> Resources.<Tx>use("tx").save(p)).start();
+flexiq.resource("db", ctx -> openPool());                       // WORKER
+flexiq.resource("tx", ResourceScope.TASK, ctx -> ctx.<Pool>use("db").begin(), Tx::close);
+flexiq.worker().handle(save, p -> Resources.<Tx>use("tx").save(p)).start();
 ```
 
 When a handler takes `@Resource` parameters, the `@TaskHandler` processor wires
@@ -341,16 +341,16 @@ File same = proxies.resolve(ref, "report");                                // wo
 ### Enqueue gates
 
 ```java
-taskito.predicate("send_email", ctx -> payloadValid(ctx));       // boolean: false → PredicateRejectedException
-taskito.gate("send_email", Recipes.businessHours(zone));         // allow / skip / defer / reject
-Optional<String> id = taskito.tryEnqueue(emailTask, msg);        // empty when a gate skips
+flexiq.predicate("send_email", ctx -> payloadValid(ctx));       // boolean: false → PredicateRejectedException
+flexiq.gate("send_email", Recipes.businessHours(zone));         // allow / skip / defer / reject
+Optional<String> id = flexiq.tryEnqueue(emailTask, msg);        // empty when a gate skips
 // Recipes: businessHours / timeWindow / dayOfWeek / payloadMatches / featureFlag.
 ```
 
 ### Producer batching
 
 ```java
-try (Batcher<Event> batcher = Batcher.of(taskito, ingest, 500, Duration.ofMillis(200))) {
+try (Batcher<Event> batcher = Batcher.of(flexiq, ingest, 500, Duration.ofMillis(200))) {
     events.forEach(batcher::add);   // flushed in one enqueueMany when full or after the delay
 }
 ```
@@ -358,16 +358,16 @@ try (Batcher<Event> batcher = Batcher.of(taskito, ingest, 500, Duration.ofMillis
 ### Autoscaling + scaler endpoint
 
 ```java
-taskito.worker().autoscale(AutoscaleOptions.of(2, 32)).handle(task, ...).start();  // resize by depth
-try (Scaler scaler = Scaler.start(taskito, ScalerOptions.onPort(9090))) { /* GET /api/scaler for KEDA */ }
+flexiq.worker().autoscale(AutoscaleOptions.of(2, 32)).handle(task, ...).start();  // resize by depth
+try (Scaler scaler = Scaler.start(flexiq, ScalerOptions.onPort(9090))) { /* GET /api/scaler for KEDA */ }
 ```
 
 ### Observability + MessagePack (optional deps)
 
 ```java
-taskito.use(new TaskitoObservation(observationRegistry));   // Micrometer (metrics + tracing)
-taskito.use(new SentryMiddleware());                        // report failures to Sentry
-Taskito.builder().sqlite("t.db").serializer(new MsgpackSerializer()).open();
+flexiq.use(new FlexiQObservation(observationRegistry));   // Micrometer (metrics + tracing)
+flexiq.use(new SentryMiddleware());                        // report failures to Sentry
+FlexiQ.builder().sqlite("t.db").serializer(new MsgpackSerializer()).open();
 ```
 
 `io.micrometer:micrometer-observation`, `io.sentry:sentry`, and
@@ -375,21 +375,21 @@ Taskito.builder().sqlite("t.db").serializer(new MsgpackSerializer()).open();
 
 ### Spring Boot 3 starter
 
-Add `org.byteveda:taskito-spring`; it auto-configures a `Taskito` bean from
-`taskito.url` / `taskito.pool-size` / `taskito.namespace`. Define your own
-`Taskito` bean to override it.
+Add `org.byteveda:flexiq-spring`; it auto-configures a `FlexiQ` bean from
+`flexiq.url` / `flexiq.pool-size` / `flexiq.namespace`. Define your own
+`FlexiQ` bean to override it.
 
 ## Structure
 
 Packages are organized by feature; the root holds only the front door.
 
 ```text
-org.byteveda.taskito
-├── Taskito            client interface + entry — Taskito.builder()...open()
-├── Queue              named-queue handle (pause/resume) — Taskito.queue(name)
-├── DefaultTaskito     package-private client impl (not exported)
+org.byteveda.flexiq
+├── FlexiQ            client interface + entry — FlexiQ.builder()...open()
+├── Queue              named-queue handle (pause/resume) — FlexiQ.queue(name)
+├── DefaultFlexiQ     package-private client impl (not exported)
 ├── NamedQueue         package-private Queue impl (not exported)
-├── TaskitoException   unchecked error base type
+├── FlexiQException   unchecked error base type
 ├── errors/            typed exceptions (Serialization/Crypto, Workflow, Lock,
 │                      Configuration, Webhook, Resource, PredicateRejected)
 ├── task/              Task, TaskFunction, EnqueueOptions
@@ -410,7 +410,7 @@ org.byteveda.taskito
 ├── serialization/     Serializer SPI + JsonSerializer default; Signed/Encrypted/Msgpack
 ├── annotation/        @TaskHandler (source-retention; see :processor)
 ├── middleware/        Middleware hooks
-├── contrib/           observability — TaskitoObservation (Micrometer), SentryMiddleware
+├── contrib/           observability — FlexiQObservation (Micrometer), SentryMiddleware
 ├── events/            worker outcome events
 ├── dashboard/ webhooks/ cli/
 ├── spi/               QueueBackend — seam between API and the native layer
@@ -418,7 +418,7 @@ org.byteveda.taskito
 ```
 
 Subprojects: `:processor` (compile-time `@TaskHandler`), `:test-support`
-(`taskito-test` in-memory backend), `:spring` (`taskito-spring` Boot 3 starter),
+(`flexiq-test` in-memory backend), `:spring` (`flexiq-spring` Boot 3 starter),
 `:graalvm-smoke` (native-image CI check).
 
 The `:processor` subproject is a standalone compile-time annotation processor
@@ -443,9 +443,9 @@ room for a future FFM/Panama backend without touching the API.
 The Rust shell is built and checked with the workspace tooling:
 
 ```bash
-cargo build -p taskito-java --release --features postgres,redis
-cargo fmt -p taskito-java -- --check
-cargo clippy -p taskito-java -- -D warnings
+cargo build -p flexiq-java --release --features postgres,redis
+cargo fmt -p flexiq-java -- --check
+cargo clippy -p flexiq-java -- -D warnings
 ```
 
 ### Native library resolution
@@ -454,7 +454,7 @@ At runtime the platform binary is extracted from the JAR and loaded. For local
 development against a freshly built library, point the loader at it directly:
 
 ```bash
--Dtaskito.native.lib=/abs/path/to/target/release/libtaskito_java.so
+-Dflexiq.native.lib=/abs/path/to/target/release/libflexiq_java.so
 ```
 
 On JDK 22+ the hot byte ops use a Project Panama (FFM) fast path; older JDKs (or

@@ -1,7 +1,7 @@
 // A throwaway consumer that drives the SDK's JNI + Jackson paths end to end.
 // CI builds it into a GraalVM native image (no tracing agent) to verify the
 // reachability metadata the runtime jar ships under
-// META-INF/native-image/org.byteveda/taskito/. Not published; not part of the
+// META-INF/native-image/org.byteveda/flexiq/. Not published; not part of the
 // SDK artifact.
 plugins {
     application
@@ -22,7 +22,7 @@ dependencies {
 }
 
 application {
-    mainClass.set("org.byteveda.taskito.graalvm.Smoke")
+    mainClass.set("org.byteveda.flexiq.graalvm.Smoke")
 }
 
 graalvmNative {
@@ -39,7 +39,7 @@ graalvmNative {
     agent {
         metadataCopy {
             inputTaskNames.add("run")
-            outputDirectories.add("../src/main/resources/META-INF/native-image/org.byteveda/taskito")
+            outputDirectories.add("../src/main/resources/META-INF/native-image/org.byteveda/flexiq")
             mergeWithExisting.set(true)
         }
     }
