@@ -14,7 +14,8 @@ use crate::storage::redis_backend::{map_err, RedisStorage};
 /// instead of resurrecting the job as a Running orphan. Redis runs the script
 /// atomically, which also closes the double-claim window between schedulers.
 ///
-/// KEYS: job_key, pending_status_set, running_status_set, pending_zset
+/// KEYS: job_key, pending_status_set, running_status_set, pending_zset,
+///       [debounce_zset] (present only for a job carrying a debounce key)
 /// ARGV: job_id, running_json
 const CLAIM_JOB_SCRIPT: &str = r#"
     if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 0 then return 0 end
@@ -22,6 +23,9 @@ const CLAIM_JOB_SCRIPT: &str = r#"
     redis.call('SREM', KEYS[2], ARGV[1])
     redis.call('SADD', KEYS[3], ARGV[1])
     redis.call('ZREM', KEYS[4], ARGV[1])
+    if KEYS[5] then
+        redis.call('ZREM', KEYS[5], ARGV[1])
+    end
     return 1
 "#;
 
@@ -42,11 +46,21 @@ impl RedisStorage {
             self.key(&["jobs", "status", &(JobStatus::Pending as i32).to_string()]);
         let running_status =
             self.key(&["jobs", "status", &(JobStatus::Running as i32).to_string()]);
-        let claimed: i32 = redis::Script::new(CLAIM_JOB_SCRIPT)
+        let claim_script = redis::Script::new(CLAIM_JOB_SCRIPT);
+        let mut invocation = claim_script.prepare_invoke();
+        invocation
             .key(&job_key)
             .key(&pending_status)
             .key(&running_status)
-            .key(queue_key)
+            .key(queue_key);
+        // A claimed job has left the debounce window it opened: a later
+        // debounced enqueue must insert a fresh job rather than slide this one
+        // out from under the worker now holding it. KEYS[5] is absent (and the
+        // script's guard false) for a job without a debounce key.
+        if let Some(debounce_key) = self.job_debounce_index_key(job) {
+            invocation.key(debounce_key);
+        }
+        let claimed: i32 = invocation
             .arg(&job.id)
             .arg(&job_json)
             .invoke(conn)
@@ -255,15 +269,19 @@ impl RedisStorage {
                 continue;
             }
 
-            // Skip expired jobs
+            // Skip expired jobs — archive them as cancelled, exactly as the
+            // single-job `dequeue` and both Diesel paths do. A status move
+            // alone would leave the row in every live index (and in its
+            // debounce window) as a terminal job that no listing by
+            // `Cancelled` can reach, since those read the archive.
             if let Some(expires_at) = job.expires_at {
                 if now > expires_at {
                     job.status = JobStatus::Cancelled;
                     job.completed_at = Some(now);
                     job.error = Some("expired before execution".to_string());
-                    self.save_job_and_move_status(&mut conn, &job, JobStatus::Pending)?;
                     conn.zrem::<_, _, ()>(&queue_key, &job_id)
                         .map_err(map_err)?;
+                    self.archive_job_immediately(&mut conn, &job, JobStatus::Pending)?;
                     continue;
                 }
             }

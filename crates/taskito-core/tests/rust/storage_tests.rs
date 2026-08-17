@@ -92,6 +92,43 @@ fn test_dequeue_batch(s: &impl Storage) {
     assert!(zero.is_empty());
 }
 
+/// A batch dequeue archives the expired candidates it skips, like the single-job
+/// `dequeue`. Asserted through the listings because they are what a status move
+/// alone would fool: a terminal status is read from the archive, so a job merely
+/// flipped to `Cancelled` in place is reachable from neither list.
+fn test_dequeue_batch_archives_expired_jobs(s: &impl Storage) {
+    let q = "q-dequeue-batch-expired";
+    let now = now_millis();
+
+    let mut expiring = make_job(q, "batch_expired");
+    expiring.expires_at = Some(now - 1_000);
+    let expired = s.enqueue(expiring).unwrap();
+    let live = s.enqueue(make_job(q, "batch_live")).unwrap();
+
+    let claimed = s.dequeue_batch(q, now + 1_000, None, 10).unwrap();
+    assert_eq!(claimed.len(), 1, "the expired job is not claimable");
+    assert_eq!(claimed[0].id, live.id);
+
+    let cancelled = s
+        .list_jobs(
+            Some(JobStatus::Cancelled as i32),
+            Some(q),
+            None,
+            50,
+            0,
+            None,
+        )
+        .unwrap();
+    assert!(
+        cancelled.iter().any(|job| job.id == expired.id),
+        "the expired job must be archived as cancelled"
+    );
+    let pending = s
+        .list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 50, 0, None)
+        .unwrap();
+    assert!(!pending.iter().any(|job| job.id == expired.id));
+}
+
 fn test_complete(s: &impl Storage) {
     let q = "q-complete";
     let job = s.enqueue(make_job(q, "complete_task")).unwrap();
@@ -1774,6 +1811,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_and_get(s);
     test_dequeue(s);
     test_dequeue_batch(s);
+    test_dequeue_batch_archives_expired_jobs(s);
     test_dispatch_order_lifo_map(s);
     test_complete(s);
     test_fail(s);
@@ -1830,13 +1868,6 @@ fn run_storage_tests(s: &impl Storage) {
     test_keyset_pagination_jobs(s);
     test_keyset_pagination_dlq_and_archive(s);
     test_debounce_key_round_trip(s);
-}
-
-/// Contract tests every backend *should* pass but only the Diesel ones can
-/// today. `enqueue_debounced` needs a transaction to hang its read-modify-write
-/// on; the Redis backend rejects the call until its Lua script lands, at which
-/// point these move into [`run_storage_tests`] and this block goes away.
-fn run_diesel_storage_tests(s: &impl Storage) {
     test_enqueue_debounced_collapses_a_burst(s);
     test_enqueue_debounced_caps_at_max_wait(s);
     test_enqueue_debounced_skips_a_claimed_job(s);
@@ -2291,7 +2322,6 @@ fn test_rate_limit_token_exhaustion(s: &impl Storage) {
 fn sqlite_storage_tests() {
     let storage = SqliteStorage::in_memory().unwrap();
     run_storage_tests(&storage);
-    run_diesel_storage_tests(&storage);
 }
 
 #[cfg(feature = "redis")]
@@ -2331,6 +2361,9 @@ fn redis_storage_tests() {
     redis_purge_dead_drains_across_batches(&storage);
     redis_keyset_pages_a_large_tie_bucket(&storage);
     redis_backfills_expiry_for_preupgrade_rows(&storage);
+    redis_debounce_index_never_outlives_its_job(&storage);
+    redis_debounce_coalesces_onto_a_plainly_enqueued_job(&storage);
+    redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
 }
 
@@ -2721,6 +2754,109 @@ fn redis_purge_preserves_reused_unique_key(s: &taskito_core::RedisStorage) {
     );
 }
 
+/// Members of the debounce index of a default-namespace key. The index is an
+/// implementation detail of the Redis backend, so the key is rebuilt here from
+/// the same shape `debounce_index_key` writes (`-` is the default namespace).
+#[cfg(feature = "redis")]
+fn redis_debounce_index_size(s: &taskito_core::RedisStorage, debounce_key: &str) -> i64 {
+    let mut conn = s.conn().unwrap();
+    redis::cmd("ZCARD")
+        .arg(format!("{}jobs:debounce:-:{debounce_key}", s.prefix()))
+        .query(&mut conn)
+        .unwrap()
+}
+
+/// The index entry cannot outlive the job it points at: claiming drops it, and
+/// so does any terminal move. Diesel gets this from a partial index the engine
+/// maintains; Redis has to write both sides itself.
+#[cfg(feature = "redis")]
+fn redis_debounce_index_never_outlives_its_job(s: &taskito_core::RedisStorage) {
+    let q = "q-redis-debounce-index";
+    let key = "redis-index:user-1";
+
+    let claimed = s
+        .enqueue_debounced(debounced(q, key), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_eq!(redis_debounce_index_size(s, key), 1);
+
+    let dequeued = s.dequeue(q, now_millis() + 10_000, None).unwrap().unwrap();
+    assert_eq!(dequeued.id, claimed.id);
+    assert_eq!(
+        redis_debounce_index_size(s, key),
+        0,
+        "claiming a job closes its window"
+    );
+    s.complete(&claimed.id, None, None).unwrap();
+
+    let cancelled = s
+        .enqueue_debounced(debounced(q, key), debounce_opts(5_000, 60_000))
+        .unwrap();
+    assert_ne!(cancelled.id, claimed.id, "the archived job is not a target");
+    assert_eq!(redis_debounce_index_size(s, key), 1);
+
+    assert!(s.cancel_job(&cancelled.id, None).unwrap());
+    assert_eq!(
+        redis_debounce_index_size(s, key),
+        0,
+        "a terminal job leaves the index with its live rows"
+    );
+}
+
+/// A job enqueued plainly with a `debounce_key` is still a slide target — the
+/// Diesel partial index covers every pending row, not only debounced writes, so
+/// the Redis index has to be written on the ordinary enqueue paths too.
+#[cfg(feature = "redis")]
+fn redis_debounce_coalesces_onto_a_plainly_enqueued_job(s: &taskito_core::RedisStorage) {
+    let q = "q-redis-debounce-plain";
+    let plain = s.enqueue(debounced(q, "redis-plain:user-1")).unwrap();
+
+    let slid = s
+        .enqueue_debounced(
+            debounced(q, "redis-plain:user-1"),
+            debounce_opts(5_000, 60_000),
+        )
+        .unwrap();
+    assert_eq!(slid.id, plain.id, "the plain row opened the window");
+    assert!(slid.scheduled_at > plain.scheduled_at);
+    assert_eq!(
+        s.list_jobs(Some(JobStatus::Pending as i32), Some(q), None, 10, 0, None)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// A slide preserves an empty payload. `payload` is a byte vector, so an empty
+/// one is `[]` in the stored document — a `cjson` decode/encode round trip in
+/// Lua would rewrite it as `{}` and the job would stop deserializing, which is
+/// why the patch is applied with serde in Rust.
+#[cfg(feature = "redis")]
+fn redis_debounce_slides_an_empty_payload(s: &taskito_core::RedisStorage) {
+    let q = "q-redis-debounce-empty";
+    let mut opening = debounced(q, "redis-empty:user-1");
+    opening.payload = Vec::new();
+    let first = s
+        .enqueue_debounced(opening, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    let mut sliding = debounced(q, "redis-empty:user-1");
+    sliding.payload = Vec::new();
+    let slid = s
+        .enqueue_debounced(sliding, debounce_opts(5_000, 60_000))
+        .unwrap();
+
+    assert_eq!(slid.id, first.id);
+    assert!(slid.payload.is_empty());
+    assert!(
+        s.get_job(&first.id, None)
+            .unwrap()
+            .unwrap()
+            .payload
+            .is_empty(),
+        "the slid document must still decode"
+    );
+}
+
 #[cfg(feature = "postgres")]
 #[test]
 fn postgres_storage_tests() {
@@ -2758,5 +2894,4 @@ fn postgres_storage_tests() {
     };
 
     run_storage_tests(&storage);
-    run_diesel_storage_tests(&storage);
 }

@@ -20,6 +20,37 @@ const RELEASE_UNIQUE_IF_OWNER: &str = r#"
 "#;
 
 impl RedisStorage {
+    /// The debounce index of a `(namespace, debounce_key)` pair: a sorted set of
+    /// the pending job ids carrying that key, scored by `created_at` so a scan
+    /// reads them oldest-first. Redis drops a sorted set once its last member
+    /// goes, so a key that falls out of use leaves nothing behind.
+    ///
+    /// The namespace segment is `-` for the default namespace and `<len>:<ns>`
+    /// otherwise. Length-prefixing it keeps the pair injective: without it a
+    /// `:` inside either half would let two different pairs address one key.
+    pub(in crate::storage::redis_backend) fn debounce_index_key(
+        &self,
+        namespace: Option<&str>,
+        debounce_key: &str,
+    ) -> String {
+        let ns_segment = match namespace {
+            Some(ns) => format!("{}:{ns}", ns.len()),
+            None => "-".to_string(),
+        };
+        self.key(&["jobs", "debounce", &ns_segment, debounce_key])
+    }
+
+    /// [`debounce_index_key`](Self::debounce_index_key) for a job, or `None`
+    /// when the job carries no debounce key — the common case, which then pays
+    /// nothing on the enqueue, claim, and archive paths.
+    pub(in crate::storage::redis_backend) fn job_debounce_index_key(
+        &self,
+        job: &Job,
+    ) -> Option<String> {
+        let key = job.debounce_key.as_deref()?;
+        Some(self.debounce_index_key(job.namespace.as_deref(), key))
+    }
+
     pub(in crate::storage::redis_backend) fn load_job(
         &self,
         conn: &mut redis::Connection,
@@ -81,32 +112,6 @@ impl RedisStorage {
         Ok(job)
     }
 
-    /// Save job JSON and move between status sets.
-    pub(in crate::storage::redis_backend) fn save_job_and_move_status(
-        &self,
-        conn: &mut redis::Connection,
-        job: &Job,
-        old_status: JobStatus,
-    ) -> Result<()> {
-        let job_json = serde_json::to_string(job)?;
-        let job_key = self.key(&["job", &job.id]);
-        let old_status_key = self.key(&["jobs", "status", &(old_status as i32).to_string()]);
-        let new_status_key = self.key(&["jobs", "status", &(job.status as i32).to_string()]);
-
-        let pipe = &mut redis::pipe();
-        pipe.set(&job_key, &job_json);
-        if old_status != job.status {
-            pipe.srem(&old_status_key, &job.id);
-            pipe.sadd(&new_status_key, &job.id);
-        }
-        // Mirror the status move on the pub/sub backlog indices, keyed on the
-        // job's new status (no-op for ordinary jobs). Same pipe as the move.
-        self.push_pubsub_transition(pipe, job, job.status);
-        pipe.query::<()>(conn).map_err(map_err)?;
-
-        Ok(())
-    }
-
     /// Reset a job to `Pending` and (re)insert it into the per-queue pending
     /// zset in a single MULTI/EXEC. Folding the status-set move and the zset
     /// add into one transaction means a crash can no longer strand the job as
@@ -137,6 +142,11 @@ impl RedisStorage {
             pipe.sadd(&pending_status_key, &job.id);
         }
         pipe.zadd(&queue_key, &job.id, score);
+        // Pending again means debounceable again, so the job re-enters its
+        // debounce index in the same atomic pipe (no-op without a debounce key).
+        if let Some(debounce_key) = self.job_debounce_index_key(job) {
+            pipe.zadd(&debounce_key, &job.id, job.created_at as f64);
+        }
         // Back to Pending: leave the running index and (re)enter the pending
         // backlog index. No-op for ordinary jobs; same atomic pipe.
         self.push_pubsub_transition(pipe, job, JobStatus::Pending);
@@ -201,6 +211,14 @@ impl RedisStorage {
         // were removed at dequeue, so only remove on a Pending→terminal move.
         if old_status == JobStatus::Pending {
             pipe.zrem(&pending_key, &job.id).ignore();
+        }
+        // A terminal job has left its debounce window, so it leaves the index
+        // with it — atomically, so no entry can outlive the job it points at.
+        // `ZREM` by job id is idempotent and cannot touch another job's entry,
+        // which is why this needs no compare-and-delete (see
+        // `release_unique_key`, where the key is shared and it does).
+        if let Some(debounce_key) = self.job_debounce_index_key(job) {
+            pipe.zrem(&debounce_key, &job.id).ignore();
         }
         pipe.set(&archived_key, job_json).ignore();
         pipe.sadd(&archived_status_key, &job.id).ignore();

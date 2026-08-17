@@ -34,6 +34,10 @@ const REQUEST_CANCEL_IF_RUNNING: &str = r#"
 /// script is a no-op. Also drops any pending cancel request so the fresh
 /// attempt isn't insta-cancelled, and clears the claim key + its time index
 /// so a healthy worker can re-claim. Returns 1 if applied, 0 otherwise.
+///
+/// KEYS[8] (the job's debounce index, present only when it carries a debounce
+/// key) re-admits the job to its window, since it is pending again. ARGV[4]
+/// carries its `created_at` score.
 const REQUEUE_STUCK_IF_RUNNING: &str = r#"
     if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 0 then return 0 end
     redis.call('SET', KEYS[1], ARGV[2])
@@ -43,6 +47,9 @@ const REQUEUE_STUCK_IF_RUNNING: &str = r#"
     redis.call('SREM', KEYS[5], ARGV[1])
     redis.call('DEL', KEYS[6])
     redis.call('ZREM', KEYS[7], ARGV[1])
+    if KEYS[8] then
+        redis.call('ZADD', KEYS[8], ARGV[4], ARGV[1])
+    end
     return 1
 "#;
 
@@ -201,17 +208,24 @@ impl RedisStorage {
         let claim_index_key = self.key(&["exec_claims", "by_time"]);
         let score = dequeue_score(job.priority, job.scheduled_at);
 
-        let applied: i32 = redis::Script::new(REQUEUE_STUCK_IF_RUNNING)
+        let requeue_script = redis::Script::new(REQUEUE_STUCK_IF_RUNNING);
+        let mut invocation = requeue_script.prepare_invoke();
+        invocation
             .key(&job_key)
             .key(&running_key)
             .key(&pending_key)
             .key(&queue_key)
             .key(&cancel_set)
             .key(&claim_key)
-            .key(&claim_index_key)
+            .key(&claim_index_key);
+        if let Some(debounce_key) = self.job_debounce_index_key(&job) {
+            invocation.key(debounce_key);
+        }
+        let applied: i32 = invocation
             .arg(id)
             .arg(&job_json)
             .arg(score)
+            .arg(job.created_at)
             .invoke(&mut conn)
             .map_err(map_err)?;
 
