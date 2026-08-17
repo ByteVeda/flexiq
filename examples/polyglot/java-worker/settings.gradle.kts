@@ -1,1 +1,1 @@
-rootProject.name = "taskito-polyglot-java-worker"
+rootProject.name = "flexiq-polyglot-java-worker"

@@ -13,8 +13,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from taskito import Queue
-from taskito.serializers import CborSerializer
+from flexiq import Queue
+from flexiq.serializers import CborSerializer
 
 
 def main() -> int:

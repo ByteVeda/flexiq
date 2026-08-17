@@ -31,19 +31,19 @@ const MIRRORS = [
   // `version.workspace` for a dependency, hence the literals.
   {
     file: "Cargo.toml",
-    pattern: /^(taskito-core = \{ path = "crates\/taskito-core", version = ")(.+?)(" \})$/m,
-    label: "taskito-core registry coordinate",
+    pattern: /^(flexiq-core = \{ path = "crates\/flexiq-core", version = ")(.+?)(" \})$/m,
+    label: "flexiq-core registry coordinate",
   },
   {
     file: "Cargo.toml",
     pattern:
-      /^(taskito-workflows = \{ path = "crates\/taskito-workflows", version = ")(.+?)(" \})$/m,
-    label: "taskito-workflows registry coordinate",
+      /^(flexiq-workflows = \{ path = "crates\/flexiq-workflows", version = ")(.+?)(" \})$/m,
+    label: "flexiq-workflows registry coordinate",
   },
   {
     file: "Cargo.toml",
-    pattern: /^(taskito-mesh = \{ path = "crates\/taskito-mesh", version = ")(.+?)(" \})$/m,
-    label: "taskito-mesh registry coordinate",
+    pattern: /^(flexiq-mesh = \{ path = "crates\/flexiq-mesh", version = ")(.+?)(" \})$/m,
+    label: "flexiq-mesh registry coordinate",
   },
   {
     file: "sdks/node/package.json",
@@ -56,17 +56,17 @@ const MIRRORS = [
     label: "Gradle projects",
   },
   {
-    file: "sdks/python/taskito/__init__.py",
+    file: "sdks/python/flexiq/__init__.py",
     pattern: /^(    __version__ = ")(.+?)(")$/m,
     label: "Python source-tree fallback",
   },
   {
-    file: "deploy/helm/taskito-server/Chart.yaml",
+    file: "deploy/helm/flexiq-server/Chart.yaml",
     pattern: /^(version: )(.+)()$/m,
     label: "Helm chart",
   },
   {
-    file: "deploy/helm/taskito-server/Chart.yaml",
+    file: "deploy/helm/flexiq-server/Chart.yaml",
     // The chart only ever ships the image built from the same commit, so
     // appVersion tracks the workspace rather than lagging it.
     pattern: /^(appVersion: ")(.+?)(")$/m,
@@ -76,19 +76,19 @@ const MIRRORS = [
 
 // Install snippets a reader copies verbatim. The version repeats within a file,
 // so every occurrence is checked and rewritten — and each pattern is anchored on
-// a taskito coordinate, never a bare `<version>`, so a neighbouring plugin or
+// a flexiq coordinate, never a bare `<version>`, so a neighbouring plugin or
 // Micrometer pin in the same snippet is left alone.
 const SNIPPET_PATTERNS = [
-  // Gradle: implementation("org.byteveda:taskito-test:0.21.0") — the optional
+  // Gradle: implementation("org.byteveda:flexiq-test:0.21.0") — the optional
   // trailing `:classifier` is outside the capture and survives untouched.
-  /(org\.byteveda:taskito[\w-]*:)(\d+\.\d+\.\d+[\w.-]*)()/g,
-  // Maven: <artifactId>taskito</artifactId> followed by its <version> tag.
-  /(<artifactId>taskito[\w-]*<\/artifactId>\s*<version>)(\d+\.\d+\.\d+[\w.-]*)(<\/version>)/g,
-  // npm: "@byteveda/taskito": "0.21.0" — an exact pin only. A range starts with
+  /(org\.byteveda:flexiq[\w-]*:)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // Maven: <artifactId>flexiq</artifactId> followed by its <version> tag.
+  /(<artifactId>flexiq[\w-]*<\/artifactId>\s*<version>)(\d+\.\d+\.\d+[\w.-]*)(<\/version>)/g,
+  // npm: "@byteveda/flexiq": "0.21.0" — an exact pin only. A range starts with
   // a non-digit, so a deliberate `^`/`~` is left alone instead of being frozen.
-  /("@byteveda\/taskito[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
-  // pip: taskito==0.21.0
-  /(\btaskito[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  /("@byteveda\/flexiq[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
+  // pip: flexiq==0.21.0
+  /(\bflexiq[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
@@ -168,7 +168,7 @@ function snippetVersions(file) {
     [...contents.matchAll(pattern)].map((match) => match[2]),
   );
   if (versions.length === 0) {
-    throw new Error(`${file}: no taskito coordinate found (pattern drifted?)`);
+    throw new Error(`${file}: no flexiq coordinate found (pattern drifted?)`);
   }
   return versions;
 }
@@ -265,7 +265,7 @@ usage: node scripts/version.mjs <command>
 Mirrors rewritten by --set:
   ${MIRRORS.map((mirror) => `${mirror.file} (${mirror.label})`).join("\n  ")}
 
-Install snippets rewritten by --set (every taskito coordinate in the file):
+Install snippets rewritten by --set (every flexiq coordinate in the file):
   ${SNIPPETS.join("\n  ")}
 
 ${CHANGELOG.file} is checked but never written — add its \`## <version>\` section by hand.`;

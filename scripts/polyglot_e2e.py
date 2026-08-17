@@ -26,9 +26,9 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
-from taskito import Queue
-from taskito.result import JobResult
-from taskito.serializers import CborSerializer
+from flexiq import Queue
+from flexiq.result import JobResult
+from flexiq.serializers import CborSerializer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_DIR = REPO_ROOT / "examples" / "polyglot"
@@ -63,9 +63,9 @@ def build_java_worker() -> Path:
         JAVA_WORKER_DIR
         / "build"
         / "install"
-        / "taskito-polyglot-java-worker"
+        / "flexiq-polyglot-java-worker"
         / "bin"
-        / "taskito-polyglot-java-worker"
+        / "flexiq-polyglot-java-worker"
     )
     if not start_script.is_file():
         raise PipelineError(f"gradle installDist produced no start script at {start_script}")
@@ -230,7 +230,7 @@ def main() -> int:
     workdir = (
         Path(args.workdir).resolve()
         if args.workdir
-        else Path(tempfile.mkdtemp(prefix="taskito-polyglot-"))
+        else Path(tempfile.mkdtemp(prefix="flexiq-polyglot-"))
     )
     workdir.mkdir(parents=True, exist_ok=True)
     db = workdir / "flexiq.db"
