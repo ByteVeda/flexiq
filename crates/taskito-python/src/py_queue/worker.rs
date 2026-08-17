@@ -8,6 +8,7 @@ use pyo3::BoundObject;
 use taskito_core::resilience::circuit_breaker::CircuitBreakerConfig;
 use taskito_core::resilience::rate_limiter::RateLimitConfig;
 use taskito_core::resilience::retry::RetryPolicy;
+use taskito_core::scheduler::shed::OnExcess;
 use taskito_core::scheduler::{JobResult, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
 use taskito_core::storage::records::{WorkerRegistration, WorkerStatus};
 use taskito_core::storage::Storage;
@@ -117,6 +118,20 @@ fn parse_rate(
         ))
     })?;
     Ok(Some(parsed))
+}
+
+/// Parse the `on_excess` spec a task registered with. Unset means the default,
+/// `defer`; anything unrecognized is a registration-time error rather than a
+/// silent fall back to keeping the job.
+fn parse_on_excess(value: Option<&String>, task_name: &str) -> PyResult<OnExcess> {
+    let Some(raw) = value else {
+        return Ok(OnExcess::default());
+    };
+    OnExcess::parse(raw).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "invalid on_excess {raw:?} for task {task_name}: expected \"defer\" or \"drop\""
+        ))
+    })
 }
 
 /// Dispatch a ResultOutcome to Python middleware hooks and events.
@@ -439,6 +454,7 @@ impl PyQueue {
                 TaskConfig {
                     retry_policy,
                     rate_limit,
+                    on_excess: parse_on_excess(tc.on_excess.as_ref(), &tc.name)?,
                     circuit_breaker,
                     retry_budget,
                     max_concurrent: tc.max_concurrent,

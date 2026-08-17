@@ -9,7 +9,7 @@ use crate::job::{now_millis, Job};
 use crate::resilience::retry::desync_delay;
 use crate::storage::Storage;
 
-use super::Scheduler;
+use super::{shed, Scheduler};
 
 /// Delay before re-scheduling a circuit-broken job (ms).
 const CIRCUIT_BREAKER_RETRY_DELAY_MS: i64 = 5000;
@@ -45,6 +45,26 @@ enum ClaimOutcome {
     AlreadyClaimed,
     /// The claim attempt errored — roll the job back to `Pending`.
     Errored,
+}
+
+/// What the pre-claim gates decided about a job. A rejection is not one thing:
+/// most gates want the job back later, but a rate limit on a task configured
+/// with [`shed::OnExcess::Drop`] wants it gone.
+enum GateDecision {
+    /// No gate objected — claim and dispatch the job.
+    Proceed,
+    /// Put the job back with this reschedule delay, in milliseconds.
+    Defer(i64),
+    /// Dead-letter the job with this reason instead of running it.
+    Shed(String),
+}
+
+/// The gate decision for a job a rate limiter just turned away.
+fn rate_limited(on_excess: shed::OnExcess, scope: &str) -> GateDecision {
+    match on_excess {
+        shed::OnExcess::Defer => GateDecision::Defer(RATE_LIMIT_RETRY_DELAY_MS),
+        shed::OnExcess::Drop => GateDecision::Shed(shed::rate_limit_shed_reason(scope)),
+    }
 }
 
 /// Per-dispatch-cycle cache of the running-job counts the post-claim
@@ -247,7 +267,8 @@ impl Scheduler {
             let state = states.entry(job.queue.clone()).or_default();
             if state.should_drop(sojourn, now, &cfg) {
                 let reason = format!(
-                    "codel: sojourn {sojourn}ms exceeded target {}ms under sustained overload",
+                    "{} sojourn {sojourn}ms exceeded target {}ms under sustained overload",
+                    shed::CODEL_REASON_PREFIX,
                     cfg.target_ms
                 );
                 self.storage
@@ -280,11 +301,19 @@ impl Scheduler {
         // both pass these gates, the gate semantics still hold (each
         // consumes its own token / observes the breaker independently). No
         // claim row exists yet, so a rejection just reschedules.
-        if let Some(delay_ms) = self.check_pre_claim_gates(&job)? {
-            self.storage
-                .reschedule(&job.id, now + desync_delay(delay_ms))?;
-            counts.release(&job.task_name, &job.queue);
-            return Ok(false);
+        match self.check_pre_claim_gates(&job)? {
+            GateDecision::Proceed => {}
+            GateDecision::Defer(delay_ms) => {
+                self.storage
+                    .reschedule(&job.id, now + desync_delay(delay_ms))?;
+                counts.release(&job.task_name, &job.queue);
+                return Ok(false);
+            }
+            GateDecision::Shed(reason) => {
+                self.shed_rate_limited(&job, &reason, false)?;
+                counts.release(&job.task_name, &job.queue);
+                return Ok(false);
+            }
         }
 
         // Claim exactly-once execution. After this point, the job is reserved
@@ -324,10 +353,18 @@ impl Scheduler {
         counts: &mut GateCounts,
         job_tx: &tokio::sync::mpsc::Sender<Job>,
     ) -> Result<bool> {
-        if let Some(delay_ms) = self.check_pre_claim_gates(&job)? {
-            counts.release(&job.task_name, &job.queue);
-            self.rollback_claim_and_reschedule(&job.id, now + desync_delay(delay_ms))?;
-            return Ok(false);
+        match self.check_pre_claim_gates(&job)? {
+            GateDecision::Proceed => {}
+            GateDecision::Defer(delay_ms) => {
+                counts.release(&job.task_name, &job.queue);
+                self.rollback_claim_and_reschedule(&job.id, now + desync_delay(delay_ms))?;
+                return Ok(false);
+            }
+            GateDecision::Shed(reason) => {
+                counts.release(&job.task_name, &job.queue);
+                self.shed_rate_limited(&job, &reason, true)?;
+                return Ok(false);
+            }
         }
 
         self.finish_dispatch(job, now, counts, job_tx)
@@ -429,33 +466,69 @@ impl Scheduler {
     }
 
     /// Evaluate the pre-claim soft gates (queue rate limit, task circuit
-    /// breaker, task rate limit) without side effects. Returns `Some(delay_ms)`
-    /// naming the reschedule delay when a gate rejects the job, or `None` when
-    /// it may proceed. The caller performs the reschedule — and, when a claim
-    /// already exists (batch path), also clears it.
-    fn check_pre_claim_gates(&self, job: &Job) -> Result<Option<i64>> {
+    /// breaker, task rate limit) without side effects, naming what the caller
+    /// should do with the job. The caller performs the reschedule or the shed —
+    /// and, when a claim already exists (batch path), also clears it.
+    fn check_pre_claim_gates(&self, job: &Job) -> Result<GateDecision> {
+        // Read once: the queue gate below needs the task's shed preference, and
+        // this runs on every dispatch.
+        let task_config = self.task_configs.get(&job.task_name);
+        let on_excess = task_config
+            .map(|config| config.on_excess)
+            .unwrap_or_default();
+
         if let Some(qcfg) = self.queue_configs.get(&job.queue) {
             if let Some(ref rl_config) = qcfg.rate_limit {
                 let key = format!("queue:{}", job.queue);
                 if !self.rate_limiter.try_acquire(&key, rl_config)? {
-                    return Ok(Some(RATE_LIMIT_RETRY_DELAY_MS));
+                    return Ok(rate_limited(on_excess, &format!("queue '{}'", job.queue)));
                 }
             }
         }
 
-        if let Some(config) = self.task_configs.get(&job.task_name) {
+        if let Some(config) = task_config {
+            // A tripped breaker is not excess load — the job is fine, its
+            // dependency is not — so shedding here would throw away work the
+            // caller never asked to shed. Always defer.
             if config.circuit_breaker.is_some() && !self.circuit_breaker.allow(&job.task_name)? {
-                return Ok(Some(CIRCUIT_BREAKER_RETRY_DELAY_MS));
+                return Ok(GateDecision::Defer(CIRCUIT_BREAKER_RETRY_DELAY_MS));
             }
 
             if let Some(ref rl_config) = config.rate_limit {
                 if !self.rate_limiter.try_acquire(&job.task_name, rl_config)? {
-                    return Ok(Some(RATE_LIMIT_RETRY_DELAY_MS));
+                    return Ok(rate_limited(
+                        on_excess,
+                        &format!("task '{}'", job.task_name),
+                    ));
                 }
             }
         }
 
-        Ok(None)
+        Ok(GateDecision::Proceed)
+    }
+
+    /// Dead-letter a job the rate limiter shed, clearing its execution claim
+    /// first when one exists so the dead-worker reaper never sees an orphan
+    /// pointing at an archived job.
+    fn shed_rate_limited(&self, job: &Job, reason: &str, claimed: bool) -> Result<()> {
+        if claimed {
+            if let Err(e) = self
+                .storage
+                .complete_execution(&job.id, self.namespace.as_deref())
+            {
+                warn!(
+                    "failed to clear execution claim while shedding job {}: {e}",
+                    job.id
+                );
+            }
+        }
+        self.storage
+            .move_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+        warn!(
+            "rate-limit shed {} on queue '{}' (task '{}')",
+            job.id, job.queue, job.task_name
+        );
+        Ok(())
     }
 
     /// Try to claim exactly-once execution. The three outcomes are handled

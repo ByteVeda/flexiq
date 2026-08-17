@@ -361,13 +361,10 @@ impl Scheduler {
 
         let mut retried = 0u64;
         for entry in &candidates {
-            // Jobs shed by CoDel were intentionally dropped as stale; never let
-            // the auto-retry sweep resurrect them.
-            if entry
-                .error
-                .as_deref()
-                .is_some_and(|e| e.starts_with("codel:"))
-            {
+            // A shed job was dropped on purpose — stale under CoDel, or excess
+            // under a rate limit whose task asked for it. Never let the
+            // auto-retry sweep resurrect one.
+            if super::shed::is_shed_reason(entry.error.as_deref()) {
                 continue;
             }
             match self

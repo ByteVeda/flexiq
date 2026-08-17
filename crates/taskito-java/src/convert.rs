@@ -499,6 +499,9 @@ pub struct TaskRetryConfig {
     pub circuit_breaker_half_open_success_rate: Option<f64>,
     /// Rate-limit spec like `"100/m"`, `"50/s"`, `"3600/h"`.
     pub rate_limit: Option<String>,
+    /// What a saturated rate limit does to this task's jobs: `"defer"` (the
+    /// default) or `"drop"`, which sheds them to the dead-letter queue.
+    pub on_excess: Option<String>,
     /// Cap on how fast this task may *retry*, across all of its jobs. Same spec
     /// as `rate_limit`; once spent, failures dead-letter instead of retrying.
     pub retry_budget: Option<String>,

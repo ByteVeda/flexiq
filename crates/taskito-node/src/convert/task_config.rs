@@ -4,6 +4,7 @@ use napi::bindgen_prelude::Result;
 use taskito_core::resilience::circuit_breaker::CircuitBreakerConfig;
 use taskito_core::resilience::rate_limiter::RateLimitConfig;
 use taskito_core::resilience::retry::RetryPolicy;
+use taskito_core::scheduler::shed::OnExcess;
 use taskito_core::scheduler::{QueueConfig, TaskConfig};
 
 use crate::config::{CircuitBreakerInput, QueueConfigInput, TaskConfigInput};
@@ -38,6 +39,20 @@ fn parse_rate_spec(
     }
 }
 
+/// Parse an optional `onExcess` spec. Unset means the default, `defer`; an
+/// unrecognized value is a config error, not a silent fall back to keeping the
+/// job — a caller who asked to shed and got deferral would never notice.
+fn parse_on_excess(name: &str, spec: Option<&str>) -> Result<OnExcess> {
+    match spec {
+        Some(s) => OnExcess::parse(s).ok_or_else(|| {
+            invalid_arg(format!(
+                "invalid onExcess '{s}' on task '{name}' (expected 'defer' or 'drop')"
+            ))
+        }),
+        None => Ok(OnExcess::default()),
+    }
+}
+
 /// Build a [`TaskConfig`] (retry policy, rate limit, concurrency cap) from JS input.
 pub fn task_config(input: &TaskConfigInput) -> Result<TaskConfig> {
     Ok(TaskConfig {
@@ -53,6 +68,7 @@ pub fn task_config(input: &TaskConfigInput) -> Result<TaskConfig> {
             &input.name,
             input.rate_limit.as_deref(),
         )?,
+        on_excess: parse_on_excess(&input.name, input.on_excess.as_deref())?,
         circuit_breaker: input
             .circuit_breaker
             .as_ref()

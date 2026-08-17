@@ -3,6 +3,7 @@ mod maintenance;
 mod poller;
 mod result_handler;
 pub mod retention;
+pub mod shed;
 #[cfg(feature = "push-dispatch")]
 #[doc(hidden)]
 pub mod wake;
@@ -227,6 +228,12 @@ pub struct TaskConfig {
     pub retry_policy: RetryPolicy,
     /// Dispatch rate limit for this task. `None` = unlimited.
     pub rate_limit: Option<crate::resilience::rate_limiter::RateLimitConfig>,
+    /// What to do with a job a rate limit turns away — defer it (the default)
+    /// or shed it. Applies to both the task's own limit and the limit on the
+    /// queue it runs in, since either one rejecting means the same thing to the
+    /// caller: this job cannot dispatch now. A tripped circuit breaker always
+    /// defers instead; that is downstream failure, not excess load.
+    pub on_excess: shed::OnExcess,
     /// Circuit-breaker settings for this task. `None` = no breaker.
     pub circuit_breaker: Option<CircuitBreakerConfig>,
     /// Cap on how fast this task may *retry*, across every job of the task.
@@ -249,6 +256,7 @@ impl Default for TaskConfig {
         Self {
             retry_policy: RetryPolicy::default(),
             rate_limit: None,
+            on_excess: shed::OnExcess::Defer,
             circuit_breaker: None,
             retry_budget: None,
             max_concurrent: None,
@@ -1121,6 +1129,7 @@ mod tests {
                     custom_delays_ms: None,
                 },
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: None,
@@ -1163,6 +1172,7 @@ mod tests {
                     custom_delays_ms: None,
                 },
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: None,
@@ -1266,6 +1276,7 @@ mod tests {
                     max_tokens: 1.0,
                     refill_rate: 0.0,
                 }),
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: None,
@@ -1297,6 +1308,285 @@ mod tests {
         assert!(jobs[0].scheduled_at > now_millis());
     }
 
+    /// A one-token, never-refilling rate limit on `shed_task`, so the second job
+    /// of a pair is always the excess one. `batch_size` picks which dispatch
+    /// path evaluates the gate: 1 claims per job, >1 claims the batch up front.
+    fn rate_limited_scheduler(on_excess: shed::OnExcess, batch_size: usize) -> Scheduler {
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            batch_size,
+            ..SchedulerConfig::default()
+        };
+        let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        scheduler.register_task(
+            "shed_task".to_string(),
+            TaskConfig {
+                rate_limit: Some(RateLimitConfig {
+                    max_tokens: 1.0,
+                    refill_rate: 0.0,
+                }),
+                on_excess,
+                ..TaskConfig::default()
+            },
+        );
+        scheduler
+    }
+
+    /// Drain the worker channel, returning how many jobs reached it. The limiter
+    /// gates at *dispatch*, so this — not an execution timestamp — is what a
+    /// shed test may assert on.
+    fn drain_dispatched(rx: &mut tokio::sync::mpsc::Receiver<Job>) -> usize {
+        let mut dispatched = 0;
+        while rx.try_recv().is_ok() {
+            dispatched += 1;
+        }
+        dispatched
+    }
+
+    #[test]
+    fn test_on_excess_drop_sheds_the_excess_job() {
+        // With the limiter saturated, the excess job terminates immediately
+        // instead of coming back: the queue does not grow, and the DLQ row
+        // proves the drop was shedding rather than data loss.
+        let scheduler = rate_limited_scheduler(shed::OnExcess::Drop, 1);
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+        scheduler.tick(&tx, &mut counters);
+
+        assert_eq!(
+            drain_dispatched(&mut rx),
+            1,
+            "the limiter still admits exactly one job"
+        );
+
+        let pending = scheduler
+            .storage
+            .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+            .unwrap();
+        assert!(
+            pending.is_empty(),
+            "a shed job must not return to the queue"
+        );
+
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
+        assert_eq!(dead.len(), 1, "the shed job is dead-lettered, not deleted");
+        assert!(
+            dead[0]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(shed::RATE_LIMIT_REASON_PREFIX)),
+            "the reason names the rate limit that shed it: {:?}",
+            dead[0].error
+        );
+        assert_eq!(
+            dead[0].metadata.as_deref(),
+            Some(shed::RATE_LIMIT_SHED_METADATA),
+            "shed work must be countable without parsing the reason string"
+        );
+    }
+
+    #[test]
+    fn test_on_excess_drop_sheds_on_the_batch_path() {
+        // The batch path claims before it gates, so its shed has an execution
+        // claim to unwind. A leftover claim row would point at an archived job
+        // and confuse the dead-worker reaper.
+        let scheduler = rate_limited_scheduler(shed::OnExcess::Drop, 8);
+        for _ in 0..3 {
+            scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        }
+
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+
+        assert_eq!(drain_dispatched(&mut rx), 1, "one token, one dispatch");
+
+        let pending = scheduler
+            .storage
+            .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+            .unwrap();
+        assert!(pending.is_empty(), "the excess of a batch is shed too");
+        assert_eq!(scheduler.storage.list_dead(10, 0, None).unwrap().len(), 2);
+
+        let claims = scheduler
+            .storage
+            .list_claims_by_worker(scheduler.claim_owner())
+            .unwrap();
+        assert_eq!(
+            claims.len(),
+            1,
+            "only the dispatched job may still hold a claim"
+        );
+    }
+
+    #[test]
+    fn test_on_excess_defer_is_the_default() {
+        // The knob is opt-in: an unset `on_excess` reschedules exactly as before.
+        let scheduler = rate_limited_scheduler(shed::OnExcess::default(), 1);
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+        scheduler.tick(&tx, &mut counters);
+
+        assert_eq!(drain_dispatched(&mut rx), 1);
+        assert_eq!(
+            scheduler
+                .storage
+                .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+                .unwrap()
+                .len(),
+            1,
+            "the excess job is deferred, not shed"
+        );
+        assert!(scheduler.storage.list_dead(10, 0, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_on_excess_drop_applies_to_the_queue_rate_limit() {
+        // `on_excess` answers "this job cannot dispatch now", whoever said so —
+        // the task's own limiter or the one on the queue it runs in.
+        let mut scheduler = test_scheduler();
+        scheduler.register_queue_config(
+            "default".to_string(),
+            QueueConfig {
+                rate_limit: Some(RateLimitConfig {
+                    max_tokens: 1.0,
+                    refill_rate: 0.0,
+                }),
+                max_concurrent: None,
+            },
+        );
+        scheduler.register_task(
+            "shed_task".to_string(),
+            TaskConfig {
+                on_excess: shed::OnExcess::Drop,
+                ..TaskConfig::default()
+            },
+        );
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+        scheduler.tick(&tx, &mut counters);
+
+        assert_eq!(drain_dispatched(&mut rx), 1);
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
+        assert_eq!(dead.len(), 1);
+        assert!(
+            dead[0]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("queue 'default'")),
+            "the reason names the queue limiter: {:?}",
+            dead[0].error
+        );
+    }
+
+    #[test]
+    fn test_on_excess_drop_never_sheds_a_circuit_broken_job() {
+        // A tripped breaker is downstream failure, not excess load. Shedding
+        // there would throw away work nobody asked to shed — the job is fine,
+        // its dependency is not — so the breaker keeps deferring.
+        let mut scheduler = test_scheduler();
+        scheduler.register_task(
+            "shed_task".to_string(),
+            TaskConfig {
+                on_excess: shed::OnExcess::Drop,
+                circuit_breaker: Some(crate::resilience::circuit_breaker::CircuitBreakerConfig {
+                    threshold: 1,
+                    window_ms: 60_000,
+                    cooldown_ms: 300_000,
+                    half_open_max_probes: 5,
+                    half_open_success_rate: 0.8,
+                }),
+                ..TaskConfig::default()
+            },
+        );
+        scheduler
+            .circuit_breaker
+            .record_failure("shed_task")
+            .unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+
+        let (tx, mut rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+
+        assert_eq!(drain_dispatched(&mut rx), 0);
+        assert_eq!(
+            scheduler
+                .storage
+                .list_jobs(Some(JobStatus::Pending as i32), None, None, 10, 0, None)
+                .unwrap()
+                .len(),
+            1,
+            "a circuit-broken job is deferred even under on_excess=drop"
+        );
+        assert!(scheduler.storage.list_dead(10, 0, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_dlq_auto_retry_leaves_shed_jobs_dead() {
+        // Auto-retry exists for jobs that failed. Resurrecting one the scheduler
+        // deliberately shed would undo the shed and re-grow the queue.
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            // Zero delay: every DLQ entry is immediately eligible, so the only
+            // thing that can hold one back is the shed check itself.
+            dlq_auto_retry_delay_ms: Some(0),
+            dlq_auto_retry_max: 3,
+            ..SchedulerConfig::default()
+        };
+        let mut scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+        scheduler.register_task(
+            "shed_task".to_string(),
+            TaskConfig {
+                rate_limit: Some(RateLimitConfig {
+                    max_tokens: 1.0,
+                    refill_rate: 0.0,
+                }),
+                on_excess: shed::OnExcess::Drop,
+                ..TaskConfig::default()
+            },
+        );
+        let failed = scheduler.storage.enqueue(make_job("other_task")).unwrap();
+        scheduler
+            .storage
+            .move_to_dlq(&failed, "ConnectionError: refused", None)
+            .unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+        scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+
+        let (tx, _rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+        scheduler.tick(&tx, &mut counters);
+
+        scheduler.auto_retry_dlq().unwrap();
+
+        let dead = scheduler.storage.list_dead(10, 0, None).unwrap();
+        assert_eq!(
+            dead.len(),
+            1,
+            "the ordinary failure was retried out of the DLQ, the shed one was not"
+        );
+        assert!(dead[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(shed::RATE_LIMIT_REASON_PREFIX)));
+    }
+
     #[test]
     fn test_try_dispatch_circuit_broken() {
         let mut scheduler = test_scheduler();
@@ -1312,6 +1602,7 @@ mod tests {
             TaskConfig {
                 retry_policy: RetryPolicy::default(),
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: Some(cb_config),
                 retry_budget: None,
                 max_concurrent: None,
@@ -1352,6 +1643,7 @@ mod tests {
             TaskConfig {
                 retry_policy: RetryPolicy::default(),
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: Some(2),
@@ -1422,6 +1714,7 @@ mod tests {
             TaskConfig {
                 retry_policy: RetryPolicy::default(),
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: Some(2),
@@ -1639,6 +1932,7 @@ mod tests {
             TaskConfig {
                 retry_policy: RetryPolicy::default(),
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: None,
@@ -1761,6 +2055,7 @@ mod tests {
             TaskConfig {
                 retry_policy: RetryPolicy::default(),
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: Some(1),
@@ -1983,6 +2278,7 @@ mod tests {
                     custom_delays_ms: None,
                 },
                 rate_limit: None,
+                on_excess: shed::OnExcess::Defer,
                 circuit_breaker: None,
                 retry_budget: None,
                 max_concurrent: None,
@@ -2021,6 +2317,7 @@ mod tests {
                 custom_delays_ms: None,
             },
             rate_limit: None,
+            on_excess: shed::OnExcess::Defer,
             circuit_breaker: None,
             retry_budget: None,
             max_concurrent: None,
