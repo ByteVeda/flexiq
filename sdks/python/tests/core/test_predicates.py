@@ -24,9 +24,9 @@ from unittest.mock import patch
 
 import pytest
 
-from taskito import Queue
-from taskito.exceptions import PredicateRejectedError
-from taskito.predicates import (
+from flexiq import Queue
+from flexiq.exceptions import PredicateRejectedError
+from flexiq.predicates import (
     AndPredicate,
     Cancel,
     Defer,
@@ -51,7 +51,7 @@ from taskito.predicates import (
     queue_paused,
     register_predicate,
 )
-from taskito.predicates.core import _CallablePredicate
+from flexiq.predicates.core import _CallablePredicate
 
 # ---------------------------------------------------------------------------
 # Helpers

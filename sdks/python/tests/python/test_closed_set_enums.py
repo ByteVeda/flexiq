@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from taskito import InterceptionMode, PredicateAction, Queue, StorageBackend
-from taskito.dashboard.delivery_store import DeliveryStatus, DeliveryStore
-from taskito.dashboard.errors import _BadRequest
-from taskito.dashboard.handlers.webhook_deliveries import handle_list_deliveries
-from taskito.dashboard.webhook_store import WebhookSubscriptionStore
-from taskito.interception.strategy import Strategy
-from taskito.mixins._log_consumer import ConsumerErrorAction
-from taskito.workflows import Workflow, WorkflowCondition
-from taskito.workflows.types import DiagramFormat, FanStrategy, GateAction
+from flexiq import InterceptionMode, PredicateAction, Queue, StorageBackend
+from flexiq.dashboard.delivery_store import DeliveryStatus, DeliveryStore
+from flexiq.dashboard.errors import _BadRequest
+from flexiq.dashboard.handlers.webhook_deliveries import handle_list_deliveries
+from flexiq.dashboard.webhook_store import WebhookSubscriptionStore
+from flexiq.interception.strategy import Strategy
+from flexiq.mixins._log_consumer import ConsumerErrorAction
+from flexiq.workflows import Workflow, WorkflowCondition
+from flexiq.workflows.types import DiagramFormat, FanStrategy, GateAction
 
 
 def test_wire_values_are_the_cross_sdk_contract() -> None:

@@ -15,16 +15,16 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.interception import (
+from flexiq import Queue
+from flexiq.interception import (
     ArgumentInterceptor,
     InterceptionError,
     InterceptionReport,
 )
-from taskito.interception.built_in import build_default_registry
-from taskito.interception.converters import reconstruct_converted
-from taskito.interception.reconstruct import reconstruct_args
-from taskito.interception.strategy import Strategy
+from flexiq.interception.built_in import build_default_registry
+from flexiq.interception.converters import reconstruct_converted
+from flexiq.interception.reconstruct import reconstruct_args
+from flexiq.interception.strategy import Strategy
 
 # -- Fixtures --
 

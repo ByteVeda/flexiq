@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from taskito.app import Queue
-from taskito.exceptions import PredicateRejectedError
-from taskito.predicates import (
+from flexiq.app import Queue
+from flexiq.exceptions import PredicateRejectedError
+from flexiq.predicates import (
     Cancel,
     Defer,
     Predicate,
@@ -154,7 +154,7 @@ def test_metrics_record_outcomes(queue: Queue) -> None:
 
 
 def test_defer_emits_predicate_deferred_event(queue: Queue, poll_until: PollUntil) -> None:
-    from taskito.events import EventType
+    from flexiq.events import EventType
 
     received: list[dict] = []
     queue._event_bus.on(EventType.PREDICATE_DEFERRED, lambda _e, p: received.append(p))
@@ -171,7 +171,7 @@ def test_defer_emits_predicate_deferred_event(queue: Queue, poll_until: PollUnti
 
 
 def test_cancel_emits_predicate_rejected_event(queue: Queue, poll_until: PollUntil) -> None:
-    from taskito.events import EventType
+    from flexiq.events import EventType
 
     received: list[dict] = []
     queue._event_bus.on(EventType.PREDICATE_REJECTED, lambda _e, p: received.append(p))

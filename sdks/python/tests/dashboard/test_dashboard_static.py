@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito.dashboard import _content_type_for, _resolve_static_node
+from flexiq.dashboard import _content_type_for, _resolve_static_node
 
 
 @pytest.fixture
@@ -115,26 +115,26 @@ def test_content_type_case_insensitive() -> None:
 
 
 def test_safe_path_strips_crlf() -> None:
-    from taskito.dashboard.server import _safe_path
+    from flexiq.dashboard.server import _safe_path
 
     assert _safe_path("/api/jobs\r\nFAKE LOG ENTRY") == "/api/jobsFAKE LOG ENTRY"
 
 
 def test_safe_path_strips_null_byte() -> None:
-    from taskito.dashboard.server import _safe_path
+    from flexiq.dashboard.server import _safe_path
 
     assert _safe_path("/api/jobs\x00admin") == "/api/jobsadmin"
 
 
 def test_safe_path_strips_all_control_chars_except_tab() -> None:
-    from taskito.dashboard.server import _safe_path
+    from flexiq.dashboard.server import _safe_path
 
     raw = "/api\x01\x02\x1f\x7fpath\twith-tab"
     assert _safe_path(raw) == "/apipath\twith-tab"
 
 
 def test_safe_path_truncates_long_input() -> None:
-    from taskito.dashboard.server import _safe_path
+    from flexiq.dashboard.server import _safe_path
 
     raw = "/api/" + "x" * 1000
     out = _safe_path(raw)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_multiple_tasks(queue: Queue) -> None:

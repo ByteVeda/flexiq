@@ -16,22 +16,22 @@ repos:
         pass_filenames: false
 
       - id: ruff-check
-        name: ruff check (taskito + tests)
-        entry: bash -c 'cd sdks/python && uv run ruff check taskito/ tests/'
+        name: ruff check (flexiq + tests)
+        entry: bash -c 'cd sdks/python && uv run ruff check flexiq/ tests/'
         language: system
         types: [python]
         pass_filenames: false
 
       - id: ruff-format
-        name: ruff format (taskito + tests)
-        entry: bash -c 'cd sdks/python && uv run ruff format --check taskito/ tests/'
+        name: ruff format (flexiq + tests)
+        entry: bash -c 'cd sdks/python && uv run ruff format --check flexiq/ tests/'
         language: system
         types: [python]
         pass_filenames: false
 
       - id: mypy
-        name: mypy (taskito + tests)
-        entry: bash -c 'cd sdks/python && uv run mypy taskito/ tests/ --no-incremental'
+        name: mypy (flexiq + tests)
+        entry: bash -c 'cd sdks/python && uv run mypy flexiq/ tests/ --no-incremental'
         language: system
         types: [python]
         pass_filenames: false

@@ -1,0 +1,10 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<ul class="object-tools">
+  <li><a href="{{ flexiq_urls.dashboard }}">Dashboard</a></li>
+  <li><a href="{{ flexiq_urls.jobs }}">Jobs</a></li>
+  <li><a href="{{ flexiq_urls.dead_letters }}">Dead Letters</a></li>
+</ul>
+{% block flexiq_content %}{% endblock %}
+{% endblock %}

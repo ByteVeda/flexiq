@@ -12,10 +12,10 @@ from __future__ import annotations
 import os
 import time
 
-from taskito import Queue
-from taskito.context import current_job
+from flexiq import Queue
+from flexiq.context import current_job
 
-queue = Queue(db_path=os.environ.get("FLEXIQ_CANCEL_TEST_DB", "/tmp/taskito-cancel.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_CANCEL_TEST_DB", "/tmp/flexiq-cancel.db"))
 
 
 @queue.task(timeout=30, max_retries=0)

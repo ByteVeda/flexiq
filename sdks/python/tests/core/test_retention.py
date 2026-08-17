@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue, Retention, RetentionPreview
+from flexiq import Queue, Retention, RetentionPreview
 
 
 def test_negative_result_ttl_rejected(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 """Tests for dashboard authentication.
 
-Covers the auth helpers in :mod:`taskito.dashboard.auth` and the HTTP
+Covers the auth helpers in :mod:`flexiq.dashboard.auth` and the HTTP
 endpoints under ``/api/auth/*``, plus the session-gating behaviour the
 server applies to every other API route.
 """
@@ -18,9 +18,9 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import _make_handler
-from taskito.dashboard.auth import (
+from flexiq import Queue
+from flexiq.dashboard import _make_handler
+from flexiq.dashboard.auth import (
     SESSION_PREFIX,
     AuthStore,
     Role,
@@ -506,12 +506,12 @@ def test_login_and_session_cookie(dashboard_server: tuple[str, Queue]) -> None:
 
     cookies = _parse_set_cookie(headers["Set-Cookie"])
     assert "flexiq_session" in cookies
-    assert "taskito_csrf" in cookies
+    assert "flexiq_csrf" in cookies
     # HttpOnly must be set on the session cookie.
     assert "HttpOnly" in headers["Set-Cookie"]
     # CSRF cookie value must match what whoami says.
     sess_token = cookies["flexiq_session"]
-    csrf = cookies["taskito_csrf"]
+    csrf = cookies["flexiq_csrf"]
     status, body, _ = _get(f"{base}/api/auth/whoami", cookies={"flexiq_session": sess_token})
     assert status == 200
     assert body["user"]["username"] == "alice"
@@ -578,7 +578,7 @@ def test_post_succeeds_with_valid_csrf(dashboard_server: tuple[str, Queue]) -> N
         {},
         cookies={
             "flexiq_session": session.token,
-            "taskito_csrf": session.csrf_token,
+            "flexiq_csrf": session.csrf_token,
         },
         headers={"X-CSRF-Token": session.csrf_token},
     )
@@ -595,7 +595,7 @@ def test_post_rejected_when_csrf_mismatched(dashboard_server: tuple[str, Queue])
         {},
         cookies={
             "flexiq_session": session.token,
-            "taskito_csrf": session.csrf_token,
+            "flexiq_csrf": session.csrf_token,
         },
         headers={"X-CSRF-Token": "different-value"},
     )
@@ -613,7 +613,7 @@ def test_logout_invalidates_session(dashboard_server: tuple[str, Queue]) -> None
         {},
         cookies={
             "flexiq_session": session.token,
-            "taskito_csrf": session.csrf_token,
+            "flexiq_csrf": session.csrf_token,
         },
         headers={"X-CSRF-Token": session.csrf_token},
     )
@@ -631,7 +631,7 @@ def test_change_password_flow(dashboard_server: tuple[str, Queue]) -> None:
         {"old_password": "hunter2-secret", "new_password": "brand-new-secure"},
         cookies={
             "flexiq_session": session.token,
-            "taskito_csrf": session.csrf_token,
+            "flexiq_csrf": session.csrf_token,
         },
         headers={"X-CSRF-Token": session.csrf_token},
     )
@@ -655,7 +655,7 @@ def test_viewer_can_read_but_not_mutate(dashboard_server: tuple[str, Queue]) -> 
     store = AuthStore(queue)
     viewer = store.create_user("watcher", "hunter2-secret", role="viewer")
     session = store.create_session(viewer)
-    cookies = {"flexiq_session": session.token, "taskito_csrf": session.csrf_token}
+    cookies = {"flexiq_session": session.token, "flexiq_csrf": session.csrf_token}
 
     status, _, _ = _get(f"{base}/api/stats", cookies=cookies)
     assert status == 200
@@ -678,7 +678,7 @@ def test_viewer_keeps_auth_self_service(dashboard_server: tuple[str, Queue]) -> 
     status, _, _ = _post(
         f"{base}/api/auth/change-password",
         {"old_password": "hunter2-secret", "new_password": "brand-new-secure"},
-        cookies={"flexiq_session": session.token, "taskito_csrf": session.csrf_token},
+        cookies={"flexiq_session": session.token, "flexiq_csrf": session.csrf_token},
         headers={"X-CSRF-Token": session.csrf_token},
     )
     assert status == 200

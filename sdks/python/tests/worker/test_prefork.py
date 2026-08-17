@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.context import JobContext
-from taskito.middleware import TaskMiddleware
+from flexiq import Queue
+from flexiq.context import JobContext
+from flexiq.middleware import TaskMiddleware
 
 
 @pytest.mark.skipif(

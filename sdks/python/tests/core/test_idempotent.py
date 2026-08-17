@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_idempotent_task_dedupes_by_args(queue: Queue) -> None:

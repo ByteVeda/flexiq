@@ -15,16 +15,16 @@ import pytest
 from joserfc import jwt as joserfc_jwt
 from joserfc.jwk import RSAKey
 
-from taskito.dashboard.oauth.config import (
+from flexiq.dashboard.oauth.config import (
     GitHubConfig,
     GoogleConfig,
     OIDCConfig,
 )
-from taskito.dashboard.oauth.identity import (
+from flexiq.dashboard.oauth.identity import (
     AllowlistDenied,
     IdentityFetchError,
 )
-from taskito.dashboard.oauth.providers import (
+from flexiq.dashboard.oauth.providers import (
     GenericOIDCProvider,
     GitHubProvider,
     GoogleProvider,
@@ -173,7 +173,7 @@ def test_google_authorization_url_includes_required_params(
         state="STATE",
         nonce="NONCE",
         code_challenge="CHALLENGE",
-        redirect_uri="https://taskito.example.com/api/auth/oauth/callback/google",
+        redirect_uri="https://flexiq.example.com/api/auth/oauth/callback/google",
     )
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
@@ -344,7 +344,7 @@ def test_google_check_allowlist_passes_when_no_restriction(
     google_discovery: dict[str, str],
 ) -> None:
     provider = _make_google_provider(discovery=google_discovery, jwks_payload={"keys": []})
-    from taskito.dashboard.oauth.identity import ProviderIdentity
+    from flexiq.dashboard.oauth.identity import ProviderIdentity
 
     identity = ProviderIdentity(slot="google", subject="x", email="x@y.com", email_verified=True)
     # Should not raise.
@@ -354,7 +354,7 @@ def test_google_check_allowlist_passes_when_no_restriction(
 def test_google_check_allowlist_rejects_unverified_email(
     google_discovery: dict[str, str],
 ) -> None:
-    from taskito.dashboard.oauth.identity import ProviderIdentity
+    from flexiq.dashboard.oauth.identity import ProviderIdentity
 
     provider = _make_google_provider(
         discovery=google_discovery,
@@ -375,7 +375,7 @@ def test_google_check_allowlist_rejects_unverified_email(
 def test_google_check_allowlist_rejects_out_of_domain_email(
     google_discovery: dict[str, str],
 ) -> None:
-    from taskito.dashboard.oauth.identity import ProviderIdentity
+    from flexiq.dashboard.oauth.identity import ProviderIdentity
 
     provider = _make_google_provider(
         discovery=google_discovery,
@@ -396,7 +396,7 @@ def test_google_check_allowlist_rejects_out_of_domain_email(
 def test_google_check_allowlist_accepts_listed_domain(
     google_discovery: dict[str, str],
 ) -> None:
-    from taskito.dashboard.oauth.identity import ProviderIdentity
+    from flexiq.dashboard.oauth.identity import ProviderIdentity
 
     provider = _make_google_provider(
         discovery=google_discovery,
@@ -433,7 +433,7 @@ def test_generic_oidc_uses_provided_discovery_url(rsa_key: RSAKey) -> None:
         http=StubSession(routes),
     )
     url = provider.authorization_url(
-        state="s", nonce="n", code_challenge="c", redirect_uri="https://taskito.x/cb"
+        state="s", nonce="n", code_challenge="c", redirect_uri="https://flexiq.x/cb"
     )
     assert url.startswith("https://acme.okta.com/oauth2/authorize?")
     assert provider.slot == "okta"

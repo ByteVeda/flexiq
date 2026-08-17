@@ -20,14 +20,14 @@ from pathlib import Path
 
 import pytest
 
-from taskito import (
+from flexiq import (
     BatchItemResult,
     BatchPartialFailureError,
     BatchResultTypeError,
     MaxRetriesExceededError,
     Queue,
 )
-from taskito.batching import BatchConfig
+from flexiq.batching import BatchConfig
 
 
 @pytest.fixture

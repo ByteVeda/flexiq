@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_update_progress(queue: Queue) -> None:

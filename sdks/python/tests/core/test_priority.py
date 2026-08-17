@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 
 @pytest.fixture

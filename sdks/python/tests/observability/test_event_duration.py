@@ -6,8 +6,8 @@ import threading
 import time
 from typing import Any
 
-from taskito import Queue
-from taskito.events import EventType
+from flexiq import Queue
+from flexiq.events import EventType
 
 PollUntil = Any  # the conftest fixture's runtime type
 

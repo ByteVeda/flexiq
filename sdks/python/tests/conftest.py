@@ -1,4 +1,4 @@
-"""Shared fixtures for taskito tests."""
+"""Shared fixtures for flexiq tests."""
 
 import os
 import sys
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 # Public type alias used by workflow test files for the ``workflow_worker``
 # fixture parameter (mypy requires annotated test parameters under

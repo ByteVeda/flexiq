@@ -3,7 +3,7 @@
 import threading
 from pathlib import Path
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_namespace_enqueue_sets_namespace(tmp_path: Path) -> None:

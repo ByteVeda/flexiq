@@ -7,9 +7,9 @@ import re
 
 import pytest
 
-from taskito import Queue
-from taskito.exceptions import TaskCancelledError
-from taskito.task_lifecycle import _MAX_RESULT_REPR, _safe_result_repr
+from flexiq import Queue
+from flexiq.exceptions import TaskCancelledError
+from flexiq.task_lifecycle import _MAX_RESULT_REPR, _safe_result_repr
 
 _RECEIVED = re.compile(r"^Task (\S+)\[(\S+)\] received$")
 _SUCCEEDED = re.compile(r"^Task (\S+)\[(\S+)\] succeeded in \d+\.\d{3}s: (.+)$")
@@ -17,8 +17,8 @@ _RAISED = re.compile(r"^Task (\S+)\[(\S+)\] raised (\w+) in \d+\.\d{3}s: (.+)$")
 _CANCELLED = re.compile(r"^Task (\S+)\[(\S+)\] cancelled in \d+\.\d{3}s: (.+)$")
 
 
-def _taskito_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if r.name == "taskito"]
+def _flexiq_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "flexiq"]
 
 
 def _matching(
@@ -30,12 +30,12 @@ def _matching(
     """Lifecycle messages this test's own task produced, at `level`.
 
     Scoped by task name because ``caplog`` captures the whole process: any worker
-    another test left running logs onto the same ``taskito`` logger, and an
+    another test left running logs onto the same ``flexiq`` logger, and an
     unscoped count then depends on test order and timing.
     """
     return [
         message
-        for record in _taskito_records(caplog)
+        for record in _flexiq_records(caplog)
         if record.levelno == level
         for message in [record.getMessage()]
         if (match := pattern.match(message)) is not None and match.group(1) == task_name
@@ -68,7 +68,7 @@ def _invoke_registered(queue: Queue, task_name: str, *args: object, **kwargs: ob
     context down — exercising the full ``_wrap_task`` lifecycle (hooks,
     middleware, lifecycle logs) without booting an actual worker.
     """
-    from taskito.context import _clear_context, _set_context
+    from flexiq.context import _clear_context, _set_context
 
     _set_context("job-" + task_name, task_name, 0, "default")
     try:
@@ -84,7 +84,7 @@ def test_received_and_succeeded_logged_for_successful_task(
     def add(a: int, b: int) -> int:
         return a + b
 
-    caplog.set_level(logging.INFO, logger="taskito")
+    caplog.set_level(logging.INFO, logger="flexiq")
     assert _invoke_registered(queue, add.name, 2, 3) == 5
 
     received = _matching(caplog, _RECEIVED, add.name, logging.INFO)
@@ -104,7 +104,7 @@ def test_raised_logged_at_error_for_failing_task(
     def boom() -> None:
         raise ValueError("bad input")
 
-    caplog.set_level(logging.INFO, logger="taskito")
+    caplog.set_level(logging.INFO, logger="flexiq")
     with pytest.raises(ValueError):
         _invoke_registered(queue, boom.name)
 
@@ -123,7 +123,7 @@ def test_cancelled_logged_at_info_for_task_cancelled(
     def stoppable() -> None:
         raise TaskCancelledError("user pulled the plug")
 
-    caplog.set_level(logging.INFO, logger="taskito")
+    caplog.set_level(logging.INFO, logger="flexiq")
     with pytest.raises(TaskCancelledError):
         _invoke_registered(queue, stoppable.name)
 

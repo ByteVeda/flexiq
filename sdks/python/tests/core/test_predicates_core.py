@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from taskito.predicates import (
+from flexiq.predicates import (
     Cancel,
     Defer,
     Predicate,

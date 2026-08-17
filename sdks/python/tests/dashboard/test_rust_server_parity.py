@@ -4,10 +4,10 @@ One SPA build is served by every implementation, so the JSON they return for
 the same database has to agree. Reading both implementations side by side is
 how drift creeps in; this compares them.
 
-Skipped unless the ``taskito-server`` binary is available — set
+Skipped unless the ``flexiq-server`` binary is available — set
 ``FLEXIQ_SERVER_BIN`` or build it first::
 
-    cargo build -p taskito-server
+    cargo build -p flexiq-server
     uv run python -m pytest tests/dashboard/test_rust_server_parity.py -v
 """
 
@@ -28,8 +28,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import _make_handler
+from flexiq import Queue
+from flexiq.dashboard import _make_handler
 
 # ── Route classification ──────────────────────────────────────────────
 #
@@ -91,7 +91,7 @@ def _server_binary() -> Path | None:
         return candidate if candidate.is_file() else None
     root = Path(__file__).resolve().parents[4]
     for profile in ("debug", "release"):
-        candidate = root / "target" / profile / "taskito-server"
+        candidate = root / "target" / profile / "flexiq-server"
         if candidate.is_file():
             return candidate
     return None
@@ -181,7 +181,7 @@ def parity_servers(seeded_queue: tuple[Queue, str]) -> Generator[tuple[str, str]
     """
     binary = _server_binary()
     if binary is None:
-        pytest.skip("taskito-server is not built; run `cargo build -p taskito-server`")
+        pytest.skip("flexiq-server is not built; run `cargo build -p flexiq-server`")
 
     queue, db_path = seeded_queue
 
@@ -213,8 +213,7 @@ def parity_servers(seeded_queue: tuple[Queue, str]) -> Generator[tuple[str, str]
         if process.poll() is not None:
             stdout = process.stdout.read() if process.stdout is not None else b""
             pytest.fail(
-                "taskito-server exited during startup:\n"
-                + (stdout or b"").decode(errors="replace")
+                "flexiq-server exited during startup:\n" + (stdout or b"").decode(errors="replace")
             )
         try:
             if _get(rust_url, "/health", timeout=1.0)[0] == 200:
@@ -227,7 +226,7 @@ def parity_servers(seeded_queue: tuple[Queue, str]) -> Generator[tuple[str, str]
     else:
         process.kill()
         process.wait(timeout=5)
-        pytest.fail("taskito-server did not become ready within 30s")
+        pytest.fail("flexiq-server did not become ready within 30s")
 
     try:
         yield python_url, rust_url
@@ -251,7 +250,7 @@ def test_route_matches_the_standalone_server(parity_servers: tuple[str, str], ro
     assert python_body == rust_body, (
         f"{route} differs between the dashboards\n"
         f"  this dashboard: {json.dumps(python_body, sort_keys=True)[:800]}\n"
-        f"  taskito-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
+        f"  flexiq-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
     )
 
 
@@ -269,7 +268,7 @@ def test_route_matches_apart_from_clock_derived_fields(
     assert _strip(python_body, volatile) == _strip(rust_body, volatile), (
         f"{route} differs beyond {volatile}\n"
         f"  this dashboard: {json.dumps(python_body, sort_keys=True)[:800]}\n"
-        f"  taskito-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
+        f"  flexiq-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
     )
 
 
@@ -289,7 +288,7 @@ def test_divergent_route_still_answers_with_the_same_shape(
     assert python_status == rust_status == 200, route
     assert type(python_body) is type(rust_body), (
         f"{route} returns {type(python_body).__name__} here and "
-        f"{type(rust_body).__name__} from taskito-server"
+        f"{type(rust_body).__name__} from flexiq-server"
     )
 
 
@@ -320,7 +319,7 @@ def test_a_job_detail_matches(parity_servers: tuple[str, str]) -> None:
             assert python_body == rust_body, (
                 f"{route} differs\n"
                 f"  this dashboard: {json.dumps(python_body, sort_keys=True)[:800]}\n"
-                f"  taskito-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
+                f"  flexiq-server: {json.dumps(rust_body, sort_keys=True)[:800]}"
             )
 
 

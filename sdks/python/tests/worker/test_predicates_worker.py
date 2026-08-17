@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from taskito.app import Queue
-from taskito.exceptions import PredicateRejectedError
-from taskito.predicates import (
+from flexiq.app import Queue
+from flexiq.exceptions import PredicateRejectedError
+from flexiq.predicates import (
     Cancel,
     Defer,
     Predicate,

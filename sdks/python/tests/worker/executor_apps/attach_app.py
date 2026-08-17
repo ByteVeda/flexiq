@@ -1,6 +1,6 @@
 """Module-level Queue + tasks for the executor attach tests.
 
-The Queue must be importable both in the ``taskito executor`` process and
+The Queue must be importable both in the ``flexiq executor`` process and
 inside each prefork child interpreter, so it lives at module scope and takes
 its DB path from the environment — the same shape ``prefork_apps`` uses.
 
@@ -15,15 +15,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from taskito import Queue
-from taskito.context import current_job
-from taskito.middleware import TaskMiddleware
+from flexiq import Queue
+from flexiq.context import current_job
+from flexiq.middleware import TaskMiddleware
 
 # The backend is configurable so one test can point this at a database that
 # does not exist, proving an executor never connects to it.
 queue = Queue(
     backend=os.environ.get("FLEXIQ_EXECUTOR_TEST_BACKEND", "sqlite"),
-    db_path=os.environ.get("FLEXIQ_EXECUTOR_TEST_DB", "/tmp/taskito-executor.db"),
+    db_path=os.environ.get("FLEXIQ_EXECUTOR_TEST_DB", "/tmp/flexiq-executor.db"),
     db_url=os.environ.get("FLEXIQ_EXECUTOR_TEST_DB")
     if os.environ.get("FLEXIQ_EXECUTOR_TEST_BACKEND")
     else None,

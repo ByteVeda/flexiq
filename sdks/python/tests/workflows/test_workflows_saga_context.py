@@ -6,9 +6,9 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from taskito import Queue
-from taskito.workflows import Workflow, WorkflowState
-from taskito.workflows.saga import CompensationContext, current_compensation_context
+from flexiq import Queue
+from flexiq.workflows import Workflow, WorkflowState
+from flexiq.workflows.saga import CompensationContext, current_compensation_context
 
 WorkflowWorkerFactory = Any
 

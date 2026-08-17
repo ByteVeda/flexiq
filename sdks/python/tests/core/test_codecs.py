@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import (
+from flexiq import (
     AesGcmCodec,
     CodecSerializer,
     CryptoError,

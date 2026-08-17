@@ -9,32 +9,32 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from taskito import Inject, MockResource, Queue
-from taskito.exceptions import (
+from flexiq import Inject, MockResource, Queue
+from flexiq.exceptions import (
     ProxyReconstructionError,
     ResourceError,
     ResourceUnavailableError,
 )
-from taskito.inject import _InjectAlias
-from taskito.interception.built_in import build_default_registry
-from taskito.interception.converters import (
+from flexiq.inject import _InjectAlias
+from flexiq.interception.built_in import build_default_registry
+from flexiq.interception.converters import (
     convert_named_tuple,
     convert_ordered_dict,
     reconstruct_converted,
     reconstruct_named_tuple,
     reconstruct_ordered_dict,
 )
-from taskito.interception.metrics import InterceptionMetrics
-from taskito.interception.walker import ArgumentWalker
-from taskito.proxies.metrics import ProxyMetrics
-from taskito.proxies.no_proxy import NoProxy as NoProxyClass
-from taskito.proxies.schema import FieldSpec, validate_recipe
-from taskito.proxies.signing import sign_recipe, verify_recipe
-from taskito.resources.definition import ResourceDefinition, ResourceScope
-from taskito.resources.frozen import FrozenResource
-from taskito.resources.pool import PoolConfig, ResourcePool
-from taskito.resources.runtime import ResourceRuntime
-from taskito.resources.thread_local import ThreadLocalStore
+from flexiq.interception.metrics import InterceptionMetrics
+from flexiq.interception.walker import ArgumentWalker
+from flexiq.proxies.metrics import ProxyMetrics
+from flexiq.proxies.no_proxy import NoProxy as NoProxyClass
+from flexiq.proxies.schema import FieldSpec, validate_recipe
+from flexiq.proxies.signing import sign_recipe, verify_recipe
+from flexiq.resources.definition import ResourceDefinition, ResourceScope
+from flexiq.resources.frozen import FrozenResource
+from flexiq.resources.pool import PoolConfig, ResourcePool
+from flexiq.resources.runtime import ResourceRuntime
+from flexiq.resources.thread_local import ThreadLocalStore
 
 # ─── Phase A — NamedTuple / OrderedDict / lambda / tempfile ───
 
@@ -510,7 +510,7 @@ class TestTomlConfig:
 
         path = pathlib.Path(str(tmp_path)) / "resources.toml"
         path.write_text('[resources.config]\nfactory = "builtins:dict"\nscope = "worker"\n')
-        from taskito.resources.toml_config import load_resources_from_toml
+        from flexiq.resources.toml_config import load_resources_from_toml
 
         defs = load_resources_from_toml(str(path))
         assert len(defs) == 1
@@ -522,7 +522,7 @@ class TestTomlConfig:
 
         path = pathlib.Path(str(tmp_path)) / "bad.toml"
         path.write_text('[resources.db]\nscope = "worker"\n')
-        from taskito.resources.toml_config import load_resources_from_toml
+        from flexiq.resources.toml_config import load_resources_from_toml
 
         with pytest.raises(ValueError, match="missing required 'factory'"):
             load_resources_from_toml(str(path))

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue, QueueFullError
+from flexiq import Queue, QueueFullError
 
 
 def _register(queue: Queue) -> None:
@@ -67,10 +67,10 @@ def test_cap_is_per_queue(queue: Queue) -> None:
 
 
 def test_queue_full_is_queue_error_subclass() -> None:
-    from taskito.exceptions import QueueError, TaskitoError
+    from flexiq.exceptions import FlexiQError, QueueError
 
     assert issubclass(QueueFullError, QueueError)
-    assert issubclass(QueueFullError, TaskitoError)
+    assert issubclass(QueueFullError, FlexiQError)
 
 
 def test_enqueue_many_all_or_nothing(queue: Queue) -> None:

@@ -13,7 +13,7 @@ from pathlib import Path
 import cloudpickle
 import pytest
 
-from taskito import JsonSerializer, Queue, SmartSerializer
+from flexiq import JsonSerializer, Queue, SmartSerializer
 
 
 @pytest.fixture

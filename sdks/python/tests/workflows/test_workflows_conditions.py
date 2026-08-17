@@ -6,8 +6,8 @@ import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from taskito import Queue
-from taskito.workflows import NodeStatus, Workflow, WorkflowContext, WorkflowState
+from flexiq import Queue
+from flexiq.workflows import NodeStatus, Workflow, WorkflowContext, WorkflowState
 
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 

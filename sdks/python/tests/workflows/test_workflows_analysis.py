@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taskito.workflows import Workflow
+from flexiq.workflows import Workflow
 
 
 class _FakeTask:

@@ -15,15 +15,15 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq.workflows import Workflow
 
 
 def _start_dashboard(queue: Queue) -> tuple[str, Any]:
     from http.server import ThreadingHTTPServer
 
-    from taskito.dashboard import _make_handler
+    from flexiq.dashboard import _make_handler
 
     handler = _make_handler(queue, static_assets=None)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)

@@ -7,8 +7,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from taskito import Queue
-from taskito.middleware import TaskMiddleware
+from flexiq import Queue
+from flexiq.middleware import TaskMiddleware
 
 
 class _CaptureEnqueue(TaskMiddleware):

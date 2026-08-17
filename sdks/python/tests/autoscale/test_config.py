@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from taskito.autoscale import AutoscaleConfig
+from flexiq.autoscale import AutoscaleConfig
 
 
 def test_default_values_pass_validation() -> None:

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
 

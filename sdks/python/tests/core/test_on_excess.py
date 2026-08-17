@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from taskito import OnExcess, Queue
+from flexiq import OnExcess, Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
 

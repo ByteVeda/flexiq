@@ -29,7 +29,7 @@ if not settings.configured:
             "django.contrib.messages",
             "django.contrib.sessions",
             "django.contrib.admin",
-            "taskito.contrib.django",
+            "flexiq.contrib.django",
         ],
         TEMPLATES=[
             {
@@ -60,13 +60,13 @@ from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import path, reverse
 
-import taskito.contrib.django.settings as tk_settings
-from taskito import Queue
-from taskito.contrib.django import admin as tk_admin
+import flexiq.contrib.django.settings as tk_settings
+from flexiq import Queue
+from flexiq.contrib.django import admin as tk_admin
 
-# Wire the four taskito routes onto the default admin site so reverse() resolves
+# Wire the four flexiq routes onto the default admin site so reverse() resolves
 # them, then expose that site as this module's URLconf (ROOT_URLCONF above).
-tk_admin.register_taskito_admin()
+tk_admin.register_flexiq_admin()
 urlpatterns = [path("admin/", admin.site.urls)]
 
 
@@ -90,9 +90,9 @@ def _render(view: Callable[..., object], request: object, *args: object) -> obje
 
 
 def test_dashboard_renders(rf: RequestFactory, patched_queue: Queue) -> None:
-    response = _render(tk_admin._dashboard_view, rf.get("/admin/taskito/"))
+    response = _render(tk_admin._dashboard_view, rf.get("/admin/flexiq/"))
     assert response.status_code == 200  # type: ignore[attr-defined]
-    assert b"Taskito Dashboard" in response.content  # type: ignore[attr-defined]
+    assert b"FlexiQ Dashboard" in response.content  # type: ignore[attr-defined]
 
 
 def test_jobs_view_lists_enqueued_job(rf: RequestFactory, patched_queue: Queue) -> None:
@@ -102,7 +102,7 @@ def test_jobs_view_lists_enqueued_job(rf: RequestFactory, patched_queue: Queue) 
 
     job_id = add.delay(1, 2).id
 
-    response = _render(tk_admin._jobs_view, rf.get("/admin/taskito/jobs/"))
+    response = _render(tk_admin._jobs_view, rf.get("/admin/flexiq/jobs/"))
     assert response.status_code == 200  # type: ignore[attr-defined]
     assert job_id.encode() in response.content  # type: ignore[attr-defined]
 
@@ -114,13 +114,13 @@ def test_job_detail_renders(rf: RequestFactory, patched_queue: Queue) -> None:
 
     job_id = noop.delay().id
 
-    response = _render(tk_admin._job_detail_view, rf.get(f"/admin/taskito/jobs/{job_id}/"), job_id)
+    response = _render(tk_admin._job_detail_view, rf.get(f"/admin/flexiq/jobs/{job_id}/"), job_id)
     assert response.status_code == 200  # type: ignore[attr-defined]
     assert job_id.encode() in response.content  # type: ignore[attr-defined]
 
 
 def test_dead_letters_empty_renders(rf: RequestFactory, patched_queue: Queue) -> None:
-    response = _render(tk_admin._dead_letters_view, rf.get("/admin/taskito/dead-letters/"))
+    response = _render(tk_admin._dead_letters_view, rf.get("/admin/flexiq/dead-letters/"))
     assert response.status_code == 200  # type: ignore[attr-defined]
     assert b"No dead letters" in response.content  # type: ignore[attr-defined]
 
@@ -136,14 +136,14 @@ def test_dead_letters_retry_posts_to_queue(
 
     monkeypatch.setattr(patched_queue, "retry_dead", record_retry)
 
-    request = rf.post("/admin/taskito/dead-letters/", {"action": "retry", "dead_id": "abc123"})
+    request = rf.post("/admin/flexiq/dead-letters/", {"action": "retry", "dead_id": "abc123"})
     _render(tk_admin._dead_letters_view, request)
     assert retried == ["abc123"]
 
 
-def test_register_taskito_admin_wires_all_routes() -> None:
-    # Parity with TaskitoAdminSite — all four named routes must resolve.
-    assert reverse("admin:taskito_dashboard")
-    assert reverse("admin:taskito_jobs")
-    assert reverse("admin:taskito_dead_letters")
-    assert reverse("admin:taskito_job_detail", args=["xyz"])
+def test_register_flexiq_admin_wires_all_routes() -> None:
+    # Parity with FlexiQAdminSite — all four named routes must resolve.
+    assert reverse("admin:flexiq_dashboard")
+    assert reverse("admin:flexiq_jobs")
+    assert reverse("admin:flexiq_dead_letters")
+    assert reverse("admin:flexiq_job_detail", args=["xyz"])

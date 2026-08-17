@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.context import current_job
+from flexiq import Queue
+from flexiq.context import current_job
 
 
 @pytest.fixture

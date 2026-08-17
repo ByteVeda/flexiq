@@ -1,8 +1,8 @@
-"""Basic tests for taskito — enqueue, dequeue, result retrieval."""
+"""Basic tests for flexiq — enqueue, dequeue, result retrieval."""
 
 import threading
 
-from taskito import Queue
+from flexiq import Queue
 
 
 def test_task_registration(queue: Queue) -> None:

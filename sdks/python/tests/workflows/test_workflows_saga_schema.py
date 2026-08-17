@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from taskito import Queue
-from taskito.workflows import Workflow
+from flexiq import Queue
+from flexiq.workflows import Workflow
 
 
 def test_task_decorator_records_compensator(queue: Queue) -> None:

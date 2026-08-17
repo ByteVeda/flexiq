@@ -9,10 +9,10 @@ from contextlib import AbstractContextManager
 
 import pytest
 
-from taskito import Queue
-from taskito.events import EventType
-from taskito.workflows import NodeStatus, Workflow, WorkflowState
-from taskito.workflows.run import WorkflowTimeoutError
+from flexiq import Queue
+from flexiq.events import EventType
+from flexiq.workflows import NodeStatus, Workflow, WorkflowState
+from flexiq.workflows.run import WorkflowTimeoutError
 
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue, chain, chord, group
+from flexiq import Queue, chain, chord, group
 
 
 @pytest.fixture

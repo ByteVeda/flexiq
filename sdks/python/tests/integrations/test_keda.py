@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import build_scaler_response
+from flexiq import Queue
+from flexiq.dashboard import build_scaler_response
 
 
 @pytest.fixture()
@@ -43,7 +43,7 @@ def populated_queue(tmp_path: Path) -> Queue:
 @pytest.fixture()
 def scaler_server(empty_queue: Queue) -> Generator[str]:
     """Start a scaler HTTP server on a random port, yield the base URL."""
-    from taskito.scaler import _make_scaler_handler
+    from flexiq.scaler import _make_scaler_handler
 
     handler = _make_scaler_handler(empty_queue, target_queue_depth=10)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -87,11 +87,11 @@ class TestScalerResponseShape:
 
     def test_metric_name_namespaced_for_queue(self, populated_queue: Queue) -> None:
         resp = build_scaler_response(populated_queue, queue_name="reports")
-        assert resp["metricName"] == "taskito_queue_depth_reports"
+        assert resp["metricName"] == "flexiq_queue_depth_reports"
 
     def test_default_metric_name(self, empty_queue: Queue) -> None:
         resp = build_scaler_response(empty_queue)
-        assert resp["metricName"] == "taskito_queue_depth"
+        assert resp["metricName"] == "flexiq_queue_depth"
 
     def test_worker_utilization_present(self, empty_queue: Queue) -> None:
         resp = build_scaler_response(empty_queue)

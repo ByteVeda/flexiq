@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from taskito import MaxRetriesExceededError, Queue, TaskFailedError, chain, chord, group
+from flexiq import MaxRetriesExceededError, Queue, TaskFailedError, chain, chord, group
 
 PollUntil = Any  # the conftest fixture's runtime type
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from taskito import Queue
-from taskito.pagination import Page
+from flexiq import Queue
+from flexiq.pagination import Page
 
 PollUntil = Any  # the conftest fixture's runtime type
 

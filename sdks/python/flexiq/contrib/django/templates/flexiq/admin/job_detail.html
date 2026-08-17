@@ -1,0 +1,50 @@
+{% extends "flexiq/admin/base.html" %}
+{% load flexiq_admin %}
+
+{% block flexiq_content %}
+<p><a href="{{ flexiq_urls.jobs }}">&larr; Back to jobs</a></p>
+
+{% if job %}
+<h1>Job {{ job.id }}</h1>
+
+<div class="module">
+  <table>
+    <tbody>
+      <tr><th>Status</th><td>{{ job.status }}</td></tr>
+      <tr><th>Task</th><td>{{ job.task_name }}</td></tr>
+      <tr><th>Queue</th><td>{{ job.queue }}</td></tr>
+      <tr><th>Priority</th><td>{{ job.priority }}</td></tr>
+      <tr><th>Progress</th><td>{{ job.progress }}</td></tr>
+      <tr><th>Retries</th><td>{{ job.retry_count }}/{{ job.max_retries }}</td></tr>
+      <tr><th>Created</th><td>{{ job.created_at|ms_datetime }}</td></tr>
+      <tr><th>Scheduled</th><td>{{ job.scheduled_at|ms_datetime }}</td></tr>
+      <tr><th>Started</th><td>{{ job.started_at|ms_datetime }}</td></tr>
+      <tr><th>Completed</th><td>{{ job.completed_at|ms_datetime }}</td></tr>
+      {% if job.error %}<tr><th>Error</th><td><pre>{{ job.error }}</pre></td></tr>{% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% if errors %}
+<h2>Error history</h2>
+<div class="module">
+  <table>
+    <thead>
+      <tr><th>Attempt</th><th>When</th><th>Error</th></tr>
+    </thead>
+    <tbody>
+      {% for err in errors %}
+      <tr>
+        <td>{{ err.attempt }}</td>
+        <td>{{ err.failed_at|ms_datetime }}</td>
+        <td><pre>{{ err.error }}</pre></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% else %}
+<p>Job not found.</p>
+{% endif %}
+{% endblock %}

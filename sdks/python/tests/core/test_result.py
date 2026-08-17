@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from taskito.result import _ERROR_SUMMARY_MAX, _summarize_error
+from flexiq.result import _ERROR_SUMMARY_MAX, _summarize_error
 
 
 class TestErrorSummary:

@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito._taskito import reserved_setting_prefixes
+from flexiq import Queue
+from flexiq._flexiq import reserved_setting_prefixes
 
 CONTRACT_FLOOR_SETTING = "contract:min_sdk"
 

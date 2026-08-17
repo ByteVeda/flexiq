@@ -3,7 +3,7 @@
 import time
 from typing import Any
 
-from taskito.events import EventBus, EventType
+from flexiq.events import EventBus, EventType
 
 PollUntil = Any  # the conftest fixture's runtime type
 

@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue, _taskito
+from flexiq import Queue, _flexiq
 
 PollUntil = Any  # the conftest fixture's runtime type
 
 requires_native_async = pytest.mark.skipif(
-    not hasattr(_taskito, "PyResultSender"),
+    not hasattr(_flexiq, "PyResultSender"),
     reason="wheel built without the native-async feature",
 )
 
@@ -37,7 +37,7 @@ def test_async_task_runs_on_native_executor(tmp_path: Path, poll_until: PollUnti
         thread.join(timeout=10)
 
     assert not thread.is_alive(), "worker did not shut down"
-    assert seen == ["taskito-async-executor"]
+    assert seen == ["flexiq-async-executor"]
 
 
 @requires_native_async

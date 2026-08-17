@@ -8,12 +8,12 @@ from typing import Any
 
 import pytest
 
-from taskito import ProxyReconstructionError, Queue
-from taskito.proxies import BuiltInProxy, ProxyRegistry, cleanup_proxies, reconstruct_proxies
-from taskito.proxies.built_in import register_builtin_handlers
-from taskito.proxies.handlers.file import FileHandler
-from taskito.proxies.handlers.logger import LoggerHandler
-from taskito.proxies.reconstruct import _ReconstructionTimeout, _run_with_timeout
+from flexiq import ProxyReconstructionError, Queue
+from flexiq.proxies import BuiltInProxy, ProxyRegistry, cleanup_proxies, reconstruct_proxies
+from flexiq.proxies.built_in import register_builtin_handlers
+from flexiq.proxies.handlers.file import FileHandler
+from flexiq.proxies.handlers.logger import LoggerHandler
+from flexiq.proxies.reconstruct import _ReconstructionTimeout, _run_with_timeout
 
 # ---------------------------------------------------------------------------
 # FileHandler

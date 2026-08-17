@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard.auth import AuthStore
-from taskito.dashboard.oauth.config import GoogleConfig, OAuthConfig
-from taskito.dashboard.oauth.flow import OAuthFlow
-from taskito.dashboard.oauth.identity import (
+from flexiq import Queue
+from flexiq.dashboard.auth import AuthStore
+from flexiq.dashboard.oauth.config import GoogleConfig, OAuthConfig
+from flexiq.dashboard.oauth.flow import OAuthFlow
+from flexiq.dashboard.oauth.identity import (
     AllowlistDenied,
     IdentityFetchError,
     ProviderIdentity,
@@ -27,7 +27,7 @@ def queue(tmp_path: Path) -> Queue:
 @pytest.fixture
 def config() -> OAuthConfig:
     return OAuthConfig(
-        redirect_base_url="https://taskito.example.com",
+        redirect_base_url="https://flexiq.example.com",
         google=GoogleConfig(
             client_id="cid",
             client_secret="csec",
@@ -89,7 +89,7 @@ def test_start_returns_provider_url_with_safe_next(queue: Queue, config: OAuthCo
     assert url.startswith("https://idp.example.com/authorize?state=")
     args = fake.last_authorization_args
     assert args is not None
-    assert args["redirect_uri"] == "https://taskito.example.com/api/auth/oauth/callback/google"
+    assert args["redirect_uri"] == "https://flexiq.example.com/api/auth/oauth/callback/google"
     assert len(args["state"]) >= 32
 
 

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from taskito.autoscale import ProcessManager
+from flexiq.autoscale import ProcessManager
 
 
 class _FakePopen:
@@ -41,7 +41,7 @@ class _FakePopen:
     def wait(self, timeout: float | None = None) -> int:
         self.wait_calls += 1
         if self._wait_raises and not self._killed:
-            raise subprocess.TimeoutExpired(cmd="taskito", timeout=timeout or 0)
+            raise subprocess.TimeoutExpired(cmd="flexiq", timeout=timeout or 0)
         if self._terminated and not self._killed:
             self.returncode = 0
         return self.returncode or 0
@@ -113,8 +113,8 @@ def test_kill_all_force_terminates_everything() -> None:
     assert pm.count_live() == 0
 
 
-@patch("taskito.autoscale.process_manager.subprocess.Popen")
-def test_spawn_worker_invokes_taskito_worker_module(mock_popen: MagicMock) -> None:
+@patch("flexiq.autoscale.process_manager.subprocess.Popen")
+def test_spawn_worker_invokes_flexiq_worker_module(mock_popen: MagicMock) -> None:
     fake = MagicMock()
     fake.pid = 4242
     mock_popen.return_value = fake
@@ -127,7 +127,7 @@ def test_spawn_worker_invokes_taskito_worker_module(mock_popen: MagicMock) -> No
     cmd: list[Any] = args[0]
     assert cmd[1:] == [
         "-m",
-        "taskito",
+        "flexiq",
         "worker",
         "--app",
         "myapp:queue",

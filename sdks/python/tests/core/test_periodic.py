@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from taskito import PeriodicInfo, Queue
+from flexiq import PeriodicInfo, Queue
 
 
 @pytest.fixture

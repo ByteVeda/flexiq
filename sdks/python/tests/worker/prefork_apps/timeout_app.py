@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 import time
 
-from taskito import Queue
+from flexiq import Queue
 
-queue = Queue(db_path=os.environ.get("FLEXIQ_TIMEOUT_TEST_DB", "/tmp/taskito-timeout.db"))
+queue = Queue(db_path=os.environ.get("FLEXIQ_TIMEOUT_TEST_DB", "/tmp/flexiq-timeout.db"))
 
 
 @queue.task(timeout=2, max_retries=0)

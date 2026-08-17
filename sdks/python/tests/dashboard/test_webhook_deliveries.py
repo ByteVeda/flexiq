@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import _make_handler
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
-from taskito.dashboard.delivery_store import DeliveryStatus, DeliveryStore
-from taskito.events import EventType
+from flexiq import Queue
+from flexiq.dashboard import _make_handler
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq.dashboard.delivery_store import DeliveryStatus, DeliveryStore
+from flexiq.events import EventType
 
 
 @pytest.fixture

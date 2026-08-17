@@ -30,13 +30,13 @@ from typing import Any
 
 import pytest
 
-from taskito import BatchItemResult, MaxRetriesExceededError, Queue
-from taskito.context import current_job
-from taskito.events import EventType
-from taskito.exceptions import SoftTimeoutError
-from taskito.middleware import TaskMiddleware
-from taskito.workflows import Workflow, WorkflowState
-from taskito.workflows.saga import current_compensation_context
+from flexiq import BatchItemResult, MaxRetriesExceededError, Queue
+from flexiq.context import current_job
+from flexiq.events import EventType
+from flexiq.exceptions import SoftTimeoutError
+from flexiq.middleware import TaskMiddleware
+from flexiq.workflows import Workflow, WorkflowState
+from flexiq.workflows.saga import current_compensation_context
 
 # Parametrise the *task*, not the assertion: `async`ness is a property of the
 # function object, so each case defines its own body under an `if is_async`.
@@ -398,7 +398,7 @@ def test_lifecycle_is_logged(queue: Queue, is_async: bool, caplog: Any) -> None:
         def logged() -> str:
             return "ok"
 
-    with caplog.at_level("INFO", logger="taskito"):
+    with caplog.at_level("INFO", logger="flexiq"):
         job = logged.delay()
         thread = _start_worker(queue)
         try:

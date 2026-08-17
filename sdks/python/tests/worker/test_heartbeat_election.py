@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from taskito import Queue
+from flexiq import Queue
 
-# Mirror of `REAPER_LOCK` in crates/taskito-core/src/storage/mod.rs.
+# Mirror of `REAPER_LOCK` in crates/flexiq-core/src/storage/mod.rs.
 REAPER_LOCK = "flexiq:reaper"
 
 

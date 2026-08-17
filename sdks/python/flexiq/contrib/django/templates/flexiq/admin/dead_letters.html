@@ -1,0 +1,52 @@
+{% extends "flexiq/admin/base.html" %}
+{% load flexiq_admin %}
+
+{% block flexiq_content %}
+<h1>Dead Letters</h1>
+
+{% if dead_letters %}
+<div class="module">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Task</th>
+        <th>Queue</th>
+        <th>Retries</th>
+        <th>Failed</th>
+        <th>Error</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for dead in dead_letters %}
+      <tr>
+        <td>{{ dead.id }}</td>
+        <td>{{ dead.task_name }}</td>
+        <td>{{ dead.queue }}</td>
+        <td>{{ dead.retry_count }}</td>
+        <td>{{ dead.failed_at|ms_datetime }}</td>
+        <td><pre>{{ dead.error }}</pre></td>
+        <td>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="retry">
+            <input type="hidden" name="dead_id" value="{{ dead.id }}">
+            <input type="submit" value="Retry">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="paginator">
+  {% if page > 1 %}<a href="?page={{ page|add:'-1' }}">Previous</a>{% endif %}
+  Page {{ page }}
+  {% if has_next %}<a href="?page={{ page|add:'1' }}">Next</a>{% endif %}
+</p>
+{% else %}
+<p>No dead letters.</p>
+{% endif %}
+{% endblock %}

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito import Queue
+from flexiq import Queue
 
 
 @pytest.fixture

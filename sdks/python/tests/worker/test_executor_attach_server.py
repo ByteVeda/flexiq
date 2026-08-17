@@ -1,4 +1,4 @@
-"""The same attach assertions, against the real ``taskito-server`` binary.
+"""The same attach assertions, against the real ``flexiq-server`` binary.
 
 Gated on ``FLEXIQ_SERVER_BIN`` so the default suite needs no Rust build. Its
 job is to keep `test_executor_attach.py`'s hand-rolled scheduler honest: that
@@ -7,8 +7,8 @@ protocol it was told to is the one the server actually speaks.
 
 Build the binary with::
 
-    cargo build -p taskito-server
-    FLEXIQ_SERVER_BIN=target/debug/taskito-server uv run pytest tests/worker
+    cargo build -p flexiq-server
+    FLEXIQ_SERVER_BIN=target/debug/flexiq-server uv run pytest tests/worker
 """
 
 from __future__ import annotations
@@ -39,14 +39,14 @@ from test_executor_attach import (
     wait_started,
 )
 
-from taskito import Queue
+from flexiq import Queue
 
 SERVER_BIN = os.environ.get("FLEXIQ_SERVER_BIN")
 
 pytestmark = [
     pytest.mark.skipif(
         not SERVER_BIN,
-        reason="set FLEXIQ_SERVER_BIN to a built taskito-server to run these",
+        reason="set FLEXIQ_SERVER_BIN to a built flexiq-server to run these",
     ),
     pytest.mark.skipif(
         sys.platform == "win32",

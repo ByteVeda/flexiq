@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from taskito.cli import _build_parser, _load_queue, _print_stats, run_autoscale
+from flexiq.cli import _build_parser, _load_queue, _print_stats, run_autoscale
 
 
 def test_load_queue_invalid_format() -> None:
@@ -22,7 +22,7 @@ def test_load_queue_missing_module() -> None:
 
 def test_print_stats_format(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """_print_stats prints a formatted stats table."""
-    from taskito import Queue
+    from flexiq import Queue
 
     db_path = str(tmp_path / "test_cli_stats.db")
     queue = Queue(db_path=db_path)
@@ -37,7 +37,7 @@ def test_print_stats_format(capsys: pytest.CaptureFixture[str], tmp_path: Path) 
     _print_stats(queue)
     output = capsys.readouterr().out
 
-    assert "taskito queue statistics" in output
+    assert "flexiq queue statistics" in output
     assert "pending" in output
     assert "total" in output
 
@@ -114,11 +114,11 @@ def test_autoscale_invalid_config_exits_cleanly(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """run_autoscale prints a clean error and exits 1 on invalid flag values."""
-    from taskito import Queue
+    from flexiq import Queue
 
     queue_module = tmp_path / "queue_app.py"
     queue_module.write_text(
-        f"from taskito import Queue\nqueue = Queue(db_path={str(tmp_path / 'q.db')!r})\n"
+        f"from flexiq import Queue\nqueue = Queue(db_path={str(tmp_path / 'q.db')!r})\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     assert isinstance(_load_queue("queue_app:queue"), Queue)

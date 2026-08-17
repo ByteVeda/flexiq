@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 
-from taskito import Queue
-from taskito.dashboard import _make_handler
-from taskito.dashboard._testing import AuthedClient, seed_admin_and_session
-from taskito.dashboard.url_safety import UnsafeWebhookUrl, validate_webhook_url
-from taskito.dashboard.webhook_store import WebhookSubscriptionStore
-from taskito.events import EventType
+from flexiq import Queue
+from flexiq.dashboard import _make_handler
+from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
+from flexiq.dashboard.url_safety import UnsafeWebhookUrl, validate_webhook_url
+from flexiq.dashboard.webhook_store import WebhookSubscriptionStore
+from flexiq.events import EventType
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 
@@ -215,7 +215,7 @@ def test_subscription_secret_signs_payload(
     queue._webhook_manager.notify(EventType.JOB_COMPLETED, {"job_id": "x"})
     poll_until(lambda: len(received) >= 1)
 
-    sig_header = received[0]["headers"].get("X-FlexiQ-Signature")
+    sig_header = received[0]["headers"].get("X-Flexiq-Signature")
     assert sig_header is not None
     body_bytes = json.dumps(received[0]["body"], default=str).encode("utf-8")
     expected = hmac.new(b"signing-key", body_bytes, hashlib.sha256).hexdigest()
