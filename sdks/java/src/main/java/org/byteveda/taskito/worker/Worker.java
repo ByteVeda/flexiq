@@ -40,6 +40,7 @@ import org.byteveda.taskito.serialization.Serializer;
 import org.byteveda.taskito.spi.QueueBackend;
 import org.byteveda.taskito.spi.WorkerControl;
 import org.byteveda.taskito.task.CircuitBreakerConfig;
+import org.byteveda.taskito.task.OnExcess;
 import org.byteveda.taskito.task.RetryPolicy;
 import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.task.TaskFunction;
@@ -321,6 +322,7 @@ public final class Worker implements AutoCloseable {
             return task.retryPolicy() != null
                     || task.circuitBreaker() != null
                     || task.rateLimit() != null
+                    || task.onExcess() != OnExcess.DEFER
                     || task.retryBudget() != null
                     || task.maxConcurrent() != null
                     || task.maxInFlightPerTask() != null;
@@ -688,6 +690,9 @@ public final class Worker implements AutoCloseable {
                 encodeCircuitBreaker(task.circuitBreaker(), config);
                 if (task.rateLimit() != null) {
                     config.put("rateLimit", task.rateLimit());
+                }
+                if (task.onExcess() != OnExcess.DEFER) {
+                    config.put("onExcess", task.onExcess().wireName());
                 }
                 if (task.retryBudget() != null) {
                     config.put("retryBudget", task.retryBudget());

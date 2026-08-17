@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.byteveda.taskito.Taskito;
 import org.byteveda.taskito.events.EventName;
+import org.byteveda.taskito.task.OnExcess;
 import org.byteveda.taskito.task.Task;
 import org.byteveda.taskito.worker.Worker;
 import org.junit.jupiter.api.Test;
@@ -187,5 +188,54 @@ class TaskPolicyConfigTest {
                     error.getMessage().contains("rateLimit"),
                     "the error should name the offending option, got: " + error.getMessage());
         }
+    }
+
+    /** {@code onExcess=DROP} sheds the jobs a saturated limiter turns away. */
+    @Test
+    @Timeout(60)
+    void onExcessDropShedsRateLimitedJobs(@TempDir Path dir) throws Exception {
+        // One token per hour: exactly one of the four jobs can dispatch, and the
+        // other three must terminate rather than wait out the limit. The limiter
+        // gates at dispatch, so this asserts on dead-letter rows and pending
+        // depth, never on when the handler ran. A shed job never reaches the
+        // result path, so there is no DEAD event to await — poll the aggregate.
+        Task<String> sample = Task.of("sample", String.class).rateLimit("1/h").onExcess(OnExcess.DROP);
+        int total = 4;
+
+        try (Taskito queue = Taskito.builder()
+                .backend("sqlite")
+                .url(dir.resolve("t.db").toString())
+                .open()) {
+            for (int i = 0; i < total; i++) {
+                queue.enqueue(sample, String.valueOf(i));
+            }
+
+            Worker worker = queue.worker()
+                    .concurrency(2)
+                    .handle(sample, (String p) -> null)
+                    .start();
+            try (worker) {
+                long deadline = System.nanoTime() + Duration.ofSeconds(45).toNanos();
+                while (System.nanoTime() < deadline && queue.stats().pending > 0) {
+                    Thread.sleep(100);
+                }
+            }
+
+            long shed = queue.listDead(10, 0).stream()
+                    .filter(entry -> entry.error != null && entry.error.startsWith("rate_limit:"))
+                    .count();
+            assertEquals(total - 1, shed, "every excess job is shed with the reserved rate_limit: reason");
+            assertEquals(0, queue.stats().pending, "a shed job must not return to the queue");
+        }
+    }
+
+    /** A typo must fail the build, not silently keep deferring the jobs. */
+    @Test
+    void malformedOnExcessIsRejected() {
+        IllegalArgumentException error =
+                assertThrows(IllegalArgumentException.class, () -> OnExcess.fromWireName("discard"));
+        assertTrue(
+                error.getMessage().contains("onExcess"),
+                "the error should name the offending option, got: " + error.getMessage());
     }
 }

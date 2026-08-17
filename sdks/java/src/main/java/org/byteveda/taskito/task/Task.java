@@ -25,6 +25,7 @@ public final class Task<T> {
     private final boolean idempotent;
     private final @Nullable CircuitBreakerConfig circuitBreaker;
     private final @Nullable String rateLimit;
+    private final OnExcess onExcess;
     private final @Nullable String retryBudget;
     private final @Nullable Integer maxConcurrent;
     private final @Nullable Integer maxInFlightPerTask;
@@ -39,6 +40,7 @@ public final class Task<T> {
             boolean idempotent,
             @Nullable CircuitBreakerConfig circuitBreaker,
             @Nullable String rateLimit,
+            OnExcess onExcess,
             @Nullable String retryBudget,
             @Nullable Integer maxConcurrent,
             @Nullable Integer maxInFlightPerTask,
@@ -54,6 +56,7 @@ public final class Task<T> {
         this.idempotent = idempotent;
         this.circuitBreaker = circuitBreaker;
         this.rateLimit = rateLimit;
+        this.onExcess = Objects.requireNonNull(onExcess, "onExcess must not be null");
         this.retryBudget = retryBudget;
         this.maxConcurrent = maxConcurrent;
         this.maxInFlightPerTask = maxInFlightPerTask;
@@ -63,7 +66,19 @@ public final class Task<T> {
     /** A task whose payload deserializes to {@code payloadType}. */
     public static <T> Task<T> of(String name, Class<T> payloadType) {
         return new Task<>(
-                name, payloadType, EnqueueOptions.none(), null, List.of(), false, null, null, null, null, null, null);
+                name,
+                payloadType,
+                EnqueueOptions.none(),
+                null,
+                List.of(),
+                false,
+                null,
+                null,
+                OnExcess.DEFER,
+                null,
+                null,
+                null,
+                null);
     }
 
     /** A task whose payload deserializes to a generic type, e.g. {@code new TypeReference<List<Foo>>(){}}. */
@@ -77,6 +92,7 @@ public final class Task<T> {
                 false,
                 null,
                 null,
+                OnExcess.DEFER,
                 null,
                 null,
                 null,
@@ -94,6 +110,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -115,6 +132,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -149,6 +167,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -171,6 +190,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -192,6 +212,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -213,6 +234,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -234,6 +256,37 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
+                retryBudget,
+                maxConcurrent,
+                maxInFlightPerTask,
+                retryOn);
+    }
+
+    /**
+     * A copy of this task that sheds rate-limited jobs instead of deferring them
+     * when {@code onExcess} is {@link OnExcess#DROP}. A shed job is dead-lettered
+     * on the spot with a reserved {@code rate_limit:} reason, so shedding stays
+     * visible in the dashboard and countable in metrics, and the dead-letter
+     * auto-retry sweep never resurrects it.
+     *
+     * <p>Applies to {@link #rateLimit} and to the limit on the queue this task
+     * runs in, since either rejecting means the same thing to the caller. A
+     * tripped {@link #circuitBreaker} always defers regardless: that is
+     * downstream failure, not excess load. Dropping fires no middleware or event
+     * hooks — the job never ran.
+     */
+    public Task<T> onExcess(OnExcess onExcess) {
+        return new Task<>(
+                name,
+                payloadType,
+                options,
+                retryPolicy,
+                codecs,
+                idempotent,
+                circuitBreaker,
+                rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -258,6 +311,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -281,6 +335,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -305,6 +360,7 @@ public final class Task<T> {
                 idempotent,
                 circuitBreaker,
                 rateLimit,
+                onExcess,
                 retryBudget,
                 maxConcurrent,
                 maxInFlightPerTask,
@@ -385,6 +441,11 @@ public final class Task<T> {
     /** This task's rate-limit spec (e.g. {@code "100/m"}), or {@code null} when unthrottled. */
     public @Nullable String rateLimit() {
         return rateLimit;
+    }
+
+    /** What a saturated rate limit does to this task's jobs; {@link OnExcess#DEFER} unless set. */
+    public OnExcess onExcess() {
+        return onExcess;
     }
 
     /** This task's retry-rate cap (e.g. {@code "100/m"}), or {@code null} when uncapped. */
