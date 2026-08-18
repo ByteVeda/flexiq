@@ -5,6 +5,7 @@
     "error-handling",
     "guarantees",
     "idempotency",
+    "debouncing",
     "rate-limiting",
     "concurrency",
     "circuit-breakers",
