@@ -36,7 +36,7 @@ The key template is resolved against the payload of each enqueue:
 - `{owner.id}` walks into a nested object.
 
 A placeholder that resolves to nothing — a missing property, an explicit null,
-an object or array where a scalar was expected — throws
+an empty value, an object or array where a scalar was expected — throws
 `IllegalArgumentException` at enqueue, and nothing is inserted. The alternative
 would be one global window silently shared by every caller, which is the failure
 debouncing exists to avoid. A template with no placeholder at all is legal and
@@ -105,9 +105,13 @@ between.
 - A debounced task cannot back a subscription. A publish is fanned out by the
   core, one delivery per subscription, and never passes through the enqueue
   path.
-- A `delay` cannot be combined with a window, and is rejected rather than
-  dropped: the deadline is recomputed from the window and max wait inside the
-  storage transaction, so the delay would have no effect.
+- A caller-supplied `delay` cannot be combined with a window and is rejected
+  rather than dropped: the deadline is recomputed from the window and max wait
+  inside the storage transaction, so the delay would have no effect.
+- An enqueue gate's `Defer` is *not* rejected — it is a scheduling hint from a
+  predicate rather than something the caller asked for — but it has no effect on
+  a debounced enqueue either, for the same reason: the window owns the
+  deadline.
 
 <Callout type="info">
   Debouncing collapses *enqueues*; to bound how fast the jobs you do create
