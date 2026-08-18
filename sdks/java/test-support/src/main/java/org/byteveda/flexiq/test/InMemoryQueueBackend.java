@@ -85,6 +85,25 @@ public final class InMemoryQueueBackend implements QueueBackend {
                 }
             }
         }
+        // A debounce slides the open window's deadline instead of inserting a second
+        // job — mirroring Storage::enqueue_debounced, so a test double never reports
+        // a burst as N jobs where the real backend collapses it to one. A claimed job
+        // is left alone: pulling it back would move a run a worker already holds.
+        Long debounceWindowMs = boxedLong(opts, "debounceWindowMs");
+        String debounceKey = text(opts, "debounceKey");
+        boolean replacePayload = optBool(opts, "debounceReplacePayload");
+        if (debounceWindowMs != null && debounceKey != null) {
+            long maxWaitMs = optLong(opts, "debounceMaxWaitMs", debounceWindowMs);
+            for (JobRec existing : jobs.values()) {
+                if (debounceKey.equals(existing.debounceKey) && "pending".equals(existing.status)) {
+                    existing.scheduledAt = Math.min(now() + debounceWindowMs, existing.createdAt + maxWaitMs);
+                    if (replacePayload) {
+                        existing.payload = payload;
+                    }
+                    return existing.id;
+                }
+            }
+        }
         JobRec job = new JobRec();
         job.enqueueSeq = seq.incrementAndGet();
         job.id = "im-" + job.enqueueSeq;
@@ -98,9 +117,13 @@ public final class InMemoryQueueBackend implements QueueBackend {
         job.metadata = text(opts, "metadata");
         job.namespace = text(opts, "namespace");
         job.notes = text(opts, "notes");
+        job.debounceKey = debounceKey;
         long createdAt = now();
         job.createdAt = createdAt;
-        job.scheduledAt = createdAt + optLong(opts, "delayMs", 0);
+        // The window owns the deadline of a debounced job; delayMs is ignored, as the
+        // core's debounced insert ignores the NewJob's scheduled_at.
+        job.scheduledAt =
+                debounceWindowMs != null ? createdAt + debounceWindowMs : createdAt + optLong(opts, "delayMs", 0);
         JsonNode expiresMs = opts == null ? null : opts.get("expiresMs");
         if (expiresMs != null && !expiresMs.isNull()) {
             job.expiresAt = createdAt + Math.max(0, expiresMs.asLong());
@@ -1100,6 +1123,12 @@ public final class InMemoryQueueBackend implements QueueBackend {
         return value == null || value.isNull() ? fallback : value.asInt();
     }
 
+    /** A boolean field; absent, null and false all read as false. */
+    private static boolean optBool(JsonNode node, String field) {
+        JsonNode value = node == null ? null : node.get(field);
+        return value != null && value.asBoolean(false);
+    }
+
     private static long optLong(JsonNode node, String field, long fallback) {
         JsonNode value = node == null ? null : node.get(field);
         return value == null || value.isNull() ? fallback : value.asLong();
@@ -1139,6 +1168,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
         Long expiresAt;
         Long resultTtlMs;
         String uniqueKey;
+        String debounceKey;
         String namespace;
         String metadata;
         String notes;
