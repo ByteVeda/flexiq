@@ -370,7 +370,7 @@ three things that tell it apart:
 
 | Field | Value |
 |---|---|
-| `error` | `rate_limit: task 'record_sample' is over its dispatch rate limit, and its on_excess is drop` |
+| `error` | <code>rate_limit: task '<SdkSwap python="record_sample" node="recordSample" java="record-sample" />' is over its dispatch rate limit, and its on_excess is drop</code> |
 | `metadata` | `{"shed":"rate_limit"}` |
 | `retry_count` | Unchanged — the job never ran, so nothing was attempted |
 
@@ -417,7 +417,7 @@ double-running the work is not. Everything else about the semantics — the
 key's independence — is identical on all three.
 
 <Callout type="info">
-  Dispatch order is a separate lever from all of the above. Under overload,
-  `"lifo"` runs the freshest jobs first, which pairs well with CoDel; `"fifo"`
-  (the default) is fair. Honored on SQLite and PostgreSQL; Redis is FIFO-only.
+  Dispatch order is a separate lever from all of the above. Under overload, LIFO
+  runs the freshest jobs first, which pairs well with CoDel; FIFO (the default)
+  is fair. Set it per queue with <SdkSwap python={<code>set_queue_dispatch_order()</code>} node={<code>configureQueue()</code>} java={<code>dispatchOrder()</code>} />, which takes <SdkSwap python={<code>"lifo"</code>} node={<code>"lifo"</code>} java={<code>DispatchOrder.LIFO</code>} />. Honored on SQLite and PostgreSQL; Redis is FIFO-only.
 </Callout>
