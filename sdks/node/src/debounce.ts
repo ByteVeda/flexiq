@@ -27,22 +27,28 @@ const PLACEHOLDER_PATTERN = /\{([^{}]*)\}/g;
 
 /** Milliseconds for a {@link Duration} — a raw number passes through as ms. */
 function parseDuration(value: Duration, context: string, field: string): number {
+  let milliseconds: number;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new QueueError(`${context}: ${field} must be a finite number of milliseconds`);
+    milliseconds = value;
+  } else {
+    const match = DURATION_PATTERN.exec(value);
+    if (match === null) {
+      throw new QueueError(
+        `${context}: ${field} "${value}" is not a duration — expected a number of ` +
+          'milliseconds or a string like "500ms", "30s", "5m", "2h", "1d"',
+      );
     }
-    return Math.round(value);
+    // Both groups exist whenever the pattern matched; the casts keep
+    // `noUncheckedIndexedAccess` honest without a runtime branch.
+    milliseconds = Number(match[1] as string) * (UNIT_MS[match[2] as string] as number);
   }
-  const match = DURATION_PATTERN.exec(value);
-  if (match === null) {
-    throw new QueueError(
-      `${context}: ${field} "${value}" is not a duration — expected a number of ` +
-        'milliseconds or a string like "500ms", "30s", "5m", "2h", "1d"',
-    );
+  // Checked after the unit multiply, not just on the number path: enough digits
+  // overflow to Infinity, which the native i64 boundary turns into 0 — the core
+  // then rejects a window the caller never wrote.
+  if (!Number.isFinite(milliseconds)) {
+    throw new QueueError(`${context}: ${field} must be a finite number of milliseconds`);
   }
-  // Both groups exist whenever the pattern matched; the casts keep
-  // `noUncheckedIndexedAccess` honest without a runtime branch.
-  return Math.round(Number(match[1] as string) * (UNIT_MS[match[2] as string] as number));
+  return Math.round(milliseconds);
 }
 
 /** Whether any debounce field is set — the signal that an enqueue overrides

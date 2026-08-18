@@ -359,6 +359,19 @@ it("rejects an unparseable duration", () => {
   ).toThrow(/is not a duration/);
 });
 
+it("rejects a duration that overflows to Infinity", () => {
+  // Enough digits and the unit multiply overflows; the native i64 boundary
+  // would silently turn Infinity into 0.
+  const overflowing = `${"9".repeat(320)}d` as `${number}d`;
+  expect(() =>
+    DebounceOptions.from("t", {
+      debounce: overflowing,
+      debounceKey: "k",
+      debounceMaxWait: overflowing,
+    }),
+  ).toThrow(/finite number of milliseconds/);
+});
+
 it("returns undefined when nothing is configured", () => {
   expect(DebounceOptions.from("t", {})).toBeUndefined();
 });
