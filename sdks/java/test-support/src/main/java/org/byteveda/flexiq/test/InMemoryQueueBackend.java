@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -89,13 +90,18 @@ public final class InMemoryQueueBackend implements QueueBackend {
         // job — mirroring Storage::enqueue_debounced, so a test double never reports
         // a burst as N jobs where the real backend collapses it to one. A claimed job
         // is left alone: pulling it back would move a run a worker already holds.
+        String namespace = text(opts, "namespace");
         Long debounceWindowMs = boxedLong(opts, "debounceWindowMs");
         String debounceKey = text(opts, "debounceKey");
         boolean replacePayload = optBool(opts, "debounceReplacePayload");
         if (debounceWindowMs != null && debounceKey != null) {
             long maxWaitMs = optLong(opts, "debounceMaxWaitMs", debounceWindowMs);
             for (JobRec existing : jobs.values()) {
-                if (debounceKey.equals(existing.debounceKey) && "pending".equals(existing.status)) {
+                // Namespace-scoped, like the core's find_debounce_target: the same key in
+                // two namespaces is two windows, not one shared job.
+                if (debounceKey.equals(existing.debounceKey)
+                        && Objects.equals(namespace, existing.namespace)
+                        && "pending".equals(existing.status)) {
                     existing.scheduledAt = Math.min(now() + debounceWindowMs, existing.createdAt + maxWaitMs);
                     if (replacePayload) {
                         existing.payload = payload;
@@ -115,7 +121,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
         job.timeoutMs = optLong(opts, "timeoutMs", 0);
         job.uniqueKey = uniqueKey;
         job.metadata = text(opts, "metadata");
-        job.namespace = text(opts, "namespace");
+        job.namespace = namespace;
         job.notes = text(opts, "notes");
         job.debounceKey = debounceKey;
         long createdAt = now();

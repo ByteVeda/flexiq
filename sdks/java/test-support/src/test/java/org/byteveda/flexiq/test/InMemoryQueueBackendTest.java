@@ -62,6 +62,27 @@ class InMemoryQueueBackendTest {
 
     @Test
     @Timeout(20)
+    void debounceWindowsAreScopedByNamespace() {
+        // The core's find_debounce_target takes the namespace, so the same key under two
+        // namespaces is two windows. The fake has to agree or it hides a real collision.
+        Task<Report> report = Task.of("im.debounce.ns", Report.class)
+                .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+        try (FlexiQ queue = InMemoryFlexiQ.open()) {
+            String tenantA = queue.enqueue(
+                    report,
+                    new Report("u1", 1),
+                    report.options().toBuilder().namespace("a").build());
+            String tenantB = queue.enqueue(
+                    report,
+                    new Report("u1", 1),
+                    report.options().toBuilder().namespace("b").build());
+
+            assertNotEquals(tenantA, tenantB, "one key in two namespaces is two windows");
+        }
+    }
+
+    @Test
+    @Timeout(20)
     void samePriorityJobsRunInEnqueueOrder() throws Exception {
         Task<Integer> order = Task.of("im.order", Integer.class);
         List<Integer> seen = Collections.synchronizedList(new ArrayList<>());
