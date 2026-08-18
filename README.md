@@ -16,7 +16,6 @@ A Rust-powered task queue with native SDKs. One engine — no broker required, j
 [![Maven Central](https://img.shields.io/maven-central/v/org.byteveda/flexiq.svg)](https://central.sonatype.com/artifact/org.byteveda/flexiq) <br>
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ByteVeda/flexiq/blob/master/LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ByteVeda/flexiq)
-[![PyPI Downloads](https://img.shields.io/pepy/dt/flexiq?label=downloads&color=ea7233)](https://pepy.tech/projects/flexiq)
 
 </div>
 
