@@ -60,6 +60,19 @@ pub struct EnqueueOptions {
     pub notes: Option<String>,
     /// Namespace override for this job.
     pub namespace: Option<String>,
+    /// Debounce key, already resolved by the shell. Its presence alone does not
+    /// debounce — `debounceWindowMs` is what routes the enqueue.
+    pub debounce_key: Option<String>,
+    /// Collapse window in milliseconds. Set (with the two fields above and
+    /// below) to route this enqueue through `Storage::enqueue_debounced`.
+    pub debounce_window_ms: Option<i64>,
+    /// Hard ceiling on the total delay, measured from when the window opened.
+    /// Mandatory alongside `debounceWindowMs`: without it a caller who never
+    /// stops enqueuing starves the job forever.
+    pub debounce_max_wait_ms: Option<i64>,
+    /// Overwrite the pending job's payload with this one. Omitted keeps the
+    /// payload the window opened with.
+    pub debounce_replace_payload: Option<bool>,
 }
 
 /// One entry in a batch enqueue: an opaque payload plus its own options.

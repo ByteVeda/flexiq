@@ -2,12 +2,13 @@
 //! logic modules so `queue`/`worker` read as intent, not plumbing.
 
 use flexiq_core::job::now_millis;
+use flexiq_core::storage::records::DebounceOptions;
 use flexiq_core::{Job, NewJob};
 use napi::bindgen_prelude::{Buffer, Result};
 use napi_derive::napi;
 
 use crate::config::EnqueueOptions;
-use crate::error::non_negative;
+use crate::error::{invalid_arg, non_negative};
 
 const DEFAULT_QUEUE: &str = "default";
 // Shared with publish fan-out (queue-level delivery defaults).
@@ -54,8 +55,44 @@ pub fn build_new_job(
         namespace: opts
             .namespace
             .or_else(|| queue_namespace.map(str::to_string)),
-        debounce_key: None,
+        debounce_key: opts.debounce_key,
     })
+}
+
+/// Read the debounce quartet off the JS options. `None` means an ordinary
+/// enqueue; `Some` routes the call through `Storage::enqueue_debounced`.
+///
+/// `debounceWindowMs` is the field that switches the path on, so every other
+/// debounce field is rejected without it: a `debounceKey` on a plainly enqueued
+/// job is worse than ignored, since the partial index makes any pending row
+/// carrying one a slide target for a later debounced enqueue. The window and
+/// max-wait *relationship* is left to the core's `validated_debounce_key`, the
+/// one place that owns it.
+pub fn debounce_options(opts: &EnqueueOptions) -> Result<Option<DebounceOptions>> {
+    let Some(window_ms) = opts.debounce_window_ms else {
+        if opts.debounce_key.is_some()
+            || opts.debounce_max_wait_ms.is_some()
+            || opts.debounce_replace_payload.is_some()
+        {
+            return Err(invalid_arg(
+                "debounceKey/debounceMaxWaitMs/debounceReplacePayload require debounceWindowMs",
+            ));
+        }
+        return Ok(None);
+    };
+    if opts.debounce_key.as_deref().unwrap_or("").is_empty() {
+        return Err(invalid_arg(
+            "debounceWindowMs requires a non-empty debounceKey",
+        ));
+    }
+    let Some(max_wait_ms) = opts.debounce_max_wait_ms else {
+        return Err(invalid_arg("debounceWindowMs requires debounceMaxWaitMs"));
+    };
+    Ok(Some(DebounceOptions {
+        window_ms: non_negative(window_ms, "debounceWindowMs")?,
+        max_wait_ms: non_negative(max_wait_ms, "debounceMaxWaitMs")?,
+        replace_payload: opts.debounce_replace_payload.unwrap_or(false),
+    }))
 }
 
 /// Passed to the JS task callback for each dispatched job. `payload` is the

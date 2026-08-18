@@ -29,6 +29,7 @@ export {
   type Role,
   serveDashboard,
 } from "./dashboard";
+export { DebounceOptions } from "./debounce";
 export { DetachedStorageError } from "./detached";
 export {
   CryptoError,
@@ -162,8 +163,10 @@ export type {
   CursorDetailedJobFilter,
   CursorJobFilter,
   DeadJob,
+  DebounceInput,
   DetailedJobFilter,
   DispatchOrder,
+  Duration,
   EffectiveRetention,
   EnqueueOptions,
   Job,
