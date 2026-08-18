@@ -259,6 +259,16 @@ between.
   </Tab>
 </CodeTabs>
 
+<Callout type="info" title="The override rule is not the same in every SDK">
+  A deliberate divergence, not an inconsistency to route around. Python treats
+  the `debounce*` set as all-or-nothing: naming any one of them means the call
+  defines the whole window, so a one-second window can never inherit a
+  thirty-minute ceiling it did not ask for. Node merges field by field, so an
+  enqueue can move the window and keep the task's key and max wait. Java replaces
+  the task's `EnqueueOptions` wholesale — passing options at all means passing
+  every option, debounce included.
+</Callout>
+
 ## Limits
 
 | Combined with | What happens |
