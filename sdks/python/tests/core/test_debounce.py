@@ -322,6 +322,16 @@ def test_per_call_dedup_key_with_debounce_is_refused(queue: Queue) -> None:
         build.apply_async(args=(1,), idempotency_key="explicit")
 
 
+def test_replace_payload_alone_is_refused_at_the_binding(queue: Queue) -> None:
+    """The low-level binding refuses it too, not just ``normalize_debounce``.
+
+    On its own the flag is a window the caller thinks they configured and did
+    not, so it must not fall through to a plain insert.
+    """
+    with pytest.raises(ValueError, match="debounce_replace_payload requires"):
+        queue._inner.enqueue(task_name="t", payload=b"x", debounce_replace_payload=True)
+
+
 def test_delay_with_debounce_is_refused(queue: Queue) -> None:
     """The window owns the deadline, so a delay would be silently dropped."""
 

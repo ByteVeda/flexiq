@@ -338,12 +338,21 @@ impl PyQueue {
             debounce_window_ms,
             debounce_max_wait_ms,
         ) {
-            (None, None, None) => None,
+            (None, None, None) if !debounce_replace_payload => None,
             (Some(_), Some(window_ms), Some(max_wait_ms)) => Some(DebounceOptions {
                 window_ms,
                 max_wait_ms,
                 replace_payload: debounce_replace_payload,
             }),
+            // `replace_payload` only means anything to a debounced write, so on
+            // its own it is a window the caller thinks they configured and did
+            // not. Its own arm because the message names the missing three.
+            (None, None, None) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "debounce_replace_payload requires debounce_key, debounce_window_ms \
+                     and debounce_max_wait_ms",
+                ))
+            }
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "debounce_key, debounce_window_ms and debounce_max_wait_ms must be \
