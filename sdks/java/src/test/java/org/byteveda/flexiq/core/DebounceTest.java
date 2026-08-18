@@ -89,12 +89,13 @@ class DebounceTest {
             Thread.sleep(300);
             queue.enqueue(task, new Report("u1", 2));
 
+            // Exactly the cap, not merely under it: the 300ms sleep puts now + window
+            // (createdAt + ~5_300) past createdAt + maxWait, so min() must pick the cap.
+            // An upper-bound assertion would also pass on the unslid 5_000ms deadline.
             Job slid = job(queue, id);
-            assertTrue(
-                    slid.scheduledAt <= opened.createdAt + 5_100,
-                    "max wait caps the deadline at createdAt + maxWait, got " + (slid.scheduledAt - opened.createdAt)
-                            + "ms past open");
-            assertTrue(slid.scheduledAt > opened.createdAt, "the job still runs in the future");
+            assertEquals(
+                    opened.createdAt + 5_100, slid.scheduledAt, "max wait caps the deadline at createdAt + maxWait");
+            assertTrue(slid.scheduledAt > opened.scheduledAt, "the capped deadline is still a slide forward");
         }
     }
 
