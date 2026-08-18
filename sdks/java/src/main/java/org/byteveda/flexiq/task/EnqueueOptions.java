@@ -42,6 +42,23 @@ public final class EnqueueOptions {
     @JsonProperty("notes")
     private final @Nullable String notes;
 
+    // The debounce window. Present alongside the other two wire fields, it routes the
+    // enqueue through the core's enqueue_debounced instead of a plain insert.
+    @JsonProperty("debounceWindowMs")
+    private final @Nullable Long debounceWindowMs;
+
+    @JsonProperty("debounceMaxWaitMs")
+    private final @Nullable Long debounceMaxWaitMs;
+
+    @JsonProperty("debounceReplacePayload")
+    private final @Nullable Boolean debounceReplacePayload;
+
+    // Serialized as the wire's debounceKey, but what a caller sets here is a *template*
+    // ("report:{userId}"). DefaultFlexiQ resolves it against the payload and re-sets it
+    // before encoding, so only a concrete key ever crosses the boundary.
+    @JsonProperty("debounceKey")
+    private final @Nullable String debounceKey;
+
     // Idempotency inputs resolve to uniqueKey locally (see DefaultFlexiQ) and never cross
     // the wire, so they carry no @JsonProperty and are not serialized into the options JSON.
     private final @Nullable Boolean idempotent;
@@ -61,6 +78,10 @@ public final class EnqueueOptions {
         this.notes = b.notes;
         this.idempotent = b.idempotent;
         this.idempotencyKey = b.idempotencyKey;
+        this.debounceWindowMs = b.debounceWindowMs;
+        this.debounceMaxWaitMs = b.debounceMaxWaitMs;
+        this.debounceReplacePayload = b.debounceReplacePayload;
+        this.debounceKey = b.debounceKey;
     }
 
     public static EnqueueOptions none() {
@@ -86,6 +107,10 @@ public final class EnqueueOptions {
         b.notes = notes;
         b.idempotent = idempotent;
         b.idempotencyKey = idempotencyKey;
+        b.debounceWindowMs = debounceWindowMs;
+        b.debounceMaxWaitMs = debounceMaxWaitMs;
+        b.debounceReplacePayload = debounceReplacePayload;
+        b.debounceKey = debounceKey;
         return b;
     }
 
@@ -107,6 +132,11 @@ public final class EnqueueOptions {
     /** The per-job timeout in milliseconds, or {@code null} for the core default. */
     public @Nullable Long timeoutMs() {
         return timeoutMs;
+    }
+
+    /** The enqueue delay in milliseconds, or {@code null} when the job runs as soon as it can. */
+    public @Nullable Long delayMs() {
+        return delayMs;
     }
 
     /** Job ids this enqueue waits on before it can be dequeued, or {@code null} when none. */
@@ -132,6 +162,34 @@ public final class EnqueueOptions {
         return idempotencyKey;
     }
 
+    /** The debounce window in milliseconds, or {@code null} when this enqueue does not debounce. */
+    public @Nullable Long debounceWindowMs() {
+        return debounceWindowMs;
+    }
+
+    /** The ceiling on a debounced job's total delay, in milliseconds, or {@code null}. */
+    public @Nullable Long debounceMaxWaitMs() {
+        return debounceMaxWaitMs;
+    }
+
+    /** Whether a repeat debounced enqueue overwrites the pending job's payload. */
+    public boolean debounceReplacePayload() {
+        return Boolean.TRUE.equals(debounceReplacePayload);
+    }
+
+    /**
+     * The debounce key template (e.g. {@code "report:{userId}"}), or {@code null} when this
+     * enqueue does not debounce. Resolved against the payload at enqueue time.
+     */
+    public @Nullable String debounceKey() {
+        return debounceKey;
+    }
+
+    /** Whether this enqueue debounces — i.e. whether a window was set. */
+    public boolean debounces() {
+        return debounceWindowMs != null;
+    }
+
     public static final class Builder {
         private @Nullable String queue;
         private @Nullable Integer priority;
@@ -145,6 +203,10 @@ public final class EnqueueOptions {
         private @Nullable String notes;
         private @Nullable Boolean idempotent;
         private @Nullable String idempotencyKey;
+        private @Nullable Long debounceWindowMs;
+        private @Nullable Long debounceMaxWaitMs;
+        private @Nullable Boolean debounceReplacePayload;
+        private @Nullable String debounceKey;
 
         public Builder queue(String queue) {
             this.queue = queue;
@@ -259,8 +321,94 @@ public final class EnqueueOptions {
             return this;
         }
 
+        /**
+         * Collapse a burst of enqueues that share a {@link #debounceKey} into one run:
+         * while the pending job is unclaimed, each further enqueue slides its deadline
+         * {@code window} into the future instead of inserting a second job. Distinct
+         * from {@link #idempotent}, which dedupes onto the first job and never moves it.
+         *
+         * <p>Setting this turns debouncing on, and so requires both {@link #debounceKey}
+         * and {@link #debounceMaxWait} — {@link #build()} rejects an incomplete set.
+         */
+        public Builder debounce(Duration window) {
+            this.debounceWindowMs = window.toMillis();
+            return this;
+        }
+
+        /**
+         * The window's identity, as a template resolved against the payload:
+         * {@code "report:{userId}"} reads the {@code userId} property off the enqueued
+         * payload, and a dotted path ({@code "{owner.id}"}) walks into a nested object.
+         * A placeholder the payload does not provide throws at enqueue rather than
+         * degrading to a key every caller shares. A template with no placeholder is a
+         * deliberate single window for the task.
+         */
+        public Builder debounceKey(String debounceKey) {
+            this.debounceKey = debounceKey;
+            return this;
+        }
+
+        /**
+         * Ceiling on the total delay, measured from when the window opened, and never
+         * shorter than {@link #debounce}. Mandatory: without it a caller who never stops
+         * enqueuing starves the job forever, which is the classic debounce footgun.
+         */
+        public Builder debounceMaxWait(Duration maxWait) {
+            this.debounceMaxWaitMs = maxWait.toMillis();
+            return this;
+        }
+
+        /**
+         * Whether an enqueue landing on an open window also overwrites the pending job's
+         * payload with its own. The default {@code false} keeps the payload the window
+         * opened with — a repeat enqueue is a vote to run again soon, not a redefinition
+         * of the run.
+         */
+        public Builder debounceReplacePayload(boolean debounceReplacePayload) {
+            this.debounceReplacePayload = debounceReplacePayload;
+            return this;
+        }
+
+        /**
+         * @throws IllegalArgumentException if the debounce options are incomplete or
+         *     contradictory — a window with no key or no max wait, a max wait shorter
+         *     than the window, or any debounce field set without a window
+         */
         public EnqueueOptions build() {
+            validateDebounce();
             return new EnqueueOptions(this);
+        }
+
+        /**
+         * The four debounce fields are a set, not four independent knobs, so every
+         * incomplete combination is refused here rather than half-applied at enqueue.
+         */
+        private void validateDebounce() {
+            if (debounceWindowMs == null) {
+                if (debounceKey != null || debounceMaxWaitMs != null || debounceReplacePayload != null) {
+                    throw new IllegalArgumentException(
+                            "debounceKey/debounceMaxWait/debounceReplacePayload require debounce(...)"
+                                    + " — the window length is what turns debouncing on");
+                }
+                return;
+            }
+            if (debounceWindowMs <= 0) {
+                throw new IllegalArgumentException(
+                        "debounce must be a positive duration, got " + debounceWindowMs + "ms");
+            }
+            if (debounceMaxWaitMs == null) {
+                throw new IllegalArgumentException("debounce(...) requires debounceMaxWait(...) — an unbounded"
+                        + " debounce starves the job while enqueues keep arriving");
+            }
+            if (debounceKey == null || debounceKey.isEmpty()) {
+                throw new IllegalArgumentException("debounce(...) requires a non-empty debounceKey(...) — one window"
+                        + " per task would collapse every caller's work into a single run, so the key is what"
+                        + " scopes it, e.g. \"report:{userId}\"");
+            }
+            if (debounceMaxWaitMs < debounceWindowMs) {
+                throw new IllegalArgumentException("debounceMaxWait (" + debounceMaxWaitMs + "ms) must be at least"
+                        + " as long as debounce (" + debounceWindowMs + "ms), or the window never gets to slide");
+            }
         }
     }
 }

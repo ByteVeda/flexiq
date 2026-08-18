@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +37,7 @@ import org.byteveda.flexiq.events.WorkflowEvent;
 import org.byteveda.flexiq.interception.Interception;
 import org.byteveda.flexiq.interception.InterceptionAnalysis;
 import org.byteveda.flexiq.interception.Interceptor;
+import org.byteveda.flexiq.internal.DebounceKeys;
 import org.byteveda.flexiq.internal.IdempotencyKeys;
 import org.byteveda.flexiq.internal.MiddlewareDisables;
 import org.byteveda.flexiq.internal.SettingsDocument;
@@ -398,6 +400,13 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
             return Optional.empty();
         }
         EnqueueOptions finalOptions = context.options();
+        boolean debounced = finalOptions.debounces();
+        if (debounced && finalOptions.delayMs() != null) {
+            throw new IllegalArgumentException("cannot combine a delay with debounce on task '" + taskName
+                    + "' — the window sets the deadline, so the delay would be silently dropped");
+        }
+        // A gate's Defer is still applied: it is a scheduling hint from a predicate, not a
+        // caller's request, and the core's debounced insert simply ignores scheduled_at.
         if (decision instanceof EnqueueDecision.Defer defer) {
             finalOptions = withDelay(finalOptions, defer.delay());
         }
@@ -413,8 +422,25 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
         // change the dedup key.
         byte[] payloadBytes = serializer.serializeCall(context.payload());
         String uniqueKey = resolveUniqueKey(taskName, payloadBytes, finalOptions, taskIdempotentDefault);
+        if (debounced && uniqueKey != null) {
+            // A debounced enqueue slides the pending job's deadline; a deduped one returns
+            // that job untouched. Both answer "what does a repeat enqueue do", and they
+            // disagree — the core's debounced insert does no dedup, so honouring both is
+            // not on offer.
+            throw new IllegalArgumentException("cannot combine a dedup key with debounce on task '" + taskName
+                    + "' — idempotency returns the pending job untouched, a debounce slides its deadline");
+        }
         if (uniqueKey != null && !uniqueKey.equals(finalOptions.uniqueKey())) {
             finalOptions = finalOptions.toBuilder().uniqueKey(uniqueKey).build();
+        }
+        if (debounced) {
+            // Resolved against the payload that is actually being stored — after
+            // interceptors and middleware have had their say — so the key always
+            // describes the job the window will run.
+            finalOptions = finalOptions.toBuilder()
+                    .debounceKey(DebounceKeys.resolve(
+                            Objects.requireNonNull(finalOptions.debounceKey()), taskName, context.payload()))
+                    .build();
         }
         byte[] data = encodeCodecs(payloadBytes, codecNames);
         String jobId = backend.enqueue(taskName, data, encode(finalOptions));
@@ -552,6 +578,13 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
 
     @Override
     public <T> List<String> enqueueMany(Task<T> task, List<T> payloads, EnqueueOptions options) {
+        if (options.debounces()) {
+            // The batch is one native call with no debounce step, so a key would be written
+            // and never honoured — and a plain pending row carrying a debounce key is a slide
+            // target for the next debounced enqueue.
+            throw new IllegalArgumentException("cannot batch-enqueue debounced task '" + task.name()
+                    + "' — a window collapses enqueues one at a time; submit them individually");
+        }
         // Run each payload through interceptors then gates (a single rejection fails
         // the whole batch), so batch enqueue can't bypass the interception contract.
         // Nothing is submitted until the single enqueueMany call, so it stays all-or-nothing.
@@ -971,6 +1004,12 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     public <T> FlexiQ subscribe(String topic, Task<T> task, SubscriptionOptions options) {
         String name = options.name() != null ? options.name() : task.name();
         EnqueueOptions taskDefaults = task.options();
+        if (taskDefaults.debounces()) {
+            // The core fans a publish out to every subscription directly; deliveries never
+            // pass through this shell's enqueue path, so the window would be dead config.
+            throw new IllegalArgumentException("debounce does not apply to topic deliveries — subscription '" + name
+                    + "' names debounced task '" + task.name() + "'");
+        }
         // A durable subscription registers now so producer-only processes see it;
         // an ephemeral one waits for a worker start to bind to that worker's id.
         // Register before recording locally, so a failed registration leaves no
