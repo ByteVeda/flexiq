@@ -19,6 +19,7 @@ with the decorator keeps the interactions in one file.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import os
 from collections import Counter
@@ -30,6 +31,12 @@ from flexiq._flexiq import PyQueue
 from flexiq.async_support.mixins import AsyncQueueMixin
 from flexiq.batching import BatchAccumulator, BatchConfig
 from flexiq.codecs import CodecSerializer, PayloadCodec
+from flexiq.debounce import (
+    DebounceConfig,
+    Duration,
+    normalize_debounce,
+    resolve_debounce_key,
+)
 from flexiq.detached import DetachedNative, is_detached
 from flexiq.enums import StorageBackend, coerce_enum
 from flexiq.events import EventBus, EventType
@@ -339,6 +346,13 @@ class Queue(
         self._task_serializers: dict[str, Serializer] = {}
         self._task_codecs: dict[str, list[str]] = {}
         self._task_idempotent: dict[str, bool] = {}
+        self._task_debounce: dict[str, DebounceConfig] = {}
+        # Signatures of debounced tasks, so a key template can address
+        # parameters by name even when the caller passed them positionally.
+        # Cached because ``inspect.signature`` is far too slow to run per
+        # enqueue, and populated lazily so a task registered after the first
+        # submission still gets one.
+        self._task_signatures: dict[str, inspect.Signature | None] = {}
         self._task_compensates: dict[str, str] = {}
         self._task_batch_configs: dict[str, BatchConfig] = {}
         # Per-task cooperative timeout, mirrored here like every other per-task
@@ -486,6 +500,72 @@ class Queue(
             return self._auto_idempotency_key(task_name, payload)
         return None
 
+    def _task_signature(self, task_name: str) -> inspect.Signature | None:
+        """The registered task's signature, or ``None`` when it has none.
+
+        A task can be submitted by name without ever being registered in this
+        process (a producer that only enqueues, a workflow step naming a task
+        that lives on the worker). Those calls still get positional
+        (``{0}``) and keyword placeholders; only name-for-positional binding
+        needs the signature.
+        """
+        fn = self._task_registry.get(task_name)
+        if fn is None:
+            # Not cached: registration may still be ahead of us, and a miss
+            # costs one dict lookup rather than an ``inspect.signature`` call.
+            return None
+        if task_name in self._task_signatures:
+            return self._task_signatures[task_name]
+        signature: inspect.Signature | None
+        try:
+            signature = inspect.signature(fn)
+        except (TypeError, ValueError):  # pragma: no cover - exotic callables
+            signature = None
+        self._task_signatures[task_name] = signature
+        return signature
+
+    def _resolve_debounce(
+        self,
+        task_name: str,
+        args: tuple,
+        kwargs: dict[str, Any],
+        debounce: Duration | None,
+        debounce_key: str | None,
+        debounce_max_wait: Duration | None,
+        debounce_replace_payload: bool | None,
+    ) -> tuple[str, DebounceConfig] | None:
+        """Resolve this call's debounce window and its key, or ``None`` when off.
+
+        Per-call options override the registered window as a set: passing any
+        of them means this call defines its own window, so the four are
+        validated together rather than mixed field-by-field with the task's.
+        That keeps a per-call ``debounce="1s"`` from inheriting a 30-minute
+        ``max_wait`` that no longer makes sense next to it.
+        """
+        per_call = (
+            debounce is not None
+            or debounce_key is not None
+            or debounce_max_wait is not None
+            or debounce_replace_payload is not None
+        )
+        if per_call:
+            config = normalize_debounce(
+                debounce, debounce_key, debounce_max_wait, bool(debounce_replace_payload)
+            )
+        else:
+            config = self._task_debounce.get(task_name)
+        if config is None:
+            return None
+
+        key = resolve_debounce_key(
+            config.key_template,
+            task_name,
+            self._task_signature(task_name),
+            args,
+            kwargs,
+        )
+        return key, config
+
     # ── Batching ──────────────────────────────────────────────────────
 
     def _ensure_batch_accumulator(self) -> BatchAccumulator:
@@ -623,6 +703,10 @@ class Queue(
         result_ttl: int | None = None,
         idempotency_key: str | None = None,
         idempotent: bool | None = None,
+        debounce: Duration | None = None,
+        debounce_key: str | None = None,
+        debounce_max_wait: Duration | None = None,
+        debounce_replace_payload: bool | None = None,
     ) -> JobResult:
         """Enqueue a task for background execution.
 
@@ -652,6 +736,31 @@ class Queue(
                 auto-derived dedup key for this single call. ``None`` (the
                 default) falls back to the per-task setting from
                 ``@queue.task(idempotent=True)``.
+            debounce: Debounce window for this call — a duration string
+                (``"5m"``) or a number of seconds. While a job with the same
+                resolved ``debounce_key`` is pending and unclaimed, this
+                submission slides its deadline forward instead of enqueuing a
+                second job. Requires ``debounce_key`` and ``debounce_max_wait``.
+            debounce_key: Format template resolved against ``args``/``kwargs``,
+                e.g. ``"report:{user_id}"``. A placeholder the call does not
+                provide raises rather than collapsing to one global key.
+            debounce_max_wait: Ceiling on the total delay, measured from when
+                the window opened. Mandatory alongside ``debounce`` — an
+                unbounded debounce starves the job.
+            debounce_replace_payload: Overwrite the pending job's payload with
+                this call's when the submission lands on an open window.
+                Defaults to keeping the payload the window opened with.
+
+        Passing any ``debounce*`` option makes this call define its own window
+        outright; passing none of them falls back to the task's registered
+        window, if it has one. Either way the window owns the deadline, so
+        ``delay`` cannot be combined with it and a predicate's deferral has no
+        effect on a debounced submission.
+
+        Raises:
+            ValueError: the ``debounce*`` options are incomplete or
+                contradictory, or ``debounce_key`` names something this call
+                does not provide.
         """
         final_args = args
         final_kwargs = kwargs or {}
@@ -674,6 +783,10 @@ class Queue(
                 "result_ttl": result_ttl,
                 "idempotency_key": idempotency_key,
                 "idempotent": idempotent,
+                "debounce": debounce,
+                "debounce_key": debounce_key,
+                "debounce_max_wait": debounce_max_wait,
+                "debounce_replace_payload": debounce_replace_payload,
             }
             for mw in self._global_middleware:
                 if not mw._should_apply(None, task_name=task_name):
@@ -697,10 +810,32 @@ class Queue(
             result_ttl = enqueue_options.get("result_ttl")
             idempotency_key = enqueue_options.get("idempotency_key")
             idempotent = enqueue_options.get("idempotent")
+            debounce = enqueue_options.get("debounce")
+            debounce_key = enqueue_options.get("debounce_key")
+            debounce_max_wait = enqueue_options.get("debounce_max_wait")
+            debounce_replace_payload = enqueue_options.get("debounce_replace_payload")
 
         # Validation runs *after* middleware so a mutating hook still gets
         # the chance to reshape notes before we reject them.
         notes_encoded = validate_and_encode_notes(notes)
+
+        # Resolved before interception, so the key comes from the arguments the
+        # caller actually passed rather than the placeholder references the
+        # interceptor swaps in for large values.
+        debounce_plan = self._resolve_debounce(
+            task_name,
+            final_args,
+            final_kwargs,
+            debounce,
+            debounce_key,
+            debounce_max_wait,
+            debounce_replace_payload,
+        )
+        if debounce_plan is not None and delay is not None:
+            raise ValueError(
+                f"cannot combine delay with debounce on task {task_name!r} — the "
+                "window sets the deadline, so the delay would be silently dropped"
+            )
 
         if self._interceptor is not None and not self._test_mode_active:
             final_args, final_kwargs = self._interceptor.intercept(final_args, final_kwargs)
@@ -711,6 +846,12 @@ class Queue(
         # accumulated items.
         batch_cfg = self._task_batch_configs.get(task_name)
         if batch_cfg is not None:
+            if debounce_plan is not None:
+                raise ValueError(
+                    f"cannot debounce batched task {task_name!r} — batched calls are "
+                    "buffered in-process and never reach the queue individually, so "
+                    "there is nothing to collapse"
+                )
             if final_kwargs:
                 raise ValueError(
                     f"batched task {task_name!r} does not accept kwargs — "
@@ -737,6 +878,13 @@ class Queue(
             idempotent=idempotent,
         )
 
+        if debounce_plan is not None and unique_key is not None:
+            raise ValueError(
+                f"cannot combine a dedup key with debounce on task {task_name!r} — "
+                "a debounced submission slides the pending job's deadline instead of "
+                "deduplicating against it, and the two keys would fight"
+            )
+
         payload = self._apply_task_codecs(task_name, payload)
         self._check_payload_size(task_name, len(payload))
 
@@ -762,6 +910,7 @@ class Queue(
 
         self._reject_if_queue_full(queue or "default")
 
+        resolved_key, debounce_config = debounce_plan or (None, None)
         py_job = self._inner.enqueue(
             task_name=task_name,
             payload=payload,
@@ -776,6 +925,10 @@ class Queue(
             depends_on=dep_ids,
             expires=expires,
             result_ttl=result_ttl,
+            debounce_key=resolved_key,
+            debounce_window_ms=debounce_config.window_ms if debounce_config else None,
+            debounce_max_wait_ms=debounce_config.max_wait_ms if debounce_config else None,
+            debounce_replace_payload=bool(debounce_config and debounce_config.replace_payload),
         )
 
         self._emit_event(
@@ -869,6 +1022,12 @@ class Queue(
                 raise ValueError(
                     f"{field_name} length ({len(values)}) must match args_list length ({count})"
                 )
+        if task_name in self._task_debounce:
+            raise ValueError(
+                f"cannot batch-enqueue debounced task {task_name!r} — a debounce "
+                "window collapses submissions one at a time, and the batch insert "
+                "has no equivalent. Submit them individually."
+            )
         kw_list = kwargs_list or [{}] * count
 
         chain = self._get_middleware_chain(task_name)

@@ -19,6 +19,7 @@ from flexiq.batching.config import BatchConfig
 from flexiq.codecs import CodecSerializer
 from flexiq.context import _clear_context
 from flexiq.dashboard.middleware_store import MiddlewareDisableStore
+from flexiq.debounce import DebounceConfig, Duration, normalize_debounce
 from flexiq.detached import disabled_middleware as dispatched_disabled_middleware
 from flexiq.detached import is_detached
 from flexiq.enums import OnExcess, coerce_enum
@@ -76,6 +77,8 @@ class QueueDecoratorMixin:
     _codecs: dict[str, PayloadCodec]
     _task_codecs: dict[str, list[str]]
     _task_idempotent: dict[str, bool]
+    _task_debounce: dict[str, DebounceConfig]
+    _task_signatures: dict[str, inspect.Signature | None]
     _task_compensates: dict[str, str]
     _task_batch_configs: dict[str, Any]
     _task_soft_timeouts: dict[str, float]
@@ -224,6 +227,10 @@ class QueueDecoratorMixin:
         max_in_flight_per_task: int | None = None,
         retry_budget: str | None = None,
         on_excess: OnExcess | str = OnExcess.DEFER,
+        debounce: Duration | None = None,
+        debounce_key: str | None = None,
+        debounce_max_wait: Duration | None = None,
+        debounce_replace_payload: bool = False,
     ) -> Callable[[Callable[..., Any]], TaskWrapper]:
         """Decorator to register a function as a background task.
 
@@ -327,6 +334,33 @@ class QueueDecoratorMixin:
             default_defer_seconds: Default delay when ``on_false="defer"``
                 and the predicate returns plain ``False`` (no explicit
                 ``Defer(seconds=...)``). Ignored otherwise.
+            debounce: Length of the debounce window — a duration string
+                (``"500ms"``, ``"5m"``, ``"2h"``) or a number of seconds. While
+                a job with the same resolved ``debounce_key`` is still pending
+                and unclaimed, each further submission slides that job's
+                deadline forward instead of enqueuing a second one, so a burst
+                collapses into a single run. Requires ``debounce_key`` and
+                ``debounce_max_wait``, and rules out ``idempotent=True``,
+                ``batch=...``, ``.map()``/``enqueue_many``, and a per-call
+                ``delay`` — each of those either decides the same thing or
+                would be silently dropped. ``None`` (default) disables
+                debouncing.
+            debounce_key: Format template resolved against each call's
+                arguments, e.g. ``"report:{user_id}"``. Parameters are
+                addressable by name whether passed positionally or by keyword.
+                A placeholder the call does not provide raises at enqueue time
+                rather than silently collapsing to one global key. A template
+                with no placeholder is a deliberate queue-wide window.
+            debounce_max_wait: Hard ceiling on the total delay, measured from
+                when the window opened — same syntax as ``debounce``, and never
+                shorter than it. Mandatory: without it a caller who never stops
+                submitting starves the job forever.
+            debounce_replace_payload: When ``True``, a submission that lands on
+                an open window also overwrites the pending job's payload with
+                its own, so the run uses the newest arguments. The default
+                ``False`` keeps the payload the window opened with — a repeat
+                submission is a vote to run again soon, not a redefinition of
+                the run.
 
         Returns:
             A decorator that wraps the function in a :class:`~flexiq.task.TaskWrapper`
@@ -337,8 +371,9 @@ class QueueDecoratorMixin:
             ValueError: ``on_false`` is neither a :class:`PredicateAction` nor one
                 of its wire strings (``"defer"``/``"cancel"``), ``on_excess`` is
                 neither an :class:`OnExcess` nor one of its wire strings
-                (``"defer"``/``"drop"``), or ``default_defer_seconds`` is
-                negative.
+                (``"defer"``/``"drop"``), ``default_defer_seconds`` is negative,
+                or the ``debounce*`` options are incomplete, contradictory, or
+                combined with ``idempotent=True`` / ``batch=...``.
         """
         on_false_action = coerce_enum(PredicateAction, on_false, param="on_false")
         on_excess_action = coerce_enum(OnExcess, on_excess, param="on_excess")
@@ -350,6 +385,20 @@ class QueueDecoratorMixin:
                 "batch=... is incompatible with idempotent=True — the auto-derived "
                 "dedup key would change for every batch flush. Use an explicit "
                 "idempotency_key per .delay() call if you need dedup."
+            )
+        debounce_config = normalize_debounce(
+            debounce, debounce_key, debounce_max_wait, debounce_replace_payload
+        )
+        if debounce_config is not None and idempotent:
+            raise ValueError(
+                "debounce=... is incompatible with idempotent=True — both decide what "
+                "a repeat submission does, and they disagree: idempotency returns the "
+                "pending job untouched, a debounce slides its deadline. Pick one."
+            )
+        if debounce_config is not None and batch_config is not None:
+            raise ValueError(
+                "debounce=... is incompatible with batch=... — batched calls never "
+                "reach the queue individually, so there is nothing to debounce."
             )
 
         def decorator(fn: Callable) -> TaskWrapper:
@@ -408,6 +457,14 @@ class QueueDecoratorMixin:
             # Store per-task idempotency flag (auto-derives unique_key on enqueue)
             if idempotent:
                 self._task_idempotent[task_name] = True
+
+            # Per-task debounce window. Re-registering a name replaces the task,
+            # so an absent window has to clear any earlier one rather than leave
+            # it for the new task to inherit.
+            if debounce_config is None:
+                self._task_debounce.pop(task_name, None)
+            else:
+                self._task_debounce[task_name] = debounce_config
 
             # Saga compensation: record the compensating task's name so the
             # workflow tracker can enqueue it during reverse-order rollback.
@@ -471,6 +528,9 @@ class QueueDecoratorMixin:
             if is_async:
                 wrapped._flexiq_async_fn = fn  # type: ignore[attr-defined]
             self._task_registry[task_name] = wrapped
+            # Re-registering a name replaces the function, so the cached
+            # signature a debounce key template binds against goes with it.
+            self._task_signatures.pop(task_name, None)
 
             cb_threshold = None
             cb_window = None

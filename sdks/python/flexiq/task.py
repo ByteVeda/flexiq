@@ -10,6 +10,7 @@ from flexiq.interception import InterceptionReport
 
 if TYPE_CHECKING:
     from flexiq.app import Queue
+    from flexiq.debounce import Duration
     from flexiq.result import JobResult
 
 
@@ -97,6 +98,10 @@ class TaskWrapper:
         result_ttl: int | None = None,
         idempotency_key: str | None = None,
         idempotent: bool | None = None,
+        debounce: Duration | None = None,
+        debounce_key: str | None = None,
+        debounce_max_wait: Duration | None = None,
+        debounce_replace_payload: bool | None = None,
     ) -> JobResult:
         """Enqueue with full control over submission options.
 
@@ -123,6 +128,20 @@ class TaskWrapper:
                 serialized payload; ``False`` disables it for this call (useful
                 when the task is registered with ``idempotent=True`` but a
                 particular submission must run again).
+            debounce: Debounce window for this submission — a duration string
+                (``"5m"``) or a number of seconds. Requires ``debounce_key``
+                and ``debounce_max_wait``.
+            debounce_key: Format template resolved against ``args``/``kwargs``,
+                e.g. ``"report:{user_id}"``.
+            debounce_max_wait: Ceiling on the total delay, measured from when
+                the window opened. Mandatory alongside ``debounce``.
+            debounce_replace_payload: Overwrite the pending job's payload with
+                this call's when the submission lands on an open window.
+
+        Passing any ``debounce*`` option makes this call define its own window;
+        passing none of them uses the window from ``@queue.task(debounce=...)``,
+        if the task has one. A debounced submission cannot also carry ``delay``
+        — the window owns the deadline.
         """
         return self._queue.enqueue(
             task_name=self._task_name,
@@ -141,6 +160,10 @@ class TaskWrapper:
             result_ttl=result_ttl,
             idempotency_key=idempotency_key,
             idempotent=idempotent,
+            debounce=debounce,
+            debounce_key=debounce_key,
+            debounce_max_wait=debounce_max_wait,
+            debounce_replace_payload=debounce_replace_payload,
         )
 
     def map(self, iterable: list[tuple]) -> list[JobResult]:
