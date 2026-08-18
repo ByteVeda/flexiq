@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import importlib
 import inspect
 import logging
-import os
-import sys
+import pkgutil
 import time
 import typing
 from collections.abc import Callable, Sequence
@@ -23,10 +23,17 @@ from flexiq.debounce import DebounceConfig, Duration, normalize_debounce
 from flexiq.detached import disabled_middleware as dispatched_disabled_middleware
 from flexiq.detached import is_detached
 from flexiq.enums import OnExcess, coerce_enum
+from flexiq.exceptions import DuplicateTaskError
 from flexiq.inject import Inject, _InjectAlias
 from flexiq.middleware import middleware_key
 from flexiq.predicates.core import coerce_predicate
 from flexiq.predicates.outcomes import PredicateAction
+from flexiq.registry import (
+    ClaimedTask,
+    _resolve_module_name,
+    pending_tasks,
+    set_task_options,
+)
 from flexiq.task import TaskWrapper
 from flexiq.task_lifecycle import run_lifecycle
 
@@ -47,22 +54,6 @@ logger = logging.getLogger("flexiq")
 # How long a cached middleware chain stays valid without a version bump. Bounds
 # the worst-case lag for an out-of-process dashboard disable change.
 _MW_CHAIN_TTL = 1.0
-
-
-def _resolve_module_name(module_name: str) -> str:
-    """Resolve __main__ to the actual module name."""
-    if module_name != "__main__":
-        return module_name
-
-    main = sys.modules.get("__main__")
-    if main is not None:
-        spec = getattr(main, "__spec__", None)
-        if spec and spec.name:
-            return str(spec.name)
-        f = getattr(main, "__file__", None)
-        if f:
-            return str(os.path.splitext(os.path.basename(f))[0])
-    return module_name
 
 
 class QueueDecoratorMixin:
@@ -100,6 +91,11 @@ class QueueDecoratorMixin:
     _max_reconstruction_timeout: int
     _global_middleware: list[TaskMiddleware]
     _queue_configs: dict[str, dict[str, Any]]
+    # Pending-registry entries this queue has claimed, keyed by task name,
+    # paired with the wrapper it built for them. Draining is idempotent, so
+    # a re-drain has to tell 'already mine' apart from 'another task owns
+    # this name', and has to re-bind the handle without re-registering.
+    _drained_pending: dict[str, ClaimedTask]
 
     # ``_emit_event`` is provided by ``QueueEventsMixin`` on the composed
     # Queue. Declaring it as a class-level callable attribute (not a method)
@@ -592,6 +588,77 @@ class QueueDecoratorMixin:
 
         return decorator
 
+    def autodiscover(self, package: str = "tasks") -> list[str]:
+        """Import every module under ``package`` and claim the tasks they declare.
+
+        The import is the load-bearing half: ``@flexiq.task`` registers on
+        import, so walking the tree is what makes the declarations happen. The
+        walk alone would find nothing.
+
+        Args:
+            package: Dotted path to the package (or single module) holding the
+                task declarations. Defaults to ``"tasks"``.
+
+        Returns:
+            Sorted names of every deferred task now registered on this queue.
+            The list is the same on a second call — draining is idempotent, not
+            destructive.
+
+        Raises:
+            ImportError: ``package``, or any module beneath it, failed to
+                import. Never swallowed: an unregistered task is a fatal,
+                non-retryable dispatch failure, so a module that quietly failed
+                to import dead-letters every job it owns.
+            DuplicateTaskError: A discovered task claims a name this queue
+                already registered for a different function.
+        """
+        root = importlib.import_module(package)
+
+        # ``walk_packages`` yields a subpackage before importing it to recurse,
+        # and swallows the ImportError if that import fails — which would skip
+        # the whole subtree in silence. Importing each yielded name here means
+        # the failure surfaces on the yield, ahead of the swallowed one.
+        paths = getattr(root, "__path__", None)
+        if paths is not None:
+            for _finder, mod_name, _ispkg in pkgutil.walk_packages(
+                paths, prefix=f"{root.__name__}."
+            ):
+                importlib.import_module(mod_name)
+
+        self._drain_pending_tasks()
+        return sorted(self._drained_pending)
+
+    def _drain_pending_tasks(self) -> None:
+        """Claim every task in the module-global pending registry.
+
+        Idempotent by construction: the registry is never emptied, so a second
+        queue in the same process gets the same tasks, and a repeat drain on
+        this queue re-binds without re-registering.
+
+        Binding is last-drain-wins — the handle a task module exports submits
+        to the queue that drained it most recently. Keeping the first binding
+        would leave the handle pointing at a queue that has been torn down as
+        soon as a second one appears.
+        """
+        for entry in pending_tasks():
+            name = entry.name
+            mine = self._drained_pending.get(name)
+            if mine is not None and mine.entry.origin == entry.origin:
+                # Already ours. Re-bind anyway: another queue may have drained
+                # the same registry since, and the most recent drain wins.
+                entry.handle._bind(mine.wrapper)
+                continue
+            if name in self._task_registry:
+                owner = mine.entry.origin if mine else "@queue.task()"
+                raise DuplicateTaskError(
+                    f"deferred task {name!r} declared in {entry.origin} collides "
+                    f"with the task this queue already registered from {owner} — "
+                    "pass an explicit name= to one of them"
+                )
+            wrapper = self.task(**entry.options)(entry.fn)
+            entry.handle._bind(wrapper)
+            self._drained_pending[name] = ClaimedTask(entry, wrapper)
+
     def periodic(
         self,
         cron: str,
@@ -704,3 +771,10 @@ class QueueDecoratorMixin:
         """
         self._hooks["on_failure"].append(fn)
         return fn
+
+
+# ``@flexiq.task`` accepts exactly what ``Queue.task`` accepts. Deriving the
+# names from the real signature here — rather than restating them in
+# ``flexiq.registry`` — keeps the deferred decorator from drifting as options
+# are added, without the registry having to import ``Queue``.
+set_task_options(inspect.signature(QueueDecoratorMixin.task))

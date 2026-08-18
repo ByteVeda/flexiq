@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from flexiq.canvas import Signature
+from flexiq.exceptions import TaskNotBoundError
 from flexiq.interception import InterceptionReport
 
 if TYPE_CHECKING:
@@ -199,3 +200,71 @@ class TaskWrapper:
 
     def __repr__(self) -> str:
         return f"<TaskWrapper '{self._task_name}'>"
+
+
+class _UnboundQueue:
+    """Stand-in for the queue of a task that no ``Queue`` has drained yet.
+
+    Every submission path on :class:`TaskWrapper` — ``delay``, ``apply_async``,
+    ``map``, ``analyze`` — reaches the queue through ``self._queue``, so raising
+    from attribute access covers all of them without overriding a single method.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, attr: str) -> Any:
+        raise TaskNotBoundError(
+            "this task is not bound to a queue yet — no Queue has drained the "
+            "pending registry. Construct the Queue after importing the task "
+            "modules, call Queue.autodiscover(...), or start the worker."
+        )
+
+    def __repr__(self) -> str:
+        return "<unbound queue>"
+
+
+_UNBOUND = _UnboundQueue()
+
+
+class DeferredTask(TaskWrapper):
+    """A task declared by ``@flexiq.task`` before any ``Queue`` existed.
+
+    Subclasses :class:`TaskWrapper` deliberately: ``compensates=`` and the
+    canvas compensator coercion both branch on ``isinstance(x, TaskWrapper)``,
+    so a deferred task has to *be* one to work in sagas and canvas primitives.
+
+    Until a queue drains it, the instance reports the defaults the declaration
+    asked for and carries an unbound queue. :meth:`_bind` swaps in the state of
+    the real wrapper the queue built.
+    """
+
+    def __init__(self, fn: Callable, name: str, defaults: dict[str, Any]):
+        super().__init__(
+            fn=fn,
+            queue_ref=cast("Any", _UNBOUND),
+            task_name=name,
+            default_priority=defaults["priority"],
+            default_queue=defaults["queue"],
+            default_max_retries=defaults["max_retries"],
+            default_timeout=defaults["timeout"],
+            default_expires=defaults["expires"],
+            inject=defaults["inject"],
+        )
+
+    def _bind(self, wrapper: TaskWrapper) -> None:
+        """Adopt the state of the wrapper a queue built for this function.
+
+        Copying ``__dict__`` rather than listing fields keeps this correct when
+        :class:`TaskWrapper` grows an attribute.
+        """
+        self.__dict__.update(vars(wrapper))
+
+    @property
+    def bound(self) -> bool:
+        """Whether a queue has claimed this task."""
+        return not isinstance(self._queue, _UnboundQueue)
+
+    def __repr__(self) -> str:
+        if not self.bound:
+            return f"<DeferredTask '{self._task_name}' (unbound)>"
+        return f"<DeferredTask '{self._task_name}'>"

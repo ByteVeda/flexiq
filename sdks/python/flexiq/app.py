@@ -66,6 +66,7 @@ from flexiq.notes import validate_and_encode_notes
 from flexiq.proxies import ProxyRegistry
 from flexiq.proxies.built_in import BuiltInProxy, register_builtin_handlers
 from flexiq.proxies.metrics import ProxyMetrics
+from flexiq.registry import ClaimedTask
 from flexiq.result import JobResult
 from flexiq.retention import Retention
 from flexiq.serializers import Serializer, SmartSerializer
@@ -436,6 +437,12 @@ class Queue(
         self._workflow_tracker: Any = None
         if _WORKFLOWS_AVAILABLE and hasattr(self._inner, "submit_workflow"):
             self._workflow_tracker = WorkflowTracker(self)
+
+        # Claim any ``@flexiq.task`` declared before this queue existed. Cheap
+        # and idempotent, so it also runs from ``autodiscover`` and worker
+        # start — between the three, neither import order needs a rule.
+        self._drained_pending: dict[str, ClaimedTask] = {}
+        self._drain_pending_tasks()
 
     def _get_serializer(self, task_name: str) -> Serializer:
         """Get the serializer for a task (per-task or queue-level fallback)."""

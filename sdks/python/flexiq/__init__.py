@@ -21,6 +21,7 @@ from flexiq.exceptions import (
     CircuitBreakerOpenError,
     CircularDependencyError,
     CryptoError,
+    DuplicateTaskError,
     FlexiQError,
     JobNotFoundError,
     MaxRetriesExceededError,
@@ -39,6 +40,7 @@ from flexiq.exceptions import (
     SoftTimeoutError,
     TaskCancelledError,
     TaskFailedError,
+    TaskNotBoundError,
     TaskTimeoutError,
 )
 from flexiq.inject import Inject
@@ -52,6 +54,13 @@ from flexiq.notes import MAX_NOTE_FIELDS
 from flexiq.predicates.outcomes import PredicateAction
 from flexiq.proxies.built_in import BuiltInProxy
 from flexiq.proxies.no_proxy import NoProxy
+
+# Deliberate shadowing: ``flexiq.task`` is also a submodule, and this rebinds
+# the name in the package namespace to the decorator. ``from flexiq import
+# task`` is the public spelling the deferred decorator has to own. Every
+# internal and documented use of the submodule is ``from flexiq.task import
+# TaskWrapper``, which resolves through ``sys.modules`` and is unaffected.
+from flexiq.registry import task
 from flexiq.result import JobResult
 from flexiq.retention import EffectiveRetention, Retention, RetentionPreview
 from flexiq.serializers import (
@@ -64,7 +73,7 @@ from flexiq.serializers import (
     SignedSerializer,
     SmartSerializer,
 )
-from flexiq.task import TaskWrapper
+from flexiq.task import DeferredTask, TaskWrapper
 from flexiq.testing import MockResource, TestMode, TestResult, TestResults
 
 __all__ = [
@@ -81,6 +90,8 @@ __all__ = [
     "CodecSerializer",
     "ConsumerErrorAction",
     "CryptoError",
+    "DeferredTask",
+    "DuplicateTaskError",
     "EffectiveRetention",
     "EncryptedSerializer",
     "EventType",
@@ -128,6 +139,7 @@ __all__ = [
     "TaskCancelledError",
     "TaskFailedError",
     "TaskMiddleware",
+    "TaskNotBoundError",
     "TaskTimeoutError",
     "TaskWrapper",
     "TestMode",
@@ -141,6 +153,7 @@ __all__ = [
     "current_job",
     "group",
     "starmap",
+    "task",
 ]
 # PyResultSender is only available when built with --features native-async.
 # Expose it with a clean error instead of a confusing AttributeError.
