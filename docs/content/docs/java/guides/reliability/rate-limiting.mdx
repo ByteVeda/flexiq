@@ -40,6 +40,25 @@ Simple boolean checks can use `predicate(...)` instead — it rejects the enqueu
 outright when the predicate fails, and composes with `Predicates.allOf`,
 `anyOf`, and `not`.
 
+## Scheduler-side limits
+
+A gate is not the only lever. A task can also carry a token-bucket limit the
+scheduler enforces globally per task name — `"100/m"` means 100 a minute across
+the whole deployment, not per worker. The worker registers it on `start()` and
+rejects a malformed spec rather than running unthrottled:
+
+```java
+Task<String> CALL_API = Task.of("call_api", String.class)
+        .rateLimit("10/s")
+        .onExcess(OnExcess.DROP);  // shed the excess instead of deferring it
+```
+
+Excess jobs defer by default: the job keeps its place and dispatches once tokens
+are available. `OnExcess.DROP` dead-letters it on the spot instead, with a
+reserved `rate_limit:` reason — see
+[flow control](/java/guides/reliability/flow-control) for what that looks like
+in the dashboard, and for how throttling relates to debouncing and coalescing.
+
 ## Bounding execution
 
 Gates shape how fast jobs *enter* the queue; to bound how many run at once,
