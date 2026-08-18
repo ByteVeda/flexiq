@@ -6,8 +6,10 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 
 use crate::config::{EnqueueJob, EnqueueOptions, OpenOptions, WorkerOptions};
-use crate::convert::{build_new_job, job_to_js, JsJob, JsOutcome, JsTaskInvocation, JsTaskOutcome};
-use crate::error::to_napi_err;
+use crate::convert::{
+    build_new_job, debounce_options, job_to_js, JsJob, JsOutcome, JsTaskInvocation, JsTaskOutcome,
+};
+use crate::error::{invalid_arg, to_napi_err};
 use crate::worker::{start_worker, JsWorker};
 
 /// Outcome callback registered from JS: `(outcome) => void`. Its return value is
@@ -68,7 +70,8 @@ impl JsQueue {
 
     /// Enqueue `task_name` with an opaque serialized `payload`. Returns the job
     /// id. When `options.uniqueKey` is set, a duplicate enqueue is a no-op while
-    /// the first job is pending/running (idempotency).
+    /// the first job is pending/running (idempotency). When the debounce fields
+    /// are set, a repeat enqueue instead slides the pending job's deadline.
     #[napi]
     pub fn enqueue(
         &self,
@@ -78,11 +81,19 @@ impl JsQueue {
     ) -> Result<String> {
         let opts = options.unwrap_or_default();
         let unique = opts.unique_key.is_some();
+        let debounce = debounce_options(&opts)?;
+        // `enqueue_debounced` collapses onto the open window; it does no unique
+        // dedup, so there is no honest way to satisfy both requests at once.
+        if unique && debounce.is_some() {
+            return Err(invalid_arg(
+                "uniqueKey and debounce cannot be combined — they are two different collapse rules",
+            ));
+        }
         let new_job = build_new_job(task_name, payload.to_vec(), opts, self.namespace.as_deref())?;
-        let job = if unique {
-            self.storage.enqueue_unique(new_job)
-        } else {
-            self.storage.enqueue(new_job)
+        let job = match debounce {
+            Some(debounce) => self.storage.enqueue_debounced(new_job, debounce),
+            None if unique => self.storage.enqueue_unique(new_job),
+            None => self.storage.enqueue(new_job),
         }
         .map_err(to_napi_err)?;
         Ok(job.id)
@@ -99,6 +110,13 @@ impl JsQueue {
             .into_iter()
             .map(|job| {
                 let opts = job.options.unwrap_or_default();
+                // The batch path is one `enqueue_batch_dedup` call with no
+                // debounce step, so an entry's key would be written but never
+                // honoured — and a plain pending row carrying a debounce key is
+                // a slide target for the next debounced enqueue.
+                if debounce_options(&opts)?.is_some() {
+                    return Err(invalid_arg("batch enqueue cannot debounce"));
+                }
                 build_new_job(task_name.clone(), job.payload.to_vec(), opts, namespace)
             })
             .collect::<Result<Vec<_>>>()?;

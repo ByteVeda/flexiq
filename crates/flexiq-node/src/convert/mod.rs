@@ -13,7 +13,9 @@ mod task_config;
 #[cfg(feature = "workflows")]
 mod workflow;
 
-pub use job::{build_new_job, job_to_js, JsJob, JsJobPage, JsTaskInvocation, JsTaskOutcome};
+pub use job::{
+    build_new_job, debounce_options, job_to_js, JsJob, JsJobPage, JsTaskInvocation, JsTaskOutcome,
+};
 pub(crate) use job::{DEFAULT_MAX_RETRIES, DEFAULT_PRIORITY, DEFAULT_TIMEOUT_MS};
 pub use lock::{lock_info_to_js, JsLockInfo};
 pub use log::{log_to_js, JsTaskLog};
