@@ -290,11 +290,9 @@ mistake, and import time is when you want to hear about it.
 ## Backends
 
 The slide-or-insert decision, the claimed-row guard and the write are one atomic
-step everywhere; how that atomicity is obtained differs. SQLite and PostgreSQL
-use a single write transaction. Redis has none to lean on, so it decides inside
-a Lua script and commits a slide as a compare-and-swap on the job document —
-contended enough to lose that swap repeatedly, the call errors rather than
-inserting a second job.
+step on every backend — see
+<SdkLink to="guides/reliability/flow-control">Flow control</SdkLink> for the
+per-backend mechanism and what Redis does under contention.
 
 <Callout type="info">
   Debouncing collapses *enqueues*; to bound how fast the jobs you do create

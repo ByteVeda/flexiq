@@ -414,7 +414,9 @@ document. Contended enough to lose that swap repeatedly, the call errors rather
 than inserting a second job: failing an enqueue is recoverable, quietly
 double-running the work is not. Everything else about the semantics — the
 `min(now + window, first_seen + max_wait)` deadline, the claimed-row guard, the
-key's independence — is identical on all three.
+key's independence — is identical on all three. See
+<SdkLink to="guides/reliability/debouncing">Debouncing</SdkLink> for the surface
+those guarantees back.
 
 <Callout type="info">
   Dispatch order is a separate lever from all of the above. Under overload, LIFO
