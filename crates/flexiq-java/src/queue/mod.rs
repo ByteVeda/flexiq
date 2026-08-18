@@ -19,7 +19,7 @@ use jni::sys::{jboolean, jbyteArray, jint, jlong, jobjectArray, jstring, JNI_FAL
 use jni::JNIEnv;
 
 use crate::backend::{self, QueueHandle};
-use crate::convert::{build_new_job, parse_json, EnqueueOptions, OpenOptions};
+use crate::convert::{build_new_job, debounce_options, parse_json, EnqueueOptions, OpenOptions};
 use crate::ffi::{
     guard, new_bytes, new_string, new_string_array, read_bytes, read_bytes_array, read_string,
 };
@@ -66,7 +66,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_close<'loca
 
 /// `String enqueue(long handle, String taskName, byte[] payload, String optionsJson)`
 /// — enqueue a job and return its id. A set `uniqueKey` makes a duplicate
-/// enqueue a no-op while the first job is pending/running (idempotency).
+/// enqueue a no-op while the first job is pending/running (idempotency). With
+/// the debounce fields set, a repeat enqueue instead slides the pending job's
+/// deadline forward.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_enqueue<'local>(
     mut env: JNIEnv<'local>,
@@ -83,11 +85,19 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_enqueue<'lo
         let raw_opts = read_string(env, &options_json)?;
         let options: EnqueueOptions = parse_json(&raw_opts, "enqueue options")?;
         let unique = options.unique_key.is_some();
+        let debounce = debounce_options(&options)?;
+        // `enqueue_debounced` collapses onto the open window; it does no unique
+        // dedup, so there is no honest way to satisfy both requests at once.
+        if unique && debounce.is_some() {
+            return Err(crate::error::BindingError::new(
+                "uniqueKey and debounce cannot be combined — they are two different collapse rules",
+            ));
+        }
         let new_job = build_new_job(task, bytes, options, queue.namespace.as_deref());
-        let job = if unique {
-            queue.storage.enqueue_unique(new_job)
-        } else {
-            queue.storage.enqueue(new_job)
+        let job = match debounce {
+            Some(debounce) => queue.storage.enqueue_debounced(new_job, debounce),
+            None if unique => queue.storage.enqueue_unique(new_job),
+            None => queue.storage.enqueue(new_job),
         }?;
         new_string(env, job.id)
     })
@@ -123,8 +133,19 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_enqueueMany
         let new_jobs = payload_list
             .into_iter()
             .zip(option_list)
-            .map(|(payload, options)| build_new_job(task.clone(), payload, options, namespace))
-            .collect();
+            .map(|(payload, options)| {
+                // The batch path is one `enqueue_batch_dedup` call with no
+                // debounce step, so an entry's key would be written but never
+                // honoured — and a plain pending row carrying a debounce key is
+                // a slide target for the next debounced enqueue.
+                if debounce_options(&options)?.is_some() {
+                    return Err(crate::error::BindingError::new(
+                        "batch enqueue cannot debounce",
+                    ));
+                }
+                Ok(build_new_job(task.clone(), payload, options, namespace))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let ids = backend::enqueue_batch_dedup(&queue.storage, new_jobs)?;
         new_string_array(env, &ids)
     })

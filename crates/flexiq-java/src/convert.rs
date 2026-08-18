@@ -8,8 +8,8 @@ use flexiq_core::job::{now_millis, Job, NewJob};
 use flexiq_core::pubsub::{DeliveryDefaults, PublishRequest};
 use flexiq_core::resilience::circuit_breaker::CircuitState;
 use flexiq_core::storage::records::{
-    CircuitBreakerState, JobError, LockInfo, PeriodicTask, ReplayEntry, Subscription, TaskLogEntry,
-    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
+    CircuitBreakerState, DebounceOptions, JobError, LockInfo, PeriodicTask, ReplayEntry,
+    Subscription, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo,
 };
 use flexiq_core::storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,58 @@ pub struct EnqueueOptions {
     pub depends_on: Option<Vec<String>>,
     /// Pre-encoded canonical JSON produced by the SDK; stored verbatim.
     pub notes: Option<String>,
+    /// Debounce key, already resolved against the payload by the shell. Its
+    /// presence alone does not debounce — `debounceWindowMs` is what routes
+    /// the enqueue.
+    pub debounce_key: Option<String>,
+    /// Collapse window in milliseconds. Set (alongside the other three) to
+    /// route this enqueue through `Storage::enqueue_debounced`.
+    pub debounce_window_ms: Option<i64>,
+    /// Hard ceiling on the total delay, measured from when the window opened.
+    /// Mandatory alongside `debounceWindowMs`: without it a caller who never
+    /// stops enqueuing starves the job forever.
+    pub debounce_max_wait_ms: Option<i64>,
+    /// Overwrite the pending job's payload with this one. Absent keeps the
+    /// payload the window opened with.
+    pub debounce_replace_payload: Option<bool>,
+}
+
+/// Read the debounce quartet off the enqueue options. `None` means an ordinary
+/// enqueue; `Some` routes the call through `Storage::enqueue_debounced`.
+///
+/// `debounceWindowMs` is the field that switches the path on, so every other
+/// debounce field is rejected without it: a `debounceKey` on a plainly enqueued
+/// job is worse than ignored, since the partial index makes any pending row
+/// carrying one a slide target for a later debounced enqueue. The window and
+/// max-wait *relationship* is left to the core's `validated_debounce_key`, the
+/// one place that owns it.
+pub fn debounce_options(options: &EnqueueOptions) -> Result<Option<DebounceOptions>, BindingError> {
+    let Some(window_ms) = options.debounce_window_ms else {
+        if options.debounce_key.is_some()
+            || options.debounce_max_wait_ms.is_some()
+            || options.debounce_replace_payload.is_some()
+        {
+            return Err(BindingError::new(
+                "debounceKey/debounceMaxWaitMs/debounceReplacePayload require debounceWindowMs",
+            ));
+        }
+        return Ok(None);
+    };
+    if options.debounce_key.as_deref().unwrap_or("").is_empty() {
+        return Err(BindingError::new(
+            "debounceWindowMs requires a non-empty debounceKey",
+        ));
+    }
+    let Some(max_wait_ms) = options.debounce_max_wait_ms else {
+        return Err(BindingError::new(
+            "debounceWindowMs requires debounceMaxWaitMs",
+        ));
+    };
+    Ok(Some(DebounceOptions {
+        window_ms,
+        max_wait_ms,
+        replace_payload: options.debounce_replace_payload.unwrap_or(false),
+    }))
 }
 
 /// Parse a JSON argument, attributing any failure to the named field.
@@ -86,7 +138,7 @@ pub fn build_new_job(
         namespace: options
             .namespace
             .or_else(|| default_namespace.map(str::to_string)),
-        debounce_key: None,
+        debounce_key: options.debounce_key,
     }
 }
 
