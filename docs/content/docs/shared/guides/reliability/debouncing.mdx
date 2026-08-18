@@ -1,0 +1,300 @@
+---
+title: Debouncing
+description: "Collapse a burst of enqueues into one run on a sliding deadline."
+---
+
+Debouncing collapses repeated enqueues that share a key into a **single** job
+whose run keeps sliding into the future while the calls keep coming. It is the
+answer to "rebuild this user's report once they stop editing", not "run this at
+most 100 times a minute" — see
+<SdkLink to="guides/reliability/flow-control">Flow control</SdkLink> for how it
+differs from throttling and from idempotent coalescing.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(
+    debounce="5m",                    # slide the run 5 minutes out on every enqueue
+    debounce_key="report:{user_id}",  # one window per user
+    debounce_max_wait="30m",          # but never delay past 30 minutes
+)
+def build_report(user_id: str) -> None: ...
+
+first = build_report.delay("u1")      # creates the job
+again = build_report.delay("u1")      # same job id — deadline moves
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("buildReport", buildReport, {
+  debounce: "5m", // slide the run 5 minutes out on every enqueue
+  debounceKey: "report:{userId}", // one window per user
+  debounceMaxWait: "30m", // but never delay past 30 minutes
+});
+
+queue.enqueue("buildReport", [{ userId: "u1" }]); // creates the job
+queue.enqueue("buildReport", [{ userId: "u1" }]); // same job id — deadline moves
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+record Report(String userId, int revision) {}
+
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(
+                Duration.ofMinutes(5),    // slide the run 5 minutes out on every enqueue
+                "report:{userId}",        // one window per user
+                Duration.ofMinutes(30));  // but never delay past 30 minutes
+
+String first = flexiq.enqueue(BUILD_REPORT, new Report("u1", 1));  // creates the job
+String again = flexiq.enqueue(BUILD_REPORT, new Report("u1", 2));  // same id — deadline moves
+```
+
+  </Tab>
+</CodeTabs>
+
+The first enqueue creates the job; every later one with the same resolved key
+returns **that** job's id, so a burst of a hundred calls leaves one pending row.
+The deadline is `min(now + window, first_seen + max_wait)`, recomputed inside the
+same storage operation that finds the open window — two producers racing on one
+key cannot both create a job.
+
+A job that has already been claimed is never pulled backwards. If a worker
+picked the job up a microsecond ago, the enqueue leaves it alone and inserts a
+fresh one instead: the run in flight finishes with the payload it started with,
+and the new window opens behind it.
+
+## Durations
+
+<SdkSwap
+  python={<><code>debounce</code> and <code>debounce_max_wait</code> take a duration string — <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code> — or a number of <strong>seconds</strong>, matching <code>delay</code>, <code>expires</code> and <code>timeout</code>. A bare numeric string like <code>"5"</code> is rejected: it reads as seconds to one person and milliseconds to the next.</>}
+  node={<><code>debounce</code> and <code>debounceMaxWait</code> take a number of <strong>milliseconds</strong>, or a suffixed string — <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>.</>}
+  java={<>The window and the max wait are <code>java.time.Duration</code> on the public API; the millisecond conversion happens at the JNI boundary.</>}
+/>
+
+## The key is the window
+
+The key is a template resolved against the arguments of each individual call —
+never at registration, since that is where the arguments do not exist yet.
+
+<SdkOnly sdk="python">
+
+- `{user_id}` names a parameter, whether the caller passed it positionally or by
+  keyword; defaults are applied first, and a `**kwargs` parameter is flattened
+  so `{user_id}` still resolves for a task declared `def f(**kw)`.
+- `{0}`, `{1}`, … name an argument by position — the fallback for a producer
+  reaching `queue.enqueue()` with no registered signature to bind against.
+
+```python
+@queue.task(debounce="10s", debounce_key="sync:{0}", debounce_max_wait="2m")
+def sync_user(user_id: str) -> None: ...
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+- `{userId}` reads that property off the first object argument carrying it.
+- `{0}`, `{1}`, … read an argument by position.
+
+```ts
+queue.task("syncUser", syncUser, {
+  debounce: "10s",
+  debounceKey: "sync:{0}", // syncUser(userId: string)
+  debounceMaxWait: "2m",
+});
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+- `{userId}` reads that property off the enqueued object — a record component, a
+  bean getter, or a `Map` entry, whatever Jackson sees.
+- `{owner.id}` walks into a nested object.
+
+```java
+Task<Report> SYNC_USER = Task.of("sync-user", Report.class)
+        .debounce(Duration.ofSeconds(10), "sync:{userId}", Duration.ofMinutes(2));
+```
+
+</SdkOnly>
+
+A placeholder that resolves to nothing — a missing name, an out-of-range
+position, an object where a scalar was expected —
+<SdkSwap python={<>raises <code>ValueError</code></>} node={<>throws a <code>QueueError</code></>} java={<>throws <code>IllegalArgumentException</code></>} />
+at enqueue, and nothing is inserted. The alternative would be one global window
+silently shared by every caller, which is the failure debouncing exists to
+avoid. A template with no placeholder at all is legal and means exactly that:
+one window for the whole task.
+
+## Max wait is mandatory
+
+A window with no max wait is refused
+<SdkSwap python={<>when the task is registered</>} node={<>when the task is registered</>} java={<>at <code>build()</code> time</>} />,
+before any job exists. Without a ceiling, a caller who never stops enqueuing
+starves the job forever — the classic debounce footgun. The ceiling is measured
+from when the window **opened**, not from the latest call, so the job runs on
+schedule no matter how long the burst lasts. It may never be shorter than the
+window itself, which would cap the very first insert and make the window
+meaningless.
+
+## Which payload runs
+
+By default the job runs with the arguments the window **opened** with; later
+enqueues move the deadline and nothing else. Turn on payload replacement to run
+with the newest arguments instead:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(
+    debounce="5m",
+    debounce_key="report:{user_id}",
+    debounce_max_wait="30m",
+    debounce_replace_payload=True,
+)
+def build_report(user_id: str, revision: int) -> None: ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("buildReport", buildReport, {
+  debounce: "5m",
+  debounceKey: "report:{userId}",
+  debounceMaxWait: "30m",
+  debounceReplacePayload: true,
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30), true);
+```
+
+  </Tab>
+</CodeTabs>
+
+Priority, metadata, notes, dependencies and expiry always belong to the job that
+opened the window — only the deadline and, optionally, the payload move. A
+coalescing call is a vote to run again soon, not a redefinition of the run.
+
+## Per-enqueue debouncing
+
+The same knobs work on a single submission, so a producer that registers no
+handler can still debounce, and one call can override the task's defaults:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+build_report.apply_async(
+    args=("u1",),
+    debounce="30s",
+    debounce_key="report:{user_id}",
+    debounce_max_wait="5m",
+)
+
+# Or from a producer process that never imported the task function:
+queue.enqueue(
+    "build_report",
+    args=("u1",),
+    debounce="30s",
+    debounce_key="report:{0}",
+    debounce_max_wait="5m",
+)
+```
+
+Passing **any** `debounce*` option makes the call define its own window from
+scratch — the task's registered values are not merged in, so a per-call
+`debounce="1s"` cannot inherit a 30-minute `debounce_max_wait` it never asked
+for. Passing none of them uses the task's window, if it has one.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.enqueue("buildReport", [{ userId: "u1" }], {
+  debounce: "30s",
+  debounceKey: "report:{userId}",
+  debounceMaxWait: "5m",
+});
+```
+
+An enqueue naming any debounce field layers it over the task's registered
+defaults field by field; naming none of them uses the task's window as-is.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+EnqueueOptions urgent = EnqueueOptions.builder()
+        .debounce(Duration.ofSeconds(30))
+        .debounceKey("report:{userId}")
+        .debounceMaxWait(Duration.ofMinutes(5))
+        .debounceReplacePayload(true)
+        .build();
+
+flexiq.enqueue(BUILD_REPORT, new Report("u1", 3), urgent);
+```
+
+`EnqueueOptions.Builder.build()` is where an incomplete set is rejected: a
+window with no key, a window with no max wait, a max wait shorter than the
+window, or a debounce field set without a window. That is also why
+`Task.debounce(...)` takes the whole set in one call — the descriptor is
+immutable, so a fluent chain would have to treat a half-set window as valid in
+between.
+
+  </Tab>
+</CodeTabs>
+
+<Callout type="info" title="The override rule is not the same in every SDK">
+  A deliberate divergence, not an inconsistency to route around. Python treats
+  the `debounce*` set as all-or-nothing: naming any one of them means the call
+  defines the whole window, so a one-second window can never inherit a
+  thirty-minute ceiling it did not ask for. Node merges field by field, so an
+  enqueue can move the window and keep the task's key and max wait. Java replaces
+  the task's `EnqueueOptions` wholesale — passing options at all means passing
+  every option, debounce included.
+</Callout>
+
+## Limits
+
+| Combined with | What happens |
+|---|---|
+| A dedup key | **Rejected.** Two different collapse rules: a dedup key pins the first job and returns it untouched, a window slides it. Covers an explicit key and auto-derived idempotency alike |
+| A batch enqueue | **Rejected.** A batch is one storage call with no window to slide — submit debounced jobs one at a time |
+| A subscription target | <SdkSwap python={<>The window never engages — a publish is fanned out by the core, one delivery per subscription, and never passes through the enqueue path</>} node={<>Rejected at <code>subscriber()</code> registration — a publish is fanned out by the core and never passes through the enqueue path</>} java={<>Rejected when the subscription is registered — a publish is fanned out by the core and never passes through the enqueue path</>} /> |
+| A caller-supplied delay | <SdkSwap python={<><strong>Rejected</strong> rather than silently dropped</>} node={<>Ignored — <code>delayMs</code> has no effect</>} java={<><strong>Rejected</strong> rather than silently dropped</>} />. The deadline is recomputed from the window inside the storage operation, so a delay could never survive |
+| An enqueue gate's defer | Ignored. It is a scheduling hint from a <SdkLink to="guides/core/predicates">predicate</SdkLink>, not something the caller asked for, but the window still owns the deadline |
+
+<SdkOnly sdk="python">
+
+`idempotent=True` and `batch=` are both rejected at registration next to a
+window, not at the first enqueue — an incompatible pair is a configuration
+mistake, and import time is when you want to hear about it.
+
+</SdkOnly>
+
+## Backends
+
+The slide-or-insert decision, the claimed-row guard and the write are one atomic
+step on every backend — see
+<SdkLink to="guides/reliability/flow-control">Flow control</SdkLink> for the
+per-backend mechanism and what Redis does under contention.
+
+<Callout type="info">
+  Debouncing collapses *enqueues*; to bound how fast the jobs you do create
+  dispatch, use <SdkLink to="guides/reliability/rate-limiting">rate limiting</SdkLink>.
+</Callout>

@@ -78,6 +78,10 @@ Three things worth knowing:
 - Dropping fires no middleware or event hooks. The job never ran, so there is
   no outcome to report — the DLQ row is the record.
 
+[Flow control](/python/guides/reliability/flow-control) walks through what a
+shed job looks like in the dashboard, and where throttling ends and
+debouncing begins.
+
 ## Per-task, not per-queue
 
 Rate limits apply to the **task name**, regardless of which queue the job is in:
