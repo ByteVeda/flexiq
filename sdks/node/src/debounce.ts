@@ -182,7 +182,10 @@ export class DebounceOptions {
         }
         return renderPlaceholder(args[index], name, context);
       }
-      const carrier = args.find((arg) => isPlainObject(arg) && name in arg);
+      // Own properties only: `in` walks the prototype chain, so an argument
+      // created from a prototype carrying the field would resolve to a value
+      // nobody passed — collapsing unrelated calls instead of throwing.
+      const carrier = args.find((arg) => isPlainObject(arg) && Object.hasOwn(arg, name));
       if (carrier === undefined) {
         throw new QueueError(
           `${context}: debounceKey placeholder "{${name}}" matches no argument — name a ` +

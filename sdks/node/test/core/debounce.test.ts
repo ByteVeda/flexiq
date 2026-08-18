@@ -236,6 +236,19 @@ it("throws when a placeholder matches no argument", () => {
   expect(queue.countPendingByQueue("default")).toBe(0);
 });
 
+it("ignores an inherited property when resolving a placeholder", () => {
+  const queue = newQueue();
+  queue.task("report", (_input: object) => undefined, {
+    debounce: "1m",
+    debounceKey: "report:{tenantId}",
+    debounceMaxWait: "5m",
+  });
+
+  // Only own properties key a window; a prototype's value is nobody's argument.
+  const inherited = Object.create({ tenantId: "shared" }) as object;
+  expect(() => queue.enqueue("report", [inherited])).toThrow(/matches no argument/);
+});
+
 it("throws when a placeholder resolves to an object", () => {
   const queue = newQueue();
   queue.task("report", (_input: { owner: unknown }) => undefined, {
