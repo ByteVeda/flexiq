@@ -18,7 +18,7 @@ use flexiq_core::periodic::next_cron_time;
 use flexiq_core::scheduler::retention::RetentionConfig;
 #[cfg(feature = "postgres")]
 use flexiq_core::storage::postgres::PostgresStorage;
-use flexiq_core::storage::records::NewPeriodicTask;
+use flexiq_core::storage::records::{DebounceOptions, NewPeriodicTask};
 #[cfg(feature = "redis")]
 use flexiq_core::storage::redis_backend::RedisStorage;
 use flexiq_core::storage::sqlite::SqliteStorage;
@@ -303,7 +303,15 @@ impl PyQueue {
     }
 
     /// Enqueue a job.
-    #[pyo3(signature = (task_name, payload, queue="default", priority=None, delay_seconds=None, max_retries=None, timeout=None, unique_key=None, metadata=None, notes=None, depends_on=None, expires=None, result_ttl=None))]
+    ///
+    /// The three `debounce_*` window arguments travel together: supplying all
+    /// of them routes the write through
+    /// [`Storage::enqueue_debounced`](flexiq_core::storage::Storage::enqueue_debounced)
+    /// instead of a plain insert, so a burst on one key collapses into a
+    /// single run. Supplying only some of them is a caller error rather than a
+    /// partially-applied window — an absent `max_wait_ms` in particular would
+    /// mean an unbounded debounce, which starves the job.
+    #[pyo3(signature = (task_name, payload, queue="default", priority=None, delay_seconds=None, max_retries=None, timeout=None, unique_key=None, metadata=None, notes=None, depends_on=None, expires=None, result_ttl=None, debounce_key=None, debounce_window_ms=None, debounce_max_wait_ms=None, debounce_replace_payload=false))]
     #[allow(clippy::too_many_arguments)]
     pub fn enqueue(
         &self,
@@ -320,7 +328,29 @@ impl PyQueue {
         depends_on: Option<Vec<String>>,
         expires: Option<f64>,
         result_ttl: Option<i64>,
+        debounce_key: Option<String>,
+        debounce_window_ms: Option<i64>,
+        debounce_max_wait_ms: Option<i64>,
+        debounce_replace_payload: bool,
     ) -> PyResult<PyJob> {
+        let debounce = match (
+            debounce_key.as_deref(),
+            debounce_window_ms,
+            debounce_max_wait_ms,
+        ) {
+            (None, None, None) => None,
+            (Some(_), Some(window_ms), Some(max_wait_ms)) => Some(DebounceOptions {
+                window_ms,
+                max_wait_ms,
+                replace_payload: debounce_replace_payload,
+            }),
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "debounce_key, debounce_window_ms and debounce_max_wait_ms must be \
+                     supplied together",
+                ))
+            }
+        };
         let now = now_millis();
         let scheduled_at = match delay_seconds {
             Some(d) => {
@@ -390,13 +420,13 @@ impl PyQueue {
             expires_at,
             result_ttl_ms,
             namespace: self.namespace.clone(),
-            debounce_key: None,
+            debounce_key,
         };
 
-        let job = if unique_key.is_some() {
-            self.storage.enqueue_unique(new_job)
-        } else {
-            self.storage.enqueue(new_job)
+        let job = match debounce {
+            Some(options) => self.storage.enqueue_debounced(new_job, options),
+            None if unique_key.is_some() => self.storage.enqueue_unique(new_job),
+            None => self.storage.enqueue(new_job),
         };
 
         let job = job.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
