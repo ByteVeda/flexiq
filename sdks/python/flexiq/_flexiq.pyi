@@ -121,6 +121,10 @@ class PyQueue:
         depends_on: list[str] | None = None,
         expires: float | None = None,
         result_ttl: int | None = None,
+        debounce_key: str | None = None,
+        debounce_window_ms: int | None = None,
+        debounce_max_wait_ms: int | None = None,
+        debounce_replace_payload: bool = False,
     ) -> PyJob: ...
     def enqueue_batch(
         self,

@@ -259,6 +259,15 @@ class AsyncQueueMixin:
 
     # -- Operations --
 
+    async def aenqueue(self, **kwargs: Any) -> JobResult:
+        """Async version of :meth:`~flexiq.app.Queue.enqueue`.
+
+        Keyword-only, like every other async wrapper here: the sync method has
+        fifteen-plus options and mirroring them positionally would fix an order
+        that the sync signature is free to grow past.
+        """
+        return await self._run_sync(self.enqueue, **kwargs)  # type: ignore[attr-defined]
+
     async def aenqueue_many(self, **kwargs: Any) -> list[JobResult]:
         """Async version of :meth:`enqueue_many`."""
         return await self._run_sync(self.enqueue_many, **kwargs)  # type: ignore[attr-defined]
