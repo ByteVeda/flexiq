@@ -9,7 +9,7 @@
 
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
 use flexiq_core::storage::records::{
-    DebounceOptions, SubscriptionMode, WorkerRegistration, WorkerStatus,
+    DebounceOptions, DlqDisposition, SubscriptionMode, WorkerRegistration, WorkerStatus,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use flexiq_core::SqliteStorage;
@@ -285,8 +285,13 @@ fn test_dead_letter_queue(s: &impl Storage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
     let running = s.get_job(&job.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "max retries exceeded", None)
-        .unwrap();
+    s.move_to_dlq(
+        &running,
+        "max retries exceeded",
+        None,
+        DlqDisposition::Failed,
+    )
+    .unwrap();
 
     let fetched = s.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Dead);
@@ -302,7 +307,8 @@ fn test_purge_retention_covers_every_status(s: &impl Storage) {
     let job = s.enqueue(make_job(q, "retain_dead")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     let running = s.get_job(&job.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
     assert_eq!(
         s.get_job(&job.id, None).unwrap().unwrap().status,
         JobStatus::Dead
@@ -386,14 +392,16 @@ fn seed_purgeable_rows(s: &impl Storage, q: &str) -> String {
     let d1 = s.enqueue(make_job(q, "dr_dead")).unwrap();
     s.dequeue(q, due(), None).unwrap();
     let running = s.get_job(&d1.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
     // dead_letter: one per-entry TTL (carried from the job).
     let mut ndj = make_job(q, "dr_dead_ttl");
     ndj.result_ttl_ms = Some(1);
     let d2 = s.enqueue(ndj).unwrap();
     s.dequeue(q, due(), None).unwrap();
     let running2 = s.get_job(&d2.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running2, "boom", None).unwrap();
+    s.move_to_dlq(&running2, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     // Side tables: logs, metrics, one error.
     let side = s.enqueue(make_job(q, "dr_side")).unwrap();
@@ -484,7 +492,8 @@ fn test_dead_letter_by_task(s: &impl Storage) {
         let job = s.enqueue(make_job(q, task_name)).unwrap();
         s.dequeue(q, now_millis() + 1000, None).unwrap();
         let running = s.get_job(&job.id, None).unwrap().unwrap();
-        s.move_to_dlq(&running, "boom", None).unwrap();
+        s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+            .unwrap();
     };
     move_to_dlq("task_a");
     move_to_dlq("task_a");
@@ -516,7 +525,8 @@ fn test_delete_dead(s: &impl Storage) {
     let job = s.enqueue(make_job(q, "del_dead_task")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     let running = s.get_job(&job.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "err", None).unwrap();
+    s.move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead = s.list_dead(100, 0, None).unwrap();
     let entry = dead
@@ -534,7 +544,8 @@ fn test_list_dead_for_retry(s: &impl Storage) {
     let job = s.enqueue(make_job(q, "dlq_retry_task")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     let running = s.get_job(&job.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "err", None).unwrap();
+    s.move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     let now = now_millis();
     let qs = [q.to_string()];
@@ -572,6 +583,52 @@ fn test_list_dead_for_retry(s: &impl Storage) {
     assert!(
         other_queue.iter().all(|d| d.original_job_id != job.id),
         "an unserved queue must exclude our entry"
+    );
+}
+
+fn test_list_dead_for_retry_excludes_shed(s: &impl Storage) {
+    // Shed entries are never retried, so their `dlq_retry_count` never moves
+    // and they keep their place at the head of the `failed_at` ordering. The
+    // limit is applied by the query, so excluding them anywhere but in the
+    // query would let them fill the page and hide the failures behind them.
+    let q = "q-dlq-retry-shed";
+    const FLOOD: usize = 5;
+    const LIMIT: i64 = 3;
+
+    for i in 0..FLOOD {
+        let job = s.enqueue(make_job(q, "shed_task")).unwrap();
+        s.move_to_dlq(
+            &job,
+            &format!("codel: sojourn {i}ms exceeded target"),
+            None,
+            DlqDisposition::Shed,
+        )
+        .unwrap();
+    }
+    // `failed_at` has millisecond resolution: make the ordinary failure
+    // strictly the newest entry, so it is genuinely behind the whole flood.
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let failed = s.enqueue(make_job(q, "failed_task")).unwrap();
+    s.move_to_dlq(
+        &failed,
+        "ConnectionError: refused",
+        None,
+        DlqDisposition::Failed,
+    )
+    .unwrap();
+
+    let qs = [q.to_string()];
+    let cands = s
+        .list_dead_for_retry(now_millis() + 5000, 3, None, &qs, LIMIT)
+        .unwrap();
+    assert_eq!(
+        cands.len(),
+        1,
+        "only the ordinary failure is a retry candidate"
+    );
+    assert_eq!(
+        cands[0].original_job_id, failed.id,
+        "the failure behind the shed flood is still reachable within the limit"
     );
 }
 
@@ -1152,7 +1209,8 @@ fn test_listing_is_blob_free(s: &impl Storage) {
     // DLQ path: a dead-lettered entry lists without its arg blob.
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     let running = s.get_job(&job.id, None).unwrap().unwrap();
-    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead = s.list_dead(10, 0, None).unwrap();
     let entry = dead.iter().find(|d| d.original_job_id == job.id).unwrap();
@@ -1835,6 +1893,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_count_expired_rows_none_cutoff_counts_per_entry_only(s);
     test_delete_dead(s);
     test_list_dead_for_retry(s);
+    test_list_dead_for_retry_excludes_shed(s);
     test_progress_tracking(s);
     test_record_and_get_errors(s);
     test_workers(s);
@@ -2177,7 +2236,8 @@ fn test_keyset_pagination_dlq_and_archive(s: &impl Storage) {
         let job = s.enqueue(make_job(q, "keyset_terminal")).unwrap();
         s.dequeue(q, now_millis() + 1000, None).unwrap();
         let running = s.get_job(&job.id, None).unwrap().unwrap();
-        s.move_to_dlq(&running, "boom", None).unwrap();
+        s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+            .unwrap();
         dead_job_ids.push(job.id);
     }
 
@@ -2448,7 +2508,8 @@ fn redis_purge_dead_drains_across_batches(s: &flexiq_core::RedisStorage) {
     let q = "q-redis-purge-batches";
     for _ in 0..550 {
         let job = s.enqueue(make_job(q, "purge_batch_task")).unwrap();
-        s.move_to_dlq(&job, "boom", None).unwrap();
+        s.move_to_dlq(&job, "boom", None, DlqDisposition::Failed)
+            .unwrap();
     }
 
     // Cutoff far in the future so every dead entry is eligible.
@@ -2637,7 +2698,8 @@ fn redis_move_to_dlq_leaves_consistent_state(s: &flexiq_core::RedisStorage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     let running = s.get_job(&job.id, None).unwrap().unwrap();
 
-    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead = s.list_dead(10, 0, None).unwrap();
     assert!(
@@ -2674,7 +2736,8 @@ fn redis_move_to_dlq_skips_already_archived(s: &flexiq_core::RedisStorage) {
     let before = s.list_dead(1000, 0, None).unwrap().len();
 
     // The stale move_to_dlq must be a no-op.
-    s.move_to_dlq(&running, "boom", None).unwrap();
+    s.move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     assert_eq!(
         s.list_dead(1000, 0, None).unwrap().len(),

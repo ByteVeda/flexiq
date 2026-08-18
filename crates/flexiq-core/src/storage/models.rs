@@ -178,6 +178,10 @@ pub struct NewDeadLetterRow<'a> {
     pub dlq_retry_count: i32,
     pub topic: Option<&'a str>,
     pub subscription_name: Option<&'a str>,
+    /// Set when the scheduler threw the job away rather than running it, so
+    /// `list_dead_for_retry` can exclude it in the query. See
+    /// [`DlqDisposition`](crate::storage::records::DlqDisposition).
+    pub shed: bool,
 }
 
 /// A row in the `rate_limits` table.

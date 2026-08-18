@@ -862,7 +862,7 @@ mod tests {
     use super::*;
     use crate::job::{now_millis, JobStatus, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
-    use crate::storage::records::NewPeriodicTask;
+    use crate::storage::records::{DlqDisposition, NewPeriodicTask};
     use crate::storage::Storage;
 
     fn test_scheduler() -> Scheduler {
@@ -1606,7 +1606,12 @@ mod tests {
         let failed = scheduler.storage.enqueue(make_job("other_task")).unwrap();
         scheduler
             .storage
-            .move_to_dlq(&failed, "ConnectionError: refused", None)
+            .move_to_dlq(
+                &failed,
+                "ConnectionError: refused",
+                None,
+                DlqDisposition::Failed,
+            )
             .unwrap();
         scheduler.storage.enqueue(make_job("shed_task")).unwrap();
         scheduler.storage.enqueue(make_job("shed_task")).unwrap();
@@ -1628,6 +1633,72 @@ mod tests {
             .error
             .as_deref()
             .is_some_and(|e| e.starts_with(shed::RATE_LIMIT_REASON_PREFIX)));
+    }
+
+    #[test]
+    fn test_dlq_auto_retry_survives_a_shed_flood() {
+        // The candidate page is bounded and ordered by `failed_at`, and a shed
+        // entry is never retried — so its `dlq_retry_count` never moves and it
+        // would hold its place at the head of that ordering forever. A DLQ
+        // holding more shed entries than the page, all older than one ordinary
+        // failure, must still auto-retry that failure.
+        let storage =
+            StorageBackend::Sqlite(crate::storage::sqlite::SqliteStorage::in_memory().unwrap());
+        let config = SchedulerConfig {
+            dlq_auto_retry_delay_ms: Some(0),
+            dlq_auto_retry_max: 3,
+            ..SchedulerConfig::default()
+        };
+        let scheduler = Scheduler::new(storage, vec!["default".to_string()], config, None);
+
+        let flood = maintenance::DLQ_RETRY_CANDIDATES as usize + 1;
+        for i in 0..flood {
+            let job = scheduler.storage.enqueue(make_job("shed_task")).unwrap();
+            scheduler
+                .storage
+                .move_to_dlq(
+                    &job,
+                    &format!(
+                        "{} sojourn {i}ms exceeded target",
+                        shed::CODEL_REASON_PREFIX
+                    ),
+                    Some("{\"codel\":true}"),
+                    DlqDisposition::Shed,
+                )
+                .unwrap();
+        }
+        // `failed_at` has millisecond resolution: make the ordinary failure
+        // strictly the newest entry, so it is genuinely behind the whole flood.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let failed = scheduler.storage.enqueue(make_job("other_task")).unwrap();
+        scheduler
+            .storage
+            .move_to_dlq(
+                &failed,
+                "ConnectionError: refused",
+                None,
+                DlqDisposition::Failed,
+            )
+            .unwrap();
+
+        scheduler.auto_retry_dlq().unwrap();
+
+        let dead = scheduler
+            .storage
+            .list_dead(flood as i64 + 10, 0, None)
+            .unwrap();
+        assert_eq!(
+            dead.len(),
+            flood,
+            "the ordinary failure was retried out of the DLQ despite the shed flood"
+        );
+        assert!(
+            dead.iter().all(|d| d
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(shed::CODEL_REASON_PREFIX))),
+            "every shed entry stayed dead"
+        );
     }
 
     #[test]

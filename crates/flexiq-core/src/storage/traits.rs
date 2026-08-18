@@ -1,9 +1,10 @@
 use crate::error::Result;
 use crate::job::{Job, NewJob};
 use crate::storage::records::{
-    CircuitBreakerState, DebounceOptions, JobError, LockInfo, NewPeriodicTask, NewSubscription,
-    PeriodicTask, RateLimitState, ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry,
-    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    CircuitBreakerState, DebounceOptions, DlqDisposition, JobError, LockInfo, NewPeriodicTask,
+    NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, Subscription, SubscriptionMode,
+    TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration,
+    WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -268,7 +269,18 @@ pub trait Storage: Send + Sync + Clone {
     // ── Dead letter operations ──────────────────────────────────────
 
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
-    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()>;
+    ///
+    /// `disposition` records *why* the job is here. It is passed explicitly
+    /// rather than inferred from `error` so the shed reason prefixes stay the
+    /// scheduler's vocabulary; storage only needs the distinction to keep shed
+    /// entries out of [`list_dead_for_retry`](Self::list_dead_for_retry).
+    fn move_to_dlq(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+        disposition: DlqDisposition,
+    ) -> Result<()>;
     /// Dead-letter entries, newest first, paginated.
     /// `namespace` of `None` returns every namespace, matching `list_jobs`.
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>>;
@@ -304,6 +316,10 @@ pub trait Storage: Send + Sync + Clone {
     /// count removed.
     fn purge_dead_with_ttl(&self, global_cutoff_ms: Option<i64>) -> Result<u64>;
     /// Dead-letter entries eligible for automatic retry, bounded by `limit`.
+    ///
+    /// Entries recorded as [`DlqDisposition::Shed`] are excluded: the scheduler
+    /// dropped them on purpose, and letting them fill the bounded page would
+    /// starve the sweep of the failures it exists to retry.
     fn list_dead_for_retry(
         &self,
         cutoff_ms: i64,

@@ -7,6 +7,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::error::Result;
 use crate::job::{now_millis, Job};
 use crate::resilience::retry::desync_delay;
+use crate::storage::records::DlqDisposition;
 use crate::storage::Storage;
 
 use super::{shed, Scheduler};
@@ -271,8 +272,12 @@ impl Scheduler {
                     shed::CODEL_REASON_PREFIX,
                     cfg.target_ms
                 );
-                self.storage
-                    .move_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
+                self.storage.move_to_dlq(
+                    &job,
+                    &reason,
+                    Some("{\"codel\":true}"),
+                    DlqDisposition::Shed,
+                )?;
                 warn!(
                     "codel shed {} on queue '{}' (sojourn {sojourn}ms)",
                     job.id, job.queue
@@ -528,8 +533,12 @@ impl Scheduler {
                 );
             }
         }
-        self.storage
-            .move_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+        self.storage.move_to_dlq(
+            job,
+            reason,
+            Some(shed::RATE_LIMIT_SHED_METADATA),
+            DlqDisposition::Shed,
+        )?;
         warn!(
             "rate-limit shed {} on queue '{}' (task '{}')",
             job.id, job.queue, job.task_name

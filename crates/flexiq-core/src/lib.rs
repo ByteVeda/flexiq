@@ -42,8 +42,8 @@ pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
-    CircuitBreakerState, JobError, LockInfo, NewPeriodicTask, NewSubscription, PeriodicTask,
-    RateLimitState, ReplayEntry, Subscription, TaskLogEntry, TaskMetric, WorkerInfo,
+    CircuitBreakerState, DlqDisposition, JobError, LockInfo, NewPeriodicTask, NewSubscription,
+    PeriodicTask, RateLimitState, ReplayEntry, Subscription, TaskLogEntry, TaskMetric, WorkerInfo,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::RedisStorage;

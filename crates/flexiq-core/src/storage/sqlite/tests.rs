@@ -1,7 +1,7 @@
 use super::*;
 use crate::error::QueueError;
 use crate::job::{now_millis, JobStatus, NewJob};
-use crate::storage::records::{DebounceOptions, WorkerRegistration};
+use crate::storage::records::{DebounceOptions, DlqDisposition, WorkerRegistration};
 
 fn test_storage() -> SqliteStorage {
     SqliteStorage::in_memory().unwrap()
@@ -64,7 +64,7 @@ fn test_notes_survive_dlq_round_trip() {
     let job = storage.enqueue(new_job).unwrap();
 
     storage
-        .move_to_dlq(&job, "boom", None)
+        .move_to_dlq(&job, "boom", None, DlqDisposition::Failed)
         .expect("move_to_dlq");
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -92,7 +92,7 @@ fn test_metadata_survives_dlq_round_trip() {
     let job = storage.enqueue(new_job).unwrap();
 
     storage
-        .move_to_dlq(&job, "boom", None)
+        .move_to_dlq(&job, "boom", None, DlqDisposition::Failed)
         .expect("move_to_dlq");
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -382,6 +382,7 @@ fn test_dead_letter_queue() {
             &storage.get_job(&job.id, None).unwrap().unwrap(),
             "max retries exceeded",
             None,
+            DlqDisposition::Failed,
         )
         .unwrap();
 
@@ -403,7 +404,7 @@ fn test_retry_dead() {
 
     let running_job = storage.get_job(&job.id, None).unwrap().unwrap();
     storage
-        .move_to_dlq(&running_job, "fatal error", None)
+        .move_to_dlq(&running_job, "fatal error", None, DlqDisposition::Failed)
         .unwrap();
 
     let dead = storage.list_dead(10, 0, None).unwrap();
@@ -1316,7 +1317,9 @@ fn test_cascade_cancel_on_dlq() {
     let now = now_millis() + 1000;
     storage.dequeue("default", now, None).unwrap();
     let running = storage.get_job(&job_a.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "fatal error", None).unwrap();
+    storage
+        .move_to_dlq(&running, "fatal error", None, DlqDisposition::Failed)
+        .unwrap();
 
     let b = storage.get_job(&job_b.id, None).unwrap().unwrap();
     assert_eq!(b.status, JobStatus::Cancelled);
@@ -1661,7 +1664,9 @@ fn test_purge_completed_with_ttl_covers_non_complete_statuses() {
     let job = storage.enqueue(make_job("dead_archived")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "boom", None).unwrap();
+    storage
+        .move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     // The archived row is now status Dead. A future cutoff must delete it —
     // before all-status retention, the Complete-only filter left it forever.
@@ -2020,7 +2025,9 @@ fn test_delete_dead_existing() {
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "err", None).unwrap();
+    storage
+        .move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead.len(), 1);
@@ -2044,7 +2051,9 @@ fn test_purge_dead_with_ttl_global() {
     let job = storage.enqueue(make_job("ttl_global")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "err", None).unwrap();
+    storage
+        .move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     // Cutoff in the future purges it
     let purged = storage.purge_dead_with_ttl(Some(now + 5000)).unwrap();
@@ -2062,7 +2071,9 @@ fn test_purge_dead_with_ttl_per_entry() {
     let job = storage.enqueue(new_job).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "err", None).unwrap();
+    storage
+        .move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(5));
 
@@ -2096,13 +2107,17 @@ fn test_count_expired_rows_matches_purge_exactly() {
     let d1 = storage.enqueue(make_job("dr_dead")).unwrap();
     storage.dequeue(q, now + 1000, None).unwrap();
     let r1 = storage.get_job(&d1.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&r1, "boom", None).unwrap();
+    storage
+        .move_to_dlq(&r1, "boom", None, DlqDisposition::Failed)
+        .unwrap();
     let mut ndj = make_job("dr_dead_ttl");
     ndj.result_ttl_ms = Some(1);
     let d2 = storage.enqueue(ndj).unwrap();
     storage.dequeue(q, now + 1000, None).unwrap();
     let r2 = storage.get_job(&d2.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&r2, "boom", None).unwrap();
+    storage
+        .move_to_dlq(&r2, "boom", None, DlqDisposition::Failed)
+        .unwrap();
 
     // Side tables: 3 logs, 2 metrics, 1 error.
     let side = storage.enqueue(make_job("dr_side")).unwrap();
@@ -2193,7 +2208,9 @@ fn test_purge_dead_drains_across_batches() {
         let job = storage.enqueue(make_job("dead_batch")).unwrap();
         storage.dequeue("default", now + 1000, None).unwrap();
         let running = storage.get_job(&job.id, None).unwrap().unwrap();
-        storage.move_to_dlq(&running, "boom", None).unwrap();
+        storage
+            .move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+            .unwrap();
     }
 
     let removed = storage.purge_dead(now_millis() + 10_000).unwrap();
@@ -2209,7 +2226,9 @@ fn test_purge_dead_with_ttl_drains_across_batches() {
         let job = storage.enqueue(make_job("dead_ttl_batch")).unwrap();
         storage.dequeue("default", now + 1000, None).unwrap();
         let running = storage.get_job(&job.id, None).unwrap().unwrap();
-        storage.move_to_dlq(&running, "boom", None).unwrap();
+        storage
+            .move_to_dlq(&running, "boom", None, DlqDisposition::Failed)
+            .unwrap();
     }
 
     let removed = storage
@@ -2227,7 +2246,9 @@ fn test_list_dead_for_retry() {
     let job = storage.enqueue(make_job("retry_cand")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "err", None).unwrap();
+    storage
+        .move_to_dlq(&running, "err", None, DlqDisposition::Failed)
+        .unwrap();
 
     let qs = [String::from("default")];
 
@@ -2258,7 +2279,9 @@ fn test_dlq_retry_count_round_trip() {
     let job = storage.enqueue(make_job("count_rt")).unwrap();
     storage.dequeue("default", now + 1000, None).unwrap();
     let running = storage.get_job(&job.id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running, "err1", None).unwrap();
+    storage
+        .move_to_dlq(&running, "err1", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead[0].dlq_retry_count, 0);
@@ -2266,7 +2289,9 @@ fn test_dlq_retry_count_round_trip() {
     let new_id = storage.retry_dead(&dead[0].id, None).unwrap();
     storage.dequeue("default", now + 2000, None).unwrap();
     let running2 = storage.get_job(&new_id, None).unwrap().unwrap();
-    storage.move_to_dlq(&running2, "err2", None).unwrap();
+    storage
+        .move_to_dlq(&running2, "err2", None, DlqDisposition::Failed)
+        .unwrap();
 
     let dead2 = storage.list_dead(10, 0, None).unwrap();
     assert_eq!(dead2[0].dlq_retry_count, 1);

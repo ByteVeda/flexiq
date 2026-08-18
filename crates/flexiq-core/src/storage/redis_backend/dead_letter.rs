@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::{map_err, strip_dead_blob, RedisStorage, SCAN_BATCH};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
+use crate::storage::records::DlqDisposition;
 use crate::storage::DeadJob;
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +28,12 @@ struct DeadJobEntry {
     pub namespace: Option<String>,
     #[serde(default)]
     pub dlq_retry_count: i32,
+    /// Whether the scheduler shed this job rather than running it. `default`
+    /// so entries written before the flag existed still deserialize — they
+    /// read back as `false` and fall through to the sweep's reason-prefix
+    /// guard.
+    #[serde(default)]
+    pub shed: bool,
 }
 
 impl From<DeadJobEntry> for DeadJob {
@@ -54,7 +61,13 @@ impl From<DeadJobEntry> for DeadJob {
 
 impl RedisStorage {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
-    pub fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+    pub fn move_to_dlq(
+        &self,
+        job: &Job,
+        error: &str,
+        metadata: Option<&str>,
+        disposition: DlqDisposition,
+    ) -> Result<()> {
         let now = now_millis();
         let dlq_id = uuid::Uuid::now_v7().to_string();
         let mut conn = self.conn()?;
@@ -87,6 +100,7 @@ impl RedisStorage {
             result_ttl_ms: job.result_ttl_ms,
             namespace: job.namespace.clone(),
             dlq_retry_count,
+            shed: disposition == DlqDisposition::Shed,
         };
 
         let json = serde_json::to_string(&entry)?;
@@ -630,8 +644,12 @@ impl RedisStorage {
             if let Some(d) = data {
                 if let Ok(entry) = serde_json::from_str::<DeadJobEntry>(&d) {
                     // Scope to the worker's own namespace + served queues, matching
-                    // the Diesel backend (the poller's dequeue scoping).
-                    if entry.dlq_retry_count < max_retries
+                    // the Diesel backend (the poller's dequeue scoping). Shed
+                    // entries are excluded here for the same reason they are in
+                    // SQL: they are never retried, so counting them against
+                    // `limit` would starve the sweep of genuine failures.
+                    if !entry.shed
+                        && entry.dlq_retry_count < max_retries
                         && entry.namespace.as_deref() == namespace
                         && queues.iter().any(|q| q == &entry.queue)
                     {
