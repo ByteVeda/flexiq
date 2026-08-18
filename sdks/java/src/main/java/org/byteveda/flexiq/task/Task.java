@@ -405,6 +405,44 @@ public final class Task<T> {
         return delayMs(delay.toMillis());
     }
 
+    /**
+     * A copy of this task that debounces: while a job with the same resolved
+     * {@code keyTemplate} is pending and unclaimed, a further enqueue slides its deadline
+     * {@code window} forward instead of inserting a second job, so a burst collapses into
+     * one run. Distinct from {@link #idempotent}, which dedupes onto the first job and
+     * never moves it — and mutually exclusive with it, since they disagree about what a
+     * repeat enqueue means.
+     *
+     * <p>The three arguments are taken together rather than as a fluent chain: this
+     * descriptor is immutable, so a half-set window would have to be legal in between,
+     * and an unbounded debounce is exactly what {@code maxWait} exists to prevent.
+     *
+     * @param window how far ahead of now each enqueue pushes the run
+     * @param keyTemplate the window's identity, resolved against the payload, e.g.
+     *     {@code "report:{userId}"} (see {@link EnqueueOptions.Builder#debounceKey})
+     * @param maxWait ceiling on the total delay, measured from when the window opened;
+     *     never shorter than {@code window}
+     * @throws IllegalArgumentException if {@code window} is not positive, {@code maxWait}
+     *     is shorter than it, or {@code keyTemplate} is empty
+     */
+    public Task<T> debounce(Duration window, String keyTemplate, Duration maxWait) {
+        return debounce(window, keyTemplate, maxWait, false);
+    }
+
+    /**
+     * {@link #debounce(Duration, String, Duration)}, additionally choosing whether an
+     * enqueue landing on an open window overwrites the pending job's payload with its own.
+     * The default keeps the payload the window opened with.
+     */
+    public Task<T> debounce(Duration window, String keyTemplate, Duration maxWait, boolean replacePayload) {
+        return withOptions(options.toBuilder()
+                .debounce(window)
+                .debounceKey(keyTemplate)
+                .debounceMaxWait(maxWait)
+                .debounceReplacePayload(replacePayload)
+                .build());
+    }
+
     public String name() {
         return name;
     }

@@ -2,6 +2,7 @@ package org.byteveda.flexiq.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -35,6 +36,48 @@ class InMemoryQueueBackendTest {
                 assertEquals(JobStatus.COMPLETE, job.status);
                 assertEquals(42, queue.getResult(id, Integer.class).orElseThrow());
             }
+        }
+    }
+
+    /** Payload with a field a debounce key template can address. */
+    record Report(String userId, int revision) {}
+
+    @Test
+    @Timeout(20)
+    void debouncedEnqueuesCollapseOntoOneJob() {
+        // The fake honours the window too, so a test written against it sees the same
+        // one-job-per-key outcome the native backend gives.
+        Task<Report> report = Task.of("im.debounce", Report.class)
+                .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+        try (FlexiQ queue = InMemoryFlexiQ.open()) {
+            String first = queue.enqueue(report, new Report("u1", 1));
+            String second = queue.enqueue(report, new Report("u1", 2));
+            String other = queue.enqueue(report, new Report("u2", 1));
+
+            assertEquals(first, second, "a repeat enqueue lands on the open window");
+            assertNotEquals(first, other, "a different key opens its own window");
+            assertEquals(2, queue.countPendingByQueue("default"));
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void debounceWindowsAreScopedByNamespace() {
+        // The core's find_debounce_target takes the namespace, so the same key under two
+        // namespaces is two windows. The fake has to agree or it hides a real collision.
+        Task<Report> report = Task.of("im.debounce.ns", Report.class)
+                .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+        try (FlexiQ queue = InMemoryFlexiQ.open()) {
+            String tenantA = queue.enqueue(
+                    report,
+                    new Report("u1", 1),
+                    report.options().toBuilder().namespace("a").build());
+            String tenantB = queue.enqueue(
+                    report,
+                    new Report("u1", 1),
+                    report.options().toBuilder().namespace("b").build());
+
+            assertNotEquals(tenantA, tenantB, "one key in two namespaces is two windows");
         }
     }
 

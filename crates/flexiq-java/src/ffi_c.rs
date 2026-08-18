@@ -21,7 +21,7 @@ use std::slice;
 use flexiq_core::Storage;
 
 use crate::backend::QueueHandle;
-use crate::convert::{build_new_job, EnqueueOptions};
+use crate::convert::{build_new_job, debounce_options, EnqueueOptions};
 
 /// The call succeeded; `out` holds the result bytes (job id, ids frame, or result).
 pub const OK: i32 = 0;
@@ -145,11 +145,20 @@ pub unsafe extern "C" fn flexiq_ffi_enqueue(
         let raw_options = read_string(options_ptr, options_len)?;
         let options: EnqueueOptions = parse_options(&raw_options, "enqueue options")?;
         let unique = options.unique_key.is_some();
+        let debounce = debounce_options(&options).map_err(|e| e.to_string())?;
+        // `enqueue_debounced` collapses onto the open window; it does no unique
+        // dedup, so there is no honest way to satisfy both requests at once.
+        if unique && debounce.is_some() {
+            return Err(
+                "uniqueKey and debounce cannot be combined — they are two different collapse rules"
+                    .to_string(),
+            );
+        }
         let new_job = build_new_job(task, payload, options, queue.namespace.as_deref());
-        let job = if unique {
-            queue.storage.enqueue_unique(new_job)
-        } else {
-            queue.storage.enqueue(new_job)
+        let job = match debounce {
+            Some(debounce) => queue.storage.enqueue_debounced(new_job, debounce),
+            None if unique => queue.storage.enqueue_unique(new_job),
+            None => queue.storage.enqueue(new_job),
         }
         .map_err(|e| e.to_string())?;
         Ok::<Vec<u8>, String>(job.id.into_bytes())
@@ -188,8 +197,20 @@ pub unsafe extern "C" fn flexiq_ffi_enqueue_many(
         let new_jobs = payloads
             .into_iter()
             .zip(option_list)
-            .map(|(payload, options)| build_new_job(task.clone(), payload, options, namespace))
-            .collect();
+            .map(|(payload, options)| {
+                // The batch path is one `enqueue_batch_dedup` call with no debounce
+                // step, so an entry's key would be written but never honoured — and a
+                // plain pending row carrying a debounce key is a slide target for the
+                // next debounced enqueue.
+                if debounce_options(&options)
+                    .map_err(|e| e.to_string())?
+                    .is_some()
+                {
+                    return Err("batch enqueue cannot debounce".to_string());
+                }
+                Ok(build_new_job(task.clone(), payload, options, namespace))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let ids = crate::backend::enqueue_batch_dedup(&queue.storage, new_jobs)
             .map_err(|e| e.to_string())?;
         let ids: Vec<Vec<u8>> = ids.into_iter().map(String::into_bytes).collect();
