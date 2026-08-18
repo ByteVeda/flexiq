@@ -1,0 +1,115 @@
+---
+title: Debouncing
+description: "Collapse a burst of enqueues into one run on a sliding deadline."
+---
+
+Debouncing collapses repeated enqueues that share a key into a **single** job
+whose run keeps sliding into the future while the calls keep coming. It is the
+answer to "rebuild this user's report once they stop editing", not "run this at
+most 100 times a minute".
+
+```java
+record Report(String userId, int revision) {}
+
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(
+                Duration.ofMinutes(5),    // slide the run 5 minutes out on every enqueue
+                "report:{userId}",        // one window per user
+                Duration.ofMinutes(30));  // but never delay past 30 minutes
+
+String first = flexiq.enqueue(BUILD_REPORT, new Report("u1", 1));  // creates the job
+String again = flexiq.enqueue(BUILD_REPORT, new Report("u1", 2));  // same id — deadline moves
+```
+
+The first enqueue creates the job; every later one with the same resolved key
+returns **that** job's id, so a burst of a hundred calls leaves one pending row.
+The deadline is `min(now + window, firstSeen + maxWait)`, recomputed inside the
+same storage transaction that finds the open window — two producers racing on
+one key cannot both create a job.
+
+## The key is the window
+
+The key template is resolved against the payload of each enqueue:
+
+- `{userId}` reads that property off the enqueued object (a record component, a
+  bean getter, or a `Map` entry — whatever Jackson sees).
+- `{owner.id}` walks into a nested object.
+
+A placeholder that resolves to nothing — a missing property, an explicit null,
+an object or array where a scalar was expected — throws
+`IllegalArgumentException` at enqueue, and nothing is inserted. The alternative
+would be one global window silently shared by every caller, which is the failure
+debouncing exists to avoid. A template with no placeholder at all is legal and
+means exactly that: one window for the whole task.
+
+```java
+Task<Report> NIGHTLY = Task.of("nightly-rollup", Report.class)
+        .debounce(Duration.ofMinutes(1), "nightly", Duration.ofMinutes(10));
+```
+
+## Max wait is mandatory
+
+A window with no max wait throws `IllegalArgumentException` at build time —
+before any job exists. Without a ceiling, a caller who never stops enqueuing
+starves the job forever, the classic debounce footgun. The ceiling is measured
+from when the window opened, not from the latest call, so the job runs on
+schedule no matter how long the burst lasts. It may never be shorter than the
+window itself.
+
+## Which payload runs
+
+By default the job runs with the payload the window **opened** with; later
+enqueues move the deadline and nothing else. Pass `replacePayload` to run with
+the newest payload instead:
+
+```java
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30), true);
+```
+
+Priority, metadata, notes and dependencies always belong to the job that opened
+the window — only the deadline and (optionally) the payload move.
+
+## Per-enqueue debouncing
+
+The same four knobs live on `EnqueueOptions`, so a producer that registers no
+handler can still debounce, and a single call can override the task's default:
+
+```java
+EnqueueOptions urgent = EnqueueOptions.builder()
+        .debounce(Duration.ofSeconds(30))
+        .debounceKey("report:{userId}")
+        .debounceMaxWait(Duration.ofMinutes(5))
+        .debounceReplacePayload(true)
+        .build();
+
+flexiq.enqueue(BUILD_REPORT, new Report("u1", 3), urgent);
+```
+
+`EnqueueOptions.Builder.build()` is where an incomplete set is rejected: a
+window with no key, a window with no max wait, a max wait shorter than the
+window, or a debounce field set without a window. That is also why
+`Task.debounce(...)` takes the whole set in one call — the descriptor is
+immutable, so a fluent chain would have to treat a half-set window as valid in
+between.
+
+## Limits
+
+- A dedup key and a window cannot be combined — they are two different collapse
+  rules. Idempotency pins the first job in place and returns it untouched; a
+  debounce slides it. That covers an explicit `uniqueKey`/`idempotencyKey` and
+  `idempotent(true)` alike. See
+  [Idempotency](/java/guides/reliability/idempotency) for the dedup path.
+- `enqueueMany` cannot debounce. A batch is a single storage call with no window
+  to slide; enqueue debounced jobs one at a time.
+- A debounced task cannot back a subscription. A publish is fanned out by the
+  core, one delivery per subscription, and never passes through the enqueue
+  path.
+- A `delay` cannot be combined with a window, and is rejected rather than
+  dropped: the deadline is recomputed from the window and max wait inside the
+  storage transaction, so the delay would have no effect.
+
+<Callout type="info">
+  Debouncing collapses *enqueues*; to bound how fast the jobs you do create
+  dispatch, use [rate limiting](/java/guides/reliability/rate-limiting).
+</Callout>

@@ -50,5 +50,7 @@ gives you both knobs.
 <Callout type="info">
   Gates run in registration order at enqueue time, after
   [interceptors](/java/guides/resources/interception) and `onEnqueue`
-  middleware — so they see the payload that will actually be stored.
+  middleware — so they see the payload that will actually be stored. To collapse
+  a burst of enqueues into one run rather than throttle them, see
+  [debouncing](/java/guides/reliability/debouncing).
 </Callout>
