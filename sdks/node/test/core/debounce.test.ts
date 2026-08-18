@@ -10,8 +10,9 @@ import { DebounceOptions, Queue, QueueError, type Worker } from "../../src/index
 
 let worker: Worker | undefined;
 
-afterEach(() => {
-  worker?.stop();
+afterEach(async () => {
+  // `stop()` is async — awaiting keeps a worker from outliving its test.
+  await worker?.stop();
   worker = undefined;
 });
 
