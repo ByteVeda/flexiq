@@ -19,8 +19,8 @@ queue.enqueue("buildReport", [{ userId: "u1" }]); // creates the job
 queue.enqueue("buildReport", [{ userId: "u1" }]); // same job id — deadline moves
 ```
 
-Each enqueue returns the **existing** job's id, so a burst of a hundred calls
-leaves one pending row. The deadline is `min(now + debounce, firstSeen +
+The first enqueue creates the job; every later one with the same resolved key
+returns **that** job's id, so a burst of a hundred calls leaves one pending row. The deadline is `min(now + debounce, firstSeen +
 debounceMaxWait)`, recomputed inside the same storage transaction that finds
 the open window — two producers racing on one key cannot both create a job.
 
