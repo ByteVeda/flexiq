@@ -11,6 +11,7 @@ arguments.
 from __future__ import annotations
 
 import inspect
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -21,6 +22,12 @@ from typing import Any
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)\s*$", re.IGNORECASE)
 
 _UNIT_MS = {"ms": 1, "s": 1_000, "m": 60_000, "h": 3_600_000, "d": 86_400_000}
+
+# Storage measures the window as an i64 of milliseconds, so anything past this
+# has no representation to travel in. Caught here rather than at the PyO3
+# boundary, where it surfaces as ``OverflowError`` instead of the ``ValueError``
+# every other duration mistake raises.
+_MAX_DURATION_MS = 2**63 - 1
 
 # What a duration may be written as, in either the decorator or a single call.
 Duration = str | float | int
@@ -38,7 +45,7 @@ def parse_duration_ms(value: Duration, *, param: str) -> int:
     Raises:
         TypeError: ``value`` is neither a string nor a real number.
         ValueError: the string has no recognized unit, or the duration is not
-            strictly positive.
+            finite, is not strictly positive, or exceeds what storage can hold.
     """
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise TypeError(
@@ -54,12 +61,25 @@ def parse_duration_ms(value: Duration, *, param: str) -> int:
                 "one of ms/s/m/h/d, e.g. '500ms', '5m', '2h'"
             )
         amount, unit = match.groups()
-        millis = round(float(amount) * _UNIT_MS[unit.lower()])
+        scaled = float(amount) * _UNIT_MS[unit.lower()]
     else:
-        millis = round(float(value) * 1000)
+        scaled = float(value) * 1000
 
+    # ``round`` raises OverflowError on an infinity and ValueError on a NaN, so
+    # both are screened here to keep one error type across every bad duration.
+    # An infinity can arrive directly (``debounce=float("inf")``) or by
+    # overflowing the multiply above.
+    if not math.isfinite(scaled):
+        raise ValueError(f"{param} must be a finite duration, got {value!r}")
+
+    millis = round(scaled)
     if millis <= 0:
         raise ValueError(f"{param} must be a positive duration, got {value!r}")
+    if millis > _MAX_DURATION_MS:
+        raise ValueError(
+            f"{param}={value!r} is longer than the {_MAX_DURATION_MS}ms ceiling storage "
+            "can represent"
+        )
     return millis
 
 

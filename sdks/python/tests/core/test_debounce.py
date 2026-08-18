@@ -49,6 +49,19 @@ def test_parse_duration_ms_rejects_non_positive_numbers() -> None:
         parse_duration_ms(0, param="debounce")
 
 
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan"), 1e308])
+def test_parse_duration_ms_rejects_non_finite_durations(value: float) -> None:
+    """``round`` would raise OverflowError on these; the contract is ValueError."""
+    with pytest.raises(ValueError, match="finite"):
+        parse_duration_ms(value, param="debounce")
+
+
+def test_parse_duration_ms_rejects_durations_storage_cannot_hold() -> None:
+    """Past i64 milliseconds the value has no representation to travel in."""
+    with pytest.raises(ValueError, match="ceiling"):
+        parse_duration_ms("999999999999999999999999d", param="debounce")
+
+
 def test_parse_duration_ms_rejects_wrong_types() -> None:
     with pytest.raises(TypeError, match="duration string"):
         parse_duration_ms(None, param="debounce")  # type: ignore[arg-type]
