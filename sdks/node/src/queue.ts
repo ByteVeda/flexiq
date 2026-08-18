@@ -8,6 +8,7 @@ import {
   type QueueOverride,
   type TaskOverride,
 } from "./dashboard/stores";
+import { DebounceOptions, hasDebounceInput, mergeDebounceInput } from "./debounce";
 import { createDetachedNative, isDetached } from "./detached";
 import {
   EnqueueSkippedError,
@@ -339,7 +340,11 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     options?: TaskOptions,
   ): Queue<TTasks & Record<Name, Handler>>;
   task(name: string, handler: AnyHandler, options?: TaskOptions): Queue<TaskMap> {
-    this.tasks.set(name, { handler, options });
+    // Debounce is validated here, not on the first enqueue: an unbounded
+    // window or an unkeyed one is a configuration mistake, and finding it at
+    // registration is what the `debounce`-without-`debounceMaxWait` rule buys.
+    const debounce = DebounceOptions.from(`task "${name}"`, options ?? {});
+    this.tasks.set(name, { handler, options, debounce });
     return this as unknown as Queue<TaskMap>;
   }
 
@@ -366,6 +371,15 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       throw new QueueError(
         `subscriber "${name}": per-task codecs do not apply to topic deliveries — ` +
           "published payloads use the queue-level serializer only",
+      );
+    }
+    // A publish is fanned out by the core, one delivery per subscription; it
+    // never passes through this shell's enqueue path, so a debounce here would
+    // be silently ignored rather than applied.
+    if (hasDebounceInput(taskOptions)) {
+      throw new QueueError(
+        `subscriber "${name}": debounce does not apply to topic deliveries — ` +
+          "the core fans a publish out to every subscription directly",
       );
     }
     const pending: PendingSubscription = {
@@ -968,7 +982,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     mode?: { batch: boolean },
   ): { taskName: string; payload: Buffer; options: NativeEnqueueOptions } | null {
     const { taskName, args: finalArgs } = this.runInterceptors(name, [...(args ?? [])], mode);
-    const defaults = this.tasks.get(taskName)?.options;
+    const registered = this.tasks.get(taskName);
+    const defaults = registered?.options;
     const merged: EnqueueOptions = {
       ...options,
       maxRetries: options?.maxRetries ?? defaults?.maxRetries,
@@ -997,10 +1012,27 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       default:
         break;
     }
+    // An enqueue naming any debounce field layers it over the task's defaults
+    // and re-validates the result; one naming none reuses the instance built
+    // at registration.
+    const debounce = hasDebounceInput(ctx.options)
+      ? DebounceOptions.from(`task "${taskName}"`, mergeDebounceInput(defaults, ctx.options))
+      : registered?.debounce;
+    if (debounce !== undefined && mode?.batch) {
+      // `enqueueMany` is one native call with no debounce step, so a key would
+      // be written and never honoured. Worse, a plain pending row carrying a
+      // debounce key is a slide target for the next debounced enqueue.
+      throw new QueueError(
+        `batch enqueue of "${taskName}" cannot debounce — enqueue debounced jobs one at a time`,
+      );
+    }
     return {
       taskName,
       payload: this.encodeTaskPayload(taskName, ctx.args),
-      options: toNativeEnqueueOptions(ctx.options),
+      options: {
+        ...toNativeEnqueueOptions(ctx.options),
+        ...debounce?.toNative(`task "${taskName}"`, ctx.args),
+      },
     };
   }
 
@@ -1789,7 +1821,12 @@ function predicateEvent(taskName: string, reason: string): PredicateEvent {
 }
 
 function toNativeEnqueueOptions(options: EnqueueOptions): NativeEnqueueOptions {
-  const { notes, ...rest } = options;
+  // The public debounce fields are dropped rather than passed through:
+  // `debounceKey` collides with the native field of the same name, which wants
+  // the *resolved* key, not the template. `DebounceOptions.toNative` supplies
+  // all four.
+  const { notes, debounce, debounceKey, debounceMaxWait, debounceReplacePayload, ...rest } =
+    options;
   return notes === undefined ? rest : { ...rest, notes: encodeNotes(notes) };
 }
 

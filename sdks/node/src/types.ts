@@ -1,3 +1,4 @@
+import type { DebounceOptions } from "./debounce";
 import type {
   CircuitBreakerInput,
   DetailedJobFilter,
@@ -80,12 +81,22 @@ export interface TopicMessage {
 /**
  * Per-job enqueue options. Mirrors the native options, but `notes` is a
  * structured object here (validated and JSON-encoded before it reaches the
- * core) rather than a pre-encoded string.
+ * core) rather than a pre-encoded string, and the debounce fields are the
+ * public spelling — the millisecond native ones are derived from them.
  */
-export interface EnqueueOptions extends Omit<NativeEnqueueOptions, "notes"> {
+export interface EnqueueOptions
+  extends Omit<NativeEnqueueOptions, "notes" | NativeDebounceField>,
+    DebounceInput {
   /** Structured annotations stored on the job — at most 15 fields, 4 KiB encoded. */
   notes?: Record<string, unknown>;
 }
+
+/** The wire spelling of the debounce fields, replaced by {@link DebounceInput}. */
+type NativeDebounceField =
+  | "debounceKey"
+  | "debounceWindowMs"
+  | "debounceMaxWaitMs"
+  | "debounceReplacePayload";
 
 /**
  * Per-publish options. Mirrors the native options, but `notes` is a structured
@@ -158,8 +169,48 @@ export type RateLimit = `${number}/${"s" | "m" | "h"}`;
 /** What a saturated rate limit does to a job: keep it, or shed it. */
 export type OnExcess = "defer" | "drop";
 
+/**
+ * A length of time: milliseconds as a number, or a suffixed string —
+ * `"500ms"`, `"30s"`, `"5m"`, `"2h"`, `"1d"`.
+ */
+export type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d"}`;
+
+/**
+ * Debounce fields, shared by {@link TaskOptions} (the task's default) and
+ * {@link EnqueueOptions} (a per-call override). Debouncing collapses a burst of
+ * enqueues that share a key into one run whose deadline slides forward with
+ * each call — distinct from `uniqueKey`, which dedups onto the first job and
+ * never moves it.
+ */
+export interface DebounceInput {
+  /**
+   * Collapse window: each enqueue pushes the run this far into the future.
+   * Setting it is what turns debouncing on, and requires both
+   * {@link DebounceInput.debounceKey} and {@link DebounceInput.debounceMaxWait}.
+   */
+  debounce?: Duration;
+  /**
+   * The window's identity, as a template resolved against the call's args:
+   * `{userId}` reads that property off the first object argument carrying it,
+   * `{0}`/`{1}` read an argument by position. A placeholder that resolves to
+   * nothing throws at enqueue rather than degrading to a key shared by every
+   * caller. A template with no placeholder is a single window for the task.
+   */
+  debounceKey?: string;
+  /**
+   * Ceiling on the total delay, measured from when the window opened.
+   * Mandatory: without it a caller who never stops enqueuing starves the job.
+   */
+  debounceMaxWait?: Duration;
+  /**
+   * Whether a repeat enqueue overwrites the pending job's payload with its own.
+   * Default false — the job runs with the args the window opened with.
+   */
+  debounceReplacePayload?: boolean;
+}
+
 /** Per-task defaults and resilience config, applied when registering a task. */
-export interface TaskOptions {
+export interface TaskOptions extends DebounceInput {
   /** Retry budget (also the per-job default at enqueue). */
   maxRetries?: number;
   /** Exponential backoff bounds for retries. */
@@ -287,6 +338,8 @@ export interface QueueLimits {
 export interface RegisteredTask {
   handler: AnyHandler;
   options?: TaskOptions;
+  /** The validated debounce policy, built once at registration. */
+  debounce?: DebounceOptions;
 }
 
 /**
