@@ -50,6 +50,7 @@ diesel::table! {
         dlq_retry_count -> Integer,
         topic -> Nullable<Text>,
         subscription_name -> Nullable<Text>,
+        shed -> Bool,
     }
 }
 

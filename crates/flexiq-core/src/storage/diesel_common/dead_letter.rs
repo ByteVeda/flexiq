@@ -12,6 +12,29 @@ macro_rules! impl_diesel_dead_letter_ops {
                 error: &str,
                 metadata: Option<&str>,
             ) -> Result<()> {
+                self.dead_letter(job, error, metadata, false)
+            }
+
+            /// Dead-letter a job the scheduler shed, flagging the entry so the
+            /// auto-retry sweep's query skips it.
+            pub fn shed_to_dlq(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+            ) -> Result<()> {
+                self.dead_letter(job, error, metadata, true)
+            }
+
+            /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
+            /// difference between them.
+            fn dead_letter(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+                shed: bool,
+            ) -> Result<()> {
                 let now = now_millis();
                 let dlq_id = uuid::Uuid::now_v7().to_string();
                 let job_id = job.id.clone();
@@ -53,6 +76,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                         dlq_retry_count,
                         topic: topic.as_deref(),
                         subscription_name: subscription_name.as_deref(),
+                        shed,
                     };
 
                     diesel::insert_into(dead_letter::table)
@@ -430,10 +454,16 @@ macro_rules! impl_diesel_dead_letter_ops {
                 // Scope to the worker's own namespace + served queues, mirroring
                 // the poller's dequeue scoping, so auto-retry never resurrects
                 // entries belonging to other namespaces/queues.
+                // `shed` is filtered here rather than by the caller: the limit
+                // is applied by the query, so a page of shed entries would be
+                // truncated *before* the caller ever saw the failures behind
+                // them. A shed entry is never retried, so its `dlq_retry_count`
+                // stays 0 and it would own the head of this ordering forever.
                 let mut query = dead_letter::table
                     .filter(dead_letter::failed_at.le(cutoff_ms))
                     .filter(dead_letter::dlq_retry_count.lt(max_retries))
                     .filter(dead_letter::queue.eq_any(queues))
+                    .filter(dead_letter::shed.eq(false))
                     .into_boxed();
                 match namespace {
                     Some(ns) => query = query.filter(dead_letter::namespace.eq(ns)),

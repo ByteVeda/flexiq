@@ -575,6 +575,42 @@ fn test_list_dead_for_retry(s: &impl Storage) {
     );
 }
 
+fn test_list_dead_for_retry_excludes_shed(s: &impl Storage) {
+    // Shed entries are never retried, so their `dlq_retry_count` never moves
+    // and they keep their place at the head of the `failed_at` ordering. The
+    // limit is applied by the query, so excluding them anywhere but in the
+    // query would let them fill the page and hide the failures behind them.
+    let q = "q-dlq-retry-shed";
+    const FLOOD: usize = 5;
+    const LIMIT: i64 = 3;
+
+    for i in 0..FLOOD {
+        let job = s.enqueue(make_job(q, "shed_task")).unwrap();
+        s.shed_to_dlq(&job, &format!("codel: sojourn {i}ms exceeded target"), None)
+            .unwrap();
+    }
+    // `failed_at` has millisecond resolution: make the ordinary failure
+    // strictly the newest entry, so it is genuinely behind the whole flood.
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let failed = s.enqueue(make_job(q, "failed_task")).unwrap();
+    s.move_to_dlq(&failed, "ConnectionError: refused", None)
+        .unwrap();
+
+    let qs = [q.to_string()];
+    let cands = s
+        .list_dead_for_retry(now_millis() + 5000, 3, None, &qs, LIMIT)
+        .unwrap();
+    assert_eq!(
+        cands.len(),
+        1,
+        "only the ordinary failure is a retry candidate"
+    );
+    assert_eq!(
+        cands[0].original_job_id, failed.id,
+        "the failure behind the shed flood is still reachable within the limit"
+    );
+}
+
 fn test_progress_tracking(s: &impl Storage) {
     let job = s.enqueue(make_job("q-progress", "progress_task")).unwrap();
     s.update_progress(&job.id, 50, None).unwrap();
@@ -1835,6 +1871,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_count_expired_rows_none_cutoff_counts_per_entry_only(s);
     test_delete_dead(s);
     test_list_dead_for_retry(s);
+    test_list_dead_for_retry_excludes_shed(s);
     test_progress_tracking(s);
     test_record_and_get_errors(s);
     test_workers(s);

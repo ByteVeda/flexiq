@@ -272,7 +272,7 @@ impl Scheduler {
                     cfg.target_ms
                 );
                 self.storage
-                    .move_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
+                    .shed_to_dlq(&job, &reason, Some("{\"codel\":true}"))?;
                 warn!(
                     "codel shed {} on queue '{}' (sojourn {sojourn}ms)",
                     job.id, job.queue
@@ -529,7 +529,7 @@ impl Scheduler {
             }
         }
         self.storage
-            .move_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
+            .shed_to_dlq(job, reason, Some(shed::RATE_LIMIT_SHED_METADATA))?;
         warn!(
             "rate-limit shed {} on queue '{}' (task '{}')",
             job.id, job.queue, job.task_name

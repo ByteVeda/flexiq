@@ -14,7 +14,8 @@ impl DeadLetterQueue {
         Self { storage }
     }
 
-    /// Move a failed job to the dead letter queue.
+    /// Move a *failed* job to the dead letter queue. The shed paths call
+    /// `Storage::shed_to_dlq` directly so their entries are flagged.
     pub(crate) fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
         self.storage.move_to_dlq(job, error, metadata)
     }

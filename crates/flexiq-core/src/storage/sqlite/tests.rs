@@ -2607,3 +2607,67 @@ fn test_is_migrated_distinguishes_an_empty_database() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn test_dlq_shed_backfill_flags_pre_migration_rows() {
+    use crate::storage::migrate::Backend;
+    use crate::storage::schema::dead_letter;
+    use diesel::prelude::*;
+
+    // A row written before `0011_dlq_shed` existed carries the reserved reason
+    // prefix but not the flag — `NOT NULL DEFAULT false` gives it `false`.
+    // `move_to_dlq` reproduces exactly that shape.
+    let storage = SqliteStorage::in_memory().unwrap();
+    let shed = storage.enqueue(make_job("legacy_shed")).unwrap();
+    storage
+        .move_to_dlq(&shed, "codel: sojourn 900ms exceeded target", None)
+        .unwrap();
+    let failed = storage.enqueue(make_job("legacy_failure")).unwrap();
+    storage
+        .move_to_dlq(&failed, "ConnectionError: refused", None)
+        .unwrap();
+
+    let flagged = |job_id: &str| -> bool {
+        let mut conn = storage.conn().unwrap();
+        dead_letter::table
+            .filter(dead_letter::original_job_id.eq(job_id))
+            .select(dead_letter::shed)
+            .first::<bool>(&mut conn)
+            .unwrap()
+    };
+    assert!(!flagged(&shed.id), "the legacy row starts unflagged");
+
+    let all = crate::storage::migrations::all();
+    let m = all
+        .iter()
+        .find(|m| m.version() == "0011_dlq_shed")
+        .expect("the migration is registered");
+    let backfill = m
+        .up(Backend::Sqlite)
+        .into_iter()
+        .find(|s| s.sql().starts_with("UPDATE"))
+        .expect("the migration carries a backfill");
+    let mut conn = storage.conn().unwrap();
+    diesel::sql_query(backfill.sql())
+        .execute(&mut conn)
+        .unwrap();
+    // Idempotent: guarded on `shed = false`, so a second pass is a no-op.
+    diesel::sql_query(backfill.sql())
+        .execute(&mut conn)
+        .unwrap();
+    drop(conn);
+
+    assert!(flagged(&shed.id), "the reserved prefix backfills to shed");
+    assert!(
+        !flagged(&failed.id),
+        "an ordinary failure is left alone by the backfill"
+    );
+
+    // And the point of the flag: the backfilled row stops being a candidate.
+    let qs = ["default".to_string()];
+    let cands = storage
+        .list_dead_for_retry(now_millis() + 5000, 3, None, &qs, 50)
+        .unwrap();
+    assert_eq!(cands.len(), 1, "only the ordinary failure is a candidate");
+    assert_eq!(cands[0].original_job_id, failed.id);
+}

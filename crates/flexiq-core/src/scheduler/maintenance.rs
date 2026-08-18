@@ -21,6 +21,11 @@ const PERIODIC_DEFAULT_TIMEOUT_MS: i64 = 300_000;
 /// Max log messages compacted per retention tick, bounding each sweep.
 const TOPIC_MESSAGE_PURGE_LIMIT: i64 = 10_000;
 
+/// Dead-letter entries considered per auto-retry sweep. The bound is applied by
+/// the query, so anything the sweep would skip has to be excluded there too —
+/// see `Storage::list_dead_for_retry`.
+pub(super) const DLQ_RETRY_CANDIDATES: i64 = 50;
+
 /// A retention window in ms as a compact human duration (`7d`, `12h`, `30m`).
 fn humanize_ms(ms: i64) -> String {
     const S: i64 = 1000;
@@ -352,7 +357,7 @@ impl Scheduler {
             max_retries,
             self.namespace.as_deref(),
             &active_queues,
-            50,
+            DLQ_RETRY_CANDIDATES,
         )?;
 
         if candidates.is_empty() {
@@ -361,9 +366,10 @@ impl Scheduler {
 
         let mut retried = 0u64;
         for entry in &candidates {
-            // A shed job was dropped on purpose — stale under CoDel, or excess
-            // under a rate limit whose task asked for it. Never let the
-            // auto-retry sweep resurrect one.
+            // Belt and braces. Storage already excludes shed entries by their
+            // `shed` flag — it must, or a DLQ full of them would fill every
+            // bounded page and starve genuine failures — but rows written
+            // before that column existed carry only the reason prefix.
             if super::shed::is_shed_reason(entry.error.as_deref()) {
                 continue;
             }
