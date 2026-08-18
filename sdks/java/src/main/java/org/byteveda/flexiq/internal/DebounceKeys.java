@@ -104,6 +104,14 @@ public final class DebounceKeys {
                     + node.getNodeType().toString().toLowerCase(java.util.Locale.ROOT)
                     + " — only scalar properties can key a debounce window");
         }
-        return node.asText();
+        String value = node.asText();
+        if (value.isEmpty()) {
+            // The whole-key guard in resolve() only catches a template that resolved to
+            // nothing at all. An empty segment still leaves a key — "report:" — that every
+            // payload with an empty property shares, which is the same silent collapse.
+            throw new IllegalArgumentException("debounceKey \"" + template + "\" for task '" + taskName
+                    + "' references {" + path + "}, which is empty — a key segment must carry a value");
+        }
+        return value;
     }
 }

@@ -239,6 +239,20 @@ class DebounceTest {
 
     @Test
     @Timeout(30)
+    void anEmptyPropertyCannotKeyAWindow(@TempDir Path dir) {
+        try (FlexiQ queue = sqlite(dir, "emptykey.db")) {
+            // "report:" would be a window every empty-userId payload shares — the same
+            // silent collapse a missing property is rejected for.
+            Task<Report> task = debounced("debounce.emptykey");
+            IllegalArgumentException e =
+                    assertThrows(IllegalArgumentException.class, () -> queue.enqueue(task, new Report("", 1)));
+            assertTrue(e.getMessage().contains("empty"), e.getMessage());
+            assertEquals(0, queue.countPendingByQueue("default"), "a rejected enqueue inserts nothing");
+        }
+    }
+
+    @Test
+    @Timeout(30)
     void aScalarPayloadCannotFillAPlaceholder(@TempDir Path dir) {
         try (FlexiQ queue = sqlite(dir, "scalar.db")) {
             Task<String> task = Task.of("debounce.scalar", String.class)
