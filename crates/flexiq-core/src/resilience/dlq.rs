@@ -1,6 +1,5 @@
 use crate::error::Result;
 use crate::job::Job;
-use crate::storage::records::DlqDisposition;
 use crate::storage::{Storage, StorageBackend};
 
 /// Dead letter queue manager. In-crate only: consumed solely by `Scheduler`;
@@ -15,11 +14,9 @@ impl DeadLetterQueue {
         Self { storage }
     }
 
-    /// Move a *failed* job to the dead letter queue. The shed paths dead-letter
-    /// through `Storage` directly so they can mark the entry
-    /// [`DlqDisposition::Shed`].
+    /// Move a *failed* job to the dead letter queue. The shed paths call
+    /// `Storage::shed_to_dlq` directly so their entries are flagged.
     pub(crate) fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
-        self.storage
-            .move_to_dlq(job, error, metadata, DlqDisposition::Failed)
+        self.storage.move_to_dlq(job, error, metadata)
     }
 }

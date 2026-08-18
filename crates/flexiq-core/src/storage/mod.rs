@@ -717,9 +717,16 @@ macro_rules! impl_storage {
                 job: &$crate::job::Job,
                 error: &str,
                 metadata: Option<&str>,
-                disposition: $crate::storage::records::DlqDisposition,
             ) -> $crate::error::Result<()> {
-                self.move_to_dlq(job, error, metadata, disposition)
+                self.move_to_dlq(job, error, metadata)
+            }
+            fn shed_to_dlq(
+                &self,
+                job: &$crate::job::Job,
+                error: &str,
+                metadata: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.shed_to_dlq(job, error, metadata)
             }
             fn list_dead(
                 &self,
@@ -1613,14 +1620,11 @@ impl Storage for StorageBackend {
     fn purge_job_errors(&self, older_than_ms: i64) -> Result<u64> {
         delegate!(self, purge_job_errors, older_than_ms)
     }
-    fn move_to_dlq(
-        &self,
-        job: &Job,
-        error: &str,
-        metadata: Option<&str>,
-        disposition: records::DlqDisposition,
-    ) -> Result<()> {
-        delegate!(self, move_to_dlq, job, error, metadata, disposition)
+    fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        delegate!(self, move_to_dlq, job, error, metadata)
+    }
+    fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        delegate!(self, shed_to_dlq, job, error, metadata)
     }
     fn list_dead(&self, limit: i64, offset: i64, namespace: Option<&str>) -> Result<Vec<DeadJob>> {
         delegate!(self, list_dead, limit, offset, namespace)

@@ -862,7 +862,7 @@ mod tests {
     use super::*;
     use crate::job::{now_millis, JobStatus, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
-    use crate::storage::records::{DlqDisposition, NewPeriodicTask};
+    use crate::storage::records::NewPeriodicTask;
     use crate::storage::Storage;
 
     fn test_scheduler() -> Scheduler {
@@ -1606,12 +1606,7 @@ mod tests {
         let failed = scheduler.storage.enqueue(make_job("other_task")).unwrap();
         scheduler
             .storage
-            .move_to_dlq(
-                &failed,
-                "ConnectionError: refused",
-                None,
-                DlqDisposition::Failed,
-            )
+            .move_to_dlq(&failed, "ConnectionError: refused", None)
             .unwrap();
         scheduler.storage.enqueue(make_job("shed_task")).unwrap();
         scheduler.storage.enqueue(make_job("shed_task")).unwrap();
@@ -1656,14 +1651,13 @@ mod tests {
             let job = scheduler.storage.enqueue(make_job("shed_task")).unwrap();
             scheduler
                 .storage
-                .move_to_dlq(
+                .shed_to_dlq(
                     &job,
                     &format!(
                         "{} sojourn {i}ms exceeded target",
                         shed::CODEL_REASON_PREFIX
                     ),
                     Some("{\"codel\":true}"),
-                    DlqDisposition::Shed,
                 )
                 .unwrap();
         }
@@ -1673,12 +1667,7 @@ mod tests {
         let failed = scheduler.storage.enqueue(make_job("other_task")).unwrap();
         scheduler
             .storage
-            .move_to_dlq(
-                &failed,
-                "ConnectionError: refused",
-                None,
-                DlqDisposition::Failed,
-            )
+            .move_to_dlq(&failed, "ConnectionError: refused", None)
             .unwrap();
 
         scheduler.auto_retry_dlq().unwrap();

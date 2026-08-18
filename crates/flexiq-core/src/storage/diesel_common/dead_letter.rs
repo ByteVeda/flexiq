@@ -11,7 +11,29 @@ macro_rules! impl_diesel_dead_letter_ops {
                 job: &Job,
                 error: &str,
                 metadata: Option<&str>,
-                disposition: $crate::storage::records::DlqDisposition,
+            ) -> Result<()> {
+                self.dead_letter(job, error, metadata, false)
+            }
+
+            /// Dead-letter a job the scheduler shed, flagging the entry so the
+            /// auto-retry sweep's query skips it.
+            pub fn shed_to_dlq(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+            ) -> Result<()> {
+                self.dead_letter(job, error, metadata, true)
+            }
+
+            /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
+            /// difference between them.
+            fn dead_letter(
+                &self,
+                job: &Job,
+                error: &str,
+                metadata: Option<&str>,
+                shed: bool,
             ) -> Result<()> {
                 let now = now_millis();
                 let dlq_id = uuid::Uuid::now_v7().to_string();
@@ -54,7 +76,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                         dlq_retry_count,
                         topic: topic.as_deref(),
                         subscription_name: subscription_name.as_deref(),
-                        shed: disposition == $crate::storage::records::DlqDisposition::Shed,
+                        shed,
                     };
 
                     diesel::insert_into(dead_letter::table)

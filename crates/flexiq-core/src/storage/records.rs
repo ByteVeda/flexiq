@@ -435,26 +435,6 @@ pub struct DebounceOptions {
     pub replace_payload: bool,
 }
 
-/// Why a job entered the dead-letter queue.
-///
-/// Storage records the distinction so [`Storage::list_dead_for_retry`] can
-/// exclude shed entries *in the query* rather than filtering an
-/// already-truncated page — a DLQ full of shed rows would otherwise own the
-/// head of the `failed_at` ordering forever and starve the sweep of genuine
-/// failures. Storage learns only "shed"; the reason vocabulary that produces
-/// one (`codel:`, `rate_limit:`) stays the scheduler's.
-///
-/// [`Storage::list_dead_for_retry`]: super::Storage::list_dead_for_retry
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum DlqDisposition {
-    /// The job failed: retries exhausted, expired, or retry budget spent.
-    #[default]
-    Failed,
-    /// The scheduler threw the job away on purpose — stale under CoDel, or
-    /// excess under a rate limit whose task asked to drop. Never auto-retried.
-    Shed,
-}
-
 /// Everything a worker announces about itself when it joins the registry.
 ///
 /// Grouped into a struct rather than passed positionally: the shells populate

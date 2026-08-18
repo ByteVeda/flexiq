@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use super::{map_err, strip_dead_blob, RedisStorage, SCAN_BATCH};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job, JobStatus, NewJob};
-use crate::storage::records::DlqDisposition;
 use crate::storage::DeadJob;
 
 #[derive(Serialize, Deserialize)]
@@ -61,12 +60,24 @@ impl From<DeadJobEntry> for DeadJob {
 
 impl RedisStorage {
     /// Move a job to the dead-letter queue and cascade-cancel its dependents.
-    pub fn move_to_dlq(
+    pub fn move_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.dead_letter(job, error, metadata, false)
+    }
+
+    /// Dead-letter a job the scheduler shed, flagging the entry so the
+    /// auto-retry sweep skips it before it can spend the candidate budget.
+    pub fn shed_to_dlq(&self, job: &Job, error: &str, metadata: Option<&str>) -> Result<()> {
+        self.dead_letter(job, error, metadata, true)
+    }
+
+    /// Shared body of `move_to_dlq`/`shed_to_dlq`; `shed` is the only
+    /// difference between them.
+    fn dead_letter(
         &self,
         job: &Job,
         error: &str,
         metadata: Option<&str>,
-        disposition: DlqDisposition,
+        shed: bool,
     ) -> Result<()> {
         let now = now_millis();
         let dlq_id = uuid::Uuid::now_v7().to_string();
@@ -100,7 +111,7 @@ impl RedisStorage {
             result_ttl_ms: job.result_ttl_ms,
             namespace: job.namespace.clone(),
             dlq_retry_count,
-            shed: disposition == DlqDisposition::Shed,
+            shed,
         };
 
         let json = serde_json::to_string(&entry)?;

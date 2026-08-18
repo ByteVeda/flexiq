@@ -7,7 +7,6 @@
 
 use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobStatus, NewJob};
-use flexiq_core::storage::records::DlqDisposition;
 use flexiq_core::SqliteStorage;
 
 const TENANT_A: &str = "tenant-a";
@@ -45,7 +44,7 @@ fn dead_letter_one_each(storage: &SqliteStorage) -> (String, String) {
             .enqueue(job_in(Some(tenant), "doomed"))
             .expect("enqueue");
         storage
-            .move_to_dlq(&job, "boom", None, DlqDisposition::Failed)
+            .move_to_dlq(&job, "boom", None)
             .expect("dead-letter");
         let entry = storage
             .list_dead(10, 0, Some(tenant))
