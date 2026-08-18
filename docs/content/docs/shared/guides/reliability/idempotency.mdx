@@ -11,6 +11,9 @@ designing task bodies that are safe to re-run. This page is about the key
 itself: how to derive it, which value wins when more than one is set, and
 where the automation stops.
 
+Coalescing is one of three collapse rules; <SdkLink to="guides/reliability/flow-control">Flow control</SdkLink>
+covers how it differs from a debounce window and from a rate limit.
+
 ## Deduping enqueues
 
 An explicit key works the same way in every binding — a second enqueue with

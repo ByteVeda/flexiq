@@ -56,6 +56,10 @@ Three things worth knowing:
 - Dropping fires no middleware or event hooks. The job never ran, so there is
   no outcome to report — the dead-letter row is the record.
 
+[Flow control](/node/guides/reliability/flow-control) walks through what a
+shed job looks like in the dashboard, and where throttling ends and
+debouncing begins.
+
 > **Coming from BullMQ?** BullMQ configures rate limiting on the `Worker`
 > (`limiter: { max, duration }`), but it's enforced storage-side across every
 > worker consuming that queue — not literally per process despite living on

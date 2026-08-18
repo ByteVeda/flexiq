@@ -1,0 +1,423 @@
+---
+title: Flow control
+description: "Debounce, throttle, and coalesce are three different rules — which one to reach for, and what the rest of the flow-control family already does."
+---
+
+Three rules get mistaken for each other. **Throttling** bounds how fast jobs
+dispatch — every call still runs, just later. **Coalescing** drops a call that
+is identical to one already queued — the first job wins and never moves.
+**Debouncing** keeps *one* job per key and slides its deadline forward on every
+call — the burst runs once, after it stops. A throttle is about rate, a coalesce
+is about duplicates, a debounce is about quiet.
+
+## Throttle: every call runs, at a bounded rate
+
+A token bucket per task name, enforced at the scheduler, so `"10/s"` means ten
+per second across the whole deployment. A hundred calls become a hundred jobs;
+the tenth second is when the hundredth runs.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(rate_limit="10/s")
+def call_api(endpoint: str) -> dict:
+    return requests.get(endpoint).json()
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("callApi", callApi, { rateLimit: "10/s" });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<String> CALL_API = Task.of("call-api", String.class).rateLimit("10/s");
+```
+
+  </Tab>
+</CodeTabs>
+
+## Coalesce: identical calls become one job
+
+A dedup key pins the **first** job. A second enqueue carrying the same key
+while that job is pending or running resolves to its id instead of inserting a
+row — same job, same deadline, nothing moves.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(idempotent=True)          # key = hash(task name + arguments)
+def charge(customer_id: int, cents: int) -> str: ...
+
+first = charge.delay(42, 1000)
+second = charge.delay(42, 1000)
+assert second.id == first.id          # coalesced onto the first job
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const first = queue.enqueue("charge", [42, 1000], { uniqueKey: "charge:42:1000" });
+const second = queue.enqueue("charge", [42, 1000], { uniqueKey: "charge:42:1000" });
+// second === first — coalesced onto the first job
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Order> CHARGE = Task.of("charge", Order.class).idempotent(true);
+
+String first = flexiq.enqueue(CHARGE, order);
+String second = flexiq.enqueue(CHARGE, order);  // same id — coalesced
+```
+
+  </Tab>
+</CodeTabs>
+
+## Debounce: the burst runs once, after it stops
+
+A window keyed on the payload. While a job with the same resolved key is
+pending and unclaimed, the enqueue slides that job's deadline instead of
+inserting a second one.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(
+    debounce="5m",                    # slide the run 5 minutes out per call
+    debounce_key="report:{user_id}",  # one window per user
+    debounce_max_wait="30m",          # but never delay past 30 minutes
+)
+def build_report(user_id: str) -> None: ...
+
+build_report.delay("u1")              # creates the job
+build_report.delay("u1")              # same job id — deadline moves
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("buildReport", buildReport, {
+  debounce: "5m", // slide the run 5 minutes out per call
+  debounceKey: "report:{userId}", // one window per user
+  debounceMaxWait: "30m", // but never delay past 30 minutes
+});
+
+queue.enqueue("buildReport", [{ userId: "u1" }]); // creates the job
+queue.enqueue("buildReport", [{ userId: "u1" }]); // same job id — deadline moves
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(
+                Duration.ofMinutes(5),    // slide the run 5 minutes out per call
+                "report:{userId}",        // one window per user
+                Duration.ofMinutes(30));  // but never delay past 30 minutes
+
+flexiq.enqueue(BUILD_REPORT, new Report("u1", 1));  // creates the job
+flexiq.enqueue(BUILD_REPORT, new Report("u1", 2));  // same id — deadline moves
+```
+
+  </Tab>
+</CodeTabs>
+
+Which one you want follows from the question you are answering:
+
+| Question | Rule |
+|---|---|
+| "This API allows 10 requests a second." | Throttle |
+| "This click got double-submitted." | Coalesce |
+| "Rebuild the report once they stop typing." | Debounce |
+
+A dedup key and a debounce window cannot be combined — one pins the job, the
+other moves it — and setting both is an error rather than a precedence rule.
+
+## What already ships
+
+The whole flow-control family, in one place:
+
+| Knob | Scope | What it does |
+|---|---|---|
+| <SdkSwap python={<code>rate_limit</code>} node={<code>rateLimit</code>} java={<code>rateLimit</code>} /> | Task name, cluster-wide | Token bucket at the scheduler. Excess jobs defer by default |
+| <SdkSwap python={<code>on_excess</code>} node={<code>onExcess</code>} java={<code>onExcess</code>} /> | Task name | Defer or drop what the limit turns away |
+| <SdkSwap python={<code>max_concurrent</code>} node={<code>maxConcurrent</code>} java={<code>maxConcurrent</code>} /> | Task name, cluster-wide | Cap on jobs of this task running at once |
+| <SdkSwap python={<code>max_in_flight_per_task</code>} node={<code>maxInFlightPerTask</code>} java={<code>maxInFlightPerTask</code>} /> | Task name, per worker | One task's share of a worker's slots, so it cannot starve the others |
+| <SdkSwap python={<code>retry_budget</code>} node={<code>retryBudget</code>} java={<code>retryBudget</code>} /> | Task name, cluster-wide | Rate cap on *retries*. Once spent, failures dead-letter instead of retrying |
+| <SdkSwap python={<code>circuit_breaker</code>} node={<code>circuitBreaker</code>} java={<code>circuitBreaker</code>} /> | Task name | Stop dispatching after repeated failures, then probe |
+| <SdkSwap python={<code>set_queue_max_pending()</code>} node={<code>maxPending</code>} java={<code>maxPending()</code>} /> | Queue | Admission cap. Enqueue is rejected once the backlog is full |
+| <SdkSwap python={<code>set_queue_codel()</code>} node={<code>codel</code>} java={<code>codel()</code>} /> | Queue | CoDel: shed the stalest jobs under *sustained* overload |
+| Debounce window | Resolved debounce key | Collapse a burst into one run on a sliding deadline |
+| <SdkSwap python={<code>unique_key</code>} node={<code>uniqueKey</code>} java={<code>uniqueKey</code>} /> | Task name + arguments, or an explicit key | Collapse duplicate enqueues onto the first job |
+
+<SdkOnly sdk="python">
+
+Rate limits and concurrency caps also exist per queue —
+`queue.set_queue_rate_limit("emails", "100/m")` and
+`queue.set_queue_concurrency("emails", 4)` — and a task's `on_excess` applies to
+the queue's limit as well as its own.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Rate limits and concurrency caps also exist per queue —
+`queue.configureQueue("emails", { rateLimit: "100/m", maxConcurrent: 4 })` — and
+a task's `onExcess` applies to the queue's limit as well as its own.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Queue-level configuration covers admission and shedding —
+`flexiq.maxPending("emails", 10_000)`, `flexiq.codel("emails", 500, 5_000)`,
+`flexiq.dispatchOrder("emails", DispatchOrder.LIFO)`. Rate limits and
+concurrency caps are per task name.
+
+</SdkOnly>
+
+See <SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink>,
+<SdkLink to="guides/reliability/concurrency">Concurrency</SdkLink>, and
+<SdkLink to="guides/reliability/circuit-breakers">Circuit breakers</SdkLink> for
+each in depth, and
+<SdkLink to="guides/reliability/debouncing">Debouncing</SdkLink> for the full
+debounce surface.
+
+## Max wait is mandatory
+
+A window with no ceiling is an unbounded delay. A caller who never stops
+enqueuing slides the deadline forever and the job never runs — the classic
+debounce footgun, and the reason a window without a max wait is refused up
+front rather than accepted and regretted:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(debounce="5m", debounce_key="report:{user_id}")
+def build_report(user_id: str) -> None: ...
+# ValueError: debounce=... requires debounce_max_wait=... — an unbounded
+# debounce starves the job while enqueues keep arriving
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("buildReport", buildReport, {
+  debounce: "5m",
+  debounceKey: "report:{userId}",
+});
+// QueueError at registration: debounce requires debounceMaxWait — without a
+// ceiling a caller who keeps enqueuing starves the job forever
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+EnqueueOptions.builder()
+        .debounce(Duration.ofMinutes(5))
+        .debounceKey("report:{userId}")
+        .build();
+// IllegalArgumentException at build(): a window requires a max wait
+```
+
+  </Tab>
+</CodeTabs>
+
+The ceiling is measured from when the window **opened**, not from the latest
+call, so the deadline is `min(now + window, first_seen + max_wait)`. A user who
+edits for two hours straight still gets a report every thirty minutes. It may
+never be shorter than the window itself — that would cap the very first insert
+and make the window meaningless.
+
+## The key must come from the payload
+
+Write the key without a placeholder and every caller shares one window. Under
+steady traffic from many users, that means one report every `max_wait` — for
+*whichever* user happened to open the window, while everyone else's edits go
+unrebuilt:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Wrong: one window for every user on the platform.
+@queue.task(debounce="5m", debounce_key="report", debounce_max_wait="30m")
+def build_report(user_id: str) -> None: ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Wrong: one window for every user on the platform.
+queue.task("buildReport", buildReport, {
+  debounce: "5m",
+  debounceKey: "report",
+  debounceMaxWait: "30m",
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Wrong: one window for every user on the platform.
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(Duration.ofMinutes(5), "report", Duration.ofMinutes(30));
+```
+
+  </Tab>
+</CodeTabs>
+
+The key is a template resolved against each call's arguments, so the unit of
+collapsing is whatever the placeholder names:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(debounce="5m", debounce_key="report:{user_id}", debounce_max_wait="30m")
+def build_report(user_id: str) -> None: ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("buildReport", buildReport, {
+  debounce: "5m",
+  debounceKey: "report:{userId}",
+  debounceMaxWait: "30m",
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
+        .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+```
+
+  </Tab>
+</CodeTabs>
+
+A placeholder the call cannot fill **throws at enqueue** and inserts nothing.
+Falling back to the literal template would silently produce the global window
+above, which is the failure debouncing exists to avoid. A key with no
+placeholder is still legal — it just has to be a deliberate choice, spelled out.
+
+## Dropping instead of deferring
+
+A saturated rate limit defers: the job keeps its place and dispatches once
+tokens are available. That is the right default, but some work is worth less
+than the backlog it would build — a metrics sample, a cache warm, a presence
+ping. For those, drop the excess:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(rate_limit="10/s", on_excess="drop")
+def record_sample(metric: str, value: float) -> None: ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("recordSample", recordSample, {
+  rateLimit: "10/s",
+  onExcess: "drop",
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Sample> RECORD_SAMPLE = Task.of("record-sample", Sample.class)
+        .rateLimit("10/s")
+        .onExcess(OnExcess.DROP);
+```
+
+  </Tab>
+</CodeTabs>
+
+Dropped is not deleted. The job is dead-lettered on the spot, so shedding is
+something an operator can see rather than something they have to infer from a
+missing run.
+
+### How a dropped job looks in the dashboard
+
+It appears in **Dead letters**, newest first, alongside genuine failures — with
+three things that tell it apart:
+
+| Field | Value |
+|---|---|
+| `error` | `rate_limit: task 'record_sample' is over its dispatch rate limit, and its on_excess is drop` |
+| `metadata` | `{"shed":"rate_limit"}` |
+| `retry_count` | Unchanged — the job never ran, so nothing was attempted |
+
+A CoDel shed looks the same shape with a `codel:` reason and `{"codel":true}`
+metadata. The reserved prefix is what the scheduler itself reads: the
+dead-letter **auto-retry sweep skips any entry wearing one**, because
+resurrecting a job the scheduler deliberately dropped would undo the shed. The
+dashboard's own Retry button is not gated — a manual retry re-enqueues a shed
+entry like any other, which is what you want when you shed by mistake.
+
+Three more things worth knowing before turning it on:
+
+- The DLQ row's `metadata` is the shed marker, so it replaces the job's own
+  metadata there. The archived job row keeps the original.
+- Dropping fires no middleware and no events. The job never ran, so there is no
+  outcome to report — the dead-letter row is the record. Dependents of a shed
+  job cascade-cancel, exactly as they would after a failure.
+- A tripped circuit breaker always defers regardless of `on_excess`. That is a
+  downstream failure, not excess load: the job is fine, its dependency is not.
+
+CoDel is the other shed path, and it is deliberately harder to trigger — a
+queue's jobs have to sit past `target_ms` for a full `interval_ms` before
+anything is dropped, so a transient spike is absorbed rather than shed.
+
+## Backend notes
+
+The debounce decision — slide the pending job or insert a new one — has to be
+atomic. A job claimed a microsecond ago must never be pulled back to a later
+deadline once a worker holds it, so the read, the status guard, and the write
+are one operation. Each backend gets that differently:
+
+| Backend | Mechanism |
+|---|---|
+| SQLite | One write transaction |
+| PostgreSQL | One write transaction |
+| Redis | A Lua script — `EVALSHA` after the first call |
+
+Redis has no transaction to lean on, so the slide-or-insert decision is made
+inside the script, and a slide commits as a compare-and-swap on the job
+document. Contended enough to lose that swap repeatedly, the call errors rather
+than inserting a second job: failing an enqueue is recoverable, quietly
+double-running the work is not. Everything else about the semantics — the
+`min(now + window, first_seen + max_wait)` deadline, the claimed-row guard, the
+key's independence — is identical on all three.
+
+<Callout type="info">
+  Dispatch order is a separate lever from all of the above. Under overload,
+  `"lifo"` runs the freshest jobs first, which pairs well with CoDel; `"fifo"`
+  (the default) is fair. Honored on SQLite and PostgreSQL; Redis is FIFO-only.
+</Callout>

@@ -7,6 +7,7 @@
     "timeouts",
     "idempotency",
     "debouncing",
+    "flow-control",
     "rate-limiting",
     "concurrency",
     "circuit-breakers",
