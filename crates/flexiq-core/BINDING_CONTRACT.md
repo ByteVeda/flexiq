@@ -206,6 +206,7 @@ for name in sorted_unique(names):                # sorted by UTF-8 bytes
 | `["a", "bc"]` | `e6b0607a88120c30` |
 | `["a\nb"]` | `068365c3a2f19d9f` |
 | `["a", "b"]` | `9dbd0e0e67e641dc` |
+| `["\u{E000}", "\u{10000}"]` | `370802f2ebd8a642` |
 
 The last four rows are two pairs, and they are the ones worth asserting: each
 pair collides under an encoding that concatenates or separates instead of
@@ -216,7 +217,12 @@ headers — an executor must be writable in an SDK's standard library alone:
   dispatch, so requiring SHA-2 would buy nothing and cost a dependency.
 - **Sorted by UTF-8 bytes**, stated rather than implied: JavaScript's
   `Array.prototype.sort` and Java's `String.compareTo` order by UTF-16 code
-  units, which disagrees with byte order above the BMP.
+  units, which disagrees with byte order above the BMP. The last row is the
+  vector that catches it: `U+E000` is one UTF-16 unit `0xE000`, `U+10000` is the
+  surrogate pair `0xD800 0xDC00`, so UTF-16 puts `U+10000` first while UTF-8 and
+  code-point order put `U+E000` first. An implementation that sorts by UTF-16
+  units answers `7653f22bef39d8ea` here and matches every ASCII vector above, so
+  this is the only row that separates the two.
 - **De-duplicated**, so registering a name twice cannot change the answer.
 - **Length-prefixed, not separated.** Any separator can also occur *inside* a
   task name: with a trailing `\n`, `["a\nb"]` and `["a", "b"]` hash the same
