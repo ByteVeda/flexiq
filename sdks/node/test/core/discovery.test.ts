@@ -369,6 +369,27 @@ it("imports only the extensions it was given, and never a declaration file", asy
   ]);
 });
 
+it("accepts an extension with or without its leading dot", async () => {
+  const root = writeTree({
+    "tasks/kept.mjs": `
+      import { task } from ${JSON.stringify(SDK)};
+      task("dotless.kept", () => "kept");
+    `,
+    "tasks/skipped.ts": `
+      import { task } from ${JSON.stringify(SDK)};
+      task("dotless.skipped", () => "skipped");
+    `,
+  });
+
+  // `extname` always reports a leading dot, so an unnormalized `"mjs"` matches
+  // nothing and discovery resolves empty — a misconfiguration that reads as an
+  // empty task directory.
+  const queue = newQueue();
+  await expect(queue.discover(join(root, "tasks"), { extensions: ["mjs"] })).resolves.toEqual([
+    "dotless.kept",
+  ]);
+});
+
 it("imports TypeScript task modules by default", async () => {
   const root = writeTree({
     "tasks/typed.ts": `

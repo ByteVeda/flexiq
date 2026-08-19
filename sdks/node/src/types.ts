@@ -287,7 +287,8 @@ export interface TaskOptions extends DebounceInput {
 export interface DiscoverOptions {
   /**
    * File extensions to import, replacing the default set (`.js`, `.mjs`, `.cjs`,
-   * `.ts`, `.mts`, `.cts`). Declaration files (`.d.ts` and friends) are never
+   * `.ts`, `.mts`, `.cts`). The leading dot is optional — `"mjs"` and `".mjs"`
+   * mean the same thing. Declaration files (`.d.ts` and friends) are never
    * imported.
    *
    * Narrow this when a directory holds sources next to their compiled output:

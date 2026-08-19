@@ -39,7 +39,17 @@ function reason(error: unknown): string {
  * dead-letters every job belonging to the tasks it declares.
  */
 export function importTaskModules(dir: string, options?: DiscoverOptions): Promise<void> {
-  return walk(dir, new Set(options?.extensions ?? DISCOVER_EXTENSIONS));
+  return walk(dir, extensionSet(options?.extensions ?? DISCOVER_EXTENSIONS));
+}
+
+/**
+ * The extension set spelled the way `extname` reports it — always with a leading
+ * dot. A caller who writes `["mjs"]` would otherwise match no file at all, and
+ * `discover` would resolve with an empty list rather than raise, which reads as
+ * an empty task directory.
+ */
+function extensionSet(extensions: readonly string[]): ReadonlySet<string> {
+  return new Set(extensions.map((ext) => (ext.startsWith(".") ? ext : `.${ext}`)));
 }
 
 async function walk(dir: string, extensions: ReadonlySet<string>): Promise<void> {
