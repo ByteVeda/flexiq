@@ -164,4 +164,30 @@ mod tests {
             Some("e6017d3a248deb69")
         );
     }
+
+    /// The table in `BINDING_CONTRACT.md`, asserted rather than described.
+    ///
+    /// The cases are the ones a re-implementation gets wrong: the framing
+    /// pairs, and the newline that a separated encoding would collide. Every
+    /// SDK asserts the same strings, so a drift here is caught in this crate
+    /// instead of as a fleet that looks split while running the same code.
+    #[test]
+    fn the_contract_vectors_are_pinned() {
+        for (names, want) in [
+            (vec!["ab", "c"], "fe4b6261eea66aa8"),
+            (vec!["a", "bc"], "e6b0607a88120c30"),
+            (vec!["a\nb"], "068365c3a2f19d9f"),
+            (vec!["a", "b"], "9dbd0e0e67e641dc"),
+            (
+                vec!["reports.build", "invoices.send", "reports.build"],
+                "fafd30ef8ebcb7de",
+            ),
+        ] {
+            assert_eq!(
+                registry_fingerprint(&names).as_deref(),
+                Some(want),
+                "fingerprint of {names:?}"
+            );
+        }
+    }
 }
