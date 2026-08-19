@@ -59,6 +59,27 @@ export class TaskNotBoundError extends FlexiQError {
 }
 
 /**
+ * Thrown by {@link Queue.discover} when a task directory cannot be read or one of
+ * its modules throws on import. Carries the offending `path` and the underlying
+ * failure as `cause`.
+ *
+ * Never downgraded to a warning: the dispatcher treats an unregistered task as a
+ * fatal, non-retryable failure, so a worker that discovered all but one module
+ * dead-letters every job belonging to the one it missed.
+ */
+export class TaskDiscoveryError extends FlexiQError {
+  constructor(
+    readonly path: string,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message);
+    this.name = "TaskDiscoveryError";
+    this.cause = cause;
+  }
+}
+
+/**
  * Thrown by {@link Queue.result} when the awaited job failed or dead-lettered.
  * A structured (cross-SDK JSON) reason exposes `errtype`/`traceback`; a plain
  * legacy/system string is surfaced verbatim with those fields undefined.
