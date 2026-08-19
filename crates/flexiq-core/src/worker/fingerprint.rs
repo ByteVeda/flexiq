@@ -184,7 +184,7 @@ mod tests {
             ),
             // The only vector that separates UTF-8 byte order from UTF-16 code
             // units, which is the ordering rule most at risk of being got wrong
-            // — every ASCII vector above passes under either. See
+            // — every ASCII vector in this list passes under either. See
             // `sorting_above_the_bmp_follows_utf_8_not_utf_16`.
             (vec!["\u{E000}", "\u{10000}"], "370802f2ebd8a642"),
         ] {
