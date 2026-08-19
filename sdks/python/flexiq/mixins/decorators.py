@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import importlib
 import inspect
 import logging
-import os
-import sys
+import pkgutil
 import time
 import typing
 from collections.abc import Callable, Sequence
@@ -23,10 +23,17 @@ from flexiq.debounce import DebounceConfig, Duration, normalize_debounce
 from flexiq.detached import disabled_middleware as dispatched_disabled_middleware
 from flexiq.detached import is_detached
 from flexiq.enums import OnExcess, coerce_enum
+from flexiq.exceptions import DuplicateTaskError
 from flexiq.inject import Inject, _InjectAlias
 from flexiq.middleware import middleware_key
 from flexiq.predicates.core import coerce_predicate
 from flexiq.predicates.outcomes import PredicateAction
+from flexiq.registry import (
+    ClaimedTask,
+    _resolve_module_name,
+    pending_tasks,
+    set_task_options,
+)
 from flexiq.task import TaskWrapper
 from flexiq.task_lifecycle import run_lifecycle
 
@@ -47,22 +54,6 @@ logger = logging.getLogger("flexiq")
 # How long a cached middleware chain stays valid without a version bump. Bounds
 # the worst-case lag for an out-of-process dashboard disable change.
 _MW_CHAIN_TTL = 1.0
-
-
-def _resolve_module_name(module_name: str) -> str:
-    """Resolve __main__ to the actual module name."""
-    if module_name != "__main__":
-        return module_name
-
-    main = sys.modules.get("__main__")
-    if main is not None:
-        spec = getattr(main, "__spec__", None)
-        if spec and spec.name:
-            return str(spec.name)
-        f = getattr(main, "__file__", None)
-        if f:
-            return str(os.path.splitext(os.path.basename(f))[0])
-    return module_name
 
 
 class QueueDecoratorMixin:
@@ -100,6 +91,11 @@ class QueueDecoratorMixin:
     _max_reconstruction_timeout: int
     _global_middleware: list[TaskMiddleware]
     _queue_configs: dict[str, dict[str, Any]]
+    # Pending-registry entries this queue has claimed, keyed by task name,
+    # paired with the wrapper it built for them. Draining is idempotent, so
+    # a re-drain has to tell 'already mine' apart from 'another task owns
+    # this name', and has to re-bind the handle without re-registering.
+    _drained_pending: dict[str, ClaimedTask]
 
     # ``_emit_event`` is provided by ``QueueEventsMixin`` on the composed
     # Queue. Declaring it as a class-level callable attribute (not a method)
@@ -192,6 +188,42 @@ class QueueDecoratorMixin:
                 _clear_context()
 
         return wrapper
+
+    def _reset_task_state(self, task_name: str) -> None:
+        """Drop every per-task setting held under ``task_name``.
+
+        Registering a name replaces the task, so the incoming declaration has
+        to start from a clean slate. Each of these maps uses *absence* to mean
+        "default", so a replacement that omits an option would otherwise
+        inherit the previous task's — a configuration neither declaration asked
+        for. ``_task_configs`` is a list keyed by name in every consumer, so a
+        stale entry shows the task twice in the override listings.
+        """
+        for state in (
+            self._task_retry_filters,
+            self._task_middleware,
+            self._task_serializers,
+            self._task_codecs,
+            self._task_idempotent,
+            self._task_debounce,
+            self._task_compensates,
+            self._task_batch_configs,
+            self._task_predicates,
+            self._task_predicate_on_false,
+            self._task_predicate_extras,
+            self._task_default_defer,
+            self._task_predicate_serialized,
+            self._task_inject_map,
+            self._task_soft_timeouts,
+            # The cached middleware chain expires on its own after
+            # ``_MW_CHAIN_TTL``, but until then it would hand the new task the
+            # middleware the old one declared.
+            self._mw_chain_cache,
+            # Bound against the previous function's parameters.
+            self._task_signatures,
+        ):
+            state.pop(task_name, None)
+        self._task_configs[:] = [c for c in self._task_configs if c.name != task_name]
 
     def task(
         self,
@@ -404,6 +436,61 @@ class QueueDecoratorMixin:
         def decorator(fn: Callable) -> TaskWrapper:
             task_name = name or f"{_resolve_module_name(fn.__module__)}.{fn.__qualname__}"
 
+            # Everything that can be rejected runs before any state is
+            # written. Registering a name resets it first, so a declaration
+            # that raises halfway would leave the previously registered
+            # function live with none of its configuration — worse than the
+            # error it reports.
+            comp_name: str | None = None
+            if compensates is not None:
+                if isinstance(compensates, TaskWrapper):
+                    comp_name = compensates.name
+                elif isinstance(compensates, str):
+                    comp_name = compensates
+                else:
+                    raise TypeError(
+                        "compensates= must be a TaskWrapper or a task-name "
+                        f"string, got {type(compensates).__name__}"
+                    )
+            coerced_predicate = coerce_predicate(predicate) if predicate is not None else None
+
+            cb_threshold = None
+            cb_window = None
+            cb_cooldown = None
+            cb_half_open_probes = None
+            cb_half_open_success_rate = None
+            if circuit_breaker:
+                cb_threshold = circuit_breaker.get("threshold", 5)
+                cb_window = circuit_breaker.get("window", 60)
+                cb_cooldown = circuit_breaker.get("cooldown", 300)
+                cb_half_open_probes = circuit_breaker.get("half_open_probes")
+                cb_half_open_success_rate = circuit_breaker.get("half_open_success_rate")
+
+            # Built here rather than at the end: PyO3 rejects a mistyped
+            # option (``rate_limit=123``) while converting the arguments.
+            config = PyTaskConfig(
+                name=task_name,
+                max_retries=max_retries,
+                retry_backoff=retry_backoff,
+                timeout=timeout,
+                priority=priority,
+                rate_limit=rate_limit,
+                queue=queue,
+                circuit_breaker_threshold=cb_threshold,
+                circuit_breaker_window=cb_window,
+                circuit_breaker_cooldown=cb_cooldown,
+                retry_delays=retry_delays,
+                max_retry_delay=max_retry_delay,
+                max_concurrent=max_concurrent,
+                circuit_breaker_half_open_probes=cb_half_open_probes,
+                circuit_breaker_half_open_success_rate=cb_half_open_success_rate,
+                max_in_flight_per_task=max_in_flight_per_task,
+                retry_budget=retry_budget,
+                on_excess=on_excess_action.value,
+            )
+
+            self._reset_task_state(task_name)
+
             # Detect Inject["name"] annotations (Phase E)
             annotation_injects: list[str] = []
             try:
@@ -458,26 +545,14 @@ class QueueDecoratorMixin:
             if idempotent:
                 self._task_idempotent[task_name] = True
 
-            # Per-task debounce window. Re-registering a name replaces the task,
-            # so an absent window has to clear any earlier one rather than leave
-            # it for the new task to inherit.
-            if debounce_config is None:
-                self._task_debounce.pop(task_name, None)
-            else:
+            # Per-task debounce window. An absent one stays absent —
+            # ``_reset_task_state`` already dropped any earlier window.
+            if debounce_config is not None:
                 self._task_debounce[task_name] = debounce_config
 
             # Saga compensation: record the compensating task's name so the
             # workflow tracker can enqueue it during reverse-order rollback.
-            if compensates is not None:
-                if isinstance(compensates, TaskWrapper):
-                    comp_name = compensates.name
-                elif isinstance(compensates, str):
-                    comp_name = compensates
-                else:
-                    raise TypeError(
-                        "compensates= must be a TaskWrapper or a task-name "
-                        f"string, got {type(compensates).__name__}"
-                    )
+            if comp_name is not None:
                 self._task_compensates[task_name] = comp_name
 
             # Store per-task batch config — producer-side accumulation enabled
@@ -491,29 +566,25 @@ class QueueDecoratorMixin:
             # dashboard can show "gated by: ..." without keeping a live
             # Python reference. Bare callables can't be serialized; the
             # snapshot is None in that case.
-            if predicate is not None:
-                coerced = coerce_predicate(predicate)
-                if coerced is not None:
-                    self._task_predicates[task_name] = coerced
-                    self._task_predicate_on_false[task_name] = on_false_action
-                    if predicate_extras:
-                        self._task_predicate_extras[task_name] = dict(predicate_extras)
-                    self._task_default_defer[task_name] = default_defer_seconds
-                    try:
-                        self._task_predicate_serialized[task_name] = coerced.to_dict()
-                    except Exception:
-                        self._task_predicate_serialized[task_name] = None
+            if coerced_predicate is not None:
+                self._task_predicates[task_name] = coerced_predicate
+                self._task_predicate_on_false[task_name] = on_false_action
+                if predicate_extras:
+                    self._task_predicate_extras[task_name] = dict(predicate_extras)
+                self._task_default_defer[task_name] = default_defer_seconds
+                try:
+                    self._task_predicate_serialized[task_name] = coerced_predicate.to_dict()
+                except Exception:
+                    self._task_predicate_serialized[task_name] = None
 
             # Store inject map for resource injection
             if final_inject:
                 self._task_inject_map[task_name] = final_inject
 
-            # Wrap the function with hooks, middleware, and context. Re-registering
-            # a name replaces the task, so an absent soft_timeout has to clear any
-            # earlier one rather than leave it for the new task to inherit.
-            if soft_timeout is None:
-                self._task_soft_timeouts.pop(task_name, None)
-            else:
+            # Wrap the function with hooks, middleware, and context. An absent
+            # soft_timeout stays absent — ``_reset_task_state`` already dropped
+            # any earlier one.
+            if soft_timeout is not None:
                 self._task_soft_timeouts[task_name] = soft_timeout
             wrapped = self._wrap_task(fn, task_name)
 
@@ -528,43 +599,8 @@ class QueueDecoratorMixin:
             if is_async:
                 wrapped._flexiq_async_fn = fn  # type: ignore[attr-defined]
             self._task_registry[task_name] = wrapped
-            # Re-registering a name replaces the function, so the cached
-            # signature a debounce key template binds against goes with it.
-            self._task_signatures.pop(task_name, None)
 
-            cb_threshold = None
-            cb_window = None
-            cb_cooldown = None
-            cb_half_open_probes = None
-            cb_half_open_success_rate = None
-            if circuit_breaker:
-                cb_threshold = circuit_breaker.get("threshold", 5)
-                cb_window = circuit_breaker.get("window", 60)
-                cb_cooldown = circuit_breaker.get("cooldown", 300)
-                cb_half_open_probes = circuit_breaker.get("half_open_probes")
-                cb_half_open_success_rate = circuit_breaker.get("half_open_success_rate")
-
-            # Store config for worker startup
-            config = PyTaskConfig(
-                name=task_name,
-                max_retries=max_retries,
-                retry_backoff=retry_backoff,
-                timeout=timeout,
-                priority=priority,
-                rate_limit=rate_limit,
-                queue=queue,
-                circuit_breaker_threshold=cb_threshold,
-                circuit_breaker_window=cb_window,
-                circuit_breaker_cooldown=cb_cooldown,
-                retry_delays=retry_delays,
-                max_retry_delay=max_retry_delay,
-                max_concurrent=max_concurrent,
-                circuit_breaker_half_open_probes=cb_half_open_probes,
-                circuit_breaker_half_open_success_rate=cb_half_open_success_rate,
-                max_in_flight_per_task=max_in_flight_per_task,
-                retry_budget=retry_budget,
-                on_excess=on_excess_action.value,
-            )
+            # Config for worker startup, built before the reset above.
             self._task_configs.append(config)
 
             # Return a TaskWrapper that has .delay() and .apply_async()
@@ -591,6 +627,83 @@ class QueueDecoratorMixin:
             return wrapper
 
         return decorator
+
+    def autodiscover(self, package: str = "tasks") -> list[str]:
+        """Import every module under ``package`` and claim the tasks they declare.
+
+        The import is the load-bearing half: ``@flexiq.task`` registers on
+        import, so walking the tree is what makes the declarations happen. The
+        walk alone would find nothing.
+
+        Args:
+            package: Dotted path to the package (or single module) holding the
+                task declarations. Defaults to ``"tasks"``.
+
+        Returns:
+            Sorted names of every deferred task now registered on this queue.
+            The list is the same on a second call — draining is idempotent, not
+            destructive.
+
+        Raises:
+            ImportError: ``package``, or any module beneath it, failed to
+                import. Never swallowed: an unregistered task is a fatal,
+                non-retryable dispatch failure, so a module that quietly failed
+                to import dead-letters every job it owns.
+            DuplicateTaskError: A discovered task claims a name this queue
+                already registered for a different function.
+        """
+        root = importlib.import_module(package)
+
+        # ``walk_packages`` yields a subpackage before importing it to recurse,
+        # and swallows the ImportError if that import fails — which would skip
+        # the whole subtree in silence. Importing each yielded name here means
+        # the failure surfaces on the yield, ahead of the swallowed one.
+        paths = getattr(root, "__path__", None)
+        if paths is not None:
+            for _finder, mod_name, _ispkg in pkgutil.walk_packages(
+                paths, prefix=f"{root.__name__}."
+            ):
+                importlib.import_module(mod_name)
+
+        self._drain_pending_tasks()
+        return sorted(self._drained_pending)
+
+    def _drain_pending_tasks(self) -> None:
+        """Claim every task in the module-global pending registry.
+
+        Idempotent by construction: the registry is never emptied, so a second
+        queue in the same process gets the same tasks, and a repeat drain on
+        this queue re-binds without re-registering.
+
+        Binding is last-drain-wins — the handle a task module exports submits
+        to the queue that drained it most recently. Keeping the first binding
+        would leave the handle pointing at a queue that has been torn down as
+        soon as a second one appears.
+        """
+        for entry in pending_tasks():
+            name = entry.name
+            mine = self._drained_pending.get(name)
+            if mine is not None and mine.entry is entry:
+                # The very declaration this queue registered. Re-bind anyway:
+                # another queue may have drained the registry since, and the
+                # most recent drain wins.
+                entry.handle._bind(mine.wrapper)
+                continue
+            # A different entry under the same origin is a re-run module: it
+            # replaces, and ``task()`` resets the name's state before
+            # registering. Anything else claiming a name this queue already
+            # holds is a collision between two distinct tasks.
+            replaces = mine is not None and mine.entry.origin == entry.origin
+            if not replaces and name in self._task_registry:
+                owner = mine.entry.origin if mine else "@queue.task()"
+                raise DuplicateTaskError(
+                    f"deferred task {name!r} declared in {entry.origin} collides "
+                    f"with the task this queue already registered from {owner} — "
+                    "pass an explicit name= to one of them"
+                )
+            wrapper = self.task(**entry.options)(entry.fn)
+            entry.handle._bind(wrapper)
+            self._drained_pending[name] = ClaimedTask(entry, wrapper)
 
     def periodic(
         self,
@@ -704,3 +817,10 @@ class QueueDecoratorMixin:
         """
         self._hooks["on_failure"].append(fn)
         return fn
+
+
+# ``@flexiq.task`` accepts exactly what ``Queue.task`` accepts. Deriving the
+# names from the real signature here — rather than restating them in
+# ``flexiq.registry`` — keeps the deferred decorator from drifting as options
+# are added, without the registry having to import ``Queue``.
+set_task_options(inspect.signature(QueueDecoratorMixin.task))

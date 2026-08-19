@@ -132,3 +132,25 @@ class PredicateRejectedError(FlexiQError):
         if reason:
             msg = f"{msg}: {reason}"
         super().__init__(msg)
+
+
+class DuplicateTaskError(FlexiQError, ValueError):
+    """Raised when two tasks claim the same registered name.
+
+    Deferred registration makes the registry implicit, so a collision that
+    ``@queue.task()`` would have resolved by overwriting has to be loud
+    instead: the losing task would keep accepting submissions that dispatch
+    to the winner's function.
+
+    Subclasses :class:`ValueError` so ``except ValueError`` around a task
+    module import keeps working.
+    """
+
+
+class TaskNotBoundError(FlexiQError, RuntimeError):
+    """Raised when a deferred task is submitted before any queue drained it.
+
+    ``@flexiq.task`` records the task in the pending registry; a ``Queue``
+    claims it at construction, at :meth:`~flexiq.Queue.autodiscover`, or at
+    worker start. Submitting before then has no queue to submit to.
+    """

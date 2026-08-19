@@ -52,6 +52,10 @@ class QueueLifecycleMixin:
     _task_registry: dict[str, Callable]
     _task_configs: list[PyTaskConfig]
     _queue_configs: dict[str, dict[str, Any]]
+    # Provided by ``QueueDecoratorMixin`` on the composed Queue. Declared as
+    # a callable attribute (not a method) so mypy sees it through this mixin
+    # without shadowing the real implementation through the MRO.
+    _drain_pending_tasks: Callable[[], None]
 
     def _print_banner(self, queues: list[str]) -> None:
         """Print ASCII startup banner."""
@@ -146,6 +150,10 @@ class QueueLifecycleMixin:
             if not app:
                 raise ValueError("app= is required when pool='prefork' (e.g. app='myapp:queue')")
         queue_list = list(queues) if queues else None
+
+        # A worker entrypoint that imported its task modules directly never has
+        # to call ``autodiscover``. Idempotent, so it costs nothing when it did.
+        self._drain_pending_tasks()
 
         # Make queue accessible from job context (for current_job.update_progress())
         _set_queue_ref(self)
