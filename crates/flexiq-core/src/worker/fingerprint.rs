@@ -9,14 +9,14 @@
 //!
 //! # Algorithm
 //!
-//! 64-bit FNV-1a over the sorted, de-duplicated names, each followed by `\n`,
+//! 64-bit FNV-1a over the sorted, de-duplicated names, each **length-prefixed**,
 //! rendered as sixteen lowercase hex digits:
 //!
 //! ```text
 //! h = 0xcbf29ce484222325
-//! for name in sorted_unique(names):        # sorted by UTF-8 bytes
-//!     for byte in utf8(name) + b"\n":
-//!         h = (h ^ byte) * 0x100000001b3   # mod 2^64
+//! for name in sorted_unique(names):                # sorted by UTF-8 bytes
+//!     for byte in be_u64(len(utf8(name))) + utf8(name):
+//!         h = (h ^ byte) * 0x100000001b3           # mod 2^64
 //! ```
 //!
 //! Every choice here exists to be re-implementable in an SDK's standard library
@@ -29,7 +29,12 @@
 //!   `Array.prototype.sort` and Java's `String.compareTo` order by UTF-16 code
 //!   units, which disagrees with byte order above the BMP.
 //! - **De-duplicated**, so registering a name twice cannot change the answer.
-//! - **A `\n` after each name**, so `["ab", "c"]` and `["a", "bc"]` differ.
+//! - **Length-prefixed, not separated.** Any separator can also occur *inside*
+//!   a task name: with a trailing `\n`, `["a\nb"]` and `["a", "b"]` both hash the
+//!   bytes `a\nb\n`, so two different registries share a fingerprint and the
+//!   divergence this module exists to catch is silently suppressed. A
+//!   fixed-width length makes the encoding injective, and eight big-endian
+//!   bytes are something every standard library can produce.
 //!
 //! An empty registry has no fingerprint. "Registered nothing" and "does not
 //! report one" are both nothing to compare against, and giving the empty set a
@@ -67,11 +72,14 @@ where
 
     let mut hash = FNV_OFFSET_BASIS;
     for name in &unique {
-        for byte in name
-            .as_bytes()
-            .iter()
-            .copied()
-            .chain(std::iter::once(b'\n'))
+        let bytes = name.as_bytes();
+        // Length-prefixed rather than separated: see the module docs. A
+        // separator that can also occur inside a name makes the encoding
+        // ambiguous, and the collision that follows is a missed warning.
+        for byte in (bytes.len() as u64)
+            .to_be_bytes()
+            .into_iter()
+            .chain(bytes.iter().copied())
         {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(FNV_PRIME);
@@ -114,13 +122,26 @@ mod tests {
         );
     }
 
-    /// The separator is why these differ. Without it both hash the bytes
-    /// `abc`, and two fleets running different registries would look identical.
+    /// The framing is why these differ. Hashed back to back both would give the
+    /// bytes `abc`, and two fleets running different registries would look
+    /// identical.
     #[test]
     fn concatenation_alone_would_collide() {
         assert_ne!(
             registry_fingerprint(["ab", "c"]),
             registry_fingerprint(["a", "bc"]),
+        );
+    }
+
+    /// The reason the encoding is length-prefixed rather than separated. Any
+    /// separator can also occur *inside* a task name, and a separated encoding
+    /// then hashes identical bytes for two different registries — the exact
+    /// divergence this module exists to catch, silently suppressed.
+    #[test]
+    fn a_name_containing_a_newline_does_not_collide_with_two_names() {
+        assert_ne!(
+            registry_fingerprint(["a\nb"]),
+            registry_fingerprint(["a", "b"]),
         );
     }
 
@@ -132,7 +153,7 @@ mod tests {
     fn the_fingerprint_of_a_known_registry_is_pinned() {
         assert_eq!(
             registry_fingerprint(["invoices.send", "reports.build"]).as_deref(),
-            Some("91df0f7323f38326"),
+            Some("fafd30ef8ebcb7de"),
         );
     }
 
@@ -140,7 +161,7 @@ mod tests {
     fn a_single_name_is_pinned() {
         assert_eq!(
             registry_fingerprint(["a"]).as_deref(),
-            Some("089bdc07b544e7b2")
+            Some("e6017d3a248deb69")
         );
     }
 }
