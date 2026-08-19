@@ -19,6 +19,46 @@ export class TaskNotRegisteredError extends FlexiQError {
 }
 
 /**
+ * Thrown when two declarations claim one task name — at declaration for a second
+ * module-level {@link task}, or at drain for a deferred task colliding with one
+ * the queue already registered.
+ *
+ * Deferred registration makes the registry implicit, so a collision that
+ * `queue.task()` would settle by overwriting has to be loud instead: the losing
+ * declaration would keep accepting enqueues that dispatch to the winner's
+ * handler.
+ */
+export class DuplicateTaskError extends FlexiQError {
+  constructor(
+    readonly taskName: string,
+    readonly owner: string,
+  ) {
+    super(
+      `task "${taskName}" is already registered by ${owner} — ` +
+        "give one of them a different name",
+    );
+    this.name = "DuplicateTaskError";
+  }
+}
+
+/**
+ * Thrown when a deferred task is enqueued before any queue drained the pending
+ * registry. A `Queue` claims declarations at construction, at
+ * {@link Queue.discover}, and at worker start; before then there is no queue to
+ * enqueue to.
+ */
+export class TaskNotBoundError extends FlexiQError {
+  constructor(readonly taskName: string) {
+    super(
+      `task "${taskName}" is not bound to a queue — no Queue has drained the pending ` +
+        "registry. Construct the Queue after importing the task modules, call " +
+        "queue.discover(...), or start the worker.",
+    );
+    this.name = "TaskNotBoundError";
+  }
+}
+
+/**
  * Thrown by {@link Queue.result} when the awaited job failed or dead-lettered.
  * A structured (cross-SDK JSON) reason exposes `errtype`/`traceback`; a plain
  * legacy/system string is surfaced verbatim with those fields undefined.
