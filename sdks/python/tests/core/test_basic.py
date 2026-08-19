@@ -1,6 +1,7 @@
 """Basic tests for flexiq — enqueue, dequeue, result retrieval."""
 
 import threading
+from typing import Any
 
 import pytest
 
@@ -191,7 +192,14 @@ def test_a_rejected_re_registration_leaves_the_previous_task_intact(queue: Queue
     def original(n: int) -> int:
         return n
 
-    for bad in ({"compensates": 123}, {"predicate": 123}, {"rate_limit": 123}):
+    # Deliberately mistyped, one per rejection site: the compensator check,
+    # predicate coercion, and PyO3's argument conversion for PyTaskConfig.
+    rejected: list[dict[str, Any]] = [
+        {"compensates": 123},
+        {"predicate": 123},
+        {"rate_limit": 123},
+    ]
+    for bad in rejected:
         with pytest.raises(TypeError):
             queue.task(name="fragile", **bad)(original)
 
