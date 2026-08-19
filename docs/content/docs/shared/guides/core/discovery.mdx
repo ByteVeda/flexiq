@@ -1,0 +1,624 @@
+---
+title: Task discovery
+description: "Declare tasks without a queue, claim them in one call, and catch a worker that only discovered half of them."
+---
+
+Registering a task against a live queue or worker couples the two: the code that
+declares the task needs the code that built the queue, and the code that built
+the queue needs every task. Discovery breaks that coupling — tasks declare
+themselves, and a queue or worker claims them later.
+
+The half that matters is the queue-less declaration. Walking a directory is the
+convenience on top; on its own it would move the error, not remove it.
+
+## The coupling
+
+Here is the shape discovery exists to undo — one place builds the queue, another
+declares a task against it, and neither stands alone:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# app.py
+from flexiq import Queue
+import tasks  # the worker needs these registered before it starts
+
+queue = Queue(db_path="app.db")
+```
+
+```python
+# tasks.py
+from app import queue  # ← app.py has not reached its `queue =` line yet
+
+@queue.task()
+def send_invoice(user_id: int) -> None:
+    ...
+```
+
+```text
+ImportError: cannot import name 'queue' from partially initialized module 'app'
+(most likely due to a circular import)
+```
+
+Imports belong at the top of the file, which is exactly what breaks this: `import
+tasks` runs before `queue` is assigned, so `tasks.py` reaches into an `app` that
+has not defined it yet. Moving the import below the assignment silences this
+particular traceback, but the cycle is still there — and the order it depends on
+is invisible to anyone reading either file on its own.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// app.ts
+import { Queue } from "@byteveda/flexiq";
+
+export const queue = new Queue({ dbPath: "app.db" });
+
+import "./tasks/invoices.js"; // the worker needs these registered before it starts
+```
+
+```ts
+// tasks/invoices.ts
+import { queue } from "../app.js"; // ← app.ts has not run its body yet
+
+queue.task("invoices.send", (userId: string) => {
+  // ...
+});
+```
+
+```text
+ReferenceError: Cannot access 'queue' before initialization
+```
+
+ESM hoists imports, so `tasks/invoices.ts` runs its body *before* `app.ts` runs
+its own — `queue` is still in the temporal dead zone.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// App.java — one place that has to name every handler class
+Worker worker = flexiq.worker()
+        .apply(b -> InvoicesTasks.bind(b, new Invoices()))
+        .apply(b -> ReportsTasks.bind(b, new Reports()))
+        .apply(b -> EmailsTasks.bind(b, new Emails()))
+        // ...and one more line for every task class ever added
+        .start();
+```
+
+Java resolves class cycles at link time, so this compiles — the cost is not an
+error but a central wiring list. Every new handler class means editing a file
+that has nothing to do with it, and a handler someone forgot to add there is
+invisible until a job for it fails.
+
+  </Tab>
+</CodeTabs>
+
+## Declaring a task without a queue
+
+The fix is a declaration that names no queue. It records the function and its
+options where the queue can find them later, so the task file reaches for the
+library and nothing else:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# tasks/invoices.py — imports flexiq, never the module holding the Queue
+from flexiq import task
+
+@task(rate_limit="10/s")
+def send_invoice(user_id: int) -> None:
+    ...
+```
+
+`@task` takes exactly what
+<SdkLink to="api-reference/queue">`@queue.task()`</SdkLink> takes — the options
+are stored as given and replayed when a queue claims the declaration, so live
+objects (a `predicate`, `middleware` instances, a per-task `serializer`) survive
+the deferral. Option names are checked against the real `Queue.task` signature
+at decoration time, so a typo raises at import with the decorator in the
+traceback.
+
+The name follows the same rule as `@queue.task()`: the explicit `name=`, or
+`module.qualname`.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// tasks/invoices.ts — imports the SDK, never the module holding the Queue
+import { task } from "@byteveda/flexiq";
+
+export const sendInvoice = task(
+  "invoices.send",
+  (userId: string) => {
+    // ...
+  },
+  { rateLimit: "10/s" },
+);
+```
+
+`task()` takes exactly what
+<SdkLink to="api-reference/queue">`queue.task()`</SdkLink> takes — the options
+are stored as given and replayed when a queue claims the declaration, so live
+values (a `retryOn` predicate, a codec list) survive the deferral.
+
+It returns a handle that is still the plain function: calling it runs the
+handler in this process, which is what unit tests want. `enqueue()` on the same
+handle goes through the queue that claimed it.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Invoices.java — no Queue, no Worker, no registry
+class Invoices {
+    @TaskHandler("invoices.send")
+    void send(InvoiceRequest request) {
+        // ...
+    }
+}
+```
+
+The `flexiq-processor` annotation processor reads `@TaskHandler` at compile
+time and emits, per annotated class, an `InvoicesTasks` companion holding a
+typed `Task` constant per handler (`InvoicesTasks.SEND`) plus the wiring a
+worker needs. The companion also carries a nested `Provider`, listed as
+`InvoicesTasks$Provider` in
+`META-INF/services/org.byteveda.flexiq.worker.HandlerRegistryProvider` — that
+entry is what makes the handlers discoverable without anything naming them.
+
+See <SdkLink to="getting-started/installation">installation</SdkLink> for the
+Gradle and Maven setup, and <SdkLink to="guides/core/tasks">Tasks</SdkLink> for
+the options `@TaskHandler` accepts.
+
+  </Tab>
+</CodeTabs>
+
+## Claiming the declarations
+
+A declaration is inert until something claims it. How that happens differs
+enough per SDK to be worth reading separately.
+
+<SdkOnly sdk="python">
+
+`Queue.autodiscover(package)` imports the package and everything beneath it,
+then claims every declaration it finds:
+
+```python
+# app.py — imports nothing from tasks/
+from flexiq import Queue
+
+queue = Queue(db_path="app.db")
+names = queue.autodiscover("tasks")  # ['tasks.invoices.send_invoice', ...]
+```
+
+The import is the load-bearing half. `@task` registers when its module is
+executed, so walking the tree is what makes the declarations happen; the walk
+alone would find nothing.
+
+`package` defaults to `"tasks"` and may be a single module rather than a
+package. The return value is the sorted names now registered on this queue — the
+same list on a second call, because claiming is idempotent rather than
+destructive.
+
+You do not always need the call. A queue claims whatever is pending at three
+points:
+
+| Point | What it covers |
+|---|---|
+| `Queue(...)` construction | Task modules imported before the queue existed. |
+| `autodiscover(...)` | The explicit walk. |
+| `run_worker(...)` | A worker entrypoint that imported its task modules directly. |
+
+So a worker whose entrypoint does `import myapp.tasks` needs no `autodiscover`
+at all, and no import order needs a rule. The registry is never emptied, which
+is also why a second `Queue` in the same process receives the same tasks.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`queue.discover(dir)` walks a directory, imports every task module in it, then
+claims every declaration it finds:
+
+```ts
+// app.ts — imports nothing from tasks/
+const queue = new Queue({ dbPath: "app.db" });
+const names = await queue.discover("./tasks"); // ["invoices.send", ...]
+```
+
+The import is the load-bearing half. `task()` registers when its module is
+executed, so walking the tree is what makes the declarations happen; the walk
+alone would find nothing. It is awaited because dynamic `import()` is async and
+ESM has no synchronous escape hatch — the one shape difference from the other
+SDKs.
+
+`dir` defaults to `"tasks"` and resolves against the working directory. The
+return value is the sorted names now registered on this queue — the same list on
+a second call, because claiming is idempotent rather than destructive.
+
+The walk is depth first in name order, so registration order is the same on
+every machine. It skips `node_modules`, anything whose name starts with a dot,
+and symlinks — a symlinked directory is the cheap way to walk in a circle, and
+one file reached by two paths would declare its tasks twice. It imports `.js`,
+`.mjs`, `.cjs`, `.ts`, `.mts` and `.cts`, never declaration files:
+
+```ts
+// A directory holding sources next to their compiled output would import both
+// x.ts and x.js — every task in them declared twice. Narrow the set instead.
+await queue.discover("./dist/tasks", { extensions: [".js"] });
+```
+
+You do not always need the call. A queue claims whatever is pending at four
+points:
+
+| Point | What it covers |
+|---|---|
+| `new Queue(...)` | Task modules imported before the queue was built — under ESM, the common case. |
+| `discover(...)` | The explicit walk. |
+| `runWorker(...)` | A worker entrypoint that imported its task modules directly. |
+| `runExecutor(...)` | The same, for an <SdkLink to="guides/operations/executor">attached executor</SdkLink>. |
+
+So a worker whose entrypoint does `import "./tasks/index.js"` needs no
+`discover` at all, and no import order needs a rule. The registry is never
+emptied, which is also why a second `Queue` in the same process receives the
+same tasks.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There is no runtime registry to drain and no directory walk. The processor
+already wrote the list at compile time, so discovery is a `ServiceLoader`
+lookup:
+
+```java
+Worker worker = queue.worker()
+        .discover()   // every @TaskHandler class listed in META-INF/services
+        .start();
+```
+
+`discover()` uses the thread context class loader; `discover(ClassLoader)`
+points it at a specific one, which is what a container or a test wants. The same
+pair exists on `Executor.Builder`, so an
+<SdkLink to="guides/operations/executor">attached executor</SdkLink> gets its
+handlers the same way:
+
+```java
+try (Executor executor = Executor.builder()
+        .discover()
+        .attach("scheduler:7777")
+        .start()) {
+    executor.awaitSession();
+}
+```
+
+The `executor` CLI subcommand does the same thing with no application `main` at
+all — `java -cp app.jar org.byteveda.flexiq.cli.Cli executor` discovers its
+handlers off the classpath and attaches.
+
+Discovery is explicit, never implicit — `queue.worker()` on its own registers
+nothing. A `Task` constant is already enqueueable the moment it is declared, so
+auto-discovering inside the builder would only silently register handlers a
+caller never asked for.
+
+Nothing here scans packages or reflects over arbitrary classes. The set of
+handlers was fixed at compile time, which is what keeps discovery working under
+<SdkLink to="guides/operations/graalvm">GraalVM native-image</SdkLink>, where
+classpath scanning does not survive the closed-world build.
+
+A provider that cannot be loaded, or that throws while building its handlers,
+raises `TaskDiscoveryException` naming the provider class. It is never skipped:
+a worker quietly missing a handler dead-letters that task's jobs instead of
+failing visibly.
+
+</SdkOnly>
+
+## Duplicate names are an error
+
+A name identifies a task across the whole system, so two declarations claiming
+one name is a mistake worth stopping for. Registering a task by hand replaces a
+name silently — that is a deliberate escape hatch. Discovery never does, because
+the loser would keep accepting submissions that run the winner's body.
+
+<SdkOnly sdk="python">
+
+| Situation | Behaviour |
+|---|---|
+| Two modules declare the same name | `DuplicateTaskError` at import — the traceback points at the second decorator |
+| A discovered name collides with a `@queue.task()` on the same queue | `DuplicateTaskError` when the queue claims it |
+| The same module runs twice (`importlib.reload`, a re-executed notebook cell) | Replaces — same declaration site, not a conflict |
+| `@queue.task()` after the queue claimed a deferred name | Replaces, silently — the escape hatch |
+
+Pass an explicit `name=` to one of the two to resolve a genuine collision.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+| Situation | Behaviour |
+|---|---|
+| Two modules declare the same name | `DuplicateTaskError` at import, wrapped by `discover()` in a `TaskDiscoveryError` naming the file |
+| A discovered name collides with a `queue.task()` on the same queue | `DuplicateTaskError` when the queue claims it |
+| A directory holding both `x.ts` and a compiled `x.js` | Both are imported, so the same collision — narrow `extensions` |
+| `queue.task()` after the queue claimed a deferred name | Replaces, silently — the escape hatch |
+
+Give one of the two a different name to resolve a genuine collision.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+| Situation | Behaviour |
+|---|---|
+| Two `@TaskHandler` methods in one compilation claim one name | Compile error from the processor |
+| Two providers on the classpath claim one name | `DuplicateTaskException` from `discover()`, naming both providers |
+| `discover()` would replace a handler already registered on the builder | `DuplicateTaskException` |
+| `handle(...)` / `register(...)` *after* `discover()` | Overrides, silently — the escape hatch |
+
+Discovery never overwrites; register after it to override deliberately. Nothing
+is registered unless every discovered handler can be, so a clash leaves the
+builder as it was rather than half-discovered.
+
+The processor's check is per compilation unit — an incremental build only sees
+the files it recompiled — which is why the runtime check exists as well. The two
+cover different halves and neither replaces the other.
+
+</SdkOnly>
+
+## Using the handle
+
+<SdkOnly sdk="python">
+
+`@task` returns a handle that behaves like the one `@queue.task()` returns, so
+canvases, sagas and the workflow builder accept it. Calling it runs the function
+directly; `.delay()`, `.apply_async()` and `.map()` go through the queue that
+claimed it most recently.
+
+```python
+from tasks.invoices import send_invoice
+
+send_invoice(42)          # runs here, no queue involved
+send_invoice.delay(42)    # enqueues on the queue that claimed the declaration
+```
+
+Submitting before any queue has claimed it raises `TaskNotBoundError`, naming
+`autodiscover` as the fix. Binding is last-claim-wins: with two queues in one
+process, the handle submits to whichever claimed the registry most recently.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`task()` returns a callable handle. Calling it runs the handler directly, which
+is what unit tests want; `enqueue()` goes through the queue that claimed it most
+recently.
+
+```ts
+import { sendInvoice } from "./tasks/invoices.js";
+
+await sendInvoice("42"); // runs here, no queue involved
+sendInvoice.enqueue(["42"]); // enqueues on the queue that claimed the declaration
+```
+
+`enqueue(args?, options?)` mirrors `queue.enqueue(name, args?, options?)`, so
+the two spellings stay interchangeable. It is the only part of the handle that
+needs a queue: before any queue has claimed the declaration it throws
+`TaskNotBoundError`, naming `discover()` as the fix. `handle.bound` reports
+whether one has. Binding is last-claim-wins: with two queues in one process, the
+handle enqueues onto whichever claimed the registry most recently.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There is no bound-versus-unbound distinction. A generated `Task` constant
+carries its own name and payload type, so it is enqueueable the moment it is
+declared — no queue has to have discovered anything first:
+
+```java
+String id = flexiq.enqueue(InvoicesTasks.SEND, request);
+```
+
+That is also why discovery stays on the worker side: the producer never needed
+it.
+
+</SdkOnly>
+
+## Why not scan the source?
+
+A reasonable-sounding alternative is to parse the files instead of importing
+them — read the syntax tree, find the declarations, skip running any code. It
+does not work here, for two reasons.
+
+Options are runtime values. A declaration can carry a rate limit read from
+configuration, a predicate object, a middleware instance, a serializer. A syntax
+tree reports that a declaration *exists*; it cannot report what its arguments
+resolved to, and those arguments are the task's configuration.
+
+Dispatch needs the live function. The worker calls the function itself, not a
+source location. Something has to load the code regardless, so parsing first
+would be work done twice — and the parse would be the copy free to disagree with
+what actually loaded.
+
+<SdkOnly sdk="java">
+
+Java gets the best of both because the annotation processor runs *inside* the
+compiler: it sees resolved types and constant annotation values, not a bare
+syntax tree, and it emits real code rather than a description of it. That is a
+compile-time registry, not a scan — and unlike reflection over the classpath, it
+survives a closed-world native-image build.
+
+</SdkOnly>
+
+## When discovery is incomplete
+
+Discovery makes the registry **implicit** — it is whatever discovery found. That
+is the whole point, and it is also the one new failure mode.
+
+A task name with no registered handler is a **fatal, non-retryable** dispatch
+failure. It is not retried and it does not wait for a worker that knows it: the
+job dead-letters. So a worker that picked up eleven of twelve task modules keeps
+running perfectly for eleven modules' worth of traffic and dead-letters
+everything belonging to the twelfth.
+
+The first defence is that discovery never swallows an error. Anything that fails
+to load fails the whole call, loudly, naming what failed:
+
+<SdkOnly sdk="python">
+
+`autodiscover` re-raises the `ImportError`, including for a subpackage — the
+standard-library walk would otherwise skip that subtree in silence.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`discover()` throws `TaskDiscoveryError` carrying the offending `path` and the
+original failure as `cause`. Modules are imported one at a time so the first
+failure names its own file instead of racing the others.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+`discover()` throws `TaskDiscoveryException` naming the provider class rather
+than contributing nothing and continuing.
+
+</SdkOnly>
+
+That covers something that failed to load. It does not cover something that was
+never reached at all — a stale image, a partial deploy, a directory that did not
+make it into the container. For that, the scheduler compares peers.
+
+### The registry fingerprint
+
+Every executor tells the scheduler which task names it can run when it attaches,
+because that list is how dispatch routes. The scheduler condenses it into a
+short value it can compare — the **registry fingerprint**:
+
+- 64-bit FNV-1a over the task names, sorted by their UTF-8 bytes and
+  de-duplicated, each name prefixed with its UTF-8 byte length as eight
+  big-endian bytes.
+- Rendered as sixteen lowercase hex digits, e.g. `eb5ed0d43c8f2aaa`.
+- An executor advertising no tasks has no fingerprint at all.
+
+Two properties are worth knowing. Order and duplicates cannot change it, so two
+executors that registered the same tasks in different orders agree. And it is
+derived from the names already on the wire rather than sent alongside them —
+there is nothing extra to compute, nothing that can disagree with the list it
+summarises, and an executor written against an older SDK takes part with no
+changes.
+
+It is not a cryptographic hash. A collision costs a missed warning, never a
+wrong dispatch.
+
+### The divergence warning
+
+When an executor attaches, the scheduler compares its fingerprint against the
+executors already attached. If **no** live peer advertises the same one, it logs
+a single warning:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```text
+[flexiq] executor python-executor-0192c8a1 (python 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor python-executor-0192b7f4 (python 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on python-executor-0192c8a1: (none). only on python-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```text
+[flexiq] executor node-executor-0192c8a1 (node 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor node-executor-0192b7f4 (node 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on node-executor-0192c8a1: (none). only on node-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```text
+[flexiq] executor java-executor-0192c8a1 (java 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor java-executor-0192b7f4 (java 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on java-executor-0192c8a1: (none). only on java-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+</CodeTabs>
+
+The `sdk` and `version` in parentheses are what each executor reported at
+attach, so a mixed fleet names them differently on either side of the comparison
+— the executor id defaults to `<sdk>-executor-<uuid>` unless you set one.
+
+The two `only on` lists are the symmetric difference — exactly the names one
+side can run and the other cannot. They are capped at ten per side with a
+`+N more` tail; the fingerprints stay exact, so the cap costs detail and never
+the ability to tell two registries apart.
+
+`(none)` on one side, as above, means that registry is a strict **subset** of
+the other's. That is the shape a half-finished discovery produces, and it is the
+case worth acting on fastest.
+
+<Callout type="info" title="One line, not one per worker">
+  The check warns only when no live peer already advertises the joining
+  registry. Rolling fifty workers onto a new task list produces one line — from
+  the first one to attach — not fifty. It needs no memory of what it already
+  warned about, so it behaves the same across a scheduler restart.
+</Callout>
+
+<Callout type="warn" title="A diagnostic, never a gate">
+  A divergent executor still attaches and still receives work. Two registries
+  may differ deliberately — a worker fleet specialised onto one set of tasks is
+  a normal deployment — and refusing the attach would turn a warning into an
+  outage.
+</Callout>
+
+### What to do when you see it
+
+1. **Read the `only on` lists.** They name the tasks at risk. Any job for a name
+   that appears on only one side fails whenever it lands on the other.
+2. **Decide whether it is deliberate.** Specialised fleets diverge on purpose.
+   If both peers are meant to be interchangeable, it is not deliberate.
+3. **Compare the two deployments.** The usual causes are a rollout in progress
+   (harmless, and it resolves itself), a stale image or replica that missed a
+   deploy, and task code that is not in the built artifact — a packaging filter,
+   a directory left out of the image, <SdkSwap python="a package missing its __init__.py" node="a source tree that was never compiled into dist/" java="a jar missing from the classpath" />.
+4. **Check the dead-letter queue for the missing names.** If jobs already
+   dead-lettered, that confirms the reachable half was routed to the peer that
+   could not run them. Requeue them once the registries agree — see
+   <SdkLink to="guides/reliability/error-handling">error handling</SdkLink>.
+5. **Roll the lagging peer forward, or take it out of the fleet.** Once every
+   attached executor advertises one fingerprint, the next attach is silent.
+
+<Callout type="info" title="Scope">
+  The comparison covers **attached executors**, which is where the scheduler
+  sees a registry from more than one peer. In-process workers do not speak the
+  attach protocol, so a single-worker deployment gets no comparison — there is
+  nothing to compare against. The defences that do apply there are the ones
+  above: discovery that never swallows a load failure, and duplicate names that
+  raise instead of overwriting.
+</Callout>
+
+## Related
+
+- <SdkLink to="guides/core/tasks">Tasks</SdkLink> — the options a declaration
+  carries, and what each one does.
+- <SdkLink to="guides/core/workers">Workers</SdkLink> — how a worker's registry
+  is populated and what it serves.
+- <SdkLink to="guides/operations/executor">Attached executors</SdkLink> — the
+  topology the divergence check runs in.
+- <SdkLink to="guides/operations/troubleshooting#task-not-registered-on-the-worker">Troubleshooting</SdkLink>
+  — diagnosing a task name the worker does not know.
