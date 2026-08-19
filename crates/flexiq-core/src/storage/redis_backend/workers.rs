@@ -32,6 +32,11 @@ impl RedisStorage {
         pipe.hset(&wkey, "pool_type", registration.pool_type.unwrap_or(""));
         pipe.hset(&wkey, "sdk", registration.sdk.unwrap_or(""));
         pipe.hset(&wkey, "sdk_version", registration.sdk_version.unwrap_or(""));
+        pipe.hset(
+            &wkey,
+            "registry_fingerprint",
+            registration.registry_fingerprint.unwrap_or(""),
+        );
         pipe.sadd(&wall, registration.worker_id);
         pipe.query::<()>(&mut conn).map_err(map_err)?;
 
@@ -118,6 +123,7 @@ impl RedisStorage {
                 pool_type: to_opt("pool_type"),
                 sdk: to_opt("sdk"),
                 sdk_version: to_opt("sdk_version"),
+                registry_fingerprint: to_opt("registry_fingerprint"),
             });
         }
 

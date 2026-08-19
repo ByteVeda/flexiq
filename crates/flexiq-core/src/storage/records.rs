@@ -471,6 +471,11 @@ pub struct WorkerRegistration<'a> {
     pub sdk: Option<&'a str>,
     /// Release of that SDK.
     pub sdk_version: Option<&'a str>,
+    /// Fingerprint of the worker's task registry, from
+    /// [`crate::worker::registry_fingerprint`]. `None` from a shell that does
+    /// not report one, and from a worker with nothing registered — neither is
+    /// a registry that differs from its peers', so neither gets a value.
+    pub registry_fingerprint: Option<&'a str>,
 }
 
 impl<'a> WorkerRegistration<'a> {
@@ -532,6 +537,16 @@ impl<'a> WorkerRegistration<'a> {
         self.sdk_version = sdk_version;
         self
     }
+
+    /// Fingerprint of the worker's task registry, from
+    /// [`crate::worker::registry_fingerprint`]. A shell that cannot see its own
+    /// registry passes `None` rather than a value it guessed: an unregistered
+    /// task name is a fatal failure, so a row that overstates what a worker
+    /// runs is worse than one that says nothing.
+    pub fn registry_fingerprint(mut self, registry_fingerprint: Option<&'a str>) -> Self {
+        self.registry_fingerprint = registry_fingerprint;
+        self
+    }
 }
 
 /// A registered worker as seen by the cluster registry.
@@ -570,6 +585,11 @@ pub struct WorkerInfo {
     /// Release of that SDK, so a stale worker is visible without going host by
     /// host. `None` from a shell that predates version reporting.
     pub sdk_version: Option<String>,
+    /// Fingerprint of the worker's task registry, so the one worker in a fleet
+    /// that discovered a different set of tasks is visible without going host
+    /// by host. `None` from a shell that predates the field, and from a worker
+    /// with nothing registered.
+    pub registry_fingerprint: Option<String>,
 }
 
 /// Holder and expiry of a distributed lock.

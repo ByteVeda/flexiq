@@ -168,3 +168,47 @@ fn unregistered_task_dead_letters_without_retry() {
 
     handle.shutdown().expect("shutdown");
 }
+
+/// The registry row records what the worker can run.
+///
+/// Registered in the opposite order to the fingerprint's, to pin that the value
+/// is over the *set*: registration order is import order, which discovery
+/// decides, and a fingerprint that followed it would report divergence on every
+/// worker that happened to import its modules differently.
+#[test]
+fn a_worker_records_a_fingerprint_of_its_task_registry() {
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone())
+        .register("reports.build", |_job: &Job| Ok(None))
+        .register("invoices.send", |_job: &Job| Ok(None))
+        .spawn()
+        .expect("spawn");
+
+    let workers = storage.list_workers().expect("list_workers");
+    let worker = workers.first().expect("the worker registered");
+    // The value `crates/flexiq-core/BINDING_CONTRACT.md` pins for this set.
+    assert_eq!(
+        worker.registry_fingerprint.as_deref(),
+        Some("fafd30ef8ebcb7de")
+    );
+
+    handle.shutdown().expect("shutdown");
+}
+
+/// A worker that brought its own pool keeps its handlers on its own side, so
+/// this process cannot see the registry and must not invent one. A row that
+/// overstates what a worker runs is worse than a row that says nothing: an
+/// unregistered task name is a fatal, non-retryable failure.
+#[test]
+fn a_worker_with_nothing_registered_reports_no_fingerprint() {
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone()).spawn().expect("spawn");
+
+    let workers = storage.list_workers().expect("list_workers");
+    assert_eq!(
+        workers.first().expect("registered").registry_fingerprint,
+        None
+    );
+
+    handle.shutdown().expect("shutdown");
+}
