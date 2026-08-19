@@ -158,6 +158,19 @@ Rules:
 - **A new frame type must declare its payload length as `payload_len`.** It is
   the only field a peer that predates the frame can find. `result_len` and
   `extra_len` predate this rule and are read as equivalents.
+- **The scheduler compares task registries across attached executors.** It
+  fingerprints each executor's `tasks[]` on attach — sorted, de-duplicated — and
+  warns when one advertises a set no live peer has, naming the difference. This
+  is the safety net for a registry that is *discovered* rather than declared: an
+  unregistered task name is a fatal, non-retryable failure, so a worker that
+  imported part of its task tree dead-letters everything for the rest in
+  silence. Nothing extra rides the frame — `tasks[]` is already there and is
+  what dispatch routes by, so a fingerprint sent alongside it could only be a
+  second copy of the same fact, free to disagree. An executor written without
+  this core gets the check for free. A mismatch is **never** a reason to refuse
+  an attach: two registries may differ on purpose, and rejecting would turn a
+  diagnostic into an outage. An executor advertising no tasks takes no part in
+  the comparison.
 - `progress` and `task_log` are fire-and-forget: they carry no reply, never
   settle a job, and a scheduler drops one naming a job the sender is not
   running. `progress` is 0–100; a value outside that range is never written —
