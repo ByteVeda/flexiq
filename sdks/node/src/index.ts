@@ -33,6 +33,7 @@ export { DebounceOptions } from "./debounce";
 export { DetachedStorageError } from "./detached";
 export {
   CryptoError,
+  DuplicateTaskError,
   EnqueueSkippedError,
   FlexiQError,
   InterceptionError,
@@ -52,6 +53,8 @@ export {
   ResourceUnavailableError,
   ResultTimeoutError,
   SerializationError,
+  TaskDiscoveryError,
+  TaskNotBoundError,
   TaskNotRegisteredError,
   WorkflowError,
 } from "./errors";
@@ -129,6 +132,7 @@ export {
 export type { ProxyHandler, ProxyRef } from "./proxies";
 export { canonicalJson, FileProxyHandler, FileReference, Proxies, ProxySession } from "./proxies";
 export { Queue, type QueueOptions } from "./queue";
+export { type DeferredTask, task } from "./registry";
 export {
   type MockResource,
   mockResource,
@@ -165,6 +169,7 @@ export type {
   DeadJob,
   DebounceInput,
   DetailedJobFilter,
+  DiscoverOptions,
   DispatchOrder,
   Duration,
   EffectiveRetention,

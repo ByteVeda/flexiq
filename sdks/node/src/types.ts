@@ -283,6 +283,21 @@ export interface TaskOptions extends DebounceInput {
   codecs?: readonly string[];
 }
 
+/** Options for {@link Queue.discover}. */
+export interface DiscoverOptions {
+  /**
+   * File extensions to import, replacing the default set (`.js`, `.mjs`, `.cjs`,
+   * `.ts`, `.mts`, `.cts`). The leading dot is optional — `"mjs"` and `".mjs"`
+   * mean the same thing. Declaration files (`.d.ts` and friends) are never
+   * imported.
+   *
+   * Narrow this when a directory holds sources next to their compiled output:
+   * importing both `x.ts` and `x.js` declares every task in them twice, which is
+   * a {@link DuplicateTaskError}.
+   */
+  extensions?: readonly string[];
+}
+
 /** Options for {@link Queue.registerPeriodic}. */
 export interface PeriodicOptions {
   /** Positional args passed to the task each time it fires. */

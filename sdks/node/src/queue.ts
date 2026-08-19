@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { Batcher, type BatcherOptions } from "./batching";
 import {
   MiddlewareDisableStore,
@@ -10,7 +10,9 @@ import {
 } from "./dashboard/stores";
 import { DebounceOptions, hasDebounceInput, mergeDebounceInput } from "./debounce";
 import { createDetachedNative, isDetached } from "./detached";
+import { importTaskModules } from "./discover";
 import {
+  DuplicateTaskError,
   EnqueueSkippedError,
   FlexiQError,
   InterceptionError,
@@ -54,6 +56,7 @@ import {
   toDecision,
 } from "./predicates";
 import { type ProxyHandlerStats, proxyMetrics } from "./proxies";
+import { type PendingTask, pendingTasks } from "./registry";
 import {
   type PoolOptions,
   type ResourceContext,
@@ -78,6 +81,7 @@ import type {
   DeadJob,
   DeclaredTopic,
   DetailedJobFilter,
+  DiscoverOptions,
   EffectiveRetention,
   EnqueueOptions,
   Job,
@@ -181,6 +185,12 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly serializer: Serializer;
   private readonly codecs: ReadonlyMap<string, PayloadCodec>;
   private readonly tasks = new Map<string, RegisteredTask>();
+  /**
+   * Pending-registry entries this queue has claimed, keyed by task name.
+   * Draining is idempotent, so a re-drain has to tell "already mine" apart from
+   * "another task owns this name", and rebind without re-registering.
+   */
+  private readonly drainedPending = new Map<string, PendingTask>();
   private readonly pendingSubscriptions: PendingSubscription[] = [];
   private readonly pendingLogConsumers: PendingLogConsumer[] = [];
   private readonly queueLimits = new Map<string, QueueLimits>();
@@ -211,6 +221,12 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       chain.length > 0 ? new CodecSerializer(baseSerializer, chain) : baseSerializer;
     this.codecs = new Map(Object.entries(options.codecs ?? {}));
     this.webhookManager = new WebhookManager(this.native, this.emitter);
+    // Claim any `task()` declared before this queue existed — under ESM a static
+    // import of the task modules runs before the module body that constructs the
+    // queue, so this is the common case. Cheap and idempotent, so it also runs
+    // from `discover` and at worker start; between them, no import order needs a
+    // rule.
+    this.drainPendingTasks();
   }
 
   /** Webhook subscriptions — create/list/delete and deliver job events to URLs. */
@@ -346,6 +362,75 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     const debounce = DebounceOptions.from(`task "${name}"`, options ?? {});
     this.tasks.set(name, { handler, options, debounce });
     return this as unknown as Queue<TaskMap>;
+  }
+
+  /**
+   * Import every task module under `dir` and claim the tasks they declare.
+   *
+   * The import is the load-bearing half: `task()` registers on import, so
+   * walking the tree is what makes the declarations happen. Awaited because
+   * dynamic `import()` is async and ESM has no synchronous escape hatch.
+   *
+   * ```ts
+   * const queue = new Queue({ dbPath });
+   * await queue.discover("./tasks");
+   * ```
+   *
+   * The walk is depth first in name order, skips `node_modules`, dot-directories
+   * and symlinks, and imports the extensions in
+   * {@link DiscoverOptions.extensions}.
+   *
+   * @param dir Directory holding the task modules, resolved against the working
+   * directory. Defaults to `"tasks"`.
+   * @returns Sorted names of every deferred task now registered on this queue.
+   * The list is the same on a second call — draining is idempotent, not
+   * destructive.
+   * @throws {TaskDiscoveryError} The directory could not be read, or one of its
+   * modules threw on import. Never swallowed: the dispatcher treats an
+   * unregistered task as a fatal, non-retryable failure, so a module that
+   * quietly failed to import dead-letters every job it owns.
+   * @throws {DuplicateTaskError} A discovered task claims a name this queue
+   * already registered for a different handler.
+   */
+  async discover(dir = "tasks", options?: DiscoverOptions): Promise<string[]> {
+    await importTaskModules(resolve(dir), options);
+    this.drainPendingTasks();
+    return [...this.drainedPending.keys()].sort();
+  }
+
+  /**
+   * Claim every declaration in the module-global pending registry.
+   *
+   * Idempotent by construction: the registry is never emptied, so a second queue
+   * in the same process gets the same tasks, and a repeat drain on this queue
+   * rebinds without re-registering.
+   *
+   * Binding is last-drain-wins — the handle a task module exports enqueues onto
+   * the queue that drained it most recently. Keeping the first binding would
+   * leave the handle pointing at a queue that has been shut down as soon as a
+   * second one appears.
+   */
+  private drainPendingTasks(): void {
+    for (const entry of pendingTasks()) {
+      const mine = this.drainedPending.get(entry.name);
+      if (mine === entry) {
+        // The very declaration this queue registered. Rebind anyway: another
+        // queue may have drained the registry since, and the latest drain wins.
+        entry.queue = this;
+        continue;
+      }
+      if (this.tasks.has(entry.name)) {
+        // `queue.task()` would overwrite here. A deferred declaration must not:
+        // the losing task keeps accepting enqueues that run the winner's body.
+        throw new DuplicateTaskError(
+          entry.name,
+          mine ? "an earlier module-level task() declaration" : "queue.task()",
+        );
+      }
+      this.task(entry.name, entry.handler, entry.options);
+      entry.queue = this;
+      this.drainedPending.set(entry.name, entry);
+    }
   }
 
   /**
@@ -1720,6 +1805,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
 
   /** Start a worker that runs the registered tasks. Hold the returned {@link Worker}. */
   runWorker(options?: WorkerRunOptions): Worker {
+    // A worker entrypoint that imported its task modules directly never has to
+    // call `discover`. Idempotent, so it costs nothing when it did.
+    this.drainPendingTasks();
     const worker: Worker = Worker.start(this.native, {
       onStopped: () => this.liveWorkers.delete(worker),
       tasks: this.tasks,
@@ -1746,6 +1834,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
    * without polling storage itself. Hold the returned {@link Executor}.
    */
   async runExecutor(options?: ExecutorRunOptions): Promise<Executor> {
+    // Same as `runWorker`: an executor runs task bodies, so it needs the drained
+    // registry too.
+    this.drainPendingTasks();
     const executor: Executor = await Executor.start(this.native, {
       onStopped: () => this.liveExecutors.delete(executor),
       tasks: this.tasks,
