@@ -189,6 +189,42 @@ class QueueDecoratorMixin:
 
         return wrapper
 
+    def _reset_task_state(self, task_name: str) -> None:
+        """Drop every per-task setting held under ``task_name``.
+
+        Registering a name replaces the task, so the incoming declaration has
+        to start from a clean slate. Each of these maps uses *absence* to mean
+        "default", so a replacement that omits an option would otherwise
+        inherit the previous task's — a configuration neither declaration asked
+        for. ``_task_configs`` is a list keyed by name in every consumer, so a
+        stale entry shows the task twice in the override listings.
+        """
+        for state in (
+            self._task_retry_filters,
+            self._task_middleware,
+            self._task_serializers,
+            self._task_codecs,
+            self._task_idempotent,
+            self._task_debounce,
+            self._task_compensates,
+            self._task_batch_configs,
+            self._task_predicates,
+            self._task_predicate_on_false,
+            self._task_predicate_extras,
+            self._task_default_defer,
+            self._task_predicate_serialized,
+            self._task_inject_map,
+            self._task_soft_timeouts,
+            # The cached middleware chain expires on its own after
+            # ``_MW_CHAIN_TTL``, but until then it would hand the new task the
+            # middleware the old one declared.
+            self._mw_chain_cache,
+            # Bound against the previous function's parameters.
+            self._task_signatures,
+        ):
+            state.pop(task_name, None)
+        self._task_configs[:] = [c for c in self._task_configs if c.name != task_name]
+
     def task(
         self,
         name: str | None = None,
@@ -399,6 +435,7 @@ class QueueDecoratorMixin:
 
         def decorator(fn: Callable) -> TaskWrapper:
             task_name = name or f"{_resolve_module_name(fn.__module__)}.{fn.__qualname__}"
+            self._reset_task_state(task_name)
 
             # Detect Inject["name"] annotations (Phase E)
             annotation_injects: list[str] = []
@@ -454,12 +491,9 @@ class QueueDecoratorMixin:
             if idempotent:
                 self._task_idempotent[task_name] = True
 
-            # Per-task debounce window. Re-registering a name replaces the task,
-            # so an absent window has to clear any earlier one rather than leave
-            # it for the new task to inherit.
-            if debounce_config is None:
-                self._task_debounce.pop(task_name, None)
-            else:
+            # Per-task debounce window. An absent one stays absent —
+            # ``_reset_task_state`` already dropped any earlier window.
+            if debounce_config is not None:
                 self._task_debounce[task_name] = debounce_config
 
             # Saga compensation: record the compensating task's name so the
@@ -504,12 +538,10 @@ class QueueDecoratorMixin:
             if final_inject:
                 self._task_inject_map[task_name] = final_inject
 
-            # Wrap the function with hooks, middleware, and context. Re-registering
-            # a name replaces the task, so an absent soft_timeout has to clear any
-            # earlier one rather than leave it for the new task to inherit.
-            if soft_timeout is None:
-                self._task_soft_timeouts.pop(task_name, None)
-            else:
+            # Wrap the function with hooks, middleware, and context. An absent
+            # soft_timeout stays absent — ``_reset_task_state`` already dropped
+            # any earlier one.
+            if soft_timeout is not None:
                 self._task_soft_timeouts[task_name] = soft_timeout
             wrapped = self._wrap_task(fn, task_name)
 
@@ -524,9 +556,6 @@ class QueueDecoratorMixin:
             if is_async:
                 wrapped._flexiq_async_fn = fn  # type: ignore[attr-defined]
             self._task_registry[task_name] = wrapped
-            # Re-registering a name replaces the function, so the cached
-            # signature a debounce key template binds against goes with it.
-            self._task_signatures.pop(task_name, None)
 
             cb_threshold = None
             cb_window = None
@@ -649,13 +678,12 @@ class QueueDecoratorMixin:
                 # most recent drain wins.
                 entry.handle._bind(mine.wrapper)
                 continue
-            if mine is not None and mine.entry.origin == entry.origin:
-                # Same origin, a different entry — the module was re-run, so
-                # this declaration replaces the last one. Registering appends a
-                # config unconditionally, so drop the stale one rather than
-                # leave two rows for one task in the override listings.
-                self._task_configs[:] = [c for c in self._task_configs if c.name != name]
-            elif name in self._task_registry:
+            # A different entry under the same origin is a re-run module: it
+            # replaces, and ``task()`` resets the name's state before
+            # registering. Anything else claiming a name this queue already
+            # holds is a collision between two distinct tasks.
+            replaces = mine is not None and mine.entry.origin == entry.origin
+            if not replaces and name in self._task_registry:
                 owner = mine.entry.origin if mine else "@queue.task()"
                 raise DuplicateTaskError(
                     f"deferred task {name!r} declared in {entry.origin} collides "
