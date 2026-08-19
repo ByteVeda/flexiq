@@ -275,15 +275,17 @@ impl Executor {
         let reader = FrameReader::new(BufReader::new(stream));
 
         writer
-            .write_header(&ExecutorMessage::Hello {
-                executor_id: format!("test-executor-{port}"),
-                sdk: "test".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                tasks: tasks.iter().map(|task| task.to_string()).collect(),
-                slots: 2,
-                protocol_version: PROTOCOL_VERSION,
-                token: token.map(Secret::new),
-            })
+            .write_header(
+                &ExecutorMessage::hello(
+                    format!("test-executor-{port}"),
+                    "test",
+                    env!("CARGO_PKG_VERSION"),
+                    tasks.iter().map(|task| task.to_string()).collect(),
+                    2,
+                )
+                .token(token.map(Secret::new))
+                .build(),
+            )
             .expect("send hello");
 
         Self { reader, writer }

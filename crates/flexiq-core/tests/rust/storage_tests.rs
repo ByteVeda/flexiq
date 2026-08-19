@@ -632,19 +632,15 @@ fn test_workers(s: &impl Storage) {
     let resources = Some(r#"["db","redis"]"#);
     let health = Some(r#"{"db":"healthy","redis":"healthy"}"#);
 
-    s.register_worker(&WorkerRegistration {
-        worker_id: "w-test-1",
-        queues: "q-workers",
-        resources,
-        resource_health: health,
-        threads: 4,
-        hostname: Some("test-host"),
-        pid: Some(12345),
-        pool_type: Some("thread"),
-        sdk: Some("rust"),
-        sdk_version: Some("9.9.9"),
-        ..Default::default()
-    })
+    s.register_worker(
+        &WorkerRegistration::new("w-test-1", "q-workers", 4)
+            .resources(resources)
+            .resource_health(health)
+            .hostname(Some("test-host"))
+            .pid(Some(12345))
+            .pool_type(Some("thread"))
+            .sdk(Some("rust"), Some("9.9.9")),
+    )
     .unwrap();
     s.heartbeat("w-test-1", Some(r#"{"db":"unhealthy","redis":"healthy"}"#))
         .unwrap();

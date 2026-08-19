@@ -516,21 +516,17 @@ impl PyQueue {
         // scheduler's claim owner).
         let hostname = gethostname::gethostname().to_string_lossy().to_string();
         let pid = std::process::id() as i32;
-        let _ = self.storage.register_worker(&WorkerRegistration {
-            worker_id: &worker_id,
-            queues: &queues_str,
-            tags: tags.as_deref(),
-            resources: resources.as_deref(),
-            threads,
-            hostname: Some(&hostname),
-            pid: Some(pid),
-            pool_type: pool.as_deref(),
-            sdk: Some("python"),
-            // The native module's version, which maturin builds from the same
-            // workspace version the wheel carries.
-            sdk_version: Some(env!("CARGO_PKG_VERSION")),
-            ..Default::default()
-        });
+        let _ = self.storage.register_worker(
+            &WorkerRegistration::new(&worker_id, &queues_str, threads)
+                .tags(tags.as_deref())
+                .resources(resources.as_deref())
+                .hostname(Some(&hostname))
+                .pid(Some(pid))
+                .pool_type(pool.as_deref())
+                // The native module's version, which maturin builds from the
+                // same workspace version the wheel carries.
+                .sdk(Some("python"), Some(env!("CARGO_PKG_VERSION"))),
+        );
 
         // Build the dispatcher up front for the prefork case so we can install
         // it on the queue before the run loop starts — request_cancel relies on

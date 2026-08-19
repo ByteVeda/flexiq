@@ -86,15 +86,18 @@ impl FakeExecutor {
 
         executor
             .writer
-            .write_header(&ExecutorMessage::Hello {
-                executor_id: executor_id.to_string(),
-                sdk: "test".to_string(),
-                version: "0.0.0".to_string(),
-                tasks: tasks.iter().map(|t| (*t).to_string()).collect(),
-                slots,
-                protocol_version,
-                token: token.map(Secret::new),
-            })
+            .write_header(
+                &ExecutorMessage::hello(
+                    executor_id,
+                    "test",
+                    "0.0.0",
+                    tasks.iter().map(|t| (*t).to_string()).collect(),
+                    slots,
+                )
+                .protocol_version(protocol_version)
+                .token(token.map(Secret::new))
+                .build(),
+            )
             .expect("send hello");
 
         let attached = dispatcher.attach(Box::new(scheduler_end));

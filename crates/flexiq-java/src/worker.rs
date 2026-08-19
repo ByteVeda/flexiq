@@ -233,18 +233,14 @@ fn register_live_worker(
 ) -> Result<(), crate::error::BindingError> {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let pid = std::process::id() as i32;
-    storage.register_worker(&WorkerRegistration {
-        worker_id,
-        queues: queues_csv,
-        threads: capacity as i32,
-        hostname: Some(&hostname),
-        pid: Some(pid),
-        pool_type: Some("java"),
-        sdk: Some("java"),
-        // The native library's version, which the jar is published alongside.
-        sdk_version: Some(env!("CARGO_PKG_VERSION")),
-        ..Default::default()
-    })?;
+    storage.register_worker(
+        &WorkerRegistration::new(worker_id, queues_csv, capacity as i32)
+            .hostname(Some(&hostname))
+            .pid(Some(pid))
+            .pool_type(Some("java"))
+            // The native library's version, which the jar is published alongside.
+            .sdk(Some("java"), Some(env!("CARGO_PKG_VERSION"))),
+    )?;
     Ok(())
 }
 

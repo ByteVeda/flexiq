@@ -318,19 +318,15 @@ fn spawn_worker_lifecycle(
         let reg_storage = storage.clone();
         let reg_id = worker_id.clone();
         match spawn_blocking(move || {
-            reg_storage.register_worker(&WorkerRegistration {
-                worker_id: &reg_id,
-                queues: &queues_csv,
-                resources: resources.as_deref(),
-                threads: capacity as i32,
-                hostname: Some(&hostname),
-                pid: Some(pid),
-                pool_type: Some("node"),
-                sdk: Some("node"),
-                // The addon's version, which the package is published from.
-                sdk_version: Some(env!("CARGO_PKG_VERSION")),
-                ..Default::default()
-            })
+            reg_storage.register_worker(
+                &WorkerRegistration::new(&reg_id, &queues_csv, capacity as i32)
+                    .resources(resources.as_deref())
+                    .hostname(Some(&hostname))
+                    .pid(Some(pid))
+                    .pool_type(Some("node"))
+                    // The addon's version, which the package is published from.
+                    .sdk(Some("node"), Some(env!("CARGO_PKG_VERSION"))),
+            )
         })
         .await
         {

@@ -24,8 +24,8 @@ pub use executor::{
     ExecutorSideChannel,
 };
 pub use protocol::{
-    Dispatch, ExecutorMessage, Incoming, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    Dispatch, ExecutorMessage, HelloBuilder, Incoming, ProtocolError, SchedulerMessage,
+    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};

@@ -54,7 +54,8 @@ pub use storage::{DeadJob, QueueStats, SubscriptionBacklogStats};
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
     ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession,
-    ExecutorSideChannel, NativeDispatcher, ProtocolError, RemoteConfig, RemoteDispatcher,
-    SchedulerMessage, Secret, SideChannel, StorageSideChannel, TaskError, TaskRegistry, TaskResult,
-    Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    ExecutorSideChannel, HelloBuilder, NativeDispatcher, ProtocolError, RemoteConfig,
+    RemoteDispatcher, SchedulerMessage, Secret, SideChannel, StorageSideChannel, TaskError,
+    TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL,
+    PROTOCOL_VERSION,
 };

@@ -441,7 +441,13 @@ pub struct DebounceOptions {
 /// these from unrelated sources — hostname from the OS, `sdk`/`sdk_version`
 /// baked in at build time, `queues`/`threads` from user config — and a run of
 /// nine same-typed `Option<&str>` arguments is easy to transpose silently.
+///
+/// `#[non_exhaustive]`: what a worker announces has grown twice already
+/// (`0009_worker_sdk`, `0012_worker_registry_fingerprint`) and will again.
+/// Build one with [`WorkerRegistration::new`] and the setters, which leave a
+/// caller compiling when it does.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct WorkerRegistration<'a> {
     /// Unique worker id.
     pub worker_id: &'a str,
@@ -467,8 +473,73 @@ pub struct WorkerRegistration<'a> {
     pub sdk_version: Option<&'a str>,
 }
 
+impl<'a> WorkerRegistration<'a> {
+    /// A registration carrying only what every worker must state: who it is,
+    /// what it consumes, and how much of it there is.
+    ///
+    /// Everything else is a setter, because everything else is something a
+    /// shell may not know about itself — a worker that cannot see its own
+    /// hostname registers without one rather than inventing a value.
+    pub fn new(worker_id: &'a str, queues: &'a str, threads: i32) -> Self {
+        Self {
+            worker_id,
+            queues,
+            threads,
+            ..Self::default()
+        }
+    }
+
+    /// Pre-encoded JSON list of worker tags.
+    pub fn tags(mut self, tags: Option<&'a str>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Pre-encoded JSON list of resource names the worker provides.
+    pub fn resources(mut self, resources: Option<&'a str>) -> Self {
+        self.resources = resources;
+        self
+    }
+
+    /// Pre-encoded JSON of per-resource health.
+    pub fn resource_health(mut self, resource_health: Option<&'a str>) -> Self {
+        self.resource_health = resource_health;
+        self
+    }
+
+    /// Host the worker runs on.
+    pub fn hostname(mut self, hostname: Option<&'a str>) -> Self {
+        self.hostname = hostname;
+        self
+    }
+
+    /// OS process id of the worker.
+    pub fn pid(mut self, pid: Option<i32>) -> Self {
+        self.pid = pid;
+        self
+    }
+
+    /// Execution pool type (e.g. `thread`, `prefork`).
+    pub fn pool_type(mut self, pool_type: Option<&'a str>) -> Self {
+        self.pool_type = pool_type;
+        self
+    }
+
+    /// SDK registering the worker, and the release of it. Taken together
+    /// because a version without the SDK that produced it names nothing.
+    pub fn sdk(mut self, sdk: Option<&'a str>, sdk_version: Option<&'a str>) -> Self {
+        self.sdk = sdk;
+        self.sdk_version = sdk_version;
+        self
+    }
+}
+
 /// A registered worker as seen by the cluster registry.
+///
+/// `#[non_exhaustive]` for the same reason as [`WorkerRegistration`], which it
+/// mirrors. Only this crate builds one; a caller reads it.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct WorkerInfo {
     /// Unique worker id.
     pub worker_id: String,
