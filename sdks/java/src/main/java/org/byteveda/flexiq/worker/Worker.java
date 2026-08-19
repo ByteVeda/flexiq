@@ -297,6 +297,29 @@ public final class Worker implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Register every handler discoverable on the classpath.
+         *
+         * <p>The {@code @TaskHandler} processor lists a provider per annotated class
+         * in {@code META-INF/services}, so this needs no code naming the handlers —
+         * a task module never has to import the module that builds the queue. A
+         * class the SDK cannot construct is skipped at build time with a compiler
+         * note; register those explicitly.
+         *
+         * <p>Discovery never replaces a handler already registered on this builder;
+         * call {@code handle(...)} or {@code register(...)} <em>after</em> it to
+         * override one deliberately.
+         */
+        public Builder discover() {
+            return discover(HandlerDiscovery.contextLoader());
+        }
+
+        /** {@link #discover()} against a specific class loader. */
+        public Builder discover(ClassLoader loader) {
+            HandlerDiscovery.load(loader, handlers.keySet(), "worker").forEach(this::register);
+            return this;
+        }
+
         /** Register a single {@link Handler} (a task + its function). */
         public Builder register(Handler<?, ?> handler) {
             handlers.put(
