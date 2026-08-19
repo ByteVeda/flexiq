@@ -74,6 +74,7 @@ final class Contract {
         m.put("tags", w.tags);
         m.put("sdk", w.sdk);
         m.put("sdk_version", w.sdkVersion);
+        m.put("registry_fingerprint", w.registryFingerprint);
         return m;
     }
 

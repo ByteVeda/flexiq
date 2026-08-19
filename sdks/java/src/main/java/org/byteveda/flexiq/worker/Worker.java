@@ -639,6 +639,12 @@ public final class Worker implements AutoCloseable {
             } else if (concurrency > 0) {
                 options.put("concurrency", concurrency);
             }
+            // Every registered handler, not just the ones with a policy: the
+            // fingerprint on the worker row has to describe what this worker
+            // can run, and taskPolicies omits every task that took the defaults.
+            if (!handlers.isEmpty()) {
+                options.put("tasks", List.copyOf(handlers.keySet()));
+            }
             if (!taskPolicies.isEmpty()) {
                 options.put("taskConfigs", encodeTaskConfigs());
             }
