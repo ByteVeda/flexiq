@@ -2,6 +2,8 @@
 
 import threading
 
+import pytest
+
 from flexiq import Queue
 
 
@@ -175,3 +177,25 @@ def test_re_registering_a_name_leaves_one_task_config(queue: Queue) -> None:
     configs = [c for c in queue._task_configs if c.name == "reused"]
     assert len(configs) == 1
     assert configs[0].max_retries == 9
+
+
+def test_a_rejected_re_registration_leaves_the_previous_task_intact(queue: Queue) -> None:
+    """A declaration that fails validation must not half-replace the live task.
+
+    Registering resets the name's state before recording the new options, so
+    anything that can be rejected has to be rejected first — otherwise the
+    error leaves the old function registered with none of its configuration.
+    """
+
+    @queue.task(name="fragile", idempotent=True, max_retries=7)
+    def original(n: int) -> int:
+        return n
+
+    for bad in ({"compensates": 123}, {"predicate": 123}, {"rate_limit": 123}):
+        with pytest.raises(TypeError):
+            queue.task(name="fragile", **bad)(original)
+
+        assert queue._task_idempotent.get("fragile") is True
+        configs = [c for c in queue._task_configs if c.name == "fragile"]
+        assert len(configs) == 1
+        assert configs[0].max_retries == 7
