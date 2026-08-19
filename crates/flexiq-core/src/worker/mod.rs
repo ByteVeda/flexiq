@@ -3,6 +3,11 @@ pub mod cancel;
 pub mod dial;
 pub mod dispatcher;
 pub mod executor;
+// Crate-private for now: nothing outside `flexiq-core` compares registries yet,
+// and private → public is a minor bump while public → private is a major one.
+// The registry-row follow-up, which needs it from the sibling SDK crates, is
+// what should publish it.
+pub(crate) mod fingerprint;
 pub mod protocol;
 pub mod registry;
 pub mod remote;
