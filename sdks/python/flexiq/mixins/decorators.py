@@ -643,12 +643,19 @@ class QueueDecoratorMixin:
         for entry in pending_tasks():
             name = entry.name
             mine = self._drained_pending.get(name)
-            if mine is not None and mine.entry.origin == entry.origin:
-                # Already ours. Re-bind anyway: another queue may have drained
-                # the same registry since, and the most recent drain wins.
+            if mine is not None and mine.entry is entry:
+                # The very declaration this queue registered. Re-bind anyway:
+                # another queue may have drained the registry since, and the
+                # most recent drain wins.
                 entry.handle._bind(mine.wrapper)
                 continue
-            if name in self._task_registry:
+            if mine is not None and mine.entry.origin == entry.origin:
+                # Same origin, a different entry — the module was re-run, so
+                # this declaration replaces the last one. Registering appends a
+                # config unconditionally, so drop the stale one rather than
+                # leave two rows for one task in the override listings.
+                self._task_configs[:] = [c for c in self._task_configs if c.name != name]
+            elif name in self._task_registry:
                 owner = mine.entry.origin if mine else "@queue.task()"
                 raise DuplicateTaskError(
                     f"deferred task {name!r} declared in {entry.origin} collides "
