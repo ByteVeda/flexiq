@@ -163,6 +163,10 @@ export class Worker {
       channelCapacity: run?.channelCapacity,
       concurrency: run?.concurrency,
       batchSize: run?.batchSize,
+      // Every registered handler, not just the ones with a policy: the
+      // fingerprint on the worker row has to describe what this worker can
+      // run, and `taskConfigs` omits every task that took the defaults.
+      tasks: [...tasks.keys()],
       taskConfigs: applyTaskOverrides(
         buildTaskConfigs(tasks),
         tasks.keys(),

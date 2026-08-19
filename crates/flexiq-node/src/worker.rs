@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use flexiq_core::storage::records::WorkerRegistration;
-use flexiq_core::worker::WorkerDispatcher;
+use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
 use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use napi::bindgen_prelude::{spawn, spawn_blocking, within_runtime_if_available, Result};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
@@ -163,6 +163,10 @@ pub fn start_worker(
         queues_csv,
         resources_json(options.resources.as_deref()),
         capacity,
+        // The handler names JS registered. Fingerprinted rather than stored, so
+        // the registry row stays one comparable value however many tasks a
+        // worker serves.
+        registry_fingerprint(options.tasks.iter().flatten()),
         lifecycle_stop.clone(),
     );
 
@@ -301,12 +305,14 @@ fn resources_json(resources: Option<&[String]>) -> Option<String> {
 }
 
 /// Register this worker, then unregister once `stop` is signalled.
+#[allow(clippy::too_many_arguments)]
 fn spawn_worker_lifecycle(
     storage: StorageBackend,
     worker_id: String,
     queues_csv: String,
     resources: Option<String>,
     capacity: usize,
+    registry_fingerprint: Option<String>,
     stop: Arc<Notify>,
 ) {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
@@ -325,7 +331,8 @@ fn spawn_worker_lifecycle(
                     .pid(Some(pid))
                     .pool_type(Some("node"))
                     // The addon's version, which the package is published from.
-                    .sdk(Some("node"), Some(env!("CARGO_PKG_VERSION"))),
+                    .sdk(Some("node"), Some(env!("CARGO_PKG_VERSION")))
+                    .registry_fingerprint(registry_fingerprint.as_deref()),
             )
         })
         .await
