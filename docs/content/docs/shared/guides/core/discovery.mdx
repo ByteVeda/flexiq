@@ -253,6 +253,15 @@ one file reached by two paths would declare its tasks twice. It imports `.js`,
 await queue.discover("./dist/tasks", { extensions: [".js"] });
 ```
 
+<Callout type="warn" title="TypeScript sources need a runtime that can load them">
+  `discover()` calls `import()` and transpiles nothing. The SDK supports Node 20,
+  but running a `.ts` file directly needs Node 22.18+ (where type stripping is on
+  by default) or a loader such as `tsx`. On an older runtime, point `discover()`
+  at your compiled output, or narrow `extensions` to the built files — otherwise
+  the first `.ts` module it reaches throws, and `discover()` surfaces that as a
+  `TaskDiscoveryError` naming the file.
+</Callout>
+
 You do not always need the call. A queue claims whatever is pending at four
 points:
 
@@ -460,11 +469,25 @@ survives a closed-world native-image build.
 Discovery makes the registry **implicit** — it is whatever discovery found. That
 is the whole point, and it is also the one new failure mode.
 
-A task name with no registered handler is a **fatal, non-retryable** dispatch
-failure. It is not retried and it does not wait for a worker that knows it: the
-job dead-letters. So a worker that picked up eleven of twelve task modules keeps
-running perfectly for eleven modules' worth of traffic and dead-letters
-everything belonging to the twelfth.
+What that costs depends on how the job reaches a process that cannot run it.
+
+A **worker** claims jobs from storage itself, so it can claim one whose task it
+never registered. That is a **fatal, non-retryable** failure: retrying cannot
+make an unregistered task runnable here, so the job dead-letters immediately
+rather than waiting for a worker that knows it. A worker that picked up eleven
+of twelve task modules keeps running perfectly for eleven modules' worth of
+traffic and dead-letters everything belonging to the twelfth.
+
+An **attached executor** is sent work instead of claiming it, and the scheduler
+only ever routes a task name to an executor that advertised it. So the job is
+never handed to a peer that cannot run it — it waits for one that can, and if
+none attaches before the placement timeout it fails *retryably* with `task '...'
+was not dispatched: no attached executor advertises it`. The symptom is
+therefore latency and retries rather than instant dead-lettering, which is
+quieter and easier to mistake for a capacity problem.
+
+Either way the jobs belonging to the missing half stop completing, and nothing
+in the task's own code is wrong.
 
 The first defence is that discovery never swallows an error. Anything that fails
 to load fails the whole call, loudly, naming what failed:
@@ -527,10 +550,10 @@ a single warning:
   <Tab sdk="python">
 
 ```text
-[flexiq] executor python-executor-0192c8a1 (python 1.0.0) advertises task registry
-eb5ed0d43c8f2aaa, but executor python-executor-0192b7f4 (python 1.0.0) advertises
+[flexiq] executor python-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60 (python 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor python-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142 (python 1.0.0) advertises
 0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
-only on python-executor-0192c8a1: (none). only on python-executor-0192b7f4:
+only on python-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60: (none). only on python-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142:
 reports.build, reports.export
 ```
 
@@ -538,10 +561,10 @@ reports.build, reports.export
   <Tab sdk="node">
 
 ```text
-[flexiq] executor node-executor-0192c8a1 (node 1.0.0) advertises task registry
-eb5ed0d43c8f2aaa, but executor node-executor-0192b7f4 (node 1.0.0) advertises
+[flexiq] executor node-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60 (node 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor node-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142 (node 1.0.0) advertises
 0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
-only on node-executor-0192c8a1: (none). only on node-executor-0192b7f4:
+only on node-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60: (none). only on node-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142:
 reports.build, reports.export
 ```
 
@@ -549,10 +572,10 @@ reports.build, reports.export
   <Tab sdk="java">
 
 ```text
-[flexiq] executor java-executor-0192c8a1 (java 1.0.0) advertises task registry
-eb5ed0d43c8f2aaa, but executor java-executor-0192b7f4 (java 1.0.0) advertises
+[flexiq] executor java-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60 (java 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor java-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142 (java 1.0.0) advertises
 0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
-only on java-executor-0192c8a1: (none). only on java-executor-0192b7f4:
+only on java-executor-0198f3d2-4c71-7a3e-b8d5-1f2a9c4e7b60: (none). only on java-executor-0198f3d1-9e05-7c42-a1b7-6d3f08ce5142:
 reports.build, reports.export
 ```
 
@@ -572,6 +595,16 @@ the ability to tell two registries apart.
 the other's. That is the shape a half-finished discovery produces, and it is the
 case worth acting on fastest.
 
+An executor with no fingerprint — one advertising no tasks at all — takes no
+part on either side of the comparison: it neither triggers a warning nor
+satisfies one, because a registry holding nothing is not a registry that differs
+from everyone else's. That is not the blind spot it sounds like. A discovery
+that found *nothing* never reaches the comparison: every SDK refuses to start an
+executor on an empty task list ("no tasks are registered on this app, so the
+executor would never be sent any work"), because it would attach and then sit
+idle forever. Total failure is loud at startup; it is the partial failure that
+needs the fingerprint.
+
 <Callout type="info" title="One line, not one per worker">
   The check warns only when no live peer already advertises the joining
   registry. Rolling fifty workers onto a new task list produces one line — from
@@ -588,17 +621,21 @@ case worth acting on fastest.
 
 ### What to do when you see it
 
-1. **Read the `only on` lists.** They name the tasks at risk. Any job for a name
-   that appears on only one side fails whenever it lands on the other.
+1. **Read the `only on` lists.** They name the tasks at risk — the ones only
+   part of the fleet can run, so they depend on that part staying attached and
+   having a free slot.
 2. **Decide whether it is deliberate.** Specialised fleets diverge on purpose.
    If both peers are meant to be interchangeable, it is not deliberate.
 3. **Compare the two deployments.** The usual causes are a rollout in progress
    (harmless, and it resolves itself), a stale image or replica that missed a
    deploy, and task code that is not in the built artifact — a packaging filter,
    a directory left out of the image, <SdkSwap python="a package missing its __init__.py" node="a source tree that was never compiled into dist/" java="a jar missing from the classpath" />.
-4. **Check the dead-letter queue for the missing names.** If jobs already
-   dead-lettered, that confirms the reachable half was routed to the peer that
-   could not run them. Requeue them once the registries agree — see
+4. **Look for jobs of those names failing to place.** `task '...' was not
+   dispatched: no attached executor advertises it` means the half that knew
+   them is gone entirely, not merely outnumbered. Those failures are retryable,
+   so the jobs come back once a peer that advertises the name attaches; check
+   the dead-letter queue for any that exhausted their retries first, and requeue
+   them — see
    <SdkLink to="guides/reliability/error-handling">error handling</SdkLink>.
 5. **Roll the lagging peer forward, or take it out of the fleet.** Once every
    attached executor advertises one fingerprint, the next attach is silent.
