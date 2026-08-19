@@ -56,10 +56,15 @@ from flexiq.proxies.built_in import BuiltInProxy
 from flexiq.proxies.no_proxy import NoProxy
 
 # Deliberate shadowing: ``flexiq.task`` is also a submodule, and this rebinds
-# the name in the package namespace to the decorator. ``from flexiq import
-# task`` is the public spelling the deferred decorator has to own. Every
-# internal and documented use of the submodule is ``from flexiq.task import
-# TaskWrapper``, which resolves through ``sys.modules`` and is unaffected.
+# the name in the package namespace to the decorator, which is the public
+# spelling the deferred decorator has to own.
+#
+# Breaking for one form: ``import flexiq.task`` followed by attribute access
+# (``flexiq.task.TaskWrapper``) now reaches the decorator and raises
+# AttributeError. ``from flexiq.task import TaskWrapper`` resolves through
+# ``sys.modules`` and is unaffected — it is the spelling used everywhere in
+# this package and in the docs. Pinned by
+# ``test_the_task_name_wins_over_the_submodule_but_the_submodule_still_imports``.
 from flexiq.registry import task
 from flexiq.result import JobResult
 from flexiq.retention import EffectiveRetention, Retention, RetentionPreview
