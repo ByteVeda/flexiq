@@ -9,7 +9,9 @@ this feature exists to remove.
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
+import textwrap
 import threading
 import uuid
 from collections.abc import Callable, Generator
@@ -68,9 +70,9 @@ def write_package(tmp_path: Path) -> Generator[PackageWriter]:
 
 
 APP = """
-from flexiq import DuplicateTaskError, Queue, TaskNotBoundError
+from flexiq import Queue
 
-queue = Queue(db_path="{db}", workers=2)
+queue = Queue(db_path={db}, workers=2)
 queue.autodiscover("<PKG>.tasks")
 """
 
@@ -91,7 +93,8 @@ def test_task_module_registers_without_importing_the_queue_module(
     pkg = write_package(
         {
             "__init__.py": "",
-            "app.py": APP.format(db=tmp_path / "circular.db"),
+            # repr, not str: a Windows path would drop \U escapes into the source.
+            "app.py": APP.format(db=repr(str(tmp_path / "circular.db"))),
             "tasks/__init__.py": "",
             "tasks/invoices.py": INVOICES,
         }
@@ -417,3 +420,76 @@ def test_a_bound_deferred_task_makes_signatures(
 
     assert signature.task is handle
     assert signature.args == (9,)
+
+
+RELOAD = """
+from flexiq import task
+
+
+@task(name="reload.probe")
+def probe():
+    return "{version}"
+"""
+
+
+def test_reloading_a_task_module_rebinds_the_new_function(
+    write_package: PackageWriter, tmp_path: Path
+) -> None:
+    """A re-run module replaces the task — the queue must dispatch the new body.
+
+    ``importlib.reload`` produces a new function object under the same origin.
+    Treating that as "already mine" would re-bind the handle to the wrapper
+    built around the previous function, so the queue would keep running the old
+    code while the registry claims it was replaced.
+    """
+    pkg = write_package({"__init__.py": "", "probe.py": RELOAD.format(version="first")})
+    queue = Queue(db_path=str(tmp_path / "reload.db"), workers=2)
+    queue.autodiscover(pkg)
+
+    module = importlib.import_module(f"{pkg}.probe")
+    # The rewrite must differ in size: the bytecode cache validates on
+    # (mtime, size), and two same-length writes in one second reload stale code.
+    (tmp_path / pkg / "probe.py").write_text(RELOAD.format(version="second-revision"))
+    importlib.invalidate_caches()
+    importlib.reload(module)
+    queue.autodiscover(pkg)
+
+    job = module.probe.delay()
+    threading.Thread(target=queue.run_worker, daemon=True).start()
+    try:
+        assert job.result(timeout=10) == "second-revision"
+        # Registering appends a config, so a replace that forgot to drop the
+        # previous one would list the task twice in the override surfaces.
+        assert [c.name for c in queue._task_configs].count("reload.probe") == 1
+    finally:
+        queue.shutdown()
+
+
+def test_the_task_name_wins_over_the_submodule_but_the_submodule_still_imports() -> None:
+    """``from flexiq import task`` shadows the ``flexiq.task`` submodule.
+
+    Deliberate, and a break for anyone doing ``import flexiq.task`` followed by
+    attribute access — that spelling now yields the decorator. The documented
+    and internally used spelling, ``from flexiq.task import TaskWrapper``,
+    resolves through ``sys.modules`` and is unaffected. Run in a subprocess so
+    the import order is the one under test rather than pytest's.
+    """
+    source = textwrap.dedent(
+        """
+        import flexiq.task
+
+        assert callable(flexiq.task), type(flexiq.task)
+
+        from flexiq.task import TaskWrapper
+
+        assert TaskWrapper.__module__ == "flexiq.task"
+        assert sys.modules["flexiq.task"] is not flexiq.task
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import sys\n" + source],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
