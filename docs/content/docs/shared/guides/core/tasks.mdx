@@ -7,6 +7,12 @@ A task is a named function bound to a queue. The name is the contract —
 producers enqueue by name, and any worker with that name registered executes
 the function and stores its return value as the job's result.
 
+Declaring a task on the queue object means the task module needs the module
+that built the queue. To break that coupling — declare tasks without naming a
+queue and let one claim them later — see
+<SdkLink to="guides/core/discovery">Task discovery</SdkLink>. Everything on this
+page applies either way; only the declaration site moves.
+
 ## Defining a task
 
 <CodeTabs>
@@ -117,6 +123,11 @@ The annotation also accepts `queue`, `maxRetries`, `timeoutMs`, `priority`,
 per-task defaults. See
 <SdkLink to="getting-started/installation">installation</SdkLink> for the
 processor setup.
+
+Each companion also carries a nested `Provider` that the processor lists in
+`META-INF/services`, so a worker can skip the `bind(...)` line entirely and call
+`.discover()` instead — see
+<SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
 
 <Callout type="info">
   Register a handler for every task a worker's queues can carry — a job whose
