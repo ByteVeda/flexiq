@@ -384,6 +384,77 @@ fails with `no handler registered for task '...'`. Register the handler
 
 </SdkOnly>
 
+### When only some workers are affected
+
+If the same task succeeds on one worker and dead-letters on another, the
+registries differ rather than the task being unregistered everywhere. That is
+the shape a partial <SdkLink to="guides/core/discovery">task discovery</SdkLink>
+produces — a stale image, a replica that missed a deploy, or a task module left
+out of the built artifact. Compare what each worker actually registered before
+changing any task code, and see
+[Executors disagree on their task registry](#executors-disagree-on-their-task-registry)
+below for the warning the scheduler logs when it can see the difference itself.
+
+## Executors disagree on their task registry
+
+**Symptom**: the scheduler logs a warning at attach, and jobs for some task
+names dead-letter depending on which peer they land on.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```text
+[flexiq] executor python-executor-0192c8a1 (python 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor python-executor-0192b7f4 (python 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on python-executor-0192c8a1: (none). only on python-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```text
+[flexiq] executor node-executor-0192c8a1 (node 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor node-executor-0192b7f4 (node 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on node-executor-0192c8a1: (none). only on node-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```text
+[flexiq] executor java-executor-0192c8a1 (java 1.0.0) advertises task registry
+eb5ed0d43c8f2aaa, but executor java-executor-0192b7f4 (java 1.0.0) advertises
+0d49390f67ebbff1; a job for a task only one of them knows fails wherever it lands.
+only on java-executor-0192c8a1: (none). only on java-executor-0192b7f4:
+reports.build, reports.export
+```
+
+  </Tab>
+</CodeTabs>
+
+**Cause**: two <SdkLink to="guides/operations/executor">attached
+executors</SdkLink> advertised different task lists. The scheduler dispatches a
+task name only to peers that advertised it, but a name only one peer knows is a
+fatal, non-retryable failure wherever it lands on the other. `(none)` on one
+side means that registry is a strict subset of the other's — the shape a
+half-finished discovery walk produces.
+
+**Fix**: read the two `only on` lists — they name the tasks at risk. If the
+peers are meant to be interchangeable, compare the two deployments: a rollout in
+progress resolves itself, a stale replica or a task module missing from the
+image does not. Check the dead-letter queue for those names and requeue once the
+registries agree. The warning is a diagnostic, never a gate — a divergent
+executor still attaches and still receives work.
+
+The warning fires once per distinct registry, not once per executor, so rolling
+a fleet onto a new task list logs a single line. See
+<SdkLink to="guides/core/discovery#the-divergence-warning">Task discovery</SdkLink>
+for the full rule and the fingerprint it compares.
+
 ## `SQLite database is locked`
 
 SQLite allows many concurrent readers (WAL mode — write-ahead logging) but
