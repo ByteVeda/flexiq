@@ -2,6 +2,7 @@
   "title": "Core",
   "pages": [
     "tasks",
+    "discovery",
     "queues",
     "workers",
     "execution-model",
