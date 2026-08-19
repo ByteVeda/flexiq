@@ -31,6 +31,8 @@ try {
 | `LockException` | `FlexiQException` | A distributed-lock operation failed or was interrupted. |
 | `ResourceException` | `FlexiQException` | A worker resource couldn't be built, resolved, or disposed — including `Resources.use` outside a task. |
 | `ProxyException` | `FlexiQException` | A proxy reference couldn't be created or reconstructed — no handler, signature mismatch, allowlist violation. |
+| `DuplicateTaskException` | `FlexiQException` | Two handlers claim one task name — two providers on the classpath, or `discover()` landing on a name already registered on the builder. See [Task discovery](/java/guides/core/discovery). |
+| `TaskDiscoveryException` | `FlexiQException` | A handler provider couldn't be loaded from the classpath, or threw while building its handlers. Never skipped. |
 | `WebhookException` | `FlexiQException` | A webhook couldn't be stored, loaded, signed, or encoded. |
 | `WorkflowException` | `FlexiQException` | Workflow definition, submission, await-timeout, or query error. |
 | `RetryableException` | `FlexiQException` | *You* throw it from a handler: this failure is transient, retry it. |

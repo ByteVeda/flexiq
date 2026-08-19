@@ -38,6 +38,8 @@ except FlexiQError as exc:
 | `JobNotFoundError` | `FlexiQError`, `KeyError` | A job ID isn't found in storage. |
 | `QueueError` | `FlexiQError` | A queue-level operational error. |
 | `NotesValidationError` | `FlexiQError`, `ValueError` | A `notes` dict breaks the contract (>15 fields, >4 KiB, …). |
+| `DuplicateTaskError` | `FlexiQError`, `ValueError` | Two tasks claim one registered name — at `@flexiq.task()` decoration, or when a queue claims a declaration that collides with one it already holds. See [Task discovery](/python/guides/core/discovery). |
+| `TaskNotBoundError` | `FlexiQError`, `RuntimeError` | A `@flexiq.task()` handle is submitted before any queue claimed it. Construct the `Queue`, call `autodiscover()`, or start the worker first. |
 | `PredicateRejectedError` | `FlexiQError` | An enqueue-time [predicate](/python/guides/core/predicates) cancelled the submission. Carries `task_name`, `reason`. |
 | `BatchPartialFailureError` | `TaskFailedError` | A batch task where some items failed. |
 | `ResourceError` | `FlexiQError` | Base for resource dependency-injection errors. |
