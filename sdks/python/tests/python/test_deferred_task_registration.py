@@ -493,3 +493,42 @@ def test_the_task_name_wins_over_the_submodule_but_the_submodule_still_imports()
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+RELOAD_OPTION = """
+from flexiq import task
+
+
+@task(name="reload.optioned"{options})
+def optioned(n):
+    return n
+"""
+
+
+def test_reloading_a_task_module_drops_an_option_the_new_body_omits(
+    write_package: PackageWriter, tmp_path: Path
+) -> None:
+    """A replacement declaration must not inherit options it left out.
+
+    Options whose absence means "default" are held in per-task maps keyed by
+    name. A replacement that only overwrites the options it sets would leave
+    the previous declaration's still applying to the new function.
+    """
+    pkg = write_package(
+        {
+            "__init__.py": "",
+            "optioned.py": RELOAD_OPTION.format(options=", idempotent=True"),
+        }
+    )
+    queue = Queue(db_path=str(tmp_path / "reload_option.db"))
+    queue.autodiscover(pkg)
+
+    module = importlib.import_module(f"{pkg}.optioned")
+    assert module.optioned.delay(1).id == module.optioned.delay(1).id
+
+    (tmp_path / pkg / "optioned.py").write_text(RELOAD_OPTION.format(options=""))
+    importlib.invalidate_caches()
+    importlib.reload(module)
+    queue.autodiscover(pkg)
+
+    assert module.optioned.delay(2).id != module.optioned.delay(2).id

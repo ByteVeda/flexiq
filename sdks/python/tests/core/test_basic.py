@@ -138,3 +138,40 @@ def test_worker_none_result(queue: Queue) -> None:
 
     result = job.result(timeout=10)
     assert result is None
+
+
+def test_re_registering_a_name_drops_options_the_new_task_omits(queue: Queue) -> None:
+    """Re-registering a name replaces the task, its options included.
+
+    Options whose absence means "default" live in per-task maps keyed by name.
+    Leaving them in place would apply the previous task's configuration to the
+    new function, which is neither declaration.
+    """
+
+    @queue.task(name="reused", idempotent=True, soft_timeout=5.0)
+    def first(n: int) -> int:
+        return n
+
+    @queue.task(name="reused")
+    def second(n: int) -> int:
+        return n
+
+    assert second.delay(1).id != second.delay(1).id
+    assert "reused" not in queue._task_soft_timeouts
+    assert "reused" not in queue._task_idempotent
+
+
+def test_re_registering_a_name_leaves_one_task_config(queue: Queue) -> None:
+    """Two configs for one name would list the task twice in the override APIs."""
+
+    @queue.task(name="reused")
+    def first(n: int) -> int:
+        return n
+
+    @queue.task(name="reused", max_retries=9)
+    def second(n: int) -> int:
+        return n
+
+    configs = [c for c in queue._task_configs if c.name == "reused"]
+    assert len(configs) == 1
+    assert configs[0].max_retries == 9
