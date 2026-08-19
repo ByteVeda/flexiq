@@ -1079,3 +1079,170 @@ fn resolving_toggles_does_not_stall_the_runtime_the_scheduler_shares() {
     drop(job_tx);
     runtime.block_on(async { running.await.expect("run loop") });
 }
+
+/// Captures `log` records so the registry-divergence warnings can be asserted.
+///
+/// The whole point of the check is a line an operator reads, so a test that
+/// only exercised the decision helper would leave the wiring unproven. The test
+/// binary runs its tests in one process and in parallel, so unrelated records
+/// land in the same buffer — every assertion below filters on an executor-id
+/// prefix unique to its own test.
+mod capture {
+    use std::sync::{Mutex, Once, OnceLock};
+
+    static RECORDS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+    fn records() -> &'static Mutex<Vec<String>> {
+        RECORDS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    struct Collector;
+
+    static COLLECTOR: Collector = Collector;
+
+    impl log::Log for Collector {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                records()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(record.args().to_string());
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    /// Install the collector. Only the first call takes effect, which is why
+    /// every test that reads warnings calls it rather than relying on ordering.
+    pub fn install() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            if log::set_logger(&COLLECTOR).is_ok() {
+                log::set_max_level(log::LevelFilter::Warn);
+            }
+        });
+    }
+
+    /// Warnings recorded so far that mention `needle`.
+    pub fn warnings_mentioning(needle: &str) -> Vec<String> {
+        records()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|line| line.contains(needle))
+            .cloned()
+            .collect()
+    }
+}
+
+#[test]
+fn divergent_task_registries_warn_and_still_attach() {
+    capture::install();
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+
+    let _first =
+        FakeExecutor::attach(&dispatcher, "diverge-a", &["alpha", "shared"], 1).expect("attach a");
+    let _second =
+        FakeExecutor::attach(&dispatcher, "diverge-b", &["beta", "shared"], 1).expect("attach b");
+
+    let warnings = capture::warnings_mentioning("diverge-");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one divergence, one warning; got {warnings:?}"
+    );
+    let warning = &warnings[0];
+    assert!(
+        warning.contains("only on diverge-b: beta"),
+        "the warning must name what only the joiner runs: {warning}"
+    );
+    assert!(
+        warning.contains("only on diverge-a: alpha"),
+        "the warning must name what only the peer runs: {warning}"
+    );
+    assert!(
+        !warning.contains("shared"),
+        "a task both of them run is not the problem: {warning}"
+    );
+
+    // Divergence is a warning, never a rejection: the registries may differ on
+    // purpose, and refusing the attach would turn a diagnostic into an outage.
+    assert_eq!(dispatcher.executors().len(), 2);
+}
+
+#[test]
+fn identical_task_registries_attach_without_a_warning() {
+    capture::install();
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+
+    let _first =
+        FakeExecutor::attach(&dispatcher, "agree-a", &["alpha", "beta"], 1).expect("attach a");
+    // Announced in the other order, to pin that the fingerprint is over the set
+    // and not over the list as it happened to be built — announcement order
+    // follows import order, which whatever discovered the tasks decides.
+    let _second =
+        FakeExecutor::attach(&dispatcher, "agree-b", &["beta", "alpha"], 1).expect("attach b");
+
+    assert!(
+        capture::warnings_mentioning("agree-").is_empty(),
+        "matching registries must be silent: {:?}",
+        capture::warnings_mentioning("agree-")
+    );
+    assert_eq!(dispatcher.executors().len(), 2);
+}
+
+/// An executor advertising nothing is deliberately inert, not a registry that
+/// differs. Neither ordering may produce a warning — otherwise every scheduler
+/// running one alongside real executors would be permanently noisy.
+#[test]
+fn an_executor_advertising_no_tasks_never_looks_divergent() {
+    capture::install();
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+
+    let _inert_first = FakeExecutor::attach(&dispatcher, "silent-first", &[], 1)
+        .expect("an executor with no tasks must still attach");
+    let _real =
+        FakeExecutor::attach(&dispatcher, "silent-real", &["beta", "gamma"], 1).expect("attach");
+    let _inert_last =
+        FakeExecutor::attach(&dispatcher, "silent-last", &[], 1).expect("attach inert");
+
+    assert!(
+        capture::warnings_mentioning("silent-").is_empty(),
+        "an executor advertising nothing must not make a fleet look divergent: {:?}",
+        capture::warnings_mentioning("silent-")
+    );
+    assert_eq!(dispatcher.executors().len(), 3);
+}
+
+/// The other half of "accepted without a warning storm": a fleet rolling onto a
+/// new registry says so once, not once per worker.
+#[test]
+fn a_fleet_rolling_onto_one_registry_warns_once() {
+    capture::install();
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+
+    let _old = FakeExecutor::attach(&dispatcher, "storm-old", &["alpha"], 1).expect("attach old");
+    let _new = (0..4)
+        .map(|i| {
+            FakeExecutor::attach(&dispatcher, &format!("storm-new-{i}"), &["beta"], 1)
+                .unwrap_or_else(|e| panic!("attach new-{i}: {e}"))
+        })
+        .collect::<Vec<_>>();
+
+    let warnings = capture::warnings_mentioning("storm-");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "the first executor on the new registry reports it and the rest match it; got {warnings:?}"
+    );
+    assert!(
+        warnings[0].contains("executor storm-new-0"),
+        "the first joiner is the one that reports: {}",
+        warnings[0]
+    );
+}

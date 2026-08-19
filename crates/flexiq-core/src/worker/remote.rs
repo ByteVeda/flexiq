@@ -15,6 +15,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use tokio::sync::Notify;
 
 use super::auth::Secret;
+use super::fingerprint::registry_fingerprint;
 use super::protocol::{
     ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError, SchedulerMessage,
     CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
@@ -262,6 +263,9 @@ struct Executor {
     sdk: String,
     version: String,
     tasks: HashSet<String>,
+    /// Fingerprint of `tasks`, kept so the divergence check costs one hash per
+    /// attach rather than one per attach per peer.
+    registry_fingerprint: Option<String>,
     slots: u32,
     free: AtomicU32,
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
@@ -307,6 +311,114 @@ impl Executor {
             idle_ms: now_ms.saturating_sub(self.last_seen_ms.load(Ordering::Relaxed)),
         }
     }
+}
+
+/// How many task names a divergence warning lists per side.
+///
+/// A registry can hold thousands of names, and a warning nobody reads through
+/// is not a warning. The fingerprints in the same line stay exact, so the cap
+/// costs detail, never the ability to tell two registries apart.
+const MAX_LOGGED_TASK_NAMES: usize = 10;
+
+/// Warn when a joining executor's task registry matches no live peer's.
+///
+/// A discovered registry is implicit — it is whatever the import walk found —
+/// and an unregistered task name is a fatal, non-retryable failure. A worker
+/// that imported eleven of twelve modules dead-letters everything for the
+/// twelfth in silence. This is the line that breaks the silence.
+///
+/// Never a gate. Two registries may differ on purpose, and refusing the attach
+/// would turn a diagnostic into an outage.
+///
+/// Warns only when *no* live peer already advertises the joiner's fingerprint,
+/// which is what keeps a rollout quiet: the first executor on a new registry
+/// reports it, and the next fifty match that one and say nothing. There is no
+/// already-warned side table to keep in sync, and the rule survives a scheduler
+/// restart because it is derived from who is attached right now.
+///
+/// An executor advertising no tasks has no fingerprint and takes no part on
+/// either side of the comparison. It is deliberately inert rather than a
+/// registry that differs from everyone else's.
+fn warn_on_registry_divergence(executors: &HashMap<String, Arc<Executor>>, joining: &Executor) {
+    let Some(mine) = joining.registry_fingerprint.as_deref() else {
+        return;
+    };
+    let peers = executors
+        .values()
+        .map(|peer| (peer.id.as_str(), peer.registry_fingerprint.as_deref()));
+    let Some((peer_id, theirs)) = divergent_peer(peers, mine) else {
+        return;
+    };
+    let Some(peer) = executors.get(peer_id) else {
+        return;
+    };
+    log::warn!(
+        "[flexiq] executor {} ({} {}) advertises task registry {mine}, but executor {} ({} {}) \
+         advertises {theirs}; a job for a task only one of them knows fails wherever it lands. \
+         only on {}: {}. only on {}: {}",
+        joining.id,
+        joining.sdk,
+        joining.version,
+        peer.id,
+        peer.sdk,
+        peer.version,
+        joining.id,
+        only_in(&joining.tasks, &peer.tasks),
+        peer.id,
+        only_in(&peer.tasks, &joining.tasks),
+    );
+}
+
+/// The peer to name in a divergence warning — its id and the registry it
+/// advertises — or `None` when there is nothing to report.
+///
+/// Returning the fingerprint alongside the id keeps the warning free of an
+/// impossible case: a peer is only ever chosen because it advertised one.
+///
+/// `None` covers both quiet cases: some live peer already advertises `mine`
+/// (this registry is represented, so a fleet rolling onto it warns once), or no
+/// live peer advertises any registry at all (nothing comparable is attached).
+///
+/// The lowest id among the divergent peers wins, so the message is stable — two
+/// schedulers looking at one fleet name the same executor, and a restart does
+/// not reshuffle it into a different-looking warning.
+fn divergent_peer<'a>(
+    peers: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    mine: &str,
+) -> Option<(&'a str, &'a str)> {
+    let mut divergent: Option<(&'a str, &'a str)> = None;
+    for (id, fingerprint) in peers {
+        // Advertises no tasks, so there is no registry to compare against.
+        let Some(theirs) = fingerprint else {
+            continue;
+        };
+        if theirs == mine {
+            return None;
+        }
+        if divergent.is_none_or(|(current, _)| id < current) {
+            divergent = Some((id, theirs));
+        }
+    }
+    divergent
+}
+
+/// Sorted names in `a` that `b` lacks, capped at [`MAX_LOGGED_TASK_NAMES`] with
+/// a `+N more` tail. `(none)` when the difference is empty — which happens when
+/// one registry is a strict subset of the other, the exact shape a half-finished
+/// import walk produces.
+fn only_in(a: &HashSet<String>, b: &HashSet<String>) -> String {
+    let mut names: Vec<&str> = a.difference(b).map(String::as_str).collect();
+    if names.is_empty() {
+        return "(none)".to_string();
+    }
+    names.sort_unstable();
+    let hidden = names.len().saturating_sub(MAX_LOGGED_TASK_NAMES);
+    names.truncate(MAX_LOGGED_TASK_NAMES);
+    let mut listed = names.join(", ");
+    if hidden > 0 {
+        listed.push_str(&format!(" (+{hidden} more)"));
+    }
+    listed
 }
 
 /// One executor-reported log line, on its way to storage.
@@ -617,11 +729,19 @@ impl Shared {
             .into());
         }
 
+        // Derived here rather than announced on the frame. `tasks` is already
+        // what dispatch routes by, so a fingerprint the executor sent alongside
+        // it could only ever be a second copy of the same fact — one that can
+        // disagree. Deriving also means an executor written without this core
+        // gets the check for free: there is nothing extra for it to send.
+        let registry_fingerprint = registry_fingerprint(&tasks);
+
         let executor = Arc::new(Executor {
             id: executor_id.clone(),
             sdk,
             version,
             tasks: tasks.into_iter().collect(),
+            registry_fingerprint,
             slots,
             free: AtomicU32::new(slots),
             in_flight: Mutex::new(HashMap::new()),
@@ -642,6 +762,7 @@ impl Shared {
             if executors.contains_key(&executor_id) {
                 return Err(AttachError::DuplicateId(executor_id));
             }
+            warn_on_registry_divergence(&executors, &executor);
             executors.insert(executor_id.clone(), executor.clone());
         }
 
@@ -1277,5 +1398,104 @@ impl Shared {
                 log::warn!("[flexiq] executor cancel channel full, dropping cancel for {job_id}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{divergent_peer, only_in, MAX_LOGGED_TASK_NAMES};
+
+    fn set(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn a_matching_registry_names_no_peer() {
+        assert_eq!(
+            divergent_peer([("exec-a", Some("aaaa")), ("exec-b", Some("aaaa"))], "aaaa"),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_divergent_registry_names_the_peer() {
+        assert_eq!(
+            divergent_peer([("exec-a", Some("aaaa"))], "bbbb"),
+            Some(("exec-a", "aaaa")),
+        );
+    }
+
+    #[test]
+    fn the_first_executor_of_a_fleet_names_no_peer() {
+        assert_eq!(divergent_peer([], "aaaa"), None);
+    }
+
+    /// The whole "no warning storm" rule: once one peer advertises a registry,
+    /// every later executor on it is silent, however many disagree.
+    #[test]
+    fn a_registry_a_peer_already_advertises_names_no_peer() {
+        let peers = [
+            ("exec-a", Some("aaaa")),
+            ("exec-b", Some("bbbb")),
+            ("exec-c", Some("bbbb")),
+        ];
+        assert_eq!(divergent_peer(peers, "bbbb"), None);
+    }
+
+    /// An executor advertising no tasks must not make a fleet look divergent,
+    /// in either direction.
+    #[test]
+    fn a_peer_with_no_registry_is_not_a_divergence() {
+        assert_eq!(divergent_peer([("exec-a", None)], "aaaa"), None);
+        assert_eq!(
+            divergent_peer([("exec-a", None), ("exec-b", Some("aaaa"))], "aaaa"),
+            None,
+        );
+    }
+
+    /// Deterministic, so two schedulers reading one fleet say the same thing.
+    #[test]
+    fn the_lowest_peer_id_is_named() {
+        let peers = [
+            ("exec-c", Some("cccc")),
+            ("exec-a", Some("aaaa")),
+            ("exec-b", Some("bbbb")),
+        ];
+        assert_eq!(divergent_peer(peers, "zzzz"), Some(("exec-a", "aaaa")));
+    }
+
+    #[test]
+    fn a_difference_is_listed_sorted() {
+        assert_eq!(
+            only_in(&set(&["b", "a", "shared"]), &set(&["shared"])),
+            "a, b",
+        );
+    }
+
+    /// A half-finished import walk produces a strict subset, so one side of the
+    /// difference is routinely empty and still has to read as an answer.
+    #[test]
+    fn an_empty_difference_reads_as_none() {
+        assert_eq!(only_in(&set(&["a"]), &set(&["a", "b"])), "(none)");
+    }
+
+    #[test]
+    fn a_long_difference_is_capped_with_a_tail() {
+        let many: Vec<String> = (0..MAX_LOGGED_TASK_NAMES + 3)
+            .map(|i| format!("task-{i:02}"))
+            .collect();
+        let listed = only_in(
+            &many.iter().cloned().collect::<HashSet<String>>(),
+            &HashSet::new(),
+        );
+        assert!(listed.starts_with("task-00, task-01"), "{listed}");
+        assert!(listed.ends_with("(+3 more)"), "{listed}");
+        assert_eq!(
+            listed.matches(", ").count(),
+            MAX_LOGGED_TASK_NAMES - 1,
+            "the cap must bound the names, not just the tail: {listed}"
+        );
     }
 }
