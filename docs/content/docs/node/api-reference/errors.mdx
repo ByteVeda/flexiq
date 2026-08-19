@@ -24,6 +24,9 @@ try {
 |---|---|---|
 | `FlexiQError` | `Error` | Base — never thrown directly. |
 | `TaskNotRegisteredError` | `FlexiQError` | A worker dequeues a job whose task name isn't registered. |
+| `DuplicateTaskError` | `FlexiQError` | Two declarations claim one task name — at `task()`, or when a queue claims one that collides with a `queue.task()` it already holds. Carries `taskName`, `owner`. See [Task discovery](/node/guides/core/discovery). |
+| `TaskNotBoundError` | `FlexiQError` | `handle.enqueue()` before any queue claimed the declaration. Carries `taskName`. |
+| `TaskDiscoveryError` | `FlexiQError` | `discover()` couldn't read a task directory, or one of its modules threw on import. Carries `path`, and the underlying failure as `cause`. |
 | `JobFailedError` | `FlexiQError` | `result()` awaits a job that failed or dead-lettered. |
 | `JobCancelledError` | `FlexiQError` | `result()` awaits a cancelled job. |
 | `ResultTimeoutError` | `FlexiQError` | `result()` times out before the job settles. |

@@ -121,6 +121,12 @@ is imported. `run_worker()` serves whatever's registered on `self` at call
 time — make sure task modules are imported (directly, or via the `--app`
 path) before the worker starts.
 
+Tasks declared with the queue-less `@flexiq.task()` are claimed automatically
+at `Queue(...)` construction, at `queue.autodiscover(...)`, and again when
+`run_worker()` starts — so a worker entrypoint that imports its task modules
+needs no extra call. See
+<SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
+
 </SdkOnly>
 
 <SdkOnly sdk="node">
@@ -129,16 +135,26 @@ path) before the worker starts.
 immediately. `runWorker()` serves whatever's registered on that instance, so
 import your task modules before calling it.
 
+Tasks declared with the queue-less `task(name, handler)` are claimed
+automatically when the `Queue` is constructed, by `await queue.discover(...)`,
+and again when `runWorker()` or `runExecutor()` starts — so a worker entrypoint
+that imports its task modules needs no extra call. See
+<SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
+
 </SdkOnly>
 
 <SdkOnly sdk="java">
 
-There's no decorator or global registry — each worker only handles what it
-explicitly binds with `.handle(task, fn)` (or `.register(...)` /
-`.apply(...)` for generated handler sets). A job for a task name the builder
-never bound fails immediately with `no handler registered for task '...'`,
-which also means two workers can bind different subsets of your tasks from
-the same `FlexiQ` client.
+There's no global registry a worker drains — each worker handles what it
+binds with `.handle(task, fn)` (or `.register(...)` / `.apply(...)` for
+generated handler sets), or what `.discover()` loads from the `@TaskHandler`
+companions the annotation processor listed in `META-INF/services`. A job for a
+task name the builder never bound fails immediately with `no handler registered
+for task '...'`, which also means two workers can bind different subsets of your
+tasks from the same `FlexiQ` client.
+
+Discovery is explicit and never replaces a handler already on the builder —
+see <SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
 
 </SdkOnly>
 
@@ -495,6 +511,9 @@ worker.close(); // drains in-flight handlers, then frees the native worker
 
 - <SdkLink to="guides/core/tasks">Tasks</SdkLink> — defining and registering
   the functions a worker runs.
+- <SdkLink to="guides/core/discovery">Task discovery</SdkLink> — declaring
+  tasks without a queue, and catching a worker that only discovered half of
+  them.
 - <SdkLink to="guides/core/execution-model">Execution model</SdkLink> — the
   deep dive on how each SDK actually runs jobs concurrently.
 - <SdkLink to="guides/core/scheduling">Scheduling</SdkLink> — how and when

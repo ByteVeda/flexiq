@@ -135,6 +135,37 @@ Register a function as a background task. Returns a [`TaskWrapper`](/python/api-
   [Idempotency](/python/guides/reliability/idempotency).
 </Callout>
 
+### `queue.autodiscover()`
+
+```python
+queue.autodiscover(package: str = "tasks") -> list[str]
+```
+
+Import `package` and every module beneath it, then register every task declared
+with the queue-less `@flexiq.task()` decorator. Returns the sorted names now
+registered on this queue.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `package` | `str` | `"tasks"` | Dotted path to the package (or single module) holding the declarations. |
+
+```python
+from flexiq import Queue
+
+queue = Queue(db_path="app.db")
+queue.autodiscover("myapp.tasks")  # ['myapp.tasks.invoices.send_invoice', ...]
+```
+
+Idempotent — a second call returns the same list rather than an empty one, and a
+second `Queue` in the same process receives the same tasks. The registry is also
+drained at `Queue(...)` construction and at `run_worker()`, so a worker
+entrypoint that imports its task modules directly never has to call this.
+
+Raises `ImportError` if `package` or anything beneath it fails to import (never
+swallowed), and [`DuplicateTaskError`](/python/api-reference/errors) if a
+discovered task claims a name this queue already registered for a different
+function. See [Task discovery](/python/guides/core/discovery).
+
 ### `@queue.periodic()`
 
 ```python
