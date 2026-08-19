@@ -87,6 +87,7 @@ pub fn worker(worker: &WorkerInfo) -> Value {
         "pool_type": worker.pool_type,
         "sdk": worker.sdk,
         "sdk_version": worker.sdk_version,
+        "registry_fingerprint": worker.registry_fingerprint,
     })
 }
 

@@ -10,7 +10,7 @@ import {
 } from "@/components/ui";
 import type { Worker } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
-import { isWorkerStale } from "../utils";
+import { divergentFingerprints, isWorkerStale } from "../utils";
 
 interface WorkersTableProps {
   workers: Worker[] | undefined;
@@ -23,6 +23,10 @@ const TIME_CELL =
   "block w-full text-right font-mono text-[0.82rem] tabular-nums text-[var(--fg-muted)]";
 
 export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableProps) {
+  // Recomputed from the whole page because "odd one out" is a property of the
+  // fleet, not of a row: a worker's fingerprint says nothing on its own.
+  const divergent = useMemo(() => divergentFingerprints(workers ?? []), [workers]);
+
   const columns = useMemo<DataTableColumn<Worker>[]>(
     () => [
       {
@@ -70,6 +74,32 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
         },
       },
       {
+        id: "registry",
+        header: "Registry",
+        // Short form: the column is read by comparing rows down the page, and
+        // eight hex digits separate any fleet an operator is looking at. The
+        // full value is on the title, for pasting into a log search.
+        cell: ({ row }) => {
+          const fingerprint = row.original.registry_fingerprint;
+          if (!fingerprint) return <span className="text-[var(--fg-subtle)]">—</span>;
+          if (!divergent.has(fingerprint)) {
+            return (
+              <span className="font-mono text-xs text-[var(--fg-subtle)]" title={fingerprint}>
+                {fingerprint.slice(0, 8)}
+              </span>
+            );
+          }
+          return (
+            <Badge
+              tone="danger"
+              title={`Task registry ${fingerprint} — no other worker here runs this set of tasks. A job for a task only some workers know fails wherever it lands.`}
+            >
+              <span className="font-mono">{fingerprint.slice(0, 8)}</span>
+            </Badge>
+          );
+        },
+      },
+      {
         accessorKey: "tags",
         header: "Tags",
         cell: ({ getValue }) => {
@@ -113,7 +143,7 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
         ),
       },
     ],
-    [],
+    [divergent],
   );
 
   if (error) {
