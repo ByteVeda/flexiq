@@ -64,6 +64,17 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
      */
     private final Set<String> providers = new LinkedHashSet<>();
 
+    /**
+     * Task name -> the handler that claimed it, accumulated across rounds.
+     *
+     * <p>Task names are global to a queue, so two handlers sharing one means every
+     * job for that name runs whichever handler registration happened to land last.
+     * Only this compilation is visible here — an incremental build recompiles a
+     * subset — so {@code discover()} repeats the check across the whole classpath
+     * at runtime; the two cover different halves of the same mistake.
+     */
+    private final Map<String, String> claimedBy = new LinkedHashMap<>();
+
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         TypeElement marker = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -77,7 +88,7 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
                 continue;
             }
             ExecutableElement method = (ExecutableElement) element;
-            if (!validate(method)) {
+            if (!validate(method) || !claim(method)) {
                 continue;
             }
             TypeElement owner = (TypeElement) method.getEnclosingElement();
@@ -148,6 +159,35 @@ public final class TaskHandlerProcessor extends AbstractProcessor {
         }
         // No declared constructor at all means the implicit public no-arg one.
         return !declaresAny;
+    }
+
+    /**
+     * Record this handler's task name, failing the build when another handler in
+     * this compilation already claimed it.
+     *
+     * <p>Reported on the second one seen; which of the two that is depends on the
+     * order the compiler hands back annotated elements, so the message names both.
+     */
+    private boolean claim(ExecutableElement method) {
+        String name = taskName(method);
+        String origin = origin(method);
+        String previous = claimedBy.putIfAbsent(name, origin);
+        if (previous != null) {
+            error(
+                    method,
+                    "duplicate task name \"" + name + "\": already declared by " + previous
+                            + ". Task names are global, so one handler would shadow the other"
+                            + " — give one an explicit @TaskHandler(\"...\")");
+            return false;
+        }
+        return true;
+    }
+
+    /** {@code com.acme.Mailer#send}, for a diagnostic naming the other side of a clash. */
+    private String origin(ExecutableElement method) {
+        TypeElement owner =
+                (TypeElement) Objects.requireNonNull(method.getEnclosingElement(), "a method has an enclosing type");
+        return owner.getQualifiedName() + "#" + method.getSimpleName();
     }
 
     private boolean validate(ExecutableElement method) {

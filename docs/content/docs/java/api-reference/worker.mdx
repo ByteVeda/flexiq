@@ -24,6 +24,12 @@ scheduler and returns a running `Worker` (an `AutoCloseable`).
 | `register(Handler<?, ?>)` | A `Handler.of(task, function)` pair. |
 | `register(HandlerRegistry)` | Every handler in a bundle (e.g. a generated `FooTasks.handlers(impl)`). |
 | `apply(Consumer<Worker.Builder>)` | Apply a customizer (e.g. a generated `FooTasks.bind`). |
+| `discover()` / `discover(ClassLoader)` | Every `@TaskHandler` class the processor listed in `META-INF/services`, with no code naming them. |
+
+`discover()` never replaces a handler already registered on the builder — two
+providers claiming one task name, or discovery landing on a name you registered
+yourself, raises `DuplicateTaskException`. Register after it to override one
+deliberately.
 
 `TaskFunction<T, R>` is `R apply(T payload) throws Exception` — the return
 value becomes the job result; a thrown exception fails the attempt.

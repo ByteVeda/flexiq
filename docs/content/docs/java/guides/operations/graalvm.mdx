@@ -47,6 +47,7 @@ the JVM, so the [deployment](/java/guides/operations/deployment) properties
 
 <Callout type="info">
   The repository's `graalvm-smoke` module is a minimal, working reference:
-  a task, a worker, an event listener, periodic registration, and dead-letter
-  listing, compiled and executed as a native image in CI.
+  a task, a worker, an event listener, a `@TaskHandler` the worker picks up
+  through `discover()`, periodic registration, and dead-letter listing,
+  compiled and executed as a native image in CI.
 </Callout>
