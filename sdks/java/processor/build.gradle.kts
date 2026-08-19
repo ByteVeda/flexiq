@@ -63,6 +63,17 @@ dependencies {
     errorprone("com.google.errorprone:error_prone_core:${property("errorProneVersion")}")
     errorprone("com.uber.nullaway:nullaway:${property("nullAwayVersion")}")
     compileOnly("org.jspecify:jspecify:${property("jspecifyVersion")}")
+
+    // The tests drive the processor through a real javac run (javax.tools), so they
+    // need nothing but JUnit — and deliberately not the runtime module, which would
+    // reintroduce the cycle this module avoids.
+    testImplementation(platform("org.junit:junit-bom:5.10.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 spotless {
