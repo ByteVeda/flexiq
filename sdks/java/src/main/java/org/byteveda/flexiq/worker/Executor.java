@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.ServiceLoader;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -164,16 +163,17 @@ public final class Executor implements AutoCloseable {
          * class in {@code META-INF/services}, so this needs no application code
          * at all. A class the executor cannot construct is skipped at build time
          * with a compiler note — register those explicitly.
+         *
+         * <p>Discovery never replaces a handler already registered on this builder;
+         * call {@code register(...)} <em>after</em> it to override one deliberately.
          */
         public Builder discover() {
-            return discover(Thread.currentThread().getContextClassLoader());
+            return discover(HandlerDiscovery.contextLoader());
         }
 
         /** {@link #discover()} against a specific class loader. */
         public Builder discover(ClassLoader loader) {
-            for (HandlerRegistryProvider provider : ServiceLoader.load(HandlerRegistryProvider.class, loader)) {
-                register(provider.registry());
-            }
+            HandlerDiscovery.load(loader, handlers.keySet(), "executor").forEach(this::register);
             return this;
         }
 
