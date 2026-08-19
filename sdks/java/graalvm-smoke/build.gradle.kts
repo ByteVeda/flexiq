@@ -16,6 +16,9 @@ repositories {
 
 dependencies {
     implementation(project(":"))
+    // Consumers wire the processor exactly like this; here it also makes the
+    // native image prove that compile-time discovery survives native-image.
+    annotationProcessor(project(":processor"))
     // The runtime jar is native-free (natives publish as classifier artifacts);
     // consume the staged host-platform library directly from the root build.
     runtimeOnly(project(mapOf("path" to ":", "configuration" to "nativeRuntime")))
