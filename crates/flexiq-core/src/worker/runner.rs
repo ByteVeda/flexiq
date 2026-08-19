@@ -171,12 +171,19 @@ impl Worker {
 
         let worker_id =
             worker_id.unwrap_or_else(|| format!("rust-worker-{}", uuid::Uuid::now_v7()));
-        // Taken before the registry moves into the dispatcher. A caller that
-        // supplies its own pool — the language shells, and the server's remote
-        // dispatcher — keeps its handlers on its own side, so this registry is
-        // empty and fingerprints as `None`. That is the honest answer: the row
-        // must not claim a registry this process cannot see.
-        let fingerprint = registry_fingerprint(registry.task_names());
+        // Only the built-in pool runs what is in `registry`: supplying a
+        // dispatcher leaves those handlers unused (see [`Worker::dispatcher`]),
+        // and a caller that did both would otherwise advertise a task set this
+        // worker will not run — false divergence, from the one column that
+        // exists to make divergence visible. The language shells and the
+        // server's remote dispatcher keep their handlers on their own side, so
+        // they report nothing here, which is the honest answer.
+        //
+        // Read before the registry moves into the pool below.
+        let fingerprint = dispatcher
+            .is_none()
+            .then(|| registry_fingerprint(registry.task_names()))
+            .flatten();
         let (pool_type, dispatcher): (String, Arc<dyn WorkerDispatcher>) = dispatcher
             .unwrap_or_else(|| {
                 (
