@@ -218,6 +218,12 @@ The **Workers** page lists every registered worker with heartbeat
 status, the queues it consumes from, tags, and registration time. Stale
 workers (no heartbeat for 30s) automatically transition to "offline".
 
+The **Registry** column is a fingerprint of the tasks each worker has handlers
+for. Workers running the same code share one value; a worker whose value the
+rest of the fleet does not share is badged, because a job for a task only some
+workers know fails wherever it lands rather than waiting for one that can run
+it. A worker whose SDK does not report a registry shows no value.
+
 ![Workers page showing a single active worker](/screenshots/dashboard/workers.png)
 
 ## Development

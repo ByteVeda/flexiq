@@ -131,6 +131,7 @@ Each entry describes a registered worker:
 | `tags` | `str \| None` | Specialization tags. |
 | `resources` | `str \| None` | Registered resource names (JSON). |
 | `resource_health` | `str \| None` | Per-resource health (JSON). |
+| `registry_fingerprint` | `str \| None` | Fingerprint of the tasks this worker has handlers for. Workers that disagree on it run different task sets. |
 
 `aworkers()` is the async variant. A worker whose `last_heartbeat` has gone
 stale has died without unregistering — that is the signal to look for when jobs
