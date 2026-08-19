@@ -42,6 +42,7 @@ const queue = new Queue(options);
 | Method | Description |
 |---|---|
 | `task(name, fn, config?)` | Register a task. See [Task](/node/api-reference/task). |
+| `discover(dir?, options?)` | **async.** Import every task module under `dir` (default `"tasks"`) and register the tasks they declare with the queue-less `task()`. Returns the sorted names now registered. See [Task discovery](/node/guides/core/discovery). |
 | `configureQueue(name, config)` | Set per-queue rate limit / concurrency. |
 | `enqueue(task, args?, options?)` | Enqueue a job → job id. Throws if a [gate](/node/guides/core/predicates) rejects or skips. |
 | `tryEnqueue(task, args?, options?)` | Enqueue a job → job id, or `null` when a gate *skipped* it. A gate that *rejects* still throws. |
