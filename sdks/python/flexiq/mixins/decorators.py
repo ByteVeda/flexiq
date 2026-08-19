@@ -435,6 +435,60 @@ class QueueDecoratorMixin:
 
         def decorator(fn: Callable) -> TaskWrapper:
             task_name = name or f"{_resolve_module_name(fn.__module__)}.{fn.__qualname__}"
+
+            # Everything that can be rejected runs before any state is
+            # written. Registering a name resets it first, so a declaration
+            # that raises halfway would leave the previously registered
+            # function live with none of its configuration — worse than the
+            # error it reports.
+            comp_name: str | None = None
+            if compensates is not None:
+                if isinstance(compensates, TaskWrapper):
+                    comp_name = compensates.name
+                elif isinstance(compensates, str):
+                    comp_name = compensates
+                else:
+                    raise TypeError(
+                        "compensates= must be a TaskWrapper or a task-name "
+                        f"string, got {type(compensates).__name__}"
+                    )
+            coerced_predicate = coerce_predicate(predicate) if predicate is not None else None
+
+            cb_threshold = None
+            cb_window = None
+            cb_cooldown = None
+            cb_half_open_probes = None
+            cb_half_open_success_rate = None
+            if circuit_breaker:
+                cb_threshold = circuit_breaker.get("threshold", 5)
+                cb_window = circuit_breaker.get("window", 60)
+                cb_cooldown = circuit_breaker.get("cooldown", 300)
+                cb_half_open_probes = circuit_breaker.get("half_open_probes")
+                cb_half_open_success_rate = circuit_breaker.get("half_open_success_rate")
+
+            # Built here rather than at the end: PyO3 rejects a mistyped
+            # option (``rate_limit=123``) while converting the arguments.
+            config = PyTaskConfig(
+                name=task_name,
+                max_retries=max_retries,
+                retry_backoff=retry_backoff,
+                timeout=timeout,
+                priority=priority,
+                rate_limit=rate_limit,
+                queue=queue,
+                circuit_breaker_threshold=cb_threshold,
+                circuit_breaker_window=cb_window,
+                circuit_breaker_cooldown=cb_cooldown,
+                retry_delays=retry_delays,
+                max_retry_delay=max_retry_delay,
+                max_concurrent=max_concurrent,
+                circuit_breaker_half_open_probes=cb_half_open_probes,
+                circuit_breaker_half_open_success_rate=cb_half_open_success_rate,
+                max_in_flight_per_task=max_in_flight_per_task,
+                retry_budget=retry_budget,
+                on_excess=on_excess_action.value,
+            )
+
             self._reset_task_state(task_name)
 
             # Detect Inject["name"] annotations (Phase E)
@@ -498,16 +552,7 @@ class QueueDecoratorMixin:
 
             # Saga compensation: record the compensating task's name so the
             # workflow tracker can enqueue it during reverse-order rollback.
-            if compensates is not None:
-                if isinstance(compensates, TaskWrapper):
-                    comp_name = compensates.name
-                elif isinstance(compensates, str):
-                    comp_name = compensates
-                else:
-                    raise TypeError(
-                        "compensates= must be a TaskWrapper or a task-name "
-                        f"string, got {type(compensates).__name__}"
-                    )
+            if comp_name is not None:
                 self._task_compensates[task_name] = comp_name
 
             # Store per-task batch config — producer-side accumulation enabled
@@ -521,18 +566,16 @@ class QueueDecoratorMixin:
             # dashboard can show "gated by: ..." without keeping a live
             # Python reference. Bare callables can't be serialized; the
             # snapshot is None in that case.
-            if predicate is not None:
-                coerced = coerce_predicate(predicate)
-                if coerced is not None:
-                    self._task_predicates[task_name] = coerced
-                    self._task_predicate_on_false[task_name] = on_false_action
-                    if predicate_extras:
-                        self._task_predicate_extras[task_name] = dict(predicate_extras)
-                    self._task_default_defer[task_name] = default_defer_seconds
-                    try:
-                        self._task_predicate_serialized[task_name] = coerced.to_dict()
-                    except Exception:
-                        self._task_predicate_serialized[task_name] = None
+            if coerced_predicate is not None:
+                self._task_predicates[task_name] = coerced_predicate
+                self._task_predicate_on_false[task_name] = on_false_action
+                if predicate_extras:
+                    self._task_predicate_extras[task_name] = dict(predicate_extras)
+                self._task_default_defer[task_name] = default_defer_seconds
+                try:
+                    self._task_predicate_serialized[task_name] = coerced_predicate.to_dict()
+                except Exception:
+                    self._task_predicate_serialized[task_name] = None
 
             # Store inject map for resource injection
             if final_inject:
@@ -557,39 +600,7 @@ class QueueDecoratorMixin:
                 wrapped._flexiq_async_fn = fn  # type: ignore[attr-defined]
             self._task_registry[task_name] = wrapped
 
-            cb_threshold = None
-            cb_window = None
-            cb_cooldown = None
-            cb_half_open_probes = None
-            cb_half_open_success_rate = None
-            if circuit_breaker:
-                cb_threshold = circuit_breaker.get("threshold", 5)
-                cb_window = circuit_breaker.get("window", 60)
-                cb_cooldown = circuit_breaker.get("cooldown", 300)
-                cb_half_open_probes = circuit_breaker.get("half_open_probes")
-                cb_half_open_success_rate = circuit_breaker.get("half_open_success_rate")
-
-            # Store config for worker startup
-            config = PyTaskConfig(
-                name=task_name,
-                max_retries=max_retries,
-                retry_backoff=retry_backoff,
-                timeout=timeout,
-                priority=priority,
-                rate_limit=rate_limit,
-                queue=queue,
-                circuit_breaker_threshold=cb_threshold,
-                circuit_breaker_window=cb_window,
-                circuit_breaker_cooldown=cb_cooldown,
-                retry_delays=retry_delays,
-                max_retry_delay=max_retry_delay,
-                max_concurrent=max_concurrent,
-                circuit_breaker_half_open_probes=cb_half_open_probes,
-                circuit_breaker_half_open_success_rate=cb_half_open_success_rate,
-                max_in_flight_per_task=max_in_flight_per_task,
-                retry_budget=retry_budget,
-                on_excess=on_excess_action.value,
-            )
+            # Config for worker startup, built before the reset above.
             self._task_configs.append(config)
 
             # Return a TaskWrapper that has .delay() and .apply_async()
