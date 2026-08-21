@@ -179,6 +179,11 @@ directory is in `PYTHONPATH`.
 | `myapp/tasks.py` with `queue = Queue()` | `myapp.tasks:queue` |
 | `src/workers/q.py` with `app = Queue()` | `src.workers.q:app` |
 
+Importing the module is also what registers its tasks, and every subcommand
+claims the [deferred declarations](/python/guides/core/discovery) that import
+leaves pending — so an app that imports its task modules *below* the `Queue`
+needs no `autodiscover` call for the CLI to see them.
+
 ### `flexiq scaler`
 
 Start a lightweight KEDA metrics server.
