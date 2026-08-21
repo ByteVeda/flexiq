@@ -65,6 +65,10 @@ def _import_queue(app_path: str) -> Any:
     module_path, attr_name = app_path.rsplit(":", 1)
     module = importlib.import_module(module_path)
     queue = getattr(module, attr_name)
+    # This interpreter is the child's own, so it claims the app's deferred
+    # declarations itself. The parent draining them says nothing about here,
+    # and a task missing from this registry fails its job non-retryably.
+    queue._drain_pending_tasks()
     return queue
 
 
