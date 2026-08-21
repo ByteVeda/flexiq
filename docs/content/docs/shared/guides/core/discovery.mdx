@@ -205,7 +205,7 @@ package. The return value is the sorted names now registered on this queue — t
 same list on a second call, because claiming is idempotent rather than
 destructive.
 
-You do not always need the call. A queue claims whatever is pending at three
+You do not always need the call. A queue claims whatever is pending at four
 points:
 
 | Point | What it covers |
@@ -213,10 +213,15 @@ points:
 | `Queue(...)` construction | Task modules imported before the queue existed. |
 | `autodiscover(...)` | The explicit walk. |
 | `run_worker(...)` | A worker entrypoint that imported its task modules directly. |
+| `flexiq <command> --app` | An app module that imports its task modules *below* the queue it builds — the constructor's claim ran too early to see them. |
 
 So a worker whose entrypoint does `import myapp.tasks` needs no `autodiscover`
 at all, and no import order needs a rule. The registry is never emptied, which
 is also why a second `Queue` in the same process receives the same tasks.
+
+The CLI point matters most to an
+<SdkLink to="guides/operations/executor">attached executor</SdkLink>, which
+advertises the registry it reads: a name missing there is routed to nobody.
 
 </SdkOnly>
 

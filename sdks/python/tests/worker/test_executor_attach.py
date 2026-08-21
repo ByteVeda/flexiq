@@ -36,6 +36,10 @@ pytestmark = pytest.mark.skipif(
 APP_DIR = Path(__file__).parent / "executor_apps"
 APP_PATH = "attach_app:queue"
 
+# An app that imports its task module below the queue it builds, so the
+# declarations are pending when the constructor drains.
+DEFERRED_APP_PATH = "deferred_app:queue"
+
 # Task names are module-qualified in the registry, and it is those names the
 # scheduler routes on.
 ECHO = "attach_app.echo"
@@ -43,6 +47,9 @@ BOOM = "attach_app.boom"
 SLOW = "attach_app.slow"
 REPORTS = "attach_app.reports"
 MIDDLEWARED = "attach_app.middlewared"
+BOUND = "deferred_app.bound"
+SEND_INVOICE = "deferred_tasks.send_invoice"
+BUILD_REPORT = "deferred_tasks.build_report"
 
 # Generous: a cold subprocess import of the app plus a prefork child spawn.
 ATTACH_TIMEOUT = 60.0
@@ -200,6 +207,7 @@ def spawn_executor(
     token: str | None = None,
     executor_id: str | None = None,
     markers: Path | None = None,
+    app_path: str = APP_PATH,
 ) -> subprocess.Popen[str]:
     """Run ``flexiq executor`` against ``port`` as a real subprocess."""
     env = dict(os.environ)
@@ -220,7 +228,7 @@ def spawn_executor(
         "flexiq.cli",
         "executor",
         "--app",
-        APP_PATH,
+        app_path,
         "--attach",
         f"127.0.0.1:{port}",
         "--slots",
@@ -292,6 +300,21 @@ def decode_result(task_name: str, payload: bytes) -> Any:
     return queue._get_serializer(task_name).loads(payload)
 
 
+def deferred_payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
+    """``payload_for``, for the app whose tasks are declared after its queue."""
+    from deferred_app import queue  # type: ignore[import-not-found]
+
+    payload: bytes = queue._get_serializer(task_name).dumps((args, kwargs))
+    return payload
+
+
+def decode_deferred_result(task_name: str, payload: bytes) -> Any:
+    """``decode_result``, for the same app."""
+    from deferred_app import queue
+
+    return queue._get_serializer(task_name).loads(payload)
+
+
 @pytest.fixture(autouse=True)
 def _app_importable() -> Iterator[None]:
     """Put the app dir on `sys.path` so the test can use its serializer."""
@@ -318,6 +341,48 @@ def test_executor_announces_itself_and_its_tasks(scheduler: FakeScheduler, tmp_p
         assert set(hello["tasks"]) >= {ECHO, BOOM, SLOW}
         # A token that was never configured must not appear on the wire.
         assert "token" not in hello
+    finally:
+        terminate(process)
+
+
+def test_tasks_declared_after_the_queue_are_advertised(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """An app that imports its task module below the queue advertises it anyway.
+
+    The CLI used to read the registry with only the constructor's drain behind
+    it, which runs before that import. A name missing here is routed to nobody,
+    so its jobs park until ``placement_timeout`` and then fail retryably.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "deferred.db", app_path=DEFERRED_APP_PATH)
+    try:
+        hello = scheduler.accept()
+
+        assert set(hello["tasks"]) == {BOUND, SEND_INVOICE, BUILD_REPORT}
+    finally:
+        terminate(process)
+
+
+def test_a_task_declared_after_the_queue_runs_on_a_child(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """Advertising the name is only half of it — the child has to hold it too.
+
+    Each prefork child imports the app module in its own interpreter, so it
+    claims the declarations on its own. A child that did not would fail the job
+    as ``not registered``, and non-retryably.
+    """
+    process = spawn_executor(
+        scheduler.port, tmp_path / "deferred_run.db", app_path=DEFERRED_APP_PATH
+    )
+    try:
+        scheduler.accept()
+        payload = deferred_payload_for(SEND_INVOICE, 7)
+        scheduler.send_job("job-1", SEND_INVOICE, payload)
+
+        header, result = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_deferred_result(SEND_INVOICE, result) == "sent:7"
     finally:
         terminate(process)
 

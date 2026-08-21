@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from flexiq import Queue
+from flexiq import Queue, registry
 
 # Public type alias used by workflow test files for the ``workflow_worker``
 # fixture parameter (mypy requires annotated test parameters under
@@ -19,6 +19,22 @@ from flexiq import Queue
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 
 PollUntil = Callable[..., None]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pending_registry() -> Generator[None]:
+    """Snapshot and restore the module-global registry ``@flexiq.task`` writes to.
+
+    It is a process global by design — that is what lets a task module register
+    without importing the module that builds the ``Queue``. Left alone, a stray
+    declaration from one test drains into every ``Queue`` built by the next.
+    """
+    snapshot = dict(registry._PENDING)
+    try:
+        yield
+    finally:
+        registry._PENDING.clear()
+        registry._PENDING.update(snapshot)
 
 
 @pytest.fixture

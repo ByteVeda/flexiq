@@ -341,6 +341,11 @@ def _load_queue(app_path: str) -> Queue:
         )
         sys.exit(1)
 
+    # The queue's own drain ran during its construction, so it missed any task
+    # module the app imports below that line. Idempotent, so an app that called
+    # ``autodiscover`` itself pays nothing.
+    queue._drain_pending_tasks()
+
     return queue
 
 
