@@ -177,6 +177,74 @@ Rules:
   SDK boundaries clamp where they can, and the scheduler drops what still
   reaches it rather than failing the job over a progress report.
 
+### Registry fingerprint
+
+One short, comparable value for "what tasks does this peer know how to run". The
+scheduler derives it from an executor's `tasks[]` to make the comparison above;
+an **in-process** worker, which never speaks this protocol, writes it to
+`workers.registry_fingerprint` instead, where the dashboard compares it across
+the fleet. Both ends have to produce the same string for the same registry, so
+the algorithm is contract material even though it never rides a frame.
+
+64-bit FNV-1a over the sorted, de-duplicated names, each **length-prefixed**,
+rendered as sixteen lowercase hex digits:
+
+```
+h = 0xcbf29ce484222325
+for name in sorted_unique(names):                # sorted by UTF-8 bytes
+    for byte in be_u64(len(utf8(name))) + utf8(name):
+        h = (h ^ byte) * 0x100000001b3           # mod 2^64
+```
+
+| Registry | Fingerprint |
+|---|---|
+| `[]` | *none* — nothing to compare against; the column stays null |
+| `["a"]` | `e6017d3a248deb69` |
+| `["invoices.send", "reports.build"]` | `fafd30ef8ebcb7de` |
+| `["reports.build", "invoices.send", "reports.build"]` | `fafd30ef8ebcb7de` |
+| `["ab", "c"]` | `fe4b6261eea66aa8` |
+| `["a", "bc"]` | `e6b0607a88120c30` |
+| `["a\nb"]` | `068365c3a2f19d9f` |
+| `["a", "b"]` | `9dbd0e0e67e641dc` |
+| `["\u{E000}", "\u{10000}"]` | `370802f2ebd8a642` |
+
+The `["ab", "c"]`/`["a", "bc"]` and `["a\nb"]`/`["a", "b"]` rows are two
+collision pairs, and they are the ones worth asserting: each pair hashes
+identical bytes under an encoding that concatenates or separates instead of
+length-prefixing. Every choice here follows from the same rule as the JSON
+headers — an executor must be writable in an SDK's standard library alone:
+
+- **Not cryptographic.** A collision costs a missed warning, never a wrong
+  dispatch, so requiring SHA-2 would buy nothing and cost a dependency.
+- **Sorted by UTF-8 bytes**, stated rather than implied: JavaScript's
+  `Array.prototype.sort` and Java's `String.compareTo` order by UTF-16 code
+  units, which disagrees with byte order above the BMP. The
+  `["\u{E000}", "\u{10000}"]` row is the vector that catches it: `U+E000` is one
+  UTF-16 unit `0xE000`, `U+10000` is the surrogate pair `0xD800 0xDC00`, so
+  UTF-16 puts `U+10000` first while UTF-8 and code-point order put `U+E000`
+  first. An implementation that sorts by UTF-16 units answers
+  `7653f22bef39d8ea` for it and still matches every ASCII vector in the table,
+  which is why that row has to be there.
+- **De-duplicated**, so registering a name twice cannot change the answer.
+- **Length-prefixed, not separated.** Any separator can also occur *inside* a
+  task name: with a trailing `\n`, `["a\nb"]` and `["a", "b"]` hash the same
+  bytes, so two different registries share a fingerprint and the divergence the
+  value exists to catch is silently suppressed. A fixed-width length makes the
+  encoding injective, and eight big-endian bytes are something every standard
+  library can produce.
+
+**An empty registry has no fingerprint.** "Registered nothing" and "does not
+report one" are both nothing to compare against, and giving the empty set a value
+would make a deliberately inert worker look divergent from every real one. The
+same rule holds in storage: the column is null, never `""`.
+
+**Never a gate.** Two registries may differ on purpose — one worker serves
+`email`, another serves `video` — so a mismatch is a diagnostic, and refusing an
+attach or a registration over one would turn it into an outage. The `workers`
+table does not compare rows at all for that reason; the dashboard surfaces the
+comparison, and the scheduler makes it only where a fleet is meant to be
+interchangeable.
+
 ## Task errors (structured, cross-SDK)
 When a task raises, the shell reports the failure as a **canonical JSON object**
 serialized into `JobResult::Failure.error` (and thus into `jobs.error`,

@@ -171,6 +171,7 @@ diesel::table! {
         pool_type -> Nullable<Text>,
         sdk -> Nullable<Text>,
         sdk_version -> Nullable<Text>,
+        registry_fingerprint -> Nullable<Text>,
     }
 }
 

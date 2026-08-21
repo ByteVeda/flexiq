@@ -3,11 +3,11 @@ pub mod cancel;
 pub mod dial;
 pub mod dispatcher;
 pub mod executor;
-// Crate-private for now: nothing outside `flexiq-core` compares registries yet,
-// and private → public is a minor bump while public → private is a major one.
-// The registry-row follow-up, which needs it from the sibling SDK crates, is
-// what should publish it.
-pub(crate) mod fingerprint;
+// Public because the sibling SDK crates fingerprint their own registries before
+// handing one to `register_worker`, and because the value now lands in a storage
+// column an executor written outside this workspace has to agree with — see
+// `BINDING_CONTRACT.md`, which pins the algorithm and its vectors.
+pub mod fingerprint;
 pub mod protocol;
 pub mod registry;
 pub mod remote;
@@ -23,9 +23,10 @@ pub use executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
     ExecutorSideChannel,
 };
+pub use fingerprint::registry_fingerprint;
 pub use protocol::{
-    Dispatch, ExecutorMessage, Incoming, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    Dispatch, ExecutorMessage, HelloBuilder, Incoming, ProtocolError, SchedulerMessage,
+    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};

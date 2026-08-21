@@ -451,6 +451,11 @@ pub struct WorkerOptions {
     /// scheduler's in-flight dispatch so it never claims more than the pool can
     /// run and starves peers sharing the DB.
     pub concurrency: Option<u32>,
+    /// Every task name this worker has a handler for, used to fingerprint its
+    /// registry on the worker row. Distinct from `task_configs`, which carries
+    /// only the tasks that were given a retry policy — a registry read off that
+    /// would be missing every task that took the defaults.
+    pub tasks: Option<Vec<String>>,
     /// Per-task retry-backoff policies, registered with the scheduler at start.
     /// The core owns the retry engine; this only feeds it the backoff curve.
     pub task_configs: Option<Vec<TaskRetryConfig>>,
@@ -726,6 +731,9 @@ pub struct WorkerView<'a> {
     /// SDK that registered the worker, and the release of it.
     pub sdk: Option<&'a str>,
     pub sdk_version: Option<&'a str>,
+    /// Fingerprint of the tasks the worker has handlers for, so the one worker
+    /// in a fleet that registered a different set is visible at a glance.
+    pub registry_fingerprint: Option<&'a str>,
 }
 
 impl<'a> From<&'a WorkerInfo> for WorkerView<'a> {
@@ -745,6 +753,7 @@ impl<'a> From<&'a WorkerInfo> for WorkerView<'a> {
             resource_health: w.resource_health.as_deref(),
             sdk: w.sdk.as_deref(),
             sdk_version: w.sdk_version.as_deref(),
+            registry_fingerprint: w.registry_fingerprint.as_deref(),
         }
     }
 }

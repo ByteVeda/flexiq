@@ -117,6 +117,9 @@ pub struct JsWorkerRow {
     /// SDK that registered the worker, and the release of it.
     pub sdk: Option<String>,
     pub sdk_version: Option<String>,
+    /// Fingerprint of the tasks the worker has handlers for, so the one worker
+    /// in a fleet that registered a different set is visible at a glance.
+    pub registry_fingerprint: Option<String>,
 }
 
 pub fn worker_to_js(worker: WorkerInfo) -> JsWorkerRow {
@@ -135,6 +138,7 @@ pub fn worker_to_js(worker: WorkerInfo) -> JsWorkerRow {
         resource_health: worker.resource_health,
         sdk: worker.sdk,
         sdk_version: worker.sdk_version,
+        registry_fingerprint: worker.registry_fingerprint,
     }
 }
 

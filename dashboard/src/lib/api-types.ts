@@ -191,6 +191,12 @@ export interface Worker {
   /** SDK that registered the worker; null from one that predates version reporting. */
   sdk: string | null;
   sdk_version: string | null;
+  /**
+   * Fingerprint of the tasks this worker has handlers for. Null from an SDK
+   * that predates the field, and from a worker with nothing registered — both
+   * mean "no registry to compare", never "a registry that differs".
+   */
+  registry_fingerprint: string | null;
 }
 
 export interface CircuitBreaker {

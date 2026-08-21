@@ -566,15 +566,16 @@ impl FakeExecutor {
         };
         executor
             .writer
-            .write_header(&ExecutorMessage::Hello {
-                executor_id: "exec-fake".to_string(),
-                sdk: "test".to_string(),
-                version: "0.0.0".to_string(),
-                tasks: tasks.iter().map(|task| (*task).to_string()).collect(),
-                slots,
-                protocol_version: PROTOCOL_VERSION,
-                token: None,
-            })
+            .write_header(
+                &ExecutorMessage::hello(
+                    "exec-fake",
+                    "test",
+                    "0.0.0",
+                    tasks.iter().map(|task| (*task).to_string()).collect(),
+                    slots,
+                )
+                .build(),
+            )
             .expect("send hello");
         match executor.reader.read::<SchedulerMessage>().expect("ack").0 {
             SchedulerMessage::HelloAck { .. } => {}

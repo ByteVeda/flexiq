@@ -264,6 +264,11 @@ pub struct WorkerOptions {
     pub concurrency: Option<u32>,
     /// Jobs claimed per scheduler poll (default 1).
     pub batch_size: Option<u32>,
+    /// Every task name this worker has a handler for, used to fingerprint its
+    /// registry on the worker row. Distinct from `task_configs`, which carries
+    /// only the tasks that were given a policy — a registry read off that would
+    /// be missing every task that took the defaults.
+    pub tasks: Option<Vec<String>>,
     pub task_configs: Option<Vec<TaskConfigInput>>,
     pub queue_configs: Option<Vec<QueueConfigInput>>,
     /// Names of the injectable resources this worker serves, advertised on

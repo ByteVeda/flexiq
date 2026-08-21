@@ -463,6 +463,49 @@ fn worker_sdk_columns_are_added_to_a_pre_existing_database() {
     assert_eq!(worker.sdk_version.as_deref(), Some("1.2.3"));
 }
 
+/// The same rewind for `0012_worker_registry_fingerprint`. Kept separate from
+/// the `0009` case so a failure names which migration stopped applying rather
+/// than "one of the worker columns".
+#[test]
+fn the_registry_fingerprint_column_is_added_to_a_pre_existing_database() {
+    use diesel::connection::SimpleConnection;
+
+    let storage = test_storage();
+
+    let mut conn = storage.conn().unwrap();
+    conn.batch_execute(
+        "ALTER TABLE workers DROP COLUMN registry_fingerprint;
+         DELETE FROM schema_migrations WHERE version = '0012_worker_registry_fingerprint';",
+    )
+    .unwrap();
+    drop(conn);
+
+    storage.migrate().unwrap();
+    // Twice: re-running a completed migration must be a no-op, not a
+    // duplicate-column error.
+    storage.migrate().unwrap();
+
+    storage
+        .register_worker(&WorkerRegistration {
+            worker_id: "fingerprinted",
+            queues: "default",
+            threads: 1,
+            registry_fingerprint: Some("fafd30ef8ebcb7de"),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let workers = storage.list_workers().unwrap();
+    let worker = workers
+        .iter()
+        .find(|w| w.worker_id == "fingerprinted")
+        .unwrap();
+    assert_eq!(
+        worker.registry_fingerprint.as_deref(),
+        Some("fafd30ef8ebcb7de")
+    );
+}
+
 /// Re-running a completed migration is a no-op rather than a duplicate-column error.
 #[test]
 fn worker_sdk_migration_is_idempotent() {

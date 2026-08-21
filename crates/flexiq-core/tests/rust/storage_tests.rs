@@ -632,19 +632,16 @@ fn test_workers(s: &impl Storage) {
     let resources = Some(r#"["db","redis"]"#);
     let health = Some(r#"{"db":"healthy","redis":"healthy"}"#);
 
-    s.register_worker(&WorkerRegistration {
-        worker_id: "w-test-1",
-        queues: "q-workers",
-        resources,
-        resource_health: health,
-        threads: 4,
-        hostname: Some("test-host"),
-        pid: Some(12345),
-        pool_type: Some("thread"),
-        sdk: Some("rust"),
-        sdk_version: Some("9.9.9"),
-        ..Default::default()
-    })
+    s.register_worker(
+        &WorkerRegistration::new("w-test-1", "q-workers", 4)
+            .resources(resources)
+            .resource_health(health)
+            .hostname(Some("test-host"))
+            .pid(Some(12345))
+            .pool_type(Some("thread"))
+            .sdk(Some("rust"), Some("9.9.9"))
+            .registry_fingerprint(Some("fafd30ef8ebcb7de")),
+    )
     .unwrap();
     s.heartbeat("w-test-1", Some(r#"{"db":"unhealthy","redis":"healthy"}"#))
         .unwrap();
@@ -663,6 +660,26 @@ fn test_workers(s: &impl Storage) {
     // stores workers as a hash rather than a migrated table.
     assert_eq!(w.sdk.as_deref(), Some("rust"));
     assert_eq!(w.sdk_version.as_deref(), Some("9.9.9"));
+    // What the worker can run, so the one host in a fleet that discovered a
+    // different task set is visible from the registry alone.
+    assert_eq!(w.registry_fingerprint.as_deref(), Some("fafd30ef8ebcb7de"));
+
+    // A shell that reports no registry must read back as absent, not as an
+    // empty string: "reports nothing" and "runs nothing" are the same answer
+    // here, and neither may look like a registry that differs from its peers'.
+    s.register_worker(&WorkerRegistration::new(
+        "w-test-no-registry",
+        "q-workers",
+        1,
+    ))
+    .unwrap();
+    let quiet = s
+        .list_workers()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.worker_id == "w-test-no-registry")
+        .unwrap();
+    assert_eq!(quiet.registry_fingerprint, None);
 
     // Test update_worker_status
     s.update_worker_status("w-test-1", WorkerStatus::Draining)

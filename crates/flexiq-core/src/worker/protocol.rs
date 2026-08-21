@@ -110,8 +110,15 @@ pub enum ProtocolError {
 }
 
 /// A message the scheduler sends to an executor.
+///
+/// `#[non_exhaustive]`: the contract says the wire is designed to grow, and a
+/// reader that cannot name a frame already skips it rather than failing. A
+/// match outside this crate therefore has to carry a `_` arm anyway — saying so
+/// in the type is what keeps the next frame type a *minor* release instead of a
+/// major one.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SchedulerMessage {
     /// Answer to [`ExecutorMessage::Hello`], completing the handshake.
     HelloAck {
@@ -170,10 +177,20 @@ pub enum SchedulerMessage {
 }
 
 /// A message an executor sends to the scheduler.
+///
+/// `#[non_exhaustive]` for the same reason as [`SchedulerMessage`].
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExecutorMessage {
     /// First frame on every connection: who is attaching and what it can run.
+    ///
+    /// The variant is `#[non_exhaustive]` on top of the enum: the handshake is
+    /// where the protocol actually grows — `token` and `capabilities` both
+    /// arrived after it shipped — and a field added to a variant an external
+    /// crate can write as a literal is a major release on its own. Build one
+    /// with [`ExecutorMessage::hello`].
+    #[non_exhaustive]
     Hello {
         /// Stable identity of this executor.
         executor_id: String,
@@ -277,6 +294,54 @@ pub enum ExecutorMessage {
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
     },
+}
+
+/// Builder for the [`ExecutorMessage::Hello`] frame, from
+/// [`ExecutorMessage::hello`].
+///
+/// Exists because the variant is `#[non_exhaustive]`. Its whole point is that
+/// a field added to the handshake leaves every caller here compiling, so the
+/// setters take the optional half only and the required half stays on
+/// [`ExecutorMessage::hello`].
+#[derive(Debug, Clone)]
+pub struct HelloBuilder {
+    executor_id: String,
+    sdk: String,
+    version: String,
+    tasks: Vec<String>,
+    slots: u32,
+    protocol_version: u32,
+    token: Option<Secret>,
+}
+
+impl HelloBuilder {
+    /// Announce a version other than [`PROTOCOL_VERSION`]. Only a test that
+    /// exercises the mismatch rejection has a reason to.
+    pub fn protocol_version(mut self, protocol_version: u32) -> Self {
+        self.protocol_version = protocol_version;
+        self
+    }
+
+    /// Attach the shared secret, when the scheduler requires one. `None` sends
+    /// the frame without the key at all, which is what a transport secured by
+    /// something other than a token does.
+    pub fn token(mut self, token: Option<Secret>) -> Self {
+        self.token = token;
+        self
+    }
+
+    /// Finish the frame.
+    pub fn build(self) -> ExecutorMessage {
+        ExecutorMessage::Hello {
+            executor_id: self.executor_id,
+            sdk: self.sdk,
+            version: self.version,
+            tasks: self.tasks,
+            slots: self.slots,
+            protocol_version: self.protocol_version,
+            token: self.token,
+        }
+    }
 }
 
 /// A frame header that may declare a trailing binary blob. Implemented by both
@@ -464,6 +529,37 @@ impl SchedulerMessage {
 }
 
 impl ExecutorMessage {
+    /// Start a [`ExecutorMessage::Hello`] frame.
+    ///
+    /// The variant is `#[non_exhaustive]`, so this is how an executor outside
+    /// this crate writes its handshake. Required here is what a correct
+    /// executor cannot omit — who it is, and what it can run. The rest has a
+    /// right answer: [`PROTOCOL_VERSION`] and no token, overridable with
+    /// [`HelloBuilder::protocol_version`] and [`HelloBuilder::token`].
+    ///
+    /// ```
+    /// # use flexiq_core::worker::protocol::ExecutorMessage;
+    /// let hello = ExecutorMessage::hello("exec-1", "python", "1.0.0", vec!["resize".into()], 4)
+    ///     .build();
+    /// ```
+    pub fn hello(
+        executor_id: impl Into<String>,
+        sdk: impl Into<String>,
+        version: impl Into<String>,
+        tasks: Vec<String>,
+        slots: u32,
+    ) -> HelloBuilder {
+        HelloBuilder {
+            executor_id: executor_id.into(),
+            sdk: sdk.into(),
+            version: version.into(),
+            tasks,
+            slots,
+            protocol_version: PROTOCOL_VERSION,
+            token: None,
+        }
+    }
+
     /// Build the result frame and payload for a finished job.
     ///
     /// The inverse of [`ExecutorMessage::into_job_result`]. A success carries

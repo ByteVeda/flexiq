@@ -441,7 +441,13 @@ pub struct DebounceOptions {
 /// these from unrelated sources — hostname from the OS, `sdk`/`sdk_version`
 /// baked in at build time, `queues`/`threads` from user config — and a run of
 /// nine same-typed `Option<&str>` arguments is easy to transpose silently.
+///
+/// `#[non_exhaustive]`: what a worker announces has grown twice already
+/// (`0009_worker_sdk`, `0012_worker_registry_fingerprint`) and will again.
+/// Build one with [`WorkerRegistration::new`] and the setters, which leave a
+/// caller compiling when it does.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct WorkerRegistration<'a> {
     /// Unique worker id.
     pub worker_id: &'a str,
@@ -465,10 +471,90 @@ pub struct WorkerRegistration<'a> {
     pub sdk: Option<&'a str>,
     /// Release of that SDK.
     pub sdk_version: Option<&'a str>,
+    /// Fingerprint of the worker's task registry, from
+    /// [`crate::worker::registry_fingerprint`]. `None` from a shell that does
+    /// not report one, and from a worker with nothing registered — neither is
+    /// a registry that differs from its peers', so neither gets a value.
+    pub registry_fingerprint: Option<&'a str>,
+}
+
+impl<'a> WorkerRegistration<'a> {
+    /// A registration carrying only what every worker must state: who it is,
+    /// what it consumes, and how much of it there is.
+    ///
+    /// Everything else is a setter, because everything else is something a
+    /// shell may not know about itself — a worker that cannot see its own
+    /// hostname registers without one rather than inventing a value.
+    pub fn new(worker_id: &'a str, queues: &'a str, threads: i32) -> Self {
+        Self {
+            worker_id,
+            queues,
+            threads,
+            ..Self::default()
+        }
+    }
+
+    /// Pre-encoded JSON list of worker tags.
+    pub fn tags(mut self, tags: Option<&'a str>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Pre-encoded JSON list of resource names the worker provides.
+    pub fn resources(mut self, resources: Option<&'a str>) -> Self {
+        self.resources = resources;
+        self
+    }
+
+    /// Pre-encoded JSON of per-resource health.
+    pub fn resource_health(mut self, resource_health: Option<&'a str>) -> Self {
+        self.resource_health = resource_health;
+        self
+    }
+
+    /// Host the worker runs on.
+    pub fn hostname(mut self, hostname: Option<&'a str>) -> Self {
+        self.hostname = hostname;
+        self
+    }
+
+    /// OS process id of the worker.
+    pub fn pid(mut self, pid: Option<i32>) -> Self {
+        self.pid = pid;
+        self
+    }
+
+    /// Execution pool type (e.g. `thread`, `prefork`).
+    pub fn pool_type(mut self, pool_type: Option<&'a str>) -> Self {
+        self.pool_type = pool_type;
+        self
+    }
+
+    /// SDK registering the worker, and the release of it. Taken together
+    /// because a version without the SDK that produced it names nothing.
+    pub fn sdk(mut self, sdk: Option<&'a str>, sdk_version: Option<&'a str>) -> Self {
+        self.sdk = sdk;
+        self.sdk_version = sdk_version;
+        self
+    }
+
+    /// Fingerprint of the worker's task registry, from
+    /// [`crate::worker::registry_fingerprint`]. A shell that cannot see its own
+    /// registry passes `None` rather than a value it guessed: an unregistered
+    /// task name is a fatal failure, so a row that overstates what a worker
+    /// runs is worse than one that says nothing.
+    pub fn registry_fingerprint(mut self, registry_fingerprint: Option<&'a str>) -> Self {
+        self.registry_fingerprint = registry_fingerprint;
+        self
+    }
 }
 
 /// A registered worker as seen by the cluster registry.
+///
+/// `#[non_exhaustive]` for the same reason as [`WorkerRegistration`], which it
+/// mirrors. Only this crate builds one; a caller reads it.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct WorkerInfo {
     /// Unique worker id.
     pub worker_id: String,
@@ -499,6 +585,11 @@ pub struct WorkerInfo {
     /// Release of that SDK, so a stale worker is visible without going host by
     /// host. `None` from a shell that predates version reporting.
     pub sdk_version: Option<String>,
+    /// Fingerprint of the worker's task registry, so the one worker in a fleet
+    /// that discovered a different set of tasks is visible without going host
+    /// by host. `None` from a shell that predates the field, and from a worker
+    /// with nothing registered.
+    pub registry_fingerprint: Option<String>,
 }
 
 /// Holder and expiry of a distributed lock.

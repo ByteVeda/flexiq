@@ -88,6 +88,7 @@ export function workerToContract(worker: WorkerInfo) {
     tags: worker.tags ?? null,
     sdk: worker.sdk ?? null,
     sdk_version: worker.sdkVersion ?? null,
+    registry_fingerprint: worker.registryFingerprint ?? null,
   };
 }
 

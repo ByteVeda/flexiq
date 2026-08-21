@@ -164,4 +164,61 @@ mod tests {
             Some("e6017d3a248deb69")
         );
     }
+
+    /// The table in `BINDING_CONTRACT.md`, asserted rather than described.
+    ///
+    /// The cases are the ones a re-implementation gets wrong: the framing
+    /// pairs, and the newline that a separated encoding would collide. Every
+    /// SDK asserts the same strings, so a drift here is caught in this crate
+    /// instead of as a fleet that looks split while running the same code.
+    #[test]
+    fn the_contract_vectors_are_pinned() {
+        for (names, want) in [
+            (vec!["ab", "c"], "fe4b6261eea66aa8"),
+            (vec!["a", "bc"], "e6b0607a88120c30"),
+            (vec!["a\nb"], "068365c3a2f19d9f"),
+            (vec!["a", "b"], "9dbd0e0e67e641dc"),
+            (
+                vec!["reports.build", "invoices.send", "reports.build"],
+                "fafd30ef8ebcb7de",
+            ),
+            // The only vector that separates UTF-8 byte order from UTF-16 code
+            // units, which is the ordering rule most at risk of being got wrong
+            // — every ASCII vector in this list passes under either. See
+            // `sorting_above_the_bmp_follows_utf_8_not_utf_16`.
+            (vec!["\u{E000}", "\u{10000}"], "370802f2ebd8a642"),
+        ] {
+            assert_eq!(
+                registry_fingerprint(&names).as_deref(),
+                Some(want),
+                "fingerprint of {names:?}"
+            );
+        }
+    }
+
+    /// The ordering rule, on the only inputs that can catch it breaking.
+    ///
+    /// `U+E000` is a single UTF-16 unit `0xE000`; `U+10000` is the surrogate
+    /// pair `0xD800 0xDC00`. Java's `String.compareTo` and JavaScript's
+    /// `Array.prototype.sort` compare those units and put `U+10000` first,
+    /// while UTF-8 bytes put `U+E000` first — so an SDK that sorted natively
+    /// would agree with every ASCII vector in the contract and still hash a
+    /// different value for a fleet using astral task names.
+    ///
+    /// Rust cannot get this wrong (`Ord for String` is byte-wise), so what this
+    /// pins is the *contract*: the constant below is what a re-implementation
+    /// has to reproduce.
+    #[test]
+    fn sorting_above_the_bmp_follows_utf_8_not_utf_16() {
+        let canonical = registry_fingerprint(["\u{E000}", "\u{10000}"]);
+        assert_eq!(canonical.as_deref(), Some("370802f2ebd8a642"));
+
+        // Input order must not matter here either — otherwise the vector would
+        // pin the caller's ordering rather than the algorithm's.
+        assert_eq!(registry_fingerprint(["\u{10000}", "\u{E000}"]), canonical,);
+
+        // What a UTF-16-ordered implementation would produce. Asserted as the
+        // wrong answer so the two are never quietly reconciled.
+        assert_ne!(canonical.as_deref(), Some("7653f22bef39d8ea"));
+    }
 }

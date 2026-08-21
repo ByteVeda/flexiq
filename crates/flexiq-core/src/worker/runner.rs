@@ -21,6 +21,7 @@ use crate::storage::{
 };
 
 use super::dispatcher::NativeDispatcher;
+use super::fingerprint::registry_fingerprint;
 use super::registry::{TaskRegistry, TaskResult};
 use super::WorkerDispatcher;
 
@@ -170,6 +171,19 @@ impl Worker {
 
         let worker_id =
             worker_id.unwrap_or_else(|| format!("rust-worker-{}", uuid::Uuid::now_v7()));
+        // Only the built-in pool runs what is in `registry`: supplying a
+        // dispatcher leaves those handlers unused (see [`Worker::dispatcher`]),
+        // and a caller that did both would otherwise advertise a task set this
+        // worker will not run — false divergence, from the one column that
+        // exists to make divergence visible. The language shells and the
+        // server's remote dispatcher keep their handlers on their own side, so
+        // they report nothing here, which is the honest answer.
+        //
+        // Read before the registry moves into the pool below.
+        let fingerprint = dispatcher
+            .is_none()
+            .then(|| registry_fingerprint(registry.task_names()))
+            .flatten();
         let (pool_type, dispatcher): (String, Arc<dyn WorkerDispatcher>) = dispatcher
             .unwrap_or_else(|| {
                 (
@@ -186,6 +200,7 @@ impl Worker {
             pool_type: Some(&pool_type),
             sdk: Some("rust"),
             sdk_version: Some(env!("CARGO_PKG_VERSION")),
+            registry_fingerprint: fingerprint.as_deref(),
             ..Default::default()
         })?;
 

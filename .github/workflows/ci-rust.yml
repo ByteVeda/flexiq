@@ -140,12 +140,18 @@ jobs:
         env:
           FLEXIQ_REDIS_TEST_URL: redis://localhost:6379/15
 
-  # Everything a crates.io release of the Rust crates depends on: the declared
-  # MSRV actually builds, the rustdoc is warning-free, the packages pass a
-  # publish dry-run, and (once a baseline exists on crates.io) the public API
-  # hasn't broken semver.
+  # What a crates.io release needs from a commit: the declared MSRV actually
+  # builds, the rustdoc is warning-free, and the packages pass a publish dry
+  # run. Each is a property of the tree alone, so it answers the same on a
+  # branch as it does at the release.
   #
-  # The three are checked as a set, never one at a time: flexiq-workflows and
+  # Semver is checked at the release instead, in publish-crates.yml. Whether a
+  # version number is a big enough step for an API change is only a question
+  # once a version is being cut; against a manifest still carrying the released
+  # version, every breaking change reads as a patch that broke semver, and the
+  # only way to keep a branch green would be to bump the manifest in it.
+  #
+  # The crates are checked as a set, never one at a time: flexiq-workflows and
   # flexiq-mesh depend on flexiq-core by path + version, so verifying either
   # alone would try to resolve flexiq-core from the registry. Packaged
   # together, cargo resolves them against each other through a temp registry.
@@ -190,57 +196,3 @@ jobs:
         run: |
           read -ra pkgs <<< "$CRATES"
           cargo publish --dry-run --locked "${pkgs[@]}"
-
-      # No baseline exists before a crate's first publish; its check is skipped
-      # until then, and a breaking change fails CI once one does. Each crate is
-      # probed separately — they reach the registry at different times, and a
-      # published core must not stop gating just because mesh is still absent.
-      - name: Check for crates.io baselines
-        id: baseline
-        run: |
-          # Probe the sparse index (index.crates.io), not the REST API: it is
-          # the registry's sanctioned programmatic path — a static CDN in
-          # Cargo's own index format, no rate limits, no User-Agent policy
-          # (the API 403s UA-less requests). Index path scheme for names of
-          # 4+ chars: /{first-two}/{next-two}/{name}, lowercase.
-          for crate in flexiq flexiq-core flexiq-workflows flexiq-mesh; do
-            prefix="${crate:0:2}/${crate:2:2}"
-            # Fail closed: only an explicit 404 means "no baseline" — a transient
-            # network error must not silently skip the semver check. Retries
-            # absorb CDN blips before that verdict.
-            if ! status="$(curl -sS -o /dev/null -w '%{http_code}' \
-              --retry 3 --retry-connrefused \
-              "https://index.crates.io/${prefix}/${crate}")"; then
-              echo "Failed to query the crates.io sparse index for ${crate}" >&2
-              exit 1
-            fi
-            case "$status" in
-              200) echo "${crate}=true" >> "$GITHUB_OUTPUT" ;;
-              404) echo "${crate}=false" >> "$GITHUB_OUTPUT" ;;
-              *) echo "Unexpected sparse-index response for ${crate}: HTTP $status" >&2; exit 1 ;;
-            esac
-          done
-
-      - name: Semver check flexiq
-        if: steps.baseline.outputs.flexiq == 'true'
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: flexiq
-
-      - name: Semver check flexiq-core
-        if: steps.baseline.outputs.flexiq-core == 'true'
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: flexiq-core
-
-      - name: Semver check flexiq-workflows
-        if: steps.baseline.outputs.flexiq-workflows == 'true'
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: flexiq-workflows
-
-      - name: Semver check flexiq-mesh
-        if: steps.baseline.outputs.flexiq-mesh == 'true'
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: flexiq-mesh

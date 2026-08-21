@@ -128,7 +128,11 @@ pub enum AttachError {
 }
 
 /// A snapshot of one attached executor.
+///
+/// `#[non_exhaustive]`: a snapshot grows every time the handshake does, and
+/// nothing outside this crate builds one — it is read, never written.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AttachedExecutor {
     /// Identity the executor announced.
     pub executor_id: String,

@@ -404,6 +404,7 @@ pub struct WorkerRow {
     pub pool_type: Option<String>,
     pub sdk: Option<String>,
     pub sdk_version: Option<String>,
+    pub registry_fingerprint: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset, Debug)]
@@ -423,6 +424,7 @@ pub struct NewWorkerRow<'a> {
     pub pool_type: Option<&'a str>,
     pub sdk: Option<&'a str>,
     pub sdk_version: Option<&'a str>,
+    pub registry_fingerprint: Option<&'a str>,
 }
 
 impl<'a> NewWorkerRow<'a> {
@@ -446,6 +448,7 @@ impl<'a> NewWorkerRow<'a> {
             pool_type: registration.pool_type,
             sdk: registration.sdk,
             sdk_version: registration.sdk_version,
+            registry_fingerprint: registration.registry_fingerprint,
         }
     }
 }
@@ -916,6 +919,7 @@ impl From<WorkerRow> for WorkerInfo {
             pool_type: r.pool_type,
             sdk: r.sdk,
             sdk_version: r.sdk_version,
+            registry_fingerprint: r.registry_fingerprint,
         }
     }
 }

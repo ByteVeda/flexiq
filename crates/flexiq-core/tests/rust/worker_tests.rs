@@ -12,6 +12,7 @@ use flexiq_core::storage::sqlite::SqliteStorage;
 use flexiq_core::storage::{Storage, StorageBackend};
 use flexiq_core::worker::registry::TaskError;
 use flexiq_core::worker::runner::Worker;
+use flexiq_core::worker::WorkerDispatcher;
 
 fn test_backend() -> StorageBackend {
     StorageBackend::Sqlite(SqliteStorage::in_memory().expect("in-memory sqlite"))
@@ -165,6 +166,88 @@ fn unregistered_task_dead_letters_without_retry() {
 
     let job = storage.enqueue(make_job("unknown", b"", 5)).unwrap();
     wait_for_dead(&storage, &job.id);
+
+    handle.shutdown().expect("shutdown");
+}
+
+/// The registry row records what the worker can run.
+///
+/// Registered in the opposite order to the fingerprint's, to pin that the value
+/// is over the *set*: registration order is import order, which discovery
+/// decides, and a fingerprint that followed it would report divergence on every
+/// worker that happened to import its modules differently.
+#[test]
+fn a_worker_records_a_fingerprint_of_its_task_registry() {
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone())
+        .register("reports.build", |_job: &Job| Ok(None))
+        .register("invoices.send", |_job: &Job| Ok(None))
+        .spawn()
+        .expect("spawn");
+
+    let workers = storage.list_workers().expect("list_workers");
+    let worker = workers.first().expect("the worker registered");
+    // The value `crates/flexiq-core/BINDING_CONTRACT.md` pins for this set.
+    assert_eq!(
+        worker.registry_fingerprint.as_deref(),
+        Some("fafd30ef8ebcb7de")
+    );
+
+    handle.shutdown().expect("shutdown");
+}
+
+/// Nothing registered is nothing to report. A row that overstates what a worker
+/// runs is worse than a row that says nothing: an unregistered task name is a
+/// fatal, non-retryable failure.
+#[test]
+fn a_worker_with_nothing_registered_reports_no_fingerprint() {
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone()).spawn().expect("spawn");
+
+    let workers = storage.list_workers().expect("list_workers");
+    assert_eq!(
+        workers.first().expect("registered").registry_fingerprint,
+        None
+    );
+
+    handle.shutdown().expect("shutdown");
+}
+
+/// A pool the caller supplied leaves the registered handlers unused, so they
+/// must not be fingerprinted.
+///
+/// `register` plus `dispatcher` is a legal combination that silently drops the
+/// handlers — see [`Worker::dispatcher`]. Reporting them would advertise a task
+/// set this worker cannot run, from the one column that exists to make exactly
+/// that kind of mismatch visible.
+#[test]
+fn a_supplied_pool_reports_no_fingerprint_for_handlers_it_will_not_run() {
+    struct IdlePool;
+
+    #[async_trait::async_trait]
+    impl WorkerDispatcher for IdlePool {
+        async fn run(
+            &self,
+            mut job_rx: tokio::sync::mpsc::Receiver<Job>,
+            _result_tx: crossbeam_channel::Sender<flexiq_core::scheduler::JobResult>,
+        ) {
+            while job_rx.recv().await.is_some() {}
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    let storage = test_backend();
+    let handle = Worker::new(storage.clone())
+        .register("invoices.send", |_job: &Job| Ok(None))
+        .dispatcher("remote", Arc::new(IdlePool))
+        .spawn()
+        .expect("spawn");
+
+    let workers = storage.list_workers().expect("list_workers");
+    let worker = workers.first().expect("the worker registered");
+    assert_eq!(worker.pool_type.as_deref(), Some("remote"));
+    assert_eq!(worker.registry_fingerprint, None);
 
     handle.shutdown().expect("shutdown");
 }

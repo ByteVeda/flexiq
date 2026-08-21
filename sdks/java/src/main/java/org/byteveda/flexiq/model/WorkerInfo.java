@@ -27,6 +27,13 @@ public final class WorkerInfo {
     /** Release of that SDK; null from a shell predating this. */
     public final String sdkVersion;
 
+    /**
+     * Fingerprint of the tasks this worker has handlers for, so the one worker in a fleet that
+     * registered a different set is visible without going host by host. Null from a shell
+     * predating this, and from a worker with nothing registered.
+     */
+    public final String registryFingerprint;
+
     @JsonCreator
     public WorkerInfo(
             @JsonProperty("workerId") String workerId,
@@ -42,7 +49,8 @@ public final class WorkerInfo {
             @JsonProperty("resources") String resources,
             @JsonProperty("resourceHealth") String resourceHealth,
             @JsonProperty("sdk") String sdk,
-            @JsonProperty("sdkVersion") String sdkVersion) {
+            @JsonProperty("sdkVersion") String sdkVersion,
+            @JsonProperty("registryFingerprint") String registryFingerprint) {
         this.workerId = workerId;
         this.queues = queues;
         this.status = status;
@@ -57,5 +65,6 @@ public final class WorkerInfo {
         this.resourceHealth = resourceHealth;
         this.sdk = sdk;
         this.sdkVersion = sdkVersion;
+        this.registryFingerprint = registryFingerprint;
     }
 }

@@ -12,6 +12,7 @@ use flexiq_core::scheduler::shed::OnExcess;
 use flexiq_core::scheduler::{JobResult, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig};
 use flexiq_core::storage::records::{WorkerRegistration, WorkerStatus};
 use flexiq_core::storage::Storage;
+use flexiq_core::worker::registry_fingerprint;
 
 use super::PyQueue;
 #[cfg(not(feature = "native-async"))]
@@ -295,6 +296,22 @@ where
     Ok(())
 }
 
+/// Fingerprint of the registry Python actually dispatches from.
+///
+/// Taken from the very dict the dispatcher looks task names up in, so the
+/// worker's registry row cannot advertise a task set this worker will not run.
+/// `None` when the object is not a dict — only reachable by calling the native
+/// method directly, and a wrong fingerprint would be worse than none.
+fn registry_fingerprint_of(py: Python<'_>, task_registry: &Py<PyAny>) -> Option<String> {
+    let registry = task_registry.bind(py).cast::<PyDict>().ok()?;
+    registry_fingerprint(
+        registry
+            .keys()
+            .iter()
+            .filter_map(|name| name.extract::<String>().ok()),
+    )
+}
+
 #[pymethods]
 #[allow(clippy::useless_conversion)]
 impl PyQueue {
@@ -506,6 +523,9 @@ impl PyQueue {
         let (job_tx, job_rx) = tokio::sync::mpsc::channel(self.num_workers * 2);
         let (result_tx, result_rx) = crossbeam_channel::bounded(self.num_workers * 2);
 
+        // Read before the registry moves into the `Arc` the pools share.
+        let fingerprint = registry_fingerprint_of(py, &task_registry);
+
         let registry_arc = Arc::new(task_registry);
         let filters_arc: Arc<Py<PyAny>> = Arc::new(retry_filters.into());
 
@@ -516,21 +536,18 @@ impl PyQueue {
         // scheduler's claim owner).
         let hostname = gethostname::gethostname().to_string_lossy().to_string();
         let pid = std::process::id() as i32;
-        let _ = self.storage.register_worker(&WorkerRegistration {
-            worker_id: &worker_id,
-            queues: &queues_str,
-            tags: tags.as_deref(),
-            resources: resources.as_deref(),
-            threads,
-            hostname: Some(&hostname),
-            pid: Some(pid),
-            pool_type: pool.as_deref(),
-            sdk: Some("python"),
-            // The native module's version, which maturin builds from the same
-            // workspace version the wheel carries.
-            sdk_version: Some(env!("CARGO_PKG_VERSION")),
-            ..Default::default()
-        });
+        let _ = self.storage.register_worker(
+            &WorkerRegistration::new(&worker_id, &queues_str, threads)
+                .tags(tags.as_deref())
+                .resources(resources.as_deref())
+                .hostname(Some(&hostname))
+                .pid(Some(pid))
+                .pool_type(pool.as_deref())
+                // The native module's version, which maturin builds from the
+                // same workspace version the wheel carries.
+                .sdk(Some("python"), Some(env!("CARGO_PKG_VERSION")))
+                .registry_fingerprint(fingerprint.as_deref()),
+        );
 
         // Build the dispatcher up front for the prefork case so we can install
         // it on the queue before the run loop starts — request_cancel relies on

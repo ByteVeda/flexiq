@@ -15,7 +15,7 @@ use flexiq_core::resilience::retry::RetryPolicy;
 use flexiq_core::scheduler::codel::CodelConfig;
 use flexiq_core::scheduler::shed::OnExcess;
 use flexiq_core::scheduler::{ResultOutcome, TaskConfig};
-use flexiq_core::worker::WorkerDispatcher;
+use flexiq_core::worker::{registry_fingerprint, WorkerDispatcher};
 use flexiq_core::{Scheduler, SchedulerConfig, Storage, StorageBackend};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong, JNI_FALSE};
@@ -115,7 +115,16 @@ fn start_worker(
     // scheduler starts, so its first poll can already see deliveries. Either
     // failure aborts the start — a silently missing subscription would drop
     // deliveries.
-    register_live_worker(&lifecycle_storage, &worker_id, &queues_csv, capacity)?;
+    register_live_worker(
+        &lifecycle_storage,
+        &worker_id,
+        &queues_csv,
+        capacity,
+        // The handler names Java registered. Fingerprinted rather than stored,
+        // so the registry row stays one comparable value however many tasks a
+        // worker serves.
+        registry_fingerprint(options.tasks.iter().flatten()).as_deref(),
+    )?;
     register_subscriptions(&storage, &worker_id, options.subscriptions.take())?;
 
     let mut scheduler = Scheduler::new(storage, queues, config, namespace);
@@ -230,21 +239,19 @@ fn register_live_worker(
     worker_id: &str,
     queues_csv: &str,
     capacity: usize,
+    registry_fingerprint: Option<&str>,
 ) -> Result<(), crate::error::BindingError> {
     let hostname = gethostname::gethostname().to_string_lossy().to_string();
     let pid = std::process::id() as i32;
-    storage.register_worker(&WorkerRegistration {
-        worker_id,
-        queues: queues_csv,
-        threads: capacity as i32,
-        hostname: Some(&hostname),
-        pid: Some(pid),
-        pool_type: Some("java"),
-        sdk: Some("java"),
-        // The native library's version, which the jar is published alongside.
-        sdk_version: Some(env!("CARGO_PKG_VERSION")),
-        ..Default::default()
-    })?;
+    storage.register_worker(
+        &WorkerRegistration::new(worker_id, queues_csv, capacity as i32)
+            .hostname(Some(&hostname))
+            .pid(Some(pid))
+            .pool_type(Some("java"))
+            // The native library's version, which the jar is published alongside.
+            .sdk(Some("java"), Some(env!("CARGO_PKG_VERSION")))
+            .registry_fingerprint(registry_fingerprint),
+    )?;
     Ok(())
 }
 

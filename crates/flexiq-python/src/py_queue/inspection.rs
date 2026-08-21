@@ -565,6 +565,7 @@ impl PyQueue {
                 dict.set_item("pool_type", r.pool_type)?;
                 dict.set_item("sdk", r.sdk)?;
                 dict.set_item("sdk_version", r.sdk_version)?;
+                dict.set_item("registry_fingerprint", r.registry_fingerprint)?;
                 result.push(dict.into());
             }
             Ok(result)
