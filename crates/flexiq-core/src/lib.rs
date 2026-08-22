@@ -40,7 +40,7 @@ pub use scheduler::{
     JobResult, QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig,
 };
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
-pub use step::StepLimits;
+pub use step::{classify_step_failure, StepFailure, StepLimits};
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
