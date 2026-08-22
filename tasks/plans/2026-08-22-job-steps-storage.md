@@ -81,3 +81,43 @@ D10, D14, §1.4, §8.4, §10.
 `flexiq_core::step` key derivation and the divergence pre-check (#666) ·
 `reschedule` gaining a namespace and the `Slept` outcome (#667) ·
 `__origin_job_id` (#668) · `CONTRACT_VERSION` → 2 and the 2.0.0 (§11, release).
+
+---
+
+## Review
+
+Landed as nine commits on `feat/job-steps-storage`, unpushed.
+
+**Two things the plan did not anticipate, both found while implementing:**
+
+- **`handle_results` needed the fence too.** §8.4 names `handle_result`, but the batched
+  success path is the default drain path and bypassed it entirely. Both now go through
+  one `authorize_finished` helper.
+- **The claim window §1.4 warns about was live in `result_handler`.** It cleared the
+  execution claim a dozen statements before the transition. Removed: `retry` and the
+  archive each revoke inside their own transaction, which is what closes it.
+
+**One addition beyond the plan:** `flexiq_core::classify_step_failure` — §12's "error
+classification at the acknowledgement boundary, mapping tests included". Pure, so the
+shells cannot disagree about which failures are retryable.
+
+**One performance correction:** the first Diesel commit path loaded every committed row to
+decide one commit, which is quadratic over a 1 000-step job. Replaced with `COUNT` + `SUM`
+plus a keyed lookup, which the gapless-`seq` invariant makes exact.
+
+### Verification
+
+| | Result |
+|---|---|
+| `cargo test --workspace` (SQLite) | 450 pass |
+| Redis contract suite (Redis Cloud) | pass, 789 s |
+| Postgres step contract (Neon, narrow test) | 12/12 pass |
+| Postgres full contract suite | blocked by a pre-existing environment red — `test_dequeue_batch_archives_expired_jobs` fails the same way on clean `master`, verified in a `master` worktree; it is Neon round-trip latency against the test's 1 s window |
+| `cargo clippy --all-targets`, default / `postgres` / `redis` | clean |
+| Python suite | 1510 pass, 14 skipped |
+
+### Not in this branch
+
+`CONTRACT_VERSION` → 2 and the repo-wide 2.0.0 (§11). `ResultOutcome` gained a
+`Superseded` variant and `QueueError` three more — both are breaking, and the epic bundles
+them into one major release rather than discovering the break at publish time.
