@@ -21,6 +21,17 @@ pub enum StepFailure {
     Superseded,
 }
 
+impl StepFailure {
+    /// Whether the attempt should be retried.
+    ///
+    /// [`Superseded`](Self::Superseded) answers `false` for completeness only —
+    /// a superseded attempt emits no result at all, so nothing consults this
+    /// for it.
+    pub const fn should_retry(self) -> bool {
+        matches!(self, StepFailure::Retryable)
+    }
+}
+
 /// Classify a step operation's error at the acknowledgement boundary.
 pub fn classify_step_failure(error: &crate::error::QueueError) -> StepFailure {
     use crate::error::QueueError as E;
@@ -30,6 +41,7 @@ pub fn classify_step_failure(error: &crate::error::QueueError) -> StepFailure {
 
         // The input itself is wrong, and will be just as wrong next attempt.
         E::StepDiverged { .. }
+        | E::StepSequenceDiverged(_)
         | E::StepLimitExceeded { .. }
         | E::Serialization(_)
         | E::Json(_)

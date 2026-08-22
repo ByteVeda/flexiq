@@ -100,6 +100,11 @@ pub enum QueueError {
         found: String,
     },
 
+    /// The running code asked for a different step than the one recorded at
+    /// that position: the step sequence changed between attempts.
+    #[error("{0}")]
+    StepSequenceDiverged(Box<StepDivergence>),
+
     /// A step commit is over one of the caps. Refused, never spilled: there is
     /// nowhere to spill to, and the same database under a different key is not
     /// a spill.
@@ -118,6 +123,39 @@ pub enum QueueError {
     /// Any other failure that fits no specific variant.
     #[error("{0}")]
     Other(String),
+}
+
+/// Why one attempt's step sequence no longer matches the recorded one.
+///
+/// Boxed inside [`QueueError::StepSequenceDiverged`]: it is the crate's widest
+/// error payload, and every `Result` in the crate would otherwise carry its
+/// size. Caught in memory, against the snapshot loaded at attempt start, so it
+/// fails before the closure runs rather than after it has charged a card. Both
+/// sequences are in the message because the difference between them is the only
+/// thing that identifies which deploy did it.
+#[derive(Error, Debug)]
+#[error(
+    "step sequence changed for job {job_id} at position {position}\n\
+     \x20 recorded: {recorded}\n\
+     \x20 running:  {running}\n\
+     \x20 step {position} was {expected}, now {found}\n\
+     A memoized result would answer a different question than the step asking \
+     for it. Drain or dead-letter this task's in-flight jobs before deploying \
+     a change to its step sequence."
+)]
+pub struct StepDivergence {
+    /// Job whose step sequence changed.
+    pub job_id: String,
+    /// Position the two sequences first disagree at.
+    pub position: usize,
+    /// The recorded sequence, around `position`.
+    pub recorded: String,
+    /// The sequence this attempt asked for, around `position`.
+    pub running: String,
+    /// What is recorded at `position`.
+    pub expected: String,
+    /// What this attempt asked for there.
+    pub found: String,
 }
 
 /// Crate-wide result alias over [`QueueError`].
