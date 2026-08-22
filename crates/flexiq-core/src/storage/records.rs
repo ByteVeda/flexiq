@@ -668,7 +668,9 @@ pub struct JobStep {
 ///
 /// `owner` and `attempt` are deliberately *not* here: they fence the write and
 /// are derived by the scheduler, never carried alongside the payload where a
-/// caller could assert them about itself.
+/// caller could assert them about itself. Neither is the namespace — the row
+/// denormalises it from the job the write already read to resolve its fence, so
+/// the two can never disagree.
 #[derive(Debug, Clone)]
 pub struct NewJobStep<'a> {
     /// Id of the job this step runs inside.
@@ -682,9 +684,6 @@ pub struct NewJobStep<'a> {
     pub kind: StepKind,
     /// Encoded result. `None` for a sleep.
     pub result: Option<&'a [u8]>,
-    /// Namespace of the owning job, denormalised so the scoped read and delete
-    /// stay single-table.
-    pub namespace: Option<&'a str>,
 }
 
 /// What a step commit did.
