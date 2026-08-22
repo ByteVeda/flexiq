@@ -66,20 +66,73 @@ const TTL_GRACE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// the one field that legitimately differs between a commit and its
 /// retransmission, and keeping it out is what makes the identical-re-commit
 /// check a plain string comparison in Lua.
+///
+/// `result` is **base64**, not the byte array `serde_json` would write for a
+/// `Vec<u8>`. JSON has no binary type, so the natural encoding is `[1,2,3,…]` —
+/// three to four bytes of storage per byte of payload. The caps are measured on
+/// the payload, so a 256 KiB step would quietly occupy near a megabyte here and
+/// mean something different from the same step on a Diesel backend, where the
+/// column is a BLOB. Base64 costs 4 bytes per 3 and keeps one meaning of "256
+/// KiB" across all three backends.
 #[derive(Serialize, Deserialize)]
 struct StepDoc {
     step_key: String,
     kind: String,
+    #[serde(with = "base64_bytes")]
     result: Option<Vec<u8>>,
     wake_at: Option<i64>,
 }
 
-/// The fence of §1.4, shared verbatim by both write scripts.
+/// `Option<Vec<u8>>` as a base64 string (or JSON null), for [`StepDoc::result`].
+mod base64_bytes {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        bytes: &Option<Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        bytes
+            .as_ref()
+            .map(|raw| STANDARD.encode(raw))
+            .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<u8>>, D::Error> {
+        let encoded = Option::<String>::deserialize(deserializer)?;
+        encoded
+            .map(|text| STANDARD.decode(text).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+/// The fence of §1.4, shared by every script that needs it.
 ///
 /// `KEYS[1]` job document · `KEYS[2]` claim key · `KEYS[3]` claim time index.
 /// `ARGV[1]` job id · `ARGV[2]` owner · `ARGV[3]` attempt · `ARGV[4]` now ·
 /// `ARGV[5]` the wire name of `Running` · `ARGV[6]` the namespace scope, empty
 /// for unscoped.
+///
+/// `reassert` is what separates a write from a check, and it appends a clause
+/// rather than selecting between two copies of the fence — two copies is
+/// exactly how the backends would come to disagree about what the fence is.
+/// A step write puts an age-swept claim back, because the writes after it need
+/// one to fence against. A read-only check must not: it would leave a claim its
+/// caller never asked for.
+fn fence(reassert: bool) -> String {
+    let mut lua = FENCE.to_string();
+    if reassert {
+        lua.push_str(FENCE_REASSERT);
+    }
+    lua
+}
+
+/// The four-case resolution. Reads only; `claim` stays in scope for the clause
+/// below, which is the whole reason the owner check is not written as an
+/// if/else.
 const FENCE: &str = r#"
     local jobdoc = redis.call('GET', KEYS[1])
     if not jobdoc then return {'claim_lost'} end
@@ -95,10 +148,17 @@ const FENCE: &str = r#"
         -- suffix); the owner itself may contain ':' (e.g. "host:pid").
         local owner = string.match(claim, '^(.*):') or claim
         if owner ~= ARGV[2] then return {'claim_lost'} end
-    else
-        -- Claims are swept by age, so a job that legitimately outruns the
-        -- cutoff finds its own claim gone while still being the only thing
-        -- executing. Re-assert rather than abandon a live attempt.
+    end
+"#;
+
+/// Put an age-swept claim back before a write proceeds. Claims are swept by
+/// age, so a job that legitimately outruns the cutoff finds its own claim gone
+/// while still being the only thing executing — abandoning a live attempt there
+/// would be a stall caused entirely by housekeeping. Safe because `SET NX`
+/// semantics are unnecessary here: the fence above already established that
+/// nothing else holds it, inside the same single-threaded script.
+const FENCE_REASSERT: &str = r#"
+    if not claim then
         redis.call('SET', KEYS[2], ARGV[2] .. ':' .. ARGV[4], 'PX', 86400000)
         redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1])
     end
@@ -106,7 +166,7 @@ const FENCE: &str = r#"
 
 /// The fence on its own, for a result the scheduler is about to act on.
 fn authorize_attempt_script() -> String {
-    format!("{FENCE}\n    return {{'ok'}}\n")
+    format!("{}\n    return {{'ok'}}\n", fence(false))
 }
 
 /// Commit one step.
@@ -115,8 +175,9 @@ fn authorize_attempt_script() -> String {
 /// document · `ARGV[10]` result_len · `ARGV[11]` max_steps · `ARGV[12]`
 /// max_total_bytes · `ARGV[13]` kind · `ARGV[14]` created_at.
 fn record_step_script() -> String {
+    let fence = fence(true);
     format!(
-        r#"{FENCE}
+        r#"{fence}
     local steps = KEYS[4]
     local seq = ARGV[7]
     local stored = redis.call('HGET', steps, seq)
@@ -165,8 +226,9 @@ fn record_step_script() -> String {
 /// `ARGV[17..19]` the KEYS index of the debounce, sub-pending and sub-running
 /// indices, or `0`.
 fn sleep_job_script() -> String {
+    let fence = fence(true);
     format!(
-        r#"{FENCE}
+        r#"{fence}
     local steps = KEYS[4]
     local seq = ARGV[7]
     local stored = redis.call('HGET', steps, seq)
