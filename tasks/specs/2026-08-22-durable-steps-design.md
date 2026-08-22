@@ -59,6 +59,7 @@ protocol. This is the single largest cost in the epic and the reason §9 exists.
 | D11 | New hook `on_sleep`; `after` does **not** fire for a slept attempt. | `after(ctx, None, None)` reads as "returned None" to every existing middleware, so OTel would close a span as success and Prometheus would count one. |
 | D12 | Inline steps require **`CONTRACT_VERSION` 2** and refuse to run below a floor of 2. | An older worker cannot read `job_steps` and would silently re-run every committed step during a rolling upgrade. That is precisely what the floor exists for. |
 | D13 | The epic lands as **one major release (2.0.0)**. | `JobResult` and `ResultOutcome` are not `#[non_exhaustive]`; adding a variant, and adding the attribute, are both breaking. Bundle them once rather than discovering the break at publish time. |
+| D14 | **Every step write is fenced on the execution claim**, and every step write is atomic with whatever else it changes. | A job can run in two places at once — `requeue_stuck` says so — so an unfenced write from an abandoned attempt lands in the live one's sequence. And a sleep split across three calls can strand a job `Running` past a crash. |
 
 ---
 
@@ -66,7 +67,7 @@ protocol. This is the single largest cost in the epic and the reason §9 exists.
 
 ### 1.1 The two granularities are nested, not parallel
 
-```
+```text
 workflow run
   └── node            ── is a job; its result is jobs.result
         └── step      ── is inside a job; its result is job_steps.result
@@ -101,7 +102,7 @@ ambiguous key is a `QueueError::Config`, raised in the shell before any I/O.
 
 ### 1.3 The trait surface
 
-Three methods on `Storage`, plus one capability probe. All defaulted, all
+Four methods on `Storage`, plus one capability probe. All defaulted, all
 namespace-scoped per #614.
 
 ```rust
@@ -113,9 +114,16 @@ fn supports_steps(&self) -> bool { false }
 fn get_job_steps(&self, job_id: &str, namespace: Option<&str>)
     -> Result<Vec<JobStep>> { Err(QueueError::Other("steps unsupported".into())) }
 
-/// Commit one step. Enforces the byte and count caps at the boundary and
-/// rejects a `seq` that is not exactly `len(existing)`.
-fn record_step_result(&self, step: &NewJobStep, namespace: Option<&str>)
+/// Commit one step, fenced on the writer still owning the execution claim
+/// (§1.4). Enforces the byte and count caps at the boundary and rejects a
+/// `seq` that is not exactly `len(existing)`. Idempotent for an identical
+/// re-commit; see `StepCommit` below.
+fn record_step_result(&self, step: &NewJobStep, owner: &str, namespace: Option<&str>)
+    -> Result<StepCommit> { Err(QueueError::Other("steps unsupported".into())) }
+
+/// End the attempt in a sleep: commit the sleep row, release the claim and
+/// reschedule the job for `wake_at` — one atomic operation (§7.1).
+fn sleep_job(&self, step: &NewJobStep, owner: &str, wake_at: i64, namespace: Option<&str>)
     -> Result<()> { Err(QueueError::Other("steps unsupported".into())) }
 
 /// Drop every step row for a job. Called from the terminal write (§8.4).
@@ -123,15 +131,46 @@ fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>)
     -> Result<u64> { Err(QueueError::Other("steps unsupported".into())) }
 ```
 
+`StepCommit` is `Committed` or `AlreadyCommitted` — the second is what an
+identical retransmission gets, and it is a success (§9.2).
+
 The `Unsupported`-by-default choice mirrors `shed_to_dlq`
 (`storage/traits.rs:286`) for source compatibility, but inverts its *semantics*:
 `shed_to_dlq` may safely degrade to `move_to_dlq`, whereas a step read that
 degrades to "no steps recorded" re-runs a charge. The lesson from the contract
 floor applies unchanged — **a gate must not fail open**.
 
-`SqliteStorage`, `PostgresStorage` and `RedisStorage` override all four.
+`SqliteStorage`, `PostgresStorage` and `RedisStorage` override all five.
 
-### 1.4 The workflow node cache is fixed, not replaced
+### 1.4 Every step write is fenced on the execution claim
+
+A job can be running in two places at once. `requeue_stuck` says so in its own
+documentation (`storage/traits.rs:139`): "a still-alive owner may finish the old
+attempt, double-executing the job", and the dead-owner reaper reclaims on the
+same assumption. Left unfenced, a step write from the abandoned attempt lands
+after the new one has started — appending a row the new attempt's sequence never
+asked for, or worse, rescheduling a job the new owner is holding.
+
+So the token that already exists is the one used: `execution_claims` is
+`(job_id PRIMARY KEY, worker_id, claimed_at)`, and `reclaim_execution` transfers
+`worker_id` atomically. A stale owner is exactly an owner whose `worker_id` no
+longer matches the claim row.
+
+**Rule:** `record_step_result` and `sleep_job` take the writer's `owner` and, in
+the same transaction as the write, require the claim row for `job_id` to still
+name it. A mismatch — or no claim row at all — is `QueueError::ClaimLost`, and
+the attempt aborts without retrying: another worker owns this job now, and
+anything this attempt does from here is a duplicate.
+
+`get_job_steps` is not fenced. It is a read at attempt start, taken by the
+worker that just won the claim, and a stale read can only cost a re-run.
+
+This is the counterpart of `finalize_fan_out_parent`'s compare-and-swap
+(`flexiq-workflows/src/storage.rs:124`), for the same reason: an operation that
+must happen exactly once cannot check its precondition in a separate round trip
+from its write.
+
+### 1.5 The workflow node cache is fixed, not replaced
 
 Fact 2 above is a real defect, and the fix is not a second blob store. A
 cache-hit node should carry **the base run's `job_id`**, so its value is
@@ -141,8 +180,8 @@ node cache and the step memo the same shape — a pointer to one durably stored
 result blob — without duplicating a byte.
 
 Out of scope for #663; tracked separately. Recorded here because it is the
-concrete instance of the drift this document exists to prevent, and because
-#665 must not foreclose it.
+concrete instance of the drift this document exists to prevent, and because it
+is something #665 must not foreclose.
 
 ---
 
@@ -176,6 +215,23 @@ for order in orders:                     # order is arbitrary
 An explicit `key` replaces the occurrence counter entirely. Two steps that
 derive the same explicit key in one attempt are a `QueueError::Config`, not a
 silent overwrite.
+
+**A keyed call does not advance the name's occurrence counter.** The two forms
+count independently, so
+
+```python
+ctx.step.run("fetch", …, key="a")   # fetch:a
+ctx.step.run("fetch", …)            # fetch#0   — not fetch#1
+ctx.step.run("fetch", …, key="b")   # fetch:b
+ctx.step.run("fetch", …)            # fetch#1
+```
+
+The alternative — a shared counter — makes *adding a keyed call* shift the key
+of every later unkeyed call of the same name, which is a divergence caused by an
+edit that changed nothing about the unkeyed steps. A keyed step's identity does
+not depend on its position, so its position must not be spent.
+
+Every shell tests all three shapes: keyed only, unkeyed only, and interleaved.
 
 **Guidance for #672:** default to `name#occurrence`; reach for `key=` the moment
 a step runs inside a loop over anything whose order is not guaranteed.
@@ -212,7 +268,7 @@ No extra I/O: the snapshot is already in memory (§5.1).
 
 A `StepDivergenceError` carrying both sequences, the position, and both keys:
 
-```
+```text
 StepDivergenceError: step sequence changed for job 018f…c2 at position 2
   recorded: charge#0, notify#0, receipt#0
   running:  charge#0, notify#0, audit#0
@@ -270,7 +326,7 @@ hide unbounded growth until the disk does the complaining.
 
 So an over-cap step raises, naming the step and the two numbers:
 
-```
+```text
 StepResultTooLargeError: step 'render#0' returned 1.4 MiB, over the 256 KiB cap
 Store the value where it belongs (object storage, a table of your own) and
 memoize the handle instead.
@@ -303,8 +359,8 @@ job's steps while it is running.
 
 ### 5.2 The queue serializer, not the task serializer
 
-#666's scope line says "the task's serializer and codec chain". This document
-overrides that: **step blobs use the queue-level serializer**, exactly as job
+The scope line in #666 says "the task's serializer and codec chain". This
+document overrides that: **step blobs use the queue-level serializer**, exactly as job
 results do (`_serialize_result`, `app.py:665`).
 
 Per-task serializers cover *payloads* only, because a payload has one writer and
@@ -331,7 +387,7 @@ the same reason they do not apply to results.
 
 ### 6.1 The shape
 
-```
+```text
 step.idempotency_key == f"{run_key}:{step_key}"        # e.g. 018f…c2:charge#0
 ```
 
@@ -350,7 +406,7 @@ days later, deliberately, through the admin UI.
 
 So:
 
-```
+```text
 run_key = job.metadata["__origin_job_id"] ?? job.id
 ```
 
@@ -372,17 +428,32 @@ Key stability across (a) an ordinary retry, (b) a sleep/wake, and (c) a
 
 ### 7.1 Mechanism
 
-A sleep ends the attempt. On the scheduler side that is exactly
-`rollback_claim_and_reschedule` (`scheduler/poller.rs:628`):
-
-1. `release_in_flight(job_id)` — free the dispatch slot;
-2. `complete_execution(job_id, ns)` — release the claim;
-3. `reschedule(job_id, wake_at)` — status back to `Pending`, `scheduled_at` set.
+A sleep ends the attempt, doing what `rollback_claim_and_reschedule`
+(`scheduler/poller.rs:628`) already does — release the claim, put the job back
+to `Pending` at a future `scheduled_at` — plus committing the sleep row.
 
 `reschedule` clears `started_at` (`diesel_common/jobs.rs:1188`), so a sleeping
 job is not eligible for `reap_stale_jobs` — it will not be timed out while it
 sleeps. That is a property of the existing implementation this design depends
 on; #667 needs a test that pins it.
+
+**The three writes are one operation, not three calls.** `sleep_job` (§1.3)
+commits the sleep row, deletes the claim and rescheduling the job inside a single
+transaction — a Lua script on Redis, as `enqueue_debounced` already does for the
+same reason. Only `release_in_flight` stays outside it: that is in-process
+bookkeeping with nothing to roll back.
+
+Split across three calls, a crash between the row and the reschedule leaves the
+job `Running` with a `sleeping` row whose deadline has not arrived — and the
+stale reaper then hands that job to another worker while its own timeout clock
+is still running. One transaction removes the window rather than documenting it.
+
+**Recovery is still defined, because a crash can land anywhere.** A committed
+sleep row whose `wake_at` is in the future is not a memo hit (§7.3); replaying
+into it re-issues the same `sleep_job`, which is idempotent — the row is
+identical, so the commit reports `AlreadyCommitted` and only the reschedule
+takes effect. A partially-applied sleep heals on the next attempt instead of
+needing a repair path of its own.
 
 ### 7.2 `reschedule` needs a namespace (#614 gap)
 
@@ -394,7 +465,18 @@ the least trusted caller in the system. #667 adds the namespace parameter.
 ### 7.3 A sleep is a step row (D9)
 
 `sleep` commits a row with `kind = 'sleep'` and `wake_at` in place of a result
-blob. Three things fall out for free:
+blob.
+
+**A sleep row is a memo hit if and only if `now >= wake_at`.** That is a derived
+rule, evaluated by the reader, not a stored status — which is why there is no
+`status` column (§10.1) and no operation that would have to move a row from
+"sleeping" to "complete". Nothing has to run at the wake moment for the row to
+mean the right thing, and there is no state a crash can strand.
+
+A `run` row, by contrast, is unconditionally a memo hit: its presence *is* its
+completion, because a step whose closure raised is never committed at all.
+
+Three things fall out of making a sleep a row:
 
 - **Idempotent sleeps.** On wake, the sleep step is a memo hit and returns
   immediately — a job with three sleeps does not restart the first one on the
@@ -549,7 +631,7 @@ explicitly fire-and-forget — which is exactly wrong for a step commit, because
 A new frame, sent immediately before the `Job` frame, to executors that
 advertise `CAP_STEPS`:
 
-```
+```text
 {"type":"job_steps","job_id":"018f…","payload_len":412}\n<412 bytes>
 ```
 
@@ -564,7 +646,7 @@ happens when it is nonetheless handed a task that calls `step.run` is §9.4.
 
 ### 9.2 Write side: the first request/response on the channel
 
-```
+```text
 executor  → {"type":"step_commit","job_id":…,"step_key":"charge#0","seq":0,"payload_len":64}
 scheduler → {"type":"step_ack","job_id":…,"seq":0,"ok":true}
 ```
@@ -575,14 +657,44 @@ first executor→scheduler frame that expects an answer; both enums are already
 
 Correlation is `(job_id, seq)` — one executor runs many jobs concurrently, and a
 `job_id` alone is not enough once a job has more than one step in flight (it
-cannot, but the pairing should not depend on that).
+cannot, but the pairing should not depend on that). The frame also carries the
+executor's `owner` id, which the scheduler passes to `record_step_result` as the
+fencing token of §1.4.
 
 A `step_ack` with `ok: false` carries the storage error — a cap violation, a
-`seq` conflict — and the executor raises it into the task body at the
-`step.run` call site.
+`seq` conflict, a lost claim — and the executor raises it into the task body at
+the `step.run` call site.
+
+**A commit is idempotent, because an ack can be lost.** The connection can drop
+between the scheduler's write and the executor seeing the answer, and the
+executor's only recourse is to send the frame again. If a retransmission were
+treated as a second commit, the durable path would fail exactly when the network
+is already failing. So `record_step_result` compares the incoming
+`(job_id, seq, step_key)` and a digest of the payload against what is stored:
+
+| Stored row at `seq` | Incoming | Result |
+|---|---|---|
+| none | anything | `Committed` |
+| identical key + digest | retransmission | `AlreadyCommitted`, `ok: true` |
+| different key or digest | conflict | `ok: false`, the attempt fails |
+
+Only genuinely conflicting data is refused. That is also what makes the sleep
+recovery in §7.1 self-healing.
+
+**The wait is bounded.** The executor waits for an ack up to the job's remaining
+`timeout_ms`, or until the connection drops, whichever comes first. Either way
+the attempt **fails** — it never proceeds past a step it could not confirm was
+durable, because an unconfirmed commit is indistinguishable from one that never
+happened, and continuing would re-run the step on the next attempt with the
+side effect already applied. The job retries, replays the steps that *are*
+committed, and re-runs this one under the same `step.idempotency_key` (§6),
+which is the mechanism that makes the re-run safe.
 
 **Sleep** is a terminal frame beside `Success`/`Failure`/`Cancelled`:
-`{"type":"slept","job_id":…,"wake_at":…,"task_name":…,"wall_time_ns":…}`.
+`{"type":"slept","job_id":…,"wake_at":…,"task_name":…,"wall_time_ns":…}`. It
+carries `owner` too, and the scheduler answers it with a `step_ack` before
+treating the attempt as ended — a sleep that could not be persisted is a failed
+attempt, not a silent one.
 
 ### 9.3 Latency
 
@@ -613,7 +725,7 @@ One table, following the `job_errors` shape (`m0001_initial.rs:131`) — text
 `archived_jobs` on completion and an FK would break exactly when the feature is
 working.
 
-```
+```sql
 job_steps(
   id          TEXT PRIMARY KEY,
   job_id      TEXT NOT NULL,
@@ -621,7 +733,6 @@ job_steps(
   step_key    TEXT NOT NULL,
   seq         INTEGER NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'run',    -- 'run' | 'sleep'
-  status      TEXT NOT NULL,                  -- 'complete' | 'sleeping'
   result      BLOB,
   result_len  INTEGER NOT NULL DEFAULT 0,     -- cheap total-cap check
   wake_at     BIGINT,                         -- kind='sleep'
@@ -636,12 +747,13 @@ Placed as `crates/flexiq-core/migrations/m0013_job_steps.rs`; `build.rs`
 discovers it. `namespace` is denormalised from the job so the scoped read and
 delete are single-table.
 
-**There is no `error` column and no `failed` status, deliberately.** A step
+**There is no `status` column and no `error` column, deliberately.** A step
 whose closure raised is never committed — that is what makes the retry re-run
-it. Only two states are reachable: `complete` (a `run` that returned, or a
-`sleep` whose deadline has passed) and `sleeping` (a `sleep` whose attempt has
-not woken yet). A schema that could express a failed step would invite a reader
-to treat one as a memo hit.
+it — so a committed `run` row is complete by construction, and a `sleep` row's
+completeness is `now >= wake_at` (§7.3). Every state is derivable from what is
+already stored. A `status` column would be a second source of truth that some
+path has to remember to advance, and a schema that could express a failed step
+would invite a reader to treat one as a memo hit.
 
 Both unique indexes matter: `(job_id, seq)` is what makes a double commit of the
 same position a database error rather than a race, and `(job_id, step_key)`
@@ -652,23 +764,48 @@ catches a duplicate explicit key.
 One hash per job, under the same prefix rules as the rest of `redis_backend/`
 (`redis_backend/mod.rs:69`):
 
+```text
+{prefix}job_steps:{job_id}   HASH
+    <seq>          → JSON document          -- decimal seq
+    k:<step_key>   → <seq>                  -- uniqueness index
+    __total        → running result_len sum
 ```
-{prefix}job_steps:{job_id}   HASH  field=seq → JSON document
-```
 
-A hash, not the list `job_errors` uses, because a step lookup is by position and
-a commit must be able to fail on a taken position — `HSETNX` gives that in one
-command with no Lua and no compare-and-swap loop.
+A hash, not the list `job_errors` uses, because a step lookup is by position.
+The `k:` fields carry what the Diesel side gets from
+`UNIQUE(job_id, step_key)` — `HSETNX` on `<seq>` alone would happily accept the
+same explicit key at two different positions, which is precisely the collision
+§2.2 promises to reject.
 
-Deleted with `DEL` in the terminal write. A **defensive TTL** (7 days, refreshed
-on each commit) covers a crash between the terminal write and the delete — which
-is also why Redis needs no SCAN sweep, unlike `job_errors`
-(`redis_backend/jobs/errors.rs:110`).
+**The commit is one Lua script, not `HSETNX` plus `MULTI`.** `MULTI` is not
+conditional: it cannot check a constraint and abandon the write when the check
+fails, so a rejected commit would still have moved `__total`, and two concurrent
+commits could each read a total under the cap and both write. Lua's
+single-threaded execution gives the conditional the transaction cannot, in one
+round trip — the same reason `enqueue_debounced` decides slide-versus-insert in
+a script (three of them, `redis_backend/jobs/enqueue.rs`).
 
-The total-bytes cap is `HVALS`-free: each document carries `result_len` and
-the running total is `HLEN` plus a `HGET` of a reserved `__total` field updated
-in the same `MULTI` as the commit. `__total` cannot collide with a field name,
-because every other field is a decimal `seq`.
+The script, in order: verify the claim still names `owner` (§1.4) · reject a
+taken `<seq>` unless the stored document is byte-identical, in which case return
+`AlreadyCommitted` (§9.2) · reject a taken `k:<step_key>` · reject when
+`HLEN`-derived count would exceed `max_steps` or `__total + result_len` would
+exceed `max_total_bytes` · only then write the field, the `k:` index and the new
+`__total` together. Every rejection leaves the hash exactly as it found it.
+
+Deleted with `DEL` in the terminal write. A **defensive TTL** covers a crash
+between the terminal write and the delete — which is also why Redis needs no
+SCAN sweep, unlike `job_errors` (`redis_backend/jobs/errors.rs:110`).
+
+**The TTL is sized from the sleep, not from a constant.** A flat 7-day TTL
+refreshed only on commit expires the snapshot of a job sleeping for thirty days,
+and the wake attempt then re-runs every committed step — the exact failure the
+feature exists to prevent, arriving silently and only for long sleeps. So every
+commit sets the TTL to `max(now + 7 days, wake_at + 7 days)`, where `wake_at` is
+the latest deadline in the hash. The grace period is the same on both arms, so a
+job that never sleeps is unaffected.
+
+Diesel backends need none of this: rows have no TTL, and the terminal write is
+their only deletion path.
 
 ### 10.3 What this costs `flexiq-workflows`
 
@@ -700,7 +837,7 @@ prevent, so:
   once every process is upgraded"*;
 - the check reads the floor already loaded at open — no extra query.
 
-#672 documents the upgrade order: upgrade every process, then raise the floor,
+The upgrade order goes in #672: upgrade every process, then raise the floor,
 then deploy tasks that use steps.
 
 ### 11.2 The 2.0.0 (D13)
@@ -730,32 +867,40 @@ up until the release is cut. Version with `node scripts/version.mjs --set 2.0.0`
 
 Each sub-issue is reviewed against the decision it implements.
 
-**#665 storage** — D1, D3, D6, D10, §10. Table shape and both unique indexes ·
-four defaulted methods, `Unsupported` not empty · caps enforced in
-`record_step_result`, on encoded bytes · deletion wired into every terminal
-write (`move_to_dlq` included) and into *neither* `requeue_stuck` nor the
-dead-owner reclaim · Redis hash with `HSETNX` and the defensive TTL · contract
-suite so the Postgres and Redis legs exercise all of it.
+**#665 storage** — D1, D3, D6, D10, D14, §1.4, §10. Table shape, both unique
+indexes, and no `status` column · five defaulted methods, `Unsupported` not
+empty · every write fenced on the claim's `worker_id`, in the write's own
+transaction · an identical re-commit returns `AlreadyCommitted`, not a conflict ·
+caps enforced in `record_step_result`, on encoded bytes · deletion wired into
+every terminal write (`move_to_dlq` included) and into *neither* `requeue_stuck`
+nor the dead-owner reclaim · the Redis commit is one Lua script, with the `k:`
+uniqueness index and the `wake_at`-sized TTL · contract suite so the Postgres and
+Redis legs exercise all of it, including a commit racing a reclaim.
 
 **#666 memoization** — D2, D4, D5, D6, D7, §2, §3, §5. `flexiq_core::step` as
 pure functions · one snapshot read per attempt · `name#occurrence` plus the
-explicit key · position-by-position check, no fingerprint column · divergence is
-`should_retry = false` · the codec test asserts on the raw stored bytes.
+explicit key, with keyed calls *not* spending an occurrence — tested keyed,
+unkeyed and interleaved · position-by-position check, no fingerprint column ·
+divergence is `should_retry = false` · the codec test asserts on the raw stored
+bytes.
 
-**#667 sleep** — D9, D11, §7. `complete_execution` + `reschedule` · `reschedule`
-gains a namespace · the sleep is a step row with `wake_at` · a test pinning that
-a sleeping job is not stale-reaped · retry count, retry budget, breaker and
-metrics all untouched · `on_sleep` and the `before`-pairing invariant · contrib
-middleware updated in all three shells · the swallow latch.
+**#667 sleep** — D9, D11, D14, §7. `sleep_job` is one transaction, not three
+calls · `reschedule` gains a namespace · the sleep is a step row with `wake_at`,
+and a memo hit only once `now >= wake_at` · a test pinning that a sleeping job is
+not stale-reaped, and one that kills the process mid-sleep and checks the next
+attempt heals · retry count, retry budget, breaker and metrics all untouched ·
+`on_sleep` and the `before`-pairing invariant · contrib middleware updated in all
+three shells · the swallow latch.
 
 **#668 idempotency key** — D8, §6. `{run_key}:{step_key}` · `run_key` is the
 origin id · `retry_dead` writes `__origin_job_id` on three backends · three
 stability tests, including across `retry_dead` · the contrast with the
 `idempotent=True` auto-key documented.
 
-**#669 / #670 / #671 shells** — §2.1 (names mandatory, positional), §4.2 (the
-error text), §7.6 (`on_sleep` in contrib), §7.7 (both swallow layers), §9.4
-(refuse without `CAP_STEPS`).
+**#669 / #670 / #671 shells** — §2.1 (names mandatory, positional), §2.2 (the
+mixed keyed/unkeyed rule), §4.2 (the error text), §7.6 (`on_sleep` in contrib),
+§7.7 (both swallow layers), §9.2 (a commit the executor could not confirm fails
+the attempt), §9.4 (refuse without `CAP_STEPS`).
 
 **#672 docs** — the nesting picture from §1.1 above the fold, §3.5 (what
 divergence cannot catch), §4.2 (store it elsewhere, memoize the handle), §7.4
@@ -766,7 +911,7 @@ divergence cannot catch), §4.2 (store it elsewhere, memoize the handle), §7.4
 
 ## §13 Out of scope
 
-- **Fixing the workflow node cache** (§1.4). Real, adjacent, separately tracked.
+- **Fixing the workflow node cache** (§1.5). Real, adjacent, separately tracked.
 - **Steps on a workflow node's task body.** Works by construction — the node is
   a job — and needs no design. Worth one line in #672.
 - **Cross-job steps.** A step belongs to one job. A unit of work that outlives a
