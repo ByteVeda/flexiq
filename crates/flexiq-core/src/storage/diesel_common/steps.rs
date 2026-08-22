@@ -8,16 +8,16 @@
 macro_rules! impl_diesel_step_ops {
     ($storage_type:ty, $conn_type:ty) => {
         impl $storage_type {
-            /// Resolve the `(owner, attempt)` fence for a step write, inside the
-            /// write's own transaction, and return the job's namespace so the
-            /// row can denormalise it.
+            /// Resolve the `(owner, attempt)` fence, inside the caller's
+            /// transaction, and return the job's namespace so a row can
+            /// denormalise it.
             ///
             /// The four cases, in the order they are checked:
             ///
             /// | Claim row | Job row | Outcome |
             /// |---|---|---|
             /// | names `owner` | `Running`, `retry_count == attempt` | proceed |
-            /// | absent | `Running`, `retry_count == attempt` | re-assert, proceed |
+            /// | absent | `Running`, `retry_count == attempt` | proceed, re-asserting the claim if `reassert` |
             /// | names another worker | — | `ClaimLost` |
             /// | absent | gone, not `Running`, or a different attempt | `ClaimLost` |
             ///
@@ -25,22 +25,41 @@ macro_rules! impl_diesel_step_ops {
             /// sweeps by age, so a job that legitimately runs longer than the
             /// cutoff finds its own claim gone while it is still the only thing
             /// executing; calling that `ClaimLost` would abandon a live attempt
-            /// and leave the job `Running` with no owner. Re-asserting is safe
-            /// because the claim insert is keyed on `job_id`, so at most one
-            /// racing writer wins, and the `Running`/`retry_count` guards keep
-            /// it from resurrecting a claim on a job that has moved on.
+            /// and leave the job `Running` with no owner.
+            ///
+            /// `reassert` is what separates a write from a check. A step write
+            /// puts the claim back, because the writes after it need one to
+            /// fence against, and the insert is safe on the `job_id` primary
+            /// key — at most one racing writer wins, and the `Running` and
+            /// `retry_count` guards keep it from resurrecting a claim on a job
+            /// that has moved on. A read-only check must not: it would leave a
+            /// claim its caller never asked for, and take a write transaction
+            /// on the result path to do it.
+            ///
+            /// A re-asserting resolution also takes the job row under
+            /// `FOR UPDATE` where the backend has it. Without that, a concurrent
+            /// `retry` or terminal archive can commit between the read and the
+            /// insert, and the step lands in a sequence that has already moved
+            /// on — or under a job that no longer exists. SQLite needs no lock:
+            /// `write_transaction` is `BEGIN IMMEDIATE`, which serializes
+            /// writers outright.
             fn resolve_step_fence(
                 conn: &mut $conn_type,
                 job_id: &str,
                 owner: &str,
                 attempt: i32,
                 namespace: Option<&str>,
+                reassert: bool,
             ) -> Result<Option<String>> {
-                let job: Option<(i32, i32, Option<String>)> = jobs::table
-                    .find(job_id)
-                    .select((jobs::status, jobs::retry_count, jobs::namespace))
-                    .first(conn)
-                    .optional()?;
+                let job = if reassert {
+                    Self::lock_job_for_step_fence(conn, job_id)?
+                } else {
+                    jobs::table
+                        .find(job_id)
+                        .select((jobs::status, jobs::retry_count, jobs::namespace))
+                        .first(conn)
+                        .optional()?
+                };
 
                 let Some((status, retry_count, job_namespace)) = job else {
                     return Err(QueueError::ClaimLost(job_id.to_string()));
@@ -59,7 +78,7 @@ macro_rules! impl_diesel_step_ops {
                 match claim {
                     Some(holder) if holder == owner => {}
                     Some(_) => return Err(QueueError::ClaimLost(job_id.to_string())),
-                    None => {
+                    None if reassert => {
                         diesel::insert_into(execution_claims::table)
                             .values(&NewExecutionClaimRow {
                                 job_id,
@@ -68,6 +87,7 @@ macro_rules! impl_diesel_step_ops {
                             })
                             .execute(conn)?;
                     }
+                    None => {}
                 }
 
                 Ok(job_namespace)
@@ -225,8 +245,14 @@ macro_rules! impl_diesel_step_ops {
                 }
 
                 self.write_transaction(|conn| {
-                    let job_namespace =
-                        Self::resolve_step_fence(conn, step.job_id, owner, attempt, namespace)?;
+                    let job_namespace = Self::resolve_step_fence(
+                        conn,
+                        step.job_id,
+                        owner,
+                        attempt,
+                        namespace,
+                        true,
+                    )?;
 
                     // A retransmission of a commit that already landed is a
                     // success, not a conflict — the executor channel can
@@ -297,8 +323,14 @@ macro_rules! impl_diesel_step_ops {
 
                 let limits = limits.clamped();
                 self.write_transaction(|conn| {
-                    let job_namespace =
-                        Self::resolve_step_fence(conn, step.job_id, owner, attempt, namespace)?;
+                    let job_namespace = Self::resolve_step_fence(
+                        conn,
+                        step.job_id,
+                        owner,
+                        attempt,
+                        namespace,
+                        true,
+                    )?;
 
                     let stored: Option<(String, String, Option<i64>)> = job_steps::table
                         .filter(job_steps::job_id.eq(step.job_id))
@@ -385,7 +417,9 @@ macro_rules! impl_diesel_step_ops {
             }
 
             /// Whether a result carrying `(owner, attempt)` still speaks for
-            /// this job. The step fence, read rather than written.
+            /// this job. The step fence, read rather than written — no claim is
+            /// re-asserted and no write transaction is taken, because this runs
+            /// once per result on the drain path.
             pub fn authorize_attempt(
                 &self,
                 job_id: &str,
@@ -395,16 +429,16 @@ macro_rules! impl_diesel_step_ops {
             ) -> Result<$crate::storage::records::AttemptFence> {
                 use $crate::storage::records::AttemptFence;
 
-                self.write_transaction(|conn| {
-                    match Self::resolve_step_fence(conn, job_id, owner, attempt, namespace) {
-                        Ok(_) => Ok(AttemptFence::Authorized),
-                        // The job moved on, or another worker holds it. Not an
-                        // error: the result is dropped, and the attempt that is
-                        // actually running finishes the job.
-                        Err(QueueError::ClaimLost(_)) => Ok(AttemptFence::Superseded),
-                        Err(other) => Err(other),
-                    }
-                })
+                let mut conn = self.conn()?;
+                match Self::resolve_step_fence(&mut conn, job_id, owner, attempt, namespace, false)
+                {
+                    Ok(_) => Ok(AttemptFence::Authorized),
+                    // The job moved on, or another worker holds it. Not an
+                    // error: the result is dropped, and the attempt that is
+                    // actually running finishes the job.
+                    Err(QueueError::ClaimLost(_)) => Ok(AttemptFence::Superseded),
+                    Err(other) => Err(other),
+                }
             }
 
             /// Drop every step row for a job. The explicit admin entry point —
