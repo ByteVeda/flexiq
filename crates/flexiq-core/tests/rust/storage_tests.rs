@@ -1945,6 +1945,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_delete_job_steps_is_namespace_scoped(s);
     test_authorize_attempt_writes_nothing(s);
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
+    test_an_elapsed_sleep_wakes_the_job_immediately(s);
 }
 
 // ── Durable inline steps ─────────────────────────────────────────────
@@ -3356,4 +3357,61 @@ fn test_a_step_at_the_cap_round_trips_byte_for_byte(s: &impl Storage) {
         ),
         other => panic!("expected the per-job cap, got {other}"),
     }
+}
+
+fn test_an_elapsed_sleep_wakes_the_job_immediately(s: &impl Storage) {
+    let q = "q-steps-elapsed";
+    let job = stepped_job(s, q, "w-elapsed");
+    let limits = StepLimits::default();
+    let sleep = NewJobStep {
+        job_id: &job.id,
+        seq: 0,
+        step_key: "cool_off#0",
+        kind: StepKind::Sleep,
+        result: None,
+    };
+    let deadline = now_millis() - 60_000;
+
+    // A deadline already in the past is committed and reported as it stands.
+    // Refusing it here would be the wrong layer: the worker decides whether a
+    // sleep is still pending, and a stored row it has passed is a memo hit it
+    // continues through. Storage's job is to answer truthfully about the
+    // deadline it holds.
+    assert_eq!(
+        s.sleep_job(&sleep, "w-elapsed", 0, deadline, &limits, None)
+            .unwrap(),
+        SleepOutcome::Slept { wake_at: deadline }
+    );
+
+    // And an elapsed sleep leaves the job runnable *now* rather than parked:
+    // `scheduled_at` in the past is exactly what "this sleep is over" means, so
+    // the next poll picks it up and the worker replays past the committed row.
+    let woken = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(woken.status, JobStatus::Pending);
+    assert_eq!(woken.scheduled_at, deadline);
+    assert_eq!(
+        s.dequeue(q, now_millis(), None).unwrap().map(|j| j.id),
+        Some(job.id.clone()),
+        "an elapsed sleep must not park the job until some later poll"
+    );
+
+    // Replaying it keeps the original instant, elapsed or not.
+    assert!(s.claim_execution(&job.id, "w-elapsed").unwrap());
+    assert_eq!(
+        s.sleep_job(
+            &sleep,
+            "w-elapsed",
+            0,
+            now_millis() + 3_600_000,
+            &limits,
+            None
+        )
+        .unwrap(),
+        SleepOutcome::AlreadySleeping { wake_at: deadline }
+    );
+    assert_eq!(
+        s.get_job(&job.id, None).unwrap().unwrap().scheduled_at,
+        deadline,
+        "a replay must never push an already-elapsed deadline into the future"
+    );
 }
