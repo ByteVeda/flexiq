@@ -60,7 +60,7 @@ pub trait Storage: Send + Sync + Clone {
     /// one or a newly inserted one; compare its id against the previous call's
     /// to tell coalescing from insertion. Rejects a missing or empty
     /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
-    /// window with [`QueueError::Config`](crate::error::QueueError::Config).
+    /// window with [`QueueError::Config`].
     ///
     /// The Diesel backends get their atomicity from the transaction; the Redis
     /// backend has none, so it decides slide-vs-insert in a Lua script and
