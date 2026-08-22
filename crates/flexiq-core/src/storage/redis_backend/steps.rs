@@ -280,6 +280,22 @@ fn sleep_job_script() -> String {
     )
 }
 
+/// Namespace check, count and delete in one pass.
+///
+/// Three round trips would let a commit land between the count and the `DEL`
+/// — deleted but not counted — or between the namespace check and the `DEL`,
+/// under a check that no longer describes the hash. Every other write here is
+/// one script for the same reason.
+const DELETE_STEPS: &str = r#"
+    if ARGV[1] ~= '' and redis.call('HGET', KEYS[1], '__ns') ~= ARGV[1] then return 0 end
+    local committed = 0
+    for _, field in ipairs(redis.call('HKEYS', KEYS[1])) do
+        if string.match(field, '^%d+$') then committed = committed + 1 end
+    end
+    redis.call('DEL', KEYS[1])
+    return committed
+"#;
+
 impl RedisStorage {
     /// The hash holding one job's committed steps.
     pub(in crate::storage::redis_backend) fn job_steps_key(&self, job_id: &str) -> String {
@@ -495,23 +511,15 @@ impl RedisStorage {
     /// Drop every step row for a job. The explicit admin entry point.
     pub fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
         let mut conn = self.conn()?;
-        let key = self.job_steps_key(job_id);
-        if let Some(scope) = namespace {
-            let stored: Option<String> = conn.hget(&key, NAMESPACE_FIELD).map_err(map_err)?;
-            if stored.as_deref() != Some(scope) {
-                return Ok(0);
-            }
-        }
-        // One `DEL` removes every position at once, so the count is taken from
-        // the field names rather than from the reply — and reading the names
-        // costs nothing next to decoding every blob.
-        let fields: Vec<String> = conn.hkeys(&key).map_err(map_err)?;
-        let committed = fields
-            .iter()
-            .filter(|field| field.parse::<i32>().is_ok())
-            .count() as u64;
-        let _: () = conn.del(&key).map_err(map_err)?;
-        Ok(committed)
+        // One `DEL` removes every position at once, so the count comes from the
+        // field names rather than from the reply — and reading the names costs
+        // nothing next to decoding every blob.
+        let committed: i64 = redis::Script::new(DELETE_STEPS)
+            .key(self.job_steps_key(job_id))
+            .arg(namespace.unwrap_or(""))
+            .invoke(&mut conn)
+            .map_err(map_err)?;
+        Ok(committed.max(0) as u64)
     }
 
     /// The deadline already committed at this position, if any.
