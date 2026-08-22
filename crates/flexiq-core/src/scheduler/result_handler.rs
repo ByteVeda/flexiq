@@ -29,12 +29,25 @@ impl Scheduler {
         let Some(record) = self.release_in_flight(job_id) else {
             return Ok(true);
         };
-        let fence = self.storage.authorize_attempt(
+        // The fence fails **open**, and deliberately. Propagating the error
+        // would drop a result whose dispatch record has already been consumed,
+        // leaving a finished job `Running` with nothing to finish it until the
+        // stale reaper times it out — a storage blip turned into a phantom
+        // timeout. Failing open costs at most what every caller had before the
+        // fence existed, and the transitions below carry their own `Running`
+        // guards.
+        let fence = match self.storage.authorize_attempt(
             job_id,
             &record.owner,
             record.attempt,
             self.namespace.as_deref(),
-        )?;
+        ) {
+            Ok(fence) => fence,
+            Err(e) => {
+                error!("could not check the fence for job {job_id}; handling anyway: {e}");
+                AttemptFence::Authorized
+            }
+        };
         if fence == AttemptFence::Superseded {
             warn!(
                 "dropping superseded result for job {job_id} from attempt {}",
@@ -118,16 +131,27 @@ impl Scheduler {
                 let job = self.storage.get_job(&job_id, self.namespace.as_deref())?;
                 let queue = job.as_ref().map(|j| j.queue.clone()).unwrap_or_default();
 
-                let move_to_dlq =
-                    |job: Option<&crate::job::Job>, metadata: Option<&str>| -> Result<()> {
-                        match job {
-                            Some(j) => self.dlq.move_to_dlq(j, &error, metadata),
-                            None => {
-                                warn!("job {job_id} disappeared before DLQ move");
-                                Ok(())
+                let move_to_dlq = |job: Option<&crate::job::Job>,
+                                   metadata: Option<&str>|
+                 -> Result<()> {
+                    match job {
+                        Some(j) => self.dlq.move_to_dlq(j, &error, metadata),
+                        None => {
+                            // The one branch that runs no transition, so the
+                            // one that has no transaction to revoke the claim
+                            // inside. Left alone it would point at a job that
+                            // no longer exists until the age sweep collects it.
+                            warn!("job {job_id} disappeared before DLQ move");
+                            if let Err(e) = self
+                                .storage
+                                .complete_execution(&job_id, self.namespace.as_deref())
+                            {
+                                error!("failed to clear the claim of vanished job {job_id}: {e}");
                             }
+                            Ok(())
                         }
-                    };
+                    }
+                };
 
                 // If should_retry is false (exception filtering), skip straight to DLQ
                 if !should_retry {
