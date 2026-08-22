@@ -412,7 +412,10 @@ impl Scheduler {
         // failure arms untrack what never left.
         let job_id = job.id.clone();
         let task_name = job.task_name.clone();
-        self.track_in_flight(&job_id, &task_name);
+        // `retry_count` as of the claim is half the fencing token: `retry` bumps
+        // it without changing who may claim next, so the owner alone cannot
+        // separate two runs of the same job.
+        self.track_in_flight(&job_id, &task_name, job.retry_count);
         match job_tx.try_send(job) {
             Ok(()) => Ok(true),
             Err(TrySendError::Full(job)) => {

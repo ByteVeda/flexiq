@@ -245,6 +245,10 @@ fn dispatch_outcome(py: Python<'_>, outcome: &ResultOutcome) {
             ResultOutcome::Success { .. } => {
                 // Success events are already emitted in _wrap_task
             }
+            ResultOutcome::Superseded { .. } => {
+                // The job is proceeding under another owner and this attempt
+                // wrote no state, so there is nothing to hook or emit.
+            }
         }
         Ok(())
     })();

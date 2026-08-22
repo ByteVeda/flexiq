@@ -641,6 +641,22 @@ impl StepKind {
     }
 }
 
+/// Whether a result still speaks for the job it names.
+///
+/// A `JobResult` is identified by `job_id` alone, so an unfenced
+/// `handle_result` will retry, dead-letter or finalize whichever job the id
+/// names — including one that orphan recovery reclaimed to another worker while
+/// the original owner was merely slow rather than dead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptFence {
+    /// The claim names this owner at this attempt, or is merely absent while the
+    /// job is still `Running` at it — the age-sweep case, which re-asserts.
+    Authorized,
+    /// The claim names another worker, or the job has moved past this attempt.
+    /// The only correct contribution a superseded attempt can make is none.
+    Superseded,
+}
+
 /// One committed step of a job, as read back at attempt start.
 ///
 /// There is no `status` and no `error`: a step whose closure raised is never

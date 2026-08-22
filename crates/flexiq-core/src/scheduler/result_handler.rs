@@ -2,6 +2,7 @@ use log::{error, warn};
 
 use crate::error::Result;
 use crate::job::JobCompletion;
+use crate::storage::records::AttemptFence;
 use crate::storage::Storage;
 
 use super::{JobResult, ResultOutcome, Scheduler};
@@ -12,14 +13,52 @@ use super::{JobResult, ResultOutcome, Scheduler};
 pub const RETRY_BUDGET_EXHAUSTED: &str = "retry_budget_exhausted";
 
 impl Scheduler {
+    /// Free a finished job's in-flight slot and decide whether its result still
+    /// speaks for the job.
+    ///
+    /// `false` means superseded: the job is proceeding under another owner —
+    /// after a reclaim, or a retry that already bumped the attempt — and the
+    /// only correct contribution this attempt can make is none. Dropped with a
+    /// warning rather than failed or retried, because failing it would kill a
+    /// run proceeding correctly elsewhere.
+    ///
+    /// A job this scheduler never dispatched has no token to check against — a
+    /// duplicate result, or a foreign id — and is left to the transitions' own
+    /// guards, exactly as before the fence existed.
+    fn authorize_finished(&self, job_id: &str) -> Result<bool> {
+        let Some(record) = self.release_in_flight(job_id) else {
+            return Ok(true);
+        };
+        let fence = self.storage.authorize_attempt(
+            job_id,
+            &record.owner,
+            record.attempt,
+            self.namespace.as_deref(),
+        )?;
+        if fence == AttemptFence::Superseded {
+            warn!(
+                "dropping superseded result for job {job_id} from attempt {}",
+                record.attempt
+            );
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// Handle a completed or failed job result from a worker.
     ///
     /// Returns a [`ResultOutcome`] describing the action taken, so the
     /// caller (the binding) can dispatch its middleware hooks and events.
     pub fn handle_result(&self, result: JobResult) -> Result<ResultOutcome> {
-        // A dispatched job finished — free its in-flight slot (no-op for jobs
-        // this scheduler didn't dispatch, e.g. maintenance-recovered orphans).
-        self.release_in_flight(result.job_id());
+        // A dispatched job finished — free its in-flight slot and take the
+        // token it was dispatched under. `None` for a job this scheduler never
+        // dispatched (a duplicate result, or a foreign id), which has nothing to
+        // validate against and is left to the transitions' own guards.
+        if !self.authorize_finished(result.job_id())? {
+            return Ok(ResultOutcome::Superseded {
+                job_id: result.job_id().to_string(),
+            });
+        }
         match result {
             JobResult::Success {
                 job_id,
@@ -42,14 +81,14 @@ impl Scheduler {
                 should_retry,
                 timed_out,
             } => {
-                // Clear execution claim so it can be retried
-                if let Err(e) = self
-                    .storage
-                    .complete_execution(&job_id, self.namespace.as_deref())
-                {
-                    log::error!("failed to clear execution claim for job {job_id}: {e}");
-                }
-
+                // The claim is *not* cleared here. Clearing it now and
+                // transitioning a dozen statements later leaves the job
+                // `Running` with no claim for the whole span in between, and a
+                // late write from the failing attempt lands squarely in that
+                // window, takes the claim back, and commits a step the retry
+                // then replays as a memo hit. Every transition below —
+                // `retry`, and the DLQ move's archive — revokes the claim
+                // inside its own transaction instead.
                 if let Err(e) = self.storage.record_error(
                     &job_id,
                     retry_count,
@@ -162,13 +201,8 @@ impl Scheduler {
                 task_name,
                 wall_time_ns,
             } => {
-                // Clear execution claim
-                if let Err(e) = self
-                    .storage
-                    .complete_execution(&job_id, self.namespace.as_deref())
-                {
-                    error!("failed to clear execution claim for job {job_id}: {e}");
-                }
+                // `mark_cancelled` archives the job and revokes the claim in
+                // one transaction, so there is no window to clear it in first.
                 // Mark as cancelled, no retry
                 if let Err(e) = self
                     .storage
@@ -225,24 +259,29 @@ impl Scheduler {
                     task_name,
                     wall_time_ns,
                 } => {
-                    success_idx.push(i);
-                    completions.push(JobCompletion {
-                        job_id,
-                        result,
-                        task_name,
-                        wall_time_ns,
-                    });
+                    // Each success is a finished job — free its in-flight slot
+                    // and fence it on the token it was dispatched under, exactly
+                    // as the single-result path does. The batch is the default
+                    // drain path, so skipping the fence here would leave it
+                    // guarding nothing.
+                    match self.authorize_finished(&job_id) {
+                        Ok(true) => {
+                            success_idx.push(i);
+                            completions.push(JobCompletion {
+                                job_id,
+                                result,
+                                task_name,
+                                wall_time_ns,
+                            });
+                        }
+                        Ok(false) => outcomes[i] = Some(Ok(ResultOutcome::Superseded { job_id })),
+                        Err(e) => outcomes[i] = Some(Err(e)),
+                    }
                 }
                 // Failures and cancellations branch (retry vs DLQ, queue
                 // lookups); batching them buys little, so keep the per-result path.
                 other => outcomes[i] = Some(self.handle_result(other)),
             }
-        }
-
-        // Each success is a finished job — free its in-flight slot. Non-success
-        // results already released theirs via `handle_result` above.
-        for c in &completions {
-            self.release_in_flight(&c.job_id);
         }
 
         if !completions.is_empty() {

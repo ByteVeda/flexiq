@@ -2,10 +2,10 @@ use crate::error::{QueueError, Result};
 use crate::job::{Job, NewJob};
 use crate::step::StepLimits;
 use crate::storage::records::{
-    CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep, NewPeriodicTask,
-    NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome, StepCommit,
-    Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats, TopicMessage,
-    WorkerInfo, WorkerRegistration, WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
+    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome,
+    StepCommit, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats,
+    TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -730,6 +730,29 @@ pub trait Storage: Send + Sync + Clone {
     ) -> Result<SleepOutcome> {
         let _ = (step, owner, attempt, wake_at, limits, namespace);
         Err(steps_unsupported())
+    }
+
+    /// Whether a result carrying `(owner, attempt)` still speaks for this job.
+    ///
+    /// The same four-case resolution
+    /// [`record_step_result`](Self::record_step_result) fences writes with,
+    /// exposed for the scheduler: a terminal transition applied to the wrong
+    /// attempt is no longer only a wrong status — it deletes another attempt's
+    /// steps.
+    ///
+    /// Defaults to [`AttemptFence::Authorized`], which is exactly how every
+    /// caller behaved before the fence existed. This is the one gate here that
+    /// must *not* fail closed: a backend that cannot evaluate it would otherwise
+    /// drop every result and leave every job `Running` forever.
+    fn authorize_attempt(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<AttemptFence> {
+        let _ = (job_id, owner, attempt, namespace);
+        Ok(AttemptFence::Authorized)
     }
 
     /// Drop every step row for a job. Returns the count removed.

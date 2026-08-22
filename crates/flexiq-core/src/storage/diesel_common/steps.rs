@@ -370,6 +370,29 @@ macro_rules! impl_diesel_step_ops {
                 })
             }
 
+            /// Whether a result carrying `(owner, attempt)` still speaks for
+            /// this job. The step fence, read rather than written.
+            pub fn authorize_attempt(
+                &self,
+                job_id: &str,
+                owner: &str,
+                attempt: i32,
+                namespace: Option<&str>,
+            ) -> Result<$crate::storage::records::AttemptFence> {
+                use $crate::storage::records::AttemptFence;
+
+                self.write_transaction(|conn| {
+                    match Self::resolve_step_fence(conn, job_id, owner, attempt, namespace) {
+                        Ok(_) => Ok(AttemptFence::Authorized),
+                        // The job moved on, or another worker holds it. Not an
+                        // error: the result is dropped, and the attempt that is
+                        // actually running finishes the job.
+                        Err(QueueError::ClaimLost(_)) => Ok(AttemptFence::Superseded),
+                        Err(other) => Err(other),
+                    }
+                })
+            }
+
             /// Drop every step row for a job. The explicit admin entry point —
             /// the terminal paths delete inline instead.
             pub fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {

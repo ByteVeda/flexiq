@@ -467,6 +467,11 @@ fn call_on_outcome(
     callbacks: &GlobalRef,
     outcome: &ResultOutcome,
 ) -> Result<(), String> {
+    // A superseded result wrote nothing — the job is proceeding under another
+    // owner — so the shell hears nothing about it.
+    if matches!(outcome, ResultOutcome::Superseded { .. }) {
+        return Ok(());
+    }
     let (kind, job_id, task_name, error, retry_count, timed_out, wall_time_ns) = describe(outcome);
     let kind_s = env.new_string(kind).map_err(|e| e.to_string())?;
     let job_s = env.new_string(job_id).map_err(|e| e.to_string())?;
@@ -557,6 +562,8 @@ fn describe(outcome: &ResultOutcome) -> (&str, &str, &str, Option<&str>, i32, bo
             false,
             *wall_time_ns,
         ),
+        // Filtered out by `call_on_outcome` before it gets here.
+        ResultOutcome::Superseded { job_id } => ("superseded", job_id, "", None, -1, false, 0),
     }
 }
 

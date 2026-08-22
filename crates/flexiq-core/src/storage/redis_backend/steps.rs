@@ -36,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, JobStatus};
 use crate::step::StepLimits;
-use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
+use crate::storage::records::{
+    AttemptFence, JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind,
+};
 use crate::storage::redis_backend::{map_err, RedisStorage};
 
 use super::jobs::dequeue_score;
@@ -101,6 +103,11 @@ const FENCE: &str = r#"
         redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1])
     end
 "#;
+
+/// The fence on its own, for a result the scheduler is about to act on.
+fn authorize_attempt_script() -> String {
+    format!("{FENCE}\n    return {{'ok'}}\n")
+}
 
 /// Commit one step.
 ///
@@ -393,6 +400,34 @@ impl RedisStorage {
             "sleep for job {} could not settle on a deadline",
             step.job_id
         )))
+    }
+
+    /// Whether a result carrying `(owner, attempt)` still speaks for this job.
+    pub fn authorize_attempt(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<AttemptFence> {
+        let mut conn = self.conn()?;
+        let reply: Vec<String> = redis::Script::new(&authorize_attempt_script())
+            .key(self.key(&["job", job_id]))
+            .key(self.key(&["exec_claim", job_id]))
+            .key(self.key(&["exec_claims", "by_time"]))
+            .arg(job_id)
+            .arg(owner)
+            .arg(attempt)
+            .arg(now_millis())
+            .arg(JobStatus::Running.wire_name())
+            .arg(namespace.unwrap_or(""))
+            .invoke(&mut conn)
+            .map_err(map_err)?;
+
+        Ok(match reply.first().map(String::as_str) {
+            Some("ok") => AttemptFence::Authorized,
+            _ => AttemptFence::Superseded,
+        })
     }
 
     /// Drop every step row for a job. The explicit admin entry point.

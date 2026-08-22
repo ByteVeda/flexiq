@@ -1250,6 +1250,15 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<$crate::storage::records::SleepOutcome> {
                 self.sleep_job(step, owner, attempt, wake_at, limits, namespace)
             }
+            fn authorize_attempt(
+                &self,
+                job_id: &str,
+                owner: &str,
+                attempt: i32,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::records::AttemptFence> {
+                self.authorize_attempt(job_id, owner, attempt, namespace)
+            }
             fn delete_job_steps(
                 &self,
                 job_id: &str,
@@ -2097,6 +2106,15 @@ impl Storage for StorageBackend {
         namespace: Option<&str>,
     ) -> Result<records::SleepOutcome> {
         delegate!(self, sleep_job, step, owner, attempt, wake_at, limits, namespace)
+    }
+    fn authorize_attempt(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<records::AttemptFence> {
+        delegate!(self, authorize_attempt, job_id, owner, attempt, namespace)
     }
     fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
         delegate!(self, delete_job_steps, job_id, namespace)

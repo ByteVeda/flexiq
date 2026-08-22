@@ -270,10 +270,13 @@ pub fn start_worker(
                     for outcome in outcomes {
                         match outcome {
                             Ok(outcome) => {
-                                outcome_callback.call(
-                                    outcome_to_js(&outcome),
-                                    ThreadsafeFunctionCallMode::NonBlocking,
-                                );
+                                // A superseded result maps to nothing: the job
+                                // is proceeding under another owner and this
+                                // attempt wrote no state to report.
+                                if let Some(js) = outcome_to_js(&outcome) {
+                                    outcome_callback
+                                        .call(js, ThreadsafeFunctionCallMode::NonBlocking);
+                                }
                             }
                             Err(err) => {
                                 log::error!("[flexiq-node] result handling error: {err}")
