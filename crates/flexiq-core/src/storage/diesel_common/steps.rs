@@ -73,36 +73,45 @@ macro_rules! impl_diesel_step_ops {
                 Ok(job_namespace)
             }
 
-            /// Every committed step's position, key, kind and encoded size —
-            /// no blobs. Enough to decide a commit; the one blob a commit ever
-            /// needs is re-read for the position it lands on.
-            fn step_index(
+            /// How many steps a job has committed, and how many encoded bytes
+            /// they add up to. Two aggregates over the `job_id` index rather
+            /// than a scan of every row: a job may commit a thousand steps, and
+            /// loading them all on each commit would make one job quadratic.
+            fn step_totals(
                 conn: &mut $conn_type,
                 job_id: &str,
-            ) -> diesel::result::QueryResult<Vec<(i32, String, String, i32)>> {
-                job_steps::table
+            ) -> diesel::result::QueryResult<(i64, i64)> {
+                let committed: i64 = job_steps::table
                     .filter(job_steps::job_id.eq(job_id))
-                    .order(job_steps::seq.asc())
-                    .select((
-                        job_steps::seq,
-                        job_steps::step_key,
-                        job_steps::kind,
-                        job_steps::result_len,
-                    ))
-                    .load(conn)
+                    .count()
+                    .get_result(conn)?;
+                let bytes: Option<i64> = job_steps::table
+                    .filter(job_steps::job_id.eq(job_id))
+                    .select(diesel::dsl::sum(job_steps::result_len))
+                    .first(conn)?;
+                Ok((committed, bytes.unwrap_or(0)))
             }
 
             /// Reject a commit that cannot legally take `seq`: an explicit key
             /// already spent at another position, or a gap in the sequence.
+            ///
+            /// The key lookup rides `UNIQUE(job_id, step_key)`, and the gap
+            /// check leans on the sequence being gapless by construction, so
+            /// the count *is* the next free position.
             fn check_step_position(
-                index: &[(i32, String, String, i32)],
+                conn: &mut $conn_type,
                 job_id: &str,
                 seq: i32,
                 step_key: &str,
+                committed: i64,
             ) -> Result<()> {
-                if let Some((taken_at, _, _, _)) =
-                    index.iter().find(|(_, key, _, _)| key == step_key)
-                {
+                let taken_at: Option<i32> = job_steps::table
+                    .filter(job_steps::job_id.eq(job_id))
+                    .filter(job_steps::step_key.eq(step_key))
+                    .select(job_steps::seq)
+                    .first(conn)
+                    .optional()?;
+                if let Some(taken_at) = taken_at {
                     return Err(QueueError::StepDiverged {
                         job_id: job_id.to_string(),
                         seq,
@@ -110,11 +119,11 @@ macro_rules! impl_diesel_step_ops {
                         found: format!("'{step_key}', already committed at position {taken_at}"),
                     });
                 }
-                if seq as usize != index.len() {
+                if i64::from(seq) != committed {
                     return Err(QueueError::StepDiverged {
                         job_id: job_id.to_string(),
                         seq,
-                        expected: format!("position {}", index.len()),
+                        expected: format!("position {committed}"),
                         found: format!("position {seq}"),
                     });
                 }
@@ -123,15 +132,15 @@ macro_rules! impl_diesel_step_ops {
 
             /// Refuse a commit that would take the job over `max_steps`.
             fn check_step_count(
-                index: &[(i32, String, String, i32)],
+                committed: i64,
                 step_key: &str,
                 limits: &$crate::step::StepLimits,
             ) -> Result<()> {
-                if index.len() + 1 > limits.max_steps {
+                if committed + 1 > limits.max_steps as i64 {
                     return Err(QueueError::StepLimitExceeded {
                         step_key: step_key.to_string(),
                         limit: "step count".to_string(),
-                        actual: index.len() as u64 + 1,
+                        actual: committed as u64 + 1,
                         allowed: limits.max_steps as u64,
                     });
                 }
@@ -218,14 +227,17 @@ macro_rules! impl_diesel_step_ops {
                 self.write_transaction(|conn| {
                     let job_namespace =
                         Self::resolve_step_fence(conn, step.job_id, owner, attempt, namespace)?;
-                    let index = Self::step_index(conn, step.job_id)?;
 
                     // A retransmission of a commit that already landed is a
                     // success, not a conflict — the executor channel can
                     // legitimately deliver the same frame twice.
-                    if let Some((_, stored_key, stored_kind, _)) =
-                        index.iter().find(|(seq, _, _, _)| *seq == step.seq)
-                    {
+                    let stored: Option<(String, String, Option<Vec<u8>>)> = job_steps::table
+                        .filter(job_steps::job_id.eq(step.job_id))
+                        .filter(job_steps::seq.eq(step.seq))
+                        .select((job_steps::step_key, job_steps::kind, job_steps::result))
+                        .first(conn)
+                        .optional()?;
+                    if let Some((stored_key, stored_kind, stored_result)) = stored {
                         if stored_key != step.step_key || stored_kind != step.kind.as_str() {
                             return Err(QueueError::StepDiverged {
                                 job_id: step.job_id.to_string(),
@@ -234,12 +246,7 @@ macro_rules! impl_diesel_step_ops {
                                 found: format!("a {} step '{}'", step.kind.as_str(), step.step_key),
                             });
                         }
-                        let stored: Option<Vec<u8>> = job_steps::table
-                            .filter(job_steps::job_id.eq(step.job_id))
-                            .filter(job_steps::seq.eq(step.seq))
-                            .select(job_steps::result)
-                            .first(conn)?;
-                        if stored.as_deref().unwrap_or(&[]) == payload {
+                        if stored_result.as_deref().unwrap_or(&[]) == payload {
                             return Ok(StepCommit::AlreadyCommitted);
                         }
                         return Err(QueueError::StepDiverged {
@@ -250,10 +257,16 @@ macro_rules! impl_diesel_step_ops {
                         });
                     }
 
-                    Self::check_step_position(&index, step.job_id, step.seq, step.step_key)?;
-                    Self::check_step_count(&index, step.step_key, &limits)?;
+                    let (committed, stored_bytes) = Self::step_totals(conn, step.job_id)?;
+                    Self::check_step_position(
+                        conn,
+                        step.job_id,
+                        step.seq,
+                        step.step_key,
+                        committed,
+                    )?;
+                    Self::check_step_count(committed, step.step_key, &limits)?;
 
-                    let stored_bytes: i64 = index.iter().map(|(_, _, _, len)| *len as i64).sum();
                     let total = stored_bytes + payload.len() as i64;
                     if total > limits.max_total_bytes as i64 {
                         return Err(QueueError::StepLimitExceeded {
@@ -323,14 +336,15 @@ macro_rules! impl_diesel_step_ops {
                             SleepOutcome::AlreadySleeping { wake_at: deadline }
                         }
                         None => {
-                            let index = Self::step_index(conn, step.job_id)?;
+                            let (committed, _) = Self::step_totals(conn, step.job_id)?;
                             Self::check_step_position(
-                                &index,
+                                conn,
                                 step.job_id,
                                 step.seq,
                                 step.step_key,
+                                committed,
                             )?;
-                            Self::check_step_count(&index, step.step_key, &limits)?;
+                            Self::check_step_count(committed, step.step_key, &limits)?;
                             Self::insert_step_row(
                                 conn,
                                 step,
