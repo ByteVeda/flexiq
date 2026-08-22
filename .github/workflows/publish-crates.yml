@@ -85,6 +85,39 @@ jobs:
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
 
+      # The tree-only readiness checks. They used to run on every pull request,
+      # where they cost each branch an extra toolchain install and two more
+      # compiles of the whole crate set to answer a question nobody asks until a
+      # release is being cut. Nothing they check can regress between the merge
+      # and the tag without a commit that CI already saw, so this is where they
+      # earn their time.
+      #
+      # The MSRV toolchain is installed with plain rustup and invoked as
+      # `cargo +<msrv>`, rather than through the toolchain action: that action
+      # makes what it installs the *default*, which would silently hand every
+      # later step in this job an MSRV compiler.
+      #
+      # --locked throughout: without it the first command may resolve a stale
+      # Cargo.lock and rewrite it on the runner, leaving the later steps to
+      # validate that rewritten lockfile instead of the committed one.
+      - name: The crates build at the declared MSRV
+        env:
+          PACKAGES: -p flexiq -p flexiq-core -p flexiq-workflows -p flexiq-mesh
+        run: |
+          set -euo pipefail
+          msrv="$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+          echo "::notice::Declared MSRV is ${msrv}"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          read -ra pkgs <<< "$PACKAGES"
+          cargo "+$msrv" check --locked "${pkgs[@]}" --all-features
+
+      - name: Rustdoc is warning-free
+        env:
+          PACKAGES: -p flexiq -p flexiq-core -p flexiq-workflows -p flexiq-mesh
+        run: |
+          read -ra pkgs <<< "$PACKAGES"
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked "${pkgs[@]}" --no-deps --all-features
+
       # Re-running a release must be a no-op for versions already up, so the
       # upload set is whatever is genuinely missing. Probing the sparse index
       # rather than the REST API: it is the registry's sanctioned programmatic
@@ -172,8 +205,10 @@ jobs:
       # Packages each pending crate and builds it from its own tarball, resolving
       # their inter-dependencies through a temporary registry. This is what
       # catches a missing file or an unpublishable dependency, and it is the
-      # whole of a dry run. The upload below reuses these tarballs via
-      # --no-verify rather than compiling everything a second time.
+      # whole of a dry run — `cargo publish --dry-run` does exactly this and
+      # nothing more, which is why the readiness job's separate dry run was not
+      # carried over with the two steps above. The upload below reuses these
+      # tarballs via --no-verify rather than compiling everything a second time.
       - name: Package and verify
         if: steps.pending.outputs.args != ''
         run: cargo package --locked ${{ steps.pending.outputs.args }}
