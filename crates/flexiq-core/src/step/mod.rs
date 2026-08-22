@@ -9,6 +9,7 @@ mod failure;
 mod key;
 mod limits;
 mod sequence;
+mod session;
 
 pub use failure::{classify_step_failure, StepFailure};
 pub use key::StepKey;
@@ -17,3 +18,4 @@ pub use limits::{
     MAX_STEPS_CEILING, MAX_STEP_BYTES_CEILING, MAX_TOTAL_BYTES_CEILING,
 };
 pub use sequence::{PendingStep, StepDecision, StepSequence};
+pub use session::StepSession;
