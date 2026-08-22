@@ -59,7 +59,7 @@ protocol. This is the single largest cost in the epic and the reason §9 exists.
 | D11 | New hook `on_sleep`; `after` does **not** fire for a slept attempt. | `after(ctx, None, None)` reads as "returned None" to every existing middleware, so OTel would close a span as success and Prometheus would count one. |
 | D12 | Inline steps require **`CONTRACT_VERSION` 2** and refuse to run below a floor of 2. | An older worker cannot read `job_steps` and would silently re-run every committed step during a rolling upgrade. That is precisely what the floor exists for. |
 | D13 | The epic lands as **one major release (2.0.0)**. | `JobResult` and `ResultOutcome` are not `#[non_exhaustive]`; adding a variant, and adding the attribute, are both breaking. Bundle them once rather than discovering the break at publish time. |
-| D14 | **Every step write is fenced on the execution claim** — with the owner derived by the scheduler, never taken from a frame — and is atomic with whatever else it changes. | A job can run in two places at once, as `requeue_stuck` documents, so an unfenced write from an abandoned attempt lands in the live one's sequence; an executor-supplied owner would let a stale peer spoof its way back in. Splitting a sleep, or a terminal cleanup, across two calls strands state past a crash. |
+| D14 | **Every step write is fenced on the execution claim** — owner derived by the scheduler, never taken from a frame; an absent claim on a still-`Running` job re-asserts rather than failing — and is atomic with whatever else it changes, terminal cleanup revoking the claim in the same transaction. | A job can run in two places at once, as `requeue_stuck` documents, so an unfenced write from an abandoned attempt lands in the live one's sequence; an executor-supplied owner would let a stale peer spoof its way back in. Splitting a sleep, or a terminal cleanup, across two calls strands state past a crash. |
 
 ---
 
@@ -164,12 +164,29 @@ So the token that already exists is the one used: `execution_claims` is
 `worker_id` atomically. A stale owner is exactly an owner whose `worker_id` no
 longer matches the claim row.
 
-**Rule:** `record_step_result` and `sleep_job` take the writer's `owner` and, in
-the same transaction as the write, require the claim row for `job_id` to still
-name it. A mismatch — or no claim row at all — is `QueueError::ClaimLost`, and
-the attempt ends without producing a result at all: another worker owns this job
-now, so failing it would kill a run that is proceeding correctly elsewhere
-(§9.2).
+**Rule:** `record_step_result` and `sleep_job` take the writer's `owner` and
+resolve the claim in the same transaction as the write:
+
+| Claim row for `job_id` | Job row | Outcome |
+|---|---|---|
+| names `owner` | — | proceed |
+| absent | still `Running` | re-assert the claim for `owner`, then proceed |
+| names another worker | — | `QueueError::ClaimLost` |
+| absent | gone or not `Running` | `QueueError::ClaimLost` |
+
+**An absent claim is not a lost one, and conflating the two loses jobs.**
+Claims are swept by age (`purge_execution_claims`, `storage/traits.rs:641`), so a
+job that legitimately runs longer than the cutoff can find its own claim gone
+while it is still the only thing executing. Treating that as `ClaimLost` would
+abandon a live attempt (§9.2 emits no result for one) and leave the job `Running`
+with no owner until the stale reaper eventually times it out — a stall caused
+entirely by housekeeping.
+
+Re-asserting is safe because `claim_execution` is insert-only on the `job_id`
+primary key: the insert succeeds exactly when no row exists, and the PK serializes
+any worker racing to claim the same job, so at most one wins. The `still Running`
+guard is what keeps this from resurrecting a claim on a job that has already gone
+terminal — which is also what makes the terminal fence of §8.4 hold.
 
 **`owner` is never something a caller asserts about itself.** In-process and
 prefork workers pass the id they claimed under, which they hold because they won
@@ -478,11 +495,20 @@ sleep that outlives the job, produced by the recovery path itself.
 So `wake_at` is an input on the first commit and ignored on every later one.
 `sleep_job` returns `SleepOutcome`:
 
-| Row at `(seq, step_key)` | Behaviour | Returns |
+| Row at `seq` | Behaviour | Returns |
 |---|---|---|
 | none | commit with the candidate `wake_at` | `Slept { wake_at }` |
-| exists, same key | keep the stored deadline, reschedule to it | `AlreadySleeping { wake_at }` |
-| exists, different key | divergence (§3) | `ok: false` |
+| same `step_key`, `kind = 'sleep'` | keep the stored deadline, reschedule to it | `AlreadySleeping { wake_at }` |
+| same `step_key`, `kind = 'run'` | divergence (§3) | `ok: false` |
+| different `step_key` | divergence (§3) | `ok: false` |
+
+`kind` is part of the match, not an afterthought: a `run` row carries no
+`wake_at`, so treating one as `AlreadySleeping` would reschedule the job to a
+null deadline. The same rule runs the other way in `record_step_result` — a `run`
+commit landing on a stored `sleep` row is a divergence, not a digest mismatch.
+The realistic cause is an edit that turned `step.run("cool_off", …)` into
+`step.sleep(…, name="cool_off")` while jobs were in flight, which is exactly the
+class of change §3 exists to catch loudly.
 
 The reschedule inside the transaction always targets the *returned* deadline,
 never the candidate. `sleep_until` passes an absolute instant and is unaffected
@@ -636,6 +662,23 @@ window: a crash rolls both statements back and the job is retried, still holding
 the memo it is entitled to. So `delete_job_steps` stays on the trait as the
 explicit admin entry point, and no terminal path calls it.
 
+**The same transaction must also revoke the execution claim.** Atomic deletion
+alone still races: an attempt running elsewhere commits a step microseconds after
+the delete, passes the owner check because its claim is still live, and writes a
+row belonging to a job that no longer exists — the orphan the transaction was
+meant to prevent, arriving right behind it. Revoking the claim inside the
+transaction closes it, because the fence of §1.4 then finds no claim *and* no
+`Running` job, which is `ClaimLost` rather than the re-assert branch. The two
+rules are load-bearing for each other.
+
+`complete_batch` already works this way — "archives the completed job, clears its
+execution claim, and records its metric … in one transaction"
+(`storage/traits.rs:113`). The work is bringing the rest up to it: today
+`result_handler.rs` calls `complete_execution` as a separate step on the failure
+and cancellation paths (`scheduler/result_handler.rs:48`), and the DLQ and
+chunked mass-mutation paths need the same treatment. #665 owes a
+terminal-versus-step-commit race test on every backend.
+
 Redis has no cross-key transaction, so its terminal paths do the `DEL` in the
 same Lua script or pipeline as the job move, with the `wake_at`-sized TTL of
 §10.2 as the backstop for the residual crash window that Lua cannot close.
@@ -752,10 +795,18 @@ is explicit:
 | Failure | Ends the attempt as | Why |
 |---|---|---|
 | ack timeout, connection drop | retryable failure | The only genuinely uncertain case. The replay re-runs the step under the same `step.idempotency_key` (§6), which is what makes it safe. |
-| storage/IO error | retryable failure | Transient by nature. |
+| backend unavailable — `Pool`, a `Redis` connection error, a Diesel serialization failure or deadlock, `Timeout` | retryable failure | The backend, not the request, is what failed. |
+| permanently bad request — `Serialization`, `Config`, `ContractTooOld`, a unique-constraint violation | `should_retry = false` → DLQ | Nothing about the next attempt is different, so a retry spends budget reproducing the error. |
 | no `CAP_STEPS` (§9.4) | retryable failure | A heterogeneous fleet mid-rollout may place the next attempt on a capable executor. Exhausting retries dead-letters it with an error naming the capability. |
 | `seq` conflict, divergence (§3), cap violation (§4), invalid step name | `should_retry = false` → DLQ | Deterministic. The code will not change between attempts, so a retry burns the budget to reproduce the same error. |
 | `ClaimLost` (§1.4) | **no result at all** | Special, and the one case that must not go through either path — see below. |
+
+"Storage error" is deliberately not one row. `QueueError` spans both a pool that
+cannot hand out a connection and a payload that will never serialize, and putting
+them in the same bucket either burns the retry budget on the permanent ones or
+dead-letters jobs over a blip. The split is by what would be different next
+time — and it is the acknowledgement boundary that has to classify, which is
+why #665 owes mapping tests there rather than leaving each shell to guess.
 
 **`ClaimLost` ends the attempt silently.** Another worker holds the claim and is
 running the job right now. Reporting a failure would dead-letter or retry a job
@@ -958,14 +1009,18 @@ Each sub-issue is reviewed against the decision it implements.
 **#665 storage** — D1, D3, D6, D10, D14, §1.4, §10. Table shape, both unique
 indexes, and no `status` column · five defaulted methods, `Unsupported` not
 empty · every write fenced on the claim's `worker_id`, in the write's own
-transaction · an identical re-commit returns `AlreadyCommitted`, not a conflict ·
-caps enforced in `record_step_result`, on encoded bytes · deletion is a statement
-*inside* each terminal method's existing transaction — no terminal path calls
-`delete_job_steps` — and neither `requeue_stuck` nor the dead-owner reclaim
-deletes anything · the Redis commit is one Lua script, with the `k:` uniqueness
+transaction, with the four-case resolution table — including a test that a
+*purged* claim on a still-`Running` job re-asserts rather than failing · an
+identical re-commit returns `AlreadyCommitted`, not a conflict, and `kind` is
+part of the match · caps enforced in `record_step_result`, on encoded bytes ·
+deletion is a statement *inside* each terminal method's existing transaction,
+which also revokes the execution claim — no terminal path calls
+`delete_job_steps`, and neither `requeue_stuck` nor the dead-owner reclaim
+deletes anything · error classification at the acknowledgement boundary, mapping
+tests included · the Redis commit is one Lua script, with the `k:` uniqueness
 index and the `wake_at`-sized TTL · contract suite so the Postgres and Redis legs
-exercise all of it, including a commit racing a reclaim and a terminal write
-rolled back mid-transaction.
+exercise all of it, including a commit racing a reclaim, a commit racing a
+terminal write, and a terminal write rolled back mid-transaction.
 
 **#666 memoization** — D2, D4, D5, D6, D7, §2, §3, §5. `flexiq_core::step` as
 pure functions · one snapshot read per attempt · `name#occurrence` plus the
