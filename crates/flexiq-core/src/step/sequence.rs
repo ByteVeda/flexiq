@@ -59,15 +59,29 @@ impl PendingStep {
 /// The recorded sequence, and where this attempt has got to in it.
 ///
 /// The "fingerprint" of a job's steps is this ordered list of keys — there is
-/// no digest column and no extra read. Each step is checked against the
-/// snapshot position by position as it is asked for (§3.2), which is what makes
-/// a divergence surface *before* the closure runs.
+/// no digest column and no extra read. Each step is matched against the
+/// snapshot as it is asked for (§3.2), which is what makes a divergence surface
+/// *before* the closure runs.
+///
+/// The two identities are matched differently, which is the whole point of
+/// having both (§2.3). An unkeyed step is matched **by position**: `fetch#1`
+/// means "the second `fetch` of this attempt", so it is only the same step if
+/// it is asked for at the same point. An explicit key is matched **by key,
+/// wherever it sits** — a key exists precisely so a loop over something
+/// unordered can hand its steps back in a different order without every one of
+/// them looking like a different question.
 #[derive(Debug)]
 pub struct StepSequence {
     job_id: String,
     /// The snapshot, ordered by `seq` and gapless — checked at construction,
     /// because a hole would silently shift every memo after it.
     recorded: Vec<JobStep>,
+    /// Which recorded steps this attempt has claimed, parallel to `recorded`.
+    /// A keyed hit can claim one out of order, so the positional walk skips
+    /// what is already spoken for rather than counting blindly.
+    claimed: Vec<bool>,
+    /// Recorded key to its index, for the keyed lookup.
+    by_key: HashMap<String, usize>,
     /// Keys this attempt has asked for, in order. Kept for the divergence
     /// message, which is only useful if it shows what the running code did.
     issued: Vec<String>,
@@ -77,12 +91,13 @@ pub struct StepSequence {
     /// Per-name occurrence counters. Explicit keys never touch these — see
     /// [`StepKey`].
     occurrences: HashMap<String, u32>,
-    /// How many steps this attempt has resolved: memo hits plus commits.
-    position: usize,
+    /// Where the positional walk has got to in the snapshot.
+    cursor: usize,
     /// The step handed out and not yet committed. At most one at a time.
     pending: Option<PendingStep>,
     /// Rows committed for this job, and the bytes they hold. Seeded from the
-    /// snapshot so the caps can be checked without a second read.
+    /// snapshot so the caps can be checked without a second read, and it is
+    /// also the next free `seq` — the sequence is gapless by construction.
     stored_count: usize,
     stored_bytes: usize,
 }
@@ -103,24 +118,31 @@ impl StepSequence {
             }
         }
         let stored_bytes = recorded.iter().map(result_len).sum();
+        let by_key = recorded
+            .iter()
+            .enumerate()
+            .map(|(index, step)| (step.step_key.clone(), index))
+            .collect();
         Ok(Self {
             job_id,
             stored_count: recorded.len(),
             stored_bytes,
+            claimed: vec![false; recorded.len()],
+            by_key,
             recorded,
             issued: Vec::new(),
             issued_keys: HashSet::new(),
             occurrences: HashMap::new(),
-            position: 0,
+            cursor: 0,
             pending: None,
         })
     }
 
     /// Decide what `step.run(name)` — or `step.run(name, key=…)` — must do.
     ///
-    /// Advances the position on a memo hit, because nothing further is needed
-    /// there. On [`StepDecision::Run`] the position moves only once the commit
-    /// lands, so a closure that raises leaves the sequence where it was.
+    /// A memo hit is resolved outright. On [`StepDecision::Run`] nothing counts
+    /// as done until the commit lands, so a closure that raises leaves the
+    /// sequence exactly where it was.
     pub fn begin_run(&mut self, name: &str, key: Option<&str>) -> Result<StepDecision> {
         let step_key = match key {
             Some(key) => StepKey::explicit(name, key)?,
@@ -129,7 +151,7 @@ impl StepSequence {
                 StepKey::derive(name, occurrence)?
             }
         };
-        let decision = self.resolve(&step_key, StepKind::Run)?;
+        let decision = self.resolve(&step_key, StepKind::Run, key.is_some())?;
         // Spent only once the key is known to be usable: a refused step must
         // not shift the key of the next one.
         if key.is_none() {
@@ -151,13 +173,12 @@ impl StepSequence {
                 )));
             }
         }
-        self.position += 1;
         self.stored_count += 1;
         self.stored_bytes += encoded_len;
         Ok(())
     }
 
-    /// Steps recorded past where this attempt stopped (§3.4).
+    /// Recorded steps this attempt never asked for (§3.4).
     ///
     /// A **warning**, never a failure: their side effects already happened and
     /// the shortened code has no use for their values. The rows die with the
@@ -165,8 +186,9 @@ impl StepSequence {
     pub fn orphaned_tail(&self) -> Vec<&str> {
         self.recorded
             .iter()
-            .skip(self.position)
-            .map(|step| step.step_key.as_str())
+            .zip(&self.claimed)
+            .filter(|(_, claimed)| !**claimed)
+            .map(|(step, _)| step.step_key.as_str())
             .collect()
     }
 
@@ -193,8 +215,8 @@ impl StepSequence {
         self.stored_bytes
     }
 
-    /// Match one step against the snapshot position, or claim new ground.
-    fn resolve(&mut self, step_key: &str, kind: StepKind) -> Result<StepDecision> {
+    /// Match one step against the snapshot, or claim new ground.
+    fn resolve(&mut self, step_key: &str, kind: StepKind, keyed: bool) -> Result<StepDecision> {
         if let Some(outstanding) = &self.pending {
             return Err(QueueError::Config(format!(
                 "step '{}' of job {} started while step '{}' is still uncommitted",
@@ -215,43 +237,66 @@ impl StepSequence {
         }
         self.issued.push(step_key.to_string());
 
-        let position = self.position;
-        match self.recorded.get(position) {
-            Some(recorded) if recorded.step_key == step_key && recorded.kind == kind => {
-                let result = recorded.result.clone().unwrap_or_default();
-                self.position += 1;
-                Ok(StepDecision::Memoized {
-                    step_key: step_key.to_string(),
-                    result,
-                })
-            }
-            Some(recorded) => Err(self.divergence(position, recorded, step_key, kind)),
-            // Past the snapshot: this attempt got further than the last one.
-            None => {
-                let seq = i32::try_from(position).map_err(|_| {
-                    QueueError::Config(format!(
-                        "job {} asked for more steps than a sequence can hold",
-                        self.job_id
-                    ))
-                })?;
-                let pending = PendingStep {
-                    seq,
-                    step_key: step_key.to_string(),
-                    kind,
-                };
-                self.pending = Some(pending.clone());
-                Ok(StepDecision::Run(pending))
-            }
+        match self.recorded_match(step_key, keyed) {
+            Some(index) if self.recorded[index].kind == kind => Ok(self.memoize(index)),
+            // Same key, different kind: `run` replaying onto a recorded `sleep`
+            // is a changed sequence like any other.
+            Some(index) => Err(self.divergence(index, step_key, kind)),
+            None if keyed || self.cursor >= self.recorded.len() => self.new_ground(step_key, kind),
+            // The positional walk reached a step the recorded run does not have
+            // here. Nothing later can line up either.
+            None => Err(self.divergence(self.cursor, step_key, kind)),
         }
     }
 
-    fn divergence(
-        &self,
-        position: usize,
-        recorded: &JobStep,
-        step_key: &str,
-        kind: StepKind,
-    ) -> QueueError {
+    /// Which recorded step, if any, this one replays.
+    ///
+    /// A keyed step is looked up by key wherever it sits; an unkeyed one must
+    /// be at the cursor, which skips whatever a keyed hit already claimed.
+    fn recorded_match(&mut self, step_key: &str, keyed: bool) -> Option<usize> {
+        if keyed {
+            // Never already claimed: a key issued twice in one attempt is
+            // refused above, so at most one lookup can reach any given row.
+            return self.by_key.get(step_key).copied();
+        }
+        while self.cursor < self.recorded.len() && self.claimed[self.cursor] {
+            self.cursor += 1;
+        }
+        let recorded = self.recorded.get(self.cursor)?;
+        (recorded.step_key == step_key).then_some(self.cursor)
+    }
+
+    /// Hand back a recorded step's value and mark it spoken for.
+    fn memoize(&mut self, index: usize) -> StepDecision {
+        self.claimed[index] = true;
+        StepDecision::Memoized {
+            step_key: self.recorded[index].step_key.clone(),
+            result: self.recorded[index].result.clone().unwrap_or_default(),
+        }
+    }
+
+    /// This attempt got further than any before it: the step is new.
+    ///
+    /// It takes the next free `seq`, which is the number of rows already
+    /// stored — not the walk's position, which a keyed hit can leave behind.
+    fn new_ground(&mut self, step_key: &str, kind: StepKind) -> Result<StepDecision> {
+        let seq = i32::try_from(self.stored_count).map_err(|_| {
+            QueueError::Config(format!(
+                "job {} asked for more steps than a sequence can hold",
+                self.job_id
+            ))
+        })?;
+        let pending = PendingStep {
+            seq,
+            step_key: step_key.to_string(),
+            kind,
+        };
+        self.pending = Some(pending.clone());
+        Ok(StepDecision::Run(pending))
+    }
+
+    fn divergence(&self, position: usize, step_key: &str, kind: StepKind) -> QueueError {
+        let recorded = &self.recorded[position];
         // Same key, different kind: say so, or the message reads as if nothing
         // changed. `run` replaying onto a recorded `sleep` is exactly this.
         let (expected, found) = if recorded.step_key == step_key {
@@ -404,6 +449,82 @@ mod tests {
             }
             commit(&mut sequence, decision, b"");
         }
+    }
+
+    #[test]
+    fn keyed_steps_replay_in_any_order() {
+        // The whole reason `key=` exists: a loop over something unordered may
+        // hand its steps back in a different order, and each one must still
+        // find its own memo rather than the one that happens to sit there.
+        let mut sequence = sequence(vec![
+            recorded(0, "fetch:a", b"A"),
+            recorded(1, "fetch:b", b"B"),
+        ]);
+        assert_eq!(
+            sequence.begin_run("fetch", Some("b")).unwrap(),
+            StepDecision::Memoized {
+                step_key: "fetch:b".to_string(),
+                result: b"B".to_vec(),
+            }
+        );
+        assert_eq!(
+            sequence.begin_run("fetch", Some("a")).unwrap(),
+            StepDecision::Memoized {
+                step_key: "fetch:a".to_string(),
+                result: b"A".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unkeyed_step_lines_up_after_reordered_keyed_ones() {
+        let mut sequence = sequence(vec![
+            recorded(0, "charge#0", b""),
+            recorded(1, "fetch:a", b"A"),
+            recorded(2, "fetch:b", b"B"),
+            recorded(3, "receipt#0", b"R"),
+        ]);
+        for (name, key) in [
+            ("charge", None),
+            ("fetch", Some("b")),
+            ("fetch", Some("a")),
+            ("receipt", None),
+        ] {
+            let decision = sequence.begin_run(name, key).unwrap();
+            assert!(
+                matches!(decision, StepDecision::Memoized { .. }),
+                "{name} {key:?} should have replayed: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_the_recorded_run_never_saw_takes_the_next_free_position() {
+        // The loop gained an item. The new step appends after every stored row,
+        // not at the walk's position — storage demands the next free `seq`.
+        let mut sequence = sequence(vec![
+            recorded(0, "fetch:a", b"A"),
+            recorded(1, "fetch:b", b"B"),
+        ]);
+        sequence.begin_run("fetch", Some("b")).unwrap();
+        match sequence.begin_run("fetch", Some("c")).unwrap() {
+            StepDecision::Run(pending) => {
+                assert_eq!((pending.seq(), pending.step_key()), (2, "fetch:c"))
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_recorded_step_nobody_asked_for_is_reported_not_failed() {
+        // The loop lost an item. Its side effects already happened and nothing
+        // reads the value, so the row is a warning, not a failed job.
+        let mut sequence = sequence(vec![
+            recorded(0, "fetch:a", b"A"),
+            recorded(1, "fetch:b", b"B"),
+        ]);
+        sequence.begin_run("fetch", Some("b")).unwrap();
+        assert_eq!(sequence.orphaned_tail(), vec!["fetch:a"]);
     }
 
     #[test]
