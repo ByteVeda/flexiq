@@ -219,6 +219,16 @@ pub enum ResultOutcome {
         /// Wall-clock execution time in nanoseconds; 0 when not measured.
         wall_time_ns: i64,
     },
+    /// The result came from an attempt the job has moved past — a reclaimed
+    /// owner finishing late, or a retry that already bumped the attempt.
+    ///
+    /// Nothing was written and nothing was retried: the job is proceeding
+    /// elsewhere, and a binding should dispatch no middleware hook and emit no
+    /// event for it, exactly as if the result had never arrived.
+    Superseded {
+        /// Id of the job the dropped result named.
+        job_id: String,
+    },
 }
 
 /// Per-task configuration for retry, rate limiting, and circuit breaker.
@@ -265,47 +275,60 @@ impl Default for TaskConfig {
     }
 }
 
-/// In-flight bookkeeping behind the dispatch caps: which jobs are out, and how many
-/// of each task. Per-task counts are maintained alongside rather than derived so the
-/// per-task gate stays O(1) — the poller consults it on every dispatch, and the map
-/// is as large as `max_in_flight`.
+/// What this scheduler dispatched a job as: the task it named, and the
+/// `(owner, attempt)` it claimed under.
+///
+/// The pair is the fencing token every result is checked against. It is derived
+/// here, by the side that won the claim — never taken from a worker, and never
+/// from a frame, because a value a peer can choose is not a fencing token but a
+/// request to be trusted.
+#[derive(Clone)]
+struct DispatchRecord {
+    task_name: String,
+    owner: String,
+    attempt: i32,
+}
+
+/// In-flight bookkeeping: which jobs this scheduler dispatched, under what
+/// token, and how many of each task. Per-task counts are maintained alongside
+/// rather than derived so the per-task gate stays O(1).
+///
+/// Populated unconditionally rather than only under `max_in_flight`: the records
+/// are load-bearing for correctness now, not just for the cap.
 #[derive(Default)]
 struct InFlight {
-    task_by_job: HashMap<String, String>,
+    by_job: HashMap<String, DispatchRecord>,
     count_by_task: HashMap<String, usize>,
 }
 
 impl InFlight {
     fn len(&self) -> usize {
-        self.task_by_job.len()
+        self.by_job.len()
     }
 
     fn count_for(&self, task_name: &str) -> usize {
         self.count_by_task.get(task_name).copied().unwrap_or(0)
     }
 
-    fn insert(&mut self, job_id: &str, task_name: &str) {
-        if self
-            .task_by_job
-            .insert(job_id.to_string(), task_name.to_string())
-            .is_none()
-        {
-            *self.count_by_task.entry(task_name.to_string()).or_insert(0) += 1;
+    fn insert(&mut self, job_id: &str, record: DispatchRecord) {
+        let task_name = record.task_name.clone();
+        if self.by_job.insert(job_id.to_string(), record).is_none() {
+            *self.count_by_task.entry(task_name).or_insert(0) += 1;
         }
     }
 
-    /// `true` if the job was tracked here (so a slot was actually freed).
-    fn remove(&mut self, job_id: &str) -> bool {
-        let Some(task_name) = self.task_by_job.remove(job_id) else {
-            return false;
-        };
-        if let Some(count) = self.count_by_task.get_mut(&task_name) {
+    /// The dispatch record, removed. `None` when this scheduler never
+    /// dispatched the job — a maintenance-recovered orphan, or a result that
+    /// arrived twice.
+    fn remove(&mut self, job_id: &str) -> Option<DispatchRecord> {
+        let record = self.by_job.remove(job_id)?;
+        if let Some(count) = self.count_by_task.get_mut(&record.task_name) {
             *count -= 1;
             if *count == 0 {
-                self.count_by_task.remove(&task_name);
+                self.count_by_task.remove(&record.task_name);
             }
         }
-        true
+        Some(record)
     }
 }
 
@@ -454,15 +477,24 @@ impl Scheduler {
         })
     }
 
-    /// Record a job as in flight once it is handed to the worker channel.
-    /// No-op when dispatch is unbounded.
-    fn track_in_flight(&self, job_id: &str, task_name: &str) {
-        if self.config.max_in_flight.is_some() {
-            self.in_flight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(job_id, task_name);
-        }
+    /// Record a job as in flight once it is handed to the worker channel, under
+    /// the `(owner, attempt)` this scheduler claimed it with.
+    ///
+    /// Unconditional, unlike the caps it also feeds: the record is what every
+    /// result is fenced against, so a scheduler with no `max_in_flight` still
+    /// needs one.
+    fn track_in_flight(&self, job_id: &str, task_name: &str, attempt: i32) {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                job_id,
+                DispatchRecord {
+                    task_name: task_name.to_string(),
+                    owner: self.claim_owner.clone(),
+                    attempt,
+                },
+            );
     }
 
     /// Forget a job that was tracked but never reached the worker channel
@@ -470,12 +502,10 @@ impl Scheduler {
     /// the poller — the slot was returned by the same thread that took it, and
     /// the send just failed, so an immediate retry would only spin.
     fn untrack_in_flight(&self, job_id: &str) {
-        if self.config.max_in_flight.is_some() {
-            self.in_flight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(job_id);
-        }
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(job_id);
     }
 
     /// How many of this task's jobs this worker currently has in flight.
@@ -515,24 +545,25 @@ impl Scheduler {
         }
     }
 
-    /// Release a job's in-flight slot when it finishes and wake the poller to
-    /// refill. Only ids this scheduler dispatched are tracked, so results for
-    /// recovered or foreign jobs (e.g. from maintenance) are a harmless no-op.
-    fn release_in_flight(&self, job_id: &str) {
-        let Some(max) = self.config.max_in_flight else {
-            return;
-        };
+    /// Take a finished job's dispatch record and wake the poller to refill its
+    /// slot. Returns `None` for a job this scheduler never dispatched — a
+    /// maintenance-recovered orphan, or a duplicate result.
+    fn release_in_flight(&self, job_id: &str) -> Option<DispatchRecord> {
         let mut in_flight = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
         // Only wake the poller when the pool was saturated — that's the only time
         // it's parked on the cap. Below the cap it's already dispatching on its
         // normal cadence, so an extra wake per completion just adds needless
         // dequeue contention with everything else touching the database.
-        let was_full = in_flight.len() >= max;
-        let freed = in_flight.remove(job_id);
+        let was_full = self
+            .config
+            .max_in_flight
+            .is_some_and(|max| in_flight.len() >= max);
+        let record = in_flight.remove(job_id);
         drop(in_flight);
-        if freed && was_full {
+        if record.is_some() && was_full {
             self.dispatch_wake.notify_one();
         }
+        record
     }
 
     /// Handle that stops [`Scheduler::run`] when notified.
@@ -1115,6 +1146,124 @@ mod tests {
             .list_claims_by_worker(scheduler.claim_owner())
             .unwrap();
         assert!(!claims.contains(&s0.id) && !claims.contains(&s1.id));
+    }
+
+    // ── The result fence (§8.4) ──────────────────────────────────────
+
+    #[test]
+    fn a_reclaimed_jobs_late_result_is_dropped() {
+        let scheduler = test_scheduler();
+        let job = enqueue_and_run(&scheduler, "reclaimed_task");
+
+        // Another survivor rescues the job while this owner was merely slow.
+        assert!(scheduler
+            .storage
+            .reclaim_execution(&job.id, scheduler.claim_owner(), "rescuer")
+            .unwrap());
+
+        let outcome = scheduler
+            .handle_result(JobResult::Success {
+                job_id: job.id.clone(),
+                result: Some(vec![42]),
+                task_name: "reclaimed_task".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, ResultOutcome::Superseded { .. }));
+        let untouched = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(
+            untouched.status,
+            JobStatus::Running,
+            "a superseded result must not complete an attempt it has nothing to do with"
+        );
+    }
+
+    #[test]
+    fn a_result_from_the_attempt_before_a_retry_is_dropped() {
+        let scheduler = test_scheduler();
+        let job = enqueue_and_run(&scheduler, "stale_task");
+
+        // The job is retried by something else, bumping the attempt without
+        // changing who may claim next.
+        scheduler
+            .storage
+            .retry(&job.id, now_millis(), None)
+            .unwrap();
+
+        let outcome = scheduler
+            .handle_result(JobResult::Success {
+                job_id: job.id.clone(),
+                result: Some(vec![42]),
+                task_name: "stale_task".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, ResultOutcome::Superseded { .. }));
+        let pending = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(pending.status, JobStatus::Pending);
+        assert_eq!(pending.retry_count, 1);
+    }
+
+    #[test]
+    fn an_age_swept_claim_does_not_strand_a_finished_attempt() {
+        let scheduler = test_scheduler();
+        let job = enqueue_and_run(&scheduler, "long_task");
+
+        // `purge_execution_claims` sweeps by age, so a job that legitimately
+        // outruns the cutoff loses its own claim while still being the only
+        // thing executing. Dropping its result would leave it Running forever.
+        scheduler
+            .storage
+            .purge_execution_claims(now_millis() + 1000)
+            .unwrap();
+
+        let outcome = scheduler
+            .handle_result(JobResult::Success {
+                job_id: job.id.clone(),
+                result: Some(vec![42]),
+                task_name: "long_task".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, ResultOutcome::Success { .. }));
+        assert_eq!(
+            scheduler
+                .storage
+                .get_job(&job.id, None)
+                .unwrap()
+                .unwrap()
+                .status,
+            JobStatus::Complete
+        );
+    }
+
+    #[test]
+    fn orphan_recovery_authorizes_itself_from_the_reclaim() {
+        let scheduler = test_scheduler();
+        let job = enqueue_and_run(&scheduler, "orphan_task");
+
+        // Simulate the dead owner: hand the claim to a worker that never
+        // heartbeats, which is what `reap_orphaned_jobs` looks for. There is no
+        // dispatch record for it — after a restart there would be none at all —
+        // so only the winning reclaim can authorize the recovery.
+        assert!(scheduler
+            .storage
+            .reclaim_execution(&job.id, scheduler.claim_owner(), "dead-worker")
+            .unwrap());
+        scheduler.untrack_in_flight(&job.id);
+
+        scheduler.recover_orphaned_jobs(now_millis()).unwrap();
+
+        let recovered = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(
+            recovered.status,
+            JobStatus::Pending,
+            "the fence must not drop the one result that unsticks a recovered job"
+        );
+        assert_eq!(recovered.retry_count, 1);
     }
 
     #[test]

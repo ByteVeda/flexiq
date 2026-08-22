@@ -7,9 +7,12 @@
 //! Each test function uses a unique queue name to avoid cross-contamination
 //! when all tests share a single storage instance.
 
+use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
+use flexiq_core::step::StepLimits;
 use flexiq_core::storage::records::{
-    DebounceOptions, SubscriptionMode, WorkerRegistration, WorkerStatus,
+    DebounceOptions, NewJobStep, SleepOutcome, StepCommit, StepKind, SubscriptionMode,
+    WorkerRegistration, WorkerStatus,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
 use flexiq_core::SqliteStorage;
@@ -1928,6 +1931,329 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_debounced_isolates_keys_and_namespaces(s);
     test_enqueue_debounced_replaces_the_payload_on_request(s);
     test_enqueue_debounced_rejects_unusable_options(s);
+    test_steps_commit_and_replay_in_order(s);
+    test_steps_identical_recommit_is_a_success(s);
+    test_steps_refuse_a_result_over_the_cap(s);
+    test_steps_re_assert_a_swept_claim(s);
+    test_steps_refuse_a_superseded_owner(s);
+    test_steps_refuse_the_previous_attempt(s);
+    test_steps_survive_a_retry_and_a_requeue(s);
+    test_steps_leave_no_orphan_after_a_terminal_write(s);
+    test_steps_refuse_a_commit_racing_a_terminal_write(s);
+    test_steps_sleep_pins_its_deadline(s);
+    test_steps_reject_a_reused_explicit_key(s);
+    test_delete_job_steps_is_namespace_scoped(s);
+    test_authorize_attempt_writes_nothing(s);
+    test_a_step_at_the_cap_round_trips_byte_for_byte(s);
+    test_an_elapsed_sleep_wakes_the_job_immediately(s);
+}
+
+// ── Durable inline steps ─────────────────────────────────────────────
+
+/// Enqueue, dequeue and claim one job, ready for a step write.
+fn stepped_job(s: &impl Storage, queue: &str, owner: &str) -> flexiq_core::job::Job {
+    let job = s.enqueue(make_job(queue, "stepped_task")).unwrap();
+    s.dequeue(queue, now_millis() + 1000, None).unwrap();
+    assert!(s.claim_execution(&job.id, owner).unwrap());
+    s.get_job(&job.id, None).unwrap().unwrap()
+}
+
+fn run_step<'a>(job_id: &'a str, seq: i32, key: &'a str, result: &'a [u8]) -> NewJobStep<'a> {
+    NewJobStep {
+        job_id,
+        seq,
+        step_key: key,
+        kind: StepKind::Run,
+        result: Some(result),
+    }
+}
+
+fn commit(
+    s: &impl Storage,
+    step: &NewJobStep<'_>,
+    owner: &str,
+) -> flexiq_core::error::Result<StepCommit> {
+    s.record_step_result(step, owner, 0, &StepLimits::default(), None)
+}
+
+fn test_steps_commit_and_replay_in_order(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-order", "w-order");
+
+    for (seq, key) in [(0, "charge#0"), (1, "email#0")] {
+        assert_eq!(
+            commit(s, &run_step(&job.id, seq, key, key.as_bytes()), "w-order").unwrap(),
+            StepCommit::Committed
+        );
+    }
+
+    let steps = s.get_job_steps(&job.id, None).unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].seq, 0);
+    assert_eq!(steps[0].step_key, "charge#0");
+    assert_eq!(steps[0].kind, StepKind::Run);
+    assert_eq!(steps[0].result.as_deref(), Some(b"charge#0".as_slice()));
+    assert_eq!(steps[1].step_key, "email#0");
+}
+
+fn test_steps_identical_recommit_is_a_success(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-recommit", "w-recommit");
+    let step = run_step(&job.id, 0, "charge#0", b"ok");
+
+    assert_eq!(
+        commit(s, &step, "w-recommit").unwrap(),
+        StepCommit::Committed
+    );
+    assert_eq!(
+        commit(s, &step, "w-recommit").unwrap(),
+        StepCommit::AlreadyCommitted,
+        "a retransmission of a commit that already landed is a success"
+    );
+    assert_eq!(s.get_job_steps(&job.id, None).unwrap().len(), 1);
+
+    let err = commit(
+        s,
+        &run_step(&job.id, 0, "charge#0", b"different"),
+        "w-recommit",
+    )
+    .unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}
+
+fn test_steps_refuse_a_result_over_the_cap(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-cap", "w-cap");
+    let limits = StepLimits {
+        max_step_bytes: 8,
+        ..StepLimits::default()
+    };
+
+    let err = s
+        .record_step_result(
+            &run_step(&job.id, 0, "render#0", &[7u8; 64]),
+            "w-cap",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    match err {
+        QueueError::StepLimitExceeded {
+            limit,
+            actual,
+            allowed,
+            ..
+        } => assert_eq!((limit.as_str(), actual, allowed), ("step bytes", 64, 8)),
+        other => panic!("expected a cap refusal, got {other}"),
+    }
+    assert!(s.get_job_steps(&job.id, None).unwrap().is_empty());
+
+    let counted = StepLimits {
+        max_steps: 1,
+        ..StepLimits::default()
+    };
+    s.record_step_result(
+        &run_step(&job.id, 0, "noop#0", &[]),
+        "w-cap",
+        0,
+        &counted,
+        None,
+    )
+    .unwrap();
+    let err = s
+        .record_step_result(
+            &run_step(&job.id, 1, "noop#1", &[]),
+            "w-cap",
+            0,
+            &counted,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, QueueError::StepLimitExceeded { limit, .. } if limit == "step count"),
+        "a loop of empty steps must still hit a cap: {err}"
+    );
+}
+
+fn test_steps_re_assert_a_swept_claim(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-swept", "worker-swept");
+
+    // Claims are swept by age, so a job that legitimately runs longer than the
+    // cutoff finds its own claim gone while still being the only thing running.
+    s.purge_execution_claims(now_millis() + 1000).unwrap();
+    assert_eq!(
+        commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "worker-swept").unwrap(),
+        StepCommit::Committed,
+        "an absent claim on a still-Running job is re-asserted, not treated as lost"
+    );
+    assert_eq!(
+        s.list_claims_by_worker("worker-swept").unwrap(),
+        vec![job.id.clone()]
+    );
+}
+
+fn test_steps_refuse_a_superseded_owner(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-superseded", "w-superseded");
+    assert!(s
+        .reclaim_execution(&job.id, "w-superseded", "worker-b")
+        .unwrap());
+
+    let err = commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-superseded").unwrap_err();
+    assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+    assert!(s.get_job_steps(&job.id, None).unwrap().is_empty());
+}
+
+fn test_steps_refuse_the_previous_attempt(s: &impl Storage) {
+    let q = "q-steps-attempt";
+    let job = stepped_job(s, q, "w-attempt");
+
+    // `retry` bumps `retry_count` without changing who may claim next, so the
+    // owner alone cannot separate two runs of the same job.
+    s.retry(&job.id, now_millis(), None).unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    assert!(
+        s.claim_execution(&job.id, "w-attempt").unwrap(),
+        "the retry must have revoked the ended attempt's claim"
+    );
+
+    let err = commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-attempt").unwrap_err();
+    assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+}
+
+fn test_steps_survive_a_retry_and_a_requeue(s: &impl Storage) {
+    let q = "q-steps-survive";
+    let job = stepped_job(s, q, "w-survive");
+    commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-survive").unwrap();
+
+    s.retry(&job.id, now_millis(), None).unwrap();
+    assert_eq!(
+        s.get_job_steps(&job.id, None).unwrap().len(),
+        1,
+        "replaying the memo is the whole point of a retry"
+    );
+    assert!(s.list_claims_by_worker("w-survive").unwrap().is_empty());
+
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    assert!(s.requeue_stuck(&job.id, now_millis()).unwrap());
+    assert_eq!(
+        s.get_job_steps(&job.id, None).unwrap().len(),
+        1,
+        "a requeue exists to let another worker resume, which is when the memo matters"
+    );
+}
+
+fn test_steps_leave_no_orphan_after_a_terminal_write(s: &impl Storage) {
+    for (queue, terminal) in [
+        ("q-steps-term-ok", "complete"),
+        ("q-steps-term-fail", "fail"),
+        ("q-steps-term-cancel", "cancel"),
+        ("q-steps-term-dlq", "dlq"),
+    ] {
+        let job = stepped_job(s, queue, "w-terminal");
+        commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-terminal").unwrap();
+
+        match terminal {
+            "complete" => s.complete(&job.id, Some(vec![1]), None).unwrap(),
+            "fail" => s.fail(&job.id, "boom").unwrap(),
+            "cancel" => s.mark_cancelled(&job.id, None).unwrap(),
+            _ => {
+                let running = s.get_job(&job.id, None).unwrap().unwrap();
+                s.move_to_dlq(&running, "boom", None).unwrap();
+            }
+        }
+
+        assert!(
+            s.get_job_steps(&job.id, None).unwrap().is_empty(),
+            "{terminal} left orphan step rows"
+        );
+        assert!(
+            s.list_claims_by_worker("w-terminal").unwrap().is_empty(),
+            "{terminal} left the execution claim behind"
+        );
+    }
+}
+
+fn test_steps_refuse_a_commit_racing_a_terminal_write(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-race", "w-race");
+    s.complete(&job.id, Some(vec![1]), None).unwrap();
+
+    // The terminal write revoked the claim in its own transaction, so the fence
+    // finds neither a claim nor a Running job — which is a lost claim, not the
+    // re-assert branch, and the orphan never lands.
+    let err = commit(s, &run_step(&job.id, 0, "charge#0", b"late"), "w-race").unwrap_err();
+    assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+    assert!(s.get_job_steps(&job.id, None).unwrap().is_empty());
+}
+
+fn test_steps_sleep_pins_its_deadline(s: &impl Storage) {
+    let q = "q-steps-sleep";
+    let job = stepped_job(s, q, "w-sleep");
+    let limits = StepLimits::default();
+    let sleep = NewJobStep {
+        job_id: &job.id,
+        seq: 0,
+        step_key: "cool_off#0",
+        kind: StepKind::Sleep,
+        result: None,
+    };
+    let deadline = now_millis() + 3_600_000;
+
+    assert_eq!(
+        s.sleep_job(&sleep, "w-sleep", 0, deadline, &limits, None)
+            .unwrap(),
+        SleepOutcome::Slept { wake_at: deadline }
+    );
+    let slept = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(slept.status, JobStatus::Pending);
+    assert_eq!(slept.scheduled_at, deadline);
+    assert!(
+        slept.started_at.is_none(),
+        "a sleeping job must not be eligible for the stale reaper"
+    );
+    assert!(s.list_claims_by_worker("w-sleep").unwrap().is_empty());
+
+    // A replay of the same `sleep("1h")` must not push the deadline an hour out.
+    s.dequeue(q, deadline + 1, None).unwrap();
+    assert!(s.claim_execution(&job.id, "w-sleep").unwrap());
+    assert_eq!(
+        s.sleep_job(&sleep, "w-sleep", 0, deadline + 3_600_000, &limits, None)
+            .unwrap(),
+        SleepOutcome::AlreadySleeping { wake_at: deadline }
+    );
+    assert_eq!(
+        s.get_job(&job.id, None).unwrap().unwrap().scheduled_at,
+        deadline
+    );
+
+    // `kind` is part of the replay match: a run commit onto a stored sleep is a
+    // divergence, not a digest mismatch.
+    s.dequeue(q, deadline + 1, None).unwrap();
+    assert!(s.claim_execution(&job.id, "w-sleep").unwrap());
+    let err = commit(s, &run_step(&job.id, 0, "cool_off#0", b"ok"), "w-sleep").unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+    s.complete(&job.id, None, None).unwrap();
+}
+
+fn test_steps_reject_a_reused_explicit_key(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-keys", "w-keys");
+    commit(s, &run_step(&job.id, 0, "charge:order-7", b"ok"), "w-keys").unwrap();
+
+    let err = commit(s, &run_step(&job.id, 1, "charge:order-7", b"ok"), "w-keys").unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+
+    let err = commit(s, &run_step(&job.id, 4, "gap#0", b"ok"), "w-keys").unwrap_err();
+    assert!(
+        matches!(err, QueueError::StepDiverged { .. }),
+        "a gap is refused: {err}"
+    );
+}
+
+fn test_delete_job_steps_is_namespace_scoped(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-delete", "w-delete");
+    commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-delete").unwrap();
+
+    assert_eq!(s.delete_job_steps(&job.id, Some("other")).unwrap(), 0);
+    assert!(s.get_job_steps(&job.id, Some("other")).unwrap().is_empty());
+    assert_eq!(s.delete_job_steps(&job.id, None).unwrap(), 1);
+    assert!(s.get_job_steps(&job.id, None).unwrap().is_empty());
 }
 
 fn debounced(queue: &str, key: &str) -> NewJob {
@@ -2948,4 +3274,144 @@ fn postgres_storage_tests() {
     };
 
     run_storage_tests(&storage);
+}
+
+fn test_authorize_attempt_writes_nothing(s: &impl Storage) {
+    use flexiq_core::storage::records::AttemptFence;
+
+    let job = stepped_job(s, "q-steps-authorize", "w-authorize");
+
+    // Runs once per result on the drain path, so it must not take a write
+    // transaction — and an authorization check must not leave behind a claim
+    // its caller never asked for. The age-sweep case is where that would show:
+    // a step *write* re-asserts here, a check must not.
+    s.purge_execution_claims(now_millis() + 1000).unwrap();
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+            .unwrap(),
+        AttemptFence::Authorized,
+        "an absent claim on a still-Running job at the same attempt is not a lost one"
+    );
+    assert!(
+        s.list_claims_by_worker("w-authorize").unwrap().is_empty(),
+        "a read-only check must write no claim"
+    );
+
+    s.complete(&job.id, None, None).unwrap();
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+            .unwrap(),
+        AttemptFence::Superseded
+    );
+}
+
+fn test_a_step_at_the_cap_round_trips_byte_for_byte(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-bytes", "w-bytes");
+    let limits = StepLimits {
+        max_step_bytes: 4096,
+        max_total_bytes: 6000,
+        ..StepLimits::default()
+    };
+    // Values a text encoding would mangle or inflate: every byte, high bits set,
+    // and the NUL and newline the Redis row format uses as separators.
+    let payload: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+
+    assert_eq!(
+        s.record_step_result(
+            &run_step(&job.id, 0, "blob#0", &payload),
+            "w-bytes",
+            0,
+            &limits,
+            None
+        )
+        .unwrap(),
+        StepCommit::Committed,
+        "a step exactly at the cap fits on every backend"
+    );
+    assert_eq!(
+        s.get_job_steps(&job.id, None).unwrap()[0].result.as_deref(),
+        Some(payload.as_slice())
+    );
+
+    // The caps count payload bytes, not whatever the backend's own encoding
+    // costs, so one more full step must break the per-job total on every
+    // backend at the same place.
+    let err = s
+        .record_step_result(
+            &run_step(&job.id, 1, "blob#1", &payload),
+            "w-bytes",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    match err {
+        QueueError::StepLimitExceeded {
+            limit,
+            actual,
+            allowed,
+            ..
+        } => assert_eq!(
+            (limit.as_str(), actual, allowed),
+            ("total bytes", 8192, 6000)
+        ),
+        other => panic!("expected the per-job cap, got {other}"),
+    }
+}
+
+fn test_an_elapsed_sleep_wakes_the_job_immediately(s: &impl Storage) {
+    let q = "q-steps-elapsed";
+    let job = stepped_job(s, q, "w-elapsed");
+    let limits = StepLimits::default();
+    let sleep = NewJobStep {
+        job_id: &job.id,
+        seq: 0,
+        step_key: "cool_off#0",
+        kind: StepKind::Sleep,
+        result: None,
+    };
+    let deadline = now_millis() - 60_000;
+
+    // A deadline already in the past is committed and reported as it stands.
+    // Refusing it here would be the wrong layer: the worker decides whether a
+    // sleep is still pending, and a stored row it has passed is a memo hit it
+    // continues through. Storage's job is to answer truthfully about the
+    // deadline it holds.
+    assert_eq!(
+        s.sleep_job(&sleep, "w-elapsed", 0, deadline, &limits, None)
+            .unwrap(),
+        SleepOutcome::Slept { wake_at: deadline }
+    );
+
+    // And an elapsed sleep leaves the job runnable *now* rather than parked:
+    // `scheduled_at` in the past is exactly what "this sleep is over" means, so
+    // the next poll picks it up and the worker replays past the committed row.
+    let woken = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(woken.status, JobStatus::Pending);
+    assert_eq!(woken.scheduled_at, deadline);
+    assert_eq!(
+        s.dequeue(q, now_millis(), None).unwrap().map(|j| j.id),
+        Some(job.id.clone()),
+        "an elapsed sleep must not park the job until some later poll"
+    );
+
+    // Replaying it keeps the original instant, elapsed or not.
+    assert!(s.claim_execution(&job.id, "w-elapsed").unwrap());
+    assert_eq!(
+        s.sleep_job(
+            &sleep,
+            "w-elapsed",
+            0,
+            now_millis() + 3_600_000,
+            &limits,
+            None
+        )
+        .unwrap(),
+        SleepOutcome::AlreadySleeping { wake_at: deadline }
+    );
+    assert_eq!(
+        s.get_job(&job.id, None).unwrap().unwrap().scheduled_at,
+        deadline,
+        "a replay must never push an already-elapsed deadline into the future"
+    );
 }

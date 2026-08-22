@@ -138,7 +138,7 @@ impl Scheduler {
     /// heartbeat table, atomically reclaims the orphaned claim — so exactly one
     /// survivor rescues each job — then routes it through the normal
     /// retry/dead-letter path.
-    fn recover_orphaned_jobs(&self, now: i64) -> Result<()> {
+    pub(super) fn recover_orphaned_jobs(&self, now: i64) -> Result<()> {
         // Live owners = workers with a fresh heartbeat, plus self: a scheduler
         // must never orphan its own in-flight jobs (covers the startup window
         // before its first heartbeat row is written).
@@ -156,6 +156,13 @@ impl Scheduler {
                 .reclaim_execution(&job.id, &dead_owner, &self.claim_owner)
             {
                 Ok(true) => {
+                    // The reclaim *is* the authorization: it returns true only
+                    // for the survivor that won the transfer. Writing the
+                    // dispatch record from it lets the synthesised result
+                    // validate like any other — without it the fence would drop
+                    // the one result that exists to unstick the job, and after a
+                    // restart there is no record to consult at all.
+                    self.track_in_flight(&job.id, &job.task_name, job.retry_count);
                     let error = format!("worker {dead_owner} died; recovering in-flight job");
                     if let Err(e) = self.handle_result(JobResult::Failure {
                         job_id: job.id.clone(),

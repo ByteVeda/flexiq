@@ -151,8 +151,9 @@ impl RedisStorage {
         job.completed_at = None;
         job.error = None;
 
-        // Atomic status-move + pending-zset insert (see `requeue_pending`).
-        self.requeue_pending(&mut conn, &job, old_status)?;
+        // Atomic status-move + pending-zset insert, plus the claim revocation
+        // that has to share the transaction with the `retry_count` bump.
+        self.requeue_pending(&mut conn, &job, old_status, true)?;
 
         Ok(())
     }
@@ -171,8 +172,9 @@ impl RedisStorage {
         job.completed_at = None;
         job.error = None;
 
-        // Atomic status-move + pending-zset insert (see `requeue_pending`).
-        self.requeue_pending(&mut conn, &job, old_status)?;
+        // Atomic status-move + pending-zset insert (see `requeue_pending`). No
+        // claim to revoke: a soft-gate reschedule is a job that never ran.
+        self.requeue_pending(&mut conn, &job, old_status, false)?;
 
         Ok(())
     }

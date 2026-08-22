@@ -1219,6 +1219,53 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<bool> {
                 self.reclaim_execution(job_id, expected_owner, new_owner)
             }
+            fn supports_steps(&self) -> bool {
+                self.supports_steps()
+            }
+            fn get_job_steps(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<Vec<$crate::storage::records::JobStep>> {
+                self.get_job_steps(job_id, namespace)
+            }
+            fn record_step_result(
+                &self,
+                step: &$crate::storage::records::NewJobStep<'_>,
+                owner: &str,
+                attempt: i32,
+                limits: &$crate::step::StepLimits,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::records::StepCommit> {
+                self.record_step_result(step, owner, attempt, limits, namespace)
+            }
+            fn sleep_job(
+                &self,
+                step: &$crate::storage::records::NewJobStep<'_>,
+                owner: &str,
+                attempt: i32,
+                wake_at: i64,
+                limits: &$crate::step::StepLimits,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::records::SleepOutcome> {
+                self.sleep_job(step, owner, attempt, wake_at, limits, namespace)
+            }
+            fn authorize_attempt(
+                &self,
+                job_id: &str,
+                owner: &str,
+                attempt: i32,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<$crate::storage::records::AttemptFence> {
+                self.authorize_attempt(job_id, owner, attempt, namespace)
+            }
+            fn delete_job_steps(
+                &self,
+                job_id: &str,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<u64> {
+                self.delete_job_steps(job_id, namespace)
+            }
             fn count_running_by_task(
                 &self,
                 task_name: &str,
@@ -2020,6 +2067,57 @@ impl Storage for StorageBackend {
         new_owner: &str,
     ) -> Result<bool> {
         delegate!(self, reclaim_execution, job_id, expected_owner, new_owner)
+    }
+    fn supports_steps(&self) -> bool {
+        delegate!(self, supports_steps)
+    }
+    fn get_job_steps(
+        &self,
+        job_id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<records::JobStep>> {
+        delegate!(self, get_job_steps, job_id, namespace)
+    }
+    fn record_step_result(
+        &self,
+        step: &records::NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        limits: &crate::step::StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<records::StepCommit> {
+        delegate!(
+            self,
+            record_step_result,
+            step,
+            owner,
+            attempt,
+            limits,
+            namespace
+        )
+    }
+    fn sleep_job(
+        &self,
+        step: &records::NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        wake_at: i64,
+        limits: &crate::step::StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<records::SleepOutcome> {
+        delegate!(self, sleep_job, step, owner, attempt, wake_at, limits, namespace)
+    }
+    fn authorize_attempt(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<records::AttemptFence> {
+        delegate!(self, authorize_attempt, job_id, owner, attempt, namespace)
+    }
+    fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
+        delegate!(self, delete_job_steps, job_id, namespace)
     }
     fn count_running_by_task(&self, task_name: &str, namespace: Option<&str>) -> Result<i64> {
         delegate!(self, count_running_by_task, task_name, namespace)

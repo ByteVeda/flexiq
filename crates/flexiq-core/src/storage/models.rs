@@ -8,9 +8,9 @@ use super::records::{
 };
 use super::schema::{
     archived_jobs, circuit_breakers, dashboard_settings, dead_letter, distributed_locks,
-    execution_claims, job_dependencies, job_errors, jobs, periodic_tasks, queue_state, rate_limits,
-    replay_history, task_logs, task_metrics, topic_deliveries, topic_messages, topic_subscriptions,
-    topics, workers,
+    execution_claims, job_dependencies, job_errors, job_steps, jobs, periodic_tasks, queue_state,
+    rate_limits, replay_history, task_logs, task_metrics, topic_deliveries, topic_messages,
+    topic_subscriptions, topics, workers,
 };
 
 /// A row in the `jobs` table (for SELECT queries).
@@ -256,6 +256,38 @@ pub struct NewJobErrorRow<'a> {
     pub attempt: i32,
     pub error: &'a str,
     pub failed_at: i64,
+}
+
+/// A row in the `job_steps` table (for SELECT queries).
+#[derive(Queryable, Selectable, Debug, Clone)]
+#[diesel(table_name = job_steps)]
+pub struct JobStepRow {
+    pub id: String,
+    pub job_id: String,
+    pub namespace: Option<String>,
+    pub step_key: String,
+    pub seq: i32,
+    pub kind: String,
+    pub result: Option<Vec<u8>>,
+    pub result_len: i32,
+    pub wake_at: Option<i64>,
+    pub created_at: i64,
+}
+
+/// Insertable struct for committed steps.
+#[derive(Insertable, Debug)]
+#[diesel(table_name = job_steps)]
+pub struct NewJobStepRow<'a> {
+    pub id: &'a str,
+    pub job_id: &'a str,
+    pub namespace: Option<&'a str>,
+    pub step_key: &'a str,
+    pub seq: i32,
+    pub kind: &'a str,
+    pub result: Option<&'a [u8]>,
+    pub result_len: i32,
+    pub wake_at: Option<i64>,
+    pub created_at: i64,
 }
 
 /// Insertable struct for job dependency entries.
@@ -718,6 +750,20 @@ pub struct NewArchivedJobRow<'a> {
 // The Diesel rows above are crate-private; the Storage trait speaks the plain
 // records in `storage::records`. Diesel query sites map with `.into()` right
 // after loading; insert sites build the borrowed insert rows from records.
+
+impl From<JobStepRow> for crate::storage::records::JobStep {
+    fn from(r: JobStepRow) -> Self {
+        crate::storage::records::JobStep {
+            job_id: r.job_id,
+            seq: r.seq,
+            step_key: r.step_key,
+            kind: crate::storage::records::StepKind::from_wire(&r.kind),
+            result: r.result,
+            wake_at: r.wake_at,
+            created_at: r.created_at,
+        }
+    }
+}
 
 impl From<JobErrorRow> for JobError {
     fn from(r: JobErrorRow) -> Self {

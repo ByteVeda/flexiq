@@ -27,6 +27,7 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+base64 = "0.23"
 rand = { workspace = true }
 crossbeam-channel = { workspace = true }
 thiserror = { workspace = true }

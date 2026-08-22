@@ -1,9 +1,11 @@
-use crate::error::Result;
+use crate::error::{QueueError, Result};
 use crate::job::{Job, NewJob};
+use crate::step::StepLimits;
 use crate::storage::records::{
-    CircuitBreakerState, DebounceOptions, JobError, LockInfo, NewPeriodicTask, NewSubscription,
-    PeriodicTask, RateLimitState, ReplayEntry, Subscription, SubscriptionMode, TaskLogEntry,
-    TaskMetric, Topic, TopicLogStats, TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
+    AttemptFence, CircuitBreakerState, DebounceOptions, JobError, JobStep, LockInfo, NewJobStep,
+    NewPeriodicTask, NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome,
+    StepCommit, Subscription, SubscriptionMode, TaskLogEntry, TaskMetric, Topic, TopicLogStats,
+    TopicMessage, WorkerInfo, WorkerRegistration, WorkerStatus,
 };
 use crate::storage::{
     DeadJob, DispatchOrder, QueueStats, RetentionCounts, RetentionCutoffs, SubscriptionBacklogStats,
@@ -58,7 +60,7 @@ pub trait Storage: Send + Sync + Clone {
     /// one or a newly inserted one; compare its id against the previous call's
     /// to tell coalescing from insertion. Rejects a missing or empty
     /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
-    /// window with [`QueueError::Config`](crate::error::QueueError::Config).
+    /// window with [`QueueError::Config`].
     ///
     /// The Diesel backends get their atomicity from the transaction; the Redis
     /// backend has none, so it decides slide-vs-insert in a Lua script and
@@ -650,6 +652,119 @@ pub trait Storage: Send + Sync + Clone {
         new_owner: &str,
     ) -> Result<bool>;
 
+    // ── Durable inline steps ──────────────────────────────────────
+
+    /// Whether this backend implements the step store.
+    ///
+    /// `false` disables the inline-step API outright. It must never degrade to
+    /// "no memo recorded": a step store that fails open re-runs a charge.
+    fn supports_steps(&self) -> bool {
+        false
+    }
+
+    /// Every committed step for a job, ordered by `seq`.
+    ///
+    /// Read **once** per attempt, by the worker that just won the claim, and
+    /// never per step. Unfenced for that reason: a stale read can only cost a
+    /// re-run, which is what the memo would have prevented anyway.
+    fn get_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
+        let _ = (job_id, namespace);
+        Err(steps_unsupported())
+    }
+
+    /// Commit one step, fenced on the writer still owning the execution claim.
+    ///
+    /// `owner` is the worker id the writer claimed under and `attempt` the
+    /// `retry_count` the job carried at claim time. Both are resolved against
+    /// the live rows inside the write's own transaction: a claim naming another
+    /// worker, or a job that has moved past this attempt, is
+    /// [`QueueError::ClaimLost`]. A claim that is merely *absent* while the job
+    /// is still `Running` at the same attempt is re-asserted rather than
+    /// refused — claims are swept by age, so a long job legitimately outlives
+    /// its own claim row while still being the only thing executing.
+    ///
+    /// `owner` is never something the caller asserts about itself: in-process
+    /// and prefork workers pass the id they won the claim with, and an attached
+    /// executor's comes from the scheduler's dispatch record, never off a
+    /// frame.
+    ///
+    /// Enforces `limits` — clamped to the hard ceilings, on the encoded bytes —
+    /// and rejects a `seq` that is not exactly the number of steps already
+    /// committed. A byte-identical re-commit at the same position is
+    /// [`StepCommit::AlreadyCommitted`], which is a success; anything else
+    /// stored there is [`QueueError::StepDiverged`].
+    fn record_step_result(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<StepCommit> {
+        let _ = (step, owner, attempt, limits, namespace);
+        Err(steps_unsupported())
+    }
+
+    /// End the attempt in a sleep: commit the sleep row, release the execution
+    /// claim, and reschedule the job — one atomic operation, fenced exactly as
+    /// [`record_step_result`](Self::record_step_result) is.
+    ///
+    /// Split into three calls, a crash between the row and the reschedule
+    /// leaves the job `Running` with an unreached deadline, and the stale
+    /// reaper then hands it to another worker while its timeout clock still
+    /// runs. One transaction has no such window.
+    ///
+    /// `wake_at` is a *candidate*. A sleep row already committed at this
+    /// position keeps the deadline it was first given, and the reschedule
+    /// targets that stored value — otherwise a duration sleep would push its
+    /// own deadline further out on every replay. A sleep commits no bytes, so
+    /// only `max_steps` can bite, but it is counted like any other step.
+    fn sleep_job(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        wake_at: i64,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<SleepOutcome> {
+        let _ = (step, owner, attempt, wake_at, limits, namespace);
+        Err(steps_unsupported())
+    }
+
+    /// Whether a result carrying `(owner, attempt)` still speaks for this job.
+    ///
+    /// The same four-case resolution
+    /// [`record_step_result`](Self::record_step_result) fences writes with,
+    /// exposed for the scheduler: a terminal transition applied to the wrong
+    /// attempt is no longer only a wrong status — it deletes another attempt's
+    /// steps.
+    ///
+    /// Defaults to [`AttemptFence::Authorized`], which is exactly how every
+    /// caller behaved before the fence existed. This is the one gate here that
+    /// must *not* fail closed: a backend that cannot evaluate it would otherwise
+    /// drop every result and leave every job `Running` forever.
+    fn authorize_attempt(
+        &self,
+        job_id: &str,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<AttemptFence> {
+        let _ = (job_id, owner, attempt, namespace);
+        Ok(AttemptFence::Authorized)
+    }
+
+    /// Drop every step row for a job. Returns the count removed.
+    ///
+    /// **Not** how the terminal paths clean up — they delete the rows inline,
+    /// in the same transaction that moves the job, so no crash can strand a
+    /// dead job's blobs. This is the explicit admin/repair entry point.
+    fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
+        let _ = (job_id, namespace);
+        Err(steps_unsupported())
+    }
+
     // ── Per-task concurrency ──────────────────────────────────────
 
     /// Running-job count for a task — the per-task concurrency-cap primitive.
@@ -725,4 +840,15 @@ pub trait Storage: Send + Sync + Clone {
     fn delete_setting(&self, key: &str) -> Result<bool>;
     /// Return all settings as a key→value map.
     fn list_settings(&self) -> Result<std::collections::HashMap<String, String>>;
+}
+
+/// The error every step method defaults to.
+///
+/// Deliberately an error and not an empty result: this mirrors
+/// [`Storage::shed_to_dlq`]'s defaulted shape for source compatibility but
+/// inverts its semantics. A shed may safely degrade to an ordinary dead-letter;
+/// a step read that degrades to "nothing recorded" silently re-executes work
+/// the memo exists to skip.
+fn steps_unsupported() -> QueueError {
+    QueueError::Other("this storage backend does not implement the step store".to_string())
 }

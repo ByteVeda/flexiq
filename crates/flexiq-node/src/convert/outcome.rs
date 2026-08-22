@@ -24,8 +24,10 @@ fn duration_ms(wall_time_ns: i64) -> Option<i64> {
     (wall_time_ns > 0).then_some(wall_time_ns / 1_000_000)
 }
 
-pub fn outcome_to_js(outcome: &ResultOutcome) -> JsOutcome {
-    match outcome {
+/// `None` for a superseded result: nothing was written, so the shell emits no
+/// event and runs no middleware for it — exactly as if it had never arrived.
+pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
+    let mapped = match outcome {
         ResultOutcome::Success {
             job_id,
             task_name,
@@ -90,5 +92,7 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> JsOutcome {
             timed_out: None,
             duration_ms: duration_ms(*wall_time_ns),
         },
-    }
+        ResultOutcome::Superseded { .. } => return None,
+    };
+    Some(mapped)
 }

@@ -605,6 +605,141 @@ pub struct LockInfo {
     pub expires_at: i64,
 }
 
+// ── Durable inline steps ─────────────────────────────────────────────
+
+/// What a committed step row records.
+///
+/// Part of the replay match, not a label: a `Run` row carries no `wake_at`, so
+/// reading one as a sleep would reschedule the job to a null deadline, and a
+/// `Run` commit landing on a stored `Sleep` row is a divergence rather than a
+/// mismatched digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepKind {
+    /// A `step.run` checkpoint. Its `result` is the memoized value.
+    Run,
+    /// A `step.sleep` deadline. Complete once `now >= wake_at`.
+    Sleep,
+}
+
+impl StepKind {
+    /// The stored form. Pinned so a Lua script and a Diesel column agree.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            StepKind::Run => "run",
+            StepKind::Sleep => "sleep",
+        }
+    }
+
+    /// Read a stored value back. An unrecognized one reads as `Run`, which is
+    /// what every row written before `sleep` existed is.
+    pub fn from_wire(value: &str) -> Self {
+        match value {
+            "sleep" => StepKind::Sleep,
+            _ => StepKind::Run,
+        }
+    }
+}
+
+/// Whether a result still speaks for the job it names.
+///
+/// A `JobResult` is identified by `job_id` alone, so an unfenced
+/// `handle_result` will retry, dead-letter or finalize whichever job the id
+/// names — including one that orphan recovery reclaimed to another worker while
+/// the original owner was merely slow rather than dead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptFence {
+    /// The claim names this owner at this attempt, or is merely absent while the
+    /// job is still `Running` at it — the age-sweep case, which re-asserts.
+    Authorized,
+    /// The claim names another worker, or the job has moved past this attempt.
+    /// The only correct contribution a superseded attempt can make is none.
+    Superseded,
+}
+
+/// One committed step of a job, as read back at attempt start.
+///
+/// There is no `status` and no `error`: a step whose closure raised is never
+/// committed, so a stored `Run` row is complete by construction and a `Sleep`
+/// row's completeness is `now >= wake_at`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStep {
+    /// Id of the job this step ran inside.
+    pub job_id: String,
+    /// Position in the job's step sequence, zero-based and gapless.
+    pub seq: i32,
+    /// Identity of the step within the job (`name#occurrence` or `name:key`).
+    pub step_key: String,
+    /// Whether this row memoizes a value or a deadline.
+    pub kind: StepKind,
+    /// Encoded result — post serializer, post codec. `None` for a sleep.
+    pub result: Option<Vec<u8>>,
+    /// Deadline this step sleeps until. `Some` only for [`StepKind::Sleep`].
+    pub wake_at: Option<i64>,
+    /// Unix-millisecond time the step was committed.
+    pub created_at: i64,
+}
+
+/// A step about to be committed.
+///
+/// `owner` and `attempt` are deliberately *not* here: they fence the write and
+/// are derived by the scheduler, never carried alongside the payload where a
+/// caller could assert them about itself. Neither is the namespace — the row
+/// denormalises it from the job the write already read to resolve its fence, so
+/// the two can never disagree.
+#[derive(Debug, Clone)]
+pub struct NewJobStep<'a> {
+    /// Id of the job this step runs inside.
+    pub job_id: &'a str,
+    /// Position in the job's step sequence. Must be exactly the number of
+    /// steps already committed.
+    pub seq: i32,
+    /// Identity of the step within the job.
+    pub step_key: &'a str,
+    /// Whether this commits a value or a deadline.
+    pub kind: StepKind,
+    /// Encoded result. `None` for a sleep.
+    pub result: Option<&'a [u8]>,
+}
+
+/// What a step commit did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepCommit {
+    /// The row was written.
+    Committed,
+    /// A byte-identical row was already at this position. A retransmission
+    /// gets this, and it is a success.
+    AlreadyCommitted,
+}
+
+/// What a sleep did, carrying the deadline the job was actually rescheduled to.
+///
+/// The first commit fixes that deadline; a replay of the same `sleep("1h")`
+/// keeps it rather than pushing an hour further out every time the job crashes
+/// into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepOutcome {
+    /// The sleep row was written with the candidate deadline.
+    Slept {
+        /// Deadline the job was rescheduled to.
+        wake_at: i64,
+    },
+    /// A sleep row was already committed here; its stored deadline stands.
+    AlreadySleeping {
+        /// Deadline the job was rescheduled to — the stored one.
+        wake_at: i64,
+    },
+}
+
+impl SleepOutcome {
+    /// The deadline the job was rescheduled to, whichever arm this is.
+    pub const fn wake_at(self) -> i64 {
+        match self {
+            SleepOutcome::Slept { wake_at } | SleepOutcome::AlreadySleeping { wake_at } => wake_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SubscriptionMode, WorkerStatus};

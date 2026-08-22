@@ -412,7 +412,10 @@ impl Scheduler {
         // failure arms untrack what never left.
         let job_id = job.id.clone();
         let task_name = job.task_name.clone();
-        self.track_in_flight(&job_id, &task_name);
+        // `retry_count` as of the claim is half the fencing token: `retry` bumps
+        // it without changing who may claim next, so the owner alone cannot
+        // separate two runs of the same job.
+        self.track_in_flight(&job_id, &task_name, job.retry_count);
         match job_tx.try_send(job) {
             Ok(()) => Ok(true),
             Err(TrySendError::Full(job)) => {
@@ -626,12 +629,13 @@ impl Scheduler {
     /// already been written. Uses `reschedule` (not `retry`) so a job that
     /// never executed does not lose retry budget.
     fn rollback_claim_and_reschedule(&self, job_id: &str, next_at: i64) -> Result<()> {
-        if let Err(e) = self
-            .storage
-            .complete_execution(job_id, self.namespace.as_deref())
-        {
-            warn!("failed to clear execution claim during rollback for job {job_id}: {e}");
-        }
+        // The revocation is not best-effort: rescheduling on top of a claim
+        // that is still there puts the job back to `Pending` with a row that
+        // blocks the next worker's insert-only claim until it ages out. Better
+        // to fail the dispatch and leave the job where the caller found it —
+        // the poller will come back to it.
+        self.storage
+            .complete_execution(job_id, self.namespace.as_deref())?;
         self.storage.reschedule(job_id, next_at)
     }
 }

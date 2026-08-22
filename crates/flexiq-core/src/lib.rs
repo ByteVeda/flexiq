@@ -16,6 +16,8 @@ pub mod resilience;
 pub mod scheduler;
 /// Reserved settings-key prefixes: the namespaces the runtime owns.
 pub mod settings;
+/// Shared rules for durable inline steps: the limits every writer honors.
+pub mod step;
 /// The [`Storage`] trait, backend implementations, and shared records.
 pub mod storage;
 /// Native worker: task registry, dispatcher trait, worker runner.
@@ -38,12 +40,14 @@ pub use scheduler::{
     JobResult, QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig,
 };
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
+pub use step::{classify_step_failure, StepFailure, StepLimits};
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
 pub use storage::records::{
-    CircuitBreakerState, JobError, LockInfo, NewPeriodicTask, NewSubscription, PeriodicTask,
-    RateLimitState, ReplayEntry, Subscription, TaskLogEntry, TaskMetric, WorkerInfo,
+    AttemptFence, CircuitBreakerState, JobError, JobStep, LockInfo, NewJobStep, NewPeriodicTask,
+    NewSubscription, PeriodicTask, RateLimitState, ReplayEntry, SleepOutcome, StepCommit, StepKind,
+    Subscription, TaskLogEntry, TaskMetric, WorkerInfo,
 };
 #[cfg(feature = "redis")]
 pub use storage::redis_backend::RedisStorage;

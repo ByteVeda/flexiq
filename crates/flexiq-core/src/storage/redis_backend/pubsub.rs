@@ -380,6 +380,24 @@ impl RedisStorage {
     /// on the very next state change. All ops are `.ignore()`d so the helper is
     /// safe to fold into either a plain or a MULTI/EXEC pipeline without
     /// disturbing the caller's result type.
+    /// The pub/sub backlog indices a job belongs to, or `(None, None)` when it
+    /// is an ordinary job rather than a delivery. Lets a script that has to move
+    /// a job back to `Pending` keep the backlog in step without re-deriving the
+    /// topic itself.
+    pub(in crate::storage::redis_backend) fn sub_backlog_keys(
+        &self,
+        job: &Job,
+    ) -> (Option<String>, Option<String>) {
+        let Some((topic, name)) = crate::pubsub::extract_topic_subscription(job.notes.as_deref())
+        else {
+            return (None, None);
+        };
+        (
+            Some(self.sub_index_key("pending", &topic, &name)),
+            Some(self.sub_index_key("running", &topic, &name)),
+        )
+    }
+
     pub(in crate::storage::redis_backend) fn push_pubsub_transition(
         &self,
         pipe: &mut redis::Pipeline,
