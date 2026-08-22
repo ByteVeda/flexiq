@@ -97,6 +97,27 @@ macro_rules! impl_diesel_job_ops {
                 // Archived jobs keep their blobs inline in `archived_jobs`'s own
                 // payload/result columns, copied above from the live row.
                 diesel::delete(jobs::table.filter(jobs::id.eq(&row.id))).execute(conn)?;
+
+                // A step memo is execution state with no value past the job's
+                // end, and under an encrypting codec it is ciphertext nothing
+                // would ever collect. Deleting it *here* rather than in an
+                // adjacent call is the whole guarantee: two calls leave a window
+                // where a crash strands the blobs of a job that no longer
+                // exists, while one transaction rolls both statements back and
+                // the job is retried still holding the memo it is entitled to.
+                diesel::delete(job_steps::table.filter(job_steps::job_id.eq(&row.id)))
+                    .execute(conn)?;
+
+                // Revoking the claim in the same transaction is load-bearing for
+                // the delete above: an attempt running elsewhere would otherwise
+                // commit a step microseconds later, pass the owner check on its
+                // still-live claim, and write a row belonging to a job that no
+                // longer exists. With the claim gone the fence finds neither a
+                // claim nor a `Running` job, which is `ClaimLost`.
+                diesel::delete(
+                    execution_claims::table.filter(execution_claims::job_id.eq(&row.id)),
+                )
+                .execute(conn)?;
                 Ok(())
             }
 
@@ -1085,12 +1106,9 @@ macro_rules! impl_diesel_job_ops {
                         row.status = JobStatus::Complete as i32;
                         row.completed_at = Some(now);
                         row.result = c.result.clone();
+                        // `archive_job_row` clears the execution claim as part
+                        // of the same transaction.
                         Self::archive_job_row(conn, &row)?;
-
-                        diesel::delete(
-                            execution_claims::table.filter(execution_claims::job_id.eq(&c.job_id)),
-                        )
-                        .execute(conn)?;
 
                         let metric_id = uuid::Uuid::now_v7().to_string();
                         diesel::insert_into(task_metrics::table)
@@ -1147,29 +1165,38 @@ macro_rules! impl_diesel_job_ops {
                 next_scheduled_at: i64,
                 namespace: Option<&str>,
             ) -> Result<()> {
-                let mut conn = self.conn()?;
+                self.write_transaction(|conn| {
+                    let mut update = diesel::update(jobs::table)
+                        .filter(jobs::id.eq(id))
+                        .into_boxed();
+                    if let Some(ns) = namespace {
+                        update = update.filter(jobs::namespace.eq(ns));
+                    }
+                    let affected = update
+                        .set((
+                            jobs::status.eq(JobStatus::Pending as i32),
+                            jobs::scheduled_at.eq(next_scheduled_at),
+                            jobs::retry_count.eq(jobs::retry_count + 1),
+                            jobs::started_at.eq(None::<i64>),
+                            jobs::completed_at.eq(None::<i64>),
+                            jobs::error.eq(None::<String>),
+                        ))
+                        .execute(conn)?;
 
-                let mut update = diesel::update(jobs::table)
-                    .filter(jobs::id.eq(id))
-                    .into_boxed();
-                if let Some(ns) = namespace {
-                    update = update.filter(jobs::namespace.eq(ns));
-                }
-                let affected = update
-                    .set((
-                        jobs::status.eq(JobStatus::Pending as i32),
-                        jobs::scheduled_at.eq(next_scheduled_at),
-                        jobs::retry_count.eq(jobs::retry_count + 1),
-                        jobs::started_at.eq(None::<i64>),
-                        jobs::completed_at.eq(None::<i64>),
-                        jobs::error.eq(None::<String>),
-                    ))
-                    .execute(&mut conn)?;
+                    if affected == 0 {
+                        return Err(QueueError::JobNotFound(id.to_string()));
+                    }
 
-                if affected == 0 {
-                    return Err(QueueError::JobNotFound(id.to_string()));
-                }
-                Ok(())
+                    // The bump and the revocation are one transaction: nothing
+                    // may leave a job `Running`-then-`Pending` with a claim
+                    // still naming the attempt that just ended, or a late write
+                    // from it would re-assert that claim and commit a step the
+                    // retry then replays as a memo hit. The step rows themselves
+                    // stay — replaying them is the whole point of a retry.
+                    diesel::delete(execution_claims::table.filter(execution_claims::job_id.eq(id)))
+                        .execute(conn)?;
+                    Ok(())
+                })
             }
 
             /// Re-schedule a job back to `Pending` without touching

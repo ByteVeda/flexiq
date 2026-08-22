@@ -2866,6 +2866,32 @@ fn a_write_from_a_superseded_owner_is_refused() {
 }
 
 #[test]
+fn a_write_from_the_previous_attempt_is_refused() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    // `retry` bumps `retry_count` without changing who may claim next, so the
+    // owner alone cannot separate the two attempts.
+    storage.retry(&job.id, now_millis(), None).unwrap();
+    storage
+        .dequeue("default", now_millis() + 1000, None)
+        .unwrap();
+    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+}
+
+#[test]
 fn an_over_cap_step_is_refused_at_the_storage_boundary() {
     let storage = test_storage();
     let job = claimed_job(&storage, "worker-a");
@@ -3075,4 +3101,115 @@ fn a_gap_in_the_sequence_is_refused() {
         )
         .unwrap_err();
     assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}
+
+#[test]
+fn a_terminal_write_leaves_no_orphan_steps() {
+    let storage = test_storage();
+    let limits = StepLimits::default();
+
+    for terminal in ["complete", "fail", "cancel", "dlq"] {
+        let job = claimed_job(&storage, "worker-a");
+        storage
+            .record_step_result(
+                &run_step(&job.id, 0, "charge#0", b"ok"),
+                "worker-a",
+                0,
+                &limits,
+                None,
+            )
+            .unwrap();
+
+        match terminal {
+            "complete" => storage.complete(&job.id, Some(vec![1]), None).unwrap(),
+            "fail" => storage.fail(&job.id, "boom").unwrap(),
+            "cancel" => storage.mark_cancelled(&job.id, None).unwrap(),
+            _ => {
+                let running = storage.get_job(&job.id, None).unwrap().unwrap();
+                storage.move_to_dlq(&running, "boom", None).unwrap();
+            }
+        }
+
+        assert!(
+            storage.get_job_steps(&job.id, None).unwrap().is_empty(),
+            "{terminal} left orphan step rows"
+        );
+        assert!(
+            storage
+                .list_claims_by_worker("worker-a")
+                .unwrap()
+                .is_empty(),
+            "{terminal} left the execution claim behind"
+        );
+    }
+}
+
+#[test]
+fn a_retry_keeps_the_steps_and_drops_the_claim() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap();
+
+    storage.retry(&job.id, now_millis(), None).unwrap();
+
+    assert_eq!(
+        storage.get_job_steps(&job.id, None).unwrap().len(),
+        1,
+        "replaying the memo is the whole point of a retry"
+    );
+    assert!(
+        storage
+            .list_claims_by_worker("worker-a")
+            .unwrap()
+            .is_empty(),
+        "nothing may leave a job claimed by the attempt that just ended"
+    );
+}
+
+#[test]
+fn requeue_stuck_keeps_the_steps_for_the_next_worker() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap();
+
+    assert!(storage.requeue_stuck(&job.id, now_millis()).unwrap());
+    assert_eq!(storage.get_job_steps(&job.id, None).unwrap().len(), 1);
+}
+
+#[test]
+fn delete_job_steps_is_scoped_to_the_namespace() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(storage.delete_job_steps(&job.id, Some("other")).unwrap(), 0);
+    assert_eq!(storage.delete_job_steps(&job.id, None).unwrap(), 1);
+    assert!(storage.get_job_steps(&job.id, None).unwrap().is_empty());
 }
