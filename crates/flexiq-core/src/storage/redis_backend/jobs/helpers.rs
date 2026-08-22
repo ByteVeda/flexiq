@@ -104,7 +104,11 @@ impl RedisStorage {
     /// A job outside it reports `JobNotFound`, like an unknown id. The check
     /// rides on the load the mutation already does, so it costs no extra round
     /// trip. `None` addresses every namespace.
-    pub(super) fn get_job_required_in(&self, id: &str, namespace: Option<&str>) -> Result<Job> {
+    pub(in crate::storage::redis_backend) fn get_job_required_in(
+        &self,
+        id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Job> {
         let job = self.get_job_required(id)?;
         if namespace.is_some() && job.namespace.as_deref() != namespace {
             return Err(QueueError::JobNotFound(id.to_string()));
@@ -120,11 +124,17 @@ impl RedisStorage {
     ///
     /// The caller must have already set the job's `status = Pending`,
     /// `scheduled_at`, and cleared `started_at`/`completed_at`/`error`.
+    /// `revoke_claim` folds the execution claim's removal into the same atomic
+    /// pipe. A transition that *ends an attempt* must set it: leaving a job
+    /// `Pending` with a claim still naming the attempt that just finished lets a
+    /// late write from that attempt re-assert the claim and commit a step the
+    /// next attempt then replays as a memo hit.
     pub(in crate::storage::redis_backend) fn requeue_pending(
         &self,
         conn: &mut redis::Connection,
         job: &Job,
         old_status: JobStatus,
+        revoke_claim: bool,
     ) -> Result<()> {
         let job_json = serde_json::to_string(job)?;
         let job_key = self.key(&["job", &job.id]);
@@ -146,6 +156,11 @@ impl RedisStorage {
         // debounce index in the same atomic pipe (no-op without a debounce key).
         if let Some(debounce_key) = self.job_debounce_index_key(job) {
             pipe.zadd(&debounce_key, &job.id, job.created_at as f64);
+        }
+        if revoke_claim {
+            pipe.del(self.key(&["exec_claim", &job.id])).ignore();
+            pipe.zrem(self.key(&["exec_claims", "by_time"]), &job.id)
+                .ignore();
         }
         // Back to Pending: leave the running index and (re)enter the pending
         // backlog index. No-op for ordinary jobs; same atomic pipe.
@@ -220,6 +235,16 @@ impl RedisStorage {
         if let Some(debounce_key) = self.job_debounce_index_key(job) {
             pipe.zrem(&debounce_key, &job.id).ignore();
         }
+        // A step memo is execution state with no value past the job's end, and
+        // under an encrypting codec it is ciphertext nothing would ever collect.
+        // Deleting it in the same atomic pipe as the archive move — together
+        // with the claim, whose survival would let an attempt running elsewhere
+        // write a row belonging to a job that no longer exists — is what leaves
+        // no orphan behind.
+        pipe.del(self.job_steps_key(&job.id)).ignore();
+        pipe.del(self.key(&["exec_claim", &job.id])).ignore();
+        pipe.zrem(self.key(&["exec_claims", "by_time"]), &job.id)
+            .ignore();
         pipe.set(&archived_key, job_json).ignore();
         pipe.sadd(&archived_status_key, &job.id).ignore();
         pipe.sadd(&archived_by_queue, &job.id).ignore();
