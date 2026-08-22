@@ -688,10 +688,36 @@ seen at dispatch, and it must be populated unconditionally rather than only when
 `max_in_flight` is set, since it is now load-bearing for correctness and not just
 for the cap.
 
-A result whose `(owner, attempt)` no longer matches the claim is **dropped with a
-warning** — not failed, not retried. The job is proceeding under another owner,
-and the only correct contribution a superseded attempt can make is none. This is
-the same disposition `ClaimLost` gets in §9.2, arrived at from the other side.
+**The check is §1.4's four-case resolution, not a stricter one.** A result is
+authorized when the claim names the dispatch record's `owner` at the same
+`attempt`, *and also* when the claim is absent while the job is still `Running`
+at that attempt — the age-sweep case. Dropping on a missing claim would punish a
+live owner that finished a perfectly good attempt after `purge_execution_claims`
+ran, leaving the job `Running` with nothing to finish it and nothing holding it.
+Only a claim naming another owner, or a job that has moved past this attempt,
+supersedes a result.
+
+A superseded result is **dropped with a warning** — not failed, not retried. The
+job is proceeding under another owner, and the only correct contribution a
+superseded attempt can make is none. This is the same disposition `ClaimLost`
+gets in §9.2, arrived at from the other side.
+
+**Orphan recovery authorizes itself from the reclaim.** The one caller with no
+dispatch record to check against is the recovery path:
+`recover_orphaned_jobs` reclaims the job and then synthesises a
+`JobResult::Failure` for `handle_result` (`scheduler/maintenance.rs:141`). Any
+`InFlight` entry there belongs to the *dead* owner, and after a restart there is
+no entry at all — so a validation that only consulted the table would drop the
+one result that exists to unstick the job, and leave it `Running` forever. That
+would be a regression created entirely by this fence.
+
+But the recovery already holds a better credential than the table does:
+`reclaim_execution` returns `true` only for the survivor that won the transfer
+(`storage/traits.rs:646`), and that transfer *is* the authorization. So on
+`Ok(true)` the recovery writes a dispatch record for
+`(job_id, claim_owner, job.retry_count)` before synthesising the result, and the
+result then validates like any other. No special case in `handle_result`, and
+recovery tests are owed on both the same-process and post-restart paths (#665).
 
 ### 8.5 Retention and the reaper (D10)
 
@@ -1065,8 +1091,11 @@ still-`Running` job re-asserts rather than failing, and one that a write from th
 previous attempt is refused after `retry` bumped `retry_count` · `retry` and
 `mark_cancelled` revoke the claim in their own transaction, so no path leaves a
 job `Running` and unclaimed · `handle_result` validates `(owner, attempt)` against
-its dispatch record before any mutation, and drops a superseded result with a
-warning — reclaimed-worker late-result and failure-to-retry race tests · an
+its dispatch record before any mutation, applying the *same* four-case resolution
+so an age-swept claim does not strand a finished attempt, and drops a superseded
+result with a warning · `recover_orphaned_jobs` writes its dispatch record from
+the winning `reclaim_execution` · reclaimed-worker late-result, failure-to-retry,
+claim-purge-versus-result, and orphan-recovery-after-restart race tests · an
 identical re-commit returns `AlreadyCommitted`, not a conflict, and `kind` is
 part of the match · caps enforced in `record_step_result`, on encoded bytes ·
 deletion is a statement *inside* each terminal method's existing transaction,
