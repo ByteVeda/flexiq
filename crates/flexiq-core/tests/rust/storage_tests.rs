@@ -9,7 +9,7 @@
 
 use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
-use flexiq_core::step::StepLimits;
+use flexiq_core::step::{classify_step_failure, StepLimits, StepSession};
 use flexiq_core::storage::records::{
     DebounceOptions, NewJobStep, SleepOutcome, StepCommit, StepKind, SubscriptionMode,
     WorkerRegistration, WorkerStatus,
@@ -1945,6 +1945,8 @@ fn run_storage_tests(s: &impl Storage) {
     test_delete_job_steps_is_namespace_scoped(s);
     test_authorize_attempt_writes_nothing(s);
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
+    test_step_session_memoizes_across_attempts(s);
+    test_step_session_refuses_a_changed_sequence(s);
     test_an_elapsed_sleep_wakes_the_job_immediately(s);
 }
 
@@ -2243,6 +2245,93 @@ fn test_steps_reject_a_reused_explicit_key(s: &impl Storage) {
     assert!(
         matches!(err, QueueError::StepDiverged { .. }),
         "a gap is refused: {err}"
+    );
+}
+
+/// The session over this backend: one snapshot read, memo hits that skip the
+/// closure, and bytes that come back exactly as they went in.
+fn test_step_session_memoizes_across_attempts(s: &impl Storage) {
+    let job = stepped_job(s, "q-step-session", "w-session");
+    let limits = StepLimits::default();
+    let mut first = StepSession::load(s.clone(), &job, "w-session", limits).unwrap();
+
+    // Bytes a codec would produce: the store must not interpret them.
+    let ciphertext = b"\x00\x9fENCRYPTED\xff\xfe".to_vec();
+    first
+        .run("charge", None, || Ok(ciphertext.clone()))
+        .unwrap();
+    first
+        .run("notify", Some("a"), || Ok(b"sent".to_vec()))
+        .unwrap();
+
+    // The attempt died; the next one replays from the recorded steps.
+    let ran = std::cell::Cell::new(false);
+    let mut second = StepSession::load(s.clone(), &job, "w-session", limits).unwrap();
+    let replayed = second
+        .run("charge", None, || {
+            ran.set(true);
+            Ok(vec![])
+        })
+        .unwrap();
+    assert_eq!(replayed, ciphertext, "a memo must return the stored bytes");
+    let keyed = second
+        .run("notify", Some("a"), || {
+            ran.set(true);
+            Ok(vec![])
+        })
+        .unwrap();
+    assert_eq!(keyed, b"sent");
+    assert!(!ran.get(), "a memoized step must not run its closure");
+
+    // New ground still appends after the replayed prefix.
+    second.run("receipt", None, || Ok(b"r".to_vec())).unwrap();
+    let keys: Vec<String> = s
+        .get_job_steps(&job.id, None)
+        .unwrap()
+        .into_iter()
+        .map(|step| step.step_key)
+        .collect();
+    assert_eq!(keys, ["charge#0", "notify:a", "receipt#0"]);
+}
+
+/// A deploy that changed the step sequence fails the attempt before the closure
+/// runs, and writes nothing.
+fn test_step_session_refuses_a_changed_sequence(s: &impl Storage) {
+    let job = stepped_job(s, "q-step-diverge", "w-diverge");
+    let limits = StepLimits::default();
+    let mut first = StepSession::load(s.clone(), &job, "w-diverge", limits).unwrap();
+    first.run("charge", None, || Ok(b"a".to_vec())).unwrap();
+    first.run("notify", None, || Ok(b"b".to_vec())).unwrap();
+
+    let mut second = StepSession::load(s.clone(), &job, "w-diverge", limits).unwrap();
+    second.run("charge", None, || Ok(vec![])).unwrap();
+    let ran = std::cell::Cell::new(false);
+    let err = second
+        .run("audit", None, || {
+            ran.set(true);
+            Ok(vec![])
+        })
+        .unwrap_err();
+
+    assert!(
+        !ran.get(),
+        "the divergence must be caught before the closure"
+    );
+    assert!(
+        matches!(&err, QueueError::StepSequenceDiverged(divergence)
+            if divergence.position == 1
+                && divergence.recorded.contains("notify#0")
+                && divergence.running.contains("audit#0")),
+        "{err}"
+    );
+    assert!(
+        !classify_step_failure(&err).should_retry(),
+        "a divergence reproduces itself on every attempt"
+    );
+    assert_eq!(
+        s.get_job_steps(&job.id, None).unwrap().len(),
+        2,
+        "a diverged attempt commits nothing"
     );
 }
 
