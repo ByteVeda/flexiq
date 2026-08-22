@@ -59,7 +59,7 @@ protocol. This is the single largest cost in the epic and the reason §9 exists.
 | D11 | New hook `on_sleep`; `after` does **not** fire for a slept attempt. | `after(ctx, None, None)` reads as "returned None" to every existing middleware, so OTel would close a span as success and Prometheus would count one. |
 | D12 | Inline steps require **`CONTRACT_VERSION` 2** and refuse to run below a floor of 2. | An older worker cannot read `job_steps` and would silently re-run every committed step during a rolling upgrade. That is precisely what the floor exists for. |
 | D13 | The epic lands as **one major release (2.0.0)**. | `JobResult` and `ResultOutcome` are not `#[non_exhaustive]`; adding a variant, and adding the attribute, are both breaking. Bundle them once rather than discovering the break at publish time. |
-| D14 | **Every step write is fenced on the execution claim** — owner derived by the scheduler, never taken from a frame; an absent claim on a still-`Running` job re-asserts rather than failing — and is atomic with whatever else it changes, terminal cleanup revoking the claim in the same transaction. | A job can run in two places at once, as `requeue_stuck` documents, so an unfenced write from an abandoned attempt lands in the live one's sequence; an executor-supplied owner would let a stale peer spoof its way back in. Splitting a sleep, or a terminal cleanup, across two calls strands state past a crash. |
+| D14 | **Every step write, and every result the scheduler acts on, is fenced on `(owner, attempt)`** — both derived by the scheduler, never taken from a frame; an absent claim on a still-`Running` job at the same attempt re-asserts rather than failing — and every transition that ends an attempt revokes the claim in its own transaction. | A job can run in two places at once, as `requeue_stuck` documents, so an unfenced write from an abandoned attempt lands in the live one's sequence; an executor-supplied owner would let a stale peer spoof its way back in. Splitting a sleep, or a terminal cleanup, across two calls strands state past a crash. |
 
 ---
 
@@ -131,7 +131,7 @@ fn sleep_job(&self, step: &NewJobStep, owner: &str, wake_at: i64, namespace: Opt
     -> Result<SleepOutcome> { Err(QueueError::Other("steps unsupported".into())) }
 
 /// Drop every step row for a job. **Not** how the terminal paths clean up —
-/// they delete inline, in their own transaction (§8.4). This is the explicit
+/// they delete inline, in their own transaction (§8.5). This is the explicit
 /// admin/repair entry point.
 fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>)
     -> Result<u64> { Err(QueueError::Other("steps unsupported".into())) }
@@ -169,10 +169,17 @@ resolve the claim in the same transaction as the write:
 
 | Claim row for `job_id` | Job row | Outcome |
 |---|---|---|
-| names `owner` | — | proceed |
-| absent | still `Running` | re-assert the claim for `owner`, then proceed |
+| names `owner` | `Running`, `retry_count == attempt` | proceed |
+| absent | `Running`, `retry_count == attempt` | re-assert the claim for `owner`, then proceed |
 | names another worker | — | `QueueError::ClaimLost` |
-| absent | gone or not `Running` | `QueueError::ClaimLost` |
+| absent | gone, not `Running`, or `retry_count != attempt` | `QueueError::ClaimLost` |
+
+**The token is `(owner, attempt)`, not `owner` alone.** `owner` alone does not
+separate two runs of the *same* job: `reclaim_execution` hands a job to a new
+worker without touching `retry_count`, and `retry` bumps `retry_count` without
+changing who may claim next. So the writer passes both — the owner it claimed
+under, and the `retry_count` the job carried at claim time — and a write whose
+attempt no longer matches the job row is as stale as one whose owner does not.
 
 **An absent claim is not a lost one, and conflating the two loses jobs.**
 Claims are swept by age (`purge_execution_claims`, `storage/traits.rs:641`), so a
@@ -184,9 +191,24 @@ entirely by housekeeping.
 
 Re-asserting is safe because `claim_execution` is insert-only on the `job_id`
 primary key: the insert succeeds exactly when no row exists, and the PK serializes
-any worker racing to claim the same job, so at most one wins. The `still Running`
-guard is what keeps this from resurrecting a claim on a job that has already gone
-terminal — which is also what makes the terminal fence of §8.4 hold.
+any worker racing to claim the same job, so at most one wins. The `Running` and
+`retry_count` guards are what keep this from resurrecting a claim on a job that
+has moved on — which is also what makes the terminal fence of §8.5 hold.
+
+**Nothing else may leave a job `Running` and unclaimed.** The re-assert branch
+exists for the age sweep and for nothing else, so every path that ends an attempt
+has to revoke the claim in the same transaction as the transition it performs —
+`retry` and `mark_cancelled` included, not just the terminal writes of §8.5.
+
+Today they do not. `result_handler.rs` clears the claim first and transitions
+several statements later (`scheduler/result_handler.rs:48`, then `:136`), which
+leaves the job `Running` with no claim for the whole span in between. Under the
+re-assert branch a late write from the failing attempt lands squarely in that
+window, takes the claim back, and commits a step the retry then replays as a memo
+hit — the exact ghost the fence exists to stop, one window over. Folding the
+revocation into `retry` and `mark_cancelled` removes the window; the `attempt`
+component then covers whatever a late writer does after it, since `retry` has
+bumped `retry_count` by the time anything can race.
 
 **`owner` is never something a caller asserts about itself.** In-process and
 prefork workers pass the id they claimed under, which they hold because they won
@@ -325,7 +347,7 @@ than were committed. The orphaned tail's side effects already happened and the
 new code has no use for their values. This is a **warning**, logged with both
 sequences, not a failure: failing a job whose code legitimately shortened would
 be worse than the leak of a value nobody reads. The rows are dropped with the
-job (§8.4).
+job (§8.5).
 
 ### 3.5 What is not detectable, and must be documented
 
@@ -639,11 +661,39 @@ otherwise time out should sleep, not raise the timeout.
 ### 8.3 Cancellation
 
 `request_cancel` → the task observes it → `mark_cancelled` archives the job.
-Terminal, so the step rows are dropped (§8.4). A cancel *during* a step is
+Terminal, so the step rows are dropped (§8.5). A cancel *during* a step is
 observed between steps, never inside one — `step.run` does not interrupt the
 closure it is running.
 
-### 8.4 Retention and the reaper (D10)
+### 8.4 The scheduler must be fenced too, not just storage
+
+Fencing the step writes and leaving `handle_result` open would be fencing the
+window and not the door. A `JobResult` is identified by `job_id` alone
+(`scheduler/mod.rs:152`), so `handle_result` will clear a claim, retry,
+dead-letter, cancel or finalize whichever job the id names — including one that
+`reap_orphaned_jobs` reclaimed to a different worker while the original owner was
+merely slow rather than dead. That worker's late result then completes, or
+dead-letters, an attempt it has nothing to do with. `requeue_stuck` already warns
+about the shape of this (`storage/traits.rs:139`); the difference is that this
+design now *depends* on terminal transitions being the thing that revokes a
+claim, so a terminal transition applied to the wrong attempt is no longer only a
+wrong status — it deletes another attempt's steps.
+
+**Rule:** the scheduler validates a result against its own dispatch record before
+any mutation, and the check runs inside the transition's transaction, not before
+it. The record already exists in all but one field: `InFlight`
+(`scheduler/mod.rs:273`) maps `job_id` to the task it dispatched, and
+`claim_owner` (`:348`) is the owner it claimed under. It gains the `retry_count`
+seen at dispatch, and it must be populated unconditionally rather than only when
+`max_in_flight` is set, since it is now load-bearing for correctness and not just
+for the cap.
+
+A result whose `(owner, attempt)` no longer matches the claim is **dropped with a
+warning** — not failed, not retried. The job is proceeding under another owner,
+and the only correct contribution a superseded attempt can make is none. This is
+the same disposition `ClaimLost` gets in §9.2, arrived at from the other side.
+
+### 8.5 Retention and the reaper (D10)
 
 Step rows are deleted **inside the terminal method's own transaction**, not by a
 call placed next to it: `complete`, `complete_batch`, `fail`, `mark_cancelled`,
@@ -989,6 +1039,7 @@ major. Everything breaking goes in it, once:
 | `JobResult::Slept` + `#[non_exhaustive]` | `scheduler/mod.rs:108` |
 | `ResultOutcome::Slept` + `#[non_exhaustive]` | `scheduler/mod.rs:169` |
 | `Storage::reschedule` gains `namespace` | `storage/traits.rs:133` |
+| `retry` / `mark_cancelled` revoke the claim (behaviour, not signature) | `storage/traits.rs:128`, `:156` |
 | `CONTRACT_VERSION` 1 → 2 | `contract.rs:23` |
 
 Additive, and therefore *not* breaking: the four `Storage` step methods (all
@@ -1006,11 +1057,16 @@ up until the release is cut. Version with `node scripts/version.mjs --set 2.0.0`
 
 Each sub-issue is reviewed against the decision it implements.
 
-**#665 storage** — D1, D3, D6, D10, D14, §1.4, §10. Table shape, both unique
+**#665 storage** — D1, D3, D6, D10, D14, §1.4, §8.4, §10. Table shape, both unique
 indexes, and no `status` column · five defaulted methods, `Unsupported` not
-empty · every write fenced on the claim's `worker_id`, in the write's own
-transaction, with the four-case resolution table — including a test that a
-*purged* claim on a still-`Running` job re-asserts rather than failing · an
+empty · every write fenced on `(owner, attempt)` in the write's own transaction,
+with the four-case resolution table — including a test that a *purged* claim on a
+still-`Running` job re-asserts rather than failing, and one that a write from the
+previous attempt is refused after `retry` bumped `retry_count` · `retry` and
+`mark_cancelled` revoke the claim in their own transaction, so no path leaves a
+job `Running` and unclaimed · `handle_result` validates `(owner, attempt)` against
+its dispatch record before any mutation, and drops a superseded result with a
+warning — reclaimed-worker late-result and failure-to-retry race tests · an
 identical re-commit returns `AlreadyCommitted`, not a conflict, and `kind` is
 part of the match · caps enforced in `record_step_result`, on encoded bytes ·
 deletion is a statement *inside* each terminal method's existing transaction,
