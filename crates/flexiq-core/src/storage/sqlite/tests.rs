@@ -2714,3 +2714,365 @@ fn test_dlq_shed_backfill_flags_pre_migration_rows() {
     assert_eq!(cands.len(), 1, "only the ordinary failure is a candidate");
     assert_eq!(cands[0].original_job_id, failed.id);
 }
+
+// ── Durable inline steps ─────────────────────────────────────────────
+
+use crate::step::StepLimits;
+use crate::storage::records::{NewJobStep, SleepOutcome, StepCommit, StepKind};
+
+/// Enqueue, dequeue and claim a job, returning it ready for a step write.
+fn claimed_job(storage: &SqliteStorage, owner: &str) -> crate::job::Job {
+    let job = storage.enqueue(make_job("stepped_task")).unwrap();
+    storage
+        .dequeue("default", now_millis() + 1000, None)
+        .unwrap();
+    assert!(storage.claim_execution(&job.id, owner).unwrap());
+    storage.get_job(&job.id, None).unwrap().unwrap()
+}
+
+fn run_step<'a>(job_id: &'a str, seq: i32, key: &'a str, result: &'a [u8]) -> NewJobStep<'a> {
+    NewJobStep {
+        job_id,
+        seq,
+        step_key: key,
+        kind: StepKind::Run,
+        result: Some(result),
+    }
+}
+
+#[test]
+fn steps_commit_and_replay_in_order() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    for (seq, key) in [(0, "charge#0"), (1, "email#0")] {
+        assert_eq!(
+            storage
+                .record_step_result(
+                    &run_step(&job.id, seq, key, key.as_bytes()),
+                    "worker-a",
+                    0,
+                    &limits,
+                    None
+                )
+                .unwrap(),
+            StepCommit::Committed
+        );
+    }
+
+    let steps = storage.get_job_steps(&job.id, None).unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].step_key, "charge#0");
+    assert_eq!(steps[0].result.as_deref(), Some(b"charge#0".as_slice()));
+    assert_eq!(steps[1].seq, 1);
+}
+
+#[test]
+fn an_identical_recommit_is_a_success() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    let step = run_step(&job.id, 0, "charge#0", b"ok");
+
+    storage
+        .record_step_result(&step, "worker-a", 0, &limits, None)
+        .unwrap();
+    assert_eq!(
+        storage
+            .record_step_result(&step, "worker-a", 0, &limits, None)
+            .unwrap(),
+        StepCommit::AlreadyCommitted
+    );
+    assert_eq!(storage.get_job_steps(&job.id, None).unwrap().len(), 1);
+}
+
+#[test]
+fn a_different_result_at_the_same_position_diverges() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"first"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap();
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"second"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}
+
+#[test]
+fn a_purged_claim_on_a_running_job_re_asserts() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    // Claims are swept by age, so a long job legitimately outlives its own.
+    assert_eq!(
+        storage.purge_execution_claims(now_millis() + 1000).unwrap(),
+        1
+    );
+    assert_eq!(
+        storage
+            .record_step_result(
+                &run_step(&job.id, 0, "charge#0", b"ok"),
+                "worker-a",
+                0,
+                &limits,
+                None
+            )
+            .unwrap(),
+        StepCommit::Committed
+    );
+    assert_eq!(
+        storage.list_claims_by_worker("worker-a").unwrap(),
+        vec![job.id.clone()],
+        "the sweep's victim must be re-asserted, not treated as lost"
+    );
+}
+
+#[test]
+fn a_write_from_a_superseded_owner_is_refused() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    assert!(storage
+        .reclaim_execution(&job.id, "worker-a", "worker-b")
+        .unwrap());
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+}
+
+#[test]
+fn an_over_cap_step_is_refused_at_the_storage_boundary() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits {
+        max_step_bytes: 8,
+        ..StepLimits::default()
+    };
+
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 0, "render#0", &[0u8; 64]),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    match err {
+        QueueError::StepLimitExceeded {
+            limit,
+            actual,
+            allowed,
+            ..
+        } => {
+            assert_eq!(limit, "step bytes");
+            assert_eq!((actual, allowed), (64, 8));
+        }
+        other => panic!("expected a cap refusal, got {other}"),
+    }
+    assert!(storage.get_job_steps(&job.id, None).unwrap().is_empty());
+}
+
+#[test]
+fn the_step_count_cap_holds_where_the_byte_cap_cannot() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits {
+        max_steps: 2,
+        ..StepLimits::default()
+    };
+
+    for seq in 0..2 {
+        storage
+            .record_step_result(
+                &run_step(&job.id, seq, &format!("noop#{seq}"), &[]),
+                "worker-a",
+                0,
+                &limits,
+                None,
+            )
+            .unwrap();
+    }
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 2, "noop#2", &[]),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, QueueError::StepLimitExceeded { limit, .. } if limit == "step count"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_sleep_pins_its_deadline_on_the_first_commit() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    let sleep = NewJobStep {
+        job_id: &job.id,
+        seq: 0,
+        step_key: "cool_off#0",
+        kind: StepKind::Sleep,
+        result: None,
+    };
+    let first_deadline = now_millis() + 3_600_000;
+
+    let outcome = storage
+        .sleep_job(&sleep, "worker-a", 0, first_deadline, &limits, None)
+        .unwrap();
+    assert_eq!(
+        outcome,
+        SleepOutcome::Slept {
+            wake_at: first_deadline
+        }
+    );
+
+    let slept = storage.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(slept.status, JobStatus::Pending);
+    assert_eq!(slept.scheduled_at, first_deadline);
+    assert!(
+        slept.started_at.is_none(),
+        "a sleeping job is not stale-reapable"
+    );
+    assert!(storage
+        .list_claims_by_worker("worker-a")
+        .unwrap()
+        .is_empty());
+
+    // Replaying the same `sleep("1h")` must not push the deadline an hour out.
+    storage
+        .dequeue("default", first_deadline + 1, None)
+        .unwrap();
+    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+    let replayed = storage
+        .sleep_job(
+            &sleep,
+            "worker-a",
+            0,
+            first_deadline + 3_600_000,
+            &limits,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        replayed,
+        SleepOutcome::AlreadySleeping {
+            wake_at: first_deadline
+        }
+    );
+    assert_eq!(
+        storage
+            .get_job(&job.id, None)
+            .unwrap()
+            .unwrap()
+            .scheduled_at,
+        first_deadline
+    );
+}
+
+#[test]
+fn a_run_commit_onto_a_stored_sleep_diverges() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+    let sleep = NewJobStep {
+        job_id: &job.id,
+        seq: 0,
+        step_key: "cool_off#0",
+        kind: StepKind::Sleep,
+        result: None,
+    };
+    storage
+        .sleep_job(&sleep, "worker-a", 0, now_millis() + 1000, &limits, None)
+        .unwrap();
+
+    storage
+        .dequeue("default", now_millis() + 100_000, None)
+        .unwrap();
+    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 0, "cool_off#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}
+
+#[test]
+fn an_explicit_key_cannot_be_spent_twice() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    storage
+        .record_step_result(
+            &run_step(&job.id, 0, "charge:order-7", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap();
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 1, "charge:order-7", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}
+
+#[test]
+fn a_gap_in_the_sequence_is_refused() {
+    let storage = test_storage();
+    let job = claimed_job(&storage, "worker-a");
+    let limits = StepLimits::default();
+
+    let err = storage
+        .record_step_result(
+            &run_step(&job.id, 3, "charge#0", b"ok"),
+            "worker-a",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
+}

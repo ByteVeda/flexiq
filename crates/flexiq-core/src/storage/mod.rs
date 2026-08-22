@@ -2055,9 +2055,10 @@ impl Storage for StorageBackend {
         owner: &str,
         attempt: i32,
         wake_at: i64,
+        limits: &crate::step::StepLimits,
         namespace: Option<&str>,
     ) -> Result<records::SleepOutcome> {
-        delegate!(self, sleep_job, step, owner, attempt, wake_at, namespace)
+        delegate!(self, sleep_job, step, owner, attempt, wake_at, limits, namespace)
     }
     fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
         delegate!(self, delete_job_steps, job_id, namespace)

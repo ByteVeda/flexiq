@@ -87,7 +87,7 @@ pub enum QueueError {
     /// A step commit does not match what is already stored at its position:
     /// a different key, or the same key with a different kind.
     #[error(
-        "step divergence on job {job_id} at position {seq}: expected '{expected}', found '{found}'"
+        "step divergence on job {job_id} at position {seq}: expected {expected}, found {found}"
     )]
     StepDiverged {
         /// Job whose step sequence diverged.

@@ -717,16 +717,18 @@ pub trait Storage: Send + Sync + Clone {
     /// `wake_at` is a *candidate*. A sleep row already committed at this
     /// position keeps the deadline it was first given, and the reschedule
     /// targets that stored value — otherwise a duration sleep would push its
-    /// own deadline further out on every replay.
+    /// own deadline further out on every replay. A sleep commits no bytes, so
+    /// only `max_steps` can bite, but it is counted like any other step.
     fn sleep_job(
         &self,
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
         wake_at: i64,
+        limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<SleepOutcome> {
-        let _ = (step, owner, attempt, wake_at, namespace);
+        let _ = (step, owner, attempt, wake_at, limits, namespace);
         Err(steps_unsupported())
     }
 
