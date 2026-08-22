@@ -287,5 +287,20 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    job_steps (id) {
+        id -> Text,
+        job_id -> Text,
+        namespace -> Nullable<Text>,
+        step_key -> Text,
+        seq -> Integer,
+        kind -> Text,
+        result -> Nullable<Binary>,
+        result_len -> Integer,
+        wake_at -> Nullable<BigInt>,
+        created_at -> BigInt,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(jobs, job_dependencies);
 diesel::allow_tables_to_appear_in_same_query!(topic_messages, topic_deliveries);
