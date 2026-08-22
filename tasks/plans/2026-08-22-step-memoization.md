@@ -46,6 +46,15 @@ core so the three shells (#669–#671) drive one implementation instead of three
      a recorded `sleep` is caught.
    - **Keyed calls do not spend an occurrence** (§2.2): two independent counters, so
      adding a keyed call cannot shift the key of a later unkeyed one.
+   - **A keyed step is matched by its key, wherever it sits; an unkeyed one by
+     position.** §3.2 describes the positional check and §2.3 says an explicit key makes
+     identity and position "independent" — the second rule is the one that governs a keyed
+     step, because §2.2's own motivating example is a loop whose order is not guaranteed,
+     and a positional check would dead-letter it on the first reorder. The walk skips
+     recorded steps a keyed hit already claimed, so an unkeyed step after a reordered
+     keyed one still lines up; a keyed step the recorded run never saw takes the next free
+     `seq` (the stored count), not the walk's position; and a recorded step this attempt
+     never asked for is the §3.4 warning, whether it sits at the end or in the middle.
    - A key issued twice in one attempt, a step started while another is uncommitted, and a
      hole in the snapshot are all refused: each of the three would otherwise return a
      value that answers a different question.
