@@ -1943,6 +1943,8 @@ fn run_storage_tests(s: &impl Storage) {
     test_steps_sleep_pins_its_deadline(s);
     test_steps_reject_a_reused_explicit_key(s);
     test_delete_job_steps_is_namespace_scoped(s);
+    test_authorize_attempt_writes_nothing(s);
+    test_a_step_at_the_cap_round_trips_byte_for_byte(s);
 }
 
 // ── Durable inline steps ─────────────────────────────────────────────
@@ -3271,4 +3273,87 @@ fn postgres_storage_tests() {
     };
 
     run_storage_tests(&storage);
+}
+
+fn test_authorize_attempt_writes_nothing(s: &impl Storage) {
+    use flexiq_core::storage::records::AttemptFence;
+
+    let job = stepped_job(s, "q-steps-authorize", "w-authorize");
+
+    // Runs once per result on the drain path, so it must not take a write
+    // transaction — and an authorization check must not leave behind a claim
+    // its caller never asked for. The age-sweep case is where that would show:
+    // a step *write* re-asserts here, a check must not.
+    s.purge_execution_claims(now_millis() + 1000).unwrap();
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+            .unwrap(),
+        AttemptFence::Authorized,
+        "an absent claim on a still-Running job at the same attempt is not a lost one"
+    );
+    assert!(
+        s.list_claims_by_worker("w-authorize").unwrap().is_empty(),
+        "a read-only check must write no claim"
+    );
+
+    s.complete(&job.id, None, None).unwrap();
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+            .unwrap(),
+        AttemptFence::Superseded
+    );
+}
+
+fn test_a_step_at_the_cap_round_trips_byte_for_byte(s: &impl Storage) {
+    let job = stepped_job(s, "q-steps-bytes", "w-bytes");
+    let limits = StepLimits {
+        max_step_bytes: 4096,
+        max_total_bytes: 6000,
+        ..StepLimits::default()
+    };
+    // Values a text encoding would mangle or inflate: every byte, high bits set,
+    // and the NUL and newline the Redis row format uses as separators.
+    let payload: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+
+    assert_eq!(
+        s.record_step_result(
+            &run_step(&job.id, 0, "blob#0", &payload),
+            "w-bytes",
+            0,
+            &limits,
+            None
+        )
+        .unwrap(),
+        StepCommit::Committed,
+        "a step exactly at the cap fits on every backend"
+    );
+    assert_eq!(
+        s.get_job_steps(&job.id, None).unwrap()[0].result.as_deref(),
+        Some(payload.as_slice())
+    );
+
+    // The caps count payload bytes, not whatever the backend's own encoding
+    // costs, so one more full step must break the per-job total on every
+    // backend at the same place.
+    let err = s
+        .record_step_result(
+            &run_step(&job.id, 1, "blob#1", &payload),
+            "w-bytes",
+            0,
+            &limits,
+            None,
+        )
+        .unwrap_err();
+    match err {
+        QueueError::StepLimitExceeded {
+            limit,
+            actual,
+            allowed,
+            ..
+        } => assert_eq!(
+            (limit.as_str(), actual, allowed),
+            ("total bytes", 8192, 6000)
+        ),
+        other => panic!("expected the per-job cap, got {other}"),
+    }
 }
