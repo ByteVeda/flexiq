@@ -318,7 +318,11 @@ impl StepSequence {
             job_id: self.job_id.clone(),
             position,
             recorded: render_sequence(&self.recorded_keys(), position),
-            running: render_sequence(&self.issued_keys(), position),
+            // Each sequence is windowed around its own index. `position` names
+            // a recorded row, and a keyed match finds one wherever it sits —
+            // which says nothing about how far this attempt has got. The
+            // offending step is always the last one issued.
+            running: render_sequence(&self.issued_keys(), self.issued.len().saturating_sub(1)),
             expected,
             found,
         }))
@@ -340,8 +344,11 @@ fn render_sequence(keys: &[&str], position: usize) -> String {
     if keys.is_empty() {
         return "(none)".to_string();
     }
-    let start = position.saturating_sub(CONTEXT);
     let end = (position + CONTEXT + 1).min(keys.len());
+    // Clamped both ways: an index past the end of these keys must render a
+    // shorter window, never an inverted slice. A helper that only ever runs
+    // while an error is being built is the last place to panic.
+    let start = position.saturating_sub(CONTEXT).min(end);
     let mut rendered = String::new();
     if start > 0 {
         rendered.push_str(&format!("…({start} earlier), "));
@@ -588,6 +595,39 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("'nap#0' as a sleep step"), "{message}");
         assert!(message.contains("'nap#0' as a run step"), "{message}");
+    }
+
+    #[test]
+    fn a_keyed_divergence_far_into_the_snapshot_renders() {
+        // The two sequences are indexed differently: a keyed match names a
+        // recorded row, which says nothing about how many steps this attempt
+        // has issued. Windowing the running sequence around the recorded index
+        // once put its start past its end.
+        let mut rows: Vec<JobStep> = (0..9)
+            .map(|seq| recorded(seq, &format!("step{seq}#0"), b""))
+            .collect();
+        rows.push(JobStep {
+            kind: StepKind::Sleep,
+            result: None,
+            wake_at: Some(1),
+            ..recorded(9, "nap:x", b"")
+        });
+        let mut sequence = sequence(rows);
+
+        let err = sequence.begin_run("nap", Some("x")).unwrap_err();
+        let QueueError::StepSequenceDiverged(divergence) = &err else {
+            panic!("{err}");
+        };
+        assert_eq!(divergence.position, 9);
+        assert_eq!(
+            divergence.running, "nap:x",
+            "one issued step, rendered whole"
+        );
+        assert!(
+            divergence.recorded.contains("nap:x"),
+            "{}",
+            divergence.recorded
+        );
     }
 
     #[test]
