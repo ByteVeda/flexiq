@@ -30,7 +30,7 @@ pub use contract::{
     ensure_contract_supported, min_contract, set_min_contract, CONTRACT_VERSION,
     MIN_CONTRACT_VERSION,
 };
-pub use error::{QueueError, Result};
+pub use error::{QueueError, Result, StepDivergence};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
@@ -40,7 +40,10 @@ pub use scheduler::{
     JobResult, QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig,
 };
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
-pub use step::{classify_step_failure, StepFailure, StepLimits};
+pub use step::{
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepLimits,
+    StepSequence, StepSession,
+};
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
 pub use storage::postgres::PostgresStorage;
