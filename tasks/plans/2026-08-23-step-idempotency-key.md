@@ -81,4 +81,4 @@ assert on it exactly, so it cannot be given a shape here — and that path alrea
 whole of the job's metadata on the way back out. Closing it properly means taking the origin
 off the metadata blob altogether, onto a `dead_letter` column no replacement can reach: a
 migration on three backends plus the row structs and the shells' DLQ types. That reverses §6.2
-of the design, so it belongs to the epic, not to a review round. Needs a follow-up issue.
+of the design, so it belongs to the epic, not to a review round. Filed as #728.

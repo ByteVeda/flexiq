@@ -120,6 +120,7 @@ pub(crate) fn stamp_origin_job_id(
 /// job's metadata on the way back out. Closing it needs the origin off the
 /// metadata blob entirely — a `dead_letter` column no replacement can reach —
 /// which is a migration on three backends and a design call the epic owns.
+/// Tracked as issue 728.
 pub(crate) fn carry_origin_job_id(replacement: Option<&str>, job: &Job) -> Option<String> {
     let Some(replacement) = replacement else {
         return job.metadata.clone();
