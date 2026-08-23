@@ -18,7 +18,7 @@ class EventNameTest {
         for (EventName name : EventName.values()) {
             assertTrue(seen.add(name.wireName()), "duplicate wire name: " + name.wireName());
         }
-        assertEquals(29, seen.size());
+        assertEquals(30, seen.size());
     }
 
     @Test

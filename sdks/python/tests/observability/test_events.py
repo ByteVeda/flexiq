@@ -87,6 +87,7 @@ def test_all_event_types_exist() -> None:
         "job.retrying",
         "job.dead",
         "job.cancelled",
+        "job.sleeping",
         "worker.started",
         "worker.stopped",
         "worker.online",
