@@ -580,6 +580,50 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_before_the_sleep_commits_heals_on_the_next_attempt() {
+        // The sleep's three writes are one transaction, so a crash lands either
+        // side of it and never inside. On this side nothing was written: the
+        // job is `Running` with a live claim, the reaper sees it, and the
+        // recovered attempt reaches the sleep as new ground.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "interrupted");
+        open(&storage, &job)
+            .run("charge", None, || Ok(b"receipt".to_vec()))
+            .unwrap();
+
+        let stale = storage
+            .reap_stale_jobs(now_millis() + 600_000, None)
+            .unwrap();
+        assert_eq!(
+            stale.len(),
+            1,
+            "an attempt that died mid-flight is reapable"
+        );
+        assert!(storage.requeue_stuck(&job.id, now_millis()).unwrap());
+
+        let recovered = wake(&storage, &job.id);
+        let mut second = open(&storage, &recovered);
+        let ran = Cell::new(false);
+        second
+            .run("charge", None, || {
+                ran.set(true);
+                Ok(vec![])
+            })
+            .unwrap();
+        assert!(!ran.get(), "the committed step is still memoized");
+        let wake_at = now_millis() + 3_600_000;
+        assert_eq!(
+            second.sleep_until(Some("nap"), None, wake_at).unwrap(),
+            StepSleep::Sleeping {
+                step_key: "nap#0".to_string(),
+                wake_at,
+            },
+            "the sleep that never committed is new ground"
+        );
+        assert_eq!(storage.get_job_steps(&job.id, None).unwrap().len(), 2);
+    }
+
+    #[test]
     fn a_sleeping_job_is_not_stale_reaped() {
         // The whole design constraint: a sleeping step must not sit inside the
         // job's timeout holding a worker slot. `sleep_job` clears `started_at`,
