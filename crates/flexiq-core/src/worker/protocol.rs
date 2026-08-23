@@ -397,7 +397,14 @@ impl Frame for ExecutorMessage {
     fn is_known_type(tag: &str) -> bool {
         matches!(
             tag,
-            "hello" | "heartbeat" | "progress" | "task_log" | "success" | "failure" | "cancelled"
+            "hello"
+                | "heartbeat"
+                | "progress"
+                | "task_log"
+                | "success"
+                | "failure"
+                | "cancelled"
+                | "slept"
         )
     }
 }
@@ -1597,6 +1604,12 @@ mod tests {
                 task_name: "t".into(),
                 wall_time_ns: 1,
             },
+            ExecutorMessage::Slept {
+                job_id: "job-1".into(),
+                task_name: "t".into(),
+                wake_at: 1,
+                wall_time_ns: 1,
+            },
         ] {
             let tag = wire_type(&frame);
             assert!(
@@ -1604,6 +1617,21 @@ mod tests {
                 "'{tag}' serializes but is not listed as known"
             );
         }
+    }
+
+    #[test]
+    fn a_malformed_sleep_frame_is_an_error_rather_than_a_skip() {
+        // A well-formed frame never consults `is_known_type` — `read_or_skip`
+        // parses typed first and returns early. The tag earns its place on the
+        // *failed* parse: without it a corrupt `slept` from a peer at a slightly
+        // different version reads as "newer than us" and is silently skipped,
+        // losing a result the scheduler is still holding a slot for. With it,
+        // the disagreement surfaces, exactly as it does for `job`.
+        let buf = b"{\"type\":\"slept\",\"job_id\":\"job-1\"}\n";
+        assert!(matches!(
+            FrameReader::new(&buf[..]).read_or_skip::<ExecutorMessage>(),
+            Err(ProtocolError::Json(_))
+        ));
     }
 
     #[test]
