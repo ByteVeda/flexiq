@@ -347,7 +347,7 @@ fn test_reschedule_preserves_retry_count() {
         .unwrap();
 
     let future = now_millis() + 5000;
-    storage.reschedule(&job.id, future).unwrap();
+    storage.reschedule(&job.id, future, None).unwrap();
 
     let fetched = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
@@ -361,12 +361,12 @@ fn test_reschedule_preserves_retry_count() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    storage.reschedule(&job.id, future + 1000).unwrap();
+    storage.reschedule(&job.id, future + 1000, None).unwrap();
     let again = storage.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(again.retry_count, 0);
 
     // Unknown id is reported, matching retry().
-    assert!(storage.reschedule("missing-id", future).is_err());
+    assert!(storage.reschedule("missing-id", future, None).is_err());
 }
 
 #[test]

@@ -1204,11 +1204,24 @@ macro_rules! impl_diesel_job_ops {
             /// reschedules (rate limit, circuit breaker, concurrency cap,
             /// backpressure) where the job never executed, so its retry
             /// budget must be preserved.
-            pub fn reschedule(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
+            ///
+            /// A job in another namespace matches no rows and reports
+            /// `JobNotFound`, like an unknown id.
+            pub fn reschedule(
+                &self,
+                id: &str,
+                next_scheduled_at: i64,
+                namespace: Option<&str>,
+            ) -> Result<()> {
                 let mut conn = self.conn()?;
 
-                let affected = diesel::update(jobs::table)
+                let mut update = diesel::update(jobs::table)
                     .filter(jobs::id.eq(id))
+                    .into_boxed();
+                if let Some(ns) = namespace {
+                    update = update.filter(jobs::namespace.eq(ns));
+                }
+                let affected = update
                     .set((
                         jobs::status.eq(JobStatus::Pending as i32),
                         jobs::scheduled_at.eq(next_scheduled_at),

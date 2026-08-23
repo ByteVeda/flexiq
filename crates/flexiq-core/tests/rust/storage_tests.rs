@@ -176,7 +176,7 @@ fn test_reschedule(s: &impl Storage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
     let future = now_millis() + 5000;
-    s.reschedule(&job.id, future).unwrap();
+    s.reschedule(&job.id, future, None).unwrap();
 
     let fetched = s.get_job(&job.id, None).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Pending);
@@ -185,6 +185,16 @@ fn test_reschedule(s: &impl Storage) {
         fetched.retry_count, 0,
         "reschedule must not burn retry budget"
     );
+
+    // Scoped like every other id-addressed method: a step sleep reschedules
+    // with an id that reached the queue through task code, so an id from
+    // another namespace must read as unknown rather than move a job.
+    assert!(
+        s.reschedule(&job.id, future + 1000, Some("other")).is_err(),
+        "a job outside the namespace must not be rescheduled"
+    );
+    let untouched = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(untouched.scheduled_at, future);
 }
 
 fn test_cancel_job(s: &impl Storage) {

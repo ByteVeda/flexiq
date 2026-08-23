@@ -132,7 +132,12 @@ pub trait Storage: Send + Sync + Clone {
     /// budget. Used for soft-gate reschedules (rate limit, circuit breaker,
     /// concurrency cap, channel backpressure) where the job never executed,
     /// unlike [`retry`](Self::retry) which increments `retry_count`.
-    fn reschedule(&self, id: &str, next_scheduled_at: i64) -> Result<()>;
+    ///
+    /// A job in another namespace reports `JobNotFound`, like an unknown id.
+    /// Scoped even though the poller only ever passes a job it just claimed:
+    /// a step sleep reschedules with an id that reached the queue through task
+    /// code, which is the least trusted caller there is.
+    fn reschedule(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()>;
     /// Force a `Running` job back to `Pending` and release its execution
     /// claim atomically, so a healthy worker can re-claim it. Preserves the
     /// retry budget (operator action, mirrors [`reschedule`](Self::reschedule))
