@@ -158,9 +158,27 @@ jobs:
             exit 1
           fi
 
+      # Exported straight to the registry rather than `docker push`ed out of the
+      # daemon: a daemon push rewrites the manifest to Docker media types, and
+      # `imagetools create` then drops the index annotations GHCR reads a
+      # multiarch description from — silently, since a Docker manifest list has
+      # no annotations field. Everything is already built, so this is a cache
+      # hit plus the upload.
       - name: Push the per-architecture tag
         if: ${{ !inputs.dry-run }}
-        run: docker push "${IMAGE}:${TAG}"
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/scheduler.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ env.VERSION }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          # Attestations would make each per-architecture tag an index of its
+          # own, adding an unknown/unknown entry to every published manifest.
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=true
+          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
 
   manifest:
     name: Publish multiarch manifest
@@ -189,9 +207,25 @@ jobs:
 
       # The per-architecture tags stay in the registry as the manifest's
       # members; `:VERSION` and `:latest` are the addresses anyone pulls.
+      #
+      # GHCR takes a multiarch package's description from the index annotations
+      # and never looks at the child images' config labels, so every label the
+      # Dockerfile set is mirrored onto the index. Reading them back off the
+      # pushed image keeps the Dockerfile the one place the strings live.
       - name: Merge the architectures into one manifest
         run: |
-          docker buildx imagetools create \
+          set -euo pipefail
+          labels="$(docker buildx imagetools inspect \
+            --format '{{ json .Image.Config.Labels }}' "${IMAGE}:${VERSION}-amd64")"
+          if [ -z "$labels" ] || [ "$labels" = "null" ]; then
+            echo "::error::${IMAGE}:${VERSION}-amd64 carries no OCI labels"
+            exit 1
+          fi
+          annotations=()
+          while IFS= read -r label; do
+            annotations+=(--annotation "index:${label}")
+          done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$labels")
+          docker buildx imagetools create "${annotations[@]}" \
             --tag "${IMAGE}:${VERSION}" \
             --tag "${IMAGE}:latest" \
             "${IMAGE}:${VERSION}-amd64" \
@@ -210,6 +244,13 @@ jobs:
               exit 1
             fi
           done
+          # The package page renders this; a manifest that regressed to Docker
+          # media types has no annotations at all and would publish blank.
+          if ! jq -e '(.annotations["org.opencontainers.image.description"] // "") != ""' \
+            <<<"$manifest" >/dev/null; then
+            echo "::error::${IMAGE}:${VERSION} carries no image description annotation"
+            exit 1
+          fi
 
       - name: Create git tag
         if: github.event_name != 'push' && env.TAG_EXISTS != 'true'
