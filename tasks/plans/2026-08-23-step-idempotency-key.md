@@ -71,7 +71,14 @@ those paths and retried again, had the *intermediate* job id stamped and started
 different downstream keys. `carry_origin_job_id` now merges the origin into a replacement that
 is a JSON object, at both `dead_letter` sites.
 
+**Round two, same helper.** The job's origin now *overwrites* one a replacement object carries
+rather than deferring to it. `move_to_dlq` is a public `Storage` method, so that blob is
+caller-supplied and its claim about a run it does not own must not win.
+
 **Left open, deliberately:** a replacement that is *not* a JSON object still drops the origin.
 `RETRY_BUDGET_EXHAUSTED` is the bare string `"retry_budget_exhausted"` and three SDK suites
-assert on it exactly, so giving it a shape is a cross-SDK contract change rather than a fix to
-make here — and that path already discards the whole of the job's metadata on the way back out.
+assert on it exactly, so it cannot be given a shape here — and that path already discards the
+whole of the job's metadata on the way back out. Closing it properly means taking the origin
+off the metadata blob altogether, onto a `dead_letter` column no replacement can reach: a
+migration on three backends plus the row structs and the shells' DLQ types. That reverses §6.2
+of the design, so it belongs to the epic, not to a review round. Needs a follow-up issue.
