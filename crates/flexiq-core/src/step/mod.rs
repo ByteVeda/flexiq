@@ -2,16 +2,18 @@
 //!
 //! Everything a step is allowed to be, in one place, so the storage backends,
 //! the workflow crate and every SDK shell answer the question the same way.
-//! The rules — the limits, the failure taxonomy, key derivation and the
-//! sequence check — are pure and I/O-free.
+//! The rules — the limits, the failure taxonomy, key derivation, the
+//! downstream idempotency key and the sequence check — are pure and I/O-free.
 
 mod failure;
+mod idempotency;
 mod key;
 mod limits;
 mod sequence;
 mod session;
 
 pub use failure::{classify_step_failure, StepFailure};
+pub use idempotency::{idempotency_key, run_key, ORIGIN_JOB_ID_KEY};
 pub use key::StepKey;
 pub use limits::{
     StepLimits, DEFAULT_MAX_STEPS, DEFAULT_MAX_STEP_BYTES, DEFAULT_MAX_TOTAL_BYTES,
