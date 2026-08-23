@@ -17,5 +17,5 @@ pub use limits::{
     StepLimits, DEFAULT_MAX_STEPS, DEFAULT_MAX_STEP_BYTES, DEFAULT_MAX_TOTAL_BYTES,
     MAX_STEPS_CEILING, MAX_STEP_BYTES_CEILING, MAX_TOTAL_BYTES_CEILING,
 };
-pub use sequence::{PendingStep, StepDecision, StepSequence};
+pub use sequence::{PendingStep, SleepDecision, StepDecision, StepSequence, DEFAULT_SLEEP_NAME};
 pub use session::StepSession;

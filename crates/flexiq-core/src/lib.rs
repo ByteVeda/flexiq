@@ -41,8 +41,8 @@ pub use scheduler::{
 };
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
 pub use step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepLimits,
-    StepSequence, StepSession,
+    classify_step_failure, PendingStep, SleepDecision, StepDecision, StepFailure, StepKey,
+    StepLimits, StepSequence, StepSession,
 };
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
