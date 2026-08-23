@@ -61,3 +61,19 @@ jobs:
             echo "::error::Image reports '${reported}', expected 'flexiq-server ${VERSION}'"
             exit 1
           fi
+
+      # publish-server.yml mirrors these labels onto the multiarch index, which
+      # is where GHCR reads the package title and description from. Asserting
+      # them here means a dropped LABEL reds a pull request instead of surfacing
+      # as a blank package page one release later.
+      - name: Image carries its OCI labels
+        run: |
+          set -euo pipefail
+          labels="$(docker image inspect --format '{{ json .Config.Labels }}' flexiq-server:ci)"
+          for key in title description source licenses version; do
+            value="$(jq -r --arg k "org.opencontainers.image.${key}" '.[$k] // ""' <<<"$labels")"
+            if [ -z "$value" ]; then
+              echo "::error::Image is missing org.opencontainers.image.${key}"
+              exit 1
+            fi
+          done
