@@ -674,6 +674,8 @@ fn kind(result: &JobResult) -> &'static str {
         JobResult::Success { .. } => "success",
         JobResult::Failure { .. } => "failure",
         JobResult::Cancelled { .. } => "cancelled",
+        JobResult::Slept { .. } => "slept",
+        _ => "unknown",
     }
 }
 

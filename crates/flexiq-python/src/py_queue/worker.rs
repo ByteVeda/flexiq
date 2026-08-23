@@ -249,6 +249,14 @@ fn dispatch_outcome(py: Python<'_>, outcome: &ResultOutcome) {
                 // The job is proceeding under another owner and this attempt
                 // wrote no state, so there is nothing to hook or emit.
             }
+            ResultOutcome::Slept { .. } => {
+                // Nothing reaches this yet: the task context has no `step`, so
+                // no attempt can end in a sleep. The `on_sleep` hook and the
+                // `job.sleeping` event land with it.
+            }
+            // The taxonomy is `#[non_exhaustive]`; an outcome this build does
+            // not know is one it cannot hook correctly, so it emits nothing.
+            _ => {}
         }
         Ok(())
     })();

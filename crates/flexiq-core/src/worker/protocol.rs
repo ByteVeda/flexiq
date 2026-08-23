@@ -294,6 +294,20 @@ pub enum ExecutorMessage {
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
     },
+    /// The attempt ended in a `step.sleep`, and the job is already `Pending` at
+    /// its deadline. Ends the attempt like a cancel, without being a failure.
+    Slept {
+        /// Job that is sleeping.
+        job_id: String,
+        /// Task that ran.
+        task_name: String,
+        /// Deadline the job was rescheduled to, in Unix milliseconds. The one
+        /// storage settled on, which on a replay is not the one the executor
+        /// proposed.
+        wake_at: i64,
+        /// Wall-clock time the attempt ran before it slept, in nanoseconds.
+        wall_time_ns: i64,
+    },
 }
 
 /// Builder for the [`ExecutorMessage::Hello`] frame, from
@@ -622,6 +636,20 @@ impl ExecutorMessage {
                 },
                 Vec::new(),
             ),
+            JobResult::Slept {
+                job_id,
+                task_name,
+                wake_at,
+                wall_time_ns,
+            } => (
+                Self::Slept {
+                    job_id,
+                    task_name,
+                    wake_at,
+                    wall_time_ns,
+                },
+                Vec::new(),
+            ),
         }
     }
 
@@ -702,6 +730,17 @@ impl ExecutorMessage {
             } => Some(JobResult::Cancelled {
                 job_id,
                 task_name,
+                wall_time_ns,
+            }),
+            Self::Slept {
+                job_id,
+                task_name,
+                wake_at,
+                wall_time_ns,
+            } => Some(JobResult::Slept {
+                job_id,
+                task_name,
+                wake_at,
                 wall_time_ns,
             }),
         }
@@ -1109,6 +1148,34 @@ mod tests {
             frame.into_job_result(payload),
             Some(JobResult::Cancelled { job_id, .. }) if job_id == "job-1"
         ));
+    }
+
+    #[test]
+    fn a_sleep_round_trips_with_its_deadline() {
+        // The deadline is the one thing this frame carries that a cancel does
+        // not: an attached executor learns it from storage's answer, not from
+        // the duration it asked for.
+        let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Slept {
+            job_id: "job-1".into(),
+            task_name: "resize".into(),
+            wake_at: 1_760_000_000_000,
+            wall_time_ns: 9,
+        });
+        let (frame, payload) = round_trip(&frame, &payload);
+        match frame.into_job_result(payload) {
+            Some(JobResult::Slept {
+                job_id,
+                task_name,
+                wake_at,
+                wall_time_ns,
+            }) => {
+                assert_eq!(job_id, "job-1");
+                assert_eq!(task_name, "resize");
+                assert_eq!(wake_at, 1_760_000_000_000);
+                assert_eq!(wall_time_ns, 9);
+            }
+            _ => panic!("expected a sleep"),
+        }
     }
 
     #[test]

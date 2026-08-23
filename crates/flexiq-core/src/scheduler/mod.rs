@@ -105,6 +105,11 @@ impl SchedulerConfig {
 }
 
 /// Result of executing a job (sent back from worker threads).
+///
+/// `#[non_exhaustive]`: an attempt can end in more ways than it once could —
+/// `Slept` was the first addition — and a shell that matches exhaustively today
+/// would break on the next one rather than falling through to a safe default.
+#[non_exhaustive]
 pub enum JobResult {
     /// The task ran to completion.
     Success {
@@ -145,6 +150,22 @@ pub enum JobResult {
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
     },
+    /// The attempt ended in a `step.sleep`, which is not a failure.
+    ///
+    /// The job is already `Pending` at `wake_at` with its claim released —
+    /// `Storage::sleep_job` did all three in one transaction — so this reports
+    /// what happened rather than asking for it. The slot it held is freed and
+    /// nothing else moves: no retry, no budget token, no breaker, no metric.
+    Slept {
+        /// Id of the sleeping job.
+        job_id: String,
+        /// Task that ran.
+        task_name: String,
+        /// Deadline the job was rescheduled to, in Unix milliseconds.
+        wake_at: i64,
+        /// Wall-clock time this attempt ran before it slept, in nanoseconds.
+        wall_time_ns: i64,
+    },
 }
 
 impl JobResult {
@@ -153,7 +174,8 @@ impl JobResult {
         match self {
             JobResult::Success { job_id, .. }
             | JobResult::Failure { job_id, .. }
-            | JobResult::Cancelled { job_id, .. } => job_id,
+            | JobResult::Cancelled { job_id, .. }
+            | JobResult::Slept { job_id, .. } => job_id,
         }
     }
 }
@@ -165,7 +187,11 @@ impl JobResult {
 /// report a job's duration without timing it again. It is 0 when nothing measured
 /// the run — a job that failed before it ever executed, or one the core recovered
 /// rather than a worker finishing it.
+///
+/// `#[non_exhaustive]` for the same reason [`JobResult`] is: a binding that
+/// matched exhaustively would break on the next outcome instead of ignoring it.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ResultOutcome {
     /// Task completed successfully.
     Success {
@@ -228,6 +254,27 @@ pub enum ResultOutcome {
     Superseded {
         /// Id of the job the dropped result named.
         job_id: String,
+    },
+    /// The attempt ended in a `step.sleep`. The job is `Pending` at `wake_at`
+    /// and will run again from its memoized steps.
+    ///
+    /// Not a completion: a binding pairs this with its `on_sleep` hook and the
+    /// `job.sleeping` event, never with `after`. `after(ctx, None, None)` reads
+    /// as "the task returned None", which would close an OTel span as a
+    /// success, increment a success counter, and clear a Sentry scope — all
+    /// wrong for an attempt that has not finished.
+    Slept {
+        /// Id of the sleeping job.
+        job_id: String,
+        /// Task that ran.
+        task_name: String,
+        /// Queue the job belongs to.
+        queue: String,
+        /// Deadline the job was rescheduled to, in Unix milliseconds.
+        wake_at: i64,
+        /// Wall-clock time this attempt ran before it slept; 0 when not
+        /// measured.
+        wall_time_ns: i64,
     },
 }
 
@@ -893,6 +940,7 @@ mod tests {
     use super::*;
     use crate::job::{now_millis, JobStatus, NewJob};
     use crate::resilience::rate_limiter::RateLimitConfig;
+    use crate::step::{StepLimits, StepSession};
     use crate::storage::records::NewPeriodicTask;
     use crate::storage::Storage;
 
@@ -2637,6 +2685,160 @@ mod tests {
                 timed_out: false,
             })
             .unwrap()
+    }
+
+    /// A scheduler whose slot cap is tight enough that `in_flight_settled`
+    /// means something, holding one dispatched job.
+    fn scheduler_with_a_slept_job(task_name: &str) -> (Scheduler, crate::job::Job) {
+        let mut scheduler = test_scheduler();
+        scheduler.config.max_in_flight = Some(1);
+        let job = scheduler.storage.enqueue(make_job(task_name)).unwrap();
+        scheduler
+            .storage
+            .dequeue("default", now_millis() + 1000, None)
+            .unwrap();
+        assert!(scheduler
+            .storage
+            .claim_execution(&job.id, &scheduler.claim_owner)
+            .unwrap());
+        scheduler.track_in_flight(&job.id, task_name, 0);
+        (scheduler, job)
+    }
+
+    #[test]
+    fn a_sleep_frees_the_slot_without_charging_the_attempt() {
+        // The whole design constraint: a sleeping step must not sit inside the
+        // job's timeout holding a worker slot.
+        let (scheduler, job) = scheduler_with_a_slept_job("napper");
+        let wake_at = now_millis() + 3_600_000;
+        let mut session = StepSession::load(
+            scheduler.storage.clone(),
+            &job,
+            &scheduler.claim_owner,
+            StepLimits::default(),
+        )
+        .unwrap();
+        session.sleep_until(Some("nap"), None, wake_at).unwrap();
+
+        assert!(!scheduler.in_flight_settled(), "the slot is still held");
+        let outcome = scheduler
+            .handle_result(JobResult::Slept {
+                job_id: job.id.clone(),
+                task_name: "napper".to_string(),
+                wake_at,
+                wall_time_ns: 42,
+            })
+            .unwrap();
+
+        match &outcome {
+            ResultOutcome::Slept {
+                job_id,
+                task_name,
+                queue,
+                wake_at: reported,
+                wall_time_ns,
+            } => {
+                assert_eq!(job_id, &job.id);
+                assert_eq!(task_name, "napper");
+                assert_eq!(queue, "default");
+                assert_eq!(*reported, wake_at);
+                assert_eq!(*wall_time_ns, 42);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(scheduler.in_flight_settled(), "the slot must be released");
+
+        // Nothing was charged to the attempt: this is a reschedule, not a retry.
+        let stored = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(stored.status, JobStatus::Pending);
+        assert_eq!(stored.scheduled_at, wake_at);
+        assert_eq!(stored.retry_count, 0);
+        assert!(scheduler
+            .storage
+            .get_job_errors(&job.id, None)
+            .unwrap()
+            .is_empty());
+        assert!(scheduler
+            .storage
+            .get_metrics(Some("napper"), 0, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_sleep_is_not_read_as_a_superseded_result() {
+        // `sleep_job` leaves the job `Pending` with no claim, which is exactly
+        // what the fence calls superseded. Routing a sleep through it would drop
+        // the one outcome that explains where the job went.
+        let (scheduler, job) = scheduler_with_a_slept_job("fenced_napper");
+        let wake_at = now_millis() + 60_000;
+        StepSession::load(
+            scheduler.storage.clone(),
+            &job,
+            &scheduler.claim_owner,
+            StepLimits::default(),
+        )
+        .unwrap()
+        .sleep_until(Some("nap"), None, wake_at)
+        .unwrap();
+        assert_eq!(
+            scheduler
+                .storage
+                .authorize_attempt(&job.id, &scheduler.claim_owner, 0, None)
+                .unwrap(),
+            crate::storage::records::AttemptFence::Superseded,
+            "the fence would refuse this attempt",
+        );
+
+        let outcome = scheduler
+            .handle_result(JobResult::Slept {
+                job_id: job.id.clone(),
+                task_name: "fenced_napper".to_string(),
+                wake_at,
+                wall_time_ns: 0,
+            })
+            .unwrap();
+        assert!(
+            matches!(outcome, ResultOutcome::Slept { .. }),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_sleep_spends_no_retry_budget() {
+        // The budget is consulted on the failure path only, and a sleep is not
+        // a failure — a task that sleeps in a loop must not drain the tokens
+        // its siblings retry with.
+        let scheduler = budgeted_scheduler("sleepy_budget", "1/m");
+        for _ in 0..3 {
+            let job = scheduler
+                .storage
+                .enqueue(make_job("sleepy_budget"))
+                .unwrap();
+            let outcome = scheduler
+                .handle_result(JobResult::Slept {
+                    job_id: job.id.clone(),
+                    task_name: "sleepy_budget".to_string(),
+                    wake_at: now_millis() + 1_000,
+                    wall_time_ns: 0,
+                })
+                .unwrap();
+            assert!(
+                matches!(outcome, ResultOutcome::Slept { .. }),
+                "{outcome:?}"
+            );
+        }
+
+        // The one token is still there for the failure that needs it.
+        let job = scheduler
+            .storage
+            .enqueue(make_job("sleepy_budget"))
+            .unwrap();
+        let outcome = fail_once(&scheduler, &job.id, "sleepy_budget");
+        assert!(
+            matches!(outcome, ResultOutcome::Retry { .. }),
+            "a sleep must not spend a retry token, got {outcome:?}"
+        );
     }
 
     #[test]
