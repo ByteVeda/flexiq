@@ -9,7 +9,7 @@
 
 use flexiq_core::error::QueueError;
 use flexiq_core::job::{now_millis, JobCompletion, JobStatus, NewJob};
-use flexiq_core::step::{classify_step_failure, StepLimits, StepSession};
+use flexiq_core::step::{classify_step_failure, StepLimits, StepSession, StepSleep};
 use flexiq_core::storage::records::{
     DebounceOptions, NewJobStep, SleepOutcome, StepCommit, StepKind, SubscriptionMode,
     WorkerRegistration, WorkerStatus,
@@ -1957,6 +1957,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
     test_step_session_memoizes_across_attempts(s);
     test_step_session_refuses_a_changed_sequence(s);
+    test_step_session_sleeps_by_ending_the_attempt(s);
     test_an_elapsed_sleep_wakes_the_job_immediately(s);
 }
 
@@ -2353,6 +2354,93 @@ fn test_delete_job_steps_is_namespace_scoped(s: &impl Storage) {
     assert!(s.get_job_steps(&job.id, Some("other")).unwrap().is_empty());
     assert_eq!(s.delete_job_steps(&job.id, None).unwrap(), 1);
     assert!(s.get_job_steps(&job.id, None).unwrap().is_empty());
+}
+
+/// A sleep through the session: the attempt ends, the deadline is fixed by the
+/// first commit, and the wake replays the steps before it.
+fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
+    let q = "q-step-sleep";
+    let job = stepped_job(s, q, "w-sleeper");
+    let limits = StepLimits::default();
+
+    let mut first = StepSession::load(s.clone(), &job, "w-sleeper", limits).unwrap();
+    first
+        .run("charge", None, || Ok(b"receipt".to_vec()))
+        .unwrap();
+    let slept = first.sleep_for(Some("cool_off"), None, 3_600_000).unwrap();
+    let StepSleep::Sleeping { wake_at, .. } = slept else {
+        panic!("{slept:?}");
+    };
+
+    // Released, not held: `Pending` at the deadline with no claim and no
+    // `started_at`, so the stale reaper leaves it alone while it sleeps.
+    let sleeping = s.get_job(&job.id, None).unwrap().unwrap();
+    assert_eq!(sleeping.status, JobStatus::Pending);
+    assert_eq!(sleeping.scheduled_at, wake_at);
+    assert_eq!(sleeping.started_at, None);
+    assert_eq!(sleeping.retry_count, 0, "a sleep is not a retry");
+
+    // Picked up early — an operator requeue, or an orphan reclaim. The stored
+    // deadline stands rather than starting another hour.
+    s.dequeue(q, wake_at, None).unwrap();
+    assert!(s.claim_execution(&job.id, "w-sleeper").unwrap());
+    let early = s.get_job(&job.id, None).unwrap().unwrap();
+    let mut second = StepSession::load(s.clone(), &job, "w-sleeper", limits).unwrap();
+    let ran = std::cell::Cell::new(false);
+    assert_eq!(
+        second
+            .run("charge", None, || {
+                ran.set(true);
+                Ok(vec![])
+            })
+            .unwrap(),
+        b"receipt"
+    );
+    assert!(!ran.get(), "the step before the sleep is memoized");
+    assert_eq!(
+        second.sleep_for(Some("cool_off"), None, 3_600_000).unwrap(),
+        StepSleep::Sleeping {
+            step_key: "cool_off#0".to_string(),
+            wake_at,
+        },
+        "the first commit fixes the deadline"
+    );
+    assert_eq!(early.retry_count, 0);
+
+    // Once the deadline has passed the sleep is a memo hit and the attempt
+    // carries on past it.
+    let steps = s.get_job_steps(&job.id, None).unwrap();
+    assert_eq!(steps.len(), 2, "a replay commits no second sleep");
+    assert_eq!(steps[1].kind, StepKind::Sleep);
+    assert_eq!(steps[1].wake_at, Some(wake_at));
+    assert_eq!(steps[1].result, None);
+
+    let past = now_millis() - 1;
+    let elapsed = stepped_job(s, "q-step-sleep-done", "w-woken");
+    let mut third = StepSession::load(s.clone(), &elapsed, "w-woken", limits).unwrap();
+    assert!(matches!(
+        third.sleep_until(Some("nap"), None, past).unwrap(),
+        StepSleep::Sleeping { .. }
+    ));
+    s.dequeue("q-step-sleep-done", past, None).unwrap();
+    assert!(s.claim_execution(&elapsed.id, "w-woken").unwrap());
+    let woken = s.get_job(&elapsed.id, None).unwrap().unwrap();
+    let mut fourth = StepSession::load(s.clone(), &woken, "w-woken", limits).unwrap();
+    assert_eq!(
+        fourth.sleep_until(Some("nap"), None, past).unwrap(),
+        StepSleep::Elapsed {
+            step_key: "nap#0".to_string(),
+            wake_at: past,
+        }
+    );
+    fourth.run("after", None, || Ok(b"ok".to_vec())).unwrap();
+    let keys: Vec<String> = s
+        .get_job_steps(&elapsed.id, None)
+        .unwrap()
+        .into_iter()
+        .map(|step| step.step_key)
+        .collect();
+    assert_eq!(keys, ["nap#0", "after#0"]);
 }
 
 fn debounced(queue: &str, key: &str) -> NewJob {
