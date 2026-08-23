@@ -2,7 +2,7 @@
 
 Reviewed against `tasks/specs/2026-08-22-durable-steps-design.md`: D8, §6, §12.
 
-#666 made a step's result memoizable and #667 made a sleep durable, but neither closes
+`#666` made a step's result memoizable and `#667` made a sleep durable, but neither closes
 the window this issue exists for. Between "the payment API returned 200" and "the step
 row committed" there is an instant in which the process can die, and the replay has no
 record that the call happened — so it makes it again. Nothing on this side of the
@@ -61,3 +61,17 @@ the same way on every attempt.
   so `FLEXIQ_POSTGRES_TEST_URL` / `FLEXIQ_REDIS_TEST_URL` went unset and both suites
   skipped locally. The Postgres path is the same Diesel macro SQLite exercises; the Redis
   one is separate code and is only compile-checked here.
+
+## Review
+
+**CodeRabbit, 1 real finding.** `move_to_dlq` / `shed_to_dlq` let a caller replace the job's
+metadata wholesale — `{"shed":"rate_limit"}`, `{"codel":true}`, `RETRY_BUDGET_EXHAUSTED`. That
+took `__origin_job_id` with it, so a run already resurrected once, dead-lettered down one of
+those paths and retried again, had the *intermediate* job id stamped and started sending
+different downstream keys. `carry_origin_job_id` now merges the origin into a replacement that
+is a JSON object, at both `dead_letter` sites.
+
+**Left open, deliberately:** a replacement that is *not* a JSON object still drops the origin.
+`RETRY_BUDGET_EXHAUSTED` is the bare string `"retry_budget_exhausted"` and three SDK suites
+assert on it exactly, so giving it a shape is a cross-SDK contract change rather than a fix to
+make here — and that path already discards the whole of the job's metadata on the way back out.
