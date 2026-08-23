@@ -80,6 +80,30 @@ pub fn idempotency_key(run_key: &str, step_key: &str) -> String {
     format!("{run_key}:{step_key}")
 }
 
+/// Stamp the metadata of a job resurrected from the dead-letter queue with the
+/// run it belongs to, so its steps keep minting the keys they always have.
+///
+/// Preserves a usable value already there: a job dead-lettered and retried
+/// twice must keep the id its *first* attempt ran under, not the id of the
+/// resurrection before it. A missing or unusable one is replaced rather than
+/// left — [`run_key`] would otherwise fall back to the new job id, which is
+/// exactly the double charge this stamp exists to prevent.
+pub(crate) fn stamp_origin_job_id(
+    metadata: &mut serde_json::Map<String, serde_json::Value>,
+    original_job_id: &str,
+) {
+    let carried = metadata
+        .get(ORIGIN_JOB_ID_KEY)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|origin| !origin.is_empty());
+    if !carried {
+        metadata.insert(
+            ORIGIN_JOB_ID_KEY.to_string(),
+            serde_json::Value::from(original_job_id),
+        );
+    }
+}
+
 /// The stamped origin id, if the metadata carries a usable one.
 ///
 /// Anything else — absent, unparseable, not a string, blank — falls back to the
@@ -147,6 +171,43 @@ mod tests {
             "job-1:charge#0",
             "the key an operator DLQ retry sends must be the one the first attempt sent"
         );
+    }
+
+    fn stamped(metadata: &str, original_job_id: &str) -> serde_json::Value {
+        let mut obj: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(metadata).unwrap();
+        stamp_origin_job_id(&mut obj, original_job_id);
+        serde_json::Value::Object(obj)
+    }
+
+    #[test]
+    fn a_resurrection_stamps_the_job_that_died() {
+        let meta = stamped(r#"{"user_id":"u1"}"#, "job-1");
+        assert_eq!(meta["__origin_job_id"], "job-1");
+        assert_eq!(meta["user_id"], "u1", "user metadata is left alone");
+    }
+
+    #[test]
+    fn a_second_resurrection_keeps_the_first_run() {
+        // job-1 died, was retried as job-2, died again, retried as job-3. Every
+        // one of them must send the keys job-1 sent.
+        let meta = stamped(r#"{"__origin_job_id":"job-1"}"#, "job-2");
+        assert_eq!(meta["__origin_job_id"], "job-1");
+    }
+
+    #[test]
+    fn an_unusable_carried_origin_is_replaced() {
+        for metadata in [
+            r#"{"__origin_job_id":null}"#,
+            r#"{"__origin_job_id":42}"#,
+            r#"{"__origin_job_id":""}"#,
+        ] {
+            assert_eq!(
+                stamped(metadata, "job-2")["__origin_job_id"],
+                "job-2",
+                "{metadata}"
+            );
+        }
     }
 
     #[test]

@@ -14,6 +14,8 @@ mod session;
 
 pub use failure::{classify_step_failure, StepFailure};
 pub use idempotency::{idempotency_key, run_key, ORIGIN_JOB_ID_KEY};
+// Written only by `retry_dead`, the one path that changes a run's job id.
+pub(crate) use idempotency::stamp_origin_job_id;
 pub use key::StepKey;
 pub use limits::{
     StepLimits, DEFAULT_MAX_STEPS, DEFAULT_MAX_STEP_BYTES, DEFAULT_MAX_TOTAL_BYTES,

@@ -404,6 +404,10 @@ impl RedisStorage {
                 "__dlq_retry_count".to_string(),
                 serde_json::Value::from(next_count),
             );
+            // The one path that changes a run's job id, so the one that
+            // records what it was: an operator's DLQ retry must send the step
+            // keys the first attempt sent, not fresh ones.
+            crate::step::stamp_origin_job_id(&mut obj, &dead_member);
             Some(serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default())
         };
 
