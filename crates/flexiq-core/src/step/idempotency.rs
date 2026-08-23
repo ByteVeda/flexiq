@@ -111,11 +111,15 @@ pub(crate) fn stamp_origin_job_id(
 /// next `retry_dead` then stamps the *intermediate* job id, and a run already
 /// resurrected once starts sending different downstream keys than it has been.
 ///
+/// A replacement that *is* an object has the job's origin written over anything
+/// it claims of its own: `move_to_dlq` is public, so that blob is caller-supplied.
+///
 /// A replacement that is not a JSON object is left byte-for-byte alone, so such
 /// a run does lose its origin here. `RETRY_BUDGET_EXHAUSTED` is a bare string
 /// three SDK suites match on exactly; that path already discards the rest of the
-/// job's metadata on the way back out, and giving it a shape is a cross-SDK
-/// contract change, not a fix to make here.
+/// job's metadata on the way back out. Closing it needs the origin off the
+/// metadata blob entirely — a `dead_letter` column no replacement can reach —
+/// which is a migration on three backends and a design call the epic owns.
 pub(crate) fn carry_origin_job_id(replacement: Option<&str>, job: &Job) -> Option<String> {
     let Some(replacement) = replacement else {
         return job.metadata.clone();
@@ -128,7 +132,13 @@ pub(crate) fn carry_origin_job_id(replacement: Option<&str>, job: &Job) -> Optio
     else {
         return Some(replacement.to_string());
     };
-    stamp_origin_job_id(&mut obj, &origin);
+    // Overwrite, never preserve: `move_to_dlq` is a public `Storage` method, so
+    // a replacement blob carrying an `__origin_job_id` of its own is a caller's
+    // assertion about a run it does not own. The job's is the authoritative one.
+    obj.insert(
+        ORIGIN_JOB_ID_KEY.to_string(),
+        serde_json::Value::from(origin),
+    );
     serde_json::to_string(&serde_json::Value::Object(obj))
         .ok()
         .or_else(|| Some(replacement.to_string()))
@@ -249,6 +259,18 @@ mod tests {
         .unwrap();
         assert_eq!(carried["__origin_job_id"], "job-1");
         assert_eq!(carried["shed"], "rate_limit", "the marker is kept");
+    }
+
+    #[test]
+    fn a_replacement_may_not_assert_a_different_origin() {
+        // `move_to_dlq` is public, so the blob is caller-supplied; the job's own
+        // origin wins over whatever a caller claims about the run.
+        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
+        let carried: serde_json::Value = serde_json::from_str(
+            &carry_origin_job_id(Some(r#"{"__origin_job_id":"forged"}"#), &job).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(carried["__origin_job_id"], "job-1");
     }
 
     #[test]
