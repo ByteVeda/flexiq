@@ -100,10 +100,10 @@ impl RedisStorage {
             retry_count: job.retry_count,
             failed_at: now,
             // Preserve the job's own metadata so it survives the round trip;
-            // an explicit `metadata` arg overrides it.
-            metadata: metadata
-                .map(|s| s.to_string())
-                .or_else(|| job.metadata.clone()),
+            // an explicit `metadata` arg overrides it — but never the run's
+            // origin, which `retry_dead` would otherwise restamp with this
+            // job's id instead of the one the run has been sending downstream.
+            metadata: crate::step::carry_origin_job_id(metadata, job),
             notes: job.notes.clone(),
             priority: job.priority,
             max_retries: job.max_retries,
@@ -404,6 +404,10 @@ impl RedisStorage {
                 "__dlq_retry_count".to_string(),
                 serde_json::Value::from(next_count),
             );
+            // The one path that changes a run's job id, so the one that
+            // records what it was: an operator's DLQ retry must send the step
+            // keys the first attempt sent, not fresh ones.
+            crate::step::stamp_origin_job_id(&mut obj, &dead_member);
             Some(serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default())
         };
 

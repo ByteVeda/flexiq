@@ -6,7 +6,7 @@
 //! commits exactly what it is handed and returns exactly what it read, which is
 //! what makes an encrypting codec work here with no extra plumbing.
 
-use super::{PendingStep, SleepDecision, StepDecision, StepLimits, StepSequence};
+use super::{idempotency, PendingStep, SleepDecision, StepDecision, StepLimits, StepSequence};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job};
 use crate::storage::records::{NewJobStep, StepCommit, StepKind};
@@ -45,6 +45,10 @@ pub enum StepSleep {
 pub struct StepSession<S: Storage> {
     storage: S,
     job_id: String,
+    /// The id this durable run began under, which is the job's own except
+    /// across a `retry_dead`. Resolved once here: it is what every
+    /// idempotency key this attempt mints is built from.
+    run_key: String,
     namespace: Option<String>,
     owner: String,
     attempt: i32,
@@ -75,6 +79,7 @@ impl<S: Storage> StepSession<S> {
         Ok(Self {
             storage,
             job_id: job.id.clone(),
+            run_key: idempotency::run_key(job),
             namespace,
             owner: owner.to_string(),
             attempt: job.retry_count,
@@ -85,17 +90,18 @@ impl<S: Storage> StepSession<S> {
 
     /// Run one step, or return what it returned last time.
     ///
-    /// `body` produces the step's result **already encoded** — post serializer,
-    /// post codec — because those are the bytes that get stored and the bytes
-    /// the caps are measured on. It is not called at all on a memo hit.
+    /// `body` is handed this step's downstream idempotency key and produces the
+    /// step's result **already encoded** — post serializer, post codec — because
+    /// those are the bytes that get stored and the bytes the caps are measured
+    /// on. It is not called at all on a memo hit.
     pub fn run<F>(&mut self, name: &str, key: Option<&str>, body: F) -> Result<Vec<u8>>
     where
-        F: FnOnce() -> Result<Vec<u8>>,
+        F: FnOnce(&str) -> Result<Vec<u8>>,
     {
         match self.begin_run(name, key)? {
             StepDecision::Memoized { result, .. } => Ok(result),
             StepDecision::Run(pending) => {
-                let encoded = body()?;
+                let encoded = body(&self.idempotency_key(pending.step_key()))?;
                 self.commit_run(&pending, &encoded)?;
                 Ok(encoded)
             }
@@ -106,9 +112,27 @@ impl<S: Storage> StepSession<S> {
     ///
     /// The split form, for a shell whose closure cannot cross into Rust: call
     /// this, run the closure where it lives, then
-    /// [`commit_run`](Self::commit_run).
+    /// [`commit_run`](Self::commit_run). The key to hand the closure is
+    /// [`idempotency_key`](Self::idempotency_key) of the pending step's key.
     pub fn begin_run(&mut self, name: &str, key: Option<&str>) -> Result<StepDecision> {
         self.sequence.begin_run(name, key)
+    }
+
+    /// The id this durable run began under: the job's own, except across a
+    /// `retry_dead`, which mints a new job for the same run.
+    pub fn run_key(&self) -> &str {
+        &self.run_key
+    }
+
+    /// The key to hand the *downstream* service for `step_key`.
+    ///
+    /// Memoization cannot close the window between a remote call succeeding and
+    /// its step row committing — only a key the other side dedupes on can. This
+    /// one is stable across a retry, across a `step.sleep` wake and across an
+    /// operator's DLQ retry, and no serializer or codec touches it. See
+    /// [`crate::step::idempotency_key`] for the recipe.
+    pub fn idempotency_key(&self, step_key: &str) -> String {
+        idempotency::idempotency_key(&self.run_key, step_key)
     }
 
     /// Commit the result of the step [`begin_run`](Self::begin_run) handed out.
@@ -277,7 +301,7 @@ impl<S: Storage> StepSession<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
     use crate::job::{now_millis, NewJob};
@@ -334,7 +358,7 @@ mod tests {
         let mut first = open(&storage, &job);
         assert_eq!(
             first
-                .run("charge", None, || Ok(b"receipt-1".to_vec()))
+                .run("charge", None, |_| Ok(b"receipt-1".to_vec()))
                 .unwrap(),
             b"receipt-1"
         );
@@ -343,7 +367,7 @@ mod tests {
         let mut second = open(&storage, &job);
         let ran = Cell::new(false);
         let replayed = second
-            .run("charge", None, || {
+            .run("charge", None, |_| {
                 ran.set(true);
                 Ok(b"receipt-2".to_vec())
             })
@@ -359,8 +383,8 @@ mod tests {
         let job = claimed_job(&storage, "checkout");
         let mut session = open(&storage, &job);
 
-        session.run("charge", None, || Ok(b"a".to_vec())).unwrap();
-        session.run("receipt", None, || Ok(b"b".to_vec())).unwrap();
+        session.run("charge", None, |_| Ok(b"a".to_vec())).unwrap();
+        session.run("receipt", None, |_| Ok(b"b".to_vec())).unwrap();
 
         let stored = storage.get_job_steps(&job.id, None).unwrap();
         let keys: Vec<&str> = stored.iter().map(|step| step.step_key.as_str()).collect();
@@ -380,7 +404,7 @@ mod tests {
 
         let mut session = open(&storage, &job);
         session
-            .run("charge", None, || Ok(ciphertext.clone()))
+            .run("charge", None, |_| Ok(ciphertext.clone()))
             .unwrap();
 
         let stored: Vec<JobStep> = storage.get_job_steps(&job.id, None).unwrap();
@@ -388,7 +412,7 @@ mod tests {
         // And the memo hands the same bytes back for the shell to decode.
         let mut replay = open(&storage, &job);
         assert_eq!(
-            replay.run("charge", None, || Ok(vec![])).unwrap(),
+            replay.run("charge", None, |_| Ok(vec![])).unwrap(),
             ciphertext
         );
     }
@@ -404,7 +428,7 @@ mod tests {
         let mut session = StepSession::load(storage.clone(), &job, "worker-1", limits).unwrap();
 
         let err = session
-            .run("render", None, || Ok(vec![7u8; 64]))
+            .run("render", None, |_| Ok(vec![7u8; 64]))
             .unwrap_err();
         match &err {
             QueueError::StepLimitExceeded {
@@ -434,8 +458,8 @@ mod tests {
         };
         let mut session = StepSession::load(storage.clone(), &job, "worker-1", limits).unwrap();
 
-        session.run("noop", None, || Ok(vec![])).unwrap();
-        let err = session.run("noop", None, || Ok(vec![])).unwrap_err();
+        session.run("noop", None, |_| Ok(vec![])).unwrap();
+        let err = session.run("noop", None, |_| Ok(vec![])).unwrap_err();
         assert!(
             matches!(&err, QueueError::StepLimitExceeded { limit, step_key, .. }
                 if limit == "step count" && step_key == "noop#1"),
@@ -453,8 +477,8 @@ mod tests {
         };
         let mut session = StepSession::load(storage.clone(), &job, "worker-1", limits).unwrap();
 
-        session.run("a", None, || Ok(vec![1u8; 6])).unwrap();
-        let err = session.run("b", None, || Ok(vec![1u8; 6])).unwrap_err();
+        session.run("a", None, |_| Ok(vec![1u8; 6])).unwrap();
+        let err = session.run("b", None, |_| Ok(vec![1u8; 6])).unwrap_err();
         assert!(
             matches!(&err, QueueError::StepLimitExceeded { limit, actual, allowed, .. }
                 if limit == "total bytes" && *actual == 12 && *allowed == 10),
@@ -534,7 +558,7 @@ mod tests {
 
         let mut first = open(&storage, &job);
         first
-            .run("charge", None, || Ok(b"receipt".to_vec()))
+            .run("charge", None, |_| Ok(b"receipt".to_vec()))
             .unwrap();
         // A deadline already in the past: the job is dequeuable on the next
         // poll, which is exactly what "this sleep is over" means.
@@ -548,7 +572,7 @@ mod tests {
         let mut second = open(&storage, &woken);
         let ran = Cell::new(false);
         let replayed = second
-            .run("charge", None, || {
+            .run("charge", None, |_| {
                 ran.set(true);
                 Ok(vec![])
             })
@@ -568,7 +592,7 @@ mod tests {
         );
         // And the attempt gets further than the one that slept.
         second
-            .run("receipt", None, || Ok(b"sent".to_vec()))
+            .run("receipt", None, |_| Ok(b"sent".to_vec()))
             .unwrap();
         let keys: Vec<String> = storage
             .get_job_steps(&job.id, None)
@@ -588,7 +612,7 @@ mod tests {
         let storage = SqliteStorage::in_memory().unwrap();
         let job = claimed_job(&storage, "interrupted");
         open(&storage, &job)
-            .run("charge", None, || Ok(b"receipt".to_vec()))
+            .run("charge", None, |_| Ok(b"receipt".to_vec()))
             .unwrap();
 
         let stale = storage
@@ -605,7 +629,7 @@ mod tests {
         let mut second = open(&storage, &recovered);
         let ran = Cell::new(false);
         second
-            .run("charge", None, || {
+            .run("charge", None, |_| {
                 ran.set(true);
                 Ok(vec![])
             })
@@ -680,7 +704,7 @@ mod tests {
         };
         let mut session = StepSession::load(storage.clone(), &job, "worker-1", limits).unwrap();
 
-        session.run("charge", None, || Ok(vec![])).unwrap();
+        session.run("charge", None, |_| Ok(vec![])).unwrap();
         let err = session.sleep_for(None, None, 1_000).unwrap_err();
         assert!(
             matches!(&err, QueueError::StepLimitExceeded { limit, step_key, .. }
@@ -689,18 +713,186 @@ mod tests {
         );
     }
 
+    /// The property the whole feature rests on: whatever happens to the attempt,
+    /// the key the downstream service sees is the same string.
+    #[test]
+    fn the_idempotency_key_survives_a_retry() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "charge_card");
+
+        let seen = RefCell::new(Vec::new());
+        // The first attempt reaches the charge and dies before committing it,
+        // which is the crash window this key exists to close.
+        let mut first = open(&storage, &job);
+        let err = first
+            .run("charge", None, |key| {
+                seen.borrow_mut().push(key.to_string());
+                Err(QueueError::Other("connection reset".into()))
+            })
+            .unwrap_err();
+        assert!(matches!(err, QueueError::Other(_)), "{err}");
+        assert!(
+            storage.get_job_steps(&job.id, None).unwrap().is_empty(),
+            "the step never committed — the whole point"
+        );
+
+        // The job is retried in place: same row, same id, next attempt.
+        storage.retry(&job.id, now_millis(), None).unwrap();
+        let retried = wake(&storage, &job.id);
+        assert_eq!(retried.retry_count, 1, "this really is a later attempt");
+        open(&storage, &retried)
+            .run("charge", None, |key| {
+                seen.borrow_mut().push(key.to_string());
+                Ok(b"receipt".to_vec())
+            })
+            .unwrap();
+
+        let expected = format!("{}:charge#0", job.id);
+        assert_eq!(seen.into_inner(), [expected.clone(), expected]);
+    }
+
+    #[test]
+    fn the_idempotency_key_survives_a_sleep_and_wake() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "checkout");
+        let expected = format!("{}:charge#0", job.id);
+
+        // A sleep before the charge, so the charge is only ever reached by an
+        // attempt that woke up — a different attempt from the one that slept.
+        let mut first = open(&storage, &job);
+        let past = now_millis() - 1;
+        assert!(matches!(
+            first.sleep_until(Some("cool_off"), None, past).unwrap(),
+            StepSleep::Sleeping { .. }
+        ));
+
+        let woken = wake(&storage, &job.id);
+        let mut second = open(&storage, &woken);
+        assert!(matches!(
+            second.sleep_until(Some("cool_off"), None, past).unwrap(),
+            StepSleep::Elapsed { .. }
+        ));
+        let seen = RefCell::new(String::new());
+        second
+            .run("charge", None, |key| {
+                *seen.borrow_mut() = key.to_string();
+                Err(QueueError::Other("connection reset".into()))
+            })
+            .unwrap_err();
+        assert_eq!(seen.into_inner(), expected);
+
+        // And again after the sleep replays on the next attempt: a sleep row
+        // sits in the sequence, but it is not what the key is built from.
+        storage.retry(&job.id, now_millis(), None).unwrap();
+        let again = wake(&storage, &job.id);
+        let mut third = open(&storage, &again);
+        third.sleep_until(Some("cool_off"), None, past).unwrap();
+        let seen = RefCell::new(String::new());
+        third
+            .run("charge", None, |key| {
+                *seen.borrow_mut() = key.to_string();
+                Ok(vec![])
+            })
+            .unwrap();
+        assert_eq!(seen.into_inner(), expected);
+    }
+
+    #[test]
+    fn a_memoized_step_mints_no_key_at_all() {
+        // Nothing downstream is called on a memo hit, so there is nothing to
+        // dedupe — and the closure that would have read the key never runs.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "charge_card");
+        open(&storage, &job)
+            .run("charge", None, |_| Ok(b"receipt".to_vec()))
+            .unwrap();
+
+        let mut second = open(&storage, &job);
+        assert_eq!(
+            second
+                .run("charge", None, |_| panic!("must not run"))
+                .unwrap(),
+            b"receipt"
+        );
+    }
+
+    #[test]
+    fn the_key_names_the_step_it_belongs_to() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "checkout");
+        let mut session = open(&storage, &job);
+
+        let seen = RefCell::new(Vec::new());
+        let record = |session: &mut StepSession<SqliteStorage>, name: &str, key: Option<&str>| {
+            session
+                .run(name, key, |minted| {
+                    seen.borrow_mut().push(minted.to_string());
+                    Ok(vec![])
+                })
+                .unwrap();
+        };
+        record(&mut session, "charge", None);
+        record(&mut session, "charge", None);
+        record(&mut session, "notify", Some("a@b.c"));
+
+        assert_eq!(session.run_key(), job.id);
+        assert_eq!(
+            seen.into_inner(),
+            [
+                format!("{}:charge#0", job.id),
+                format!("{}:charge#1", job.id),
+                format!("{}:notify:a@b.c", job.id),
+            ],
+            "two calls of one step are two downstream operations"
+        );
+    }
+
+    #[test]
+    fn a_resurrected_job_keeps_the_run_it_died_in() {
+        // The case that would otherwise ship broken: an operator retries a
+        // dead-lettered charge from the admin UI three days later, and
+        // `retry_dead` hands the work to a job with a brand new id.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "charge_card");
+        let expected = format!("{}:charge#0", job.id);
+
+        let seen = RefCell::new(Vec::new());
+        open(&storage, &job)
+            .run("charge", None, |key| {
+                seen.borrow_mut().push(key.to_string());
+                Err(QueueError::Other("connection reset".into()))
+            })
+            .unwrap_err();
+
+        storage.move_to_dlq(&job, "boom", None).unwrap();
+        let dead = storage.list_dead(10, 0, None).unwrap();
+        let resurrected = storage.retry_dead(&dead[0].id, None).unwrap();
+        assert_ne!(resurrected, job.id, "retry_dead mints a new job id");
+
+        let retried = wake(&storage, &resurrected);
+        let mut session = open(&storage, &retried);
+        assert_eq!(session.run_key(), job.id, "the run outlives the job row");
+        session
+            .run("charge", None, |key| {
+                seen.borrow_mut().push(key.to_string());
+                Ok(b"receipt".to_vec())
+            })
+            .unwrap();
+        assert_eq!(seen.into_inner(), [expected.clone(), expected]);
+    }
+
     #[test]
     fn a_diverged_sequence_fails_before_the_closure_runs() {
         let storage = SqliteStorage::in_memory().unwrap();
         let job = claimed_job(&storage, "deployed_task");
         let mut first = open(&storage, &job);
-        first.run("charge", None, || Ok(vec![])).unwrap();
+        first.run("charge", None, |_| Ok(vec![])).unwrap();
 
         // The deploy renamed the step; the next attempt asks for a different one.
         let mut second = open(&storage, &job);
         let ran = Cell::new(false);
         let err = second
-            .run("audit", None, || {
+            .run("audit", None, |_| {
                 ran.set(true);
                 Ok(vec![])
             })
@@ -728,7 +920,7 @@ mod tests {
             .reclaim_execution(&job.id, "worker-1", "worker-2")
             .unwrap());
 
-        let err = session.run("charge", None, || Ok(vec![])).unwrap_err();
+        let err = session.run("charge", None, |_| Ok(vec![])).unwrap_err();
         assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
         assert_eq!(
             super::super::classify_step_failure(&err),

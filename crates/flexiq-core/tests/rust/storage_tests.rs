@@ -1956,6 +1956,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_authorize_attempt_writes_nothing(s);
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
     test_step_session_memoizes_across_attempts(s);
+    test_step_idempotency_key_survives_a_dlq_retry(s);
     test_step_session_refuses_a_changed_sequence(s);
     test_step_session_sleeps_by_ending_the_attempt(s);
     test_an_elapsed_sleep_wakes_the_job_immediately(s);
@@ -2269,24 +2270,24 @@ fn test_step_session_memoizes_across_attempts(s: &impl Storage) {
     // Bytes a codec would produce: the store must not interpret them.
     let ciphertext = b"\x00\x9fENCRYPTED\xff\xfe".to_vec();
     first
-        .run("charge", None, || Ok(ciphertext.clone()))
+        .run("charge", None, |_| Ok(ciphertext.clone()))
         .unwrap();
     first
-        .run("notify", Some("a"), || Ok(b"sent".to_vec()))
+        .run("notify", Some("a"), |_| Ok(b"sent".to_vec()))
         .unwrap();
 
     // The attempt died; the next one replays from the recorded steps.
     let ran = std::cell::Cell::new(false);
     let mut second = StepSession::load(s.clone(), &job, "w-session", limits).unwrap();
     let replayed = second
-        .run("charge", None, || {
+        .run("charge", None, |_| {
             ran.set(true);
             Ok(vec![])
         })
         .unwrap();
     assert_eq!(replayed, ciphertext, "a memo must return the stored bytes");
     let keyed = second
-        .run("notify", Some("a"), || {
+        .run("notify", Some("a"), |_| {
             ran.set(true);
             Ok(vec![])
         })
@@ -2295,7 +2296,7 @@ fn test_step_session_memoizes_across_attempts(s: &impl Storage) {
     assert!(!ran.get(), "a memoized step must not run its closure");
 
     // New ground still appends after the replayed prefix.
-    second.run("receipt", None, || Ok(b"r".to_vec())).unwrap();
+    second.run("receipt", None, |_| Ok(b"r".to_vec())).unwrap();
     let keys: Vec<String> = s
         .get_job_steps(&job.id, None)
         .unwrap()
@@ -2305,20 +2306,100 @@ fn test_step_session_memoizes_across_attempts(s: &impl Storage) {
     assert_eq!(keys, ["charge#0", "notify:a", "receipt#0"]);
 }
 
+/// The key a step hands downstream survives the one boundary that changes a
+/// job's id: an operator retrying a dead-lettered charge from the DLQ.
+///
+/// Without the stamped origin the resurrected job mints a fresh key, the
+/// payment API sees a new request and the customer is charged twice — three
+/// days later, deliberately, through the admin UI.
+fn test_step_idempotency_key_survives_a_dlq_retry(s: &impl Storage) {
+    let q = "q-step-dlq-key";
+    let job = stepped_job(s, q, "w-dlq-key");
+    let limits = StepLimits::default();
+    let expected = format!("{}:charge#0", job.id);
+
+    // The attempt reaches the charge and dies before the step row commits.
+    let minted = std::cell::RefCell::new(Vec::new());
+    let mut first = StepSession::load(s.clone(), &job, "w-dlq-key", limits).unwrap();
+    first
+        .run("charge", None, |key| {
+            minted.borrow_mut().push(key.to_string());
+            Err(QueueError::Other("connection reset".into()))
+        })
+        .unwrap_err();
+    assert_eq!(first.run_key(), job.id);
+
+    s.move_to_dlq(&job, "boom", None).unwrap();
+    let dead = s
+        .list_dead(1000, 0, None)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.original_job_id == job.id)
+        .expect("dead entry");
+    let resurrected = s.retry_dead(&dead.id, None).unwrap();
+    assert_ne!(resurrected, job.id, "retry_dead mints a new job id");
+
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    assert!(s.claim_execution(&resurrected, "w-dlq-key").unwrap());
+    let retried = s.get_job(&resurrected, None).unwrap().unwrap();
+    let mut second = StepSession::load(s.clone(), &retried, "w-dlq-key", limits).unwrap();
+    assert_eq!(
+        second.run_key(),
+        job.id,
+        "the run key is the id the run began under, not the row it runs on"
+    );
+    second
+        .run("charge", None, |key| {
+            minted.borrow_mut().push(key.to_string());
+            Ok(b"receipt".to_vec())
+        })
+        .unwrap();
+    assert_eq!(minted.into_inner(), [expected.clone(), expected]);
+
+    // A second death and resurrection still answers with the first run — and
+    // it dies down a path that hands the DLQ *replacement* metadata, which
+    // would otherwise drop the origin and restamp the intermediate job id.
+    s.move_to_dlq(&retried, "boom again", Some(r#"{"killed":"budget"}"#))
+        .unwrap();
+    let dead = s
+        .list_dead(1000, 0, None)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.original_job_id == resurrected)
+        .expect("second dead entry");
+    assert_eq!(
+        dead.metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|m| m["killed"].as_str().map(str::to_string))
+            .as_deref(),
+        Some("budget"),
+        "the caller's marker still wins the blob"
+    );
+    let twice = s.retry_dead(&dead.id, None).unwrap();
+    let twice = s.get_job(&twice, None).unwrap().unwrap();
+    assert_eq!(
+        StepSession::load(s.clone(), &twice, "w-dlq-key", limits)
+            .unwrap()
+            .run_key(),
+        job.id,
+    );
+}
+
 /// A deploy that changed the step sequence fails the attempt before the closure
 /// runs, and writes nothing.
 fn test_step_session_refuses_a_changed_sequence(s: &impl Storage) {
     let job = stepped_job(s, "q-step-diverge", "w-diverge");
     let limits = StepLimits::default();
     let mut first = StepSession::load(s.clone(), &job, "w-diverge", limits).unwrap();
-    first.run("charge", None, || Ok(b"a".to_vec())).unwrap();
-    first.run("notify", None, || Ok(b"b".to_vec())).unwrap();
+    first.run("charge", None, |_| Ok(b"a".to_vec())).unwrap();
+    first.run("notify", None, |_| Ok(b"b".to_vec())).unwrap();
 
     let mut second = StepSession::load(s.clone(), &job, "w-diverge", limits).unwrap();
-    second.run("charge", None, || Ok(vec![])).unwrap();
+    second.run("charge", None, |_| Ok(vec![])).unwrap();
     let ran = std::cell::Cell::new(false);
     let err = second
-        .run("audit", None, || {
+        .run("audit", None, |_| {
             ran.set(true);
             Ok(vec![])
         })
@@ -2365,7 +2446,7 @@ fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
 
     let mut first = StepSession::load(s.clone(), &job, "w-sleeper", limits).unwrap();
     first
-        .run("charge", None, || Ok(b"receipt".to_vec()))
+        .run("charge", None, |_| Ok(b"receipt".to_vec()))
         .unwrap();
     let slept = first.sleep_for(Some("cool_off"), None, 3_600_000).unwrap();
     let StepSleep::Sleeping { wake_at, .. } = slept else {
@@ -2389,7 +2470,7 @@ fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
     let ran = std::cell::Cell::new(false);
     assert_eq!(
         second
-            .run("charge", None, || {
+            .run("charge", None, |_| {
                 ran.set(true);
                 Ok(vec![])
             })
@@ -2433,7 +2514,7 @@ fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
             wake_at: past,
         }
     );
-    fourth.run("after", None, || Ok(b"ok".to_vec())).unwrap();
+    fourth.run("after", None, |_| Ok(b"ok".to_vec())).unwrap();
     let keys: Vec<String> = s
         .get_job_steps(&elapsed.id, None)
         .unwrap()
