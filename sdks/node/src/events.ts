@@ -14,6 +14,10 @@ export const EVENT_NAMES = [
   "job.retrying",
   "job.dead",
   "job.cancelled",
+  // An attempt ended in a durable step sleep; the job is pending until its
+  // deadline. Reserved: part of the cross-SDK contract, and emitted once the
+  // task context carries a step API.
+  "job.sleeping",
   "worker.started",
   "worker.online",
   "worker.stopped",
@@ -54,6 +58,17 @@ export interface OutcomeEvent {
   retryCount?: number;
   timedOut?: boolean;
   /** How long the job ran, in ms. Absent when nothing measured the run. */
+  durationMs?: number;
+}
+
+/** Payload for `job.sleeping` — an attempt that ended in a step sleep. */
+export interface SleepEvent {
+  jobId: string;
+  taskName: string;
+  queue?: string;
+  /** Deadline the job was rescheduled to, in Unix milliseconds. */
+  wakeAt: number;
+  /** How long the attempt ran before it slept, in ms. */
   durationMs?: number;
 }
 
@@ -123,6 +138,7 @@ export interface EventMap {
   "job.retrying": OutcomeEvent;
   "job.dead": OutcomeEvent;
   "job.cancelled": OutcomeEvent;
+  "job.sleeping": SleepEvent;
   "worker.started": WorkerEvent;
   "worker.online": WorkerEvent;
   "worker.stopped": WorkerEvent;

@@ -161,9 +161,16 @@ impl RedisStorage {
     /// Re-schedule a job back to `Pending` without consuming retry budget.
     /// Mirrors [`retry`](Self::retry) for soft-gate reschedules where the job
     /// never executed, so `retry_count` must be preserved.
-    pub fn reschedule(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
+    ///
+    /// A job in another namespace reports `JobNotFound`, like an unknown id.
+    pub fn reschedule(
+        &self,
+        id: &str,
+        next_scheduled_at: i64,
+        namespace: Option<&str>,
+    ) -> Result<()> {
         let mut conn = self.conn()?;
-        let mut job = self.get_job_required(id)?;
+        let mut job = self.get_job_required_in(id, namespace)?;
         let old_status = job.status;
 
         job.status = JobStatus::Pending;

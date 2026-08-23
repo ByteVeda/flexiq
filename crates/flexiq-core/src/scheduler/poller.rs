@@ -305,8 +305,11 @@ impl Scheduler {
         match self.check_pre_claim_gates(&job)? {
             GateDecision::Proceed => {}
             GateDecision::Defer(delay_ms) => {
-                self.storage
-                    .reschedule(&job.id, now + desync_delay(delay_ms))?;
+                self.storage.reschedule(
+                    &job.id,
+                    now + desync_delay(delay_ms),
+                    self.namespace.as_deref(),
+                )?;
                 counts.release(&job.task_name, &job.queue);
                 return Ok(false);
             }
@@ -636,6 +639,7 @@ impl Scheduler {
         // the poller will come back to it.
         self.storage
             .complete_execution(job_id, self.namespace.as_deref())?;
-        self.storage.reschedule(job_id, next_at)
+        self.storage
+            .reschedule(job_id, next_at, self.namespace.as_deref())
     }
 }

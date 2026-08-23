@@ -18,13 +18,14 @@ const MAX_PAGE_SIZE: i64 = 200;
 
 /// The cross-SDK event taxonomy. A subscription must stay portable between
 /// SDKs, so this list is a contract, not this server's own vocabulary.
-const EVENT_TYPES: [&str; 29] = [
+const EVENT_TYPES: [&str; 30] = [
     "job.enqueued",
     "job.completed",
     "job.failed",
     "job.retrying",
     "job.dead",
     "job.cancelled",
+    "job.sleeping",
     "worker.started",
     "worker.stopped",
     "worker.online",

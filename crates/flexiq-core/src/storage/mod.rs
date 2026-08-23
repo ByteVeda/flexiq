@@ -563,8 +563,13 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<()> {
                 self.retry(id, next_scheduled_at, namespace)
             }
-            fn reschedule(&self, id: &str, next_scheduled_at: i64) -> $crate::error::Result<()> {
-                self.reschedule(id, next_scheduled_at)
+            fn reschedule(
+                &self,
+                id: &str,
+                next_scheduled_at: i64,
+                namespace: Option<&str>,
+            ) -> $crate::error::Result<()> {
+                self.reschedule(id, next_scheduled_at, namespace)
             }
             fn requeue_stuck(&self, id: &str, now: i64) -> $crate::error::Result<bool> {
                 self.requeue_stuck(id, now)
@@ -1556,8 +1561,8 @@ impl Storage for StorageBackend {
     fn retry(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()> {
         delegate!(self, retry, id, next_scheduled_at, namespace)
     }
-    fn reschedule(&self, id: &str, next_scheduled_at: i64) -> Result<()> {
-        delegate!(self, reschedule, id, next_scheduled_at)
+    fn reschedule(&self, id: &str, next_scheduled_at: i64, namespace: Option<&str>) -> Result<()> {
+        delegate!(self, reschedule, id, next_scheduled_at, namespace)
     }
     fn requeue_stuck(&self, id: &str, now: i64) -> Result<bool> {
         delegate!(self, requeue_stuck, id, now)

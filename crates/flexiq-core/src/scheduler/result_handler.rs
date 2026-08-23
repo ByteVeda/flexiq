@@ -63,11 +63,19 @@ impl Scheduler {
     /// Returns a [`ResultOutcome`] describing the action taken, so the
     /// caller (the binding) can dispatch its middleware hooks and events.
     pub fn handle_result(&self, result: JobResult) -> Result<ResultOutcome> {
+        // A sleep skips the fence, and deliberately. `sleep_job` already left
+        // the job `Pending` with no claim — that is what a sleep *is* — so
+        // asking whether the attempt still owns it reads a correctly slept job
+        // as superseded and drops the one outcome that explains where it went.
+        // The write was fenced where it happened; re-fencing the
+        // acknowledgement of it is the wrong question. `finalize_sleep` frees
+        // the in-flight slot itself.
+        let slept = matches!(result, JobResult::Slept { .. });
         // A dispatched job finished — free its in-flight slot and take the
         // token it was dispatched under. `None` for a job this scheduler never
         // dispatched (a duplicate result, or a foreign id), which has nothing to
         // validate against and is left to the transitions' own guards.
-        if !self.authorize_finished(result.job_id())? {
+        if !slept && !self.authorize_finished(result.job_id())? {
             return Ok(ResultOutcome::Superseded {
                 job_id: result.job_id().to_string(),
             });
@@ -257,6 +265,12 @@ impl Scheduler {
                     wall_time_ns,
                 })
             }
+            JobResult::Slept {
+                job_id,
+                task_name,
+                wake_at,
+                wall_time_ns,
+            } => self.finalize_sleep(job_id, task_name, wake_at, wall_time_ns),
         }
     }
 
@@ -339,6 +353,47 @@ impl Scheduler {
             .into_iter()
             .map(|o| o.expect("every result yields an outcome"))
             .collect()
+    }
+
+    /// Release the slot a slept attempt held, and report where its job went.
+    ///
+    /// Writes nothing. The three writes a sleep needs — the step row, the claim
+    /// revocation, the reschedule — were one transaction inside
+    /// [`Storage::sleep_job`](crate::storage::Storage::sleep_job); by the time
+    /// the result arrives the job is already `Pending` at its deadline.
+    ///
+    /// And nothing else is touched, because nothing failed: no `retry_count`
+    /// (this is a `reschedule`, not a `retry`), no retry-budget token (only the
+    /// failure path spends one), no circuit-breaker sample, no `job_errors`
+    /// row, and no `task_metrics` row — `succeeded = true` would inflate the
+    /// success count and `false` the failure count, and neither happened. The
+    /// cost is that per-attempt CPU time is invisible for a job that sleeps
+    /// several times; the final success metric still covers the job.
+    fn finalize_sleep(
+        &self,
+        job_id: String,
+        task_name: String,
+        wake_at: i64,
+        wall_time_ns: i64,
+    ) -> Result<ResultOutcome> {
+        self.release_in_flight(&job_id);
+        let queue = self
+            .storage
+            .get_job(&job_id, self.namespace.as_deref())?
+            .as_ref()
+            .map(|j| j.queue.clone())
+            .unwrap_or_default();
+        // The job is scheduled, not running: tell the poller when to come back,
+        // exactly as a retry does.
+        #[cfg(feature = "push-dispatch")]
+        self.signal_scheduled(wake_at);
+        Ok(ResultOutcome::Slept {
+            job_id,
+            task_name,
+            queue,
+            wake_at,
+            wall_time_ns,
+        })
     }
 
     /// Persist one successful completion and return its outcome. Shared by the

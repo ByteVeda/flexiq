@@ -468,8 +468,18 @@ fn call_on_outcome(
     outcome: &ResultOutcome,
 ) -> Result<(), String> {
     // A superseded result wrote nothing — the job is proceeding under another
-    // owner — so the shell hears nothing about it.
-    if matches!(outcome, ResultOutcome::Superseded { .. }) {
+    // owner — so the shell hears nothing about it. Neither does a sleep: there
+    // is no `onSleep` for it to reach yet, because the task context has no
+    // `step` and no attempt can end in one. The taxonomy is
+    // `#[non_exhaustive]`, so anything else this build cannot name stays silent
+    // for the same reason rather than arriving mislabelled.
+    if !matches!(
+        outcome,
+        ResultOutcome::Success { .. }
+            | ResultOutcome::Retry { .. }
+            | ResultOutcome::DeadLettered { .. }
+            | ResultOutcome::Cancelled { .. }
+    ) {
         return Ok(());
     }
     let (kind, job_id, task_name, error, retry_count, timed_out, wall_time_ns) = describe(outcome);
@@ -562,8 +572,15 @@ fn describe(outcome: &ResultOutcome) -> (&str, &str, &str, Option<&str>, i32, bo
             false,
             *wall_time_ns,
         ),
-        // Filtered out by `call_on_outcome` before it gets here.
+        // Filtered out by `call_on_outcome` before they get here.
         ResultOutcome::Superseded { job_id } => ("superseded", job_id, "", None, -1, false, 0),
+        ResultOutcome::Slept {
+            job_id,
+            task_name,
+            wall_time_ns,
+            ..
+        } => ("slept", job_id, task_name, None, -1, false, *wall_time_ns),
+        _ => ("unknown", "", "", None, -1, false, 0),
     }
 }
 

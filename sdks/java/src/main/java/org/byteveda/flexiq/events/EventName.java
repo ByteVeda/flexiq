@@ -20,6 +20,12 @@ public enum EventName {
     DEAD("job.dead"),
     /** A job was cancelled ({@code job.cancelled}). */
     CANCELLED("job.cancelled"),
+    /**
+     * An attempt ended in a durable step sleep and the job is pending until its
+     * deadline ({@code job.sleeping}). Reserved: part of the cross-SDK contract,
+     * and emitted once the task context carries a step API.
+     */
+    JOB_SLEEPING("job.sleeping"),
     /** A job was accepted into a queue ({@code job.enqueued}). */
     JOB_ENQUEUED("job.enqueued"),
     /** A handler threw, before the retry/dead-letter decision ({@code job.failed}). */

@@ -26,6 +26,10 @@ class EventType(enum.Enum):
     JOB_RETRYING = "job.retrying"
     JOB_DEAD = "job.dead"
     JOB_CANCELLED = "job.cancelled"
+    # An attempt ended in a durable step sleep; the job is pending until its
+    # deadline. Reserved: part of the cross-SDK contract, and emitted once the
+    # task context carries a step API.
+    JOB_SLEEPING = "job.sleeping"
     WORKER_STARTED = "worker.started"
     WORKER_STOPPED = "worker.stopped"
     WORKER_ONLINE = "worker.online"

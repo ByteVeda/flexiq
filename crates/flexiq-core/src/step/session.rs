@@ -6,11 +6,35 @@
 //! commits exactly what it is handed and returns exactly what it read, which is
 //! what makes an encrypting codec work here with no extra plumbing.
 
-use super::{PendingStep, StepDecision, StepLimits, StepSequence};
+use super::{PendingStep, SleepDecision, StepDecision, StepLimits, StepSequence};
 use crate::error::{QueueError, Result};
-use crate::job::Job;
-use crate::storage::records::{NewJobStep, StepCommit};
+use crate::job::{now_millis, Job};
+use crate::storage::records::{NewJobStep, StepCommit, StepKind};
 use crate::storage::Storage;
+
+/// What a `step.sleep` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepSleep {
+    /// The deadline had already passed, so nothing was written and the attempt
+    /// carries on from here.
+    Elapsed {
+        /// Identity of the sleep that replayed.
+        step_key: String,
+        /// The deadline it slept to.
+        wake_at: i64,
+    },
+    /// The attempt is **over**. The row is committed, the execution claim is
+    /// released and the job is `Pending` at `wake_at`. The task body must
+    /// unwind now — anything it does after this point runs unclaimed, and will
+    /// run again when the job wakes.
+    Sleeping {
+        /// Identity of the sleep the job is in.
+        step_key: String,
+        /// Deadline the job was actually rescheduled to — the stored one on a
+        /// replay, which is not necessarily the one this call proposed.
+        wake_at: i64,
+    },
+}
 
 /// Durable inline steps for one attempt of one job.
 ///
@@ -108,6 +132,84 @@ impl<S: Storage> StepSession<S> {
         // it was, and the attempt ends there anyway.
         self.sequence.commit(pending, encoded.len())?;
         Ok(commit)
+    }
+
+    /// Sleep for `duration_ms`, ending the attempt if the deadline is still
+    /// ahead.
+    ///
+    /// The clock is read **once, here**, and the deadline it produces is only a
+    /// candidate: storage keeps whatever a sleep row at this position already
+    /// holds. A binding that recomputed `now + duration` on each replay would
+    /// push the deadline a full duration further out every time the job crashed
+    /// into it — a sleep that outlives the job, produced by the recovery path
+    /// itself. Reach for [`sleep_until`](Self::sleep_until) when the deadline
+    /// means something outside the job.
+    pub fn sleep_for(
+        &mut self,
+        name: Option<&str>,
+        key: Option<&str>,
+        duration_ms: i64,
+    ) -> Result<StepSleep> {
+        let now = now_millis();
+        self.sleep_at(name, key, now.saturating_add(duration_ms), now)
+    }
+
+    /// Sleep until an absolute instant, in Unix milliseconds.
+    pub fn sleep_until(
+        &mut self,
+        name: Option<&str>,
+        key: Option<&str>,
+        wake_at: i64,
+    ) -> Result<StepSleep> {
+        self.sleep_at(name, key, wake_at, now_millis())
+    }
+
+    /// Both sleeps, with the clock read exactly once by the caller.
+    ///
+    /// One call rather than a `begin`/`commit` pair: `run` splits because its
+    /// closure lives in the shell, and a sleep has no closure to send across
+    /// that boundary.
+    fn sleep_at(
+        &mut self,
+        name: Option<&str>,
+        key: Option<&str>,
+        wake_at: i64,
+        now: i64,
+    ) -> Result<StepSleep> {
+        let (pending, fresh) = match self.sequence.begin_sleep(name, key, now)? {
+            SleepDecision::Elapsed { step_key, wake_at } => {
+                return Ok(StepSleep::Elapsed { step_key, wake_at })
+            }
+            SleepDecision::Sleep(pending) => (pending, true),
+            SleepDecision::Resume(pending) => (pending, false),
+        };
+        // Only a fresh row can be refused by the step-count cap, which is what
+        // `sleep_job` checks too: a resume writes nothing to count.
+        if fresh {
+            self.check_caps(&pending, &[])?;
+        }
+        let step = NewJobStep {
+            job_id: &self.job_id,
+            seq: pending.seq(),
+            step_key: pending.step_key(),
+            kind: StepKind::Sleep,
+            result: None,
+        };
+        let outcome = self.storage.sleep_job(
+            &step,
+            &self.owner,
+            self.attempt,
+            wake_at,
+            &self.limits,
+            self.namespace.as_deref(),
+        )?;
+        self.sequence.commit_sleep(&pending, outcome)?;
+        Ok(StepSleep::Sleeping {
+            step_key: pending.step_key().to_string(),
+            // The deadline storage settled on, never the candidate: on a replay
+            // they are different numbers and the job was rescheduled to theirs.
+            wake_at: outcome.wake_at(),
+        })
     }
 
     /// Close the attempt out, warning if its code no longer runs steps that are
@@ -211,6 +313,17 @@ mod tests {
 
     fn open(storage: &SqliteStorage, job: &Job) -> StepSession<SqliteStorage> {
         StepSession::load(storage.clone(), job, "worker-1", StepLimits::default()).unwrap()
+    }
+
+    /// Pick a slept job back up, the way a poller reaching its deadline does.
+    fn wake(storage: &SqliteStorage, job_id: &str) -> Job {
+        let job = storage.get_job(job_id, None).unwrap().unwrap();
+        assert!(storage
+            .dequeue("default", job.scheduled_at, None)
+            .unwrap()
+            .is_some());
+        assert!(storage.claim_execution(job_id, "worker-1").unwrap());
+        storage.get_job(job_id, None).unwrap().unwrap()
     }
 
     #[test]
@@ -345,6 +458,233 @@ mod tests {
         assert!(
             matches!(&err, QueueError::StepLimitExceeded { limit, actual, allowed, .. }
                 if limit == "total bytes" && *actual == 12 && *allowed == 10),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_sleep_ends_the_attempt_and_reschedules_the_job() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "cool_off");
+        let mut session = open(&storage, &job);
+
+        let wake_at = now_millis() + 3_600_000;
+        let slept = session
+            .sleep_until(Some("cool_off"), None, wake_at)
+            .unwrap();
+        assert_eq!(
+            slept,
+            StepSleep::Sleeping {
+                step_key: "cool_off#0".to_string(),
+                wake_at,
+            }
+        );
+
+        // Pending at the deadline, with no claim and no `started_at` — which is
+        // what keeps the stale reaper off a sleeping job.
+        let stored = storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(stored.status, crate::job::JobStatus::Pending);
+        assert_eq!(stored.scheduled_at, wake_at);
+        assert_eq!(stored.started_at, None);
+        assert_eq!(stored.retry_count, 0, "a sleep is not a retry");
+    }
+
+    #[test]
+    fn replaying_a_duration_sleep_never_moves_its_deadline() {
+        // The failure this guards is a sleep that outlives the job: recomputing
+        // `now + 1h` on each replay pushes the deadline an hour further out
+        // every time the job crashes into it.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "long_nap");
+
+        let first = open(&storage, &job)
+            .sleep_for(Some("nap"), None, 3_600_000)
+            .unwrap();
+        let StepSleep::Sleeping { wake_at, .. } = first else {
+            panic!("{first:?}");
+        };
+
+        for _ in 0..2 {
+            // Each replay re-wins the claim the sleep released, as a worker
+            // that reached the deadline would.
+            let job = wake(&storage, &job.id);
+            let again = open(&storage, &job)
+                .sleep_for(Some("nap"), None, 3_600_000)
+                .unwrap();
+            assert_eq!(
+                again,
+                StepSleep::Sleeping {
+                    step_key: "nap#0".to_string(),
+                    wake_at,
+                },
+                "the first commit fixes the deadline"
+            );
+        }
+        assert_eq!(
+            storage.get_job_steps(&job.id, None).unwrap().len(),
+            1,
+            "a replay must not commit a second sleep"
+        );
+    }
+
+    #[test]
+    fn a_woken_job_replays_its_sleep_and_carries_on() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "checkout");
+
+        let mut first = open(&storage, &job);
+        first
+            .run("charge", None, || Ok(b"receipt".to_vec()))
+            .unwrap();
+        // A deadline already in the past: the job is dequeuable on the next
+        // poll, which is exactly what "this sleep is over" means.
+        let past = now_millis() - 1;
+        assert!(matches!(
+            first.sleep_until(Some("cool_off"), None, past).unwrap(),
+            StepSleep::Sleeping { .. }
+        ));
+
+        let woken = wake(&storage, &job.id);
+        let mut second = open(&storage, &woken);
+        let ran = Cell::new(false);
+        let replayed = second
+            .run("charge", None, || {
+                ran.set(true);
+                Ok(vec![])
+            })
+            .unwrap();
+        assert_eq!(
+            replayed, b"receipt",
+            "the step before the sleep is memoized"
+        );
+        assert!(!ran.get());
+        assert_eq!(
+            second.sleep_until(Some("cool_off"), None, past).unwrap(),
+            StepSleep::Elapsed {
+                step_key: "cool_off#0".to_string(),
+                wake_at: past,
+            },
+            "an elapsed sleep returns without ending the attempt"
+        );
+        // And the attempt gets further than the one that slept.
+        second
+            .run("receipt", None, || Ok(b"sent".to_vec()))
+            .unwrap();
+        let keys: Vec<String> = storage
+            .get_job_steps(&job.id, None)
+            .unwrap()
+            .into_iter()
+            .map(|step| step.step_key)
+            .collect();
+        assert_eq!(keys, ["charge#0", "cool_off#0", "receipt#0"]);
+    }
+
+    #[test]
+    fn a_crash_before_the_sleep_commits_heals_on_the_next_attempt() {
+        // The sleep's three writes are one transaction, so a crash lands either
+        // side of it and never inside. On this side nothing was written: the
+        // job is `Running` with a live claim, the reaper sees it, and the
+        // recovered attempt reaches the sleep as new ground.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "interrupted");
+        open(&storage, &job)
+            .run("charge", None, || Ok(b"receipt".to_vec()))
+            .unwrap();
+
+        let stale = storage
+            .reap_stale_jobs(now_millis() + 600_000, None)
+            .unwrap();
+        assert_eq!(
+            stale.len(),
+            1,
+            "an attempt that died mid-flight is reapable"
+        );
+        assert!(storage.requeue_stuck(&job.id, now_millis()).unwrap());
+
+        let recovered = wake(&storage, &job.id);
+        let mut second = open(&storage, &recovered);
+        let ran = Cell::new(false);
+        second
+            .run("charge", None, || {
+                ran.set(true);
+                Ok(vec![])
+            })
+            .unwrap();
+        assert!(!ran.get(), "the committed step is still memoized");
+        let wake_at = now_millis() + 3_600_000;
+        assert_eq!(
+            second.sleep_until(Some("nap"), None, wake_at).unwrap(),
+            StepSleep::Sleeping {
+                step_key: "nap#0".to_string(),
+                wake_at,
+            },
+            "the sleep that never committed is new ground"
+        );
+        assert_eq!(storage.get_job_steps(&job.id, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_sleeping_job_is_not_stale_reaped() {
+        // The whole design constraint: a sleeping step must not sit inside the
+        // job's timeout holding a worker slot. `sleep_job` clears `started_at`,
+        // and the reaper only looks at `Running` jobs — this pins the property
+        // the mechanism depends on.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "long_nap");
+        let mut session = open(&storage, &job);
+        let wake_at = now_millis() + 3_600_000;
+        session.sleep_until(Some("nap"), None, wake_at).unwrap();
+
+        // Well past the job's 300s timeout, and still nothing to reap.
+        let reaped = storage
+            .reap_stale_jobs(now_millis() + 600_000, None)
+            .unwrap();
+        assert!(reaped.is_empty(), "{reaped:?}");
+        let stored = storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(stored.status, crate::job::JobStatus::Pending);
+        assert_eq!(stored.scheduled_at, wake_at);
+    }
+
+    #[test]
+    fn a_sleep_from_a_superseded_attempt_writes_nothing() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "reclaimed_nap");
+        let mut session = open(&storage, &job);
+
+        assert!(storage
+            .reclaim_execution(&job.id, "worker-1", "worker-2")
+            .unwrap());
+
+        let err = session.sleep_for(Some("nap"), None, 60_000).unwrap_err();
+        assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
+        assert_eq!(
+            super::super::classify_step_failure(&err),
+            super::super::StepFailure::Superseded,
+            "a superseded attempt emits no result at all"
+        );
+        assert!(storage.get_job_steps(&job.id, None).unwrap().is_empty());
+        assert_eq!(
+            storage.get_job(&job.id, None).unwrap().unwrap().status,
+            crate::job::JobStatus::Running,
+            "the job proceeding elsewhere is left alone"
+        );
+    }
+
+    #[test]
+    fn the_step_count_cap_covers_sleeps_too() {
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "sleepy_loop");
+        let limits = StepLimits {
+            max_steps: 1,
+            ..StepLimits::default()
+        };
+        let mut session = StepSession::load(storage.clone(), &job, "worker-1", limits).unwrap();
+
+        session.run("charge", None, || Ok(vec![])).unwrap();
+        let err = session.sleep_for(None, None, 1_000).unwrap_err();
+        assert!(
+            matches!(&err, QueueError::StepLimitExceeded { limit, step_key, .. }
+                if limit == "step count" && step_key == "sleep#0"),
             "{err}"
         );
     }
