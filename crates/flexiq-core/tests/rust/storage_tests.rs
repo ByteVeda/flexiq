@@ -2356,14 +2356,26 @@ fn test_step_idempotency_key_survives_a_dlq_retry(s: &impl Storage) {
         .unwrap();
     assert_eq!(minted.into_inner(), [expected.clone(), expected]);
 
-    // A second death and resurrection still answers with the first run.
-    s.move_to_dlq(&retried, "boom again", None).unwrap();
+    // A second death and resurrection still answers with the first run — and
+    // it dies down a path that hands the DLQ *replacement* metadata, which
+    // would otherwise drop the origin and restamp the intermediate job id.
+    s.move_to_dlq(&retried, "boom again", Some(r#"{"killed":"budget"}"#))
+        .unwrap();
     let dead = s
         .list_dead(1000, 0, None)
         .unwrap()
         .into_iter()
         .find(|entry| entry.original_job_id == resurrected)
         .expect("second dead entry");
+    assert_eq!(
+        dead.metadata
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|m| m["killed"].as_str().map(str::to_string))
+            .as_deref(),
+        Some("budget"),
+        "the caller's marker still wins the blob"
+    );
     let twice = s.retry_dead(&dead.id, None).unwrap();
     let twice = s.get_job(&twice, None).unwrap().unwrap();
     assert_eq!(

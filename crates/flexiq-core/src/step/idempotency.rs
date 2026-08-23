@@ -104,6 +104,36 @@ pub(crate) fn stamp_origin_job_id(
     }
 }
 
+/// The metadata a dead-letter row should carry, given a caller's replacement.
+///
+/// `move_to_dlq` lets its caller replace the job's metadata wholesale — a shed
+/// marker, a retry-budget marker — which takes `__origin_job_id` with it. The
+/// next `retry_dead` then stamps the *intermediate* job id, and a run already
+/// resurrected once starts sending different downstream keys than it has been.
+///
+/// A replacement that is not a JSON object is left byte-for-byte alone, so such
+/// a run does lose its origin here. `RETRY_BUDGET_EXHAUSTED` is a bare string
+/// three SDK suites match on exactly; that path already discards the rest of the
+/// job's metadata on the way back out, and giving it a shape is a cross-SDK
+/// contract change, not a fix to make here.
+pub(crate) fn carry_origin_job_id(replacement: Option<&str>, job: &Job) -> Option<String> {
+    let Some(replacement) = replacement else {
+        return job.metadata.clone();
+    };
+    let Some(origin) = origin_job_id(job.metadata.as_deref()) else {
+        return Some(replacement.to_string());
+    };
+    let Ok(mut obj) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(replacement)
+    else {
+        return Some(replacement.to_string());
+    };
+    stamp_origin_job_id(&mut obj, &origin);
+    serde_json::to_string(&serde_json::Value::Object(obj))
+        .ok()
+        .or_else(|| Some(replacement.to_string()))
+}
+
 /// The stamped origin id, if the metadata carries a usable one.
 ///
 /// Anything else — absent, unparseable, not a string, blank — falls back to the
@@ -208,6 +238,43 @@ mod tests {
                 "{metadata}"
             );
         }
+    }
+
+    #[test]
+    fn replacement_dlq_metadata_still_carries_the_origin() {
+        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
+        let carried: serde_json::Value = serde_json::from_str(
+            &carry_origin_job_id(Some(r#"{"shed":"rate_limit"}"#), &job).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(carried["__origin_job_id"], "job-1");
+        assert_eq!(carried["shed"], "rate_limit", "the marker is kept");
+    }
+
+    #[test]
+    fn dlq_metadata_without_a_replacement_is_the_jobs_own() {
+        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
+        assert_eq!(
+            carry_origin_job_id(None, &job).as_deref(),
+            Some(r#"{"__origin_job_id":"job-1"}"#)
+        );
+        assert_eq!(carry_origin_job_id(None, &job_with("job-1", None)), None);
+    }
+
+    #[test]
+    fn a_replacement_is_untouched_when_there_is_nothing_to_carry() {
+        // No origin on the job, and a bare-string marker three SDK suites match
+        // on exactly — neither may be rewritten.
+        let plain = job_with("job-1", None);
+        assert_eq!(
+            carry_origin_job_id(Some("retry_budget_exhausted"), &plain).as_deref(),
+            Some("retry_budget_exhausted")
+        );
+        let resurrected = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
+        assert_eq!(
+            carry_origin_job_id(Some("retry_budget_exhausted"), &resurrected).as_deref(),
+            Some("retry_budget_exhausted")
+        );
     }
 
     #[test]

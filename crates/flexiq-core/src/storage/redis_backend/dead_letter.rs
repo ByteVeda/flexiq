@@ -100,10 +100,10 @@ impl RedisStorage {
             retry_count: job.retry_count,
             failed_at: now,
             // Preserve the job's own metadata so it survives the round trip;
-            // an explicit `metadata` arg overrides it.
-            metadata: metadata
-                .map(|s| s.to_string())
-                .or_else(|| job.metadata.clone()),
+            // an explicit `metadata` arg overrides it — but never the run's
+            // origin, which `retry_dead` would otherwise restamp with this
+            // job's id instead of the one the run has been sending downstream.
+            metadata: crate::step::carry_origin_job_id(metadata, job),
             notes: job.notes.clone(),
             priority: job.priority,
             max_retries: job.max_retries,

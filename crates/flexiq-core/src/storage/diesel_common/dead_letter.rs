@@ -53,6 +53,10 @@ macro_rules! impl_diesel_dead_letter_ops {
                 let (topic, subscription_name) =
                     $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
                         .map_or((None, None), |(t, s)| (Some(t), Some(s)));
+                // A replacement blob would drop the run's origin with the rest
+                // of the job's metadata, and `retry_dead` would then stamp this
+                // job's id over the one the run has been sending downstream.
+                let dlq_metadata = $crate::step::carry_origin_job_id(metadata, job);
 
                 self.write_transaction(|conn| {
                     let dlq_row = NewDeadLetterRow {
@@ -66,7 +70,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                         failed_at: now,
                         // Preserve the job's own metadata so it survives the
                         // round trip; an explicit `metadata` arg overrides it.
-                        metadata: metadata.or(job.metadata.as_deref()),
+                        metadata: dlq_metadata.as_deref(),
                         notes: job.notes.as_deref(),
                         priority: job.priority,
                         max_retries: job.max_retries,
