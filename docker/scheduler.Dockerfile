@@ -58,6 +58,10 @@ FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 # Overridden per release; a literal here would outrank scripts/version.mjs,
 # which is why `--check` guards against one.
 ARG VERSION=dev
+# publish-server.yml copies these onto the multiarch index as OCI annotations:
+# GHCR reads a manifest list's title and description from the index and never
+# from the child images' config labels, so a label alone leaves the package page
+# blank. ci-server-image.yml asserts they are all still set.
 LABEL org.opencontainers.image.title="flexiq-server" \
       org.opencontainers.image.description="FlexiQ scheduler, executor attach listener, and dashboard" \
       org.opencontainers.image.source="https://github.com/ByteVeda/flexiq" \
