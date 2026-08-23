@@ -183,13 +183,10 @@ impl StepSequence {
     /// as done until the commit lands, so a closure that raises leaves the
     /// sequence exactly where it was.
     pub fn begin_run(&mut self, name: &str, key: Option<&str>) -> Result<StepDecision> {
-        let step_key = self.issue(name, key)?;
-        Ok(
-            match self.landed(&step_key, StepKind::Run, key.is_some())? {
-                StepMatch::Recorded(index) => self.memoize(index),
-                StepMatch::New(pending) => StepDecision::Run(pending),
-            },
-        )
+        Ok(match self.resolve(name, key, StepKind::Run)? {
+            StepMatch::Recorded(index) => self.memoize(index),
+            StepMatch::New(pending) => StepDecision::Run(pending),
+        })
     }
 
     /// Decide what `step.sleep(…)` — named or not, keyed or not — must do.
@@ -206,8 +203,7 @@ impl StepSequence {
         now: i64,
     ) -> Result<SleepDecision> {
         let name = name.unwrap_or(DEFAULT_SLEEP_NAME);
-        let step_key = self.issue(name, key)?;
-        match self.landed(&step_key, StepKind::Sleep, key.is_some())? {
+        match self.resolve(name, key, StepKind::Sleep)? {
             StepMatch::New(pending) => Ok(SleepDecision::Sleep(pending)),
             StepMatch::Recorded(index) => {
                 let recorded = &self.recorded[index];
@@ -238,12 +234,11 @@ impl StepSequence {
         }
     }
 
-    /// Derive this step's identity and spend an occurrence if it needs one.
+    /// Name this step, check it may be asked for, and find where it lands.
     ///
-    /// The occurrence is spent only once the key is known to be usable: a
-    /// refused step must not shift the key of the next one. Explicit keys never
-    /// spend one at all, so adding a keyed call cannot move an unkeyed one.
-    fn issue(&mut self, name: &str, key: Option<&str>) -> Result<String> {
+    /// Shared by `run` and `sleep`, which differ only in what a landing *means*
+    /// — the naming, the guards and the divergence are one path.
+    fn resolve(&mut self, name: &str, key: Option<&str>, kind: StepKind) -> Result<StepMatch> {
         let step_key = match key {
             Some(key) => StepKey::explicit(name, key)?,
             None => {
@@ -252,10 +247,14 @@ impl StepSequence {
             }
         };
         self.check_issuable(&step_key)?;
+        let landed = self.landed(&step_key, kind, key.is_some())?;
+        // Spent only once the step is known to be usable: a refused one must
+        // not shift the key of the next. Explicit keys never spend one at all,
+        // so adding a keyed call cannot move an unkeyed one.
         if key.is_none() {
             *self.occurrences.entry(name.to_string()).or_insert(0) += 1;
         }
-        Ok(step_key)
+        Ok(landed)
     }
 
     /// Acknowledge that `pending` was committed, and move on.
@@ -861,6 +860,26 @@ mod tests {
             .commit_sleep(&pending, SleepOutcome::AlreadySleeping { wake_at: 5_000 })
             .unwrap();
         assert_eq!(sequence.committed_steps(), 1);
+    }
+
+    #[test]
+    fn a_refused_step_does_not_spend_its_occurrence() {
+        // The counter moves only for a step that was usable. A diverged one was
+        // not, and had it spent an occurrence anyway the next call of the same
+        // name would derive `charge#1` and report a divergence against a step
+        // the code never wrote — an error caused entirely by the first error.
+        // The counter standing still is what the duplicate-key message proves:
+        // the second call derived `charge#0` again.
+        let mut sequence = sequence(vec![recorded(0, "other#0", b"")]);
+        assert!(matches!(
+            sequence.begin_run("charge", None),
+            Err(QueueError::StepSequenceDiverged(_))
+        ));
+        let message = sequence.begin_run("charge", None).unwrap_err().to_string();
+        assert!(
+            message.contains("'charge#0' was used twice"),
+            "the occurrence must not have moved: {message}"
+        );
     }
 
     #[test]
