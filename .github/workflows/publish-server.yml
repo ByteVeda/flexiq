@@ -158,9 +158,28 @@ jobs:
             exit 1
           fi
 
+      # Exported straight to the registry rather than `docker push`ed out of the
+      # daemon: a daemon push rewrites the manifest to Docker media types, and
+      # `imagetools create` then drops the index annotations GHCR reads a
+      # multiarch description from — silently, since a Docker manifest list has
+      # no annotations field. Everything is already built, so this is a cache
+      # hit plus the upload.
       - name: Push the per-architecture tag
         if: ${{ !inputs.dry-run }}
-        run: docker push "${IMAGE}:${TAG}"
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/scheduler.Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: VERSION=${{ env.VERSION }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          # Attestations would make each per-architecture tag an index of its
+          # own, adding an unknown/unknown entry to every published manifest.
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=true
+          cache-from: type=gha,scope=server-image-${{ matrix.arch }}
+
 
   manifest:
     name: Publish multiarch manifest
