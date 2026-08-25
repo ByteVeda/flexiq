@@ -64,7 +64,8 @@ export interface OutcomeEvent {
 export interface SleepEvent {
   jobId: string;
   taskName: string;
-  queue?: string;
+  /** Queue the sleeping job belongs to, read off the dispatch frame. */
+  queue: string;
   /** Deadline the job was rescheduled to, in Unix milliseconds. */
   wakeAt: number;
   /** Identity of the sleep step — `name#occurrence`, or its explicit key. */
