@@ -43,7 +43,13 @@ pub fn execute_task(
     let context_mod = py.import("flexiq.context")?;
     context_mod.call_method1(
         "_set_context",
-        (&job.id, &job.task_name, job.retry_count, &job.queue),
+        (
+            &job.id,
+            &job.task_name,
+            job.retry_count,
+            &job.queue,
+            job.namespace.as_deref(),
+        ),
     )?;
 
     // Wrap deserialization + call so _clear_context is always called
@@ -129,6 +135,8 @@ pub fn format_python_error(py: Python<'_>, e: &PyErr) -> String {
 
 /// How an attempt that raised ended, before it is turned into a `JobResult`.
 enum Ending {
+    /// `step.sleep` committed its row and released the claim.
+    Slept { wake_at: i64 },
     /// The task observed its cancel request.
     Cancelled,
     /// Anything else.
@@ -138,8 +146,9 @@ enum Ending {
 /// The result a failed attempt reports, classified once for every worker path.
 ///
 /// One function rather than one per pool: the three pools had already drifted
-/// on how many times they took the GIL to answer this, and each new kind of
-/// ending would otherwise have to be added to every copy.
+/// on how many times they took the GIL to answer this, and a sleep — which is
+/// neither a success nor a failure — is exactly the kind of ending a fourth
+/// copy would miss.
 pub fn job_result_from_error(
     e: &PyErr,
     retry_filters: &Py<PyAny>,
@@ -153,6 +162,9 @@ pub fn job_result_from_error(
     // exception object, and taking the GIL per question is pure overhead on
     // the failure path.
     let ending = Python::attach(|py| {
+        if let Some(wake_at) = sleep_wake_at(py, e) {
+            return Ending::Slept { wake_at };
+        }
         if is_cancelled_error(py, e) {
             return Ending::Cancelled;
         }
@@ -164,6 +176,15 @@ pub fn job_result_from_error(
     });
 
     match ending {
+        Ending::Slept { wake_at } => {
+            log::info!("[flexiq] Task {task_name}[{job_id}] sleeping until {wake_at}");
+            JobResult::Slept {
+                job_id,
+                task_name,
+                wake_at,
+                wall_time_ns,
+            }
+        }
         Ending::Cancelled => JobResult::Cancelled {
             job_id,
             task_name,
@@ -186,6 +207,38 @@ pub fn job_result_from_error(
             }
         }
     }
+}
+
+/// The deadline of a `step.sleep` that ended this attempt, if that is what
+/// happened.
+///
+/// A slept attempt is neither a success nor a failure: the sleep row is already
+/// committed, the claim already released and the job already `Pending` at the
+/// deadline, so the only thing left is to tell the scheduler where it went.
+pub fn sleep_wake_at(py: Python<'_>, e: &PyErr) -> Option<i64> {
+    let signal = py
+        .import("flexiq.steps.errors")
+        .ok()?
+        .getattr("StepSleepSignal")
+        .ok()?;
+    if !e.get_type(py).is_subclass(&signal).unwrap_or(false) {
+        return None;
+    }
+    e.value(py).getattr("wake_at").ok()?.extract().ok()
+}
+
+/// The core's retry decision for a step failure, or `None` for anything else.
+///
+/// A divergence or a cap will be just as wrong on the next attempt, and an
+/// unreachable step store may not be. The task's `retry_on` / `dont_retry_on`
+/// filters have no opinion worth overriding that with, so this is consulted
+/// first.
+fn step_retry_decision(py: Python<'_>, e: &PyErr) -> Option<bool> {
+    e.value(py)
+        .getattr(crate::py_step::SHOULD_RETRY_ATTR)
+        .ok()?
+        .extract()
+        .ok()
 }
 
 /// Check if the Python exception is a TaskCancelledError.
@@ -226,6 +279,10 @@ pub fn check_should_retry(
     _exc_class_name: &str,
     exc: &PyErr,
 ) -> bool {
+    if let Some(decision) = step_retry_decision(py, exc) {
+        return decision;
+    }
+
     let filters = retry_filters.bind(py);
     let filters_dict: &Bound<'_, PyDict> = match filters.cast() {
         Ok(d) => d,

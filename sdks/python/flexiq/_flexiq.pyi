@@ -467,6 +467,58 @@ class PyQueue:
         self, run_id: str, node_name: str, error: str, completed_at: int
     ) -> None: ...
 
+    # -- Durable steps --
+    def open_step_session(
+        self,
+        job_id: str,
+        attempt: int,
+        namespace: str | None = None,
+    ) -> StepSession: ...
+    def supports_steps(self) -> bool: ...
+
+class StepDecision:
+    """What ``begin_run`` decided, and the token ``commit_run`` needs back."""
+
+    @property
+    def memoized(self) -> bytes | None:
+        """The step's stored result, or ``None`` when the closure must run."""
+
+    @property
+    def step_key(self) -> str:
+        """Identity of this step — ``name#occurrence``, or the explicit key."""
+
+    @property
+    def idempotency_key(self) -> str:
+        """The key to hand the downstream service for this step."""
+
+class StepSleepOutcome:
+    """What a sleep did."""
+
+    @property
+    def elapsed(self) -> bool:
+        """True when the deadline had passed and the attempt carries on."""
+
+    @property
+    def step_key(self) -> str: ...
+    @property
+    def wake_at(self) -> int:
+        """Deadline the job was rescheduled to, in Unix milliseconds."""
+
+class StepSession:
+    """One attempt's durable steps, fenced on the worker's execution claim."""
+
+    def begin_run(self, name: str, key: str | None = None) -> StepDecision: ...
+    def commit_run(self, decision: StepDecision, encoded: bytes) -> None: ...
+    def sleep_for(
+        self, duration_ms: int, name: str | None = None, key: str | None = None
+    ) -> StepSleepOutcome: ...
+    def sleep_until(
+        self, wake_at: int, name: str | None = None, key: str | None = None
+    ) -> StepSleepOutcome: ...
+    def run_key(self) -> str: ...
+    def idempotency_key(self, step_key: str) -> str: ...
+    def finish(self) -> None: ...
+
 class PyWorkflowBuilder:
     """Rust-side workflow DAG builder.
 
@@ -580,6 +632,13 @@ class PyResultSender:
         self,
         job_id: str,
         task_name: str,
+        wall_time_ns: int,
+    ) -> bool: ...
+    def try_report_slept(
+        self,
+        job_id: str,
+        task_name: str,
+        wake_at: int,
         wall_time_ns: int,
     ) -> bool: ...
 

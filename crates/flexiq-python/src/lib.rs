@@ -9,6 +9,7 @@ mod prefork;
 mod py_config;
 mod py_job;
 mod py_queue;
+mod py_step;
 pub mod py_worker;
 #[cfg(feature = "workflows")]
 mod py_workflow;
@@ -52,6 +53,9 @@ fn _flexiq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQueue>()?;
     m.add_class::<PyJob>()?;
     m.add_class::<PyTaskConfig>()?;
+    m.add_class::<py_step::PyStepSession>()?;
+    m.add_class::<py_step::PyStepDecision>()?;
+    m.add_class::<py_step::PyStepSleep>()?;
     m.add_class::<executor::PyExecutor>()?;
     #[cfg(feature = "native-async")]
     {

@@ -81,7 +81,13 @@ fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Op
     let context_mod = py.import("flexiq.context")?;
     context_mod.call_method1(
         "_set_context",
-        (&job.id, &job.task_name, job.retry_count, &job.queue),
+        (
+            &job.id,
+            &job.task_name,
+            job.retry_count,
+            &job.queue,
+            job.namespace.as_deref(),
+        ),
     )?;
 
     let result = (|| -> PyResult<Bound<'_, pyo3::PyAny>> {

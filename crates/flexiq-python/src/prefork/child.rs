@@ -19,6 +19,8 @@ use flexiq_core::worker::protocol::{
 /// reaches the child's logs.
 const SCHEDULER_ID: &str = "prefork";
 
+use crate::py_step::CLAIM_OWNER_ENV;
+
 /// Writer half — sends frames to the child process via stdin.
 pub type ChildWriter = FrameWriter<ChildStdin>;
 
@@ -75,12 +77,28 @@ impl ChildProcess {
 pub fn spawn_child(
     python: &str,
     app_path: &str,
+    claim_owner: Option<&str>,
 ) -> Result<(ChildWriter, ChildReader, ChildProcess), String> {
-    let mut process = Command::new(python)
+    let mut command = Command::new(python);
+    command
         .args(["-m", "flexiq.prefork", app_path])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    // The claim owner travels on the spawn, never on a frame. This same frame
+    // format also crosses a socket to an attached executor, and an owner an
+    // executor fills in is an owner it can forge — after a reclaim, a stale
+    // executor naming the *current* owner would write straight into the live
+    // attempt's step sequence. A private spawn cannot be spoofed that way.
+    // Removed rather than left alone when there is none, so an inherited value
+    // can never stand in for a claim this process does not hold.
+    match claim_owner {
+        Some(owner) => command.env(CLAIM_OWNER_ENV, owner),
+        None => command.env_remove(CLAIM_OWNER_ENV),
+    };
+
+    let mut process = command
         .spawn()
         .map_err(|e| format!("failed to spawn child: {e}"))?;
 

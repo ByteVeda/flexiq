@@ -119,6 +119,20 @@ class TaskMiddleware:
     def on_timeout(self, ctx: JobContext) -> None:
         """Called when a job hits its timeout limit."""
 
+    def on_sleep(self, ctx: JobContext, wake_at: int) -> None:
+        """Called when an attempt ends in a ``step.sleep``. Pairs with ``before``.
+
+        Every ``before`` is matched by exactly one of ``after`` or ``on_sleep``.
+        A sleep is not a result: ``after(ctx, None, None)`` is indistinguishable
+        from "the task returned ``None``", which would close a tracing span as a
+        success, increment a success counter and clear an error scope — all
+        wrong for an attempt that has not finished.
+
+        Args:
+            ctx: The sleeping job's context.
+            wake_at: Deadline the job was rescheduled to, in Unix milliseconds.
+        """
+
     def on_cancel(self, ctx: JobContext) -> None:
         """Called when a job is cancelled during execution."""
 

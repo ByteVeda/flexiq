@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from flexiq.async_support.context import clear_async_context, set_async_context
 from flexiq.exceptions import TaskCancelledError
+from flexiq.steps import StepError, StepSleepSignal, step_retry_decision
 from flexiq.task_errors import encode_task_error
 from flexiq.task_lifecycle import run_lifecycle
 
@@ -190,6 +191,39 @@ class AsyncTaskExecutor:
                         lambda: self._sender.try_report_cancelled(job_id, task_name, wall_ns)
                     )
 
+            except StepSleepSignal as sleep:
+                # Neither a success nor a failure: the sleep row is committed and
+                # the job is already Pending at its deadline. Reported before the
+                # BaseException clause below can mistake it for a teardown.
+                if not reported:
+                    wall_ns = time.monotonic_ns() - start_ns
+                    wake_at = sleep.wake_at
+                    reported = True
+                    await self._hand_off(
+                        lambda: self._sender.try_report_slept(job_id, task_name, wake_at, wall_ns)
+                    )
+
+            except StepError as exc:
+                # A step failure carries the core's own retry decision, which
+                # outranks the task's retry filters: a divergence or a cap will
+                # be just as wrong next attempt.
+                if not reported:
+                    wall_ns = time.monotonic_ns() - start_ns
+                    reported = True
+                    error_msg = encode_task_error(exc)
+                    should_retry = exc.flexiq_should_retry
+                    await self._hand_off(
+                        lambda: self._sender.try_report_failure(
+                            job_id,
+                            task_name,
+                            error_msg,
+                            retry_count,
+                            max_retries,
+                            wall_ns,
+                            should_retry,
+                        )
+                    )
+
             except asyncio.CancelledError:
                 # CancelledError is a BaseException, so `except Exception` misses it and
                 # the job would sit Running until the reaper mislabelled it a timeout.
@@ -252,6 +286,12 @@ class AsyncTaskExecutor:
 
     def _check_retry(self, task_name: str, exc: Exception) -> bool:
         """Check retry filters to decide if this exception should be retried."""
+        # A step failure has already been classified by the core, and a task's
+        # retry filters have no opinion worth overriding that with.
+        step_decision = step_retry_decision(exc)
+        if step_decision is not None:
+            return step_decision
+
         filters = self._queue_ref._task_retry_filters.get(task_name)
         if filters is None:
             return True

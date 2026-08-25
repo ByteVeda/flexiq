@@ -44,7 +44,9 @@ from flexiq.context import current_job
 from flexiq.events import EventType
 from flexiq.exceptions import TaskCancelledError
 from flexiq.interception.reconstruct import reconstruct_args
+from flexiq.middleware import TaskMiddleware
 from flexiq.proxies import cleanup_proxies, reconstruct_proxies
+from flexiq.steps import StepError, StepSleepSignal
 from flexiq.workflows.saga.context import (
     _reset_compensation_context,
     _set_compensation_context,
@@ -76,6 +78,36 @@ def _release_acquired(
         cleanup_proxies(proxy_cleanup, metrics=queue_ref._proxy_metrics)
     except Exception:
         logger.exception("proxy cleanup error")
+
+
+#: Middleware classes already warned about for pairing ``before`` without
+#: ``on_sleep``. Process-wide and unbounded only in the number of distinct
+#: middleware classes, which is small and fixed at import time.
+_WARNED_UNPAIRED: set[str] = set()
+
+
+def _warn_unpaired_middleware(middleware: list[Any]) -> None:
+    """Warn once per class about middleware that pairs ``before`` with only ``after``.
+
+    A sleep ends the attempt without a result, so such middleware leaks whatever
+    its ``before`` opened — a span, a scope, a timer. Nothing can be done for it
+    automatically: only the middleware knows how to close what it opened. Naming
+    it once is the honest answer.
+    """
+    for mw in middleware:
+        cls = type(mw)
+        if cls.before is TaskMiddleware.before or cls.on_sleep is not TaskMiddleware.on_sleep:
+            continue
+        path = f"{cls.__module__}.{cls.__qualname__}"
+        if path in _WARNED_UNPAIRED:
+            continue
+        _WARNED_UNPAIRED.add(path)
+        logger.warning(
+            "%s overrides before() but not on_sleep(), so whatever its before() opened "
+            "is left open when an attempt ends in step.sleep. Implement on_sleep(ctx, "
+            "wake_at) to close it.",
+            path,
+        )
 
 
 def _safe_result_repr(value: Any) -> str:
@@ -221,6 +253,7 @@ async def run_lifecycle(
     # keep the cleanup below from reporting success, but only a failure is one.
     error: BaseException | None = None
     torn_down = False
+    slept: StepSleepSignal | None = None
     result = None
     try:
         called = fn(*args, **kwargs)
@@ -231,6 +264,11 @@ async def run_lifecycle(
         # blocking one, the executor's own loop on the native one), and
         # run_maybe_async refuses to nest.
         ret = await called if inspect.isawaitable(called) else called
+        # A step raises out of the body to end the attempt, and a body that
+        # caught one and returned anyway ran the rest of itself unclaimed. This
+        # is the layer that catches an ``except BaseException`` the signal
+        # classes cannot escape on their own.
+        current_job._check_step_control()
         # Per-item batch result: when the task is batched with
         # per_item_results=True, enforce the return type contract and surface
         # partial failures via BatchPartialFailureError so the existing
@@ -251,7 +289,22 @@ async def run_lifecycle(
                 result = ret
                 raise BatchPartialFailureError(failed_items=failed)
         result = ret
-    except Exception as exc:
+    except StepSleepSignal as exc:
+        # Not a failure and not a result: the sleep row is committed, the claim
+        # released and the job already Pending at its deadline. Recorded so the
+        # cleanup below pairs `before` with `on_sleep` instead of `after`, then
+        # re-raised for the worker path to report as a slept attempt.
+        error = exc
+        slept = exc
+        logger.info(
+            "Task %s[%s] sleeping until %d after %.3fs",
+            task_name,
+            job_id,
+            exc.wake_at,
+            time.perf_counter() - started_at,
+        )
+        raise
+    except (Exception, StepError) as exc:
         error = exc
         elapsed = time.perf_counter() - started_at
         # Format the exception into the message rather than passing it as an
@@ -317,12 +370,22 @@ async def run_lifecycle(
             if comp_ctx_token is not None:
                 _reset_compensation_context(comp_ctx_token)
             _release_acquired(release_callbacks, proxy_cleanup, queue_ref)
-            for hook in hooks["after_task"]:
-                hook(task_name, args, kwargs, result, error)
-            # Run middleware after hooks (only those whose before() succeeded)
+            current_job._finish_steps()
+            # A slept attempt has no result to report, so the after_task hooks —
+            # which exist to see one — stay out of it, exactly as `after` does.
+            if slept is None:
+                for hook in hooks["after_task"]:
+                    hook(task_name, args, kwargs, result, error)
+            # Run middleware after hooks (only those whose before() succeeded).
+            # Every before() is matched by exactly one of after() / on_sleep().
+            if slept is not None:
+                _warn_unpaired_middleware(completed_mw)
             for mw in completed_mw:
                 try:
-                    mw.after(current_job, result, error)
+                    if slept is not None:
+                        mw.on_sleep(current_job, slept.wake_at)
+                    else:
+                        mw.after(current_job, result, error)
                 except Exception:
                     logger.exception("middleware after() error")
             # Emit job lifecycle events. The Rust outcome loop skips Success on
@@ -339,7 +402,11 @@ async def run_lifecycle(
                     # so a subscriber reads one duration field for every job event.
                     "duration_ms": round((time.perf_counter() - started_at) * 1000),
                 }
-                if error is not None:
+                if slept is not None:
+                    event_payload["wake_at"] = slept.wake_at
+                    event_payload["step_key"] = slept.step_key
+                    queue_ref._emit_event(EventType.JOB_SLEEPING, event_payload)
+                elif error is not None:
                     event_payload["error"] = str(error)
                     queue_ref._emit_event(EventType.JOB_FAILED, event_payload)
                 else:

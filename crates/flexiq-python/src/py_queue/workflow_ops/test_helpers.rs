@@ -62,6 +62,9 @@ pub(crate) fn make_test_pyqueue() -> PyQueue {
         namespace: None,
         push_dispatch: false,
         dispatcher: Arc::new(Mutex::new(None)),
+        // No claim: these tests call `#[pymethods]` directly, never through a
+        // worker, so nothing here is entitled to write a durable step.
+        claim_owner: Arc::new(Mutex::new(None)),
         workflow_storage,
     }
 }

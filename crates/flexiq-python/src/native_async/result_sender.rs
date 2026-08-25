@@ -83,4 +83,26 @@ impl PyResultSender {
             wall_time_ns,
         })
     }
+
+    /// Report an attempt that ended in a `step.sleep`.
+    ///
+    /// Not a success and not a failure: by the time this is sent the sleep row
+    /// is committed, the claim released and the job already `Pending` at
+    /// `wake_at`. `wake_at` is the deadline storage settled on, which on a
+    /// replay is not the one this attempt proposed.
+    #[pyo3(signature = (job_id, task_name, wake_at, wall_time_ns))]
+    fn try_report_slept(
+        &self,
+        job_id: String,
+        task_name: String,
+        wake_at: i64,
+        wall_time_ns: i64,
+    ) -> bool {
+        self.try_hand_off(JobResult::Slept {
+            job_id,
+            task_name,
+            wake_at,
+            wall_time_ns,
+        })
+    }
 }
