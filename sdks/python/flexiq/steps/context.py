@@ -275,16 +275,32 @@ class StepContext:
             return None
         return session.begin_run(name, key)
 
-    def _invoke(self, step_key: str, key: str, fn: Callable[[], _T]) -> _T:
+    def _invoke(
+        self,
+        step_key: str,
+        key: str,
+        fn: Callable[[], _T],
+        on_accept: Callable[[], None] | None = None,
+    ) -> _T:
         self._enter(step_key, key)
         try:
+            if on_accept is not None:
+                on_accept()
             return fn()
         finally:
             self._leave()
 
-    async def _ainvoke(self, step_key: str, key: str, fn: Callable[[], Any]) -> Any:
+    async def _ainvoke(
+        self,
+        step_key: str,
+        key: str,
+        fn: Callable[[], Any],
+        on_accept: Callable[[], None] | None = None,
+    ) -> Any:
         self._enter(step_key, key)
         try:
+            if on_accept is not None:
+                on_accept()
             return await _resolve(fn())
         finally:
             self._leave()
@@ -399,26 +415,37 @@ class StepContext:
         and the one-at-a-time rule still holds, so a test fails on the same
         misuse a worker would.
         """
-        return self._invoke(*self._inline_identity(name, key), fn)
+        step_key, idempotency_key, spend = self._inline_identity(name, key)
+        return self._invoke(step_key, idempotency_key, fn, spend)
 
     async def _ainline(self, name: str, key: str | None, fn: Callable[[], Any]) -> Any:
-        return await self._ainvoke(*self._inline_identity(name, key), fn)
+        step_key, idempotency_key, spend = self._inline_identity(name, key)
+        return await self._ainvoke(step_key, idempotency_key, fn, spend)
 
-    def _inline_identity(self, name: str, key: str | None) -> tuple[str, str]:
-        """This step's key and downstream key, derived without a session.
+    def _inline_identity(self, name: str, key: str | None) -> tuple[str, str, Callable[[], None]]:
+        """This step's key, its downstream key, and how to spend its occurrence.
 
-        Through the core's own derivation, not a local f-string: test mode has
-        to refuse exactly what a worker refuses. An empty ``key=""`` used to
-        fall back to numbering by occurrence here while the worker raised, so a
-        test passed for a key the real run rejects.
+        Derived through the core rather than a local f-string: test mode has to
+        refuse exactly what a worker refuses. An empty ``key=""`` used to fall
+        back to numbering by occurrence here while the worker raised, so a test
+        passed for a key the real run rejects.
+
+        The occurrence is handed back as a callable rather than spent here,
+        because it may only be spent once the step is *accepted*. `resolve` in
+        the core spends after its guards for the same reason: a refused step
+        that took a number would shift the next one's key, and the whole point
+        of that key is that it does not move.
         """
         occurrence = self._inline_occurrences.get(name, 0)
         step_key = derive_step_key(name, key, occurrence)
-        # Spent only once the key is known to be usable, matching the core:
-        # a refused step must not shift the key of the next one.
-        if key is None:
-            self._inline_occurrences[name] = occurrence + 1
-        return step_key, f"{self._ctx.job_id}:{step_key}"
+
+        def spend() -> None:
+            # An explicit key never spends one, so adding a keyed call cannot
+            # move an unkeyed one — again matching the core.
+            if key is None:
+                self._inline_occurrences[name] = occurrence + 1
+
+        return step_key, f"{self._ctx.job_id}:{step_key}", spend
 
 
 class _ControlScope:

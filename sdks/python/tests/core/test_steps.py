@@ -735,6 +735,33 @@ def test_a_worker_refuses_an_empty_key_the_same_way(
     assert "empty key" in queue.dead_letters()[0]["error"]
 
 
+def test_a_refused_inline_step_does_not_spend_its_occurrence(queue: Queue) -> None:
+    """A step the guard refuses must not move the next one's key.
+
+    The occurrence counter is what an unkeyed step's identity is built from, so
+    a refused call that took a number would shift every later one — and the
+    whole point of the downstream key is that it does not move. Driven
+    re-entrantly rather than through ``gather`` so the ordering is exact.
+    """
+    ctx = _ActiveContext(job_id="j", task_name="t", retry_count=0, queue_name="default")
+    step = StepContext(ctx, queue)
+    keys: list[str] = []
+
+    with queue.test_mode():
+
+        def outer() -> str:
+            # Refused: `a#0` is still in flight. It derives `a#1` on the way to
+            # being refused, which is exactly the number it must not keep.
+            with pytest.raises(StepError, match="still uncommitted"):
+                step.run("a", lambda: "inner")
+            return "outer"
+
+        assert step.run("a", outer) == "outer"
+        step.run("a", lambda: keys.append(step.idempotency_key))
+
+    assert keys == ["j:a#1"], "the refused step spent an occurrence it never used"
+
+
 # ------------------------------------------------------------------ helpers
 
 
