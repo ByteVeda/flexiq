@@ -167,3 +167,54 @@ warning naming middleware that override `before` but not `on_sleep`. Contrib
 - the codec test asserts on the **raw** stored row
 - refusal paths: no owner, detached
 - `ruff check` + `mypy` over `flexiq/` and `tests/`
+
+---
+
+## Review
+
+Built as planned, with four things the plan did not anticipate.
+
+**The swallow latch is invisible for a sleep.** §7.7 says the runner fails an
+attempt whose body caught a control signal and returned. It does — and for a
+*sleep* the scheduler then drops that failure, because `sleep_job` has already
+left the job `Pending` and unclaimed, which `handle_result`'s `(owner, attempt)`
+fence calls `Superseded`. The job wakes, the sleep is a memo hit, and the body
+finishes: one attempt wasted, nothing broken. The latch only bites on a
+swallowed **divergence**, where the attempt still holds its claim and nothing
+downstream would question the value it goes on to return. The test that claimed
+to prove the latch was rewritten around a divergence, and a second test
+documents the sleep case rather than pretending it fails.
+
+**A test cannot read the database in-process while a worker runs.** Python's
+`sqlite3` and the SQLite the extension links are two separate SQLite libraries
+in one process; they do not share the WAL index. The first version of the codec
+and pinned-deadline tests read `jobs` already rescheduled by the sleep
+transaction and `job_steps` **empty** — no error, just nothing, and only under
+pytest. Both now query through a subprocess, which is also 3× faster: the poll
+loop's in-process connections had been fighting the writer for the file lock.
+
+**Test mode had no queue.** `_set_queue_ref` was only called by `run_worker`, so
+progress, logs and steps were all unreachable from a task under `test_mode()`.
+Set and restored by `TestMode` now.
+
+**Step limits are not exposed.** Three optional arguments on
+`open_step_session` had no caller and tripped `clippy::too_many_arguments`;
+§4.2's answer to an oversized result is to store it elsewhere and memoize the
+handle, so a shell knob has nothing to do. `StepLimits::default()`.
+
+Two pre-existing things cleaned up on the way: `WorkerPool` in `py_worker.rs`
+had no constructor since the async pools replaced it, and all three pools
+carried their own drifting copy of "cancelled or failed, and does it retry".
+
+**Verified.** 1531 Python tests (20 new) on the default wheel and the whole step
+suite again on a `native-async` one, prefork included · `cargo test --workspace`
+· clippy clean on `--all-targets --all-features` · `cargo check` on default,
+`postgres`, `redis` and `native-async`.
+
+**Found, not fixed:** `docs/content/docs/shared/guides/reliability/retries.mdx:435`
+calls `queue.add_middleware(...)`, which does not exist — middleware is
+registered through `Queue(middleware=[…])` or `@queue.task(middleware=[…])`.
+
+**Left open**, and belonging to the core rather than a shell: §9.1/§9.2's
+`job_steps` snapshot frame and the `step_commit`/`step_ack` pair were never
+built, so an attached executor still refuses. Docs are #672.
