@@ -61,27 +61,30 @@ must not reach it either).
 A refusal is a `StepUnavailableError`, **retryable**: a heterogeneous fleet
 mid-rollout may put the next attempt on a worker that can commit.
 
-## The claim owner lives on the queue handle, not on the frame
+## The claim owner lives on the worker handle
 
 The fence is `(owner, attempt)` and `owner` must never be something the running
 code asserts about itself (§1.4, §9.2).
 
-- `JsQueue` gains `claim_owner: Mutex<Option<String>>`. `run_worker` mints the
-  worker id, records it, *then* calls `start_worker` — so the owner is in place
-  before the scheduler loop can dispatch anything. (`start_worker` stops
-  generating its own id and takes one.)
+- `openStepSession` is a method on **`JsWorker`**, which keeps its own
+  `worker_id` and storage handle. The owner is therefore the id *that* worker
+  claims execution under, and JS supplies only a job id and an attempt.
+- A queue-level `claim_owner` slot was the first shape, and it is wrong: a
+  second `runWorker` on the same `Queue` overwrites it, and every step the first
+  worker goes on to commit is refused as superseded — safe, but the job dies
+  rather than running. Pinned by `fences each of a queue's workers on its own
+  claim`.
+- The worker does not exist until `runWorker` returns, and its scheduler loop is
+  already dispatching by then, so the task callback reaches for it through a
+  holder and awaits a readiness gate rather than reading it empty — the same
+  shape `Executor.start` already uses, for the same reason.
 - **Not** a field on `JsTaskInvocation`: the same struct is what the attached
   executor's dispatcher fills in from a socket frame, and an owner an executor
   supplies is one it can get wrong.
-- `attempt` *is* new on `JsTaskInvocation` — it is the dispatched job's
-  `retry_count`, which is not a claim and not forgeable into one:
-  `openStepSession` re-reads the job row and refuses a mismatch as a lost claim,
-  and the storage fence would refuse the write regardless.
-- Known limitation, documented on `openStepSession`: two workers on **one**
-  `Queue` share one owner slot, so the older worker's step commits are refused
-  as superseded. Nothing is ever written under the wrong claim — the fence sees
-  to that — but such a job fails rather than running. One worker per queue
-  handle when using steps. (Same shape as the Python shell.)
+- `attempt` and `queue` *are* new on `JsTaskInvocation` — neither is a claim.
+  `attempt` is the dispatched job's `retry_count`, re-read from the job row and
+  refused on a mismatch as a lost claim; `queue` is what lets `job.sleeping`
+  name its queue without a storage read while the task is still running.
 
 ## Both swallow layers (§7.7), in a language where `catch` catches everything
 
@@ -139,11 +142,10 @@ shell, so it has nothing to pair and gains nothing.
 - `step_error(QueueError) -> napi::Error`: a JSON reason
   `{"flexiqStep":"<kind>","message":…,"retryable":…}` built from
   `classify_step_failure`.
-- `crates/flexiq-node/src/queue/steps.rs`: `JsQueue::openStepSession(jobId,
-  attempt)` (resolves the owner, re-reads the job, refuses a mismatched
-  attempt, `StepLimits::default()`) and `supportsSteps()`.
-- `queue/mod.rs`: the `claim_owner` field, set in `run_worker`;
-  `worker.rs::start_worker` takes the id.
+- `JsWorker::openStepSession(jobId, attempt)` in the same module (owner off the
+  worker, re-reads the job, refuses a mismatched attempt,
+  `StepLimits::default()`); `JsQueue::supportsSteps()` in `queue/steps.rs`.
+- `worker.rs`: `JsWorker` keeps its `storage` and `namespace`.
 
 ### 2 — Report a slept attempt
 - `convert/job.rs`: `JsTaskInvocation.attempt`, `JsTaskOutcome.sleptUntil`.
@@ -223,11 +225,17 @@ synchronous commit stalls every other job's timers and cancel polls. The one
 casualty is `runKey`, a property in Python and a `Promise` here. `sleepFor` is
 a storage write on the same path, which is why it is async too.
 
-**The claim owner is minted in `run_worker`, not in `start_worker`.** Recording
-it after `start_worker` returned would leave a window where the scheduler loop
-is already dispatching and the queue's owner slot is still empty — a task that
-reached for `ctx.step` in that window would refuse. `start_worker` now takes the
-id.
+**The claim owner belongs to the worker, not the queue.** The first shape put a
+`claim_owner` slot on `JsQueue`, mirroring the Python shell's `PyQueue`. It is
+wrong for the same reason on both: a second `runWorker` on one handle overwrites
+it, and every step the first worker goes on to commit is then refused as
+superseded — nothing is written under a wrong claim, but the job dies instead of
+running. `openStepSession` moved onto `JsWorker`, which holds its own
+`worker_id` and storage, so JS supplies only a job id and an attempt and each
+worker fences on its own claim. The worker handle does not exist until
+`runWorker` returns and its scheduler is already dispatching by then, so the
+callback reaches it through a holder behind a readiness gate — the shape
+`Executor.start` already uses. **#671 should not copy `PyQueue.claim_owner`.**
 
 **A `supportsSteps()` probe is exposed but is not the gate.** `open()` refuses
 only on a missing store (the executor) and otherwise lets the core's
@@ -241,14 +249,10 @@ on `Queue` instead, for an app that wants the answer without paying a job read.
   step failure naming the step, and latches. Python lets the serializer's own
   `TypeError` out, which the body can swallow while the step has already run
   its side effect and committed nothing.
-- `SleepEvent.queue` stays undefined: the dispatch frame carries no queue name,
-  and inventing one from the task's registration would be a guess. Python reads
-  it off `current_job.queue_name`.
-
-**Known limitation, documented on `openStepSession`:** two workers started from
-one `Queue` share one owner slot, so the older worker's commits are refused as
-superseded — nothing is written under the wrong claim, but such a job fails
-rather than running. The Python shell has the same shape.
+- `SleepEvent.queue` is required rather than optional: `JsTaskInvocation` now
+  carries the dispatched job's queue, so the event can name it without a storage
+  read while the task is still running. Python reads it off
+  `current_job.queue_name`.
 
 **Left where they belong:** the dashboard's "sleeping until …" read (four
 surfaces plus `api-types.ts`), the docs taxonomy tables (#672), and
@@ -256,15 +260,17 @@ surfaces plus `api-types.ts`), the docs taxonomy tables (#672), and
 
 ### Verified
 
-`pnpm test` 761 passed / 6 skipped over 102 files, including 14 new step tests
+`pnpm test` 762 passed / 6 skipped over 102 files, including 15 new step tests
 and one on the executor refusal path; `pnpm typecheck`; `pnpm lint`;
 `cargo clippy -p flexiq-node --all-targets --features postgres,redis,mesh,workflows`;
 `cargo check --workspace` on default, `postgres` and `redis`; `cargo fmt --check`.
 
-Three of the new tests were checked **red** against a broken implementation
+Four of the new tests were checked **red** against a broken implementation
 rather than trusted: dropping `latch.check()` and the step retry verdict fails
 the divergence and swallow tests, removing the `onSleep` dispatch fails the
-pairing test, and dropping `{ key }` fails the keyed-step test with
+pairing test, resolving both workers' sessions through the last-started worker
+(the queue-level slot, simulated) fails the two-worker fence test, and dropping
+`{ key }` fails the keyed-step test with
 `[ 'alice', 'bob' ]` where `[ 'bob', 'alice' ]` was expected — the assertion
 that separates key matching from position matching. The first version of that
 test only counted callback runs, which a positional match satisfies too.
