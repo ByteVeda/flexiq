@@ -116,6 +116,26 @@ class OpenTelemetryMiddleware(TaskMiddleware):
         finally:
             span.end()
 
+    def on_sleep(self, ctx: JobContext, wake_at: int) -> None:
+        """End the span for an attempt that slept, without calling it a result.
+
+        The span has to end — the attempt is over and the worker slot is gone —
+        but its status stays unset: the task neither succeeded nor failed, and
+        marking it OK would make a job that sleeps three times look like three
+        successful executions.
+        """
+        with self._lock:
+            span = self._spans.pop(ctx.id, None)
+        if span is None:
+            return
+
+        prefix = self._attr_prefix
+        try:
+            span.set_attribute(f"{prefix}.slept", True)
+            span.add_event("sleep", attributes={f"{prefix}.wake_at": wake_at})
+        finally:
+            span.end()
+
     def on_retry(self, ctx: JobContext, error: Exception, retry_count: int) -> None:
         with self._lock:
             span = self._spans.get(ctx.id)

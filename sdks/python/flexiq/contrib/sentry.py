@@ -90,6 +90,20 @@ class SentryMiddleware(TaskMiddleware):
             sentry_sdk.capture_exception(error)
         sentry_sdk.pop_scope_unsafe()
 
+    def on_sleep(self, ctx: JobContext, wake_at: int) -> None:
+        """Pop the scope ``before`` pushed, without reporting anything.
+
+        Nothing failed, so there is no exception to capture — but the scope
+        must come off the stack, or every later job on this thread inherits
+        this job's tags.
+        """
+        sentry_sdk.add_breadcrumb(
+            category=self._tag_prefix,
+            message=f"{ctx.task_name} sleeping until {wake_at}",
+            level="info",
+        )
+        sentry_sdk.pop_scope_unsafe()
+
     def on_retry(self, ctx: JobContext, error: Exception, retry_count: int) -> None:
         sentry_sdk.add_breadcrumb(
             category=self._tag_prefix,
