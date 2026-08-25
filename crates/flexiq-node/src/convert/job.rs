@@ -104,9 +104,12 @@ pub struct JsTaskInvocation {
     pub payload: Buffer,
     /// The job's `retry_count` as dispatched — the attempt half of the
     /// `(owner, attempt)` fence durable steps commit under. Not a claim: the
-    /// owner never rides a frame (see `JsQueue::openStepSession`), and this is
+    /// owner never rides a frame (see `JsWorker::openStepSession`), and this is
     /// re-read from the job row before a step session is handed out.
     pub attempt: i32,
+    /// Queue the job was dispatched from, so a lifecycle event raised while the
+    /// task is still running can name it without a storage read.
+    pub queue: String,
 }
 
 /// What the JS task callback resolves with: either a result or an error, never

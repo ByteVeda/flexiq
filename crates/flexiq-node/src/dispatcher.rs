@@ -149,6 +149,7 @@ async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job)
         // large); `job` stays whole for the later `failure(job, ...)` moves.
         payload: Buffer::from(std::mem::take(&mut job.payload)),
         attempt: job.retry_count,
+        queue: job.queue.clone(),
     };
 
     // The callback runs on the JS thread and returns a Promise; bridge its
