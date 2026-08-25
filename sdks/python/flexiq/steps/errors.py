@@ -8,7 +8,7 @@ way :class:`KeyboardInterrupt` does: a bare ``except Exception`` in a task body
 misses them.
 
 That is only the first of the two layers. It cannot stop ``except
-BaseException``, so the runner also latches — see :mod:`flexiq.steps.signals`.
+BaseException``, so the runner also latches — see :mod:`flexiq.steps.latch`.
 """
 
 from __future__ import annotations
