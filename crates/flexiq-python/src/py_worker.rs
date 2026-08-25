@@ -1,131 +1,8 @@
-use std::sync::Arc;
-use std::thread;
-
-use crossbeam_channel::{Receiver, Sender};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use flexiq_core::job::Job;
 use flexiq_core::scheduler::JobResult;
-
-/// Manages a pool of std::threads that execute Python task functions.
-/// Each thread acquires the GIL only when running a task, so the scheduler
-/// and storage operations remain GIL-free.
-pub struct WorkerPool {
-    handles: Vec<thread::JoinHandle<()>>,
-}
-
-impl WorkerPool {
-    /// Spawn `num_workers` threads that pull jobs from `job_rx`,
-    /// execute them via the Python task registry, and send results to `result_tx`.
-    pub fn start(
-        num_workers: usize,
-        job_rx: Receiver<Job>,
-        result_tx: Sender<JobResult>,
-        task_registry: Arc<Py<PyAny>>,
-        retry_filters: Arc<Py<PyAny>>,
-    ) -> Self {
-        let mut handles = Vec::with_capacity(num_workers);
-
-        for worker_id in 0..num_workers {
-            let rx = job_rx.clone();
-            let tx = result_tx.clone();
-            let registry = task_registry.clone();
-            let filters = retry_filters.clone();
-
-            let handle = thread::spawn(move || {
-                worker_loop(worker_id, rx, tx, registry, filters);
-            });
-
-            handles.push(handle);
-        }
-
-        Self { handles }
-    }
-
-    /// Wait for all worker threads to finish.
-    pub fn join(self) {
-        for handle in self.handles {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn worker_loop(
-    _worker_id: usize,
-    job_rx: Receiver<Job>,
-    result_tx: Sender<JobResult>,
-    task_registry: Arc<Py<PyAny>>,
-    retry_filters: Arc<Py<PyAny>>,
-) {
-    while let Ok(job) = job_rx.recv() {
-        let job_id = job.id.clone();
-        let task_name = job.task_name.clone();
-        let retry_count = job.retry_count;
-        let max_retries = job.max_retries;
-
-        let start = std::time::Instant::now();
-        log::info!("[flexiq] Task {task_name}[{job_id}] received");
-
-        let result = Python::attach(|py| -> PyResult<Option<Vec<u8>>> {
-            execute_task(py, &task_registry, &job)
-        });
-
-        let wall_time_ns: i64 = start.elapsed().as_nanos().try_into().unwrap_or(i64::MAX);
-
-        let job_result = match result {
-            Ok(result_bytes) => {
-                let secs = start.elapsed().as_secs_f64();
-                log::info!("[flexiq] Task {task_name}[{job_id}] succeeded in {secs:.3}s");
-                JobResult::Success {
-                    job_id,
-                    result: result_bytes,
-                    task_name: task_name.clone(),
-                    wall_time_ns,
-                }
-            }
-            Err(e) => {
-                // Single GIL acquisition: extract the error info and the retry
-                // decision together instead of taking the GIL twice.
-                let (error_msg, is_cancelled, should_retry) = Python::attach(|py| {
-                    let msg = format_python_error(py, &e);
-                    let cancelled = is_cancelled_error(py, &e);
-                    let retry = if cancelled {
-                        false
-                    } else {
-                        let class_name = get_exception_class_name(py, &e);
-                        check_should_retry(py, &retry_filters, &task_name, &class_name, &e)
-                    };
-                    (msg, cancelled, retry)
-                });
-
-                if is_cancelled {
-                    JobResult::Cancelled {
-                        job_id,
-                        task_name,
-                        wall_time_ns,
-                    }
-                } else {
-                    log::error!("[flexiq] Task {task_name}[{job_id}] failed: {error_msg}");
-                    JobResult::Failure {
-                        job_id,
-                        error: error_msg,
-                        retry_count,
-                        max_retries,
-                        task_name,
-                        wall_time_ns,
-                        should_retry,
-                        timed_out: false,
-                    }
-                }
-            }
-        };
-
-        if result_tx.send(job_result).is_err() {
-            break; // Channel closed, shutting down
-        }
-    }
-}
 
 pub fn execute_task(
     py: Python<'_>,
@@ -248,6 +125,67 @@ pub fn format_python_error(py: Python<'_>, e: &PyErr) -> String {
         }
     }
     format!("{e}")
+}
+
+/// How an attempt that raised ended, before it is turned into a `JobResult`.
+enum Ending {
+    /// The task observed its cancel request.
+    Cancelled,
+    /// Anything else.
+    Failed { error: String, should_retry: bool },
+}
+
+/// The result a failed attempt reports, classified once for every worker path.
+///
+/// One function rather than one per pool: the three pools had already drifted
+/// on how many times they took the GIL to answer this, and each new kind of
+/// ending would otherwise have to be added to every copy.
+pub fn job_result_from_error(
+    e: &PyErr,
+    retry_filters: &Py<PyAny>,
+    job: &Job,
+    wall_time_ns: i64,
+) -> JobResult {
+    let job_id = job.id.clone();
+    let task_name = job.task_name.clone();
+
+    // A single GIL acquisition: every question below is asked of the same
+    // exception object, and taking the GIL per question is pure overhead on
+    // the failure path.
+    let ending = Python::attach(|py| {
+        if is_cancelled_error(py, e) {
+            return Ending::Cancelled;
+        }
+        let class_name = get_exception_class_name(py, e);
+        Ending::Failed {
+            error: format_python_error(py, e),
+            should_retry: check_should_retry(py, retry_filters, &task_name, &class_name, e),
+        }
+    });
+
+    match ending {
+        Ending::Cancelled => JobResult::Cancelled {
+            job_id,
+            task_name,
+            wall_time_ns,
+        },
+        Ending::Failed {
+            error,
+            should_retry,
+        } => {
+            log::error!("[flexiq] Task {task_name}[{job_id}] failed: {error}");
+            JobResult::Failure {
+                job_id,
+                error,
+                retry_count: job.retry_count,
+                max_retries: job.max_retries,
+                task_name,
+                wall_time_ns,
+                should_retry,
+                timed_out: false,
+            }
+        }
+    }
 }
 
 /// Check if the Python exception is a TaskCancelledError.
