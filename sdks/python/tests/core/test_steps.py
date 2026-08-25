@@ -26,7 +26,7 @@ from flexiq.codecs import GzipCodec
 from flexiq.context import current_job
 from flexiq.detached import DetachedNative
 from flexiq.middleware import TaskMiddleware
-from flexiq.steps import StepContext, StepUnavailableError
+from flexiq.steps import StepContext, StepError, StepUnavailableError
 
 PollUntil = Any  # the conftest fixture's runtime type
 WorkerFactory = Callable[[Queue], threading.Thread]
@@ -648,10 +648,44 @@ def test_gathered_steps_are_refused_rather_than_interleaved(
         message="gathered steps should have failed the attempt",
     )
     assert "still uncommitted" in queue.dead_letters()[0]["error"]
-    # Whether the surviving closure got as far as reading a key depends on when
-    # the loop tears the gather down, but if it did, it read its own — never the
-    # other step's, which is the corruption a shared key slot would cause.
+    # `gather` leaves the surviving coroutine running when its sibling raises,
+    # and this one sleeps before reading its key — so the dead letter lands
+    # first. Wait for the read, or the assertion below passes on an empty list.
+    poll_until(
+        lambda: bool(keys),
+        timeout=20,
+        message="the surviving step body never read its key",
+    )
     assert all(key.endswith(":a#0") for key in keys), keys
+
+
+def test_test_mode_refuses_gathered_steps_too(queue: Queue) -> None:
+    """Test mode holds the one-at-a-time rule, so a test fails what a worker fails.
+
+    Inline steps have no session, so nothing in the core sees them — without a
+    guard here, two gathered bodies overwrite each other's key and the test
+    passes for code that dead-letters in production.
+    """
+    keys: list[str] = []
+
+    async def body(tag: str) -> str:
+        await asyncio.sleep(0.05)
+        keys.append(current_job.step.idempotency_key)
+        return tag
+
+    with queue.test_mode(propagate_errors=True):
+
+        @queue.task()
+        async def gathered() -> str:
+            a = current_job.step.arun("a", lambda: body("a"))
+            b = current_job.step.arun("b", lambda: body("b"))
+            first, second = await asyncio.gather(a, b)
+            return f"{first}{second}"
+
+        with pytest.raises(StepError, match="still uncommitted"):
+            gathered.delay()
+
+    assert keys == [], "no body should have read a key it does not own"
 
 
 # ------------------------------------------------------------------ helpers

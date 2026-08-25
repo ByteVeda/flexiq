@@ -33,7 +33,12 @@ from flexiq.steps.durations import (
     sleep_deadline_ms,
     sleep_duration_ms,
 )
-from flexiq.steps.errors import StepControlSignal, StepSleepSignal, StepUnavailableError
+from flexiq.steps.errors import (
+    StepControlSignal,
+    StepError,
+    StepSleepSignal,
+    StepUnavailableError,
+)
 from flexiq.steps.latch import latch
 
 #: A step's result type. Carried through so a caller reads the closure's own
@@ -54,13 +59,21 @@ class StepContext:
     the identity of the step currently running — survive across calls.
     """
 
-    __slots__ = ("_ctx", "_current_key", "_inline_occurrences", "_queue", "_session")
+    __slots__ = (
+        "_ctx",
+        "_current_key",
+        "_current_step",
+        "_inline_occurrences",
+        "_queue",
+        "_session",
+    )
 
     def __init__(self, ctx: _ActiveContext, queue: Queue | None) -> None:
         self._ctx = ctx
         self._queue = queue
         self._session: StepSession | None = None
         self._current_key: str | None = None
+        self._current_step: str | None = None
         self._inline_occurrences: dict[str, int] = {}
 
     # ---------------------------------------------------------------- run
@@ -101,7 +114,7 @@ class StepContext:
                 return self._inline(name, key, fn)
             if decision.memoized is not None:
                 return cast("_T", self._replay(decision.memoized))
-            value = self._invoke(decision.idempotency_key, fn)
+            value = self._invoke(decision.step_key, decision.idempotency_key, fn)
             self._commit(decision, value)
             return value
 
@@ -131,7 +144,7 @@ class StepContext:
                 return await self._ainline(name, key, fn)
             if decision.memoized is not None:
                 return self._replay(decision.memoized)
-            value = await self._ainvoke(decision.idempotency_key, fn)
+            value = await self._ainvoke(decision.step_key, decision.idempotency_key, fn)
             self._commit(decision, value)
             return value
 
@@ -261,19 +274,45 @@ class StepContext:
             return None
         return session.begin_run(name, key)
 
-    def _invoke(self, key: str, fn: Callable[[], _T]) -> _T:
-        self._current_key = key
+    def _invoke(self, step_key: str, key: str, fn: Callable[[], _T]) -> _T:
+        self._enter(step_key, key)
         try:
             return fn()
         finally:
-            self._current_key = None
+            self._leave()
 
-    async def _ainvoke(self, key: str, fn: Callable[[], Any]) -> Any:
-        self._current_key = key
+    async def _ainvoke(self, step_key: str, key: str, fn: Callable[[], Any]) -> Any:
+        self._enter(step_key, key)
         try:
             return await _resolve(fn())
         finally:
-            self._current_key = None
+            self._leave()
+
+    def _enter(self, step_key: str, key: str) -> None:
+        """Take the single in-flight slot, or refuse.
+
+        A step's identity is its position in the sequence, so a second one
+        started while the first is uncommitted has no position to take. The core
+        refuses that for a real session — this guard is what makes ``test_mode``,
+        which has no session, refuse it the same way instead of letting two
+        bodies overwrite each other's key and quietly pass a test for code that
+        dead-letters in production.
+
+        Raises before the caller's ``try``, so a refused step never clears the
+        state of the one already running.
+        """
+        if self._current_step is not None:
+            raise StepError(
+                f"step '{step_key}' started while step '{self._current_step}' is still "
+                "uncommitted: steps run one at a time, so two started together have no "
+                "second position to take. Await them in order."
+            )
+        self._current_step = step_key
+        self._current_key = key
+
+    def _leave(self) -> None:
+        self._current_step = None
+        self._current_key = None
 
     def _commit(self, decision: StepDecision, value: Any) -> None:
         self._session_required().commit_run(decision, self._encode(value))
@@ -355,17 +394,21 @@ class StepContext:
         Documented rather than refused. Refusing would make every task that uses
         a step untestable with ``queue.test_mode()``, which is already an
         explicit stand-in for a worker rather than one. The idempotency key is
-        still derived, so a test can assert on what the step would have sent.
+        still derived, so a test can assert on what the step would have sent —
+        and the one-at-a-time rule still holds, so a test fails on the same
+        misuse a worker would.
         """
-        return self._invoke(self._inline_key(name, key), fn)
+        return self._invoke(*self._inline_identity(name, key), fn)
 
     async def _ainline(self, name: str, key: str | None, fn: Callable[[], Any]) -> Any:
-        return await self._ainvoke(self._inline_key(name, key), fn)
+        return await self._ainvoke(*self._inline_identity(name, key), fn)
 
-    def _inline_key(self, name: str, key: str | None) -> str:
+    def _inline_identity(self, name: str, key: str | None) -> tuple[str, str]:
+        """This step's key and downstream key, derived without a session."""
         occurrence = self._inline_occurrences.get(name, 0)
         self._inline_occurrences[name] = occurrence + 1
-        return f"{self._ctx.job_id}:{key or f'{name}#{occurrence}'}"
+        step_key = key or f"{name}#{occurrence}"
+        return step_key, f"{self._ctx.job_id}:{step_key}"
 
 
 class _ControlScope:
