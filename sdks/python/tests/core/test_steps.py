@@ -7,6 +7,7 @@ nothing about the memo.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import subprocess
@@ -608,6 +609,49 @@ def test_an_async_task_sleeps_on_the_native_executor(
     start_worker(queue)
 
     assert job.result(timeout=30) == "awake on pass 2"
+
+
+@requires_native_async
+def test_gathered_steps_are_refused_rather_than_interleaved(
+    queue: Queue, start_worker: WorkerFactory, poll_until: PollUntil
+) -> None:
+    """Two steps at once have no position to take, so the attempt fails.
+
+    A step's identity *is* its place in the sequence, so the core refuses a
+    second `begin_run` while one is uncommitted — before the second closure
+    runs, and before it could read a key. Pinned because the obvious "fix" for
+    the shared current-key slot is a ContextVar, which would make the key look
+    right for a mode the sequence cannot support.
+    """
+    keys: list[str] = []
+
+    async def body(tag: str) -> str:
+        await asyncio.sleep(0.05)
+        keys.append(current_job.step.idempotency_key)
+        return tag
+
+    @queue.task(max_retries=0)
+    async def gathered() -> str:
+        # Bound before the gather so each infers its own step type rather than
+        # being solved against the gather's expected one.
+        a = current_job.step.arun("a", lambda: body("a"))
+        b = current_job.step.arun("b", lambda: body("b"))
+        first, second = await asyncio.gather(a, b)
+        return f"{first}{second}"
+
+    gathered.delay()
+    start_worker(queue)
+
+    poll_until(
+        lambda: len(queue.dead_letters()) >= 1,
+        timeout=20,
+        message="gathered steps should have failed the attempt",
+    )
+    assert "still uncommitted" in queue.dead_letters()[0]["error"]
+    # Whether the surviving closure got as far as reading a key depends on when
+    # the loop tears the gather down, but if it did, it read its own — never the
+    # other step's, which is the corruption a shared key slot would cause.
+    assert all(key.endswith(":a#0") for key in keys), keys
 
 
 # ------------------------------------------------------------------ helpers

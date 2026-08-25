@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 from flexiq._active_context import _ActiveContext
 from flexiq.steps.durations import (
@@ -105,16 +105,32 @@ class StepContext:
             self._commit(decision, value)
             return value
 
+    @overload
     async def arun(
-        self, name: str, fn: Callable[[], _T | Awaitable[_T]], *, key: str | None = None
-    ) -> _T:
-        """Await twin of :meth:`run`. ``fn`` may return a value or an awaitable."""
+        self, name: str, fn: Callable[[], Awaitable[_T]], *, key: str | None = None
+    ) -> _T: ...
+
+    @overload
+    async def arun(self, name: str, fn: Callable[[], _T], *, key: str | None = None) -> _T: ...
+
+    # The awaitable overload comes first, or an ``async def`` body solves ``_T``
+    # to the coroutine itself — a union of ``_T`` and ``Awaitable[_T]`` gives a
+    # checker two ways to match one argument and it picks neither.
+    async def arun(self, name: str, fn: Callable[[], Any], *, key: str | None = None) -> Any:
+        """Await twin of :meth:`run`. ``fn`` may return a value or an awaitable.
+
+        **Steps run one at a time, even here.** A step's position in the
+        sequence is what identifies it, so a second step started while the
+        first is still uncommitted has no position to take —
+        ``asyncio.gather`` over two ``arun`` calls fails the attempt
+        permanently rather than interleaving them. Await them in order.
+        """
         with self._control():
             decision = self._begin(name, key)
             if decision is None:
                 return await self._ainline(name, key, fn)
             if decision.memoized is not None:
-                return cast("_T", self._replay(decision.memoized))
+                return self._replay(decision.memoized)
             value = await self._ainvoke(decision.idempotency_key, fn)
             self._commit(decision, value)
             return value
@@ -252,7 +268,7 @@ class StepContext:
         finally:
             self._current_key = None
 
-    async def _ainvoke(self, key: str, fn: Callable[[], _T | Awaitable[_T]]) -> _T:
+    async def _ainvoke(self, key: str, fn: Callable[[], Any]) -> Any:
         self._current_key = key
         try:
             return await _resolve(fn())
@@ -343,9 +359,7 @@ class StepContext:
         """
         return self._invoke(self._inline_key(name, key), fn)
 
-    async def _ainline(
-        self, name: str, key: str | None, fn: Callable[[], _T | Awaitable[_T]]
-    ) -> _T:
+    async def _ainline(self, name: str, key: str | None, fn: Callable[[], Any]) -> Any:
         return await self._ainvoke(self._inline_key(name, key), fn)
 
     def _inline_key(self, name: str, key: str | None) -> str:
@@ -370,10 +384,10 @@ class _ControlScope:
             latch(self._ctx)
 
 
-async def _resolve(value: _T | Awaitable[_T]) -> _T:
+async def _resolve(value: Any) -> Any:
     """Await whatever is awaitable, so a step body may be either kind."""
     resolved: Any = await value if inspect.isawaitable(value) else value
-    return cast("_T", resolved)
+    return resolved
 
 
 __all__ = ["StepContext"]
