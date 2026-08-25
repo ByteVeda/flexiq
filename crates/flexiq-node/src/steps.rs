@@ -7,11 +7,11 @@
 //! sees inside them, which is what makes an encrypting codec work here with no
 //! extra plumbing.
 //!
-//! Nothing in here reads an owner or an attempt from the running code. Both
-//! are resolved by the worker that won the execution claim and handed in by
-//! [`JsQueue::open_step_session`](crate::JsQueue), because an owner task code
-//! can assert is an owner it can forge — and a forged one writes straight into
-//! the live attempt's sequence.
+//! Nothing in here reads an owner from the running code. It is the id of the
+//! worker that won the execution claim, read off that worker's own handle by
+//! [`JsWorker::open_step_session`], because an owner task code can assert is an
+//! owner it can forge — and a forged one writes straight into the live
+//! attempt's sequence.
 //!
 //! Every storage round trip is `spawn_blocking` behind a `Promise`. Node has
 //! one thread for every task on the worker, so a synchronous commit would
@@ -22,13 +22,15 @@ use std::sync::{Arc, Mutex};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepSession, StepSleep,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSession,
+    StepSleep,
 };
-use flexiq_core::storage::StorageBackend;
+use flexiq_core::storage::{Storage, StorageBackend};
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Result, Status};
 use napi_derive::napi;
 
 use crate::error::join_to_napi_err;
+use crate::worker::JsWorker;
 
 /// Turn a core step error into the napi error its class deserves, stamped with
 /// the retry decision from `classify_step_failure`.
@@ -124,8 +126,8 @@ struct SessionState {
 
 /// One attempt's durable steps.
 ///
-/// Built by [`JsQueue::open_step_session`](crate::JsQueue), which is the only
-/// place the owner and the attempt come from. The mutex guards the hand-off
+/// Built by [`JsWorker::open_step_session`], which is the only place the owner
+/// and the attempt come from. The mutex guards the hand-off
 /// between the JS thread and the blocking pool, not concurrency: a session
 /// belongs to one attempt, and the core refuses two steps at once.
 #[napi]
@@ -273,5 +275,62 @@ impl JsStepSession {
         if let Ok(state) = self.state.lock() {
             state.session.finish();
         }
+    }
+}
+
+#[napi]
+impl JsWorker {
+    /// Open the durable-step session for one attempt of `jobId`.
+    ///
+    /// On the **worker**, not the queue: the fence is `(owner, attempt)`, and
+    /// the owner is the id *this* worker claims execution under. A queue-level
+    /// slot would be overwritten by a second `runWorker` on the same handle, and
+    /// every step the first worker went on to commit would be refused as
+    /// superseded — safe, but the job would fail rather than run.
+    ///
+    /// `attempt` is the `retryCount` the job was dispatched with. It is checked
+    /// against the row rather than trusted: an attempt that has been superseded
+    /// — reclaimed by another worker, or retried past this one — must not write
+    /// into the live attempt's sequence, and finding out here gives a clearer
+    /// error than the storage fence's refusal on the first commit.
+    ///
+    /// An attached executor never reaches this: it holds no worker handle, so
+    /// it has no channel to commit a step on and refuses in the shell instead.
+    #[napi]
+    pub async fn open_step_session(&self, job_id: String, attempt: i32) -> Result<JsStepSession> {
+        let storage = self.storage.clone();
+        let namespace = self.namespace.clone();
+        let owner = self.worker_id.clone();
+
+        spawn_blocking(move || {
+            let job = storage
+                .get_job(&job_id, namespace.as_deref())
+                .map_err(step_error)?
+                .ok_or_else(|| {
+                    step_error(QueueError::ClaimLost(format!(
+                        "job {job_id} no longer exists"
+                    )))
+                })?;
+
+            if job.retry_count != attempt {
+                // Reported as a lost claim, which is what it is: this attempt
+                // is not the one the job is on, so its writes are refused and
+                // its result is dropped by the scheduler's own fence.
+                return Err(step_error(QueueError::ClaimLost(format!(
+                    "job {job_id} is on attempt {} and this one is {attempt}",
+                    job.retry_count
+                ))));
+            }
+
+            // The defaults, not a caller-supplied value: §4.2's answer to a
+            // result that will not fit is to store it elsewhere and memoize the
+            // handle, not to raise the cap, so there is nothing for a shell
+            // knob to do yet.
+            let session = StepSession::load(storage, &job, &owner, StepLimits::default())
+                .map_err(step_error)?;
+            Ok(JsStepSession::new(session))
+        })
+        .await
+        .map_err(join_to_napi_err)?
     }
 }
