@@ -10,15 +10,19 @@ type. Hosting the type here breaks the loop without relying on inline imports.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 
 class _ActiveContext:
     __slots__ = (
         "job_id",
+        "namespace",
         "queue_name",
         "retry_count",
         "soft_timeout",
         "started_mono",
+        "step_context",
+        "step_control_raised",
         "task_name",
     )
 
@@ -28,10 +32,19 @@ class _ActiveContext:
         task_name: str,
         retry_count: int,
         queue_name: str,
+        namespace: str | None = None,
     ):
         self.job_id = job_id
         self.task_name = task_name
         self.retry_count = retry_count
         self.queue_name = queue_name
+        self.namespace = namespace
         self.started_mono: float | None = time.monotonic()
         self.soft_timeout: float | None = None
+        # Durable steps, opened on first use: the session costs a job read and
+        # a snapshot read, and most tasks never take one.
+        self.step_context: Any = None
+        # Set when ``ctx.step`` raises a control signal out of the task body.
+        # The runner fails an attempt that returns normally with it set — the
+        # second of the two layers that keep a sleep from being swallowed.
+        self.step_control_raised: bool = False

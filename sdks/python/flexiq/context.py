@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from flexiq._active_context import _ActiveContext
 from flexiq.async_support.context import get_async_context
 from flexiq.exceptions import SoftTimeoutError, TaskCancelledError
+from flexiq.steps import StepContext, StepSwallowedError, was_swallowed
 
 logger = logging.getLogger("flexiq.context")
 
@@ -95,6 +96,24 @@ class JobContext:
     def queue_name(self) -> str:
         """The queue this job is running on."""
         return self._require_context().queue_name
+
+    @property
+    def namespace(self) -> str | None:
+        """The tenant namespace this job belongs to, if any."""
+        return self._require_context().namespace
+
+    @property
+    def step(self) -> StepContext:
+        """Durable inline steps for this job — see :mod:`flexiq.steps`.
+
+        Opened lazily and held on the active context, so the session it needs
+        is read once per attempt and only for tasks that actually take a step.
+        """
+        ctx = self._require_context()
+        if ctx.step_context is None:
+            ctx.step_context = StepContext(ctx, _queue_ref)
+        step_context: StepContext = ctx.step_context
+        return step_context
 
     def update_progress(self, progress: int) -> None:
         """Update the job's progress (0-100)."""
@@ -185,24 +204,58 @@ class JobContext:
                     f"Soft timeout exceeded: {elapsed:.1f}s > {ctx.soft_timeout}s"
                 )
 
+    def _check_step_control(self) -> None:
+        """Fail the attempt if the body caught a step control signal and returned.
+
+        The second of the two swallow layers. A sleep or a divergence that the
+        task body catches away leaves the rest of the body running with no
+        execution claim, so every side effect it has after that point happens
+        again on the next attempt.
+
+        Raises:
+            StepSwallowedError: A control signal was raised and never left the body.
+        """
+        if was_swallowed(self._active_context()):
+            raise StepSwallowedError(
+                "step control flow was swallowed by the task body: a step raised to end "
+                "this attempt and the task caught it. Let StepControlSignal propagate — "
+                "narrow the except clause, or re-raise it."
+            )
+
+    def _finish_steps(self) -> None:
+        """Close out this attempt's steps, if it took any. Never raises."""
+        ctx = self._active_context()
+        if ctx is not None and ctx.step_context is not None:
+            ctx.step_context.finish()
+
     def _set_soft_timeout(self, seconds: float) -> None:
         """Set the soft timeout on the current context (called by wrapper)."""
         ctx = self._require_context()
         ctx.soft_timeout = seconds
 
     @staticmethod
-    def _require_context() -> _ActiveContext:
-        # Try contextvars first (async tasks on native executor)
+    def _active_context() -> _ActiveContext | None:
+        """The running job's context, or ``None`` outside a task.
+
+        Contextvar first (async tasks on the native executor), thread-local
+        second (sync tasks). The order matters: a pool thread's thread-local
+        outlives the task that set it, so checking it first would hand an async
+        task the previous sync task's job.
+        """
         ctx = get_async_context()
         if ctx is not None:
             return ctx
-        # Fall back to threading.local (sync tasks)
         sync_ctx: _ActiveContext | None = getattr(_local, "context", None)
-        if sync_ctx is None:
+        return sync_ctx
+
+    @staticmethod
+    def _require_context() -> _ActiveContext:
+        ctx = JobContext._active_context()
+        if ctx is None:
             raise RuntimeError(
                 "No active job context. current_job can only be used inside a running task."
             )
-        return sync_ctx
+        return ctx
 
 
 def _set_queue_ref(queue: Any) -> None:
@@ -211,11 +264,17 @@ def _set_queue_ref(queue: Any) -> None:
     _queue_ref = queue
 
 
+def _get_queue_ref() -> Any:
+    """The Queue the job context resolves against, or ``None`` outside a worker."""
+    return _queue_ref
+
+
 def _set_context(
     job_id: str,
     task_name: str,
     retry_count: int,
     queue_name: str,
+    namespace: str | None = None,
 ) -> None:
     """Set the thread-local job context. Called from Rust worker before each task."""
     _local.context = _ActiveContext(
@@ -223,6 +282,7 @@ def _set_context(
         task_name=task_name,
         retry_count=retry_count,
         queue_name=queue_name,
+        namespace=namespace,
     )
 
 

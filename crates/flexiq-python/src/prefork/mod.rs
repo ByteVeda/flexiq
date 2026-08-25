@@ -66,6 +66,9 @@ pub struct PreforkPool {
     num_workers: usize,
     app_path: String,
     python: String,
+    /// Worker id this pool's children fence their durable-step writes on, or
+    /// `None` when this process holds no execution claim. See [`Self::new`].
+    claim_owner: Option<String>,
     shutdown: AtomicBool,
     /// Side-channel for cooperative cancellation. The dispatch loop installs
     /// the sender when `run()` starts and clears it on shutdown so
@@ -75,13 +78,21 @@ pub struct PreforkPool {
 }
 
 impl PreforkPool {
-    pub fn new(num_workers: usize, app_path: String) -> Self {
+    /// Build a pool of `num_workers` children running `app_path`.
+    ///
+    /// `claim_owner` is the worker id this process claims execution under, and
+    /// it is what a child's durable-step writes are fenced on. `None` means
+    /// this process holds no claim of its own — an attached executor, which
+    /// relays a scheduler's work without ever owning it — and its children
+    /// refuse steps rather than writing under an owner they made up.
+    pub fn new(num_workers: usize, app_path: String, claim_owner: Option<String>) -> Self {
         let python = std::env::var("FLEXIQ_PYTHON").unwrap_or_else(|_| "python".to_string());
 
         Self {
             num_workers,
             app_path,
             python,
+            claim_owner,
             shutdown: AtomicBool::new(false),
             cancel_tx: Mutex::new(None),
             side_channel: Arc::new(Mutex::new(None)),
@@ -123,6 +134,7 @@ impl WorkerDispatcher for PreforkPool {
                 idx,
                 &self.python,
                 &self.app_path,
+                self.claim_owner.as_deref(),
                 &writers,
                 &processes,
                 &slots,
@@ -170,6 +182,7 @@ impl WorkerDispatcher for PreforkPool {
                     idx,
                     &self.python,
                     &self.app_path,
+                    self.claim_owner.as_deref(),
                     &writers,
                     &processes,
                     &slots,
@@ -360,6 +373,7 @@ fn start_child(
     idx: usize,
     python: &str,
     app_path: &str,
+    claim_owner: Option<&str>,
     writers: &WriterPool,
     processes: &ProcessPool,
     slots: &SlotState,
@@ -367,7 +381,7 @@ fn start_child(
     result_tx: &Sender<JobResult>,
     side_channel: &SideChannelSlot,
 ) -> Option<JoinHandle<()>> {
-    match spawn_child(python, app_path) {
+    match spawn_child(python, app_path, claim_owner) {
         Ok((writer, reader, process)) => {
             log::info!("[flexiq] prefork child {idx} ready");
             if let Ok(mut guard) = writers[idx].lock() {

@@ -1,9 +1,11 @@
 use crossbeam_channel::Sender;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 
 use flexiq_core::job::Job;
 use flexiq_core::scheduler::JobResult;
+
+use crate::py_worker::job_result_from_error;
 
 /// Execute a sync task on the current thread (called inside `spawn_blocking`).
 ///
@@ -18,8 +20,6 @@ pub fn execute_sync_task(
 ) {
     let job_id = job.id.clone();
     let task_name = job.task_name.clone();
-    let retry_count = job.retry_count;
-    let max_retries = job.max_retries;
 
     let start = std::time::Instant::now();
     log::info!("[flexiq] Task {task_name}[{job_id}] received");
@@ -40,38 +40,7 @@ pub fn execute_sync_task(
                 wall_time_ns,
             }
         }
-        Err(e) => {
-            let (error_msg, is_cancelled, exc_class_name) = Python::attach(|py| {
-                let msg = format_python_error(py, &e);
-                let cancelled = is_cancelled_error(py, &e);
-                let class_name = get_exception_class_name(py, &e);
-                (msg, cancelled, class_name)
-            });
-
-            if is_cancelled {
-                JobResult::Cancelled {
-                    job_id,
-                    task_name,
-                    wall_time_ns,
-                }
-            } else {
-                let should_retry = Python::attach(|py| {
-                    check_should_retry(py, retry_filters, &task_name, &exc_class_name, &e)
-                });
-
-                log::error!("[flexiq] Task {task_name}[{job_id}] failed: {error_msg}");
-                JobResult::Failure {
-                    job_id,
-                    error: error_msg,
-                    retry_count,
-                    max_retries,
-                    task_name,
-                    wall_time_ns,
-                    should_retry,
-                    timed_out: false,
-                }
-            }
-        }
+        Err(e) => job_result_from_error(&e, retry_filters, job, wall_time_ns),
     };
 
     let _ = result_tx.send(job_result);
@@ -112,7 +81,13 @@ fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Op
     let context_mod = py.import("flexiq.context")?;
     context_mod.call_method1(
         "_set_context",
-        (&job.id, &job.task_name, job.retry_count, &job.queue),
+        (
+            &job.id,
+            &job.task_name,
+            job.retry_count,
+            &job.queue,
+            job.namespace.as_deref(),
+        ),
     )?;
 
     let result = (|| -> PyResult<Bound<'_, pyo3::PyAny>> {
@@ -163,83 +138,4 @@ fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Op
         let bytes: Vec<u8> = serialized.extract()?;
         Ok(Some(bytes))
     }
-}
-
-// One structured-error encoder for every worker path — see py_worker.rs.
-use crate::py_worker::format_python_error;
-
-fn is_cancelled_error(py: Python<'_>, e: &PyErr) -> bool {
-    if let Ok(exceptions_mod) = py.import("flexiq.exceptions") {
-        if let Ok(cancelled_cls) = exceptions_mod.getattr("TaskCancelledError") {
-            return e.get_type(py).is_subclass(&cancelled_cls).unwrap_or(false);
-        }
-    }
-    false
-}
-
-fn get_exception_class_name(py: Python<'_>, e: &PyErr) -> String {
-    let type_obj = e.get_type(py);
-    let module = type_obj
-        .getattr("__module__")
-        .and_then(|m| m.extract::<String>())
-        .unwrap_or_default();
-    let qualname = type_obj
-        .getattr("__qualname__")
-        .and_then(|q| q.extract::<String>())
-        .unwrap_or_else(|_| "Exception".to_string());
-
-    if module.is_empty() || module == "builtins" {
-        qualname
-    } else {
-        format!("{module}.{qualname}")
-    }
-}
-
-fn check_should_retry(
-    py: Python<'_>,
-    retry_filters: &Py<PyAny>,
-    task_name: &str,
-    _exc_class_name: &str,
-    exc: &PyErr,
-) -> bool {
-    let filters = retry_filters.bind(py);
-    let filters_dict: &Bound<'_, PyDict> = match filters.cast() {
-        Ok(d) => d,
-        Err(_) => return true,
-    };
-
-    let task_filters = match filters_dict.get_item(task_name) {
-        Ok(Some(f)) => f,
-        _ => return true,
-    };
-
-    let task_dict: &Bound<'_, PyDict> = match task_filters.cast() {
-        Ok(d) => d,
-        Err(_) => return true,
-    };
-
-    if let Ok(Some(dont_retry)) = task_dict.get_item("dont_retry_on") {
-        if let Ok(list) = dont_retry.cast::<PyList>() {
-            for cls in list.iter() {
-                if exc.get_type(py).is_subclass(&cls).unwrap_or(false) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    if let Ok(Some(retry_on)) = task_dict.get_item("retry_on") {
-        if let Ok(list) = retry_on.cast::<PyList>() {
-            if !list.is_empty() {
-                for cls in list.iter() {
-                    if exc.get_type(py).is_subclass(&cls).unwrap_or(false) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-        }
-    }
-
-    true
 }

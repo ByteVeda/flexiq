@@ -81,7 +81,11 @@ impl PyExecutor {
 
         // Kept typed as well as erased: the side-channel handle only exists
         // once the handshake has completed, so it is installed after `spawn`.
-        let pool = Arc::new(PreforkPool::new(slots as usize, app_path.to_string()));
+        // No claim owner: an executor runs a scheduler's work without ever
+        // holding its execution claim, so its children have nothing to fence a
+        // durable-step write on and refuse steps rather than degrade to
+        // running them un-memoized.
+        let pool = Arc::new(PreforkPool::new(slots as usize, app_path.to_string(), None));
 
         // Dialling and the handshake both block on the network; holding the GIL
         // across them would freeze every other Python thread in the process.

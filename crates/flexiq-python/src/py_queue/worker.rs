@@ -250,9 +250,10 @@ fn dispatch_outcome(py: Python<'_>, outcome: &ResultOutcome) {
                 // wrote no state, so there is nothing to hook or emit.
             }
             ResultOutcome::Slept { .. } => {
-                // Nothing reaches this yet: the task context has no `step`, so
-                // no attempt can end in a sleep. The `on_sleep` hook and the
-                // `job.sleeping` event land with it.
+                // Handled where the attempt ended, not here: `run_lifecycle`
+                // pairs the sleep with `on_sleep` and emits `job.sleeping`
+                // while the job context is still live, the same way it owns
+                // the success event. Doing it again here would double both.
             }
             // The taxonomy is `#[non_exhaustive]`; an outcome this build does
             // not know is one it cannot hook correctly, so it emits nothing.
@@ -419,6 +420,9 @@ impl PyQueue {
             self.namespace.clone(),
         );
         scheduler.set_claim_owner(worker_id.clone());
+        // The same id durable steps fence on: a step written by a task running
+        // here must name the owner the job was actually claimed under.
+        self.set_claim_owner(Some(worker_id.clone()));
 
         // Build retry filters dict from the Queue's _task_retry_filters
         let retry_filters = PyDict::new(py).into_any();
@@ -578,9 +582,12 @@ impl PyQueue {
         let mut async_executor_for_shutdown: Option<Arc<Py<PyAny>>> = None;
 
         let dispatcher_for_run: Arc<dyn flexiq_core::worker::WorkerDispatcher> = if use_prefork {
-            let pool_arc: Arc<dyn flexiq_core::worker::WorkerDispatcher> = Arc::new(
-                crate::prefork::PreforkPool::new(num_workers, app_path.unwrap_or_default()),
-            );
+            let pool_arc: Arc<dyn flexiq_core::worker::WorkerDispatcher> =
+                Arc::new(crate::prefork::PreforkPool::new(
+                    num_workers,
+                    app_path.unwrap_or_default(),
+                    Some(worker_id.clone()),
+                ));
             self.set_dispatcher(Some(pool_arc.clone()));
             pool_arc
         } else {
@@ -860,6 +867,9 @@ impl PyQueue {
         // Clear the dispatcher reference so post-shutdown cancel requests
         // become no-ops instead of forwarding to a torn-down pool.
         self.set_dispatcher(None);
+        // This process no longer claims anything, so a later task body must not
+        // be able to write steps under an id whose claim has been released.
+        self.set_claim_owner(None);
 
         // Unregister worker on shutdown
         let _ = self.storage.unregister_worker(&worker_id);

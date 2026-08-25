@@ -44,6 +44,7 @@ from flexiq.detached import (
 )
 from flexiq.exceptions import TaskCancelledError
 from flexiq.log_config import silence_asyncio_pipe_noise
+from flexiq.steps import StepError, StepSleepSignal
 from flexiq.task_errors import encode_task_error
 from flexiq.worker_protocol import (
     WORKER_PROTOCOL_VERSION,
@@ -213,7 +214,13 @@ def _execute_job(
             "timed_out": False,
         }, b""
 
-    _set_context(job_id, task_name, retry_count, job.get("queue", "default"))
+    _set_context(
+        job_id,
+        task_name,
+        retry_count,
+        job.get("queue", "default"),
+        job.get("namespace"),
+    )
     # Resolved by the scheduler and carried on the frame, because an executor
     # has no settings store of its own to read the toggle list from. Empty from
     # an in-process worker's parent, which reads storage directly instead.
@@ -241,6 +248,35 @@ def _execute_job(
             "job_id": job_id,
             "task_name": task_name,
             "wall_time_ns": wall_time_ns,
+        }, b""
+
+    except StepSleepSignal as sleep:
+        # The attempt ended in a step.sleep: the row is committed and the job is
+        # already Pending at its deadline, so this frame only tells the parent
+        # where the job went. ``wake_at`` is the deadline storage settled on,
+        # not the one this attempt proposed.
+        return {
+            "type": "slept",
+            "job_id": job_id,
+            "task_name": task_name,
+            "wake_at": sleep.wake_at,
+            "wall_time_ns": time.monotonic_ns() - start_ns,
+        }, b""
+
+    except StepError as step_failure:
+        # A step failure carries the core's own retry decision, which outranks
+        # the task's retry filters below.
+        logger.error("task %s[%s] step failed: %s", task_name, job_id, step_failure)
+        return {
+            "type": "failure",
+            "job_id": job_id,
+            "error": encode_task_error(step_failure),
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "task_name": task_name,
+            "wall_time_ns": time.monotonic_ns() - start_ns,
+            "should_retry": step_failure.flexiq_should_retry,
+            "timed_out": False,
         }, b""
 
     except Exception:

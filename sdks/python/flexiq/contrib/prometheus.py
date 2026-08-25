@@ -40,7 +40,13 @@ except ImportError:
 # ── Metric categories ─────────────────────────────────────
 # Used by `disabled_metrics` to skip groups of metrics.
 _METRIC_GROUPS: dict[str, list[str]] = {
-    "jobs": ["jobs_total", "job_duration_seconds", "active_workers", "retries_total"],
+    "jobs": [
+        "jobs_total",
+        "job_duration_seconds",
+        "active_workers",
+        "retries_total",
+        "sleeps_total",
+    ],
     "queue": ["queue_depth", "dlq_size", "worker_utilization"],
     "resource": [
         "resource_health_status",
@@ -103,6 +109,9 @@ def _get_or_create_metrics(
         )
         store["retries_total"] = _make(
             Counter, "retries_total", "Total number of job retries", ["task"]
+        )
+        store["sleeps_total"] = _make(
+            Counter, "sleeps_total", "Total number of attempts ended by step.sleep", ["task"]
         )
         store["queue_depth"] = _make(
             Gauge, "queue_depth", "Number of pending jobs per queue", ["queue"]
@@ -225,6 +234,25 @@ class PrometheusMiddleware(TaskMiddleware):
             m = self._metrics["job_duration"]
             if m is not None:
                 m.labels(task=ctx.task_name).observe(duration)
+
+    def on_sleep(self, ctx: JobContext, wake_at: int) -> None:
+        """Count the sleep and release the worker slot, on its own counter.
+
+        Deliberately not ``jobs_total``: a job that sleeps three times would
+        then be counted four times, and neither ``completed`` nor ``failed``
+        describes an attempt that has not finished. The duration histogram is
+        skipped for the same reason — this attempt measured part of a job.
+        """
+        m = self._metrics["active_workers"]
+        if m is not None:
+            m.dec()
+
+        m = self._metrics["sleeps_total"]
+        if m is not None:
+            m.labels(task=ctx.task_name).inc()
+
+        with self._lock:
+            self._start_times.pop(ctx.id, None)
 
     def on_retry(self, ctx: JobContext, error: Exception, retry_count: int) -> None:
         m = self._metrics["retries_total"]

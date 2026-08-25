@@ -361,3 +361,90 @@ def test_prefork_cancel_does_not_kill_child(cancel_app: object, poll_until: Any)
     follow_up = cancel_app.quick.delay(21)  # type: ignore[attr-defined]
     result = follow_up.result(timeout=15)
     assert result == 42
+
+
+# ---------------------------------------------------------------------------
+# Durable steps in a child process
+# ---------------------------------------------------------------------------
+
+STEPS_APP_PATH = "prefork_apps.steps_app:queue"
+
+
+@pytest.fixture
+def steps_app(tmp_path: Path) -> Iterator[object]:
+    """Set up the module-level durable-step app with a per-test DB path.
+
+    Same shape as ``cancel_app``: the env var must be set before the import so
+    the parent's Queue and each child's re-import agree on the database.
+    """
+    db_path = str(tmp_path / "steps.db")
+    prev_db = os.environ.get("FLEXIQ_STEPS_TEST_DB")
+    prev_pythonpath = os.environ.get("PYTHONPATH")
+
+    os.environ["FLEXIQ_STEPS_TEST_DB"] = db_path
+    os.environ["PYTHONPATH"] = (
+        f"{PREFORK_APP_DIR}{os.pathsep}{prev_pythonpath}" if prev_pythonpath else PREFORK_APP_DIR
+    )
+    if PREFORK_APP_DIR not in sys.path:
+        sys.path.insert(0, PREFORK_APP_DIR)
+
+    sys.modules.pop("prefork_apps.steps_app", None)
+    sys.modules.pop("prefork_apps", None)
+    module = importlib.import_module("prefork_apps.steps_app")
+
+    try:
+        yield module
+    finally:
+        with contextlib.suppress(Exception):
+            module.queue._inner.request_shutdown()
+        if prev_db is None:
+            os.environ.pop("FLEXIQ_STEPS_TEST_DB", None)
+        else:
+            os.environ["FLEXIQ_STEPS_TEST_DB"] = prev_db
+        if prev_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = prev_pythonpath
+
+
+def _start_steps_worker(queue: Queue) -> threading.Thread:
+    thread = threading.Thread(
+        target=queue.run_worker,
+        kwargs={"pool": "prefork", "app": STEPS_APP_PATH},
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+@prefork_unix_only
+def test_prefork_child_memoizes_a_step(steps_app: object) -> None:
+    """A child commits and replays steps against its own storage.
+
+    The claim owner reaches the child through its spawn environment, never
+    through the dispatch frame — the frame format also crosses a socket to an
+    attached executor, and an owner an executor supplies is one it can forge.
+    """
+    queue: Queue = steps_app.queue  # type: ignore[attr-defined]
+
+    job = steps_app.charge_once.delay()  # type: ignore[attr-defined]
+    _start_steps_worker(queue)
+
+    result = job.result(timeout=60)
+    charge, ran = result.split("/")
+    assert ran == "1", "the memoized step must not run a second time"
+    assert charge.startswith(f"{job.id}:charge#0")
+
+
+@prefork_unix_only
+def test_prefork_child_sleeps_and_wakes(steps_app: object) -> None:
+    """``step.sleep`` in a child ends the attempt and the job wakes to finish."""
+    queue: Queue = steps_app.queue  # type: ignore[attr-defined]
+
+    job = steps_app.naps.delay()  # type: ignore[attr-defined]
+    _start_steps_worker(queue)
+
+    assert job.result(timeout=60) == "awake"
+    finished = queue.get_job(job.id)
+    assert finished is not None
+    assert finished.to_dict()["retry_count"] == 0, "a sleep costs no retry"
