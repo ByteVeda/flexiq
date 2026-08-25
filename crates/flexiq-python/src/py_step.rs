@@ -20,7 +20,7 @@ use pyo3::types::{PyBytes, PyDict};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepSession, StepSleep,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepSession, StepSleep,
 };
 use flexiq_core::storage::StorageBackend;
 
@@ -78,6 +78,27 @@ pub(crate) fn step_error(py: Python<'_>, error: QueueError) -> PyErr {
         let _ = import_error;
         pyo3::exceptions::PyRuntimeError::new_err(message)
     })
+}
+
+/// Derive a step's identity under the core's rules, without a session.
+///
+/// For the inline path only. Test mode has no session to derive through, and
+/// hand-rolling the rules in the shell would drift: an empty `key=""` is
+/// refused here and was silently renumbered by occurrence before this existed,
+/// so a test passed for a key a worker rejects. Same rules, one place.
+#[pyfunction]
+#[pyo3(signature = (name, key=None, occurrence=0))]
+pub fn derive_step_key(
+    py: Python<'_>,
+    name: &str,
+    key: Option<&str>,
+    occurrence: u32,
+) -> PyResult<String> {
+    match key {
+        Some(key) => StepKey::explicit(name, key),
+        None => StepKey::derive(name, occurrence),
+    }
+    .map_err(|error| step_error(py, error))
 }
 
 /// What `begin_run` decided, and the token `commit_run` needs back.

@@ -27,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 from flexiq._active_context import _ActiveContext
+from flexiq._flexiq import derive_step_key
 from flexiq.steps.durations import (
     SleepDeadline,
     SleepDuration,
@@ -404,10 +405,19 @@ class StepContext:
         return await self._ainvoke(*self._inline_identity(name, key), fn)
 
     def _inline_identity(self, name: str, key: str | None) -> tuple[str, str]:
-        """This step's key and downstream key, derived without a session."""
+        """This step's key and downstream key, derived without a session.
+
+        Through the core's own derivation, not a local f-string: test mode has
+        to refuse exactly what a worker refuses. An empty ``key=""`` used to
+        fall back to numbering by occurrence here while the worker raised, so a
+        test passed for a key the real run rejects.
+        """
         occurrence = self._inline_occurrences.get(name, 0)
-        self._inline_occurrences[name] = occurrence + 1
-        step_key = key or f"{name}#{occurrence}"
+        step_key = derive_step_key(name, key, occurrence)
+        # Spent only once the key is known to be usable, matching the core:
+        # a refused step must not shift the key of the next one.
+        if key is None:
+            self._inline_occurrences[name] = occurrence + 1
         return step_key, f"{self._ctx.job_id}:{step_key}"
 
 

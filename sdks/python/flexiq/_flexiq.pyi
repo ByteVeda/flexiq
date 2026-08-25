@@ -694,6 +694,9 @@ class Executor:
         """Drain in-flight work, disconnect, and join. Idempotent."""
         ...
 
+def derive_step_key(name: str, key: str | None = None, occurrence: int = 0) -> str:
+    """A step's identity under the core's rules: ``name#occurrence`` or ``name:key``."""
+
 def _init_rust_logging() -> None:
     """Activate the Rust → Python `logging` bridge (idempotent)."""
     ...

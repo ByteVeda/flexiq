@@ -685,7 +685,54 @@ def test_test_mode_refuses_gathered_steps_too(queue: Queue) -> None:
         with pytest.raises(StepError, match="still uncommitted"):
             gathered.delay()
 
-    assert keys == [], "no body should have read a key it does not own"
+    # `asyncio.run` cancels the surviving task on its way out, so `keys` is
+    # normally empty — but emptiness alone would also be what a cancelled
+    # *corrupted* read looks like. Assert the invariant instead: whatever was
+    # read belonged to the step that read it.
+    assert all(key.endswith(":a#0") for key in keys), keys
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("", "empty key"),
+        ("k" * 600, "over the"),
+    ],
+)
+def test_test_mode_refuses_the_keys_a_worker_refuses(queue: Queue, key: str, message: str) -> None:
+    """Inline steps derive their identity through the core, so the rules match.
+
+    `key=""` used to fall back to numbering by occurrence here while a worker
+    raised — a test passing for a key the real run rejects.
+    """
+    with queue.test_mode(propagate_errors=True):
+
+        @queue.task()
+        def keyed() -> str:
+            return current_job.step.run("charge", lambda: "x", key=key)
+
+        with pytest.raises(StepError, match=message):
+            keyed.delay()
+
+
+def test_a_worker_refuses_an_empty_key_the_same_way(
+    queue: Queue, start_worker: WorkerFactory, poll_until: PollUntil
+) -> None:
+    """The other half of the pair above: same rule, same message, real session."""
+
+    @queue.task(max_retries=0)
+    def keyed() -> str:
+        return current_job.step.run("charge", lambda: "x", key="")
+
+    keyed.delay()
+    start_worker(queue)
+
+    poll_until(
+        lambda: len(queue.dead_letters()) >= 1,
+        timeout=20,
+        message="an empty key should have failed the attempt",
+    )
+    assert "empty key" in queue.dead_letters()[0]["error"]
 
 
 # ------------------------------------------------------------------ helpers
