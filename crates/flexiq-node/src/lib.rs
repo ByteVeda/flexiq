@@ -12,10 +12,12 @@ mod dispatcher;
 mod error;
 mod executor;
 mod queue;
+mod steps;
 mod worker;
 
 pub use executor::{start_executor, JsExecutor};
 pub use queue::JsQueue;
+pub use steps::JsStepSession;
 pub use worker::JsWorker;
 
 /// Settings-key prefixes the dashboard's generic KV surface must hide. Sourced

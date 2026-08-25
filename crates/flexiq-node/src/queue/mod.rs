@@ -24,6 +24,7 @@ mod locks;
 mod logs;
 mod periodic;
 mod pubsub;
+mod steps;
 #[cfg(feature = "workflows")]
 mod workflows;
 
@@ -32,6 +33,13 @@ mod workflows;
 pub struct JsQueue {
     storage: StorageBackend,
     namespace: Option<String>,
+    /// The worker id this handle claims execution under, once one has started.
+    ///
+    /// Durable steps are fenced on `(owner, attempt)`, and the owner must never
+    /// be something the running code asserts about itself — so it is recorded
+    /// here, by the process that won the claim, rather than carried on the
+    /// dispatch frame, which also crosses the socket to an attached executor.
+    claim_owner: std::sync::Mutex<Option<String>>,
     /// Whether opening applies schema changes. When false the workflow store is
     /// built unmigrated too, so no path applies DDL until `migrate()` runs.
     #[cfg(feature = "workflows")]
@@ -61,6 +69,7 @@ impl JsQueue {
         Ok(Self {
             storage,
             namespace,
+            claim_owner: std::sync::Mutex::new(None),
             #[cfg(feature = "workflows")]
             auto_migrate,
             #[cfg(feature = "workflows")]
@@ -196,9 +205,17 @@ impl JsQueue {
         outcome_callback: ThreadsafeFunction<JsOutcome, Unknown<'static>, JsOutcome, Status, false>,
         options: Option<WorkerOptions>,
     ) -> Result<JsWorker> {
+        // Minted here, not inside `start_worker`, so the id is recorded as this
+        // handle's claim owner *before* the scheduler loop can dispatch a job
+        // into a task that reaches for `ctx.step`.
+        let worker_id = format!("node-{}", uuid::Uuid::now_v7());
+        if let Ok(mut owner) = self.claim_owner.lock() {
+            *owner = Some(worker_id.clone());
+        }
         start_worker(
             self.storage.clone(),
             self.namespace.clone(),
+            worker_id,
             options.unwrap_or_default(),
             callback,
             outcome_callback,

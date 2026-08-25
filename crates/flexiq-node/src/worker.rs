@@ -62,6 +62,9 @@ impl JsWorker {
 pub fn start_worker(
     storage: StorageBackend,
     namespace: Option<String>,
+    // Minted by the caller, which records it as the queue's claim owner before
+    // this loop can dispatch anything — durable steps are fenced on it.
+    worker_id: String,
     options: WorkerOptions,
     callback: TaskCallback,
     outcome_callback: OutcomeCallback,
@@ -114,7 +117,6 @@ pub fn start_worker(
     let dispatcher_namespace = namespace.clone();
     let lifecycle_storage = storage.clone();
     let queues_csv = queues.join(",");
-    let worker_id = format!("node-{}", uuid::Uuid::now_v7());
     // Mesh gossip advertises the served queues; capture them before `queues`
     // moves into the scheduler.
     #[cfg(feature = "mesh")]
