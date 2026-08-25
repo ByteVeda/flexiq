@@ -1498,6 +1498,17 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     return this.native.requeueJob(jobId);
   }
 
+  /**
+   * Whether this queue's storage backend implements a durable-step store.
+   *
+   * Answers "can a task here use `ctx.step`" without opening a session, which
+   * costs a job read. A backend that answers `false` refuses every step rather
+   * than degrading to "no steps recorded" — that answer re-runs a charge.
+   */
+  supportsSteps(): boolean {
+    return this.native.supportsSteps();
+  }
+
   /** Purge dead-letter entries older than `olderThanMs`. Returns the count removed. */
   purgeDead(olderThanMs: number): Promise<number> {
     return this.native.purgeDead(olderThanMs);

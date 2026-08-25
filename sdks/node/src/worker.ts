@@ -124,6 +124,10 @@ export class Worker {
       emitter,
       resources,
       queue,
+      // A worker reaches storage and holds an execution claim, so `ctx.step`
+      // can commit here. `queue.runWorker` below records the claim owner on
+      // this handle before the scheduler can dispatch anything into it.
+      steps: queue,
     });
 
     const outcomeCallback = (outcome: JsOutcome): void => {
