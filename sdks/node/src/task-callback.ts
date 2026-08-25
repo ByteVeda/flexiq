@@ -66,14 +66,14 @@ export interface TaskCallbackDeps {
     extra?: string,
   ) => void;
   /**
-   * Where `ctx.step` commits, when this process can commit at all.
+   * Where `ctx.step` commits, when this callback's owner can commit at all.
    *
-   * Absent means it cannot, and every step refuses. An attached executor holds
-   * no execution claim and has no channel to commit a step on, so it passes
-   * nothing here — deliberately, rather than reaching for `queue`, which is
-   * only the detached stand-in when the process is a `flexiq executor`. An
-   * executor started from a process that *does* have storage must refuse too:
-   * the job belongs to the scheduler, and its claim is not this process's.
+   * A worker passes its own native handle, so every step is fenced on the id
+   * *that* worker claims execution under — two workers on one queue must not
+   * share an owner. Absent means nothing here can commit and every step
+   * refuses: an attached executor holds no claim and has no channel to commit
+   * on, and one started from a process that *does* have storage must refuse
+   * too, because the job belongs to the scheduler.
    */
   steps?: StepStore;
 }
@@ -208,6 +208,7 @@ export function createTaskCallback(
         emitter.emit("job.sleeping", {
           jobId: invocation.id,
           taskName: invocation.taskName,
+          queue: invocation.queue,
           wakeAt: error.wakeAt,
           stepKey: error.stepKey,
           durationMs: performance.now() - startedAt,

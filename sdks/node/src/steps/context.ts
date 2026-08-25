@@ -33,7 +33,7 @@ import { type SleepDeadline, sleepDeadlineMs, sleepDurationMs } from "./duration
 import { StepError, StepSleepSignal, StepUnavailableError, stepErrorFrom } from "./errors";
 import type { StepLatch } from "./latch";
 
-/** Where a durable step commits. Satisfied by the native queue handle. */
+/** Where a durable step commits — one worker's own claim on one job. */
 export interface StepStore {
   openStepSession(jobId: string, attempt: number): Promise<NativeStepSession>;
 }
