@@ -223,6 +223,7 @@ it("ends the attempt on a sleep and replays earlier steps on wake", async () => 
   const sleeping = slept[0] as SleepEvent;
   expect(sleeping.jobId).toBe(jobId);
   expect(sleeping.stepKey).toBe("settle#0");
+  expect(sleeping.queue).toBe("default");
   expect(sleeping.wakeAt).toBeGreaterThan(Date.now());
   // A sleeping job holds no worker slot: it is pending at its deadline, not
   // running, so it cannot be timed out while it waits.
@@ -449,6 +450,40 @@ it("pairs a middleware's before with onSleep rather than after", async () => {
   // The slept attempt gets `onSleep` and no `after`, because an attempt that
   // has not finished has no result for `after` to see.
   expect(calls).toEqual(["before", "onSleep", "before", "after"]);
+});
+
+it("fences each of a queue's workers on its own claim", async () => {
+  // The owner half of `(owner, attempt)` belongs to the worker that won the
+  // claim, not to the queue they were started from. Held on the queue, a second
+  // `runWorker` would overwrite the first worker's id and every step it went on
+  // to commit would be refused as superseded — safe, but the job dies.
+  const queue = newQueue();
+  const completed: OutcomeEvent[] = [];
+  const dead: OutcomeEvent[] = [];
+  const charged: string[] = [];
+
+  queue.on("job.completed", (event) => completed.push(event));
+  queue.on("job.dead", (event) => dead.push(event));
+  queue.task("checkout", async (label: string) => {
+    return step().run("charge", () => {
+      charged.push(label);
+      return label;
+    });
+  });
+
+  const first = queue.runWorker({ queues: ["alpha"] });
+  const second = queue.runWorker({ queues: ["beta"] });
+  try {
+    queue.enqueue("checkout", ["on-alpha"], { queue: "alpha" });
+    queue.enqueue("checkout", ["on-beta"], { queue: "beta" });
+
+    expect(await waitFor(() => completed.length === 2)).toBe(true);
+    expect(dead).toHaveLength(0);
+    expect(charged.sort()).toEqual(["on-alpha", "on-beta"]);
+  } finally {
+    first.stop();
+    second.stop();
+  }
 });
 
 it("refuses a step where nothing can commit it", async () => {
