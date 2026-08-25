@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
-from flexiq.context import _clear_context, _set_context
+from flexiq.context import _clear_context, _get_queue_ref, _set_context, _set_queue_ref
 from flexiq.resources.runtime import ResourceRuntime
 
 if TYPE_CHECKING:
@@ -136,11 +136,19 @@ class TestMode:
         self._patches: list[Any] = []
         self._job_counter = 0
         self._prev_runtime: Any = None
+        self._prev_queue_ref: Any = None
         self._mock_resources: dict[str, MockResource] = {}
 
     def __enter__(self) -> TestResults:
         # Set test mode flag
         self._queue._test_mode_active = True
+
+        # Point the job context at the queue running these tasks. Only
+        # ``run_worker`` sets this otherwise, so without it every context
+        # feature that needs the queue — progress, logs, durable steps — is
+        # unreachable from a task under test.
+        self._prev_queue_ref = _get_queue_ref()
+        _set_queue_ref(self._queue)
 
         # Set up test resource runtime if resources provided
         if self._resources is not None:
@@ -174,6 +182,11 @@ class TestMode:
 
         # Clear test mode flag
         self._queue._test_mode_active = False
+
+        # Put back whatever the job context pointed at before, so a worker
+        # running in this process keeps its own queue.
+        _set_queue_ref(self._prev_queue_ref)
+        self._prev_queue_ref = None
 
         # Restore previous resource runtime
         if self._resources is not None:
