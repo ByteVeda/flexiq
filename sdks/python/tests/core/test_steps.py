@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from flexiq import Queue
+from flexiq import Queue, _flexiq
 from flexiq._active_context import _ActiveContext
 from flexiq.codecs import GzipCodec
 from flexiq.context import current_job
@@ -29,6 +29,13 @@ from flexiq.steps import StepContext, StepUnavailableError
 
 PollUntil = Any  # the conftest fixture's runtime type
 WorkerFactory = Callable[[Queue], threading.Thread]
+
+# Only an ``async def`` task reaches the native executor, and only that path
+# reports a sleep through ``try_report_slept``.
+requires_native_async = pytest.mark.skipif(
+    not hasattr(_flexiq, "PyResultSender"),
+    reason="wheel built without the native-async feature",
+)
 
 
 @pytest.fixture
@@ -577,6 +584,30 @@ def test_arun_awaits_a_coroutine_step(queue: Queue) -> None:
 
     assert ran == ["async"]
     assert tq[0].return_value == "done:async"
+
+
+@requires_native_async
+def test_an_async_task_sleeps_on_the_native_executor(
+    queue: Queue, start_worker: WorkerFactory
+) -> None:
+    """The native-async path reports a slept attempt on its own channel.
+
+    A sync task on this pool still runs on a blocking thread, so only an
+    ``async def`` reaches ``AsyncTaskExecutor`` — and only it exercises
+    ``try_report_slept``, the one sleep-reporting path the other tests miss.
+    """
+    bodies: list[int] = []
+
+    @queue.task(max_retries=0)
+    async def naps() -> str:
+        bodies.append(1)
+        await current_job.step.asleep("150ms", name="nap")
+        return f"awake on pass {len(bodies)}"
+
+    job = naps.delay()
+    start_worker(queue)
+
+    assert job.result(timeout=30) == "awake on pass 2"
 
 
 # ------------------------------------------------------------------ helpers
