@@ -420,6 +420,21 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
     }
 
     /**
+     * Whether this backend has a durable-step store, i.e. whether
+     * {@code JobContext.current().step()} can commit anything.
+     *
+     * <p>A capability probe, not the gate: a step session refuses on its own if
+     * the store is missing. This is for an application that wants the answer
+     * without dispatching a job first.
+     *
+     * @return {@code false} for a backend that has no step store, including any
+     *     implementation of this interface that predates them
+     */
+    default boolean supportsSteps() {
+        return false;
+    }
+
+    /**
      * Raises or lowers the contract floor.
      *
      * <p>Raise it only once every process in the deployment has been upgraded —
