@@ -91,6 +91,10 @@ public final class StepContext {
      * serializer does not round-trip exactly comes back in its decoded shape.
      * Return something the serializer preserves, or a handle to it.
      *
+     * <p>Only a body that <b>returns</b> is memoized. One that throws commits
+     * nothing and runs again on the next attempt, as does one whose process dies
+     * before the commit — see {@link #idempotencyKey()}.
+     *
      * <p><b>Its signals must reach the worker.</b> A divergence, a cap violation
      * or a lost claim throws a {@link StepControlSignal}, which is an
      * {@link Error} so an ordinary {@code catch (Exception e)} around this call

@@ -1,8 +1,16 @@
 package org.byteveda.flexiq.steps;
 
 /**
- * The body of a durable step: run once, its result memoized for every later
- * attempt of the job.
+ * The body of a durable step: run on the attempt that commits it, its result
+ * replayed to every later attempt of the job.
+ *
+ * <p>"Runs once" is the guarantee for a body that <b>returns</b>. A body that
+ * throws commits nothing, so the next attempt runs it again — and so does an
+ * attempt whose process dies between the body returning and the row committing.
+ * Memoization closes the replay window, not the crash window; only a key the
+ * downstream service dedupes on closes that, which is what
+ * {@link StepContext#idempotencyKey()} is for. Write side effects to be
+ * idempotent under that key.
  *
  * <p>Declares {@code throws Exception} on purpose. A step body is ordinary code
  * — a network call, a database write — and forcing it to be exception-free
