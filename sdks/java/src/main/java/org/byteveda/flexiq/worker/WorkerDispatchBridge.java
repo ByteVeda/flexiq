@@ -276,8 +276,13 @@ final class WorkerDispatchBridge implements WorkerBridge {
     private static boolean overrides(Class<?> type, String name, Class<?>... params) {
         try {
             return type.getMethod(name, params).getDeclaringClass() != Middleware.class;
-        } catch (NoSuchMethodException | SecurityException e) {
-            // An unreadable method is not evidence of an unpaired hook.
+        } catch (NoSuchMethodException | RuntimeException | LinkageError e) {
+            // An unreadable method is not evidence of an unpaired hook — and a
+            // diagnostic must never be able to fail the attempt it describes.
+            // Under a native image a user middleware's methods may not be
+            // registered for reflective lookup at all, and this runs on the
+            // sleep path, where an escaping Error would leave the job
+            // unreported until its dispatch timed out.
             return false;
         }
     }
