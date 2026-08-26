@@ -246,6 +246,9 @@ public final class NativeQueue {
     /** A JSON array of declared topics. */
     public static native String listDeclaredTopics(long handle);
 
+    /** Whether this backend has a durable-step store. */
+    public static native boolean supportsSteps(long handle);
+
     // ── Worker ──────────────────────────────────────────────────────
     /** Start a worker; returns its handle. {@code bridge} is a {@code WorkerBridge}. */
     public static native long runWorker(long handle, Object bridge, String optionsJson);
