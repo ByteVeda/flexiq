@@ -396,6 +396,61 @@ class StepsTest {
         }
     }
 
+    /**
+     * A hook that throws must not stop the attempt reporting.
+     *
+     * <p>{@code reportSleep} runs inside the {@code catch (StepSleepSignal)} arm,
+     * so anything escaping it leaves {@code runJob} without an outcome — and
+     * {@code Error} is not theoretical here, because a step control signal is
+     * one, so a hook that touches {@code ctx.step()} throws one by construction.
+     *
+     * <p>The sleeping job itself is a poor witness: {@code sleep_job} already
+     * left it {@code Pending} and unclaimed, so it wakes and finishes whether or
+     * not the attempt reported. What actually leaks is the <b>dispatch slot</b>,
+     * which is what this pins — one in-flight job on a worker of one, and a
+     * second job that cannot start until the first reports.
+     */
+    @Test
+    @Timeout(60)
+    void aThrowingOnSleepHookDoesNotHoldItsDispatchSlot(@TempDir Path dir) throws Exception {
+        Task<String> naps = Task.of("naps", String.class).maxRetries(2).retryPolicy(FAST);
+        Task<String> plain = Task.of("plain", String.class).maxRetries(2).retryPolicy(FAST);
+
+        try (FlexiQ queue = open(dir)) {
+            queue.use(new Middleware() {
+                @Override
+                public void before(TaskContext context) {}
+
+                @Override
+                public void onSleep(TaskContext context, long wakeAt) {
+                    throw new StackOverflowError("a hook that throws an Error, not an Exception");
+                }
+            });
+            queue.enqueue(naps, "go");
+            queue.enqueue(plain, "go");
+
+            CountDownLatch second = new CountDownLatch(1);
+            Worker worker = queue.worker()
+                    .concurrency(1)
+                    .handle(naps, (String payload) -> {
+                        JobContext.current().step().sleep(Duration.ofMillis(300));
+                        return "ok";
+                    })
+                    .handle(plain, (String payload) -> "ok")
+                    .on(EventName.SUCCESS, event -> {
+                        if ("plain".equals(event.taskName)) {
+                            second.countDown();
+                        }
+                    })
+                    .start();
+            try (worker) {
+                assertTrue(
+                        second.await(30, TimeUnit.SECONDS),
+                        "the sleeping attempt released its slot, so the queued job could start");
+            }
+        }
+    }
+
     @Test
     @Timeout(30)
     void sqliteHasAStepStore(@TempDir Path dir) throws Exception {

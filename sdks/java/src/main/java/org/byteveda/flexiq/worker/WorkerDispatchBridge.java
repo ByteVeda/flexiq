@@ -186,7 +186,15 @@ final class WorkerDispatchBridge implements WorkerBridge {
             reportSleep(bound, token, context, chain, sleeping, startedAtNanos);
         } catch (Throwable t) {
             for (Middleware m : chain) {
-                m.onError(context, t);
+                try {
+                    m.onError(context, t);
+                } catch (RuntimeException | Error e) {
+                    // Same rule as onSleep below, and as onOutcome: a hook that
+                    // throws here escapes runJob without reporting, and the
+                    // dispatch stalls until its timeout. One faulty middleware
+                    // must not starve the rest of the chain either.
+                    LOG.warn("middleware " + m.getClass().getName() + " threw on onError (job " + jobId + ")", e);
+                }
             }
             // Canonical structured error (middleware above saw the live Throwable).
             String encoded = TaskErrors.encode(t);
@@ -220,21 +228,33 @@ final class WorkerDispatchBridge implements WorkerBridge {
             List<Middleware> chain,
             StepSleepSignal sleeping,
             long startedAtNanos) {
-        warnUnpairedMiddleware(chain);
-        for (Middleware m : chain) {
-            try {
-                m.onSleep(context, sleeping.wakeAt());
-            } catch (RuntimeException e) {
-                // The sleep is already committed; a hook cannot undo it.
-                LOG.warn("middleware " + m.getClass().getName() + " threw on onSleep (job " + context.jobId + ")", e);
+        // Nothing here may stop the report below. This runs inside the
+        // catch(StepSleepSignal) arm, so anything thrown escapes runJob without
+        // an outcome and the dispatch stalls until its timeout. `Error` is not
+        // theoretical: a step control signal is one, so a hook that touches
+        // ctx.step() throws one by construction.
+        try {
+            warnUnpairedMiddleware(chain);
+            for (Middleware m : chain) {
+                try {
+                    m.onSleep(context, sleeping.wakeAt());
+                } catch (RuntimeException | Error e) {
+                    // The sleep is already committed; a hook cannot undo it, and
+                    // one faulty middleware must not starve the rest.
+                    LOG.warn(
+                            "middleware " + m.getClass().getName() + " threw on onSleep (job " + context.jobId + ")",
+                            e);
+                }
             }
+            emitter.emit(new SleepEvent(
+                    context.jobId,
+                    context.taskName,
+                    sleeping.stepKey(),
+                    sleeping.wakeAt(),
+                    (System.nanoTime() - startedAtNanos) / 1_000_000L));
+        } catch (RuntimeException | Error e) {
+            LOG.warn("could not announce the sleep of job " + context.jobId + "; reporting it regardless", e);
         }
-        emitter.emit(new SleepEvent(
-                context.jobId,
-                context.taskName,
-                sleeping.stepKey(),
-                sleeping.wakeAt(),
-                (System.nanoTime() - startedAtNanos) / 1_000_000L));
         try {
             bound.sleepJob(token, sleeping.wakeAt());
         } catch (RuntimeException | Error e) {
