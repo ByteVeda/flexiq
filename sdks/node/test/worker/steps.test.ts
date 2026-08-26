@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
   currentJob,
+  type Duration,
   type Middleware,
   type OutcomeEvent,
   Queue,
@@ -179,7 +180,11 @@ it("sleeps until an absolute instant", async () => {
   const queue = newQueue();
   const completed: OutcomeEvent[] = [];
   const slept: SleepEvent[] = [];
-  const deadline = new Date(Date.now() + 300);
+  // Far enough ahead that worker startup cannot consume the window and turn the
+  // sleep into an `Elapsed` replay, which commits no sleep and emits no event.
+  // Only `sleepUntil` is exposed to this: a relative duration is read on the
+  // worker, at step time.
+  const deadline = new Date(Date.now() + 2_000);
 
   queue.on("job.completed", (event) => completed.push(event));
   queue.on("job.sleeping", (event) => slept.push(event));
@@ -484,6 +489,72 @@ it("fences each of a queue's workers on its own claim", async () => {
     first.stop();
     second.stop();
   }
+});
+
+it("dead-letters invalid step input rather than retrying it", async () => {
+  // A missing name and an unparseable duration are deterministic — the replay
+  // is handed the same value — so §9.2 calls them permanent. Retried, they
+  // would spend the whole budget to reach the same dead letter.
+  const queue = newQueue();
+  const dead: OutcomeEvent[] = [];
+  const retries: OutcomeEvent[] = [];
+
+  queue.on("job.dead", (event) => dead.push(event));
+  queue.on("job.retrying", (event) => retries.push(event));
+  queue.task(
+    "unnamed",
+    async () => {
+      return step().run("", () => "value");
+    },
+    RETRIES,
+  );
+  queue.task(
+    "badsleep",
+    async () => {
+      // Cast because `Duration` is a template-literal type, so TypeScript
+      // rejects this spelling outright. The runtime path is still reachable
+      // from JavaScript, and from any duration read out of config.
+      return step().sleep("1 hour" as Duration);
+    },
+    RETRIES,
+  );
+
+  queue.enqueue("unnamed");
+  queue.enqueue("badsleep");
+
+  worker = queue.runWorker();
+
+  expect(await waitFor(() => dead.length === 2)).toBe(true);
+  expect(retries).toHaveLength(0);
+  expect(dead.map((event) => String(event.error)).join("\n")).toContain("a step needs a name");
+});
+
+it("latches invalid step input, so catching it cannot report a result", async () => {
+  const queue = newQueue();
+  const dead: OutcomeEvent[] = [];
+  const completed: OutcomeEvent[] = [];
+
+  queue.on("job.dead", (event) => dead.push(event));
+  queue.on("job.completed", (event) => completed.push(event));
+  queue.task(
+    "swallows",
+    async () => {
+      try {
+        await step().run("", () => "value");
+      } catch {
+        // the body carries on as if the step had never been asked for
+      }
+      return "done";
+    },
+    RETRIES,
+  );
+
+  queue.enqueue("swallows");
+  worker = queue.runWorker();
+
+  expect(await waitFor(() => dead.length > 0)).toBe(true);
+  expect(completed).toHaveLength(0);
+  expect(String(dead[0]?.error)).toContain("caught a step control signal");
 });
 
 it("refuses a step where nothing can commit it", async () => {
