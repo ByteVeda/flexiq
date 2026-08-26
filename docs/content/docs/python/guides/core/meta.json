@@ -6,6 +6,7 @@
     "queues",
     "workers",
     "execution-model",
+    "steps",
     "enqueue-options",
     "scheduling",
     "cancellation",

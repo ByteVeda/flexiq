@@ -26,6 +26,14 @@ handle.nodes();                   // per-step status snapshot
 Requires the addon built with the `workflows` cargo feature (enabled by
 `pnpm build:native`).
 
+<Callout type="info" title="A DAG, or ordinary control flow?">
+  A workflow is a graph declared up front, one job per node, distributable and
+  inspectable. When the sequence is just the shape of one function — charge,
+  wait, email — reach for
+  [durable steps](/node/guides/core/steps) instead: same replay-safety,
+  written with ordinary control flow, inside a single job.
+</Callout>
+
 <Callout type="warning" title="Workflows need a running worker">
   `.submit()` enqueues the step jobs; they only execute while a worker (a
   process that claims and executes queued jobs) is consuming the queue. Start

@@ -14,6 +14,13 @@ where the automation stops.
 Coalescing is one of three collapse rules; <SdkLink to="guides/reliability/flow-control">Flow control</SdkLink>
 covers how it differs from a debounce window and from a rate limit.
 
+<Callout type="info" title="Deduping the enqueue, not the effect">
+  This key collapses duplicate *enqueues*. It does nothing about a task body
+  that already charged a card and then crashed before committing — for that you
+  need a key the downstream service dedupes on, minted per checkpoint. See
+  <SdkLink to="guides/core/steps">durable steps</SdkLink>.
+</Callout>
+
 ## Deduping enqueues
 
 An explicit key works the same way in every binding — a second enqueue with

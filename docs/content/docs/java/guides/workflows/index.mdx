@@ -42,6 +42,14 @@ can also declare structural steps with `stepAfter(name, task, deps...)` and
 supply payloads at submit time via
 `queue.submitWorkflow(workflow, Map.of("extract", 5, ...))`.
 
+<Callout type="info" title="A DAG, or ordinary control flow?">
+  A workflow is a graph declared up front, one job per node, distributable and
+  inspectable. When the sequence is just the shape of one function — charge,
+  wait, email — reach for
+  [durable steps](/java/guides/core/steps) instead: same replay-safety,
+  written with ordinary control flow, inside a single job.
+</Callout>
+
 <Callout type="info">
   The worker must opt in with `trackWorkflows()` — workflow node and run state
   are driven from that worker's job outcomes. Workflows that use gates,

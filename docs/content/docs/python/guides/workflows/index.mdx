@@ -54,6 +54,14 @@ called with its predecessor's return value — each runs with the args you give 
 in `wf.step(...)`. To pass a value between steps, use fan-out / fan-in or read
 `WorkflowContext.results`. See [Building workflows](/python/guides/workflows/building).
 
+<Callout type="info" title="A DAG, or ordinary control flow?">
+  A workflow is a graph declared up front, one job per node, distributable and
+  inspectable. When the sequence is just the shape of one function — charge,
+  wait, email — reach for
+  [durable steps](/python/guides/core/steps) instead: same replay-safety,
+  written with `if` and `for`, inside a single job.
+</Callout>
+
 <Callout type="warn" title="Workflows need a running worker">
   `submit_workflow()` enqueues the step jobs; they execute only while a worker is
   consuming the queue. Start one first — `flexiq worker --app tasks:queue`, or
