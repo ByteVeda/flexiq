@@ -20,6 +20,23 @@ public final class NativeWorker {
 
     public static native void cancelJob(long handle, long token);
 
+    /**
+     * Report that an in-flight job's attempt ended in a durable step sleep.
+     * {@code wakeAt} is the deadline the core rescheduled it to, in Unix
+     * milliseconds.
+     */
+    public static native void sleepJob(long handle, long token, long wakeAt);
+
+    /**
+     * Open the durable-step session for one attempt of {@code jobId}; returns
+     * its handle.
+     *
+     * <p>On the worker, because the {@code (owner, attempt)} fence's owner is
+     * the id this worker won its execution claim under. Java supplies only the
+     * job and the attempt.
+     */
+    public static native long openStepSession(long handle, String jobId, int attempt);
+
     public static native void stop(long handle);
 
     public static native void close(long handle);

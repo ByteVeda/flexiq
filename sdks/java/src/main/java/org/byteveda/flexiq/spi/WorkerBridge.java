@@ -33,6 +33,28 @@ public interface WorkerBridge {
             @Nullable String metadataJson,
             @Nullable String disabledMiddlewareJson);
 
+    /**
+     * The form the runtime actually calls, carrying the dispatched attempt.
+     *
+     * <p>{@code attempt} is the job's {@code retryCount} at dispatch. Durable
+     * steps are fenced on {@code (owner, attempt)}, and this is the attempt half
+     * — the owner half stays on the worker handle, out of reach of anything an
+     * attached executor could fill in from a socket frame.
+     *
+     * <p>A default rather than a signature change, so a bridge written against
+     * the six-argument form keeps working; it simply cannot run durable steps.
+     */
+    default void onJob(
+            long token,
+            String jobId,
+            String taskName,
+            byte[] payload,
+            @Nullable String metadataJson,
+            @Nullable String disabledMiddlewareJson,
+            int attempt) {
+        onJob(token, jobId, taskName, payload, metadataJson, disabledMiddlewareJson);
+    }
+
     void onOutcome(
             String kind,
             String jobId,

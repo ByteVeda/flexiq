@@ -20,6 +20,7 @@ mod jvm;
 #[cfg(feature = "mesh")]
 mod mesh;
 mod queue;
+mod steps;
 mod worker;
 #[cfg(feature = "workflows")]
 mod workflows;

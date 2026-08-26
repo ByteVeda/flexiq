@@ -29,6 +29,10 @@ pub enum TaskOutcome {
     Success(Vec<u8>),
     Failure(String, bool),
     Cancelled,
+    /// The attempt ended in a `step.sleep`. Carries the deadline the core
+    /// rescheduled the job to, which is the stored one on a replay and not
+    /// necessarily the one the body asked for.
+    Slept(i64),
 }
 
 /// Pending-job registry shared between the dispatcher and the Java completion
@@ -197,6 +201,16 @@ async fn run_one(
             task_name: job.task_name,
             wall_time_ns: wall,
         },
+        // Before the cancel and failure arms: a sleep is neither. The sleep row
+        // is committed, the claim released and the job already `Pending` at its
+        // deadline, so this reports what happened rather than asking for it —
+        // no retry, no budget token, no breaker, no metric.
+        Ok(TaskOutcome::Slept(wake_at)) => JobResult::Slept {
+            job_id: job.id,
+            task_name: job.task_name,
+            wake_at,
+            wall_time_ns: wall,
+        },
         Ok(TaskOutcome::Cancelled) => cancelled(job, wall),
         Ok(TaskOutcome::Failure(error, retryable)) => {
             // A failure on a cancel-requested job is a cancellation, not a fault.
@@ -239,13 +253,17 @@ fn submit_to_java(
     // bridge ignores them in favour of the live values.
     let metadata = optional_string(&mut env, job.metadata.as_deref())?;
     let disabled = optional_string(&mut env, disabled_middleware)?;
+    // The attempt this dispatch is, so a durable-step session can be fenced on
+    // it. Not an owner and not a claim — those stay on the worker handle, where
+    // an executor filling in a socket frame cannot reach them (§9.2).
+    let attempt = job.retry_count;
     // An `Err(JavaException)` leaves the exception pending on the attached
     // thread; clear it before returning so the thread isn't poisoned for the
     // next call.
     if let Err(e) = env.call_method(
         callbacks,
         "onJob",
-        "(JLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;)V",
+        "(JLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;I)V",
         &[
             JValue::Long(token as i64),
             JValue::Object(&job_id),
@@ -253,6 +271,7 @@ fn submit_to_java(
             JValue::Object(&payload),
             JValue::Object(&metadata),
             JValue::Object(&disabled),
+            JValue::Int(attempt),
         ],
     ) {
         let _ = env.exception_clear();

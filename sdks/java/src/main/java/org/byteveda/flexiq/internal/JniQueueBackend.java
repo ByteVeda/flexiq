@@ -743,6 +743,11 @@ public final class JniQueueBackend implements QueueBackend {
     }
 
     @Override
+    public boolean supportsSteps() {
+        return withOpenHandle(() -> NativeQueue.supportsSteps(handle));
+    }
+
+    @Override
     public WorkerControl startWorker(WorkerBridge bridge, String optionsJson) {
         return withOpenHandle(() -> new JniWorkerControl(NativeQueue.runWorker(handle, bridge, optionsJson)));
     }

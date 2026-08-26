@@ -47,6 +47,13 @@ pub struct WorkerHandle {
     registry: Arc<Registry>,
     shutdown: Arc<Notify>,
     heartbeat_stop: Arc<Notify>,
+    /// Storage, namespace and claim id, kept for `openStepSession` — the fence
+    /// on every step write is `(owner, attempt)`, and the owner has to be the id
+    /// *this* worker won its execution claim under, never one the running task
+    /// asserts about itself.
+    pub(crate) storage: StorageBackend,
+    pub(crate) namespace: Option<String>,
+    pub(crate) worker_id: String,
     /// The mesh node, when mesh scheduling is enabled. Held so `stop` can signal
     /// its gossip + steal-server tasks and `meshClusterInfo` can read its state.
     #[cfg(feature = "mesh")]
@@ -96,11 +103,15 @@ fn start_worker(
     let dispatcher_storage = storage.clone();
     let dispatcher_namespace = namespace.clone();
     let lifecycle_storage = storage.clone();
+    // The handle's own copies, for the step sessions it opens.
+    let step_storage = storage.clone();
+    let step_namespace = namespace.clone();
     let queues_csv = queues.join(",");
     let worker_id = format!("java-{}", uuid::Uuid::now_v7());
     // The mesh node id is this worker's id; capture before `worker_id` moves.
     #[cfg(feature = "mesh")]
     let mesh_worker_id = worker_id.clone();
+    let step_worker_id = worker_id.clone();
 
     // Validate every task policy before writing any persistent state: this is
     // the last fallible step that has no side effects, and returning Err past
@@ -225,6 +236,9 @@ fn start_worker(
         registry,
         shutdown,
         heartbeat_stop,
+        storage: step_storage,
+        namespace: step_namespace,
+        worker_id: step_worker_id,
         #[cfg(feature = "mesh")]
         mesh,
     })
@@ -468,11 +482,13 @@ fn call_on_outcome(
     outcome: &ResultOutcome,
 ) -> Result<(), String> {
     // A superseded result wrote nothing — the job is proceeding under another
-    // owner — so the shell hears nothing about it. Neither does a sleep: there
-    // is no `onSleep` for it to reach yet, because the task context has no
-    // `step` and no attempt can end in one. The taxonomy is
-    // `#[non_exhaustive]`, so anything else this build cannot name stays silent
-    // for the same reason rather than arriving mislabelled.
+    // owner — so the shell hears nothing about it. Neither does a sleep, for the
+    // opposite reason: `WorkerDispatchBridge` already ran `onSleep` and emitted
+    // `job.sleeping` on the thread the task slept on, where the middleware chain
+    // that opened in `before` still exists. Reporting it again here would pair
+    // one `before` with two hooks. The taxonomy is `#[non_exhaustive]`, so
+    // anything else this build cannot name stays silent rather than arriving
+    // mislabelled.
     if !matches!(
         outcome,
         ResultOutcome::Success { .. }
@@ -697,6 +713,29 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_failJob<'l
             token as u64,
             TaskOutcome::Failure(message, retryable != JNI_FALSE),
         );
+        Ok(())
+    })
+}
+
+/// `void sleepJob(long workerHandle, long token, long wakeAt)` — the attempt
+/// ended in a `step.sleep`.
+///
+/// Not a completion and not a failure: `Storage::sleep_job` already committed
+/// the sleep row, released the claim and left the job `Pending` at `wakeAt`, so
+/// this only tells the scheduler what happened.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_sleepJob(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    token: jlong,
+    wake_at: jlong,
+) {
+    guard(&mut env, (), |_env| {
+        let worker = unsafe { borrow_worker(handle) };
+        worker
+            .registry
+            .complete(token as u64, TaskOutcome::Slept(wake_at));
         Ok(())
     })
 }

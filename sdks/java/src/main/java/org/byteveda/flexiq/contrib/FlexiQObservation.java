@@ -57,6 +57,24 @@ public final class FlexiQObservation implements Middleware {
         stop(context, error);
     }
 
+    /**
+     * The attempt ended in a durable {@code step.sleep}.
+     *
+     * <p>Closed with a {@code sleep} event and no error: the work has not
+     * finished, so recording it as a success would inflate the success timer and
+     * close the span green on a job that has not run yet. The next attempt opens
+     * its own observation, which is the honest shape — a sleeping job is not
+     * occupying a worker.
+     */
+    @Override
+    public void onSleep(TaskContext context, long wakeAt) {
+        Observation observation = (Observation) context.attributes().get(OBSERVATION);
+        if (observation != null) {
+            observation.event(Observation.Event.of("flexiq.sleep", "sleeping until " + wakeAt));
+        }
+        stop(context, null);
+    }
+
     private void stop(TaskContext context, @Nullable Throwable error) {
         Observation.Scope scope = (Observation.Scope) context.attributes().remove(SCOPE);
         if (scope != null) {

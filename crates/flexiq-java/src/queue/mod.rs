@@ -270,6 +270,23 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_setProgress
     })
 }
 
+/// `boolean supportsSteps(long handle)` — whether this backend has a step store.
+///
+/// A capability probe, not the gate: `StepSession::load` refuses on its own, and
+/// mirroring that rule in the shell is how a shell drifts from the core. This is
+/// for an application that wants the answer without paying for a job read.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_supportsSteps(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    guard(&mut env, JNI_FALSE, |_env| {
+        let queue = unsafe { borrow_queue(handle) };
+        Ok(to_jboolean(queue.storage.supports_steps()))
+    })
+}
+
 /// Map a Rust `bool` onto a JNI `jboolean`.
 fn to_jboolean(value: bool) -> jboolean {
     if value {

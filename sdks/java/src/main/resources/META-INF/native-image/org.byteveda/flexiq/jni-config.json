@@ -7,7 +7,39 @@
   "name":"java.lang.String"
 },
 {
+  "name":"org.byteveda.flexiq.FlexiQException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.spi.StepDecision",
+  "methods":[{"name":"<init>","parameterTypes":["byte[]","java.lang.String","java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.spi.StepSleepOutcome",
+  "methods":[{"name":"<init>","parameterTypes":["boolean","java.lang.String","long"] }]
+},
+{
+  "name":"org.byteveda.flexiq.steps.StepDivergedError",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.steps.StepError",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.steps.StepLimitExceededError",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.steps.StepSupersededError",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"org.byteveda.flexiq.steps.StepUnavailableError",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
   "name":"org.byteveda.flexiq.worker.WorkerDispatchBridge",
-  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
+  "methods":[{"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String"] }, {"name":"onJob","parameterTypes":["long","java.lang.String","java.lang.String","byte[]","java.lang.String","java.lang.String","int"] }, {"name":"onOutcome","parameterTypes":["java.lang.String","java.lang.String","java.lang.String","java.lang.String","int","boolean","long"] }]
 }
 ]

@@ -3,6 +3,7 @@ package org.byteveda.flexiq.internal;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
+import org.byteveda.flexiq.spi.StepSession;
 import org.byteveda.flexiq.spi.WorkerControl;
 
 /**
@@ -54,6 +55,24 @@ public final class JniWorkerControl implements WorkerControl {
             NativeWorker.cancelJob(handle, token);
             return null;
         });
+    }
+
+    @Override
+    public void sleepJob(long token, long wakeAt) {
+        withOpenHandle(() -> {
+            NativeWorker.sleepJob(handle, token, wakeAt);
+            return null;
+        });
+    }
+
+    /**
+     * The one control that can: it holds the native worker handle, so the owner
+     * every step write is fenced on is the id <i>this</i> worker claims
+     * execution under.
+     */
+    @Override
+    public StepSession openStepSession(String jobId, int attempt) {
+        return withOpenHandle(() -> new JniStepSession(NativeWorker.openStepSession(handle, jobId, attempt)));
     }
 
     @Override

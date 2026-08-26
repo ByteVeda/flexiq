@@ -213,6 +213,22 @@ public interface QueueBackend extends AutoCloseable, ConditionalSettings {
         return "[]";
     }
 
+    /**
+     * Whether this backend has a durable-step store.
+     *
+     * <p>A capability probe, not the gate: a step session refuses on its own if
+     * the store is missing, and mirroring that rule here is how a shell drifts
+     * from the core. This exists for an application that wants the answer
+     * without dispatching a job first.
+     *
+     * <p>Defaults to {@code false}, so a custom backend that has never heard of
+     * {@code job_steps} reports the truth rather than promising a store it does
+     * not have.
+     */
+    default boolean supportsSteps() {
+        return false;
+    }
+
     // ── Locks ───────────────────────────────────────────────────────
     // Optional capability: default to throwing so existing custom backends keep
     // compiling and fail explicitly only when locks are actually used.

@@ -676,6 +676,11 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     }
 
     @Override
+    public boolean supportsSteps() {
+        return backend.supportsSteps();
+    }
+
+    @Override
     public boolean cancel(String jobId) {
         return backend.cancel(jobId);
     }
