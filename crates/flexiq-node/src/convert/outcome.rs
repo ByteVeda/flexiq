@@ -93,9 +93,10 @@ pub fn outcome_to_js(outcome: &ResultOutcome) -> Option<JsOutcome> {
             duration_ms: duration_ms(*wall_time_ns),
         },
         ResultOutcome::Superseded { .. } => return None,
-        // Nothing reaches this yet: the task context has no `step`, so no
-        // attempt can end in a sleep. The `on_sleep` hook and the
-        // `job.sleeping` event land with it.
+        // Handled where the attempt ended, not here: the task callback pairs
+        // the sleep with `onSleep` and emits `job.sleeping` while the job
+        // context is still live, the same way it owns the success event.
+        // Doing it again here would double both.
         ResultOutcome::Slept { .. } => return None,
         // The taxonomy is `#[non_exhaustive]`; an outcome this build does not
         // know is one it cannot name correctly, so it emits nothing.

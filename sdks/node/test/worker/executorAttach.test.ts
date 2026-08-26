@@ -380,6 +380,29 @@ it("reports a task failure with its retry verdict", async () => {
   expect(String(frame.header.error)).toContain("deliberate failure");
 });
 
+it("refuses a durable step rather than running it un-memoized", async () => {
+  // An executor holds no execution claim and has no channel to commit a step
+  // on, so `ctx.step` refuses. Retryably: a heterogeneous fleet mid-rollout may
+  // put the next attempt on a worker that can commit, and there is no version
+  // of "your charge step silently lost its memo" that beats a failure naming
+  // the reason.
+  scheduler = await FakeScheduler.listen();
+  const queue = newQueue();
+  queue.task("checkout", async () => {
+    const job = currentJob();
+    return job?.step.run("charge", () => "charged");
+  });
+
+  executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
+  await scheduler.attached();
+  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
+
+  const frame = await scheduler.nextResult();
+  expect(frame.header.type).toBe("failure");
+  expect(frame.header.should_retry).toBe(true);
+  expect(String(frame.header.error)).toContain("attached executor");
+});
+
 it("honours a task's retryOn predicate over the wire", async () => {
   // Only the executor sees the exception, so its verdict is the one that
   // counts; a wire defaulting this to true would retry poison jobs forever.

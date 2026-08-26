@@ -70,6 +70,7 @@ export {
   type OutcomeEvent,
   type PredicateEvent,
   type QueueEvent,
+  type SleepEvent,
   type WorkerEvent,
   type WorkerUnhealthyEvent,
   type WorkflowEvent,
@@ -160,6 +161,20 @@ export {
   type Serializer,
   SignedSerializer,
 } from "./serializers";
+export {
+  type SleepDeadline,
+  StepContext,
+  StepControlSignal,
+  StepDivergedError,
+  StepError,
+  StepLimitExceededError,
+  type StepRunOptions,
+  type StepSleepOptions,
+  StepSleepSignal,
+  StepSupersededError,
+  StepSwallowedError,
+  StepUnavailableError,
+} from "./steps";
 export { decodeTaskError, encodeTaskError, type TaskError } from "./task-error";
 export type {
   AnyHandler,

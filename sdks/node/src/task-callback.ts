@@ -1,10 +1,18 @@
 import { type JobContext, runInContext } from "./context";
+import { middlewareKey } from "./dashboard/stores/middlewareDisables";
 import { SerializationError, TaskNotRegisteredError } from "./errors";
 import type { Emitter } from "./events";
 import type { Middleware, TaskContext } from "./middleware";
 import type { JsTaskInvocation, JsTaskOutcome, NativeQueue } from "./native";
 import { type ResourceRuntime, runWithResolver } from "./resources";
 import { deserializeCall, type PayloadCodec, type Serializer } from "./serializers";
+import {
+  StepContext,
+  StepLatch,
+  StepSleepSignal,
+  type StepStore,
+  stepRetryDecision,
+} from "./steps";
 import { encodeTaskError } from "./task-error";
 import type { RegisteredTask } from "./types";
 import { createLogger } from "./utils";
@@ -57,6 +65,17 @@ export interface TaskCallbackDeps {
     message: string,
     extra?: string,
   ) => void;
+  /**
+   * Where `ctx.step` commits, when this callback's owner can commit at all.
+   *
+   * A worker passes its own native handle, so every step is fenced on the id
+   * *that* worker claims execution under — two workers on one queue must not
+   * share an owner. Absent means nothing here can commit and every step
+   * refuses: an attached executor holds no claim and has no channel to commit
+   * on, and one started from a process that *does* have storage must refuse
+   * too, because the job belongs to the scheduler.
+   */
+  steps?: StepStore;
 }
 
 /**
@@ -107,9 +126,17 @@ export function createTaskCallback(
 
     // Cooperative cancel signal + job context exposed to the handler.
     const controller = new AbortController();
+    // One latch per invocation, shared by `ctx.step` and the swallow check
+    // below: JavaScript has no error a `catch` misses, so this is the whole of
+    // the defence against a body that catches a control signal and returns.
+    const latch = new StepLatch();
     const context: JobContext = {
       jobId: invocation.id,
       signal: controller.signal,
+      // Step results are encoded with the *queue* serializer, which already
+      // carries the queue codec chain — that is how `new Queue({ codec })`
+      // encryption reaches `job_steps` with no extra plumbing.
+      step: new StepContext(invocation.id, invocation.attempt, serializer, latch, deps.steps),
       setProgress: (progress) => setProgress(invocation.id, progress),
       log: (message, level = "info", extra) =>
         writeTaskLog(
@@ -156,11 +183,38 @@ export function createTaskCallback(
         await mw.before?.(ctx);
       }
       const result = await runWithResolver(scope.resolver, () => runInContext(context, invoke));
+      // Before the `after` hooks, which exist to see a result: a body that
+      // caught a step control signal and returned did not produce one.
+      latch.check();
       for (const mw of chain) {
         await mw.after?.(ctx, result);
       }
       return { result: Buffer.from(serializer.serialize(result)) };
     } catch (error) {
+      // A slept attempt is neither a result nor a failure: the sleep row is
+      // committed, the claim released and the job already Pending at its
+      // deadline. It pairs `before` with `onSleep` rather than `after`, runs
+      // no `onError`, and emits `job.sleeping` instead of `job.failed`.
+      if (error instanceof StepSleepSignal) {
+        warnUnpairedMiddleware(chain);
+        for (const mw of chain) {
+          try {
+            await mw.onSleep?.(ctx, error.wakeAt);
+          } catch (hookError) {
+            // A sleep is already committed; a hook cannot undo it.
+            log.debug(() => `onSleep middleware hook failed for ${invocation.id}`, hookError);
+          }
+        }
+        emitter.emit("job.sleeping", {
+          jobId: invocation.id,
+          taskName: invocation.taskName,
+          queue: invocation.queue,
+          wakeAt: error.wakeAt,
+          stepKey: error.stepKey,
+          durationMs: performance.now() - startedAt,
+        });
+        return { sleptUntil: error.wakeAt };
+      }
       for (const mw of chain) {
         try {
           await mw.onError?.(ctx, error);
@@ -183,6 +237,9 @@ export function createTaskCallback(
       return { error: encoded, retryable: isRetryable(task, error) };
     } finally {
       clearInterval(poller);
+      // Warns if the job has recorded steps this code no longer runs. Never
+      // throws — the side effects already happened.
+      context.step.finish();
       try {
         await scope.teardown();
       } catch (error) {
@@ -191,6 +248,42 @@ export function createTaskCallback(
       }
     }
   };
+}
+
+/**
+ * Middleware already warned about for pairing `before` with only `after`.
+ *
+ * Process-wide and unbounded only in the number of distinct middleware names,
+ * which is small and fixed at startup.
+ */
+const WARNED_UNPAIRED = new Set<string>();
+
+/**
+ * Warn once per middleware that opens something in `before` and implements no
+ * `onSleep`.
+ *
+ * A sleep ends the attempt without a result, so such middleware leaks whatever
+ * its `before` opened — a span, a scope, a timer. Nothing can be done for it
+ * automatically: only the middleware knows how to close what it opened. Naming
+ * it once is the honest answer.
+ */
+function warnUnpairedMiddleware(chain: readonly Middleware[]): void {
+  chain.forEach((mw, index) => {
+    if (!mw.before || mw.onSleep) {
+      return;
+    }
+    const name = middlewareKey(mw, index);
+    if (WARNED_UNPAIRED.has(name)) {
+      return;
+    }
+    WARNED_UNPAIRED.add(name);
+    log.warn(
+      () =>
+        `${name} defines before() but not onSleep(), so whatever its before() opened is ` +
+        "left open when an attempt ends in step.sleep. Implement onSleep(ctx, wakeAt) to " +
+        "close it.",
+    );
+  });
 }
 
 /**
@@ -208,8 +301,19 @@ function encodeExtra(value: unknown): string {
   }
 }
 
-/** Whether a task's `retryOn` predicate accepts this failure. */
+/**
+ * Whether this failure may be retried.
+ *
+ * A step failure answers for itself: the core has already classified it
+ * (`classifyStepFailure`), and a divergence or a cap violation will be just as
+ * wrong next attempt whatever the task's `retryOn` predicate thinks — that
+ * predicate expresses an opinion about the *task's* errors.
+ */
 export function isRetryable(task: RegisteredTask, error: unknown): boolean {
+  const stepDecision = stepRetryDecision(error);
+  if (stepDecision !== undefined) {
+    return stepDecision;
+  }
   const predicate = task.options?.retryOn;
   if (!predicate) {
     return true;

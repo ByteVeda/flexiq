@@ -15,6 +15,8 @@ export const { JsQueue, JsWorker, startExecutor, reservedSettingPrefixes } = bin
 export type NativeQueue = InstanceType<typeof JsQueue>;
 export type NativeWorker = InstanceType<typeof JsWorker>;
 export type NativeExecutor = Awaited<ReturnType<typeof startExecutor>>;
+/** One attempt's durable-step session. Only a worker hands one out. */
+export type NativeStepSession = Awaited<ReturnType<NativeWorker["openStepSession"]>>;
 
 export type {
   CircuitBreakerInput,
@@ -33,6 +35,8 @@ export type {
   JsOutcome,
   JsReplayEntry,
   JsStats,
+  JsStepDecision,
+  JsStepSleepOutcome,
   JsSubscription,
   JsTaskInvocation,
   JsTaskLog,

@@ -102,6 +102,14 @@ pub struct JsTaskInvocation {
     pub id: String,
     pub task_name: String,
     pub payload: Buffer,
+    /// The job's `retry_count` as dispatched — the attempt half of the
+    /// `(owner, attempt)` fence durable steps commit under. Not a claim: the
+    /// owner never rides a frame (see `JsWorker::openStepSession`), and this is
+    /// re-read from the job row before a step session is handed out.
+    pub attempt: i32,
+    /// Queue the job was dispatched from, so a lifecycle event raised while the
+    /// task is still running can name it without a storage read.
+    pub queue: String,
 }
 
 /// What the JS task callback resolves with: either a result or an error, never
@@ -117,6 +125,11 @@ pub struct JsTaskOutcome {
     /// Whether the failure may be retried; absent means yes. `false` sends the
     /// job straight to the dead-letter queue, whatever budget is left.
     pub retryable: Option<bool>,
+    /// Set when the attempt ended in `ctx.step.sleep`: the deadline the job was
+    /// rescheduled to, in Unix milliseconds. Neither a result nor a failure —
+    /// the sleep row is already committed and the claim already released, so it
+    /// outranks both fields above.
+    pub slept_until: Option<i64>,
 }
 
 /// JS-facing view of a stored [`Job`]. `result` is the opaque result blob (or

@@ -18,6 +18,7 @@ interface FlexiQMetrics {
   jobDuration: Histogram<"task">;
   activeWorkers: Gauge<string>;
   retriesTotal: Counter<"task">;
+  sleepsTotal: Counter<"task">;
   queueDepth: Gauge<"queue">;
   dlqSize: Gauge<string>;
 }
@@ -59,6 +60,12 @@ function getMetrics(register: Registry, namespace: string, buckets?: number[]): 
     retriesTotal: new Counter({
       name: `${namespace}_retries_total`,
       help: "Total job retries by task.",
+      labelNames: ["task"],
+      registers,
+    }),
+    sleepsTotal: new Counter({
+      name: `${namespace}_sleeps_total`,
+      help: "Total attempts ended by a durable step sleep, by task.",
       labelNames: ["task"],
       registers,
     }),
@@ -129,6 +136,17 @@ export function prometheusMiddleware(options: PrometheusMiddlewareOptions = {}):
     },
     onError(ctx) {
       finish(ctx.jobId, ctx.taskName, "failed");
+    },
+    // Count the sleep and release the worker slot, on its own counter.
+    // Deliberately not `jobsTotal`: a job that sleeps three times would then be
+    // counted four times, and neither `completed` nor `failed` describes an
+    // attempt that has not finished. The duration histogram is skipped for the
+    // same reason — this attempt measured part of a job.
+    onSleep(ctx) {
+      if (starts.delete(ctx.jobId)) {
+        metrics.activeWorkers.dec();
+        metrics.sleepsTotal.inc({ task: ctx.taskName });
+      }
     },
     onRetry(event) {
       if (tracked(event.taskName)) {

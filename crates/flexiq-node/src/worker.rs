@@ -27,7 +27,13 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 128;
 /// [`JsWorker::stop`] to shut it down.
 #[napi]
 pub struct JsWorker {
-    worker_id: String,
+    pub(crate) worker_id: String,
+    /// This worker's own handle to storage, for the durable-step sessions it
+    /// opens. Held here rather than on the queue because the fence is
+    /// `(owner, attempt)` and the owner is *this* worker's id: two workers
+    /// started from one queue must not share one owner slot.
+    pub(crate) storage: StorageBackend,
+    pub(crate) namespace: Option<String>,
     shutdown: Arc<Notify>,
     lifecycle_stop: Arc<Notify>,
     #[cfg(feature = "mesh")]
@@ -115,6 +121,10 @@ pub fn start_worker(
     let lifecycle_storage = storage.clone();
     let queues_csv = queues.join(",");
     let worker_id = format!("node-{}", uuid::Uuid::now_v7());
+    // The step sessions this worker opens are fenced on the id it claims
+    // execution under, so it keeps its own storage handle alongside it.
+    let steps_storage = storage.clone();
+    let steps_namespace = namespace.clone();
     // Mesh gossip advertises the served queues; capture them before `queues`
     // moves into the scheduler.
     #[cfg(feature = "mesh")]
@@ -291,6 +301,8 @@ pub fn start_worker(
 
     Ok(JsWorker {
         worker_id,
+        storage: steps_storage,
+        namespace: steps_namespace,
         shutdown,
         lifecycle_stop,
         #[cfg(feature = "mesh")]

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { StepContext } from "./steps";
 import type { TaskLogLevel } from "./types";
 
 /**
@@ -26,6 +27,12 @@ export interface JobContext {
    * task (ETL, ML steps, batch processing).
    */
   publish(value: unknown): void;
+  /**
+   * Durable inline steps — `step.run` memoizes work against the job so a retry
+   * replays it, `step.sleep` ends the attempt instead of holding a worker slot.
+   * See {@link StepContext}.
+   */
+  readonly step: StepContext;
 }
 
 /**

@@ -15,8 +15,7 @@ export const EVENT_NAMES = [
   "job.dead",
   "job.cancelled",
   // An attempt ended in a durable step sleep; the job is pending until its
-  // deadline. Reserved: part of the cross-SDK contract, and emitted once the
-  // task context carries a step API.
+  // deadline.
   "job.sleeping",
   "worker.started",
   "worker.online",
@@ -65,9 +64,12 @@ export interface OutcomeEvent {
 export interface SleepEvent {
   jobId: string;
   taskName: string;
-  queue?: string;
+  /** Queue the sleeping job belongs to, read off the dispatch frame. */
+  queue: string;
   /** Deadline the job was rescheduled to, in Unix milliseconds. */
   wakeAt: number;
+  /** Identity of the sleep step — `name#occurrence`, or its explicit key. */
+  stepKey: string;
   /** How long the attempt ran before it slept, in ms. */
   durationMs?: number;
 }

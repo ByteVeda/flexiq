@@ -116,6 +116,20 @@ export class Worker {
     // Advance workflow runs as node-jobs settle, unless disabled or unsupported.
     const tracker = (run?.advanceWorkflows ?? true) ? (params.workflowTracker ?? null) : null;
 
+    // Durable steps are fenced on `(owner, attempt)`, and the owner is the id
+    // *this* worker claims execution under — so sessions are opened through the
+    // native worker, not the queue, which two workers would share.
+    //
+    // The worker does not exist until `runWorker` returns, and its scheduler
+    // loop is already dispatching by then, so the callback reaches for it
+    // through a holder and waits for the gate rather than reading it empty.
+    // Same shape as `Executor.start`, and for the same reason.
+    let started: NativeWorker | undefined;
+    let markStarted: () => void = () => {};
+    const workerReady = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
     const taskCallback = createTaskCallback({
       tasks,
       serializer,
@@ -124,6 +138,15 @@ export class Worker {
       emitter,
       resources,
       queue,
+      steps: {
+        openStepSession: async (jobId, attempt) => {
+          await workerReady;
+          if (!started) {
+            throw new Error("the worker stopped before its step session could open");
+          }
+          return started.openStepSession(jobId, attempt);
+        },
+      },
     });
 
     const outcomeCallback = (outcome: JsOutcome): void => {
@@ -179,6 +202,8 @@ export class Worker {
       pushDispatch: run?.pushDispatch,
     };
     const native = queue.runWorker(taskCallback, outcomeCallback, nativeOptions);
+    started = native;
+    markStarted();
     emitter.emit("worker.started", { workerId: native.id, queues: run?.queues });
     // Lease the shared resource runtime only once the native worker actually
     // started, so its worker-scoped values survive until the last worker on this

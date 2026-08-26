@@ -138,6 +138,12 @@ function degraded(warnOnce: (what: string) => void, holder: SinkHolder): Record<
     isCancelRequested(): boolean {
       return false;
     },
+    // Answered rather than thrown: a durable step is fenced on the claim of the
+    // worker that won it, and an executor holds none. `false` is the true
+    // answer, and the proxy's default would make a capability *probe* throw.
+    supportsSteps(): boolean {
+      return false;
+    },
     getSetting(): string | null {
       return null;
     },

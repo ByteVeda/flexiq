@@ -34,6 +34,14 @@ function recorder(): Recorder {
   };
 }
 
+it("answers the durable-step capability probe instead of throwing", () => {
+  // The stand-in's proxy hands back a *throwing function* for anything it does
+  // not implement, so a capability probe has to be answered explicitly or it
+  // becomes a crash. `false` is the true answer: a step is fenced on the claim
+  // of the worker that won it, and an executor holds none.
+  expect(createDetachedNative().supportsSteps()).toBe(false);
+});
+
 it("routes each detached queue's writes to its own sink", () => {
   const first = createDetachedNative();
   const second = createDetachedNative();

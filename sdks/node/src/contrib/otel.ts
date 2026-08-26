@@ -23,8 +23,9 @@ export interface OtelMiddlewareOptions {
 
 /**
  * Build {@link Middleware} that wraps each task execution in an OpenTelemetry span.
- * The span starts in `before`, ends `OK` in `after`, and ends `ERROR` (recording the
- * exception) in `onError`.
+ * The span starts in `before`, ends `OK` in `after`, ends `ERROR` (recording the
+ * exception) in `onError`, and ends with no status in `onSleep` — an attempt
+ * that slept is neither.
  */
 export function otelMiddleware(options: OtelMiddlewareOptions = {}): Middleware {
   const tracerName = options.tracerName ?? "flexiq";
@@ -68,6 +69,22 @@ export function otelMiddleware(options: OtelMiddlewareOptions = {}): Middleware 
       const message = error instanceof Error ? error.message : String(error);
       span.recordException(error instanceof Error ? error : message);
       span.setStatus({ code: SpanStatusCode.ERROR, message });
+      span.end();
+      spans.delete(ctx.jobId);
+    },
+
+    // End the span for an attempt that slept, without calling it a result. The
+    // span has to end — the attempt is over and the worker slot is gone — but
+    // its status stays unset: the task neither succeeded nor failed, and
+    // marking it OK would make a job that sleeps three times look like three
+    // successful executions.
+    onSleep(ctx, wakeAt) {
+      const span = spans.get(ctx.jobId);
+      if (!span) {
+        return;
+      }
+      span.setAttribute(`${prefix}.slept`, true);
+      span.addEvent("sleep", { [`${prefix}.wake_at`]: wakeAt });
       span.end();
       spans.delete(ctx.jobId);
     },

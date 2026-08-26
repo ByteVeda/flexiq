@@ -148,6 +148,8 @@ async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job)
         // Never read from `job` again — take, don't clone (payloads can be
         // large); `job` stays whole for the later `failure(job, ...)` moves.
         payload: Buffer::from(std::mem::take(&mut job.payload)),
+        attempt: job.retry_count,
+        queue: job.queue.clone(),
     };
 
     // The callback runs on the JS thread and returns a Promise; bridge its
@@ -189,6 +191,18 @@ async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job)
     };
     let wall_time_ns = started.elapsed().as_nanos() as i64;
     match timed {
+        // A slept attempt is neither a result nor a failure, and it is matched
+        // before either because it is the one ending whose state is already
+        // written: the sleep row is committed and this worker's claim is gone.
+        Ok(Ok(Ok(TaskOutcome {
+            slept_until: Some(wake_at),
+            ..
+        }))) => JobResult::Slept {
+            job_id: job.id,
+            task_name: job.task_name,
+            wake_at,
+            wall_time_ns,
+        },
         Ok(Ok(Ok(outcome))) => match outcome.error {
             None => JobResult::Success {
                 job_id: job.id,
@@ -240,6 +254,8 @@ struct TaskOutcome {
     /// Whether a failure may be retried. The shell's per-task `retryOn`
     /// predicate decides; an absent flag means retry, as before it existed.
     retryable: bool,
+    /// Set when `ctx.step.sleep` ended the attempt: the committed deadline.
+    slept_until: Option<i64>,
 }
 
 impl From<JsTaskOutcome> for TaskOutcome {
@@ -248,6 +264,7 @@ impl From<JsTaskOutcome> for TaskOutcome {
             result: outcome.result.map(|buffer| buffer.to_vec()),
             error: outcome.error,
             retryable: outcome.retryable.unwrap_or(true),
+            slept_until: outcome.slept_until,
         }
     }
 }
