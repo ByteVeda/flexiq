@@ -8,6 +8,7 @@ package org.byteveda.flexiq.events;
  */
 public sealed interface FlexiQEvent
         permits OutcomeEvent,
+                SleepEvent,
                 EnqueuedEvent,
                 WorkerEvent,
                 QueueEvent,

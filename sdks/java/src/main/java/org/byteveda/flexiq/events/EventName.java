@@ -22,8 +22,9 @@ public enum EventName {
     CANCELLED("job.cancelled"),
     /**
      * An attempt ended in a durable step sleep and the job is pending until its
-     * deadline ({@code job.sleeping}). Reserved: part of the cross-SDK contract,
-     * and emitted once the task context carries a step API.
+     * deadline ({@code job.sleeping}). Carries a
+     * {@link org.byteveda.flexiq.events.SleepEvent}; subscribe with
+     * {@code onEvent}, not {@code on}, since it is not a terminal outcome.
      */
     JOB_SLEEPING("job.sleeping"),
     /** A job was accepted into a queue ({@code job.enqueued}). */
