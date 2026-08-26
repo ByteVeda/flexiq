@@ -8,6 +8,10 @@ budget and backoff curve are enforced by the shared Rust scheduler — durable
 across worker crashes and identical in behavior across every binding — so a
 job that survives a worker restart mid-backoff still retries on schedule.
 
+A retry re-runs the task body from the top, so anything it already did happens
+again. To keep the parts that succeeded, checkpoint them with
+<SdkLink to="guides/core/steps">durable steps</SdkLink>.
+
 ## Retry policy
 
 Configure the retry budget and backoff on the task itself:
