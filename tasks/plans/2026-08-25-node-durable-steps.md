@@ -274,3 +274,37 @@ pairing test, resolving both workers' sessions through the last-started worker
 `[ 'alice', 'bob' ]` where `[ 'bob', 'alice' ]` was expected — the assertion
 that separates key matching from position matching. The first version of that
 test only counted callback runs, which a positional match satisfies too.
+
+### Review (CodeRabbit, round 1 — 4 findings, 3 real)
+
+- **`Queue.supportsSteps()` threw on a detached queue.** The stand-in's proxy
+  hands back a *throwing function* for anything it does not implement, so the
+  one method added as a cheap capability probe became a crash in exactly the
+  process that most needs the answer. `degraded()` answers `false` now, which is
+  also true: an executor holds no claim to fence a step on. The trap is the same
+  one the plan already warned about for `openStepSession`, missed one method over.
+- **Local validation bypassed the retry verdict.** The name check and both
+  duration parsers threw outside `guard`, so nothing stamped
+  `flexiqShouldRetry`, `isRetryable` fell through to the task default, and a
+  deterministic input error spent the whole retry budget to reach the same dead
+  letter — against §9.2, which calls an invalid step name permanent. All three
+  route through a `refuse()` helper that latches and returns a non-retryable
+  `StepError`; `encode()` had been doing it by hand and now shares it. **The
+  Python shell has the same gap** (`TypeError` is not a `StepControlSignal`, so
+  `_ControlScope` does not latch it) — worth folding into #733's branch.
+- **The absolute-sleep test could elapse before dispatch.** `sleepUntil` is the
+  only sleep whose instant is computed in the *test* process, so worker startup
+  ate the 300 ms window and the sleep replayed as `Elapsed` with no event.
+  Widened to 2 s, with a comment saying why the relative-duration tests are not
+  exposed.
+- **Declined: awaiting `onSleep` before reporting the sleep.** Real, but not
+  specific to this branch — `before` / `after` / `onError` are awaited the same
+  way, `Middleware` documents that contract, and `run_one` bounds all of them
+  whenever `timeout_ms > 0`. Making `onSleep` alone fire-and-forget would give
+  it different semantics from its three siblings and break flush-before-exit
+  while leaving the same hole on `after`. Bounded hooks belong in one change
+  across all four. One asymmetry is worth recording: a permit leaked on the
+  sleep path accumulates while the job proceeds to its deadline, where one
+  leaked on the success path pins a job a reaper eventually reclaims.
+
+Both fixes carry tests checked red against the old behaviour.
