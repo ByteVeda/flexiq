@@ -23,6 +23,20 @@ impl BindingError {
         }
     }
 
+    /// An exception of a specific class, for a failure whose *class* is the
+    /// contract.
+    ///
+    /// Durable steps are the case this exists for: the core's retry verdict has
+    /// to survive the crossing, and JNI can throw any class, so the class names
+    /// both the failure and whether the attempt may be retried. Nothing has to
+    /// be encoded into the message to carry it (see [`crate::steps`]).
+    pub fn with_class(class: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: message.into(),
+        }
+    }
+
     /// Throw this as a pending Java exception. A failed throw means the JVM is
     /// already in a bad state, so there is nothing further to do.
     pub fn throw(&self, env: &mut JNIEnv) {
