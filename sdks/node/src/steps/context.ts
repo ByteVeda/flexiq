@@ -117,11 +117,12 @@ export class StepContext {
    * latches when one is thrown and fails the attempt if the body returns
    * anyway, so swallowing it buys nothing and costs a clear error message.
    *
-   * @throws TypeError if `name` is empty or not a string.
+   * @throws StepError if `name` is empty or not a string — permanently, since
+   * the replay would be handed the same name.
    */
   async run<T>(name: string, fn: () => T | Promise<T>, options: StepRunOptions = {}): Promise<T> {
     if (typeof name !== "string" || name.length === 0) {
-      throw new TypeError("a step needs a name: step.run('charge', ...)");
+      throw this.refuse("a step needs a name: step.run('charge', ...)");
     }
     const session = await this.guard(() => this.session());
     const decision = await this.guard(() => session.beginRun(name, options.key));
@@ -156,7 +157,7 @@ export class StepContext {
    * and runs again on wake. Let it propagate.
    */
   async sleep(duration: Duration, options: StepSleepOptions = {}): Promise<void> {
-    const millis = sleepDurationMs(duration);
+    const millis = this.validate(() => sleepDurationMs(duration));
     const session = await this.guard(() => this.session());
     this.endAttemptIfSleeping(
       await this.guard(() => session.sleepFor(millis, options.name, options.key)),
@@ -171,7 +172,7 @@ export class StepContext {
    * unaffected by how many times the attempt replayed.
    */
   async sleepUntil(when: SleepDeadline, options: StepSleepOptions = {}): Promise<void> {
-    const millis = sleepDeadlineMs(when);
+    const millis = this.validate(() => sleepDeadlineMs(when));
     const session = await this.guard(() => this.session());
     this.endAttemptIfSleeping(
       await this.guard(() => session.sleepUntil(millis, options.name, options.key)),
@@ -218,6 +219,28 @@ export class StepContext {
   }
 
   // -------------------------------------------------------------- private
+
+  /**
+   * Refuse a step on input this shell can judge without asking the core.
+   *
+   * A missing name or an unparseable duration is deterministic — the replay is
+   * handed the same value — so §9.2 calls it permanent and the retry budget
+   * must not be spent on it. Latched like every other control signal: a body
+   * that caught this and returned would report a result it never computed.
+   */
+  private refuse(message: string): StepError {
+    this.latch.latch();
+    return new StepError(message, false);
+  }
+
+  /** Read a local validation, turning its failure into a permanent refusal. */
+  private validate<T>(read: () => T): T {
+    try {
+      return read();
+    } catch (error) {
+      throw this.refuse(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   /**
    * Run a native step call, converting its rejection and latching the body.
@@ -283,11 +306,9 @@ export class StepContext {
     try {
       return Buffer.from(this.serializer.serialize(value));
     } catch (error) {
-      this.latch.latch();
       const reason = error instanceof Error ? error.message : String(error);
-      throw new StepError(
+      throw this.refuse(
         `step '${stepKey}' returned a value the queue serializer cannot encode: ${reason}`,
-        false,
       );
     }
   }
