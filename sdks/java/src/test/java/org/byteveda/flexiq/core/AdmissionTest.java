@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import org.byteveda.flexiq.FlexiQ;
 import org.byteveda.flexiq.errors.QueueFullException;
 import org.byteveda.flexiq.task.EnqueueOptions;
@@ -82,6 +83,47 @@ class AdmissionTest {
     void rejectsNegativeCap(@TempDir Path dir) {
         try (FlexiQ queue = sqlite(dir)) {
             assertThrows(IllegalArgumentException.class, () -> queue.maxPending("default", -1));
+        }
+    }
+
+    /**
+     * The cap is admission control on pending rows and a coalescing enqueue adds none, so a
+     * full queue still takes a slide onto the open window.
+     */
+    @Test
+    @Timeout(30)
+    void fullQueueStillTakesADebouncedSlide(@TempDir Path dir) {
+        Task<String> noop = Task.of("noop", String.class);
+        Task<String> report =
+                Task.of("report", String.class).debounce(Duration.ofMinutes(5), "report:u1", Duration.ofMinutes(30));
+        try (FlexiQ queue = sqlite(dir)) {
+            queue.maxPending("default", 2);
+            String opened = queue.enqueue(report, "u1");
+            queue.enqueue(noop, "a");
+            assertEquals(2, queue.countPendingByQueue("default"));
+
+            assertEquals(opened, queue.enqueue(report, "u1"));
+            assertEquals(2, queue.countPendingByQueue("default"));
+        }
+    }
+
+    /** With no window open there is a row to insert, so the same full queue refuses it. */
+    @Test
+    @Timeout(30)
+    void fullQueueStillRefusesToOpenADebounceWindow(@TempDir Path dir) {
+        Task<String> noop = Task.of("noop", String.class);
+        Task<String> report =
+                Task.of("report", String.class).debounce(Duration.ofMinutes(5), "report:u1", Duration.ofMinutes(30));
+        try (FlexiQ queue = sqlite(dir)) {
+            queue.maxPending("default", 2);
+            queue.enqueue(noop, "a");
+            queue.enqueue(noop, "b");
+
+            QueueFullException full = assertThrows(QueueFullException.class, () -> queue.enqueue(report, "u1"));
+            assertEquals("default", full.queue());
+            assertEquals(2, full.pending());
+            assertEquals(2, full.cap());
+            assertEquals(2, queue.countPendingByQueue("default"));
         }
     }
 
