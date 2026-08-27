@@ -1,7 +1,7 @@
 pub mod codel;
 mod maintenance;
 mod poller;
-mod result_handler;
+pub(crate) mod result_handler;
 pub mod retention;
 pub mod shed;
 #[cfg(feature = "push-dispatch")]

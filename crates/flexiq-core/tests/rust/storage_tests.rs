@@ -15,7 +15,7 @@ use flexiq_core::storage::records::{
     WorkerRegistration, WorkerStatus,
 };
 use flexiq_core::storage::{DeadJob, RetentionCutoffs, Storage};
-use flexiq_core::SqliteStorage;
+use flexiq_core::{SqliteStorage, RETRY_BUDGET_EXHAUSTED};
 
 fn make_job(queue: &str, task_name: &str) -> NewJob {
     NewJob {
@@ -2030,6 +2030,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
     test_step_session_memoizes_across_attempts(s);
     test_step_idempotency_key_survives_a_dlq_retry(s);
+    test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s);
     test_step_session_refuses_a_changed_sequence(s);
     test_step_session_sleeps_by_ending_the_attempt(s);
     test_an_elapsed_sleep_wakes_the_job_immediately(s);
@@ -2457,6 +2458,86 @@ fn test_step_idempotency_key_survives_a_dlq_retry(s: &impl Storage) {
             .run_key(),
         job.id,
     );
+}
+
+/// The run survives a dead-letter whose metadata a caller replaced with
+/// something that is not a JSON object.
+///
+/// `RETRY_BUDGET_EXHAUSTED` is the bare string `"retry_budget_exhausted"`,
+/// matched byte-for-byte by three SDK suites, so it has no object an origin
+/// could be merged into. While the run rode the metadata blob, a job already
+/// resurrected once and then killed by the budget lost it: the next
+/// `retry_dead` stamped the *intermediate* id and the operator's retry charged
+/// the customer a second time. The origin rides a column now.
+fn test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s: &impl Storage) {
+    let q = "q-step-budget-key";
+    let job = stepped_job(s, q, "w-budget-key");
+    let limits = StepLimits::default();
+    let expected = format!("{}:charge#0", job.id);
+
+    // 1. The charge is sent and the attempt dies before the step row commits.
+    let minted = std::cell::RefCell::new(Vec::new());
+    let mut first = StepSession::load(s.clone(), &job, "w-budget-key", limits).unwrap();
+    first
+        .run("charge", None, |key| {
+            minted.borrow_mut().push(key.to_string());
+            Err(QueueError::Other("connection reset".into()))
+        })
+        .unwrap_err();
+
+    // 2. An operator retries it out of the DLQ, which mints a new job id.
+    s.move_to_dlq(&job, "boom", None).unwrap();
+    let resurrected = s.retry_dead(&newest_dead_for(s, &job.id).id, None).unwrap();
+
+    // 3. The resurrection is killed by the retry budget, which replaces the
+    //    metadata blob with a marker that cannot carry anything.
+    let retried = s.get_job(&resurrected, None).unwrap().unwrap();
+    s.move_to_dlq(
+        &retried,
+        "retry budget exhausted",
+        Some(RETRY_BUDGET_EXHAUSTED),
+    )
+    .unwrap();
+    let dead = newest_dead_for(s, &resurrected);
+    assert_eq!(
+        dead.metadata.as_deref(),
+        Some(RETRY_BUDGET_EXHAUSTED),
+        "the marker keeps its exact value — three SDK suites match it byte-for-byte"
+    );
+    assert_eq!(
+        dead.origin_job_id.as_deref(),
+        Some(job.id.as_str()),
+        "the run rides a column the replacement cannot reach"
+    );
+
+    // 4. The second operator retry still belongs to the run that began at `job`,
+    //    so the payment API sees the request it has already answered.
+    let twice = s.retry_dead(&dead.id, None).unwrap();
+    s.dequeue(q, now_millis() + 1000, None).unwrap();
+    assert!(s.claim_execution(&twice, "w-budget-key").unwrap());
+    let twice = s.get_job(&twice, None).unwrap().unwrap();
+    let mut third = StepSession::load(s.clone(), &twice, "w-budget-key", limits).unwrap();
+    assert_eq!(third.run_key(), job.id);
+    third
+        .run("charge", None, |key| {
+            minted.borrow_mut().push(key.to_string());
+            Ok(b"receipt".to_vec())
+        })
+        .unwrap();
+    assert_eq!(
+        minted.into_inner(),
+        [expected.clone(), expected],
+        "one idempotency key across two resurrections, so one charge"
+    );
+}
+
+/// The newest dead-letter entry for a job that died.
+fn newest_dead_for(s: &impl Storage, original_job_id: &str) -> DeadJob {
+    s.list_dead(1000, 0, None)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.original_job_id == original_job_id)
+        .expect("dead entry")
 }
 
 /// A deploy that changed the step sequence fails the attempt before the closure
