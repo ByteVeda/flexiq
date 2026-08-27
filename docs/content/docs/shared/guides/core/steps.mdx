@@ -504,7 +504,7 @@ attempt regardless, naming what it swallowed.
 | `StepSleepSignal` — a sleep committed; the attempt is over | Not a failure. The job is already pending at its deadline |
 | `StepDivergedError` — the sequence changed | No. Dead-letters |
 | `StepLimitExceededError` — over a cap | No. A bigger blob will not fit next time either |
-| `StepError` — a step name or sleep duration the API rejects | No. The same call is written in the code, so it is rejected identically next attempt |
+| `StepError` — a step name, sleep duration or wake deadline the API rejects | No. The same call is written in the code, so it is rejected identically next attempt |
 | `StepUnavailableError` — no worker able to commit | Yes. The next attempt may land somewhere that can |
 | `StepSupersededError` — the claim was lost | Reported, then dropped by the scheduler's fence |
 | `StepSwallowedError` — the body caught a signal and returned | No. The attempt ran unclaimed and cannot be trusted |
