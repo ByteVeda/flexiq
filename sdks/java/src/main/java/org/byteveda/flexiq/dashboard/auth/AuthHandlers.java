@@ -13,14 +13,30 @@ import org.byteveda.flexiq.dashboard.support.DashboardError;
 public final class AuthHandlers {
     private final AuthStore store;
 
+    /**
+     * Handlers over one auth store.
+     *
+     * @param store where users and sessions live
+     */
     public AuthHandlers(AuthStore store) {
         this.store = store;
     }
 
+    /**
+     * Whether auth is on, and whether the first admin still has to be created.
+     *
+     * @return {@code auth_enabled} and {@code setup_required}
+     */
     public Map<String, Object> status() {
         return Map.of("auth_enabled", true, "setup_required", store.countUsers() == 0);
     }
 
+    /**
+     * Create the first administrator. Refused once any user exists.
+     *
+     * @param body {@code username} and {@code password}
+     * @return the created user under {@code user}
+     */
     public Map<String, Object> setup(Map<String, Object> body) {
         if (store.countUsers() != 0) {
             throw DashboardError.badRequest("setup already complete");
@@ -31,6 +47,13 @@ public final class AuthHandlers {
         return Map.of("user", serializeUser(user));
     }
 
+    /**
+     * Exchange credentials for a session.
+     *
+     * @param body {@code username} and {@code password}
+     * @return the user and the session; the server sets the cookies and redacts the
+     *     raw token from what it sends back
+     */
     public Map<String, Object> login(Map<String, Object> body) {
         if (store.countUsers() == 0) {
             throw DashboardError.badRequest("setup_required");
@@ -48,6 +71,12 @@ public final class AuthHandlers {
         return out;
     }
 
+    /**
+     * Revoke the caller's session.
+     *
+     * @param ctx the request's auth state
+     * @return {@code {"ok": true}}, whether or not a session was present
+     */
     public Map<String, Object> logout(RequestContext ctx) {
         if (ctx.session() != null) {
             store.deleteSession(ctx.session().token());
@@ -55,6 +84,12 @@ public final class AuthHandlers {
         return Map.of("ok", true);
     }
 
+    /**
+     * The caller's user, CSRF token, and session expiry.
+     *
+     * @param ctx the request's auth state
+     * @return the identity; a session whose user has since been deleted is revoked here
+     */
     public Map<String, Object> whoami(RequestContext ctx) {
         Session session = ctx.session();
         if (session == null) {
@@ -72,6 +107,13 @@ public final class AuthHandlers {
         return out;
     }
 
+    /**
+     * Change the caller's own password, which revokes their other sessions.
+     *
+     * @param ctx the request's auth state
+     * @param body {@code old_password} and {@code new_password}
+     * @return {@code {"ok": true}}
+     */
     public Map<String, Object> changePassword(RequestContext ctx, Map<String, Object> body) {
         Session session = ctx.session();
         if (session == null) {

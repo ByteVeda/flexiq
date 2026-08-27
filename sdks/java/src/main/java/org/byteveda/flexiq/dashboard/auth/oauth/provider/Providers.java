@@ -18,7 +18,13 @@ public final class Providers {
 
     private Providers() {}
 
-    /** Instantiate one provider per configured slot, keyed by slot, in display order. */
+    /**
+     * Instantiate one provider per configured slot, keyed by slot, in display order.
+     *
+     * @param config the parsed environment configuration
+     * @param http the client each provider makes its token and userinfo calls on
+     * @return the registry, keyed by slot
+     */
     public static Map<String, OAuthProvider> build(OAuthConfig config, HttpClient http) {
         Map<String, OAuthProvider> registry = new LinkedHashMap<>();
         for (ProviderConfig entry : config.providers()) {

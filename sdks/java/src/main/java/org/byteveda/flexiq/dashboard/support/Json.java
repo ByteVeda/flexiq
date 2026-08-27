@@ -21,6 +21,12 @@ public final class Json {
 
     private Json() {}
 
+    /**
+     * Encode a response body.
+     *
+     * @param value the body
+     * @return its compact JSON bytes
+     */
     public static byte[] toBytes(Object value) {
         try {
             return MAPPER.writeValueAsBytes(value);
@@ -29,6 +35,12 @@ public final class Json {
         }
     }
 
+    /**
+     * Encode a value for the settings KV.
+     *
+     * @param value the record to store
+     * @return its compact JSON, byte-compatible with what the other SDKs write
+     */
     public static String toString(@Nullable Object value) {
         try {
             return MAPPER.writeValueAsString(value);
@@ -37,7 +49,12 @@ public final class Json {
         }
     }
 
-    /** Parse an object body; returns {@code null} for non-object or malformed input. */
+    /**
+     * Parse an object body; returns {@code null} for non-object or malformed input.
+     *
+     * @param body the request body, or {@code null}
+     * @return the parsed map, or {@code null} — the caller decides which status that is
+     */
     public static @Nullable Map<String, Object> readObject(byte @Nullable [] body) {
         if (body == null || body.length == 0) {
             return null;
@@ -49,7 +66,13 @@ public final class Json {
         }
     }
 
-    /** Parse a stored JSON string into a mutable map; {@code null} if malformed/non-object. */
+    /**
+     * Parse a stored JSON string into a mutable map; {@code null} if malformed/non-object.
+     *
+     * @param json the stored record, or {@code null}
+     * @return the parsed map, or {@code null} — a corrupt row reads as absent rather
+     *     than failing the request
+     */
     public static @Nullable Map<String, Object> parseMap(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return null;
@@ -61,7 +84,12 @@ public final class Json {
         }
     }
 
-    /** Parse a JSON array of strings; empty list if malformed/non-array/null. */
+    /**
+     * Parse a JSON array of strings; empty list if malformed/non-array/null.
+     *
+     * @param json the stored array, or {@code null}
+     * @return the strings, or an empty list — a corrupt row reads as absent
+     */
     public static List<String> parseStringList(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return List.of();
@@ -79,7 +107,12 @@ public final class Json {
         }
     }
 
-    /** Parse a JSON array of objects into maps; empty list if malformed/non-array/null. */
+    /**
+     * Parse a JSON array of objects into maps; empty list if malformed/non-array/null.
+     *
+     * @param json the stored array, or {@code null}
+     * @return the objects, non-object elements dropped; empty when the row is corrupt
+     */
     public static List<Map<String, Object>> parseListOfObjects(@Nullable String json) {
         if (json == null || json.isEmpty()) {
             return List.of();
@@ -102,7 +135,13 @@ public final class Json {
         }
     }
 
-    /** A required string field of a parsed record; throws when absent or not a string. */
+    /**
+     * A required string field of a parsed record; throws when absent or not a string.
+     *
+     * @param data the parsed record
+     * @param key the field's name
+     * @return the value
+     */
     public static String requireString(Map<String, Object> data, String key) {
         Object value = data.get(key);
         if (value instanceof String text) {
@@ -111,12 +150,24 @@ public final class Json {
         throw new IllegalArgumentException("expected a string at '" + key + "', got " + value);
     }
 
-    /** An optional string field of a parsed record; {@code null} when absent or not a string. */
+    /**
+     * An optional string field of a parsed record; {@code null} when absent or not a string.
+     *
+     * @param data the parsed record
+     * @param key the field's name
+     * @return the value, or {@code null}
+     */
     public static @Nullable String optionalString(Map<String, Object> data, String key) {
         return data.get(key) instanceof String text ? text : null;
     }
 
-    /** A required numeric field of a parsed record; throws when absent or not a number. */
+    /**
+     * A required numeric field of a parsed record; throws when absent or not a number.
+     *
+     * @param data the parsed record
+     * @param key the field's name
+     * @return the value
+     */
     public static long requireLong(Map<String, Object> data, String key) {
         Object value = data.get(key);
         if (value instanceof Number number) {
@@ -125,7 +176,13 @@ public final class Json {
         throw new IllegalArgumentException("expected a number at '" + key + "', got " + value);
     }
 
-    /** An optional numeric field of a parsed record; {@code null} when absent or not a number. */
+    /**
+     * An optional numeric field of a parsed record; {@code null} when absent or not a number.
+     *
+     * @param data the parsed record
+     * @param key the field's name
+     * @return the value, or {@code null}
+     */
     public static @Nullable Long optionalLong(Map<String, Object> data, String key) {
         return data.get(key) instanceof Number number ? number.longValue() : null;
     }

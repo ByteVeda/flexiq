@@ -25,11 +25,19 @@ import org.jspecify.annotations.Nullable;
  * dummy verification so timing can't enumerate accounts.
  */
 public final class AuthStore {
+    /** Settings key holding every user, as one shared JSON blob. */
     public static final String USERS_KEY = "auth:users";
+
+    /** Prefix of the per-session settings keys, one row per live token. */
     public static final String SESSION_PREFIX = "auth:session:";
+
+    /** How long a session lasts when no TTL is given: 24 hours. */
     public static final long DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
 
+    /** Environment variable naming the bootstrap administrator. */
     public static final String ENV_ADMIN_USER = "FLEXIQ_DASHBOARD_ADMIN_USER";
+
+    /** Environment variable holding the bootstrap administrator's password. */
     public static final String ENV_ADMIN_PASSWORD = "FLEXIQ_DASHBOARD_ADMIN_PASSWORD";
 
     private static final int USERNAME_MAX_LEN = 64;
@@ -41,16 +49,33 @@ public final class AuthStore {
 
     private final SettingsAccess settings;
 
+    /**
+     * A store over one queue's settings documents.
+     *
+     * @param settings where the user blob and the session rows live, so every
+     *     dashboard process sees the same accounts
+     */
     public AuthStore(SettingsAccess settings) {
         this.settings = settings;
     }
 
     // ---- users -------------------------------------------------------------
 
+    /**
+     * How many accounts exist.
+     *
+     * @return the count, which the first-run bootstrap checks for zero
+     */
     public int countUsers() {
         return rawUsers().size();
     }
 
+    /**
+     * One account.
+     *
+     * @param username the account's name
+     * @return the user, or empty when no such account exists or its row is malformed
+     */
     public Optional<User> getUser(String username) {
         return userRow(rawUsers(), username).map(row -> toUser(username, row));
     }
@@ -70,12 +95,24 @@ public final class AuthStore {
      * Create a password user (default role {@code admin}). Mutations of the
      * shared {@code auth:users} blob are {@code synchronized} against writers in
      * this process and compare-and-set against writers in another.
+     *
+     * @param username the account's name
+     * @param password the plaintext password, hashed here and never stored
+     * @param role the wire-form role, {@code "admin"} or {@code "viewer"}
+     * @return the created user
      */
     public synchronized User createUser(String username, String password, String role) {
         return createUser(username, password, parseRole(role));
     }
 
-    /** Create a password user with a typed role. */
+    /**
+     * Create a password user with a typed role.
+     *
+     * @param username the account's name
+     * @param password the plaintext password, hashed here and never stored
+     * @param role what the account may do
+     * @return the created user
+     */
     public synchronized User createUser(String username, String password, Role role) {
         validateUsername(username);
         validatePassword(password);
@@ -103,7 +140,14 @@ public final class AuthStore {
         return new User(username, hash, role.wire(), now, null, null, null);
     }
 
-    /** Verify credentials; {@code null} on any failure. Updates last-login on success. */
+    /**
+     * Verify credentials; {@code null} on any failure. Updates last-login on success.
+     *
+     * @param username the account's name
+     * @param password the plaintext password
+     * @return the authenticated user, or {@code null} — an unknown user still pays a
+     *     dummy verification, so timing cannot enumerate accounts
+     */
     public @Nullable User authenticate(String username, String password) {
         Optional<User> found = getUser(username);
         if (found.isEmpty()) {
@@ -117,12 +161,23 @@ public final class AuthStore {
         return touchLastLogin(user);
     }
 
-    /** Verify a password without side effects (used by change-password). */
+    /**
+     * Verify a password without side effects (used by change-password).
+     *
+     * @param user the account to check against
+     * @param password the plaintext password
+     * @return whether it matches; last-login is not stamped
+     */
     public boolean verifyPassword(User user, String password) {
         return PasswordHasher.verify(password, user.passwordHash());
     }
 
-    /** Change a user's password and revoke their existing sessions. */
+    /**
+     * Change a user's password and revoke their existing sessions.
+     *
+     * @param username the account's name
+     * @param newPassword the new plaintext password, hashed here
+     */
     public synchronized void updatePassword(String username, String newPassword) {
         validatePassword(newPassword);
         String hash = PasswordHasher.hash(newPassword);
@@ -133,6 +188,11 @@ public final class AuthStore {
         deleteSessionsForUser(username);
     }
 
+    /**
+     * Remove an account and every session it holds.
+     *
+     * @param username the account's name; deleting an absent one is not an error
+     */
     public synchronized void deleteUser(String username) {
         updateUsers(users -> users.remove(username) != null);
         deleteSessionsForUser(username);
@@ -163,6 +223,15 @@ public final class AuthStore {
      * {@code <slot>:<subject>} (never the email). New users get a role from
      * {@link #oauthBootstrapRole}; existing users keep their role but refresh
      * email/display-name and last-login.
+     *
+     * @param slot which configured provider the identity came from
+     * @param subject the provider's stable id for the person
+     * @param email the address the provider reported, or {@code null}; an absent one
+     *     leaves any stored address alone
+     * @param name the display name the provider reported, or {@code null}; likewise
+     * @param emailVerified whether the provider vouched for the address
+     * @param adminEmails addresses that may bootstrap to admin
+     * @return the user, freshly provisioned or refreshed
      */
     public synchronized User getOrCreateOauthUser(
             String slot,
@@ -208,6 +277,11 @@ public final class AuthStore {
      * Role for a freshly seen OAuth user: admin requires a verified email AND a
      * listed address. Everyone else — including the very first user — gets
      * viewer, so a stray first OAuth login can never win admin.
+     *
+     * @param email the address the provider reported, or {@code null}
+     * @param emailVerified whether the provider vouched for it
+     * @param adminEmails addresses that may bootstrap to admin, matched case-insensitively
+     * @return {@code ADMIN} only for a verified, listed address; {@code VIEWER} otherwise
      */
     public static Role oauthBootstrapRole(@Nullable String email, boolean emailVerified, List<String> adminEmails) {
         if (!emailVerified || email == null || email.isBlank()) {
@@ -221,20 +295,48 @@ public final class AuthStore {
 
     // ---- sessions ----------------------------------------------------------
 
+    /**
+     * Open a session lasting {@link #DEFAULT_SESSION_TTL_SECONDS}.
+     *
+     * @param username whose session it is
+     * @param role what the session may do
+     * @return the session, carrying its token and CSRF token
+     */
     public Session createSession(String username, Role role) {
         return createSession(username, role, DEFAULT_SESSION_TTL_SECONDS);
     }
 
-    /** Open a session from a wire-form role ({@code "admin"} / {@code "viewer"}). */
+    /**
+     * Open a session from a wire-form role ({@code "admin"} / {@code "viewer"}).
+     *
+     * @param username whose session it is
+     * @param role the wire-form role
+     * @return the session, carrying its token and CSRF token
+     */
     public Session createSession(String username, String role) {
         return createSession(username, parseRole(role), DEFAULT_SESSION_TTL_SECONDS);
     }
 
-    /** Open a session from a wire-form role, with an explicit TTL. */
+    /**
+     * Open a session from a wire-form role, with an explicit TTL.
+     *
+     * @param username whose session it is
+     * @param role the wire-form role
+     * @param ttlSeconds how long the session stays valid
+     * @return the session, carrying its token and CSRF token
+     */
     public Session createSession(String username, String role, long ttlSeconds) {
         return createSession(username, parseRole(role), ttlSeconds);
     }
 
+    /**
+     * Open a session with an explicit TTL.
+     *
+     * @param username whose session it is
+     * @param role what the session may do
+     * @param ttlSeconds how long the session stays valid
+     * @return the session, carrying its token and CSRF token
+     */
     public Session createSession(String username, Role role, long ttlSeconds) {
         if (role == null) {
             throw DashboardError.badRequest("invalid role");
@@ -253,7 +355,12 @@ public final class AuthStore {
         return new Session(token, username, role.wire(), now, expires, csrf);
     }
 
-    /** Resolve a session token; deletes and returns empty if expired/malformed. */
+    /**
+     * Resolve a session token; deletes and returns empty if expired/malformed.
+     *
+     * @param token the token from the request cookie
+     * @return the live session, or empty for an unknown, malformed or lapsed one
+     */
     public Optional<Session> getSession(String token) {
         if (token == null || token.isEmpty()) {
             return Optional.empty();
@@ -285,10 +392,20 @@ public final class AuthStore {
         return Optional.of(session);
     }
 
+    /**
+     * Revoke one session.
+     *
+     * @param token the session's token; deleting an absent one is not an error
+     */
     public void deleteSession(String token) {
         settings.deleteSetting(SESSION_PREFIX + token);
     }
 
+    /**
+     * Sweep every lapsed session row.
+     *
+     * @return how many rows were removed
+     */
     public int pruneExpiredSessions() {
         long now = nowSeconds();
         int removed = 0;

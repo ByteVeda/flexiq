@@ -120,28 +120,75 @@ public final class DashboardServer implements AutoCloseable {
         this.router = buildRouter();
     }
 
-    /** Start on {@code port} (0 = ephemeral) in open mode — no authentication. */
+    /**
+     * Start on {@code port} (0 = ephemeral) in open mode — no authentication.
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
+     */
     public static DashboardServer start(FlexiQ queue, int port) throws IOException {
         return start(queue, port, null, null, true, false);
     }
 
-    /** Start on {@code port}; {@code authEnabled=true} enables the session-auth flow. */
+    /**
+     * Start on {@code port}; {@code authEnabled=true} enables the session-auth flow.
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @param authEnabled {@code true} for password users, sessions and RBAC;
+     *     {@code false} serves every route openly
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
+     */
     public static DashboardServer start(FlexiQ queue, int port, boolean authEnabled) throws IOException {
         return start(queue, port, null, null, true, authEnabled);
     }
 
-    /** Start in legacy shared-token mode; the session flow is disabled. */
+    /**
+     * Start in legacy shared-token mode; the session flow is disabled.
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @param token the shared bearer token every request must carry, or {@code null}
+     *     to serve openly
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
+     */
     public static DashboardServer start(FlexiQ queue, int port, @Nullable String token) throws IOException {
         return start(queue, port, token, null, true, false);
     }
 
-    /** As {@link #start(FlexiQ, int, String)} but with an unpacked SPA directory. */
+    /**
+     * As {@link #start(FlexiQ, int, String)} but with an unpacked SPA directory.
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @param token the shared bearer token, or {@code null} to serve openly
+     * @param staticDir where the built SPA lives, or {@code null} to auto-discover
+     *     the bundled one
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
+     */
     public static DashboardServer start(FlexiQ queue, int port, @Nullable String token, @Nullable String staticDir)
             throws IOException {
         return start(queue, port, token, staticDir, true, false);
     }
 
-    /** As the full variant with auth disabled (the default). */
+    /**
+     * As the full variant with auth disabled (the default).
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @param token the shared bearer token, or {@code null} to serve openly
+     * @param staticDir where the built SPA lives, or {@code null} to auto-discover
+     *     the bundled one
+     * @param secureCookies {@code false} drops the {@code Secure} cookie attribute,
+     *     for local HTTP development
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
+     */
     public static DashboardServer start(
             FlexiQ queue, int port, @Nullable String token, @Nullable String staticDir, boolean secureCookies)
             throws IOException {
@@ -154,6 +201,19 @@ public final class DashboardServer implements AutoCloseable {
      * flow (true) or open mode (false, the default). A null {@code staticDir}
      * auto-discovers the bundled SPA. {@code secureCookies=false} drops the
      * {@code Secure} cookie attribute for local HTTP development.
+     *
+     * @param queue the queue the dashboard reads and acts on
+     * @param port the port to bind, or 0 for an ephemeral one
+     * @param token the shared bearer token, which selects legacy mode and wins over
+     *     {@code authEnabled}; {@code null} to leave the mode to {@code authEnabled}
+     * @param staticDir where the built SPA lives, or {@code null} to auto-discover
+     *     the bundled one
+     * @param secureCookies {@code false} drops the {@code Secure} cookie attribute,
+     *     for local HTTP development
+     * @param authEnabled {@code true} for the session flow, which is also the only
+     *     mode OAuth is wired into
+     * @return the running server, to be closed when the process stops
+     * @throws IOException if the port cannot be bound
      */
     public static DashboardServer start(
             FlexiQ queue,
@@ -229,6 +289,11 @@ public final class DashboardServer implements AutoCloseable {
         }
     }
 
+    /**
+     * The bound port (useful when {@code port} was 0).
+     *
+     * @return the port the server actually listens on
+     */
     public int port() {
         return server.getAddress().getPort();
     }

@@ -15,6 +15,12 @@ package org.byteveda.flexiq.dashboard.auth;
  */
 public record Session(String token, String username, String role, long createdAt, long expiresAt, String csrfToken) {
 
+    /**
+     * Whether the session has lapsed.
+     *
+     * @param nowSeconds the current time in Unix <b>seconds</b>
+     * @return whether {@link #expiresAt()} has been reached
+     */
     public boolean isExpired(long nowSeconds) {
         return nowSeconds >= expiresAt;
     }

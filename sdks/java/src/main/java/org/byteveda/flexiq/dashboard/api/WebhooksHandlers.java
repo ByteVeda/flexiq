@@ -31,18 +31,44 @@ public final class WebhooksHandlers {
 
     private final WebhookManager manager;
 
+    /**
+     * Handlers over one queue's webhooks.
+     *
+     * @param queue whose settings store holds the hooks; no middleware is registered,
+     *     so these routes work with no worker running
+     */
     public WebhooksHandlers(FlexiQ queue) {
         this.manager = WebhookManager.forQueue(queue);
     }
 
+    /**
+     * Every stored hook.
+     *
+     * @return the hooks, header values masked and secrets withheld
+     */
     public Object list() {
         return manager.list().stream().map(Contract::webhook).collect(Collectors.toList());
     }
 
+    /**
+     * One stored hook.
+     *
+     * @param id the hook's id
+     * @return the hook, secret withheld, or {@code null} for a 404
+     */
     public @Nullable Object get(String id) {
         return manager.get(id).map(Contract::webhook).orElse(null);
     }
 
+    /**
+     * Create a hook from untrusted dashboard input, SSRF-guarding its URL.
+     *
+     * @param body the request body: {@code url} required, plus {@code events},
+     *     {@code headers}, {@code task_filter}, {@code max_retries},
+     *     {@code timeout_seconds}, {@code retry_backoff}, {@code enabled},
+     *     {@code description} and {@code secret}
+     * @return the created hook, the one response that carries its secret
+     */
     public Object create(Map<String, Object> body) {
         String url = requireString(body, "url");
         validateUrl(url);
@@ -68,6 +94,13 @@ public final class WebhooksHandlers {
         return Contract.webhookWithSecret(manager.create(spec));
     }
 
+    /**
+     * Patch a hook; absent keys are left alone, and a new URL is SSRF-guarded.
+     *
+     * @param id the hook's id
+     * @param body the fields to change, named as in {@link #create}
+     * @return the patched hook, secret withheld, or {@code null} for a 404
+     */
     public @Nullable Object update(String id, Map<String, Object> body) {
         WebhookUpdate.Builder update = WebhookUpdate.builder();
         if (body.containsKey("url")) {
@@ -107,14 +140,34 @@ public final class WebhooksHandlers {
         return manager.update(id, update.build()).map(Contract::webhook).orElse(null);
     }
 
+    /**
+     * Remove a hook and its recorded deliveries.
+     *
+     * @param id the hook's id
+     * @return {@code {"deleted": true}}, or {@code null} for a 404
+     */
     public @Nullable Object delete(String id) {
         return manager.delete(id) ? Map.of("deleted", true) : null;
     }
 
+    /**
+     * Mint a new signing secret for a hook.
+     *
+     * @param id the hook's id
+     * @return the hook carrying its new secret — surfaced once, so the operator must
+     *     copy it now — or {@code null} for a 404
+     */
     public @Nullable Object rotateSecret(String id) {
         return manager.rotateSecret(id).map(Contract::webhookWithSecret).orElse(null);
     }
 
+    /**
+     * Post a synthetic {@code test} event to the hook, synchronously.
+     *
+     * @param id the hook's id
+     * @return whether the endpoint answered 2xx, under {@code delivered}, or
+     *     {@code null} for a 404
+     */
     public @Nullable Object test(String id) {
         if (manager.get(id).isEmpty()) {
             return null;
@@ -122,6 +175,14 @@ public final class WebhooksHandlers {
         return Map.of("delivered", manager.test(id));
     }
 
+    /**
+     * A page of one hook's recorded deliveries.
+     *
+     * @param id the hook's id
+     * @param query {@code status}, {@code event}, {@code limit} (capped at 200) and
+     *     {@code offset}, each optional
+     * @return the page
+     */
     public Object deliveries(String id, Map<String, String> query) {
         int limit = Math.min(intQuery(query, "limit", DEFAULT_DELIVERY_LIMIT), MAX_DELIVERY_LIMIT);
         int offset = intQuery(query, "offset", 0);
@@ -130,10 +191,25 @@ public final class WebhooksHandlers {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * One recorded delivery.
+     *
+     * @param id the hook's id
+     * @param deliveryId the delivery's id
+     * @return the delivery, or {@code null} for a 404
+     */
     public @Nullable Object delivery(String id, String deliveryId) {
         return manager.delivery(id, deliveryId).map(Contract::delivery).orElse(null);
     }
 
+    /**
+     * Re-send a recorded delivery, keeping the original in the log.
+     *
+     * @param id the hook's id
+     * @param deliveryId the delivery to re-send
+     * @return whether the endpoint answered 2xx, under {@code replayed}, or
+     *     {@code null} for a 404
+     */
     public @Nullable Object replayDelivery(String id, String deliveryId) {
         if (manager.get(id).isEmpty() || manager.delivery(id, deliveryId).isEmpty()) {
             return null;

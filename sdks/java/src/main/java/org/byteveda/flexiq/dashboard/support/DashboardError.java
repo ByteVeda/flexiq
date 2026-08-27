@@ -11,6 +11,7 @@ import org.jspecify.annotations.Nullable;
 public final class DashboardError extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
+    /** The HTTP status this renders as; carried into the serialized form. */
     private final int status;
 
     private DashboardError(int status, String code) {
@@ -18,35 +19,81 @@ public final class DashboardError extends RuntimeException {
         this.status = status;
     }
 
+    /**
+     * The HTTP status this renders as.
+     *
+     * @return the status code
+     */
     public int status() {
         return status;
     }
 
-    /** The stable error code (also the exception message). */
+    /**
+     * The stable error code (also the exception message).
+     *
+     * @return the code the JSON body carries, which clients may branch on
+     */
     public @Nullable String code() {
         return getMessage();
     }
 
+    /**
+     * A failure at an arbitrary status.
+     *
+     * @param status the HTTP status to render
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError of(int status, String code) {
         return new DashboardError(status, code);
     }
 
+    /**
+     * A 400: the request itself is wrong.
+     *
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError badRequest(String code) {
         return new DashboardError(400, code);
     }
 
+    /**
+     * A 401: the caller is not authenticated.
+     *
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError unauthorized(String code) {
         return new DashboardError(401, code);
     }
 
+    /**
+     * A 403: the caller is authenticated but not permitted.
+     *
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError forbidden(String code) {
         return new DashboardError(403, code);
     }
 
+    /**
+     * A 404: no such route or record.
+     *
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError notFound(String code) {
         return new DashboardError(404, code);
     }
 
+    /**
+     * A 503: a dependency the route needs is not answering.
+     *
+     * @param code the stable machine-readable code
+     * @return the error, to be thrown
+     */
     public static DashboardError serviceUnavailable(String code) {
         return new DashboardError(503, code);
     }

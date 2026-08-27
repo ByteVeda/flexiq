@@ -23,6 +23,7 @@ import org.byteveda.flexiq.dashboard.support.Json;
  * malformed.
  */
 public final class OAuthStateStore {
+    /** Prefix of the per-flow state keys, one row per pending login. */
     public static final String STATE_PREFIX = "auth:oauth_state:";
     /** 5 min — covers consent UX plus reasonable network latency. */
     public static final long DEFAULT_STATE_TTL_SECONDS = 5 * 60;
@@ -30,11 +31,23 @@ public final class OAuthStateStore {
     private final SettingsAccess settings;
     private final AtomicLong lastPruneAt = new AtomicLong(0);
 
+    /**
+     * A store over one queue's settings documents.
+     *
+     * @param settings where the pending-flow rows live, so any dashboard process can
+     *     serve the callback
+     */
     public OAuthStateStore(SettingsAccess settings) {
         this.settings = settings;
     }
 
-    /** Mint a fresh state/nonce/verifier triple, persist it, and return it. */
+    /**
+     * Mint a fresh state/nonce/verifier triple, persist it, and return it.
+     *
+     * @param slot which provider the flow is for; the callback must match
+     * @param nextUrl the already-sanitised post-login target
+     * @return the pending flow, valid for {@link #DEFAULT_STATE_TTL_SECONDS}
+     */
     public OAuthState create(String slot, String nextUrl) {
         long now = nowSeconds();
         OAuthState state = new OAuthState(
@@ -60,6 +73,10 @@ public final class OAuthStateStore {
      * Look up {@code stateToken} and delete it atomically. Empty if missing,
      * malformed, or expired. The delete happens <b>before</b> parsing so a replay
      * of the same state never re-validates.
+     *
+     * @param stateToken the state the provider echoed back
+     * @return the pending flow, or empty when it is missing, malformed, expired or
+     *     already used
      */
     public Optional<OAuthState> consume(String stateToken) {
         if (stateToken == null || stateToken.isEmpty()) {
@@ -111,7 +128,11 @@ public final class OAuthStateStore {
         }
     }
 
-    /** Best-effort sweep of expired state rows. Returns the count removed. */
+    /**
+     * Best-effort sweep of expired state rows.
+     *
+     * @return how many rows were removed
+     */
     public int pruneExpired() {
         long now = nowSeconds();
         int removed = 0;

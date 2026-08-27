@@ -25,6 +25,11 @@ public record User(
         @Nullable String email,
         @Nullable String displayName) {
 
+    /**
+     * Whether this account signs in through a provider rather than a password.
+     *
+     * @return whether the hash is the {@code oauth:<slot>} sentinel
+     */
     public boolean isOauth() {
         return PasswordHasher.isOauth(passwordHash);
     }

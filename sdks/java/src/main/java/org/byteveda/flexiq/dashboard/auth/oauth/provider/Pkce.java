@@ -20,7 +20,11 @@ public final class Pkce {
 
     private Pkce() {}
 
-    /** A 43-char base64url verifier (32 random bytes), above the RFC 7636 minimum. */
+    /**
+     * A 43-char base64url verifier (32 random bytes), above the RFC 7636 minimum.
+     *
+     * @return the verifier, to be stashed server-side and never sent to the provider
+     */
     public static String verifier() {
         return Tokens.urlSafe(Tokens.CODE_VERIFIER_BYTES);
     }
@@ -28,6 +32,9 @@ public final class Pkce {
     /**
      * The {@code S256} challenge for {@code verifier}: base64url (no padding) of
      * {@code SHA-256(verifier)}, matching every provider's PKCE implementation.
+     *
+     * @param verifier the value {@link #verifier()} minted
+     * @return the challenge, which is what travels to the provider
      */
     public static String challenge(String verifier) {
         byte[] digest = sha256(verifier.getBytes(StandardCharsets.US_ASCII));

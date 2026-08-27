@@ -20,11 +20,24 @@ public final class OverridesHandlers {
     private final FlexiQ queue;
     private final OverridesStore store;
 
+    /**
+     * Handlers over one queue's overrides.
+     *
+     * @param queue read for the observable task and queue names, and paused live
+     *     when a queue override says so
+     * @param store where the override rows are persisted
+     */
     public OverridesHandlers(FlexiQ queue, OverridesStore store) {
         this.queue = queue;
         this.store = store;
     }
 
+    /**
+     * Task names the overrides UI can select from.
+     *
+     * @return every task seen in metrics, circuit breakers or an existing override
+     *     row — a best-effort superset, since this SDK has no declared registry
+     */
     public Object listTasks() {
         TreeSet<String> names = new TreeSet<>();
         for (TaskMetric metric : queue.metrics(null, 0)) {
@@ -37,6 +50,11 @@ public final class OverridesHandlers {
         return new ArrayList<>(names);
     }
 
+    /**
+     * Queue names the overrides UI can select from.
+     *
+     * @return every queue with stats, paused, or carrying an override row
+     */
     public Object listQueues() {
         TreeSet<String> names = new TreeSet<>(queue.statsAllQueues().keySet());
         names.addAll(queue.listPausedQueues());
@@ -44,22 +62,55 @@ public final class OverridesHandlers {
         return new ArrayList<>(names);
     }
 
+    /**
+     * One task's override row.
+     *
+     * @param name the task's name
+     * @return the row, or {@code null} for a 404
+     */
     public @Nullable Object getTaskOverride(String name) {
         return store.getTask(name);
     }
 
+    /**
+     * Merge fields into one task's override row.
+     *
+     * @param name the task's name
+     * @param body the fields to set
+     * @return the row as it stands after the write
+     */
     public Object putTaskOverride(String name, Map<String, Object> body) {
         return store.putTask(name, body);
     }
 
+    /**
+     * Drop one task's override row, so the task falls back to its declared settings.
+     *
+     * @param name the task's name
+     * @return whether a row was removed, under {@code cleared}
+     */
     public Object deleteTaskOverride(String name) {
         return Map.of("cleared", store.deleteTask(name));
     }
 
+    /**
+     * One queue's override row.
+     *
+     * @param name the queue's name
+     * @return the row, or {@code null} for a 404
+     */
     public @Nullable Object getQueueOverride(String name) {
         return store.getQueue(name);
     }
 
+    /**
+     * Merge fields into one queue's override row, reconciling {@code paused} live.
+     *
+     * @param name the queue's name
+     * @param body the fields to set; touching {@code paused} pauses or resumes the
+     *     queue to match the resulting row, clearing included
+     * @return the row as it stands after the write
+     */
     public Object putQueueOverride(String name, Map<String, Object> body) {
         Map<String, Object> row = store.putQueue(name, body);
         // Reconcile the live queue to the resulting override whenever the caller
@@ -75,6 +126,12 @@ public final class OverridesHandlers {
         return row;
     }
 
+    /**
+     * Drop one queue's override row.
+     *
+     * @param name the queue's name
+     * @return whether a row was removed, under {@code cleared}
+     */
     public Object deleteQueueOverride(String name) {
         return Map.of("cleared", store.deleteQueue(name));
     }

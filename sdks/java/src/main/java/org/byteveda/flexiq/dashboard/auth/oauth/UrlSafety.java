@@ -14,7 +14,12 @@ public final class UrlSafety {
 
     private UrlSafety() {}
 
-    /** Whether {@code path} is safe to use as a same-origin post-login redirect. */
+    /**
+     * Whether {@code path} is safe to use as a same-origin post-login redirect.
+     *
+     * @param path the {@code next} target a login link asked for
+     * @return whether it is a same-origin path rooted at {@code /}
+     */
     public static boolean isSafeRedirect(String path) {
         if (path == null || path.isEmpty()) {
             return false;

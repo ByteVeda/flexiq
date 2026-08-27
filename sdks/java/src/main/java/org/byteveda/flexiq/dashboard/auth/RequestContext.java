@@ -15,6 +15,11 @@ import org.jspecify.annotations.Nullable;
  */
 public record RequestContext(@Nullable Session session, @Nullable String csrfCookie, @Nullable String csrfHeader) {
 
+    /**
+     * Whether a session was resolved for this request.
+     *
+     * @return {@code true} when the request carried a live session cookie
+     */
     public boolean authenticated() {
         return session != null;
     }
@@ -23,6 +28,8 @@ public record RequestContext(@Nullable Session session, @Nullable String csrfCoo
      * Double-submit CSRF check: the {@code flexiq_csrf} cookie must equal both
      * the {@code X-CSRF-Token} header and the token bound to the session. The
      * session binding defeats a pre-seeded cookie.
+     *
+     * @return whether the request may mutate
      */
     public boolean csrfValid() {
         return session != null
@@ -33,6 +40,13 @@ public record RequestContext(@Nullable Session session, @Nullable String csrfCoo
                 && csrfCookie.equals(session.csrfToken());
     }
 
+    /**
+     * Resolve the request's auth state from its cookies and headers.
+     *
+     * @param exchange the request
+     * @param store consulted to resolve the session cookie
+     * @return the context, with a {@code null} session when there is no live one
+     */
     public static RequestContext build(HttpExchange exchange, AuthStore store) {
         Map<String, String> cookies = Cookies.parse(exchange);
         String sessionToken = cookies.get(Cookies.SESSION);
@@ -44,7 +58,11 @@ public record RequestContext(@Nullable Session session, @Nullable String csrfCoo
         return new RequestContext(session, csrfCookie, csrfHeader);
     }
 
-    /** Fixed open identity for legacy shared-token mode. */
+    /**
+     * Fixed open identity for legacy shared-token mode.
+     *
+     * @return a context with no session and no CSRF material — that mode has neither
+     */
     public static RequestContext open() {
         return new RequestContext(null, null, null);
     }

@@ -4,6 +4,11 @@ package org.byteveda.flexiq.dashboard.auth.oauth.error;
 public final class StateValidationError extends OAuthException {
     private static final long serialVersionUID = 1L;
 
+    /**
+     * A callback whose state does not stand up.
+     *
+     * @param message which check failed — missing, expired, replayed, or wrong slot
+     */
     public StateValidationError(String message) {
         super(message);
     }

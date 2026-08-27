@@ -22,10 +22,22 @@ public final class WorkflowsHandlers {
 
     private final FlexiQ queue;
 
+    /**
+     * Handlers reading one queue's workflow runs.
+     *
+     * @param queue what the routes below read from
+     */
     public WorkflowsHandlers(FlexiQ queue) {
         this.queue = queue;
     }
 
+    /**
+     * A page of workflow runs.
+     *
+     * @param query {@code definition_name}, {@code state}, {@code limit} and
+     *     {@code offset}, each optional
+     * @return the runs, with the paging echoed back
+     */
     public Object runs(Map<String, String> query) {
         long limit = Http.longParam(query, "limit", DEFAULT_LIMIT);
         long offset = Http.longParam(query, "offset", 0);
@@ -40,6 +52,13 @@ public final class WorkflowsHandlers {
         return out;
     }
 
+    /**
+     * One run and its nodes.
+     *
+     * @param id the run's id
+     * @return the run under {@code run} and its nodes under {@code nodes}, or
+     *     {@code null} for a 404
+     */
     public @Nullable Object run(String id) {
         var run = queue.getWorkflowRun(id).orElse(null);
         if (run == null) {
@@ -52,6 +71,12 @@ public final class WorkflowsHandlers {
         return out;
     }
 
+    /**
+     * The sub-workflow runs a run spawned.
+     *
+     * @param id the parent run's id
+     * @return the children under {@code children}
+     */
     public Object children(String id) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put(
@@ -62,6 +87,12 @@ public final class WorkflowsHandlers {
         return out;
     }
 
+    /**
+     * The run's graph, enriched with live node status and job ids.
+     *
+     * @param id the run's id
+     * @return the graph under {@code dag}, or {@code null} for a 404
+     */
     public @Nullable Object dag(String id) {
         String dag = queue.getWorkflowDag(id).orElse(null);
         if (dag == null) {

@@ -23,6 +23,13 @@ public final class Policy {
 
     private Policy() {}
 
+    /**
+     * Whether a path is reachable without a session.
+     *
+     * @param path the request path
+     * @return {@code true} for the auth entry points, the OAuth start/callback
+     *     prefixes and {@code /health}
+     */
     public static boolean isPublicPath(String path) {
         if (PUBLIC_PATHS.contains(path)) {
             return true;
@@ -35,6 +42,12 @@ public final class Policy {
         return false;
     }
 
+    /**
+     * Whether a method mutates, and so needs CSRF and (usually) admin.
+     *
+     * @param method the HTTP method
+     * @return {@code true} for POST, PUT, DELETE and PATCH
+     */
     public static boolean isStateChanging(String method) {
         return "POST".equals(method) || "PUT".equals(method) || "DELETE".equals(method) || "PATCH".equals(method);
     }
@@ -50,7 +63,14 @@ public final class Policy {
                 && !SELF_SERVICE_PATHS.contains(path);
     }
 
-    /** Enforce the gate for an {@code /api/} request; throws on denial. */
+    /**
+     * Enforce the gate for an {@code /api/} request; throws on denial.
+     *
+     * @param path the request path
+     * @param method the HTTP method
+     * @param ctx the request's auth state
+     * @param store consulted for whether any user exists yet
+     */
     public static void authorize(String path, String method, RequestContext ctx, AuthStore store) {
         if (!isPublicPath(path) && store.countUsers() == 0) {
             throw DashboardError.serviceUnavailable("setup_required");

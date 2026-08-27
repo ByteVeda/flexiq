@@ -16,7 +16,10 @@ import org.jspecify.annotations.Nullable;
  * it; absent fields are left unchanged.
  */
 public final class OverridesStore {
+    /** Prefix of the per-task override keys. */
     public static final String TASK_PREFIX = "overrides:task:";
+
+    /** Prefix of the per-queue override keys. */
     public static final String QUEUE_PREFIX = "overrides:queue:";
 
     private static final List<String> TASK_FIELDS =
@@ -28,40 +31,93 @@ public final class OverridesStore {
 
     private final SettingsAccess settings;
 
+    /**
+     * A store over one queue's settings documents.
+     *
+     * @param settings where the override rows live
+     */
     public OverridesStore(SettingsAccess settings) {
         this.settings = settings;
     }
 
+    /**
+     * One task's override row.
+     *
+     * @param name the task's name
+     * @return the normalised row, or {@code null} when none is stored
+     */
     public @Nullable Map<String, Object> getTask(String name) {
         return read(TASK_PREFIX + name);
     }
 
+    /**
+     * One queue's override row.
+     *
+     * @param name the queue's name
+     * @return the normalised row, or {@code null} when none is stored
+     */
     public @Nullable Map<String, Object> getQueue(String name) {
         return read(QUEUE_PREFIX + name);
     }
 
+    /**
+     * Merge a patch into one task's override row.
+     *
+     * @param name the task's name
+     * @param patch the fields to set; an explicit {@code null} clears a field, an
+     *     absent one leaves it alone
+     * @return the row as it stands after the write
+     */
     public Map<String, Object> putTask(String name, Map<String, Object> patch) {
         return put(TASK_PREFIX + name, "task_name", name, TASK_FIELDS, patch);
     }
 
+    /**
+     * Merge a patch into one queue's override row.
+     *
+     * @param name the queue's name
+     * @param patch the fields to set; an explicit {@code null} clears a field, an
+     *     absent one leaves it alone
+     * @return the row as it stands after the write
+     */
     public Map<String, Object> putQueue(String name, Map<String, Object> patch) {
         return put(QUEUE_PREFIX + name, "queue_name", name, QUEUE_FIELDS, patch);
     }
 
+    /**
+     * Drop one task's override row.
+     *
+     * @param name the task's name
+     * @return whether a row existed
+     */
     public boolean deleteTask(String name) {
         return settings.deleteSetting(TASK_PREFIX + name);
     }
 
+    /**
+     * Drop one queue's override row.
+     *
+     * @param name the queue's name
+     * @return whether a row existed
+     */
     public boolean deleteQueue(String name) {
         return settings.deleteSetting(QUEUE_PREFIX + name);
     }
 
-    /** Task names that carry an override row. */
+    /**
+     * Task names that carry an override row.
+     *
+     * @return the names, sorted
+     */
     public java.util.Set<String> taskNames() {
         return names(TASK_PREFIX);
     }
 
-    /** Queue names that carry an override row. */
+    /**
+     * Queue names that carry an override row.
+     *
+     * @return the names, sorted
+     */
     public java.util.Set<String> queueNames() {
         return names(QUEUE_PREFIX);
     }

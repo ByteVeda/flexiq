@@ -12,13 +12,22 @@ public enum Role {
     /** Read-only access. */
     VIEWER;
 
-    /** Lowercase wire form persisted in the settings store and sent over the API. */
+    /**
+     * Lowercase wire form persisted in the settings store and sent over the API.
+     *
+     * @return the wire form
+     */
     @JsonValue
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
-    /** Parse a wire form ({@code "admin"}/{@code "viewer"}); null for anything else. */
+    /**
+     * Parse a wire form ({@code "admin"}/{@code "viewer"}); null for anything else.
+     *
+     * @param wire the stored or received value
+     * @return the role, or {@code null} when it names none
+     */
     @JsonCreator
     public static @Nullable Role fromWire(@Nullable String wire) {
         if (wire == null) {
@@ -36,6 +45,9 @@ public enum Role {
      * Read a persisted role, failing closed. Rows predate this enum, so an
      * unrecognized value yields the least-privileged role rather than locking the
      * user out or granting more than was stored.
+     *
+     * @param wire the stored value
+     * @return the role, or {@link #VIEWER} when it names none
      */
     public static Role orViewer(@Nullable String wire) {
         Role role = fromWire(wire);

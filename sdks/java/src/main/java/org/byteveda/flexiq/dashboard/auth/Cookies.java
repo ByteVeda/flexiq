@@ -14,14 +14,26 @@ import org.jspecify.annotations.Nullable;
  * (readable by the SPA), both {@code SameSite=Strict; Path=/}.
  */
 public final class Cookies {
+    /** Name of the HttpOnly session cookie. */
     public static final String SESSION = "flexiq_session";
+
+    /** Name of the CSRF cookie, deliberately readable by the SPA. */
     public static final String CSRF = "flexiq_csrf";
+
+    /** Header the SPA echoes the CSRF cookie back in. */
     public static final String CSRF_HEADER = "X-CSRF-Token";
+
+    /** Name of the legacy shared-token cookie. */
     public static final String LEGACY_TOKEN = "flexiq_token";
 
     private Cookies() {}
 
-    /** Parse the {@code Cookie} header(s); first value wins for duplicate names. */
+    /**
+     * Parse the {@code Cookie} header(s); first value wins for duplicate names.
+     *
+     * @param exchange the request
+     * @return the cookies by name; empty when the request carried none
+     */
     public static Map<String, String> parse(HttpExchange exchange) {
         List<String> headers = exchange.getRequestHeaders().getOrDefault("Cookie", Collections.emptyList());
         Map<String, String> out = new HashMap<>();
@@ -41,26 +53,69 @@ public final class Cookies {
         return out;
     }
 
+    /**
+     * One cookie off the request.
+     *
+     * @param exchange the request
+     * @param name the cookie's name
+     * @return its value, or {@code null} when the request did not carry it
+     */
     public static @Nullable String get(HttpExchange exchange, String name) {
         return parse(exchange).get(name);
     }
 
+    /**
+     * A {@code Set-Cookie} for the HttpOnly session cookie.
+     *
+     * @param token the session token
+     * @param secure whether to add {@code Secure}; {@code false} for local HTTP
+     * @param maxAgeSeconds how long the browser should keep it
+     * @return the header value
+     */
     public static String sessionCookie(String token, boolean secure, long maxAgeSeconds) {
         return format(SESSION, token, true, secure, maxAgeSeconds);
     }
 
+    /**
+     * A {@code Set-Cookie} for the CSRF cookie, which the SPA must be able to read.
+     *
+     * @param csrf the session's CSRF token
+     * @param secure whether to add {@code Secure}; {@code false} for local HTTP
+     * @param maxAgeSeconds how long the browser should keep it
+     * @return the header value
+     */
     public static String csrfCookie(String csrf, boolean secure, long maxAgeSeconds) {
         return format(CSRF, csrf, false, secure, maxAgeSeconds);
     }
 
+    /**
+     * A {@code Set-Cookie} that expires the session cookie.
+     *
+     * @param secure whether to add {@code Secure}; must match how it was set
+     * @return the header value
+     */
     public static String clearSession(boolean secure) {
         return format(SESSION, "", true, secure, 0);
     }
 
+    /**
+     * A {@code Set-Cookie} that expires the CSRF cookie.
+     *
+     * @param secure whether to add {@code Secure}; must match how it was set
+     * @return the header value
+     */
     public static String clearCsrf(boolean secure) {
         return format(CSRF, "", false, secure, 0);
     }
 
+    /**
+     * A {@code Set-Cookie} for the legacy shared-token cookie.
+     *
+     * @param token the shared token
+     * @param secure whether to add {@code Secure}; {@code false} for local HTTP
+     * @param maxAgeSeconds how long the browser should keep it
+     * @return the header value
+     */
     public static String legacyTokenCookie(String token, boolean secure, long maxAgeSeconds) {
         return format(LEGACY_TOKEN, token, true, secure, maxAgeSeconds);
     }
