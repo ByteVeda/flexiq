@@ -301,35 +301,10 @@ macro_rules! impl_diesel_dead_letter_ops {
                 let job = new_job.into_job();
                 // Re-attribute the resurrected delivery so it counts against the
                 // subscription's backlog again, not just its DLQ depth.
-                let (topic, subscription_name) =
-                    $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                        .map_or((None, None), |(t, s)| (Some(t), Some(s)));
+                let attribution = $crate::storage::diesel_common::JobAttribution::of(&job);
 
                 let result = conn.transaction(|conn| {
-                    let row = super::super::models::NewJobRow {
-                        id: &job.id,
-                        queue: &job.queue,
-                        task_name: &job.task_name,
-                        payload: &job.payload,
-                        status: job.status as i32,
-                        priority: job.priority,
-                        created_at: job.created_at,
-                        scheduled_at: job.scheduled_at,
-                        retry_count: job.retry_count,
-                        max_retries: job.max_retries,
-                        timeout_ms: job.timeout_ms,
-                        unique_key: job.unique_key.as_deref(),
-                        metadata: job.metadata.as_deref(),
-                        notes: job.notes.as_deref(),
-                        cancel_requested: 0,
-                        expires_at: job.expires_at,
-                        result_ttl_ms: job.result_ttl_ms,
-                        namespace: job.namespace.as_deref(),
-                        has_deps: job.has_deps,
-                        topic: topic.as_deref(),
-                        subscription_name: subscription_name.as_deref(),
-                        debounce_key: job.debounce_key.as_deref(),
-                    };
+                    let row = $crate::storage::diesel_common::new_job_row(&job, &attribution);
 
                     diesel::insert_into(jobs::table)
                         .values(&row)

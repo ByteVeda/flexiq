@@ -209,6 +209,62 @@ macro_rules! impl_diesel_job_ops {
                 }
             }
 
+            /// Validate every dependency of a job about to be inserted.
+            ///
+            /// The loop four of the five enqueue paths run verbatim; the fifth
+            /// (`enqueue_batch`) resolves intra-batch edges first and so keeps
+            /// its own.
+            fn validate_dependencies(
+                conn: &mut $conn_type,
+                depends_on: &[String],
+                namespace: Option<&str>,
+            ) -> diesel::result::QueryResult<()> {
+                for dep_id in depends_on {
+                    Self::validate_dependency(conn, dep_id, namespace)?;
+                }
+                Ok(())
+            }
+
+            /// Write a job's dependency edges.
+            ///
+            /// Never optional when the job carries dependencies: `into_job`
+            /// folds `depends_on` into the `has_deps` flag, and the flag with no
+            /// rows behind it reads as "no dependencies" at dequeue — the job
+            /// dispatches straight past its DAG.
+            fn insert_job_dependencies(
+                conn: &mut $conn_type,
+                job_id: &str,
+                depends_on: &[String],
+            ) -> diesel::result::QueryResult<()> {
+                for dep_id in depends_on {
+                    let dep_row = NewJobDependencyRow {
+                        id: &uuid::Uuid::now_v7().to_string(),
+                        job_id,
+                        depends_on_job_id: dep_id,
+                    };
+                    diesel::insert_into(job_dependencies::table)
+                        .values(&dep_row)
+                        .execute(conn)?;
+                }
+                Ok(())
+            }
+
+            /// Insert a job row and its dependency edges — the shared tail of
+            /// every enqueue path. Callers keep only their own pre-insert work
+            /// (dependency validation, unique-key lookup, debounce-target scan).
+            fn insert_job_with_deps(
+                conn: &mut $conn_type,
+                job: &Job,
+                depends_on: &[String],
+            ) -> diesel::result::QueryResult<()> {
+                let attribution = $crate::storage::diesel_common::JobAttribution::of(job);
+                let row = $crate::storage::diesel_common::new_job_row(job, &attribution);
+                diesel::insert_into(jobs::table)
+                    .values(&row)
+                    .execute(conn)?;
+                Self::insert_job_dependencies(conn, &job.id, depends_on)
+            }
+
             /// Insert a new job into the queue. Returns the job.
             pub fn enqueue(&self, new_job: NewJob) -> Result<Job> {
                 let depends_on = new_job.depends_on.clone();
@@ -218,66 +274,11 @@ macro_rules! impl_diesel_job_ops {
                     // Validate dependencies exist, share this job's namespace,
                     // and aren't dead/cancelled. Terminal deps live in
                     // `archived_jobs`, so a missing live row falls back there.
-                    for dep_id in &depends_on {
-                        Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
-                    }
-
-                    // Attribute pub/sub deliveries to their subscription so
-                    // backlog stats index by it; `None` for ordinary jobs.
-                    let (topic, subscription_name) =
-                        $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                            .map_or((None, None), |(t, s)| (Some(t), Some(s)));
-                    let row = NewJobRow {
-                        id: &job.id,
-                        queue: &job.queue,
-                        task_name: &job.task_name,
-                        payload: &job.payload,
-                        status: job.status as i32,
-                        priority: job.priority,
-                        created_at: job.created_at,
-                        scheduled_at: job.scheduled_at,
-                        retry_count: job.retry_count,
-                        max_retries: job.max_retries,
-                        timeout_ms: job.timeout_ms,
-                        unique_key: job.unique_key.as_deref(),
-                        metadata: job.metadata.as_deref(),
-                        notes: job.notes.as_deref(),
-                        cancel_requested: 0,
-                        expires_at: job.expires_at,
-                        result_ttl_ms: job.result_ttl_ms,
-                        namespace: job.namespace.as_deref(),
-                        has_deps: job.has_deps,
-                        topic: topic.as_deref(),
-                        subscription_name: subscription_name.as_deref(),
-                        debounce_key: job.debounce_key.as_deref(),
-                    };
-
-                    diesel::insert_into(jobs::table)
-                        .values(&row)
-                        .execute(conn)?;
-
-                    // Insert dependency rows
-                    for dep_id in &depends_on {
-                        let dep_row = NewJobDependencyRow {
-                            id: &uuid::Uuid::now_v7().to_string(),
-                            job_id: &job.id,
-                            depends_on_job_id: dep_id,
-                        };
-                        diesel::insert_into(job_dependencies::table)
-                            .values(&dep_row)
-                            .execute(conn)?;
-                    }
-
+                    Self::validate_dependencies(conn, &depends_on, job.namespace.as_deref())?;
+                    Self::insert_job_with_deps(conn, &job, &depends_on)?;
                     Ok(())
                 })
-                .map_err(|e| match e {
-                    QueueError::Storage(diesel::result::Error::RollbackTransaction) => {
-                        QueueError::DependencyNotFound(
-                            "dependency not found or already dead/cancelled".to_string(),
-                        )
-                    }
-                    other => other,
-                })?;
+                .map_err($crate::storage::diesel_common::dependency_not_found)?;
 
                 Ok(job)
             }
@@ -300,12 +301,9 @@ macro_rules! impl_diesel_job_ops {
 
                 // Pre-compute subscription attribution so the owned strings
                 // outlive the borrowing rows built below.
-                let attribution: Vec<(Option<String>, Option<String>)> = jobs
+                let attribution: Vec<$crate::storage::diesel_common::JobAttribution> = jobs
                     .iter()
-                    .map(|job| {
-                        $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                            .map_or((None, None), |(t, s)| (Some(t), Some(s)))
-                    })
+                    .map($crate::storage::diesel_common::JobAttribution::of)
                     .collect();
 
                 self.write_transaction(|conn| {
@@ -335,33 +333,12 @@ macro_rules! impl_diesel_job_ops {
                         }
                     }
 
+                    // The multi-row INSERT is why this path builds rows itself
+                    // rather than calling `insert_job_with_deps` per job.
                     let rows: Vec<NewJobRow> = jobs
                         .iter()
                         .zip(&attribution)
-                        .map(|(job, (topic, subscription_name))| NewJobRow {
-                            id: &job.id,
-                            queue: &job.queue,
-                            task_name: &job.task_name,
-                            payload: &job.payload,
-                            status: job.status as i32,
-                            priority: job.priority,
-                            created_at: job.created_at,
-                            scheduled_at: job.scheduled_at,
-                            retry_count: job.retry_count,
-                            max_retries: job.max_retries,
-                            timeout_ms: job.timeout_ms,
-                            unique_key: job.unique_key.as_deref(),
-                            metadata: job.metadata.as_deref(),
-                            notes: job.notes.as_deref(),
-                            cancel_requested: 0,
-                            expires_at: job.expires_at,
-                            result_ttl_ms: job.result_ttl_ms,
-                            namespace: job.namespace.as_deref(),
-                            has_deps: job.has_deps,
-                            topic: topic.as_deref(),
-                            subscription_name: subscription_name.as_deref(),
-                            debounce_key: job.debounce_key.as_deref(),
-                        })
+                        .map(|(job, attr)| $crate::storage::diesel_common::new_job_row(job, attr))
                         .collect();
 
                     // One multi-row INSERT per chunk instead of N single-row
@@ -373,28 +350,12 @@ macro_rules! impl_diesel_job_ops {
                     }
 
                     for (job, depends_on) in jobs.iter().zip(&dep_lists) {
-                        for dep_id in depends_on {
-                            let dep_row = NewJobDependencyRow {
-                                id: &uuid::Uuid::now_v7().to_string(),
-                                job_id: &job.id,
-                                depends_on_job_id: dep_id,
-                            };
-                            diesel::insert_into(job_dependencies::table)
-                                .values(&dep_row)
-                                .execute(conn)?;
-                        }
+                        Self::insert_job_dependencies(conn, &job.id, depends_on)?;
                     }
 
                     Ok(jobs)
                 })
-                .map_err(|e| match e {
-                    QueueError::Storage(diesel::result::Error::RollbackTransaction) => {
-                        QueueError::DependencyNotFound(
-                            "dependency not found or already dead/cancelled".to_string(),
-                        )
-                    }
-                    other => other,
-                })
+                .map_err($crate::storage::diesel_common::dependency_not_found)
             }
 
             /// The pending job a debounce write may slide, or `None` when the key
@@ -492,62 +453,12 @@ macro_rules! impl_diesel_job_ops {
 
                     // No open window: insert, validating dependencies exactly as
                     // `enqueue` does (RollbackTransaction → DependencyNotFound).
-                    for dep_id in &depends_on {
-                        Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
-                    }
-
-                    let (topic, subscription_name) =
-                        $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                            .map_or((None, None), |(t, s)| (Some(t), Some(s)));
-                    let row = NewJobRow {
-                        id: &job.id,
-                        queue: &job.queue,
-                        task_name: &job.task_name,
-                        payload: &job.payload,
-                        status: job.status as i32,
-                        priority: job.priority,
-                        created_at: job.created_at,
-                        scheduled_at: job.scheduled_at,
-                        retry_count: job.retry_count,
-                        max_retries: job.max_retries,
-                        timeout_ms: job.timeout_ms,
-                        unique_key: job.unique_key.as_deref(),
-                        metadata: job.metadata.as_deref(),
-                        notes: job.notes.as_deref(),
-                        cancel_requested: 0,
-                        expires_at: job.expires_at,
-                        result_ttl_ms: job.result_ttl_ms,
-                        namespace: job.namespace.as_deref(),
-                        has_deps: job.has_deps,
-                        topic: topic.as_deref(),
-                        subscription_name: subscription_name.as_deref(),
-                        debounce_key: job.debounce_key.as_deref(),
-                    };
-                    diesel::insert_into(jobs::table)
-                        .values(&row)
-                        .execute(conn)?;
-
-                    for dep_id in &depends_on {
-                        let dep_row = NewJobDependencyRow {
-                            id: &uuid::Uuid::now_v7().to_string(),
-                            job_id: &job.id,
-                            depends_on_job_id: dep_id,
-                        };
-                        diesel::insert_into(job_dependencies::table)
-                            .values(&dep_row)
-                            .execute(conn)?;
-                    }
+                    Self::validate_dependencies(conn, &depends_on, job.namespace.as_deref())?;
+                    Self::insert_job_with_deps(conn, &job, &depends_on)?;
 
                     Ok(job.clone())
                 })
-                .map_err(|e| match e {
-                    QueueError::Storage(diesel::result::Error::RollbackTransaction) => {
-                        QueueError::DependencyNotFound(
-                            "dependency not found or already dead/cancelled".to_string(),
-                        )
-                    }
-                    other => other,
-                })
+                .map_err($crate::storage::diesel_common::dependency_not_found)
             }
 
             /// Enqueue with unique_key deduplication. Returns the existing active
@@ -584,52 +495,8 @@ macro_rules! impl_diesel_job_ops {
 
                         // Validate dependencies exist and aren't dead/cancelled,
                         // matching `enqueue` (RollbackTransaction → DependencyNotFound).
-                        for dep_id in &depends_on {
-                            Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
-                        }
-
-                        let (topic, subscription_name) =
-                            $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                                .map_or((None, None), |(t, s)| (Some(t), Some(s)));
-                        let row = NewJobRow {
-                            id: &job.id,
-                            queue: &job.queue,
-                            task_name: &job.task_name,
-                            payload: &job.payload,
-                            status: job.status as i32,
-                            priority: job.priority,
-                            created_at: job.created_at,
-                            scheduled_at: job.scheduled_at,
-                            retry_count: job.retry_count,
-                            max_retries: job.max_retries,
-                            timeout_ms: job.timeout_ms,
-                            unique_key: job.unique_key.as_deref(),
-                            metadata: job.metadata.as_deref(),
-                            notes: job.notes.as_deref(),
-                            cancel_requested: 0,
-                            expires_at: job.expires_at,
-                            result_ttl_ms: job.result_ttl_ms,
-                            namespace: job.namespace.as_deref(),
-                            has_deps: job.has_deps,
-                            topic: topic.as_deref(),
-                            subscription_name: subscription_name.as_deref(),
-                            debounce_key: job.debounce_key.as_deref(),
-                        };
-
-                        diesel::insert_into(jobs::table)
-                            .values(&row)
-                            .execute(conn)?;
-
-                        for dep_id in &depends_on {
-                            let dep_row = NewJobDependencyRow {
-                                id: &uuid::Uuid::now_v7().to_string(),
-                                job_id: &job.id,
-                                depends_on_job_id: dep_id,
-                            };
-                            diesel::insert_into(job_dependencies::table)
-                                .values(&dep_row)
-                                .execute(conn)?;
-                        }
+                        Self::validate_dependencies(conn, &depends_on, job.namespace.as_deref())?;
+                        Self::insert_job_with_deps(conn, &job, &depends_on)?;
 
                         Ok(job.clone())
                     });
@@ -687,25 +554,21 @@ macro_rules! impl_diesel_job_ops {
             pub fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
                 const MAX_ENQUEUE_ATTEMPTS: usize = 3;
 
-                // Precompute owned jobs, dependency lists, and pub/sub attribution
-                // once so the per-attempt closure only borrows.
-                type Prepared = (Job, Vec<String>, Option<String>, Option<String>);
+                // Precompute owned jobs and dependency lists once so the
+                // per-attempt closure only borrows.
+                type Prepared = (Job, Vec<String>);
                 let prepared: Vec<Prepared> = new_jobs
                     .into_iter()
                     .map(|nj| {
                         let depends_on = nj.depends_on.clone();
-                        let job = nj.into_job();
-                        let (topic, subscription_name) =
-                            $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
-                                .map_or((None, None), |(t, s)| (Some(t), Some(s)));
-                        (job, depends_on, topic, subscription_name)
+                        (nj.into_job(), depends_on)
                     })
                     .collect();
 
                 for _ in 0..MAX_ENQUEUE_ATTEMPTS {
                     let result = self.write_transaction(|conn| {
                         let mut out = Vec::with_capacity(prepared.len());
-                        for (job, depends_on, topic, subscription_name) in &prepared {
+                        for (job, depends_on) in &prepared {
                             // Return any existing active job with the same key.
                             if let Some(ref uk) = job.unique_key {
                                 let existing: Option<JobRow> = jobs::table
@@ -723,48 +586,12 @@ macro_rules! impl_diesel_job_ops {
                                 }
                             }
 
-                            for dep_id in depends_on {
-                                Self::validate_dependency(conn, dep_id, job.namespace.as_deref())?;
-                            }
-
-                            let row = NewJobRow {
-                                id: &job.id,
-                                queue: &job.queue,
-                                task_name: &job.task_name,
-                                payload: &job.payload,
-                                status: job.status as i32,
-                                priority: job.priority,
-                                created_at: job.created_at,
-                                scheduled_at: job.scheduled_at,
-                                retry_count: job.retry_count,
-                                max_retries: job.max_retries,
-                                timeout_ms: job.timeout_ms,
-                                unique_key: job.unique_key.as_deref(),
-                                metadata: job.metadata.as_deref(),
-                                notes: job.notes.as_deref(),
-                                cancel_requested: 0,
-                                expires_at: job.expires_at,
-                                result_ttl_ms: job.result_ttl_ms,
-                                namespace: job.namespace.as_deref(),
-                                has_deps: job.has_deps,
-                                topic: topic.as_deref(),
-                                subscription_name: subscription_name.as_deref(),
-                                debounce_key: job.debounce_key.as_deref(),
-                            };
-                            diesel::insert_into(jobs::table)
-                                .values(&row)
-                                .execute(conn)?;
-
-                            for dep_id in depends_on {
-                                let dep_row = NewJobDependencyRow {
-                                    id: &uuid::Uuid::now_v7().to_string(),
-                                    job_id: &job.id,
-                                    depends_on_job_id: dep_id,
-                                };
-                                diesel::insert_into(job_dependencies::table)
-                                    .values(&dep_row)
-                                    .execute(conn)?;
-                            }
+                            Self::validate_dependencies(
+                                conn,
+                                depends_on,
+                                job.namespace.as_deref(),
+                            )?;
+                            Self::insert_job_with_deps(conn, job, depends_on)?;
 
                             out.push(job.clone());
                         }

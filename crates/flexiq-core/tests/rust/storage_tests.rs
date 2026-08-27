@@ -1109,6 +1109,78 @@ fn test_enqueue_dep_on_completed_archived_job(s: &impl Storage) {
     );
 }
 
+/// Every path that creates a job must persist its dependency edges.
+///
+/// `NewJob::into_job()` folds `depends_on` into the `has_deps` flag, so a path
+/// that writes the flag but skips the edges produces a job that reads as "no
+/// dependencies" at dequeue and dispatches straight past its DAG — a silent
+/// wrong answer, not an error. The five entry points share one insert helper on
+/// the Diesel backends; this pins the contract per path so a future divergence
+/// (or a Redis path that drifts) fails here.
+fn test_every_enqueue_path_writes_dependency_rows(s: &impl Storage) {
+    let q = "q-dep-rows-every-path";
+    let anchor = s.enqueue(make_job(q, "dep_anchor")).unwrap();
+
+    let dependent = |task: &str| {
+        let mut job = make_job(q, task);
+        job.depends_on = vec![anchor.id.clone()];
+        job
+    };
+    let keyed = |task: &str, key: &str| {
+        let mut job = dependent(task);
+        job.unique_key = Some(key.to_string());
+        job
+    };
+
+    let created = [
+        ("enqueue", s.enqueue(dependent("dep_plain")).unwrap()),
+        (
+            "enqueue_batch",
+            s.enqueue_batch(vec![dependent("dep_batch")])
+                .unwrap()
+                .remove(0),
+        ),
+        (
+            "enqueue_unique",
+            s.enqueue_unique(keyed("dep_unique", "dep-rows-uk-single"))
+                .unwrap(),
+        ),
+        (
+            "enqueue_unique_batch",
+            s.enqueue_unique_batch(vec![keyed("dep_unique_batch", "dep-rows-uk-batch")])
+                .unwrap()
+                .remove(0),
+        ),
+        ("enqueue_debounced", {
+            let mut job = dependent("dep_debounced");
+            job.debounce_key = Some("dep-rows-debounce".to_string());
+            s.enqueue_debounced(job, debounce_opts(5_000, 60_000))
+                .unwrap()
+        }),
+    ];
+
+    for (path, job) in &created {
+        assert!(job.has_deps, "{path} lost the has_deps flag");
+        assert_eq!(
+            s.get_dependencies(&job.id, None).unwrap(),
+            vec![anchor.id.clone()],
+            "{path} did not persist its dependency edge",
+        );
+    }
+
+    // The edges are also readable from the other side — a dependent written
+    // without its row would be invisible to the completion fan-out that wakes
+    // blocked jobs.
+    let mut dependents = s.get_dependents(&anchor.id, None).unwrap();
+    dependents.sort();
+    let mut expected: Vec<String> = created.iter().map(|(_, job)| job.id.clone()).collect();
+    expected.sort();
+    assert_eq!(
+        dependents, expected,
+        "one enqueue path is missing from the DAG"
+    );
+}
+
 fn test_dependent_blocked_by_cancelled_parent(s: &impl Storage) {
     let q = "q-dep-cancelled-parent";
 
@@ -1892,6 +1964,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_unique_batch(s);
     test_enqueue_batch_dedup(s);
     test_enqueue_batch_dedup_validates_deps(s);
+    test_every_enqueue_path_writes_dependency_rows(s);
     test_dead_letter_queue(s);
     test_dead_letter_by_task(s);
     test_purge_retention_covers_every_status(s);
