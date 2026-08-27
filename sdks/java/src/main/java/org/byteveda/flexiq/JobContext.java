@@ -46,8 +46,23 @@ public final class JobContext {
 
     /** Where this job's progress and logs actually go. */
     public interface Sink {
+        /**
+         * Record how far the job has got.
+         *
+         * @param jobId the running job
+         * @param progress the percentage the handler is reporting
+         */
         void setProgress(String jobId, int progress);
 
+        /**
+         * Append one structured log line for the job.
+         *
+         * @param jobId the running job
+         * @param taskName the task's registered name
+         * @param level the severity's wire form
+         * @param message the line itself
+         * @param extra structured context as JSON, or {@code null}
+         */
         void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra);
     }
 
@@ -62,6 +77,10 @@ public final class JobContext {
      * <p>Kept for callers outside the worker: there is no execution claim to
      * fence a step on, so {@link #step()} answers with a retryable refusal
      * rather than committing under an owner nobody holds.
+     *
+     * @param jobId the job's id
+     * @param taskName the task's registered name
+     * @param sink where progress and logs actually go
      */
     public JobContext(String jobId, String taskName, Sink sink) {
         this(jobId, taskName, sink, new StepContext(jobId, 0, new JsonSerializer(), new StepLatch(), null));
@@ -70,6 +89,10 @@ public final class JobContext {
     /**
      * The worker's constructor: {@code step} is bound to this attempt's session.
      *
+     * @param jobId the job's id
+     * @param taskName the task's registered name
+     * @param sink where progress and logs actually go
+     * @param step the step context bound to this attempt's session
      * @hidden
      */
     public JobContext(String jobId, String taskName, Sink sink, StepContext step) {
@@ -82,6 +105,7 @@ public final class JobContext {
     /**
      * The job running on this thread.
      *
+     * @return the context bound on this thread
      * @throws IllegalStateException outside a task body, where there is no job
      *     to describe and any answer would be a guess
      */
@@ -94,7 +118,12 @@ public final class JobContext {
         return active;
     }
 
-    /** Bind {@code context} for the duration of one task. @hidden */
+    /**
+     * Bind {@code context} for the duration of one task.
+     *
+     * @param context what {@link #current()} returns until {@link #exit()} runs
+     * @hidden
+     */
     public static void enter(JobContext context) {
         ACTIVE.set(context);
     }
@@ -104,10 +133,20 @@ public final class JobContext {
         ACTIVE.clear();
     }
 
+    /**
+     * The running job's id.
+     *
+     * @return the id
+     */
     public String jobId() {
         return jobId;
     }
 
+    /**
+     * The running task's registered name.
+     *
+     * @return the name
+     */
     public String taskName() {
         return taskName;
     }
@@ -131,12 +170,18 @@ public final class JobContext {
      * with a retryable
      * {@link org.byteveda.flexiq.steps.StepUnavailableError} — the same answer
      * a backend with no step store gives.
+     *
+     * @return this attempt's step context
      */
     public StepContext step() {
         return step;
     }
 
-    /** Report progress (0-100) for observability. Values outside that range are ignored. */
+    /**
+     * Report progress (0-100) for observability. Values outside that range are ignored.
+     *
+     * @param progress how far the handler has got, as a percentage
+     */
     public void setProgress(int progress) {
         if (progress < 0 || progress > 100) {
             LOG.warn("ignoring out-of-range progress " + progress + " for job " + jobId);
@@ -145,12 +190,21 @@ public final class JobContext {
         sink.setProgress(jobId, progress);
     }
 
-    /** Write an {@code info} log line against this job. */
+    /**
+     * Write an {@code info} log line against this job.
+     *
+     * @param message the line itself
+     */
     public void log(String message) {
         log(TaskLogLevel.INFO, message, null);
     }
 
-    /** Write a log line at {@code level}. */
+    /**
+     * Write a log line at {@code level}.
+     *
+     * @param level the severity
+     * @param message the line itself
+     */
     public void log(TaskLogLevel level, String message) {
         log(level, message, null);
     }
@@ -161,6 +215,10 @@ public final class JobContext {
      * <p>The level is the enum rather than its wire string, matching
      * {@link FlexiQ#writeTaskLog(String, String, TaskLogLevel, String, String)} — the
      * string-typed form there is deprecated, so there is no reason to introduce another.
+     *
+     * @param level the severity
+     * @param message the line itself
+     * @param extra structured context as pre-encoded JSON, or {@code null}
      */
     public void log(TaskLogLevel level, String message, @Nullable String extra) {
         sink.writeTaskLog(jobId, taskName, level.wire(), message, extra);

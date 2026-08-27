@@ -366,6 +366,7 @@ public final class Worker implements AutoCloseable {
          * <p>Discovery never replaces a handler already registered on this builder;
          * call {@code handle(...)} or {@code register(...)} <em>after</em> it to
          * override one deliberately.
+         *
          * @return {@code this}, for chaining
          */
         public Builder discover() {

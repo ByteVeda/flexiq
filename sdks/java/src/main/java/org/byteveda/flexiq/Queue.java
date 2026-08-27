@@ -7,7 +7,11 @@ package org.byteveda.flexiq;
  */
 public interface Queue {
 
-    /** This queue's name. */
+    /**
+     * This queue's name.
+     *
+     * @return the name it was obtained under
+     */
     String name();
 
     /** Stop workers from dispatching jobs on this queue. */
@@ -16,6 +20,10 @@ public interface Queue {
     /** Resume dispatching after a {@link #pause()}. */
     void resume();
 
-    /** Whether this queue is currently paused. */
+    /**
+     * Whether this queue is currently paused.
+     *
+     * @return {@code true} while workers are holding off this queue's jobs
+     */
     boolean isPaused();
 }

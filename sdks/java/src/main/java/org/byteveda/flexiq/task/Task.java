@@ -180,6 +180,7 @@ public final class Task<T> {
      * <p>A handler that throws {@link org.byteveda.flexiq.errors.RetryableException}
      * or {@link org.byteveda.flexiq.errors.NonRetryableException} decides for itself
      * — those bypass this predicate.
+     *
      * @param retryOn decides whether a thrown exception is worth another attempt
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -205,6 +206,7 @@ public final class Task<T> {
      * org.byteveda.flexiq.serialization.PayloadCodec}s (in order on enqueue,
      * reversed on the worker). Each name must be registered via
      * {@code FlexiQ.builder().codec(name, codec)} on producers and workers.
+     *
      * @param codecs the codec names, applied in order on the way out and reversed on the way in
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -229,6 +231,7 @@ public final class Task<T> {
      * A copy of this task that auto-derives a {@code uniqueKey} from the payload on every
      * enqueue, so a duplicate enqueue is a no-op while the first job is pending or running.
      * A per-enqueue {@link EnqueueOptions.Builder#idempotent(boolean)} overrides this default.
+     *
      * @param idempotent {@code true} to derive a {@code uniqueKey} from the task and payload
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -253,6 +256,7 @@ public final class Task<T> {
      * A copy of this task guarded by {@code circuitBreaker}. The worker registers it on
      * {@code start()}; once the breaker opens, the scheduler stops dispatching this task until
      * it recovers.
+     *
      * @param circuitBreaker the breaker's thresholds and timings
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -277,6 +281,7 @@ public final class Task<T> {
      * A copy of this task throttled to {@code rateLimit}, a spec like {@code "100/m"}
      * ({@code s}, {@code m} and {@code h} suffixes). The worker registers it on
      * {@code start()} and rejects a malformed spec rather than running unthrottled.
+     *
      * @param rateLimit a spec like {@code "100/m"}, with {@code s}, {@code m} or {@code h} suffixes
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -309,6 +314,7 @@ public final class Task<T> {
      * tripped {@link #circuitBreaker} always defers regardless: that is
      * downstream failure, not excess load. Dropping fires no middleware or event
      * hooks — the job never ran.
+     *
      * @param onExcess what a saturated rate limit does to this task's jobs
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -335,6 +341,7 @@ public final class Task<T> {
      * costs a database read. {@code null} or {@code 0} means no cap — matching the
      * annotation's sentinel, and because a literal cap of zero would stop the task
      * from ever dispatching.
+     *
      * @param maxConcurrent the cluster-wide ceiling, or {@code null} to leave it uncapped
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -362,6 +369,7 @@ public final class Task<T> {
      * failures dead-letter instead of retrying, so a broken dependency cannot become
      * a retry storm. Distinct from {@link #maxRetries}, which bounds one job rather
      * than the rate.
+     *
      * @param retryBudget a spec like {@code "100/m"}, capping how fast this task may retry
      * @return the copy; this descriptor is immutable and unchanged
      */
@@ -388,6 +396,7 @@ public final class Task<T> {
      * others. In-process and free, unlike {@link #maxConcurrent}, which is
      * cluster-wide and costs a database read. {@code null} or {@code 0} lets it use
      * the whole pool, matching the annotation's sentinel.
+     *
      * @param maxInFlightPerTask the per-worker ceiling, or {@code null} to allow the whole pool
      * @return the copy; this descriptor is immutable and unchanged
      */
