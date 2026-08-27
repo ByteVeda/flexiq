@@ -12,13 +12,22 @@ import java.util.Optional;
  */
 public interface ConditionalSettings {
 
-    /** The value for {@code key}, or empty when unset. */
+    /**
+     * The value for {@code key}, or empty when unset.
+     *
+     * @param key the document's key
+     * @return its content, or empty when nothing is stored under it
+     */
     Optional<String> getSetting(String key);
 
     /**
      * Writes {@code key} only if it still holds {@code expected}, where an empty
      * {@code expected} means the key must be unset.
      *
+     * @param key the document's key
+     * @param expected the content the write is conditional on; empty means the key
+     *     must be unset
+     * @param value the content to store
      * @return false when another writer got there first, so a read-modify-write
      *     caller can re-read and retry instead of overwriting an unseen edit.
      */

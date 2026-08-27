@@ -6,11 +6,28 @@ import org.jspecify.annotations.Nullable;
 
 /** Controls a running worker and completes its in-flight jobs. */
 public interface WorkerControl extends AutoCloseable {
+    /**
+     * Report that a dispatched job finished successfully.
+     *
+     * @param token the dispatch token the bridge was handed
+     * @param result the encoded result to store
+     */
     void completeJob(long token, byte[] result);
 
-    /** Fail a job. {@code retryable} false dead-letters it whatever budget is left. */
+    /**
+     * Fail a job. {@code retryable} false dead-letters it whatever budget is left.
+     *
+     * @param token the dispatch token the bridge was handed
+     * @param error the stored error string
+     * @param retryable {@code false} to dead-letter now, whatever budget is left
+     */
     void failJob(long token, String error, boolean retryable);
 
+    /**
+     * Report that a dispatched job was cancelled rather than run to a verdict.
+     *
+     * @param token the dispatch token the bridge was handed
+     */
     void cancelJob(long token);
 
     /**
@@ -24,6 +41,7 @@ public interface WorkerControl extends AutoCloseable {
      * <p>Unreachable unless {@link #openStepSession} handed out a session, so
      * the default refuses rather than guessing.
      *
+     * @param token the dispatch token the bridge was handed
      * @param wakeAt the deadline the job was rescheduled to, in Unix milliseconds
      */
     default void sleepJob(long token, long wakeAt) {
@@ -45,8 +63,10 @@ public interface WorkerControl extends AutoCloseable {
      * backend without a step store. Retryable: a heterogeneous fleet
      * mid-rollout may put the next attempt somewhere that can commit.
      *
+     * @param jobId the running job
      * @param attempt the {@code retryCount} the job was dispatched with, checked
      *     against the row so a superseded attempt cannot write into the live one
+     * @return the session this attempt's steps commit through
      */
     default StepSession openStepSession(String jobId, int attempt) {
         throw new StepUnavailableError("durable steps need a worker that reaches storage; this one has none, so job "
@@ -60,6 +80,9 @@ public interface WorkerControl extends AutoCloseable {
      * own: the scheduler holds the connection and applies this on its behalf.
      * A worker writes straight to its {@link QueueBackend} and never calls this,
      * so the default does nothing.
+     *
+     * @param jobId the running job
+     * @param progress the percentage the handler is reporting
      */
     default void reportProgress(String jobId, int progress) {}
 
@@ -68,13 +91,23 @@ public interface WorkerControl extends AutoCloseable {
      * this at level {@code "result"}, with the value as {@code extra}.
      *
      * <p>Same split as {@link #reportProgress}.
+     *
+     * @param jobId the running job
+     * @param taskName the task's registered name
+     * @param level the severity's wire form
+     * @param message the line itself
+     * @param extra structured context as JSON, or {@code null}
      */
     default void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra) {}
 
     /** Stop the scheduler and heartbeat loops; in-flight jobs drain. */
     void stop();
 
-    /** A JSON {@code ClusterInfo} snapshot when mesh is enabled, else empty. */
+    /**
+     * A JSON {@code ClusterInfo} snapshot when mesh is enabled, else empty.
+     *
+     * @return the snapshot as JSON, or empty when this worker joined no mesh
+     */
     default Optional<String> meshClusterInfoJson() {
         return Optional.empty();
     }
