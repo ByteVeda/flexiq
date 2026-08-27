@@ -433,6 +433,14 @@ pub struct DebounceOptions {
     /// Overwrite the pending job's payload with the newest one. `false` keeps
     /// the payload the window opened with.
     pub replace_payload: bool,
+    /// The target queue's `max_pending` admission cap, or `None` when the queue
+    /// is uncapped (then nothing is counted and no query is spent).
+    ///
+    /// It rides here because this is the one enqueue whose caller cannot apply
+    /// it: a coalescing call adds no pending row, and slide-vs-insert is only
+    /// decided inside the write. Enforced on the inserting branch alone, and
+    /// with the callers' rule — refused once `pending + 1` would exceed `cap`.
+    pub max_pending: Option<i64>,
 }
 
 /// Everything a worker announces about itself when it joins the registry.

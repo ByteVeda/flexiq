@@ -66,6 +66,11 @@ pub struct EnqueueOptions {
     /// Overwrite the pending job's payload with this one. Absent keeps the
     /// payload the window opened with.
     pub debounce_replace_payload: Option<bool>,
+    /// The target queue's admission cap, applied inside the debounce write and
+    /// only on the branch that inserts. Set for a debounced enqueue onto a
+    /// capped queue and nowhere else — every other enqueue can tell it is
+    /// inserting and checks the cap itself.
+    pub debounce_max_pending: Option<i64>,
 }
 
 /// Read the debounce quartet off the enqueue options. `None` means an ordinary
@@ -103,6 +108,7 @@ pub fn debounce_options(options: &EnqueueOptions) -> Result<Option<DebounceOptio
         window_ms,
         max_wait_ms,
         replace_payload: options.debounce_replace_payload.unwrap_or(false),
+        max_pending: options.debounce_max_pending,
     }))
 }
 

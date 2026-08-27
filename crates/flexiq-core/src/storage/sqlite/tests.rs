@@ -602,6 +602,7 @@ fn debounce_opts(window_ms: i64, max_wait_ms: i64) -> DebounceOptions {
         window_ms,
         max_wait_ms,
         replace_payload: false,
+        max_pending: None,
     }
 }
 

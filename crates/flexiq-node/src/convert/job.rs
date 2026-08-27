@@ -92,6 +92,10 @@ pub fn debounce_options(opts: &EnqueueOptions) -> Result<Option<DebounceOptions>
         window_ms: non_negative(window_ms, "debounceWindowMs")?,
         max_wait_ms: non_negative(max_wait_ms, "debounceMaxWaitMs")?,
         replace_payload: opts.debounce_replace_payload.unwrap_or(false),
+        max_pending: opts
+            .debounce_max_pending
+            .map(|cap| non_negative(cap, "debounceMaxPending"))
+            .transpose()?,
     }))
 }
 

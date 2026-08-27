@@ -2014,6 +2014,9 @@ fn run_storage_tests(s: &impl Storage) {
     test_enqueue_debounced_isolates_keys_and_namespaces(s);
     test_enqueue_debounced_replaces_the_payload_on_request(s);
     test_enqueue_debounced_rejects_unusable_options(s);
+    test_enqueue_debounced_collapses_onto_a_full_queue(s);
+    test_enqueue_debounced_refuses_to_open_a_window_on_a_full_queue(s);
+    test_enqueue_debounced_counts_only_its_own_queue(s);
     test_steps_commit_and_replay_in_order(s);
     test_steps_identical_recommit_is_a_success(s);
     test_steps_refuse_a_result_over_the_cap(s);
@@ -2739,6 +2742,15 @@ fn debounce_opts(window_ms: i64, max_wait_ms: i64) -> DebounceOptions {
         window_ms,
         max_wait_ms,
         replace_payload: false,
+        max_pending: None,
+    }
+}
+
+/// The same window under an admission cap.
+fn capped_opts(max_pending: i64) -> DebounceOptions {
+    DebounceOptions {
+        max_pending: Some(max_pending),
+        ..debounce_opts(5_000, 60_000)
     }
 }
 
@@ -2881,6 +2893,86 @@ fn test_enqueue_debounced_rejects_unusable_options(s: &impl Storage) {
 
     let written = s.list_jobs(None, Some(q), None, 10, 0, None).unwrap();
     assert!(written.is_empty(), "a rejected call must write nothing");
+}
+
+/// The whole point of the cap moving into the write: a queue sitting at its cap
+/// still admits an enqueue that only slides the open window, because that
+/// enqueue inserts nothing for the cap to be about.
+fn test_enqueue_debounced_collapses_onto_a_full_queue(s: &impl Storage) {
+    let q = "q-debounce-cap-slide";
+    let opened = s
+        .enqueue_debounced(debounced(q, "capslide:user-1"), capped_opts(4))
+        .unwrap();
+    // Fill the rest of the cap with plain jobs so the window's own row is not
+    // the only thing standing between the queue and its limit.
+    for _ in 0..3 {
+        s.enqueue(make_job(q, "filler")).unwrap();
+    }
+    assert_eq!(s.count_pending_by_queue(q).unwrap(), 4);
+
+    let slid = s
+        .enqueue_debounced(debounced(q, "capslide:user-1"), capped_opts(4))
+        .unwrap();
+    assert_eq!(slid.id, opened.id, "a full queue still takes a slide");
+    assert_eq!(s.count_pending_by_queue(q).unwrap(), 4);
+}
+
+/// With no window open there is a row to insert, so the same full queue refuses
+/// it — and refuses it having written nothing.
+fn test_enqueue_debounced_refuses_to_open_a_window_on_a_full_queue(s: &impl Storage) {
+    let q = "q-debounce-cap-insert";
+    for _ in 0..2 {
+        s.enqueue(make_job(q, "filler")).unwrap();
+    }
+
+    let err = s
+        .enqueue_debounced(debounced(q, "capinsert:user-1"), capped_opts(2))
+        .unwrap_err();
+    match err {
+        QueueError::QueueFull {
+            queue,
+            pending,
+            cap,
+        } => {
+            assert_eq!(queue, q);
+            assert_eq!(pending, 2);
+            assert_eq!(cap, 2);
+        }
+        other => panic!("expected QueueFull, got {other:?}"),
+    }
+    assert_eq!(
+        s.count_pending_by_queue(q).unwrap(),
+        2,
+        "a refused insert must leave the queue exactly as it found it"
+    );
+
+    // Raising the cap by one admits the window that was just refused, so the
+    // refusal was the cap and not the debounce write failing for its own reason.
+    let opened = s
+        .enqueue_debounced(debounced(q, "capinsert:user-1"), capped_opts(3))
+        .unwrap();
+    assert_eq!(s.get_job(&opened.id, None).unwrap().unwrap().queue, q);
+}
+
+/// The cap is per queue, and an uncapped call counts nothing at all.
+fn test_enqueue_debounced_counts_only_its_own_queue(s: &impl Storage) {
+    let noisy = "q-debounce-cap-noisy";
+    let quiet = "q-debounce-cap-quiet";
+    for _ in 0..3 {
+        s.enqueue(make_job(noisy, "filler")).unwrap();
+    }
+
+    s.enqueue_debounced(debounced(quiet, "capquiet:user-1"), capped_opts(1))
+        .unwrap();
+    assert_eq!(s.count_pending_by_queue(quiet).unwrap(), 1);
+
+    // Same queue, now over its cap, but the call carries none.
+    s.enqueue_debounced(
+        debounced(quiet, "capquiet:user-2"),
+        debounce_opts(5_000, 60_000),
+    )
+    .unwrap();
+    assert_eq!(s.count_pending_by_queue(quiet).unwrap(), 2);
 }
 
 /// The debounce key must survive a write and both read projections on every
