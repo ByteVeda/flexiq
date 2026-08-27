@@ -21,6 +21,13 @@ import org.jspecify.annotations.Nullable;
  * every callback URL is derived from it. OAuth is considered disabled when no
  * provider is configured. {@link #fromEnv(Map)} fails fast on partial provider
  * configuration rather than silently ignoring it.
+ *
+ * @param redirectBaseUrl the public origin the dashboard is served at; every callback URL derives from it
+ * @param google the Google provider's configuration, or {@code null} when it is not configured
+ * @param github the GitHub provider's configuration, or {@code null} when it is not configured
+ * @param oidc every generic OIDC provider configured, in display order
+ * @param passwordAuthEnabled whether password login is offered alongside the providers
+ * @param adminEmails addresses granted the admin role; every other OAuth login is a viewer
  */
 public record OAuthConfig(
         String redirectBaseUrl,

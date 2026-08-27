@@ -8,6 +8,10 @@ import org.jspecify.annotations.Nullable;
  * Per-request auth state: the resolved {@link Session} (null when
  * unauthenticated) plus the CSRF cookie and header used for double-submit
  * validation.
+ *
+ * @param session the resolved session, or {@code null} when unauthenticated
+ * @param csrfCookie the {@code flexiq_csrf} cookie the request carried, or {@code null}
+ * @param csrfHeader the {@code X-CSRF-Token} header it carried, or {@code null}
  */
 public record RequestContext(@Nullable Session session, @Nullable String csrfCookie, @Nullable String csrfHeader) {
 
