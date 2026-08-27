@@ -53,10 +53,11 @@ macro_rules! impl_diesel_dead_letter_ops {
                 let (topic, subscription_name) =
                     $crate::pubsub::extract_topic_subscription(job.notes.as_deref())
                         .map_or((None, None), |(t, s)| (Some(t), Some(s)));
-                // A replacement blob would drop the run's origin with the rest
-                // of the job's metadata, and `retry_dead` would then stamp this
-                // job's id over the one the run has been sending downstream.
-                let dlq_metadata = $crate::step::carry_origin_job_id(metadata, job);
+                // The run this job belongs to, recorded on a column of its own:
+                // the `metadata` argument replaces the job's blob wholesale, and
+                // a bare-string replacement has nothing to merge an origin into.
+                // See `m0014_dead_letter_origin`.
+                let origin_job_id = $crate::step::run_key(job);
 
                 self.write_transaction(|conn| {
                     let dlq_row = NewDeadLetterRow {
@@ -70,7 +71,7 @@ macro_rules! impl_diesel_dead_letter_ops {
                         failed_at: now,
                         // Preserve the job's own metadata so it survives the
                         // round trip; an explicit `metadata` arg overrides it.
-                        metadata: dlq_metadata.as_deref(),
+                        metadata: metadata.or(job.metadata.as_deref()),
                         notes: job.notes.as_deref(),
                         priority: job.priority,
                         max_retries: job.max_retries,
@@ -81,6 +82,12 @@ macro_rules! impl_diesel_dead_letter_ops {
                         topic: topic.as_deref(),
                         subscription_name: subscription_name.as_deref(),
                         shed,
+                        origin_job_id: Some(&origin_job_id),
+                        // Only when the replacement would otherwise displace
+                        // it: with no replacement, `metadata` already is the
+                        // job's own and copying an unbounded blob twice buys
+                        // nothing. See `m0015_dead_letter_job_metadata`.
+                        job_metadata: metadata.and(job.metadata.as_deref()),
                     };
 
                     diesel::insert_into(dead_letter::table)
@@ -259,9 +266,15 @@ macro_rules! impl_diesel_dead_letter_ops {
 
                 let retry_metadata = {
                     let next_count = dead_row.dlq_retry_count + 1;
+                    // The job's own metadata, which is `metadata` unless a
+                    // caller's replacement displaced it. Rebuilding the job
+                    // from the replacement would hand the operator a job
+                    // stripped of the keys it was enqueued with — and, for a
+                    // marker that is not even an object, an empty blob.
                     let mut obj = dead_row
-                        .metadata
+                        .job_metadata
                         .as_deref()
+                        .or(dead_row.metadata.as_deref())
                         .and_then(|m| {
                             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(m)
                                 .ok()
@@ -274,7 +287,14 @@ macro_rules! impl_diesel_dead_letter_ops {
                     // The one path that changes a run's job id, so the one
                     // that records what it was: an operator's DLQ retry must
                     // send the step keys the first attempt sent, not fresh ones.
-                    $crate::step::stamp_origin_job_id(&mut obj, &dead_row.original_job_id);
+                    // The column outranks the blob, which a caller's replacement
+                    // metadata may have emptied; a row older than the column
+                    // still resolves from the blob.
+                    $crate::step::stamp_origin_job_id(
+                        &mut obj,
+                        dead_row.origin_job_id.as_deref(),
+                        &dead_row.original_job_id,
+                    );
                     Some(serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default())
                 };
 

@@ -35,6 +35,7 @@ pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
 pub use resilience::retry::RetryPolicy;
+pub use scheduler::result_handler::RETRY_BUDGET_EXHAUSTED;
 pub use scheduler::retention::{EffectiveRetention, RetentionConfig};
 pub use scheduler::{
     JobResult, QueueConfig, ResultOutcome, Scheduler, SchedulerConfig, TaskConfig,

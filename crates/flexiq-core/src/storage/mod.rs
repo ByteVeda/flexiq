@@ -410,6 +410,11 @@ pub struct DeadJob {
     pub namespace: Option<String>,
     /// Times this entry was auto-retried out of the DLQ.
     pub dlq_retry_count: i32,
+    /// The run this entry belongs to: the id the run *began* under, which is
+    /// [`Self::original_job_id`] unless the job was itself resurrected from the
+    /// DLQ. `None` on entries written before the column existed, whose origin
+    /// `retry_dead` still recovers from the metadata blob.
+    pub origin_job_id: Option<String>,
 }
 
 impl From<models::DeadLetterRow> for DeadJob {
@@ -431,6 +436,7 @@ impl From<models::DeadLetterRow> for DeadJob {
             result_ttl_ms: row.result_ttl_ms,
             namespace: row.namespace,
             dlq_retry_count: row.dlq_retry_count,
+            origin_job_id: row.origin_job_id,
         }
     }
 }
@@ -457,6 +463,7 @@ impl DeadJob {
             result_ttl_ms: row.result_ttl_ms,
             namespace: row.namespace,
             dlq_retry_count: row.dlq_retry_count,
+            origin_job_id: row.origin_job_id,
         }
     }
 }

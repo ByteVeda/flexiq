@@ -82,3 +82,7 @@ whole of the job's metadata on the way back out. Closing it properly means takin
 off the metadata blob altogether, onto a `dead_letter` column no replacement can reach: a
 migration on three backends plus the row structs and the shells' DLQ types. That reverses §6.2
 of the design, so it belongs to the epic, not to a review round. Filed as #728.
+
+**Closed by #728** — `dead_letter.origin_job_id` (`m0014_dead_letter_origin`) now carries the
+run, `carry_origin_job_id` is gone, and the four-step sequence is pinned in the contract
+suite. See `tasks/plans/2026-08-27-dead-letter-origin-column.md`.

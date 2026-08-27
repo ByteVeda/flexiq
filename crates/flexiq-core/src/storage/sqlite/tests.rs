@@ -2715,6 +2715,83 @@ fn test_dlq_shed_backfill_flags_pre_migration_rows() {
     assert_eq!(cands[0].original_job_id, failed.id);
 }
 
+/// A dead-letter row written before `0014_dead_letter_origin` has a NULL
+/// column, and its run must still be recoverable from the metadata blob — the
+/// carrier the column replaces. Rows already in an upgraded deployment's DLQ
+/// are exactly this shape.
+#[test]
+fn test_retry_dead_falls_back_to_the_blob_for_a_pre_migration_row() {
+    use crate::storage::schema::dead_letter;
+    use diesel::prelude::*;
+
+    let storage = SqliteStorage::in_memory().unwrap();
+    let mut new_job = make_job("charge_card");
+    // The shape `retry_dead` leaves on a job it resurrected: the run began at
+    // `job-1`, and this row is a later incarnation of it.
+    new_job.metadata = Some(r#"{"__origin_job_id":"job-1"}"#.to_string());
+    let job = storage.enqueue(new_job).unwrap();
+    storage.move_to_dlq(&job, "boom", None).unwrap();
+
+    let dead = storage.list_dead(10, 0, None).unwrap().pop().unwrap();
+    assert_eq!(
+        dead.origin_job_id.as_deref(),
+        Some("job-1"),
+        "a row written today records the run on its column"
+    );
+
+    // Age the row back to the pre-migration shape.
+    let mut conn = storage.conn().unwrap();
+    diesel::update(dead_letter::table.find(&dead.id))
+        .set(dead_letter::origin_job_id.eq(None::<String>))
+        .execute(&mut conn)
+        .unwrap();
+    drop(conn);
+
+    let resurrected = storage.retry_dead(&dead.id, None).unwrap();
+    let retried = storage.get_job(&resurrected, None).unwrap().unwrap();
+    assert_eq!(
+        crate::step::run_key(&retried),
+        "job-1",
+        "the blob is still read when the column has nothing to say"
+    );
+}
+
+/// A row written before `0015_dead_letter_job_metadata` has a NULL
+/// `job_metadata`, and its resurrection must still be built from the `metadata`
+/// column — which for such a row is all there ever was.
+#[test]
+fn test_retry_dead_falls_back_to_metadata_for_a_pre_migration_row() {
+    use crate::storage::schema::dead_letter;
+    use diesel::prelude::*;
+
+    let storage = SqliteStorage::in_memory().unwrap();
+    let mut new_job = make_job("charge_card");
+    new_job.metadata = Some(r#"{"tenant":"acme"}"#.to_string());
+    let job = storage.enqueue(new_job).unwrap();
+    // No replacement, so `metadata` holds the job's own and `job_metadata` is
+    // NULL exactly as a pre-migration row's would be.
+    storage.move_to_dlq(&job, "boom", None).unwrap();
+
+    let dead = storage.list_dead(10, 0, None).unwrap().pop().unwrap();
+    let mut conn = storage.conn().unwrap();
+    let carried: Option<String> = dead_letter::table
+        .find(&dead.id)
+        .select(dead_letter::job_metadata)
+        .first(&mut conn)
+        .unwrap();
+    drop(conn);
+    assert_eq!(
+        carried, None,
+        "nothing displaced the job's metadata, so nothing is copied"
+    );
+
+    let resurrected = storage.retry_dead(&dead.id, None).unwrap();
+    let retried = storage.get_job(&resurrected, None).unwrap().unwrap();
+    let meta: serde_json::Value =
+        serde_json::from_str(retried.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["tenant"], "acme");
+}
+
 // ── Durable inline steps ─────────────────────────────────────────────
 
 use crate::step::StepLimits;

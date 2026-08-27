@@ -471,6 +471,18 @@ double-underscore metadata prefix is established precedent.
 
 Costs one small change in `retry_dead` on three backends. #668 owns it.
 
+**Amended by #728: the dead-letter carrier is a column, not the blob.** The
+metadata blob turned out not to be a safe carrier across the dead-letter
+boundary — `move_to_dlq`/`shed_to_dlq` take a `metadata` argument that
+*replaces* the job's blob wholesale, and `RETRY_BUDGET_EXHAUSTED` is a bare
+string with no object an origin could be merged into. A run resurrected once and
+then killed by the retry budget lost its origin there and double-charged on the
+next operator retry. `dead_letter.origin_job_id`
+(`m0014_dead_letter_origin`) now carries it, written on every dead-letter, and
+`retry_dead` resolves column → blob → `original_job_id` so pre-migration rows
+still resolve. The blob stays the carrier on a **live** job — that is what
+`run_key(&Job)` reads, and what `retry_dead` writes onto the resurrection.
+
 ### 6.3 The tests that matter
 
 Key stability across (a) an ordinary retry, (b) a sleep/wake, and (c) a
