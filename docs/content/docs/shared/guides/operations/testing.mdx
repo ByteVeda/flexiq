@@ -126,6 +126,14 @@ void runsATaskEndToEnd() throws Exception {
 backend explicitly (e.g. to share one across a custom builder), pass it to
 `FlexiQ.builder().open(new InMemoryQueueBackend())`.
 
+Tasks that use <SdkLink to="guides/core/steps">durable steps</SdkLink> run here
+too, as a real sequence rather than a bypass — a step is memoized across a retry,
+a changed sequence diverges, and `step.sleep` reschedules the job. What the
+harness does not model, and when to reach for a file-backed queue instead, is
+covered in <SdkLink to="guides/core/steps">that guide</SdkLink>.
+
+Not supported: workflows. Periodic registration is recorded but never fires.
+
 </SdkOnly>
 
 <SdkOnly sdk="python">

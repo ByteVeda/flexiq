@@ -162,6 +162,12 @@ dependencies {
     // are exercised end-to-end. Consumers wire it the same way.
     testAnnotationProcessor(project(":processor"))
 
+    // Test-only, and only in this direction: the harness in :test-support is
+    // a Java restatement of rules that live in the core, so it is pinned by a
+    // parity test that runs one task body over it and over a real worker. That
+    // test needs both, and the real-worker half is here.
+    testImplementation(project(":test-support"))
+
     testImplementation(platform("org.junit:junit-bom:5.10.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

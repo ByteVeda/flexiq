@@ -1,6 +1,7 @@
 // flexiq-test: a pure-Java in-memory QueueBackend for fast unit tests (no JNI,
-// no disk). Depends on the runtime for the SPI + models; the runtime does NOT
-// depend on it (its own tests live here), so there is no cycle.
+// no disk). Depends on the runtime for the SPI + models. The runtime's *main*
+// source set does not depend on this module — only its tests do, for the step
+// parity test — so there is no cycle.
 plugins {
     `java-library`
     checkstyle
