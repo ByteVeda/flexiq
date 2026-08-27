@@ -486,6 +486,55 @@ dead-letters in production.
 
 </SdkOnly>
 
+<SdkOnly sdk="java">
+
+## Testing a task that uses steps
+
+`InMemoryFlexiQ` runs steps as a real sequence, not as a bypass: committed steps
+are recorded per job, a replay is answered from that record, a changed sequence
+diverges with the same permanent verdict, and `step.sleep` ends the attempt and
+reschedules the job. A task that passes in memory is a task a worker runs the
+same way.
+
+```java
+try (FlexiQ queue = InMemoryFlexiQ.open()) {
+    AtomicInteger charges = new AtomicInteger();
+    queue.enqueue(checkout, "go");
+
+    try (Worker worker = queue.worker()
+            .handle(checkout, payload -> {
+                JobContext ctx = JobContext.current();
+                ctx.step().run("charge", Integer.class, charges::incrementAndGet);
+                return "ok";
+            })
+            .start()) {
+        queue.awaitJob(id, Duration.ofSeconds(5));
+    }
+
+    assertEquals(1, charges.get()); // once per job, across every attempt
+}
+```
+
+The rules behind that — how a step is named, when an occurrence is spent, what
+counts as a divergence, the size caps — live in the core, and the in-memory
+backend cannot ask it: being free of the native library is what makes it fast. It
+restates them, and a parity suite runs one task body over it and over a real
+worker to keep the restatement honest.
+
+What it does not give you is a database. It is one process, so the
+`(owner, attempt)` fence is a field check rather than a row condition; a job's
+steps are dropped when the job finishes rather than retained; and the caps are
+the core's defaults rather than a queue's configuration. For anything that turns
+on real storage — retention, a reaper reclaiming a dead worker's job, two
+processes racing — point the test at a file-backed queue instead, which is a
+two-line change and always exact:
+
+```java
+FlexiQ queue = FlexiQ.builder().backend("sqlite").url(tempDir + "/steps.db").open();
+```
+
+</SdkOnly>
+
 ## Signals you cannot catch away
 
 A step sleep and a step failure both unwind the task body, and neither may be
