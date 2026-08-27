@@ -70,6 +70,12 @@ pub struct ExecutorConfig {
     pub tasks: Vec<String>,
     /// Jobs this executor can run concurrently.
     pub slots: u32,
+    /// Optional behaviours this executor takes part in, announced in `hello`.
+    ///
+    /// Empty by default: a shell opts in by naming what it has actually wired
+    /// up — [`CAP_STEPS`] once its job context can open a step session — and a
+    /// scheduler sends nothing that was not claimed.
+    pub capabilities: Vec<String>,
     /// Shared secret, when the scheduler requires one.
     pub token: Option<Secret>,
     /// How long the handshake may take before the attach is abandoned.
@@ -104,6 +110,7 @@ impl ExecutorConfig {
             version: version.into(),
             tasks: Vec::new(),
             slots: 1,
+            capabilities: Vec::new(),
             token: None,
             handshake_timeout: Duration::from_secs(10),
             write_timeout: Duration::from_secs(30),
@@ -172,15 +179,18 @@ impl ExecutorClient {
         let mut reader = FrameReader::new(read);
         let mut writer = FrameWriter::new(write);
 
-        writer.write_header(&ExecutorMessage::Hello {
-            executor_id: config.executor_id.clone(),
-            sdk: config.sdk.clone(),
-            version: config.version.clone(),
-            tasks: config.tasks.clone(),
-            slots: config.slots,
-            protocol_version: PROTOCOL_VERSION,
-            token: config.token.clone(),
-        })?;
+        writer.write_header(
+            &ExecutorMessage::hello(
+                config.executor_id.clone(),
+                config.sdk.clone(),
+                config.version.clone(),
+                config.tasks.clone(),
+                config.slots,
+            )
+            .capabilities(config.capabilities.clone())
+            .token(config.token.clone())
+            .build(),
+        )?;
 
         let (scheduler_id, capabilities) = read_ack(&mut reader)?;
         connection.set_read_timeout(None)?;

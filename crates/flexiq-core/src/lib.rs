@@ -66,5 +66,5 @@ pub use worker::{
     ExecutorSideChannel, HelloBuilder, NativeDispatcher, ProtocolError, RemoteConfig,
     RemoteDispatcher, SchedulerMessage, Secret, SideChannel, StorageSideChannel, TaskError,
     TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    CAP_STEPS, PROTOCOL_VERSION,
 };

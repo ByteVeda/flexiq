@@ -27,8 +27,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::auth::Secret;
+use crate::error::QueueError;
 use crate::job::{Job, JobStatus};
 use crate::scheduler::JobResult;
+use crate::step::StepFailure;
+use crate::storage::records::{JobStep, StepKind};
 
 /// Frame format version. Both sides announce it in the handshake; a mismatch
 /// is rejected rather than silently downgraded.
@@ -47,6 +50,18 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// understand — it degrades to dropping progress and logs, as it did before
 /// the side-channel existed.
 pub const CAP_SIDE_CHANNEL: &str = "side_channel";
+
+/// Capability: durable inline steps work across this attach.
+///
+/// Announced by *both* sides, because each half is useless without the other.
+/// A scheduler advertises it in `hello_ack` when it has a step-capable store to
+/// commit through; an executor advertises it in `hello` so a scheduler never
+/// sends a step snapshot to a peer that would only discard it.
+///
+/// Absent, a durable step is refused rather than run un-memoized — there is no
+/// version of "your charge step silently lost its memo" that beats a failure
+/// naming the executor.
+pub const CAP_STEPS: &str = "steps";
 
 /// Header cap, bounding a peer that never sends a newline.
 pub const MAX_HEADER_BYTES: u64 = 64 * 1024;
@@ -166,6 +181,55 @@ pub enum SchedulerMessage {
         #[serde(default)]
         metadata: Option<String>,
     },
+    /// The steps a job has already committed, sent immediately *before* its
+    /// [`Job`](Self::Job) frame so the executor can answer a memo hit without a
+    /// storage read it has no credentials for (§9.1).
+    ///
+    /// The snapshot rides the dispatch rather than being fetched per step:
+    /// there is exactly one read per attempt, and it is the scheduler's. Sent
+    /// only to an executor that advertised [`CAP_STEPS`], and only when the job
+    /// has steps — no frame means an empty snapshot, never an unknown one.
+    ///
+    /// The blob cannot live in the header: a snapshot can be megabytes and a
+    /// header is capped at [`MAX_HEADER_BYTES`]. Its encoding is
+    /// [`encode_step_snapshot`].
+    JobSteps {
+        /// Job the snapshot belongs to. The `job` frame that follows repeats it.
+        job_id: String,
+        /// Length of the encoded snapshot that follows.
+        payload_len: usize,
+    },
+    /// Answer to [`ExecutorMessage::StepCommit`] (§9.2).
+    ///
+    /// The executor blocks on this before returning from `step.run`: an
+    /// unconfirmed commit is indistinguishable from one that never happened,
+    /// and carrying on past it would re-run the step next attempt with the side
+    /// effect already applied.
+    StepAck {
+        /// Job the commit named.
+        job_id: String,
+        /// Position the commit named. `(job_id, seq)` is the correlation — one
+        /// executor runs many jobs, and a job id alone would not pair them.
+        seq: i32,
+        /// Whether the step is durable now. `true` covers a fresh write and a
+        /// byte-identical retransmission alike.
+        ok: bool,
+        /// True when a byte-identical row was already at this position — a
+        /// retransmission after a lost ack, which is a success.
+        #[serde(default)]
+        already: bool,
+        /// Deadline the job was *actually* rescheduled to, for a sleep commit.
+        /// On a replay this is the stored deadline, not the one proposed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wake_at: Option<i64>,
+        /// Why the commit was refused, when `ok` is false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// What the executor should do about it. Classified by the side that
+        /// holds storage, because only it can see the error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<StepFailure>,
+    },
     /// Cooperative-cancel request, so the executor observes a cancel without
     /// either side polling storage.
     Cancel {
@@ -204,6 +268,12 @@ pub enum ExecutorMessage {
         slots: u32,
         /// Version the executor speaks.
         protocol_version: u32,
+        /// Optional behaviours this executor can take part in, e.g.
+        /// [`CAP_STEPS`]. Defaults to empty so an executor built before the
+        /// list existed still parses, and so a scheduler never sends a frame
+        /// for a behaviour the peer never claimed.
+        #[serde(default)]
+        capabilities: Vec<String>,
         /// Shared secret, when the scheduler is configured to require one.
         ///
         /// Omitted from the wire when absent so a transport that needs no
@@ -294,8 +364,50 @@ pub enum ExecutorMessage {
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
     },
+    /// Commit one durable step, or one `step.sleep`, through the scheduler
+    /// (§9.2). Answered with [`SchedulerMessage::StepAck`].
+    ///
+    /// **The frame carries no owner, and must not.** An owner an executor fills
+    /// in is an owner it can forge, and after a reclaim a stale executor
+    /// sending the *current* owner's id would write straight into the live
+    /// attempt's sequence. The scheduler supplies both halves of the fence from
+    /// the dispatch it recorded, and drops any frame naming a job the sending
+    /// connection is not running. The authenticated connection is the claim of
+    /// identity; the frame only says which job and which step.
+    ///
+    /// Neither does it carry the namespace or the caps: the scheduler resolves
+    /// the namespace from its dispatch record, and the limits are the
+    /// operator's, enforced inside the write's own transaction.
+    ///
+    /// A retransmission after a lost ack is expected and safe — the same
+    /// `(seq, step_key)` and payload comes back as `already`.
+    StepCommit {
+        /// Job this step runs inside.
+        job_id: String,
+        /// Position in the job's step sequence, which must be exactly the
+        /// number of steps already committed.
+        seq: i32,
+        /// Identity of the step within the job (`name#occurrence` or
+        /// `name:key`).
+        step_key: String,
+        /// Whether this commits a memoized value or a deadline.
+        kind: StepKind,
+        /// Candidate deadline for a [`StepKind::Sleep`], in Unix milliseconds.
+        /// A sleep row already at this position keeps the deadline it was first
+        /// given, which is what the ack echoes back.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wake_at: Option<i64>,
+        /// Length of the encoded result that follows. Zero for a sleep, which
+        /// commits no bytes.
+        payload_len: usize,
+    },
     /// The attempt ended in a `step.sleep`, and the job is already `Pending` at
     /// its deadline. Ends the attempt like a cancel, without being a failure.
+    ///
+    /// A sleep from an attached executor has already been committed and
+    /// rescheduled by a [`ExecutorMessage::StepCommit`] of kind
+    /// [`StepKind::Sleep`] by the time this is written; this frame only ends the
+    /// attempt.
     Slept {
         /// Job that is sleeping.
         job_id: String,
@@ -325,6 +437,7 @@ pub struct HelloBuilder {
     tasks: Vec<String>,
     slots: u32,
     protocol_version: u32,
+    capabilities: Vec<String>,
     token: Option<Secret>,
 }
 
@@ -344,6 +457,14 @@ impl HelloBuilder {
         self
     }
 
+    /// Announce the optional behaviours this executor takes part in, e.g.
+    /// [`CAP_STEPS`]. Empty by default: an executor claims nothing it has not
+    /// implemented, and a scheduler sends nothing that was not claimed.
+    pub fn capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Finish the frame.
     pub fn build(self) -> ExecutorMessage {
         ExecutorMessage::Hello {
@@ -353,9 +474,120 @@ impl HelloBuilder {
             tasks: self.tasks,
             slots: self.slots,
             protocol_version: self.protocol_version,
+            capabilities: self.capabilities,
             token: self.token,
         }
     }
+}
+
+/// One committed step's metadata inside an encoded snapshot.
+///
+/// The blob is not here: a `result` serialized as a JSON array of numbers would
+/// inflate a snapshot several-fold, past [`MAX_PAYLOAD_BYTES`] at the step
+/// store's own ceiling. The bytes ride behind the metadata line instead, which
+/// is the same trade the outer frame makes.
+#[derive(Debug, Serialize, Deserialize)]
+struct SnapshotEntry {
+    seq: i32,
+    step_key: String,
+    kind: StepKind,
+    /// Length of this step's blob. `None` is no result (every sleep, and a run
+    /// committed without one); `Some(0)` is an empty one.
+    result_len: Option<usize>,
+    wake_at: Option<i64>,
+    created_at: i64,
+}
+
+/// Encode a job's committed steps for a [`SchedulerMessage::JobSteps`] payload.
+///
+/// A JSON metadata line, then every step's blob concatenated in `seq` order —
+/// the frame format's own shape, one level down. It stays parseable with any
+/// standard library, and a megabyte of step results costs a megabyte.
+///
+/// `job_id` is deliberately absent from every entry: the frame header already
+/// names it, and a second copy could only disagree.
+pub fn encode_step_snapshot(steps: &[JobStep]) -> Vec<u8> {
+    let entries: Vec<SnapshotEntry> = steps
+        .iter()
+        .map(|step| SnapshotEntry {
+            seq: step.seq,
+            step_key: step.step_key.clone(),
+            kind: step.kind,
+            result_len: step.result.as_ref().map(Vec::len),
+            wake_at: step.wake_at,
+            created_at: step.created_at,
+        })
+        .collect();
+
+    // Infallible in practice: every field is a plain scalar or a String.
+    let mut payload = serde_json::to_vec(&entries).unwrap_or_else(|_| b"[]".to_vec());
+    payload.push(b'\n');
+    for step in steps {
+        if let Some(result) = &step.result {
+            payload.extend_from_slice(result);
+        }
+    }
+    payload
+}
+
+/// Decode a [`SchedulerMessage::JobSteps`] payload back into the job's steps.
+///
+/// Fails rather than returning what it could parse. A snapshot that silently
+/// came back short is a memo that silently went missing, and that re-runs a
+/// charge — the one outcome the whole feature exists to prevent.
+pub fn decode_step_snapshot(job_id: &str, payload: &[u8]) -> crate::error::Result<Vec<JobStep>> {
+    let split = payload
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| {
+            QueueError::Other(format!(
+                "the step snapshot for job {job_id} has no metadata line"
+            ))
+        })?;
+    let entries: Vec<SnapshotEntry> =
+        serde_json::from_slice(&payload[..split]).map_err(|error| {
+            QueueError::Other(format!(
+                "the step snapshot for job {job_id} has an unreadable metadata line: {error}"
+            ))
+        })?;
+
+    let mut blobs = &payload[split + 1..];
+    let mut steps = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let result = match entry.result_len {
+            None => None,
+            Some(len) => {
+                if blobs.len() < len {
+                    return Err(QueueError::Other(format!(
+                        "the step snapshot for job {job_id} is truncated at step {} ({} of {len} \
+                         bytes)",
+                        entry.step_key,
+                        blobs.len()
+                    )));
+                }
+                let (blob, rest) = blobs.split_at(len);
+                blobs = rest;
+                Some(blob.to_vec())
+            }
+        };
+        steps.push(JobStep {
+            job_id: job_id.to_string(),
+            seq: entry.seq,
+            step_key: entry.step_key,
+            kind: entry.kind,
+            result,
+            wake_at: entry.wake_at,
+            created_at: entry.created_at,
+        });
+    }
+
+    if !blobs.is_empty() {
+        return Err(QueueError::Other(format!(
+            "the step snapshot for job {job_id} carries {} byte(s) no step claims",
+            blobs.len()
+        )));
+    }
+    Ok(steps)
 }
 
 /// A frame header that may declare a trailing binary blob. Implemented by both
@@ -375,13 +607,16 @@ pub trait Frame: Serialize + DeserializeOwned {
 impl Frame for SchedulerMessage {
     fn payload_len(&self) -> usize {
         match self {
-            Self::Job { payload_len, .. } => *payload_len,
+            Self::Job { payload_len, .. } | Self::JobSteps { payload_len, .. } => *payload_len,
             _ => 0,
         }
     }
 
     fn is_known_type(tag: &str) -> bool {
-        matches!(tag, "hello_ack" | "job" | "cancel" | "shutdown")
+        matches!(
+            tag,
+            "hello_ack" | "job" | "job_steps" | "step_ack" | "cancel" | "shutdown"
+        )
     }
 }
 
@@ -390,6 +625,7 @@ impl Frame for ExecutorMessage {
         match self {
             Self::Success { result_len, .. } => result_len.unwrap_or(0),
             Self::TaskLog { extra_len, .. } => extra_len.unwrap_or(0),
+            Self::StepCommit { payload_len, .. } => *payload_len,
             _ => 0,
         }
     }
@@ -401,6 +637,7 @@ impl Frame for ExecutorMessage {
                 | "heartbeat"
                 | "progress"
                 | "task_log"
+                | "step_commit"
                 | "success"
                 | "failure"
                 | "cancelled"
@@ -501,7 +738,11 @@ impl SchedulerMessage {
     /// the frame.
     pub fn into_dispatch(self, payload: Vec<u8>) -> Option<Dispatch> {
         match self {
-            Self::HelloAck { .. } | Self::Cancel { .. } | Self::Shutdown => None,
+            Self::HelloAck { .. }
+            | Self::JobSteps { .. }
+            | Self::StepAck { .. }
+            | Self::Cancel { .. }
+            | Self::Shutdown => None,
             Self::Job {
                 id,
                 task_name,
@@ -577,6 +818,7 @@ impl ExecutorMessage {
             tasks,
             slots,
             protocol_version: PROTOCOL_VERSION,
+            capabilities: Vec::new(),
             token: None,
         }
     }
@@ -699,7 +941,8 @@ impl ExecutorMessage {
             Self::Hello { .. }
             | Self::Heartbeat { .. }
             | Self::Progress { .. }
-            | Self::TaskLog { .. } => None,
+            | Self::TaskLog { .. }
+            | Self::StepCommit { .. } => None,
             Self::Success {
                 job_id,
                 result_len,
@@ -1195,6 +1438,7 @@ mod tests {
                 tasks: vec!["resize".into(), "thumbnail".into()],
                 slots: 4,
                 protocol_version: PROTOCOL_VERSION,
+                capabilities: Vec::new(),
                 token: None,
             },
             &[],
@@ -1327,6 +1571,7 @@ mod tests {
             tasks: vec!["resize".into()],
             slots: 1,
             protocol_version: PROTOCOL_VERSION,
+            capabilities: Vec::new(),
             token: token.map(Secret::new),
         }
     }
@@ -1563,6 +1808,19 @@ mod tests {
                 capabilities: vec![],
             },
             SchedulerMessage::from(&sample_job(b"")),
+            SchedulerMessage::JobSteps {
+                job_id: "job-1".into(),
+                payload_len: 0,
+            },
+            SchedulerMessage::StepAck {
+                job_id: "job-1".into(),
+                seq: 0,
+                ok: true,
+                already: false,
+                wake_at: None,
+                error: None,
+                failure: None,
+            },
             SchedulerMessage::Cancel {
                 job_id: "job-1".into(),
             },
@@ -1583,6 +1841,14 @@ mod tests {
                 progress: 10,
             },
             ExecutorMessage::task_log("job-1", "t", "info", "m", None).0,
+            ExecutorMessage::StepCommit {
+                job_id: "job-1".into(),
+                seq: 0,
+                step_key: "charge#0".into(),
+                kind: StepKind::Run,
+                wake_at: None,
+                payload_len: 0,
+            },
             ExecutorMessage::Success {
                 job_id: "job-1".into(),
                 result_len: None,
@@ -1697,5 +1963,244 @@ mod tests {
             FrameReader::new(&buf[..]).read_or_skip::<ExecutorMessage>(),
             Err(ProtocolError::Json(_))
         ));
+    }
+
+    fn sample_step(seq: i32, key: &str, result: Option<&[u8]>) -> JobStep {
+        JobStep {
+            job_id: "job-1".into(),
+            seq,
+            step_key: key.into(),
+            kind: if result.is_some() {
+                StepKind::Run
+            } else {
+                StepKind::Sleep
+            },
+            result: result.map(<[u8]>::to_vec),
+            wake_at: result.is_none().then_some(1_700_000_000_000),
+            created_at: 1_699_999_999_000,
+        }
+    }
+
+    #[test]
+    fn a_step_snapshot_survives_a_round_trip() {
+        // Non-UTF-8 and empty blobs both matter: the core never looks inside a
+        // step's bytes, so an encrypting codec's output has to arrive verbatim,
+        // and `Some(vec![])` is an empty result rather than a missing one.
+        let steps = vec![
+            sample_step(0, "charge#0", Some(b"\x00\x9f\xffreceipt")),
+            sample_step(1, "cool_off#0", None),
+            sample_step(2, "notify:a@b.c", Some(b"")),
+        ];
+
+        let payload = encode_step_snapshot(&steps);
+        let decoded = decode_step_snapshot("job-1", &payload).expect("decode");
+
+        assert_eq!(decoded.len(), 3);
+        for (before, after) in steps.iter().zip(&decoded) {
+            assert_eq!(before.seq, after.seq);
+            assert_eq!(before.step_key, after.step_key);
+            assert_eq!(before.kind, after.kind);
+            assert_eq!(before.result, after.result);
+            assert_eq!(before.wake_at, after.wake_at);
+            assert_eq!(before.created_at, after.created_at);
+        }
+    }
+
+    #[test]
+    fn an_empty_snapshot_round_trips_as_empty() {
+        let payload = encode_step_snapshot(&[]);
+        assert!(decode_step_snapshot("job-1", &payload)
+            .expect("decode")
+            .is_empty());
+    }
+
+    #[test]
+    fn a_truncated_snapshot_is_refused_rather_than_shortened() {
+        // The whole point of the memo is that a step it recorded is not run
+        // again. A snapshot that quietly came back short re-runs a charge, so
+        // it has to fail loudly instead.
+        let payload = encode_step_snapshot(&[sample_step(0, "charge#0", Some(b"receipt"))]);
+        let truncated = &payload[..payload.len() - 2];
+        assert!(decode_step_snapshot("job-1", truncated).is_err());
+
+        let mut overlong = payload.clone();
+        overlong.extend_from_slice(b"extra");
+        assert!(decode_step_snapshot("job-1", &overlong).is_err());
+
+        assert!(decode_step_snapshot("job-1", b"[]").is_err(), "no newline");
+    }
+
+    #[test]
+    fn a_snapshot_takes_its_job_id_from_the_frame() {
+        // Carried once, in the header. A second copy in every entry could only
+        // ever disagree with it.
+        let payload = encode_step_snapshot(&[sample_step(0, "charge#0", Some(b"r"))]);
+        let decoded = decode_step_snapshot("job-2", &payload).expect("decode");
+        assert_eq!(decoded[0].job_id, "job-2");
+    }
+
+    #[test]
+    fn the_step_frames_survive_a_round_trip() {
+        let (frame, payload) = round_trip(
+            &SchedulerMessage::JobSteps {
+                job_id: "job-1".into(),
+                payload_len: 4,
+            },
+            b"[]\n\n",
+        );
+        assert!(matches!(frame, SchedulerMessage::JobSteps { .. }));
+        assert_eq!(payload, b"[]\n\n");
+
+        let (frame, payload) = round_trip(
+            &ExecutorMessage::StepCommit {
+                job_id: "job-1".into(),
+                seq: 3,
+                step_key: "charge#0".into(),
+                kind: StepKind::Run,
+                wake_at: None,
+                payload_len: 7,
+            },
+            b"receipt",
+        );
+        let ExecutorMessage::StepCommit { seq, step_key, .. } = frame else {
+            panic!("expected a step_commit")
+        };
+        assert_eq!((seq, step_key.as_str()), (3, "charge#0"));
+        assert_eq!(payload, b"receipt");
+
+        let (frame, _) = round_trip(
+            &SchedulerMessage::StepAck {
+                job_id: "job-1".into(),
+                seq: 3,
+                ok: false,
+                already: false,
+                wake_at: None,
+                error: Some("pool exhausted".into()),
+                failure: Some(StepFailure::Retryable),
+            },
+            &[],
+        );
+        let SchedulerMessage::StepAck { failure, error, .. } = frame else {
+            panic!("expected a step_ack")
+        };
+        assert_eq!(failure, Some(StepFailure::Retryable));
+        assert_eq!(error.as_deref(), Some("pool exhausted"));
+    }
+
+    #[test]
+    fn a_step_commit_declares_its_blob_as_payload_len() {
+        // The rule that keeps `read_or_skip` aligned: a peer released before
+        // this frame existed has only the field *name* to go on.
+        let frame = ExecutorMessage::StepCommit {
+            job_id: "job-1".into(),
+            seq: 0,
+            step_key: "charge#0".into(),
+            kind: StepKind::Run,
+            wake_at: None,
+            payload_len: 7,
+        };
+        let header = serde_json::to_value(&frame).expect("encode");
+        assert_eq!(header["payload_len"], 7);
+        assert_eq!(header["type"], "step_commit");
+        assert_eq!(header["kind"], "run");
+
+        // And an older scheduler skips it without losing the frame behind it.
+        let mut buf = Vec::new();
+        let mut writer = FrameWriter::new(&mut buf);
+        writer.write(&frame, b"receipt").expect("write");
+        writer
+            .write_header(&ExecutorMessage::Heartbeat { free_slots: 2 })
+            .expect("write");
+        drop(writer);
+
+        // `Legacy` knows every frame this build does *except* `step_commit`.
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Legacy {
+            Heartbeat { free_slots: u32 },
+        }
+        impl Frame for Legacy {
+            fn payload_len(&self) -> usize {
+                0
+            }
+            fn is_known_type(tag: &str) -> bool {
+                tag == "heartbeat"
+            }
+        }
+
+        let mut reader = FrameReader::new(buf.as_slice());
+        assert!(matches!(
+            reader.read_or_skip::<Legacy>().expect("skip"),
+            Incoming::Unknown { .. }
+        ));
+        assert!(matches!(
+            reader.read_or_skip::<Legacy>().expect("read"),
+            Incoming::Known(Legacy::Heartbeat { free_slots: 2 }, _)
+        ));
+    }
+
+    #[test]
+    fn a_step_commit_is_not_a_job_result() {
+        // Taking a job's in-flight entry is the exactly-once token for its one
+        // outcome, and a step commit must never spend it.
+        assert!(ExecutorMessage::StepCommit {
+            job_id: "job-1".into(),
+            seq: 0,
+            step_key: "charge#0".into(),
+            kind: StepKind::Run,
+            wake_at: None,
+            payload_len: 0,
+        }
+        .into_job_result(Vec::new())
+        .is_none());
+
+        for frame in [
+            SchedulerMessage::JobSteps {
+                job_id: "job-1".into(),
+                payload_len: 0,
+            },
+            SchedulerMessage::StepAck {
+                job_id: "job-1".into(),
+                seq: 0,
+                ok: true,
+                already: false,
+                wake_at: None,
+                error: None,
+                failure: None,
+            },
+        ] {
+            assert!(frame.into_dispatch(Vec::new()).is_none());
+        }
+    }
+
+    #[test]
+    fn an_executor_announces_no_capabilities_by_default() {
+        // A capability is a claim about wiring that exists. Defaulting to the
+        // full list would have a scheduler send frames the shell never handled.
+        let ExecutorMessage::Hello { capabilities, .. } =
+            ExecutorMessage::hello("e-1", "python", "1.0.0", vec!["resize".into()], 4).build()
+        else {
+            panic!("expected a hello")
+        };
+        assert!(capabilities.is_empty());
+
+        let ExecutorMessage::Hello { capabilities, .. } =
+            ExecutorMessage::hello("e-1", "python", "1.0.0", vec!["resize".into()], 4)
+                .capabilities(vec![CAP_STEPS.to_string()])
+                .build()
+        else {
+            panic!("expected a hello")
+        };
+        assert_eq!(capabilities, vec![CAP_STEPS.to_string()]);
+    }
+
+    #[test]
+    fn a_hello_from_before_capabilities_existed_still_parses() {
+        let header = br#"{"type":"hello","executor_id":"e-1","sdk":"python","version":"1.0.0","tasks":[],"slots":1,"protocol_version":1}"#;
+        let hello: ExecutorMessage = serde_json::from_slice(header).expect("parse");
+        let ExecutorMessage::Hello { capabilities, .. } = hello else {
+            panic!("expected a hello")
+        };
+        assert!(capabilities.is_empty());
     }
 }

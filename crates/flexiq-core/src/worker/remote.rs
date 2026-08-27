@@ -691,6 +691,7 @@ impl Shared {
             tasks,
             slots,
             protocol_version,
+            capabilities: _,
             token,
         } = hello
         else {

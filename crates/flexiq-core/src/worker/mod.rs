@@ -25,8 +25,8 @@ pub use executor::{
 };
 pub use fingerprint::registry_fingerprint;
 pub use protocol::{
-    Dispatch, ExecutorMessage, HelloBuilder, Incoming, ProtocolError, SchedulerMessage,
-    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    decode_step_snapshot, encode_step_snapshot, Dispatch, ExecutorMessage, HelloBuilder, Incoming,
+    ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};

@@ -7,7 +7,12 @@
 /// direction is expensive: retrying a permanently-bad commit burns the job's
 /// whole retry budget on an error that will never change, and dead-lettering a
 /// transient one throws away work over a dropped connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serializable because it crosses the attached-executor wire on a `step_ack`:
+/// the classification is made by the side that holds storage, and travels back
+/// as itself rather than being re-derived from an error string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StepFailure {
     /// The backend was unavailable. Fail the attempt and let the job's own
     /// retry policy have it.
