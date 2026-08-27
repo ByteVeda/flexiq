@@ -1270,8 +1270,10 @@ public final class InMemoryQueueBackend implements QueueBackend {
                     dispatchedAt.put(token, System.nanoTime());
                     // Nulls, like a worker's dispatch: this backend *is* the
                     // storage, so the bridge reads metadata and toggles from it
-                    // rather than being handed them.
-                    bridge.onJob(token, job.id, job.taskName, job.payload, null, null);
+                    // rather than being handed them. The attempt is carried
+                    // explicitly — it is half the fence every step write is
+                    // checked against, and the six-argument form defaults it to 0.
+                    bridge.onJob(token, job.id, job.taskName, job.payload, null, null, job.retryCount);
                 }
                 sleep();
             }
