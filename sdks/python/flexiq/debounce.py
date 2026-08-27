@@ -32,6 +32,22 @@ _MAX_DURATION_MS = 2**63 - 1
 # What a duration may be written as, in either the decorator or a single call.
 Duration = str | float | int
 
+# The tail of the core's ``QueueFull`` message. A debounced enqueue is the one
+# enqueue whose admission cap is applied by storage, so this is how the counts
+# behind that refusal come back — anchored on the end, where a queue name can
+# never be mistaken for the two integers.
+_QUEUE_FULL_RE = re.compile(r"\bis full: (\d+) pending >= max_pending (\d+)$")
+
+
+def queue_full_counts(message: str) -> tuple[int, int] | None:
+    """The ``(pending, cap)`` behind a storage-side admission refusal.
+
+    ``None`` for any other failure, so a caller re-raises it untouched rather
+    than reporting an unrelated error as a full queue.
+    """
+    match = _QUEUE_FULL_RE.search(message)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
 
 def parse_duration_ms(value: Duration, *, param: str) -> int:
     """Parse a duration into whole milliseconds.
