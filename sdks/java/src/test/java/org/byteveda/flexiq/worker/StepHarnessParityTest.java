@@ -72,11 +72,26 @@ class StepHarnessParityTest {
     @AfterEach
     void closeQueues() throws Exception {
         // Reverse order: a worker has to stop before the queue it polls closes.
+        // Every one is closed even when an earlier close throws, or a leaked
+        // SQLite handle and temp directory carry into the next parameterized
+        // invocation and the failure that surfaces there hides this one.
+        Exception failed = null;
         for (int index = open.size() - 1; index >= 0; index--) {
-            open.get(index).close();
+            try {
+                open.get(index).close();
+            } catch (Exception e) {
+                if (failed == null) {
+                    failed = e;
+                } else {
+                    failed.addSuppressed(e);
+                }
+            }
         }
         open.clear();
         deleteScratch();
+        if (failed != null) {
+            throw failed;
+        }
     }
 
     private FlexiQ queue(Backend backend) throws IOException {
