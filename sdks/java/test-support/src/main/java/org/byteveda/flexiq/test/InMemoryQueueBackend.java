@@ -414,6 +414,10 @@ public final class InMemoryQueueBackend implements QueueBackend {
                     job.metadata = source.metadata;
                     job.namespace = source.namespace;
                 }
+                // A retry mints a new job id, so the run it belongs to has to be
+                // carried explicitly or every idempotency key its steps mint
+                // changes — and the customer is charged a second time.
+                job.metadata = stampOrigin(job.metadata, (String) entry.get("originalJobId"));
                 job.createdAt = now();
                 job.scheduledAt = job.createdAt;
                 jobs.put(job.id, job);
@@ -421,6 +425,25 @@ public final class InMemoryQueueBackend implements QueueBackend {
             }
         }
         throw new FlexiQException("no dead-letter entry: " + deadId);
+    }
+
+    /**
+     * Stamp {@code metadata} with the run a resurrected job belongs to.
+     *
+     * <p>Preserves a usable value already there: a job dead-lettered and retried
+     * twice must keep the id its <i>first</i> attempt ran under, not the id of
+     * the resurrection before it.
+     */
+    private static String stampOrigin(String metadata, String originJobId) {
+        JsonNode existing = readNode(metadata);
+        String recorded = text(existing, ORIGIN_JOB_ID_KEY);
+        if (recorded != null && !recorded.isEmpty()) {
+            return metadata;
+        }
+        ObjectNode stamped =
+                existing != null && existing.isObject() ? ((ObjectNode) existing).deepCopy() : JSON.createObjectNode();
+        stamped.put(ORIGIN_JOB_ID_KEY, originJobId);
+        return toJson(stamped);
     }
 
     @Override
