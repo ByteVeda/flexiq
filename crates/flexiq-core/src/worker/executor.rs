@@ -653,6 +653,18 @@ impl ExecutorSteps {
         job: &Job,
         limits: StepLimits,
     ) -> crate::error::Result<StepSession<ExecutorStepStore>> {
+        // Refused here rather than left to `StepSession::open`, whose message
+        // names a storage backend: there is no backend on this side, and an
+        // operator reading that line would go looking at the wrong process.
+        // Retryable, so a fleet mid-rollout can still place the next attempt
+        // somewhere that commits.
+        if !self.shared.steps {
+            return Err(QueueError::Other(format!(
+                "job {} uses durable steps, but the scheduler this executor is attached to \
+                 offers no step store",
+                job.id
+            )));
+        }
         let store = ExecutorStepStore {
             shared: Arc::clone(&self.shared),
             ack_timeout: self.shared.step_ack_timeout.min(job_deadline(job)),

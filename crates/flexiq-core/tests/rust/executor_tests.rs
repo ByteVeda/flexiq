@@ -1925,7 +1925,14 @@ fn a_scheduler_without_the_capability_refuses_every_step() {
         .open_session(&running_job("job-1"), StepLimits::default())
         .err()
         .expect("a session must not open without a step store");
-    assert!(error.to_string().contains("does not implement"), "{error}");
+    // The message names the scheduler, not "this storage backend": there is no
+    // backend on this side, and that line would send an operator to the wrong
+    // process.
+    assert!(
+        error.to_string().contains("offers no step store"),
+        "{error}"
+    );
+    assert_eq!(classify_step_failure(&error), StepFailure::Retryable);
     handle.shutdown();
 }
 
