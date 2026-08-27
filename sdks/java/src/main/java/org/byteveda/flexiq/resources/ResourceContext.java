@@ -11,9 +11,20 @@ import org.jspecify.annotations.Nullable;
  * use any scope.
  */
 public interface ResourceContext {
-    /** The scope the factory is building for. */
+    /**
+     * The scope the factory is building for.
+     *
+     * @return the scope, which bounds what {@link #use} will resolve
+     */
     ResourceScope scope();
 
-    /** Resolve another resource by name (building it if needed). */
+    /**
+     * Resolve another resource by name (building it if needed).
+     *
+     * @param name the dependency's registered name
+     * @param <T> what the caller expects it to be; unchecked, so a mismatch surfaces
+     *     as a {@link ClassCastException} at the use site
+     * @return the resolved resource, or {@code null} if its factory produced none
+     */
     <T> @Nullable T use(String name);
 }

@@ -30,6 +30,15 @@ public final class Batcher<T> implements AutoCloseable {
     private @Nullable ScheduledFuture<?> pendingFlush;
     private boolean closed; // guarded by lock
 
+    /**
+     * A batcher for one task, its flush timer idle until the first payload arrives.
+     *
+     * @param queue where the batch is enqueued
+     * @param task the task every buffered payload is enqueued for
+     * @param maxBatch flush once this many payloads are buffered; must be positive
+     * @param maxDelay flush this long after the first buffered payload, however few
+     *     have accumulated; must be positive
+     */
     public Batcher(FlexiQ queue, Task<T> task, int maxBatch, Duration maxDelay) {
         if (maxBatch <= 0) {
             throw new IllegalArgumentException("maxBatch must be > 0");
@@ -45,6 +54,16 @@ public final class Batcher<T> implements AutoCloseable {
         this.maxDelayNanos = maxDelay.toNanos();
     }
 
+    /**
+     * {@link #Batcher(FlexiQ, Task, int, Duration)} with the payload type inferred.
+     *
+     * @param queue where the batch is enqueued
+     * @param task the task every buffered payload is enqueued for
+     * @param maxBatch flush once this many payloads are buffered; must be positive
+     * @param maxDelay flush this long after the first buffered payload; must be positive
+     * @param <T> the task's payload type
+     * @return the batcher, to be closed when the producer stops
+     */
     public static <T> Batcher<T> of(FlexiQ queue, Task<T> task, int maxBatch, Duration maxDelay) {
         return new Batcher<>(queue, task, maxBatch, maxDelay);
     }
@@ -52,6 +71,9 @@ public final class Batcher<T> implements AutoCloseable {
     /**
      * Buffer {@code payload}. Returns the job ids if this call triggered a flush
      * (the buffer reached {@code maxBatch}), otherwise an empty list.
+     *
+     * @param payload the work to enqueue with the rest of its batch
+     * @return the job ids if this call flushed, otherwise an empty list
      */
     public List<String> add(T payload) {
         synchronized (lock) {
@@ -67,7 +89,11 @@ public final class Batcher<T> implements AutoCloseable {
         }
     }
 
-    /** Enqueue any buffered payloads now; returns their job ids (empty if none). */
+    /**
+     * Enqueue any buffered payloads now.
+     *
+     * @return the job ids, or an empty list when nothing was buffered
+     */
     public List<String> flush() {
         synchronized (lock) {
             return flushLocked();

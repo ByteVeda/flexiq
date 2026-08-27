@@ -17,6 +17,10 @@ public sealed interface FlexiQEvent
                 NodeCompensationEvent,
                 PredicateEvent {
 
-    /** Which event this is; determines the concrete type and the listeners it reaches. */
+    /**
+     * Which event this is; determines the concrete type and the listeners it reaches.
+     *
+     * @return the name the emitter routes on
+     */
     EventName name();
 }

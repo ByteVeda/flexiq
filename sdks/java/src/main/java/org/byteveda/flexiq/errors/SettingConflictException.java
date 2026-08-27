@@ -10,14 +10,24 @@ import org.byteveda.flexiq.FlexiQException;
  */
 public class SettingConflictException extends FlexiQException {
 
+    /** The settings key that could not be written; carried into the serialized form. */
     private final String key;
 
+    /**
+     * A conditional write that lost its race past the retry bound.
+     *
+     * @param key the settings document that kept changing
+     */
     public SettingConflictException(String key) {
         super("setting '" + key + "' kept changing under a conditional write");
         this.key = key;
     }
 
-    /** The settings key that could not be written. */
+    /**
+     * The settings key that could not be written.
+     *
+     * @return the document key
+     */
     public String key() {
         return key;
     }

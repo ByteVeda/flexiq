@@ -20,6 +20,12 @@ public final class AesGcmCodec implements PayloadCodec {
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
 
+    /**
+     * A codec encrypting with {@code key}.
+     *
+     * @param key the AES key, 16, 24 or 32 bytes; producer and worker must hold the
+     *     same one or the tag check fails
+     */
     public AesGcmCodec(byte[] key) {
         this.key = new SecretKeySpec(key, "AES");
     }

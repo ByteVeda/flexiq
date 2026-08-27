@@ -25,7 +25,12 @@ public final class Emitter {
         this(null);
     }
 
-    /** An emitter that forwards every event to {@code parent} (nullable) after local dispatch. */
+    /**
+     * An emitter that forwards every event to {@code parent} (nullable) after local dispatch.
+     *
+     * @param parent the emitter to forward to — a worker's parent is the owning
+     *     queue's hub — or {@code null} to keep events local
+     */
     public Emitter(@Nullable Emitter parent) {
         this.parent = parent;
         // Pre-bind every name so the map is never structurally mutated after
@@ -40,13 +45,23 @@ public final class Emitter {
      * Subscribe to a job outcome's {@link OutcomeEvent}s. Only valid for names
      * where {@link EventName#isJobOutcome()} holds — other events don't carry an
      * {@code OutcomeEvent}; subscribe to them via {@link #onEvent}.
+     *
+     * @param name the outcome to subscribe to
+     * @param listener called on the emitting thread; a throw is logged and does not
+     *     stop the other listeners
      */
     public void on(EventName name, Consumer<OutcomeEvent> listener) {
         name.requireJobOutcome();
         onEvent(name, event -> listener.accept((OutcomeEvent) event));
     }
 
-    /** Subscribe to any event by name; the listener narrows to the concrete type. */
+    /**
+     * Subscribe to any event by name; the listener narrows to the concrete type.
+     *
+     * @param name the event to subscribe to
+     * @param listener called on the emitting thread; a throw is logged and does not
+     *     stop the other listeners
+     */
     public void onEvent(EventName name, Consumer<FlexiQEvent> listener) {
         listenersFor(name).add(listener);
     }
@@ -56,7 +71,11 @@ public final class Emitter {
         return Objects.requireNonNull(listeners.get(name), () -> name + " was not pre-bound");
     }
 
-    /** Deliver a job outcome; equivalent to {@link #emit(FlexiQEvent)}. */
+    /**
+     * Deliver a job outcome; equivalent to {@link #emit(FlexiQEvent)}.
+     *
+     * @param event the outcome to dispatch
+     */
     public void emit(OutcomeEvent event) {
         emit((FlexiQEvent) event);
     }
@@ -64,6 +83,8 @@ public final class Emitter {
     /**
      * Deliver {@code event} to its listeners, then forward it to the parent
      * emitter (when one exists); a throwing listener never blocks the rest.
+     *
+     * @param event the event to dispatch, routed by its own {@code name()}
      */
     public void emit(FlexiQEvent event) {
         for (Consumer<FlexiQEvent> listener : listenersFor(event.name())) {

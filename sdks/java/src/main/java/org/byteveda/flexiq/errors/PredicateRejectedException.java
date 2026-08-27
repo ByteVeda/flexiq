@@ -7,6 +7,11 @@ import org.byteveda.flexiq.FlexiQException;
  * created.
  */
 public class PredicateRejectedException extends FlexiQException {
+    /**
+     * A gate that rejected an enqueue outright.
+     *
+     * @param message which predicate rejected the enqueue, and why
+     */
     public PredicateRejectedException(String message) {
         super(message);
     }

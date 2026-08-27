@@ -16,10 +16,17 @@ import org.msgpack.jackson.dataformat.MessagePackFactory;
 public final class MsgpackSerializer implements Serializer {
     private final ObjectMapper mapper;
 
+    /** A serializer over a default MessagePack-backed mapper. */
     public MsgpackSerializer() {
         this(new ObjectMapper(new MessagePackFactory()));
     }
 
+    /**
+     * A serializer over a mapper the application configured.
+     *
+     * @param mapper a MessagePack-backed mapper; a mapper of another format would
+     *     write bytes the peer cannot read
+     */
     public MsgpackSerializer(ObjectMapper mapper) {
         this.mapper = mapper;
     }

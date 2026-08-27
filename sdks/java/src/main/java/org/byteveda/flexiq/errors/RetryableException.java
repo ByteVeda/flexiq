@@ -12,10 +12,21 @@ import org.byteveda.flexiq.FlexiQException;
  * predicate, or to say so explicitly at the throw site.
  */
 public class RetryableException extends FlexiQException {
+    /**
+     * A transient failure, described in words.
+     *
+     * @param message why the next attempt could plausibly get further
+     */
     public RetryableException(String message) {
         super(message);
     }
 
+    /**
+     * A transient failure wrapping the exception that caused it.
+     *
+     * @param message why the next attempt could plausibly get further
+     * @param cause the failure being marked transient
+     */
     public RetryableException(String message, Throwable cause) {
         super(message, cause);
     }

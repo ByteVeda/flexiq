@@ -18,7 +18,11 @@ import java.util.Map;
 public record ResourceStatusEntry(
         String name, String scope, String health, long initDurationMs, int recreations, List<String> dependsOn) {
 
-    /** The snake_case row the dashboard and the probe endpoints report. */
+    /**
+     * The snake_case row the dashboard and the probe endpoints report.
+     *
+     * @return the row, keyed as the cross-SDK contract spells it
+     */
     public Map<String, Object> toMap() {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("name", name);

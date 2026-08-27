@@ -21,12 +21,20 @@ import org.jspecify.annotations.Nullable;
  */
 public record ReadinessReport(String status, String storage, WorkersCheck workers, @Nullable ResourcesCheck resources) {
 
-    /** Whether every dependency answered healthily. */
+    /**
+     * Whether every dependency answered healthily.
+     *
+     * @return {@code true} when the status is {@code ready}
+     */
     public boolean ready() {
         return "ready".equals(status);
     }
 
-    /** The probe body, in the shape every shell reports. */
+    /**
+     * The probe body, in the shape every shell reports.
+     *
+     * @return the status plus a {@code checks} map, resources omitted when absent
+     */
     public Map<String, Object> toMap() {
         Map<String, Object> checks = new LinkedHashMap<>();
         checks.put("storage", storage);

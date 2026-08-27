@@ -119,12 +119,21 @@ public enum EventName {
         this.wireName = wireName;
     }
 
-    /** The dotted cross-SDK wire name, e.g. {@code job.completed}. */
+    /**
+     * The dotted cross-SDK wire name, e.g. {@code job.completed}.
+     *
+     * @return the wire name every SDK writes for this event
+     */
     public String wireName() {
         return wireName;
     }
 
-    /** Whether events under this name are terminal-or-attempt job outcomes carrying an {@link OutcomeEvent}. */
+    /**
+     * Whether events under this name are terminal-or-attempt job outcomes carrying an {@link OutcomeEvent}.
+     *
+     * @return {@code true} when {@code on(name, listener)} may be used; other names
+     *     need {@code onEvent}
+     */
     public boolean isJobOutcome() {
         return this == SUCCESS || this == RETRY || this == DEAD || this == CANCELLED || this == JOB_FAILED;
     }
@@ -148,6 +157,8 @@ public enum EventName {
      * plus the legacy outcome aliases {@code success}/{@code retry}/{@code dead}/
      * {@code cancelled} that predate the dotted names.
      *
+     * @param wire the dotted name, or a legacy outcome alias
+     * @return the constant it names
      * @throws SerializationException on an unknown name
      */
     public static EventName fromWire(String wire) {
@@ -158,7 +169,12 @@ public enum EventName {
         return name;
     }
 
-    /** Map a native outcome kind ("success"/"retry"/"dead"/"cancelled"). */
+    /**
+     * Map a native outcome kind ("success"/"retry"/"dead"/"cancelled").
+     *
+     * @param kind the verdict the core reported
+     * @return the matching outcome constant
+     */
     public static EventName fromKind(String kind) {
         switch (kind) {
             case "success":

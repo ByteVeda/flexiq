@@ -25,10 +25,25 @@ public final class FlexiQObservation implements Middleware {
     private final String name;
     private final Predicate<String> taskFilter;
 
+    /**
+     * Observe every task under the {@code flexiq.task} name.
+     *
+     * @param registry the application's registry, which decides where the timer and
+     *     span actually go
+     */
     public FlexiQObservation(ObservationRegistry registry) {
         this(registry, "flexiq.task", task -> true);
     }
 
+    /**
+     * Observe the tasks {@code taskFilter} accepts, under {@code name}.
+     *
+     * @param registry the application's registry, which decides where the timer and
+     *     span actually go
+     * @param name the observation name every task shares; the task itself is a
+     *     low-cardinality tag, not part of the name
+     * @param taskFilter which tasks to instrument, by task name
+     */
     public FlexiQObservation(ObservationRegistry registry, String name, Predicate<String> taskFilter) {
         this.registry = registry;
         this.name = name;
