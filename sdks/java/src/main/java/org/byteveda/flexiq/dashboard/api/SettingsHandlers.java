@@ -25,11 +25,22 @@ public final class SettingsHandlers {
     // same keys and this class never touches the native library itself.
     private final List<String> protectedPrefixes;
 
+    /**
+     * Handlers over one queue's settings documents.
+     *
+     * @param settings where the documents live; its reserved prefixes are the ones
+     *     hidden from every route below
+     */
     public SettingsHandlers(SettingsAccess settings) {
         this.settings = settings;
         this.protectedPrefixes = settings.reservedPrefixes();
     }
 
+    /**
+     * Every settings document a caller may see.
+     *
+     * @return the documents, keyed by key, with the reserved prefixes withheld
+     */
     public Object list() {
         Map<String, Object> out = new LinkedHashMap<>();
         settings.listSettings().forEach((key, value) -> {
@@ -40,6 +51,13 @@ public final class SettingsHandlers {
         return out;
     }
 
+    /**
+     * One settings document.
+     *
+     * @param key the document's key
+     * @return the entry, or {@code null} for a 404 — a reserved key reads as absent
+     *     rather than forbidden, so the route does not confirm it exists
+     */
     public @Nullable Object get(String key) {
         if (isProtected(key)) {
             return null; // read as absent → 404
@@ -47,6 +65,14 @@ public final class SettingsHandlers {
         return settings.getSetting(key).map(value -> entry(key, value)).orElse(null);
     }
 
+    /**
+     * Write one settings document.
+     *
+     * @param key the document's key; a reserved one is refused
+     * @param body the new content under {@code value}, encoded as JSON when it is
+     *     not already a string
+     * @return the stored entry
+     */
     public Object put(String key, Map<String, Object> body) {
         validateKey(key);
         @Nullable Object raw = body.get("value");
@@ -58,6 +84,12 @@ public final class SettingsHandlers {
         return entry(key, value);
     }
 
+    /**
+     * Remove one settings document.
+     *
+     * @param key the document's key; a reserved one answers 404
+     * @return whether a document was removed, under {@code deleted}
+     */
     public Object delete(String key) {
         if (isProtected(key)) {
             throw DashboardError.notFound("not found");

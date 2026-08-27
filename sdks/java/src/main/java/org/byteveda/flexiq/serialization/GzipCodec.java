@@ -20,10 +20,17 @@ public final class GzipCodec implements PayloadCodec {
 
     private final int maxDecompressedBytes;
 
+    /** A codec capped at {@link #DEFAULT_MAX_DECOMPRESSED_BYTES}. */
     public GzipCodec() {
         this(DEFAULT_MAX_DECOMPRESSED_BYTES);
     }
 
+    /**
+     * A codec with an explicit decompression cap.
+     *
+     * @param maxDecompressedBytes how much output one payload may expand to before
+     *     decoding is abandoned; must be positive
+     */
     public GzipCodec(int maxDecompressedBytes) {
         if (maxDecompressedBytes <= 0) {
             throw new IllegalArgumentException("maxDecompressedBytes must be > 0");

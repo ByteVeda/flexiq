@@ -39,16 +39,37 @@ public record OAuthConfig(
 
     // ---- env var names (cross-SDK contract — do not rename) ----------------
 
+    /** Absolute base URL the callback paths are appended to. */
     public static final String ENV_REDIRECT_BASE_URL = "FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL";
+
+    /** Set falsy to make the deployment OAuth-only. */
     public static final String ENV_PASSWORD_AUTH_ENABLED = "FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED";
+
+    /** Comma-separated addresses that may bootstrap to admin. */
     public static final String ENV_ADMIN_EMAILS = "FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS";
+
+    /** Google OAuth client id; its presence is what enables the provider. */
     public static final String ENV_GOOGLE_CLIENT_ID = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID";
+
+    /** Google OAuth client secret. */
     public static final String ENV_GOOGLE_CLIENT_SECRET = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET";
+
+    /** Comma-separated hosted domains Google logins are restricted to. */
     public static final String ENV_GOOGLE_ALLOWED_DOMAINS = "FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS";
+
+    /** GitHub OAuth client id; its presence is what enables the provider. */
     public static final String ENV_GITHUB_CLIENT_ID = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID";
+
+    /** GitHub OAuth client secret. */
     public static final String ENV_GITHUB_CLIENT_SECRET = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET";
+
+    /** Comma-separated organisations GitHub logins are restricted to. */
     public static final String ENV_GITHUB_ALLOWED_ORGS = "FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS";
+
+    /** Comma-separated OIDC slots to configure. */
     public static final String ENV_OIDC_PROVIDERS = "FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS";
+
+    /** Prefix of the per-slot OIDC variables, e.g. {@code ..._OIDC_OKTA_CLIENT_ID}. */
     public static final String ENV_OIDC_PREFIX = "FLEXIQ_DASHBOARD_OAUTH_OIDC_";
 
     static final Pattern SLOT_PATTERN = Pattern.compile("^[a-z][a-z0-9_-]{0,31}$");
@@ -56,6 +77,7 @@ public record OAuthConfig(
     /** Hosts where {@code http://} is accepted for a redirect URL (dev only). */
     static final Set<String> LOCAL_HOSTS = Set.of("localhost", "127.0.0.1", "::1");
 
+    /** Refuses a redirect base URL the providers could not send a browser back to. */
     public OAuthConfig {
         validateRedirectBaseUrl(redirectBaseUrl);
         oidc = List.copyOf(oidc);
@@ -64,11 +86,20 @@ public record OAuthConfig(
 
     // ---- introspection -----------------------------------------------------
 
+    /**
+     * Whether any provider is configured.
+     *
+     * @return {@code false} when only a base URL was set
+     */
     public boolean isEnabled() {
         return google != null || github != null || !oidc.isEmpty();
     }
 
-    /** Configured providers in display order (Google, GitHub, then OIDC slots). */
+    /**
+     * Configured providers in display order (Google, GitHub, then OIDC slots).
+     *
+     * @return the providers, in the order the login UI shows them
+     */
     public List<ProviderConfig> providers() {
         List<ProviderConfig> out = new ArrayList<>();
         if (google != null) {
@@ -81,11 +112,21 @@ public record OAuthConfig(
         return out;
     }
 
+    /**
+     * One provider by slot.
+     *
+     * @param slot the slot from the request path
+     * @return the config, or empty when nothing is registered under it
+     */
     public Optional<ProviderConfig> findProvider(String slot) {
         return providers().stream().filter(p -> p.slot().equals(slot)).findFirst();
     }
 
-    /** Compact provider summary for the login UI (no secrets), in display order. */
+    /**
+     * Compact provider summary for the login UI (no secrets), in display order.
+     *
+     * @return one entry per provider: slot, label and type
+     */
     public List<Map<String, Object>> providersListing() {
         List<Map<String, Object>> out = new ArrayList<>();
         for (ProviderConfig p : providers()) {
@@ -98,13 +139,24 @@ public record OAuthConfig(
         return out;
     }
 
+    /**
+     * Where a provider must send the browser back.
+     *
+     * @param slot the provider's slot
+     * @return the absolute callback URL, which must match what the provider has
+     *     registered
+     */
     public String callbackUrl(String slot) {
         return stripTrailingSlashes(redirectBaseUrl) + "/api/auth/oauth/callback/" + slot;
     }
 
     // ---- env parsing -------------------------------------------------------
 
-    /** Parse from {@link System#getenv()}. */
+    /**
+     * Parse from {@link System#getenv()}.
+     *
+     * @return the configuration, or empty when OAuth is not configured at all
+     */
     public static Optional<OAuthConfig> fromEnv() {
         return fromEnv(System.getenv());
     }
@@ -113,6 +165,9 @@ public record OAuthConfig(
      * Parse from {@code env}. Empty when neither a base URL nor any provider is
      * configured (OAuth off). Throws {@link OAuthConfigError} on partial provider
      * configuration or an unusable redirect URL.
+     *
+     * @param env the variables to read, injected so tests need no process environment
+     * @return the configuration, or empty when OAuth is not configured at all
      */
     public static Optional<OAuthConfig> fromEnv(Map<String, String> env) {
         String baseUrl = trimmed(env, ENV_REDIRECT_BASE_URL);
@@ -289,15 +344,39 @@ public record OAuthConfig(
 
     /** Common shape shared by the three provider configs (no secrets exposed). */
     public sealed interface ProviderConfig permits GoogleConfig, GitHubConfig, OidcConfig {
+        /**
+         * URL-safe registry key used in the callback path.
+         *
+         * @return the slot
+         */
         String slot();
 
+        /**
+         * Human-readable button label rendered by the dashboard.
+         *
+         * @return the label
+         */
         String label();
 
+        /**
+         * One of {@code "google"}, {@code "github"}, {@code "oidc"} — picks the icon.
+         *
+         * @return the type
+         */
         String type();
     }
 
+    /**
+     * Sign-in with Google.
+     *
+     * @param clientId the OAuth client id
+     * @param clientSecret the OAuth client secret
+     * @param allowedDomains hosted domains admitted, or empty to admit any verified
+     *     Google account
+     */
     public record GoogleConfig(String clientId, String clientSecret, List<String> allowedDomains)
             implements ProviderConfig {
+        /** Defensively copies the allowlist. */
         public GoogleConfig {
             allowedDomains = List.copyOf(allowedDomains);
         }
@@ -318,8 +397,17 @@ public record OAuthConfig(
         }
     }
 
+    /**
+     * Sign-in with GitHub.
+     *
+     * @param clientId the OAuth client id
+     * @param clientSecret the OAuth client secret
+     * @param allowedOrgs organisations admitted, or empty to admit any account;
+     *     checked during the code exchange, since it needs the access token
+     */
     public record GitHubConfig(String clientId, String clientSecret, List<String> allowedOrgs)
             implements ProviderConfig {
+        /** Defensively copies the allowlist. */
         public GitHubConfig {
             allowedOrgs = List.copyOf(allowedOrgs);
         }
@@ -340,6 +428,16 @@ public record OAuthConfig(
         }
     }
 
+    /**
+     * Sign-in with any standards-compliant OIDC provider.
+     *
+     * @param slot the URL-safe key this provider is registered under
+     * @param clientId the OAuth client id
+     * @param clientSecret the OAuth client secret
+     * @param discoveryUrl the provider's {@code .well-known} document
+     * @param allowedDomains email domains admitted, or empty to admit any
+     * @param label the button label shown on the login page
+     */
     public record OidcConfig(
             String slot,
             String clientId,
@@ -348,6 +446,7 @@ public record OAuthConfig(
             List<String> allowedDomains,
             String label)
             implements ProviderConfig {
+        /** Refuses a slot that is malformed or collides with a built-in provider. */
         public OidcConfig {
             if (slot == null || !SLOT_PATTERN.matcher(slot).matches()) {
                 throw new OAuthConfigError("OIDC slot '" + slot + "' must match " + SLOT_PATTERN.pattern());

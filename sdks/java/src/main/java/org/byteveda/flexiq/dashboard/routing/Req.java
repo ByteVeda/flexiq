@@ -29,11 +29,22 @@ public record Req(
         byte @Nullable [] body,
         RequestContext ctx) {
 
+    /**
+     * One matched path parameter.
+     *
+     * @param index its position among the route pattern's capture groups, from 0
+     * @return the decoded value
+     */
     public String param(int index) {
         return params.get(index);
     }
 
-    /** Parse the body as a JSON object; empty map if absent/invalid. */
+    /**
+     * Parse the body as a JSON object; empty map if absent/invalid.
+     *
+     * @return the parsed body, or an empty map — handlers validate the fields they
+     *     need rather than the body's shape
+     */
     public Map<String, Object> jsonBody() {
         Map<String, Object> parsed = Json.readObject(body);
         return parsed != null ? parsed : Map.of();

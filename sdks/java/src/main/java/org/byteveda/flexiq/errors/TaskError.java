@@ -24,7 +24,11 @@ public final class TaskError {
         this.raw = raw;
     }
 
-    /** One-line human summary: {@code errtype: message}, or just the message when errtype is empty. */
+    /**
+     * One-line human summary: {@code errtype: message}, or just the message when errtype is empty.
+     *
+     * @return the summary, for a dashboard row or a log line
+     */
     public String summary() {
         return errtype.isEmpty() ? message : errtype + ": " + message;
     }

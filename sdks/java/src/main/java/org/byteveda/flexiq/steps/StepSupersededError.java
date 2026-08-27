@@ -12,7 +12,11 @@ package org.byteveda.flexiq.steps;
 public final class StepSupersededError extends StepError {
     private static final long serialVersionUID = 1L;
 
-    /** @param message the core's account of which owner or attempt holds the job now */
+    /**
+     * A lost claim, detected when the step tried to commit.
+     *
+     * @param message the core's account of which owner or attempt holds the job now
+     */
     public StepSupersededError(String message) {
         super(message, false);
     }

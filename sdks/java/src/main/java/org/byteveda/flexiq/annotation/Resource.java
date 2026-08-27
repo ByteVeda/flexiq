@@ -20,6 +20,10 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.PARAMETER)
 public @interface Resource {
-    /** The registered resource name to resolve. */
+    /**
+     * The registered resource name to resolve.
+     *
+     * @return the name, as passed to {@code Resources.use(name)}
+     */
     String value();
 }

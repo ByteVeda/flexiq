@@ -8,6 +8,11 @@ import org.byteveda.flexiq.FlexiQException;
  * which returns an empty {@code Optional} instead.
  */
 public class EnqueueSkippedException extends FlexiQException {
+    /**
+     * A gate that returned {@code Skip}.
+     *
+     * @param message which gate skipped the enqueue, and why
+     */
     public EnqueueSkippedException(String message) {
         super(message);
     }

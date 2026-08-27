@@ -16,10 +16,20 @@ import org.byteveda.flexiq.spi.QueueBackend;
 public final class CoreFacade {
     private final QueueBackend backend;
 
+    /**
+     * A facade over one backend.
+     *
+     * @param backend the thin native binding this layer translates for
+     */
     public CoreFacade(QueueBackend backend) {
         this.backend = backend;
     }
 
+    /**
+     * The backend underneath.
+     *
+     * @return the binding, for callers that already speak the core's wire terms
+     */
     public QueueBackend backend() {
         return backend;
     }
@@ -28,6 +38,11 @@ public final class CoreFacade {
      * Poll until the job reaches a terminal state or {@code timeout} elapses,
      * returning its final JSON view. Intended for tests — production code should
      * use worker event hooks or webhooks. Throws on timeout.
+     *
+     * @param jobId the job to wait on
+     * @param timeout how long to wait before giving up
+     * @param pollInterval how long to sleep between reads
+     * @return the job's final JSON view, or empty if no such job exists
      */
     public Optional<String> awaitJobJson(String jobId, Duration timeout, Duration pollInterval) {
         long deadline = System.nanoTime() + timeout.toNanos();

@@ -23,6 +23,13 @@ public final class EncryptedSerializer implements Serializer {
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
 
+    /**
+     * A serializer encrypting whatever {@code delegate} produces.
+     *
+     * @param delegate what turns values into bytes
+     * @param key the AES key, 16, 24 or 32 bytes; producer and worker must hold the
+     *     same one or the tag check fails
+     */
     public EncryptedSerializer(Serializer delegate, byte[] key) {
         this.delegate = delegate;
         this.key = new SecretKeySpec(key, "AES");

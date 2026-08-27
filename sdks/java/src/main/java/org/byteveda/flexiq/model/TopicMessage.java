@@ -24,6 +24,15 @@ public final class TopicMessage {
     /** Unix-millisecond publish time. */
     public final long createdAt;
 
+    /**
+     * One message as the core handed it over.
+     *
+     * @param id message id; doubles as the cursor token for {@code ackTopic}
+     * @param payload opaque publish payload — decode with the queue's serializer
+     * @param metadata caller metadata, or {@code null} when none was set
+     * @param notes structured notes, or {@code null} when none were set
+     * @param createdAt Unix-millisecond publish time
+     */
     public TopicMessage(
             String id,
             byte[] payload,

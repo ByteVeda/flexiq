@@ -28,10 +28,15 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class Page<T> {
+    /** This page's rows, newest first. */
     public final List<T> items;
+
+    /** Cursor for the next page, or {@code null} on the last one. */
     public final String nextCursor;
 
     /**
+     * Decoded from the core's JSON page view.
+     *
      * @param items this page's rows, newest first
      * @param nextCursor cursor for the next page, or {@code null} on the last one
      */

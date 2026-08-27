@@ -9,10 +9,17 @@ import org.jspecify.annotations.Nullable;
 public final class JsonSerializer implements Serializer {
     private final ObjectMapper mapper;
 
+    /** A serializer over a default {@code ObjectMapper}. */
     public JsonSerializer() {
         this(new ObjectMapper());
     }
 
+    /**
+     * A serializer over a mapper the application configured.
+     *
+     * @param mapper the mapper, carrying whatever modules and features the payload
+     *     types need
+     */
     public JsonSerializer(ObjectMapper mapper) {
         this.mapper = mapper;
     }

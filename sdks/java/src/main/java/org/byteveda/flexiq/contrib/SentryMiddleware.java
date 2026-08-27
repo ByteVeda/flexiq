@@ -18,10 +18,16 @@ import org.byteveda.flexiq.middleware.TaskContext;
 public final class SentryMiddleware implements Middleware {
     private final Predicate<String> taskFilter;
 
+    /** Report failures for every task. */
     public SentryMiddleware() {
         this(task -> true);
     }
 
+    /**
+     * Report failures only for the tasks {@code taskFilter} accepts.
+     *
+     * @param taskFilter which tasks to report on, by task name
+     */
     public SentryMiddleware(Predicate<String> taskFilter) {
         this.taskFilter = taskFilter;
     }

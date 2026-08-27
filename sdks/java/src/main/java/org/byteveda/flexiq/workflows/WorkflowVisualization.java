@@ -12,7 +12,12 @@ import org.jspecify.annotations.Nullable;
 public final class WorkflowVisualization {
     private WorkflowVisualization() {}
 
-    /** A Mermaid {@code graph TD} diagram of the workflow. */
+    /**
+     * A Mermaid {@code graph TD} diagram of the workflow.
+     *
+     * @param workflow the definition to render; validated first
+     * @return the diagram source
+     */
     public static String mermaid(Workflow workflow) {
         WorkflowAnalysis.validate(workflow);
         Map<String, String> ids = nodeIds(workflow);
@@ -38,7 +43,12 @@ public final class WorkflowVisualization {
         return out.toString();
     }
 
-    /** A Graphviz DOT digraph of the workflow. */
+    /**
+     * A Graphviz DOT digraph of the workflow.
+     *
+     * @param workflow the definition to render; validated first
+     * @return the digraph source
+     */
     public static String dot(Workflow workflow) {
         WorkflowAnalysis.validate(workflow);
         StringBuilder out =

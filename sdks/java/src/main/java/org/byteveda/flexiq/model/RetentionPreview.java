@@ -35,6 +35,17 @@ public final class RetentionPreview {
     /** Total rows a purge would delete across every table. */
     public final long total;
 
+    /**
+     * Decoded from the core's JSON dry-run view.
+     *
+     * @param enabled false when no table has a window — only per-entry TTLs would be swept
+     * @param defaulted true when the windows are the recommended defaults, set by no one
+     * @param namespace the namespace the windows cover
+     * @param referenceTime the {@code now} the snapshot was taken at, in Unix milliseconds
+     * @param windows the windows the counts were computed against, or {@code null} for none
+     * @param counts the per-table counts, or {@code null} for all zero
+     * @param total total rows a purge would delete across every table
+     */
     @JsonCreator
     public RetentionPreview(
             @JsonProperty("enabled") boolean enabled,
@@ -74,6 +85,16 @@ public final class RetentionPreview {
         /** Per-attempt job errors. */
         public final @Nullable Long jobErrorsMs;
 
+        /**
+         * The windows the preview was computed against.
+         *
+         * @param archivedJobsMs how long terminal jobs are kept, or {@code null} to keep
+         *     them forever
+         * @param deadLetterMs how long dead-letter entries are kept, or {@code null} forever
+         * @param taskLogsMs how long task logs are kept, or {@code null} forever
+         * @param taskMetricsMs how long task metrics are kept, or {@code null} forever
+         * @param jobErrorsMs how long per-attempt job errors are kept, or {@code null} forever
+         */
         @JsonCreator
         public Windows(
                 @JsonProperty("archived_jobs_ttl_ms") @Nullable Long archivedJobsMs,
@@ -110,6 +131,15 @@ public final class RetentionPreview {
         /** Per-attempt job-error rows that would be purged. */
         public final long jobErrors;
 
+        /**
+         * The rows each table's purge would remove.
+         *
+         * @param archivedJobs terminal jobs that would be purged
+         * @param deadLetter dead-letter entries that would be purged
+         * @param taskLogs task-log lines that would be purged
+         * @param taskMetrics task-metric rows that would be purged
+         * @param jobErrors per-attempt job-error rows that would be purged
+         */
         @JsonCreator
         public Counts(
                 @JsonProperty("archived_jobs") long archivedJobs,

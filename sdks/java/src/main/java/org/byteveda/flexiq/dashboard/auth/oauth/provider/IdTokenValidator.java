@@ -43,15 +43,29 @@ import org.byteveda.flexiq.dashboard.auth.oauth.error.IdentityFetchError;
 public final class IdTokenValidator {
     private static final long CLOCK_SKEW_SECONDS = 60;
 
+    /**
+     * A validator with an empty JWKS cache.
+     *
+     * <p>Constructing one eagerly touches a nimbus type, so a missing jar fails
+     * here — at flow-build time, where OAuth is disabled cleanly — rather than
+     * mid-login.
+     */
+    public IdTokenValidator() {}
+
     private final Set<JWSAlgorithm> algorithms = Set.of(JWSAlgorithm.RS256, JWSAlgorithm.ES256);
     private final ConcurrentHashMap<String, JWKSource<SecurityContext>> jwkSources = new ConcurrentHashMap<>();
 
     /**
      * Verify {@code idToken} and return its claims.
      *
+     * @param idToken the compact JWS the provider returned
+     * @param jwksUri where to fetch the signing keys; cached per URI
      * @param issuer expected {@code iss}; skipped when {@code null}
+     * @param clientId expected {@code aud}, and the {@code azp} a multi-audience
+     *     token must carry
      * @param expectedNonce expected {@code nonce}; skipped when {@code null}
      * @param nowSeconds current Unix time in seconds (injected for testability)
+     * @return the verified claims
      * @throws IdentityFetchError if the signature or any claim check fails
      */
     public Map<String, Object> validate(

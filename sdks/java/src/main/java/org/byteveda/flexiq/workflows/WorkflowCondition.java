@@ -15,12 +15,21 @@ public enum WorkflowCondition {
     /** Regardless of predecessor outcomes, once they settle. */
     ALWAYS;
 
-    /** Lowercase snake_case wire form ({@code "on_success"}/{@code "on_failure"}/{@code "always"}). */
+    /**
+     * Lowercase snake_case wire form ({@code "on_success"}/{@code "on_failure"}/{@code "always"}).
+     *
+     * @return the wire form
+     */
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
-    /** Parse a wire form ({@code "on_success"}/{@code "on_failure"}/{@code "always"}). */
+    /**
+     * Parse a wire form ({@code "on_success"}/{@code "on_failure"}/{@code "always"}).
+     *
+     * @param wire the stored value
+     * @return the matching constant
+     */
     public static WorkflowCondition fromWire(String wire) {
         if (wire == null) {
             throw new SerializationException("workflow condition is null");

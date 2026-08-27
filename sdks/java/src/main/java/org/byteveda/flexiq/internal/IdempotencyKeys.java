@@ -25,7 +25,14 @@ public final class IdempotencyKeys {
 
     private IdempotencyKeys() {}
 
-    /** The {@code auto:}-prefixed idempotency key for {@code taskName} over {@code payload}. */
+    /**
+     * The {@code auto:}-prefixed idempotency key for {@code taskName} over {@code payload}.
+     *
+     * @param taskName the task's registered name
+     * @param payload the pre-codec payload bytes, so a non-deterministic codec cannot
+     *     break dedup
+     * @return the key, identical to what a peer SDK computes for the same pair
+     */
     public static String autoKey(String taskName, byte[] payload) {
         MessageDigest digest;
         try {

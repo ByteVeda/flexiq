@@ -16,6 +16,12 @@ public final class HmacCodec implements PayloadCodec {
 
     private final byte[] key;
 
+    /**
+     * A codec signing with {@code key}.
+     *
+     * @param key the HMAC key; producer and worker must hold the same one or every
+     *     payload is rejected. Defensively copied
+     */
     public HmacCodec(byte[] key) {
         this.key = key.clone();
     }

@@ -20,7 +20,11 @@ public enum OnExcess {
         this.wireName = wireName;
     }
 
-    /** The spelling the binding expects, shared across every SDK. */
+    /**
+     * The spelling the binding expects, shared across every SDK.
+     *
+     * @return the wire name
+     */
     public String wireName() {
         return wireName;
     }
@@ -28,6 +32,8 @@ public enum OnExcess {
     /**
      * The constant for a wire spelling, case-insensitively.
      *
+     * @param wireName {@code "defer"} or {@code "drop"}
+     * @return the matching constant
      * @throws IllegalArgumentException when {@code wireName} names no constant
      */
     public static OnExcess fromWireName(String wireName) {

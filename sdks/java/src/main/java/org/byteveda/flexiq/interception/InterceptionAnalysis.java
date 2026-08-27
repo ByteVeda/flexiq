@@ -25,6 +25,7 @@ public record InterceptionAnalysis(
         boolean rejected,
         @Nullable String rejectionReason) {
 
+    /** Defensively copies the outcome list, so the analysis cannot change under its reader. */
     public InterceptionAnalysis {
         outcomes = List.copyOf(outcomes);
     }

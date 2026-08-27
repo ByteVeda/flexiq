@@ -28,7 +28,12 @@ public final class JniQueueBackend implements QueueBackend {
         this.transport = NativeTransport.create(handle);
     }
 
-    /** Open a native backend from its JSON options. */
+    /**
+     * Open a native backend from its JSON options.
+     *
+     * @param optionsJson the queue options as JSON
+     * @return the backend, owning the native handle until it is closed
+     */
     public static JniQueueBackend open(String optionsJson) {
         return new JniQueueBackend(NativeQueue.open(optionsJson));
     }

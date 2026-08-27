@@ -14,21 +14,52 @@ import org.byteveda.flexiq.dashboard.auth.oauth.model.ProviderIdentity;
  */
 public interface OAuthProvider {
 
-    /** URL-safe registry key used in the callback path ({@code google}, …). */
+    /**
+     * URL-safe registry key used in the callback path ({@code google}, …).
+     *
+     * @return the slot
+     */
     String slot();
 
-    /** Human-readable button label rendered by the dashboard. */
+    /**
+     * Human-readable button label rendered by the dashboard.
+     *
+     * @return the label
+     */
     String label();
 
-    /** One of {@code "google"}, {@code "github"}, {@code "oidc"} — picks the icon. */
+    /**
+     * One of {@code "google"}, {@code "github"}, {@code "oidc"} — picks the icon.
+     *
+     * @return the type
+     */
     String type();
 
-    /** Build the provider-side authorize URL the browser is redirected to. */
+    /**
+     * Build the provider-side authorize URL the browser is redirected to.
+     *
+     * @param state the pending flow, carrying its PKCE challenge and nonce
+     * @param redirectUri where the provider must send the browser back
+     * @return the URL to redirect to
+     */
     String authorizationUrl(OAuthState state, String redirectUri);
 
-    /** Exchange the auth code for an identity, raising on any failure. */
+    /**
+     * Exchange the auth code for an identity, raising on any failure.
+     *
+     * @param code the one-time code the callback carried
+     * @param codeVerifier the PKCE verifier stashed when the flow started
+     * @param redirectUri the same URI the authorize step declared
+     * @param expectedNonce the nonce the id token must echo
+     * @return the normalised identity
+     */
     ProviderIdentity exchangeCode(String code, String codeVerifier, String redirectUri, String expectedNonce);
 
-    /** Raise {@code AllowlistDenied} if the identity is not permitted. */
+    /**
+     * Raise {@code AllowlistDenied} if the identity is not permitted.
+     *
+     * @param identity the identity {@link #exchangeCode} produced; a provider that
+     *     already enforced its allowlist there leaves this a no-op
+     */
     void checkAllowlist(ProviderIdentity identity);
 }

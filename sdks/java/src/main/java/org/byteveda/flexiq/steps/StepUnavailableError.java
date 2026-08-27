@@ -15,7 +15,11 @@ package org.byteveda.flexiq.steps;
 public final class StepUnavailableError extends StepError {
     private static final long serialVersionUID = 1L;
 
-    /** @param message why this process cannot commit a step */
+    /**
+     * A refusal to run a step un-memoized where there is nowhere to commit it.
+     *
+     * @param message why this process cannot commit a step
+     */
     public StepUnavailableError(String message) {
         super(message, true);
     }

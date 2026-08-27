@@ -11,6 +11,11 @@ import org.byteveda.flexiq.FlexiQException;
  * across jars there is no basis for preferring either side.
  */
 public class DuplicateTaskException extends FlexiQException {
+    /**
+     * Two handlers claiming one task name.
+     *
+     * @param message the task name both handlers claim, and where each came from
+     */
     public DuplicateTaskException(String message) {
         super(message);
     }

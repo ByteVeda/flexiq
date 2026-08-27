@@ -37,6 +37,9 @@ import picocli.CommandLine.ParentCommand;
 public final class Cli {
     static final ObjectMapper JSON = new ObjectMapper();
 
+    /** The root command; picocli fills its options in reflectively. */
+    public Cli() {}
+
     @CommandLine.Spec
     CommandLine.Model.CommandSpec spec;
 
@@ -72,6 +75,11 @@ public final class Cli {
         }
     }
 
+    /**
+     * Entry point: parse {@code args} and exit with the subcommand's status.
+     *
+     * @param args the command line, starting with the subcommand name
+     */
     public static void main(String[] args) {
         System.exit(new CommandLine(new Cli()).execute(args));
     }

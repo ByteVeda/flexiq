@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /** Backlog snapshot for one topic subscription: how much of its fan-out is outstanding. */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class TopicStat {
+    /** The topic being fanned out. */
     public final String topic;
 
     /** Stable subscription identity; unique per topic. */
@@ -36,6 +37,20 @@ public final class TopicStat {
     /** Age (ms) of the oldest still-pending delivery, or {@code null} at zero backlog. */
     public final Long oldestPendingAgeMs;
 
+    /**
+     * Decoded from the core's JSON backlog view.
+     *
+     * @param topic the topic being fanned out
+     * @param subscription stable subscription identity; unique per topic
+     * @param taskName task enqueued for each published message
+     * @param queue queue deliveries are enqueued into
+     * @param active whether the subscription currently receives deliveries (false = paused)
+     * @param durable whether the registration persists across restarts (false = ephemeral)
+     * @param pending deliveries waiting to run
+     * @param running deliveries currently executing
+     * @param dead deliveries in the dead-letter queue
+     * @param oldestPendingAgeMs age (ms) of the oldest still-pending delivery, or {@code null} at zero backlog
+     */
     @JsonCreator
     public TopicStat(
             @JsonProperty("topic") String topic,

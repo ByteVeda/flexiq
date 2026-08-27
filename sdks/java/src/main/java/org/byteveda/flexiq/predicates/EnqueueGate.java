@@ -8,5 +8,11 @@ package org.byteveda.flexiq.predicates;
  */
 @FunctionalInterface
 public interface EnqueueGate {
+    /**
+     * Decide what to do with one enqueue.
+     *
+     * @param context the task, payload and options the caller passed
+     * @return allow, skip, defer or reject
+     */
     EnqueueDecision decide(PredicateContext context);
 }

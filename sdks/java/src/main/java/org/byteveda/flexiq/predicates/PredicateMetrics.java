@@ -9,13 +9,20 @@ import java.util.concurrent.atomic.LongAdder;
  * counters are read far less often than they are bumped.
  */
 public final class PredicateMetrics {
+    /** Counters starting at zero, one set per queue. */
+    public PredicateMetrics() {}
+
     private final LongAdder allowed = new LongAdder();
     private final LongAdder skipped = new LongAdder();
     private final LongAdder deferred = new LongAdder();
     private final LongAdder rejected = new LongAdder();
     private final LongAdder errors = new LongAdder();
 
-    /** Record the decision that won for one gated enqueue. */
+    /**
+     * Record the decision that won for one gated enqueue.
+     *
+     * @param decision the winning decision; anything but skip/defer/reject counts as allowed
+     */
     public void record(EnqueueDecision decision) {
         if (decision instanceof EnqueueDecision.Skip) {
             skipped.increment();
@@ -33,7 +40,12 @@ public final class PredicateMetrics {
         errors.increment();
     }
 
-    /** A point-in-time snapshot of the counters. */
+    /**
+     * A point-in-time snapshot of the counters.
+     *
+     * @return the sums, each read independently, so a burst of enqueues can land
+     *     between two of them
+     */
     public PredicateStats snapshot() {
         return new PredicateStats(allowed.sum(), skipped.sum(), deferred.sum(), rejected.sum(), errors.sum());
     }

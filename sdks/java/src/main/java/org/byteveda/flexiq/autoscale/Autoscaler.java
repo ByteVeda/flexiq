@@ -23,6 +23,14 @@ public final class Autoscaler implements AutoCloseable {
     private final AutoscaleOptions options;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(Autoscaler::daemon);
 
+    /**
+     * An autoscaler over one pool; idle here until {@link #start()}.
+     *
+     * @param pool the handler pool to resize; its core threads are made to time out
+     *     so the pool actually shrinks
+     * @param depth reads the queue's outstanding work, called once per tick
+     * @param options the bounds and cadence
+     */
     public Autoscaler(ThreadPoolExecutor pool, LongSupplier depth, AutoscaleOptions options) {
         this.pool = pool;
         this.depth = depth;
@@ -42,7 +50,13 @@ public final class Autoscaler implements AutoCloseable {
         scheduler.shutdownNow();
     }
 
-    /** The target pool size for {@code depth} under {@code options}. */
+    /**
+     * The target pool size for {@code depth} under {@code options}.
+     *
+     * @param depth the queue's outstanding work
+     * @param options the bounds and the per-worker target
+     * @return {@code ceil(depth / tasksPerWorker)} clamped to the configured range
+     */
     public static int desiredSize(long depth, AutoscaleOptions options) {
         long perWorker = options.tasksPerWorker();
         long target = (depth + perWorker - 1) / perWorker; // ceil(depth / perWorker)

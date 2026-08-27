@@ -24,18 +24,49 @@ public final class Router {
 
     private final List<Route> routes = new ArrayList<>();
 
+    /** An empty table; add routes in the order they should be matched. */
+    public Router() {}
+
+    /**
+     * Add a GET route.
+     *
+     * @param pattern an anchored regex; each capture group becomes a path parameter
+     * @param handler what serves the match
+     * @return {@code this}, for chaining
+     */
     public Router get(String pattern, Handler handler) {
         return add("GET", pattern, handler);
     }
 
+    /**
+     * Add a POST route.
+     *
+     * @param pattern an anchored regex; each capture group becomes a path parameter
+     * @param handler what serves the match
+     * @return {@code this}, for chaining
+     */
     public Router post(String pattern, Handler handler) {
         return add("POST", pattern, handler);
     }
 
+    /**
+     * Add a PUT route.
+     *
+     * @param pattern an anchored regex; each capture group becomes a path parameter
+     * @param handler what serves the match
+     * @return {@code this}, for chaining
+     */
     public Router put(String pattern, Handler handler) {
         return add("PUT", pattern, handler);
     }
 
+    /**
+     * Add a DELETE route.
+     *
+     * @param pattern an anchored regex; each capture group becomes a path parameter
+     * @param handler what serves the match
+     * @return {@code this}, for chaining
+     */
     public Router delete(String pattern, Handler handler) {
         return add("DELETE", pattern, handler);
     }
@@ -48,6 +79,14 @@ public final class Router {
     /**
      * Dispatch a request. Returns {@code false} (no route matched) so the caller
      * can 404; otherwise writes the response and returns {@code true}.
+     *
+     * @param exchange the request, which the matched handler's response is written to
+     * @param method the HTTP method
+     * @param path the request path, without its query string
+     * @param query the parsed query string
+     * @param ctx the resolved auth context
+     * @return whether a route matched and answered
+     * @throws IOException if reading the body or writing the response fails
      */
     public boolean dispatch(
             HttpExchange exchange, String method, String path, Map<String, String> query, RequestContext ctx)

@@ -34,6 +34,19 @@ public final class OAuthFlow {
     private final OAuthStateStore stateStore;
     private final Map<String, OAuthProvider> providers;
 
+    /**
+     * A flow over one configured provider set.
+     *
+     * <p>Warns when providers are configured with no admin allowlist: every OAuth
+     * login would then land the viewer role, leaving an OAuth-only deployment with
+     * no administrator at all.
+     *
+     * @param authStore where the provisioned users and landed sessions live
+     * @param config the parsed environment configuration
+     * @param stateStore where the pending flows are stashed
+     * @param providers the registry, keyed by slot; copied, and its iteration order
+     *     is the login UI's display order
+     */
     public OAuthFlow(
             AuthStore authStore, OAuthConfig config, OAuthStateStore stateStore, Map<String, OAuthProvider> providers) {
         this.authStore = authStore;
@@ -56,22 +69,43 @@ public final class OAuthFlow {
      */
     public record CallbackResult(Session session, @Nullable String nextUrl) {}
 
-    /** Instantiate one provider per configured slot, keyed by slot, in display order. */
+    /**
+     * Instantiate one provider per configured slot, keyed by slot, in display order.
+     *
+     * @param config the parsed environment configuration
+     * @param http the client each provider makes its token and userinfo calls on
+     * @return the registry, keyed by slot
+     */
     public static Map<String, OAuthProvider> buildProviders(OAuthConfig config, HttpClient http) {
         return Providers.build(config, http);
     }
 
     // ---- introspection -----------------------------------------------------
 
+    /**
+     * Whether password login is still offered alongside the providers.
+     *
+     * @return {@code false} when the deployment is OAuth-only
+     */
     public boolean passwordAuthEnabled() {
         return config.passwordAuthEnabled();
     }
 
+    /**
+     * Whether a slot has a registered provider.
+     *
+     * @param slot the slot from the request path
+     * @return whether it resolves
+     */
     public boolean hasProvider(String slot) {
         return providers.containsKey(slot);
     }
 
-    /** Compact provider summary for the login UI (no secrets), in display order. */
+    /**
+     * Compact provider summary for the login UI (no secrets), in display order.
+     *
+     * @return one entry per provider: slot, label and type
+     */
     public List<Map<String, Object>> providersListing() {
         List<Map<String, Object>> out = new ArrayList<>();
         for (OAuthProvider provider : providers.values()) {
@@ -90,6 +124,11 @@ public final class OAuthFlow {
      * Mint a state row and return the provider's authorize URL. {@code nextUrl}
      * is sanitised against {@link UrlSafety#isSafeRedirect}, falling back to
      * {@code "/"}.
+     *
+     * @param slot which provider to start with
+     * @param nextUrl where to land after login, or {@code null}; anything that is not
+     *     a same-origin path is replaced with {@code "/"}
+     * @return the provider's authorize URL to redirect the browser to
      */
     public String start(String slot, @Nullable String nextUrl) {
         OAuthProvider provider = requireProvider(slot);
@@ -101,6 +140,11 @@ public final class OAuthFlow {
     /**
      * Exchange {@code code} for an identity and create a session.
      *
+     * @param slot which provider the callback route named
+     * @param code the one-time code the provider returned, or {@code null}
+     * @param stateToken the state the provider echoed back, or {@code null}
+     * @param error the provider's own error parameter, or {@code null}
+     * @return the landed session and its sanitised redirect target
      * @throws StateValidationError missing/expired/replayed state or a slot mismatch
      * @throws IdentityFetchError any token / userinfo / claim failure
      * @throws org.byteveda.flexiq.dashboard.auth.oauth.error.AllowlistDenied the

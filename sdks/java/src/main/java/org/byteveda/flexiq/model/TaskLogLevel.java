@@ -11,19 +11,35 @@ import org.byteveda.flexiq.errors.SerializationException;
  * name — is part of the cross-SDK contract.
  */
 public enum TaskLogLevel {
+    /** Internal detail, useful when diagnosing the task itself. */
     DEBUG,
+    /** Normal progress. */
     INFO,
+    /** Something recovered from, but worth knowing about. */
     WARNING,
+    /** Something that failed. */
     ERROR,
+    /** Something that failed and needs attention now. */
     CRITICAL,
     /** Partial results published from a running task, not a severity. */
     RESULT;
 
+    /**
+     * Lowercase wire form shared across SDKs.
+     *
+     * @return the wire form
+     */
     @JsonValue
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * Parse a wire form.
+     *
+     * @param wire the stored value
+     * @return the matching constant
+     */
     @JsonCreator
     public static TaskLogLevel fromWire(String wire) {
         if (wire == null) {

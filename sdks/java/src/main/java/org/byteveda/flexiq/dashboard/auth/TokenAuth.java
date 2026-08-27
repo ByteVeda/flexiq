@@ -23,10 +23,22 @@ public final class TokenAuth {
 
     private final String token;
 
+    /**
+     * A gate over one shared token.
+     *
+     * @param token the token every request must present
+     */
     public TokenAuth(String token) {
         this.token = token;
     }
 
+    /**
+     * The token the request carried.
+     *
+     * @param exchange the request
+     * @return the token from {@code Authorization: Bearer}, {@code X-Flexiq-Token}
+     *     or the cookie, in that order; {@code null} when none was sent
+     */
     public @Nullable String presented(HttpExchange exchange) {
         String authorization = exchange.getRequestHeaders().getFirst("Authorization");
         if (authorization != null && authorization.startsWith("Bearer ")) {
@@ -39,6 +51,12 @@ public final class TokenAuth {
         return Cookies.get(exchange, Cookies.LEGACY_TOKEN);
     }
 
+    /**
+     * Whether the presented token is the configured one.
+     *
+     * @param presented what the request carried, or {@code null}
+     * @return whether they match, compared in constant time
+     */
     public boolean matches(@Nullable String presented) {
         if (presented == null) {
             return false;
@@ -47,14 +65,32 @@ public final class TokenAuth {
                 token.getBytes(StandardCharsets.UTF_8), presented.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * A {@code Set-Cookie} that bootstraps the token cookie from a {@code ?token=}
+     * page load, so the query string is not needed again.
+     *
+     * @param token the shared token
+     * @param secure whether to add {@code Secure}; {@code false} for local HTTP
+     * @return the header value
+     */
     public static String openCookie(String token, boolean secure) {
         return Cookies.legacyTokenCookie(token, secure, OPEN_COOKIE_MAX_AGE);
     }
 
+    /**
+     * The {@code /api/auth/status} body for this mode.
+     *
+     * @return auth on, setup never required — there are no users to create
+     */
     public static Map<String, Object> openStatus() {
         return Map.of("auth_enabled", true, "setup_required", false);
     }
 
+    /**
+     * The {@code /api/auth/whoami} body for this mode.
+     *
+     * @return the fixed admin identity every token-mode request runs as
+     */
     public static Map<String, Object> openWhoami() {
         Map<String, Object> user = new LinkedHashMap<>();
         user.put("username", "viewer");

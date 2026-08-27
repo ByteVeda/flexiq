@@ -11,6 +11,7 @@ import java.time.Duration;
  * @param interval how often to re-evaluate (must be positive)
  */
 public record AutoscaleOptions(int minWorkers, int maxWorkers, int tasksPerWorker, Duration interval) {
+    /** Refuses a range or cadence the resize loop could not act on. */
     public AutoscaleOptions {
         if (minWorkers < 1) {
             throw new IllegalArgumentException("minWorkers must be >= 1");
@@ -26,7 +27,13 @@ public record AutoscaleOptions(int minWorkers, int maxWorkers, int tasksPerWorke
         }
     }
 
-    /** Defaults: scale {@code min..max} threads, ~10 tasks per worker, re-evaluated every 2s. */
+    /**
+     * Defaults: scale {@code min..max} threads, ~10 tasks per worker, re-evaluated every 2s.
+     *
+     * @param minWorkers the floor on handler threads
+     * @param maxWorkers the ceiling on handler threads
+     * @return the options
+     */
     public static AutoscaleOptions of(int minWorkers, int maxWorkers) {
         return new AutoscaleOptions(minWorkers, maxWorkers, 10, Duration.ofSeconds(2));
     }

@@ -16,12 +16,19 @@ package org.byteveda.flexiq.steps;
 public final class StepLatch {
     private volatile boolean raised;
 
+    /** A fresh latch for one invocation. */
+    public StepLatch() {}
+
     /** Record that a step control signal is being thrown out of the body. */
     public void latch() {
         raised = true;
     }
 
-    /** Whether a control signal was raised at some point during this attempt. */
+    /**
+     * Whether a control signal was raised at some point during this attempt.
+     *
+     * @return {@code true} once {@link #latch()} has been called
+     */
     public boolean swallowed() {
         return raised;
     }

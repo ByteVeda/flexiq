@@ -9,7 +9,11 @@ import java.util.Map;
  */
 public record HealthReport(String status) {
 
-    /** The probe body, in the shape every shell reports. */
+    /**
+     * The probe body, in the shape every shell reports.
+     *
+     * @return a single-key map holding the status
+     */
     public Map<String, Object> toMap() {
         return Map.of("status", status);
     }

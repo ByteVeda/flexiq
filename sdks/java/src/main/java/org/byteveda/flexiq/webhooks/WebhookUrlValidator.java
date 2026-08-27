@@ -34,7 +34,11 @@ public final class WebhookUrlValidator {
 
     private WebhookUrlValidator() {}
 
-    /** Validate {@code url}, reading the allow-private bypass from the environment. */
+    /**
+     * Validate {@code url}, reading the allow-private bypass from the environment.
+     *
+     * @param url the endpoint an operator configured
+     */
     public static void validate(String url) {
         validate(url, allowPrivateFromEnv());
     }
@@ -44,6 +48,9 @@ public final class WebhookUrlValidator {
      * {@code allowPrivate}. The {@code allowPrivate} seam keeps tests independent
      * of process environment.
      *
+     * @param url the endpoint an operator configured
+     * @param allowPrivate {@code true} to check only the scheme and host, letting a
+     *     loopback or RFC1918 destination through — for local development
      * @throws WebhookException on a non-http(s) scheme, a missing host, an
      *     unresolvable host, or a host that resolves to an unsafe address.
      */

@@ -124,12 +124,19 @@ public final class ResourceRuntime {
      * A per-worker runtime sharing this runtime's definitions and counters but with
      * its own worker-scoped cache, teardown stack, and lease count — so each worker
      * builds and disposes its own {@code WORKER}-scoped instances.
+     *
+     * @return the child runtime, which a client-level reload still reaches
      */
     public ResourceRuntime forWorker() {
         return new ResourceRuntime(definitions, counters, this);
     }
 
-    /** Register a resource under {@code name}. A name may be registered only once. */
+    /**
+     * Register a resource under {@code name}. A name may be registered only once.
+     *
+     * @param name what {@code use("...")} will ask for
+     * @param definition how to build, scope and dispose it
+     */
     public void register(String name, ResourceDefinition definition) {
         if (definitions.putIfAbsent(name, definition) != null) {
             throw new ResourceException("resource '" + name + "' is already registered");
@@ -137,12 +144,20 @@ public final class ResourceRuntime {
         counters.computeIfAbsent(name, key -> new Counter());
     }
 
-    /** Whether any resource is registered (lets the worker skip all wiring when unused). */
+    /**
+     * Whether any resource is registered (lets the worker skip all wiring when unused).
+     *
+     * @return {@code true} when nothing is registered
+     */
     public boolean isEmpty() {
         return definitions.isEmpty();
     }
 
-    /** A fresh per-invocation scope for one task. */
+    /**
+     * A fresh per-invocation scope for one task.
+     *
+     * @return the scope, to be torn down after the handler returns
+     */
     public TaskScope createTaskScope() {
         return new TaskScope(this);
     }
@@ -337,7 +352,11 @@ public final class ResourceRuntime {
         }
     }
 
-    /** Per-resource counters snapshot. */
+    /**
+     * Per-resource counters snapshot.
+     *
+     * @return created, disposed and live counts per registered name
+     */
     public Map<String, ResourceStat> metrics() {
         Map<String, ResourceStat> out = new LinkedHashMap<>();
         counters.forEach((name, counter) -> {

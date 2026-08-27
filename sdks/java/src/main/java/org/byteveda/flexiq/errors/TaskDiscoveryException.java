@@ -11,6 +11,12 @@ import org.byteveda.flexiq.FlexiQException;
  * far harder to notice than a start-up failure naming the provider.
  */
 public class TaskDiscoveryException extends FlexiQException {
+    /**
+     * A provider that could not be loaded or could not build its handlers.
+     *
+     * @param message which provider failed, so start-up names it
+     * @param cause the load or construction failure underneath
+     */
     public TaskDiscoveryException(String message, Throwable cause) {
         super(message, cause);
     }

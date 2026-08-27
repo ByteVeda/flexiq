@@ -7,5 +7,11 @@ package org.byteveda.flexiq.predicates;
  */
 @FunctionalInterface
 public interface Predicate {
+    /**
+     * Decide whether one enqueue may proceed.
+     *
+     * @param context the task, payload and options the caller passed
+     * @return {@code true} to allow the enqueue, {@code false} to reject it
+     */
     boolean test(PredicateContext context);
 }

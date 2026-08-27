@@ -15,14 +15,33 @@ public final class MetricsHandlers {
 
     private final FlexiQ queue;
 
+    /**
+     * Handlers reading one queue's task metrics.
+     *
+     * @param queue what the routes below read from
+     */
     public MetricsHandlers(FlexiQ queue) {
         this.queue = queue;
     }
 
+    /**
+     * Task metrics rolled up per task.
+     *
+     * @param query {@code task} to narrow to one, {@code since} as a Unix-millisecond
+     *     floor; both optional
+     * @return one row per task
+     */
     public Object aggregated(Map<String, String> query) {
         return Metrics.aggregateByTask(queue.metrics(query.get("task"), Http.longParam(query, "since", 0)));
     }
 
+    /**
+     * Task metrics bucketed over time, for the charts.
+     *
+     * @param query {@code task}, {@code since} as a Unix-millisecond floor, and
+     *     {@code bucket} as a bucket width in milliseconds; each optional
+     * @return one series per task
+     */
     public Object timeseries(Map<String, String> query) {
         long since = Http.longParam(query, "since", 0);
         long bucket = Http.longParam(query, "bucket", DEFAULT_BUCKET_MS);

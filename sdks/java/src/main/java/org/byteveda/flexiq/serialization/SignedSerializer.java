@@ -19,6 +19,13 @@ public final class SignedSerializer implements Serializer {
     private final Serializer delegate;
     private final byte[] key;
 
+    /**
+     * A serializer signing whatever {@code delegate} produces.
+     *
+     * @param delegate what turns values into bytes
+     * @param key the HMAC key; producer and worker must hold the same one or every
+     *     payload is rejected. Defensively copied
+     */
     public SignedSerializer(Serializer delegate, byte[] key) {
         this.delegate = delegate;
         this.key = key.clone();

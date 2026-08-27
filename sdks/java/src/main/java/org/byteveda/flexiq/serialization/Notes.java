@@ -25,10 +25,19 @@ import org.jspecify.annotations.Nullable;
  * the encoded document at most {@link #MAX_BYTES} UTF-8 bytes.
  */
 public final class Notes {
+    /** Most top-level keys one note map may carry. */
     public static final int MAX_FIELDS = 15;
+
+    /** Longest a key may be, in characters. */
     public static final int MAX_KEY_LENGTH = 64;
+
+    /** Longest a string leaf may be, in characters. */
     public static final int MAX_VALUE_LENGTH = 500;
+
+    /** Deepest a nested list or map may go. */
     public static final int MAX_DEPTH = 3;
+
+    /** Largest the encoded document may be, in UTF-8 bytes. */
     public static final int MAX_BYTES = 4096;
 
     // Canonical form: keys sorted, compact separators (Jackson's default), non-ASCII emitted raw.
@@ -42,6 +51,8 @@ public final class Notes {
      * Validate {@code notes} and return its canonical JSON encoding. A {@code null} map returns
      * {@code null} (the absence of notes, distinct from an empty map which encodes as {@code "{}"}).
      *
+     * @param notes the annotations to attach, or {@code null} for none
+     * @return the canonical JSON, or {@code null} when {@code notes} was {@code null}
      * @throws NotesValidationException if any bound in the class contract is violated
      */
     public static @Nullable String encode(Map<String, ?> notes) {

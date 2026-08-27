@@ -19,7 +19,11 @@ package org.byteveda.flexiq.steps;
 public abstract class StepControlSignal extends Error {
     private static final long serialVersionUID = 1L;
 
-    /** @param message what happened, in the core's own words where it came from the core */
+    /**
+     * A signal carrying its own account of why the attempt ended.
+     *
+     * @param message what happened, in the core's own words where it came from the core
+     */
     protected StepControlSignal(String message) {
         super(message);
     }

@@ -16,6 +16,12 @@ import org.byteveda.flexiq.spi.ConditionalSettings;
  */
 public interface SettingsAccess extends ConditionalSettings {
 
+    /**
+     * Write a settings document, overwriting whatever was there.
+     *
+     * @param key the document's key
+     * @param value its content
+     */
     void setSetting(String key, String value);
 
     /**
@@ -34,10 +40,19 @@ public interface SettingsAccess extends ConditionalSettings {
         return true;
     }
 
-    /** @return whether a row existed. */
+    /**
+     * Remove a settings document.
+     *
+     * @param key the document's key
+     * @return whether a row existed
+     */
     boolean deleteSetting(String key);
 
-    /** All settings; callers filter by key prefix. */
+    /**
+     * All settings; callers filter by key prefix.
+     *
+     * @return every document, keyed by key
+     */
     Map<String, String> listSettings();
 
     /**
@@ -45,11 +60,19 @@ public interface SettingsAccess extends ConditionalSettings {
      * webhooks, runtime-published documents). Comes from the core so every shell
      * hides the same keys; resolved on call, not on class load, so an in-memory
      * store can answer without the native library.
+     *
+     * @return the prefixes the generic settings routes must hide
      */
     default List<String> reservedPrefixes() {
         return List.of(NativeQueue.reservedSettingPrefixes());
     }
 
+    /**
+     * A view over a live queue's settings store.
+     *
+     * @param queue the queue whose documents are read and written
+     * @return the view, delegating every call to {@code queue}
+     */
     static SettingsAccess of(FlexiQ queue) {
         return new SettingsAccess() {
             @Override

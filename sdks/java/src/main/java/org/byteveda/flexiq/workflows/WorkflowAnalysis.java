@@ -23,6 +23,8 @@ public final class WorkflowAnalysis {
      * Ensure every {@code after} edge names a declared step. Throws a
      * {@link WorkflowException} on the first dangling dependency. Every query below
      * runs this first, so they all reject the same invalid workflows.
+     *
+     * @param workflow the definition to check
      */
     public static void validate(Workflow workflow) {
         Set<String> names = new HashSet<>();
@@ -38,7 +40,12 @@ public final class WorkflowAnalysis {
         }
     }
 
-    /** Nodes in a topological order (predecessors before successors). Throws on a cycle. */
+    /**
+     * Nodes in a topological order (predecessors before successors). Throws on a cycle.
+     *
+     * @param workflow the definition to order
+     * @return the node names, predecessors first
+     */
     public static List<String> topologicalOrder(Workflow workflow) {
         validate(workflow);
         Map<String, List<String>> successors = successors(workflow);
@@ -67,7 +74,12 @@ public final class WorkflowAnalysis {
         return order;
     }
 
-    /** Nodes grouped into dependency levels: level 0 is the roots, each later level depends only on earlier ones. */
+    /**
+     * Nodes grouped into dependency levels: level 0 is the roots, each later level depends only on earlier ones.
+     *
+     * @param workflow the definition to level
+     * @return the levels, each a list of node names that may run together
+     */
     public static List<List<String>> levels(Workflow workflow) {
         Map<String, List<String>> predecessors = predecessors(workflow);
         Map<String, Integer> level = new HashMap<>();
@@ -86,19 +98,36 @@ public final class WorkflowAnalysis {
         return levels;
     }
 
-    /** All nodes that must complete before {@code node} (transitive predecessors). */
+    /**
+     * All nodes that must complete before {@code node} (transitive predecessors).
+     *
+     * @param workflow the definition to walk
+     * @param node the node to walk back from
+     * @return the node names, {@code node} itself excluded
+     */
     public static Set<String> ancestors(Workflow workflow, String node) {
         validate(workflow);
         return reachable(predecessors(workflow), node);
     }
 
-    /** All nodes that run after {@code node} (transitive successors). */
+    /**
+     * All nodes that run after {@code node} (transitive successors).
+     *
+     * @param workflow the definition to walk
+     * @param node the node to walk forward from
+     * @return the node names, {@code node} itself excluded
+     */
     public static Set<String> descendants(Workflow workflow, String node) {
         validate(workflow);
         return reachable(successors(workflow), node);
     }
 
-    /** Nodes with no predecessors. */
+    /**
+     * Nodes with no predecessors.
+     *
+     * @param workflow the definition to inspect
+     * @return the node names that start the run
+     */
     public static List<String> roots(Workflow workflow) {
         validate(workflow);
         Map<String, Integer> indegree = indegree(workflow);
@@ -111,7 +140,12 @@ public final class WorkflowAnalysis {
         return roots;
     }
 
-    /** Nodes with no successors. */
+    /**
+     * Nodes with no successors.
+     *
+     * @param workflow the definition to inspect
+     * @return the node names nothing waits on
+     */
     public static List<String> leaves(Workflow workflow) {
         validate(workflow);
         Map<String, List<String>> successors = successors(workflow);

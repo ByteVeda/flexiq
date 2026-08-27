@@ -11,14 +11,25 @@ package org.byteveda.flexiq.steps;
 public class StepError extends StepControlSignal {
     private static final long serialVersionUID = 1L;
 
+    /** The core's verdict, carried across JNI and into the serialized form. */
     private final boolean shouldRetry;
 
-    /** A permanent step failure. */
+    /**
+     * A permanent step failure.
+     *
+     * @param message what the step was doing and why it could not be done
+     */
     public StepError(String message) {
         this(message, false);
     }
 
-    /** A step failure that retries only if {@code shouldRetry}. */
+    /**
+     * A step failure that retries only if {@code shouldRetry}.
+     *
+     * @param message what the step was doing and why it could not be done
+     * @param shouldRetry {@code true} where the next attempt could plausibly get
+     *     further — an unreachable backend, not a divergence
+     */
     public StepError(String message, boolean shouldRetry) {
         super(message);
         this.shouldRetry = shouldRetry;

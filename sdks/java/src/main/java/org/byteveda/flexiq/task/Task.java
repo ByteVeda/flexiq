@@ -65,7 +65,14 @@ public final class Task<T> {
         this.retryOn = retryOn;
     }
 
-    /** A task whose payload deserializes to {@code payloadType}. */
+    /**
+     * A task whose payload deserializes to {@code payloadType}.
+     *
+     * @param name the registered task name, which producer and worker must agree on
+     * @param payloadType the type the handler is called with
+     * @param <T> that type
+     * @return the descriptor, with every setting left to the core's defaults
+     */
     public static <T> Task<T> of(String name, Class<T> payloadType) {
         return new Task<>(
                 name,
@@ -83,7 +90,14 @@ public final class Task<T> {
                 null);
     }
 
-    /** A task whose payload deserializes to a generic type, e.g. {@code new TypeReference<List<Foo>>(){}}. */
+    /**
+     * A task whose payload deserializes to a generic type, e.g. {@code new TypeReference<List<Foo>>(){}}.
+     *
+     * @param name the registered task name, which producer and worker must agree on
+     * @param payloadType the type the handler is called with, its type arguments preserved
+     * @param <T> that type
+     * @return the descriptor, with every setting left to the core's defaults
+     */
     public static <T> Task<T> of(String name, TypeReference<T> payloadType) {
         return new Task<>(
                 name,
@@ -101,7 +115,12 @@ public final class Task<T> {
                 null);
     }
 
-    /** A copy of this task with the given default options. */
+    /**
+     * A copy of this task with the given default options.
+     *
+     * @param options the enqueue defaults, replacing this task's wholesale
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> withOptions(EnqueueOptions options) {
         return new Task<>(
                 name,
@@ -123,6 +142,9 @@ public final class Task<T> {
      * A copy of this task whose retries use {@code retryPolicy}'s backoff curve.
      * Registered with the worker on {@code start()}; the retry budget still comes
      * from {@link #maxRetries}.
+     *
+     * @param retryPolicy the backoff curve the scheduler applies between attempts
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> retryPolicy(RetryPolicy retryPolicy) {
         return new Task<>(
@@ -158,6 +180,9 @@ public final class Task<T> {
      * <p>A handler that throws {@link org.byteveda.flexiq.errors.RetryableException}
      * or {@link org.byteveda.flexiq.errors.NonRetryableException} decides for itself
      * — those bypass this predicate.
+     *
+     * @param retryOn decides whether a thrown exception is worth another attempt
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> retryOn(Predicate<Throwable> retryOn) {
         return new Task<>(
@@ -181,6 +206,9 @@ public final class Task<T> {
      * org.byteveda.flexiq.serialization.PayloadCodec}s (in order on enqueue,
      * reversed on the worker). Each name must be registered via
      * {@code FlexiQ.builder().codec(name, codec)} on producers and workers.
+     *
+     * @param codecs the codec names, applied in order on the way out and reversed on the way in
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> codecs(String... codecs) {
         return new Task<>(
@@ -203,6 +231,9 @@ public final class Task<T> {
      * A copy of this task that auto-derives a {@code uniqueKey} from the payload on every
      * enqueue, so a duplicate enqueue is a no-op while the first job is pending or running.
      * A per-enqueue {@link EnqueueOptions.Builder#idempotent(boolean)} overrides this default.
+     *
+     * @param idempotent {@code true} to derive a {@code uniqueKey} from the task and payload
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> idempotent(boolean idempotent) {
         return new Task<>(
@@ -225,6 +256,9 @@ public final class Task<T> {
      * A copy of this task guarded by {@code circuitBreaker}. The worker registers it on
      * {@code start()}; once the breaker opens, the scheduler stops dispatching this task until
      * it recovers.
+     *
+     * @param circuitBreaker the breaker's thresholds and timings
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> circuitBreaker(CircuitBreakerConfig circuitBreaker) {
         return new Task<>(
@@ -247,6 +281,9 @@ public final class Task<T> {
      * A copy of this task throttled to {@code rateLimit}, a spec like {@code "100/m"}
      * ({@code s}, {@code m} and {@code h} suffixes). The worker registers it on
      * {@code start()} and rejects a malformed spec rather than running unthrottled.
+     *
+     * @param rateLimit a spec like {@code "100/m"}, with {@code s}, {@code m} or {@code h} suffixes
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> rateLimit(String rateLimit) {
         return new Task<>(
@@ -277,6 +314,9 @@ public final class Task<T> {
      * tripped {@link #circuitBreaker} always defers regardless: that is
      * downstream failure, not excess load. Dropping fires no middleware or event
      * hooks — the job never ran.
+     *
+     * @param onExcess what a saturated rate limit does to this task's jobs
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> onExcess(OnExcess onExcess) {
         return new Task<>(
@@ -301,6 +341,9 @@ public final class Task<T> {
      * costs a database read. {@code null} or {@code 0} means no cap — matching the
      * annotation's sentinel, and because a literal cap of zero would stop the task
      * from ever dispatching.
+     *
+     * @param maxConcurrent the cluster-wide ceiling, or {@code null} to leave it uncapped
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> maxConcurrent(@Nullable Integer maxConcurrent) {
         maxConcurrent = uncappedIfZero(maxConcurrent);
@@ -326,6 +369,9 @@ public final class Task<T> {
      * failures dead-letter instead of retrying, so a broken dependency cannot become
      * a retry storm. Distinct from {@link #maxRetries}, which bounds one job rather
      * than the rate.
+     *
+     * @param retryBudget a spec like {@code "100/m"}, capping how fast this task may retry
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> retryBudget(String retryBudget) {
         return new Task<>(
@@ -350,6 +396,9 @@ public final class Task<T> {
      * others. In-process and free, unlike {@link #maxConcurrent}, which is
      * cluster-wide and costs a database read. {@code null} or {@code 0} lets it use
      * the whole pool, matching the annotation's sentinel.
+     *
+     * @param maxInFlightPerTask the per-worker ceiling, or {@code null} to allow the whole pool
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> maxInFlightPerTask(@Nullable Integer maxInFlightPerTask) {
         maxInFlightPerTask = uncappedIfZero(maxInFlightPerTask);
@@ -374,35 +423,82 @@ public final class Task<T> {
         return cap != null && cap == 0 ? null : cap;
     }
 
+    /**
+     * A copy of this task enqueuing onto {@code queue}.
+     *
+     * @param queue the queue name
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> queue(String queue) {
         return withOptions(options.toBuilder().queue(queue).build());
     }
 
+    /**
+     * A copy of this task enqueuing at {@code priority}.
+     *
+     * @param priority the dispatch priority; higher runs first within a queue
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> priority(int priority) {
         return withOptions(options.toBuilder().priority(priority).build());
     }
 
+    /**
+     * A copy of this task with a different retry budget.
+     *
+     * @param maxRetries how many attempts a job gets before it dead-letters
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> maxRetries(int maxRetries) {
         return withOptions(options.toBuilder().maxRetries(maxRetries).build());
     }
 
-    /** Alias of {@link #maxRetries} in the guide's vocabulary. */
+    /**
+     * Alias of {@link #maxRetries} in the guide's vocabulary.
+     *
+     * @param retries how many attempts a job gets before it dead-letters
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> retries(int retries) {
         return maxRetries(retries);
     }
 
+    /**
+     * A copy of this task with a different per-attempt timeout.
+     *
+     * @param timeoutMs the timeout in milliseconds
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> timeoutMs(long timeoutMs) {
         return withOptions(options.toBuilder().timeoutMs(timeoutMs).build());
     }
 
+    /**
+     * Duration form of {@link #timeoutMs}.
+     *
+     * @param timeout the per-attempt timeout
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> timeout(Duration timeout) {
         return timeoutMs(timeout.toMillis());
     }
 
+    /**
+     * A copy of this task whose jobs are held back before they run.
+     *
+     * @param delayMs the delay in milliseconds
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> delayMs(long delayMs) {
         return withOptions(options.toBuilder().delayMs(delayMs).build());
     }
 
+    /**
+     * Duration form of {@link #delayMs}.
+     *
+     * @param delay the delay before a job becomes runnable
+     * @return the copy; this descriptor is immutable and unchanged
+     */
     public Task<T> delay(Duration delay) {
         return delayMs(delay.toMillis());
     }
@@ -424,6 +520,7 @@ public final class Task<T> {
      *     {@code "report:{userId}"} (see {@link EnqueueOptions.Builder#debounceKey})
      * @param maxWait ceiling on the total delay, measured from when the window opened;
      *     never shorter than {@code window}
+     * @return the copy; this descriptor is immutable and unchanged
      * @throws IllegalArgumentException if {@code window} is not positive, {@code maxWait}
      *     is shorter than it, or {@code keyTemplate} is empty
      */
@@ -435,6 +532,12 @@ public final class Task<T> {
      * {@link #debounce(Duration, String, Duration)}, additionally choosing whether an
      * enqueue landing on an open window overwrites the pending job's payload with its own.
      * The default keeps the payload the window opened with.
+     *
+     * @param window how far ahead of now each enqueue pushes the run
+     * @param keyTemplate the window's identity, resolved against the payload
+     * @param maxWait ceiling on the total delay; never shorter than {@code window}
+     * @param replacePayload {@code true} to let a later enqueue redefine the run
+     * @return the copy; this descriptor is immutable and unchanged
      */
     public Task<T> debounce(Duration window, String keyTemplate, Duration maxWait, boolean replacePayload) {
         return withOptions(options.toBuilder()
@@ -445,65 +548,119 @@ public final class Task<T> {
                 .build());
     }
 
+    /**
+     * The registered task name.
+     *
+     * @return the name producer and worker agree on
+     */
     public String name() {
         return name;
     }
 
-    /** The payload type — a {@code Class} or a generic {@code Type} from a {@link TypeReference}. */
+    /**
+     * The payload type — a {@code Class} or a generic {@code Type} from a {@link TypeReference}.
+     *
+     * @return the type the handler is called with
+     */
     public Type payloadType() {
         return payloadType;
     }
 
+    /**
+     * This task's enqueue defaults.
+     *
+     * @return the options every enqueue of this task starts from
+     */
     public EnqueueOptions options() {
         return options;
     }
 
-    /** The retry-backoff curve for this task, or {@code null} for the core defaults. */
+    /**
+     * The retry-backoff curve for this task, or {@code null} for the core defaults.
+     *
+     * @return the curve, or {@code null} for the core defaults
+     */
     public @Nullable RetryPolicy retryPolicy() {
         return retryPolicy;
     }
 
-    /** Names of the payload codecs applied to this task (empty if none). */
+    /**
+     * Names of the payload codecs applied to this task (empty if none).
+     *
+     * @return the codec names, in the order they encode
+     */
     public List<String> codecNames() {
         return codecs;
     }
 
-    /** Whether this task auto-derives an idempotency {@code uniqueKey} by default. */
+    /**
+     * Whether this task auto-derives an idempotency {@code uniqueKey} by default.
+     *
+     * @return whether every enqueue is deduped on its payload
+     */
     public boolean idempotent() {
         return idempotent;
     }
 
-    /** This task's circuit-breaker configuration, or {@code null} when none is set. */
+    /**
+     * This task's circuit-breaker configuration, or {@code null} when none is set.
+     *
+     * @return the configuration, or {@code null} when the breaker is off
+     */
     public @Nullable CircuitBreakerConfig circuitBreaker() {
         return circuitBreaker;
     }
 
-    /** This task's rate-limit spec (e.g. {@code "100/m"}), or {@code null} when unthrottled. */
+    /**
+     * This task's rate-limit spec (e.g. {@code "100/m"}), or {@code null} when unthrottled.
+     *
+     * @return the spec, or {@code null} when unthrottled
+     */
     public @Nullable String rateLimit() {
         return rateLimit;
     }
 
-    /** What a saturated rate limit does to this task's jobs; {@link OnExcess#DEFER} unless set. */
+    /**
+     * What a saturated rate limit does to this task's jobs; {@link OnExcess#DEFER} unless set.
+     *
+     * @return the policy, {@link OnExcess#DEFER} unless set
+     */
     public OnExcess onExcess() {
         return onExcess;
     }
 
-    /** This task's retry-rate cap (e.g. {@code "100/m"}), or {@code null} when uncapped. */
+    /**
+     * This task's retry-rate cap (e.g. {@code "100/m"}), or {@code null} when uncapped.
+     *
+     * @return the spec, or {@code null} when uncapped
+     */
     public @Nullable String retryBudget() {
         return retryBudget;
     }
 
-    /** Cap on this task's concurrently-running jobs, or {@code null} when uncapped. */
+    /**
+     * Cap on this task's concurrently-running jobs, or {@code null} when uncapped.
+     *
+     * @return the cluster-wide ceiling, or {@code null} when uncapped
+     */
     public @Nullable Integer maxConcurrent() {
         return maxConcurrent;
     }
 
-    /** Cap on this task's share of one worker's dispatch slots, or {@code null} when uncapped. */
+    /**
+     * Cap on this task's share of one worker's dispatch slots, or {@code null} when uncapped.
+     *
+     * @return the per-worker ceiling, or {@code null} when uncapped
+     */
     public @Nullable Integer maxInFlightPerTask() {
         return maxInFlightPerTask;
     }
 
-    /** Predicate deciding whether a thrown exception is retryable, or {@code null} to retry all. */
+    /**
+     * Predicate deciding whether a thrown exception is retryable, or {@code null} to retry all.
+     *
+     * @return the predicate, or {@code null} to retry every failure
+     */
     public @Nullable Predicate<Throwable> retryOn() {
         return retryOn;
     }

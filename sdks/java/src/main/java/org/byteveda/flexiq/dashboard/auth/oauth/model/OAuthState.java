@@ -25,6 +25,12 @@ public record OAuthState(
         long createdAt,
         long expiresAt) {
 
+    /**
+     * Whether the pending flow has lapsed.
+     *
+     * @param nowSeconds the current time in Unix <b>seconds</b>
+     * @return whether {@link #expiresAt()} has been reached
+     */
     public boolean isExpired(long nowSeconds) {
         return nowSeconds >= expiresAt;
     }

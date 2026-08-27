@@ -100,8 +100,15 @@ mavenPublishing {
 // Javadoc caps its output at 100 warnings by default, which is how a backlog of
 // a few thousand read as "104" for as long as anyone had looked. Raise the cap so
 // the number the build prints is the real one.
+//
+// -Xwerror holds the runtime at zero, the way `flexiq-test` is held: the backlog
+// that cap was hiding is cleared, and an undocumented parameter is now a build
+// failure rather than a line nobody reads.
 tasks.withType<Javadoc>().configureEach {
-    (options as StandardJavadocDocletOptions).addStringOption("Xmaxwarns", "100000")
+    (options as StandardJavadocDocletOptions).apply {
+        addStringOption("Xmaxwarns", "100000")
+        addStringOption("Xwerror", "-quiet")
+    }
 }
 
 // --- Code integrity: formatting + static analysis -------------------------

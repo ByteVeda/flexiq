@@ -24,7 +24,13 @@ public record ProxyRef(
         @Nullable Long expiresAtMs,
         @Nullable String purpose) {
 
-    /** A ref with neither expiry nor purpose binding. */
+    /**
+     * A ref with neither expiry nor purpose binding.
+     *
+     * @param handler the {@link ProxyHandler#id()} that produced (and reconstructs) it
+     * @param reference the handler's serializable reference data
+     * @param signature an HMAC over {@code handler + reference + expiresAtMs + purpose}
+     */
     public ProxyRef(String handler, Map<String, Object> reference, String signature) {
         this(handler, reference, signature, null, null);
     }

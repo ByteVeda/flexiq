@@ -21,6 +21,10 @@ public interface WorkerBridge {
      * the job. Both are {@code null} under an in-process worker, whose bridge
      * reads the live values from storage instead.
      *
+     * @param token the dispatch token to complete or fail the job with
+     * @param jobId the job's id
+     * @param taskName the task's registered name
+     * @param payload the encoded payload, to decode with the queue's serializer
      * @param metadataJson the job's stored metadata blob, or {@code null}
      * @param disabledMiddlewareJson a JSON array of disabled middleware names,
      *     or {@code null} when the caller should read the list itself
@@ -43,6 +47,16 @@ public interface WorkerBridge {
      *
      * <p>A default rather than a signature change, so a bridge written against
      * the six-argument form keeps working; it simply cannot run durable steps.
+     *
+     * @param token the dispatch token to complete or fail the job with
+     * @param jobId the job's id
+     * @param taskName the task's registered name
+     * @param payload the encoded payload, to decode with the queue's serializer
+     * @param metadataJson the job's stored metadata blob, or {@code null}
+     * @param disabledMiddlewareJson a JSON array of disabled middleware names,
+     *     or {@code null} when the caller should read the list itself
+     * @param attempt the job's {@code retryCount} at dispatch, the attempt half of the
+     *     step fence
      */
     default void onJob(
             long token,
@@ -55,6 +69,18 @@ public interface WorkerBridge {
         onJob(token, jobId, taskName, payload, metadataJson, disabledMiddlewareJson);
     }
 
+    /**
+     * Report a finished job, for events and middleware.
+     *
+     * @param kind the core's verdict: {@code success}, {@code retry}, {@code dead} or
+     *     {@code cancelled}
+     * @param jobId the job's id
+     * @param taskName the task's registered name
+     * @param error the stored error string, or {@code null} on success and cancel
+     * @param retryCount attempts spent, or {@code -1} where it does not apply
+     * @param timedOut whether the attempt was cut short by the task timeout
+     * @param wallTimeNs how long the run took, or 0 when it was not measured
+     */
     void onOutcome(
             String kind,
             String jobId,

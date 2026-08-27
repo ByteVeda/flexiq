@@ -20,7 +20,11 @@ public final class Health {
 
     private Health() {}
 
-    /** Basic liveness check — always ok. */
+    /**
+     * Basic liveness check — always ok.
+     *
+     * @return an {@code ok} report; a process that could not answer would never reach here
+     */
     public static HealthReport check() {
         return new HealthReport("ok");
     }
@@ -29,6 +33,9 @@ public final class Health {
      * Readiness: storage reachable, workers alive, resources healthy. Never
      * throws — a failing dependency lands in its own check and degrades the
      * status, so a probe endpoint can always answer.
+     *
+     * @param queue the queue to probe
+     * @return the report, {@code degraded} rather than thrown when a dependency fails
      */
     public static ReadinessReport readiness(FlexiQ queue) {
         String storage = "ok";
@@ -76,6 +83,9 @@ public final class Health {
      * advertised resources plus the health its heartbeat reported. A resource a
      * worker advertises but never reports on is {@code not_initialized}; when
      * workers disagree, the worst health wins.
+     *
+     * @param queue the queue whose workers are polled
+     * @return one entry per resource any live worker advertises or reports on, by name
      */
     public static List<ResourceStatusEntry> resourceStatus(FlexiQ queue) {
         Map<String, Integer> reported = new TreeMap<>();

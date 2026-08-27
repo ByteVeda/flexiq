@@ -23,16 +23,31 @@ public final class OpsHandlers {
 
     private final FlexiQ queue;
 
+    /**
+     * Handlers reading one queue's operational state.
+     *
+     * @param queue what the routes below read from
+     */
     public OpsHandlers(FlexiQ queue) {
         this.queue = queue;
     }
 
+    /**
+     * Every task's circuit-breaker state.
+     *
+     * @return one row per task with a breaker
+     */
     public Object circuitBreakers() {
         return queue.listCircuitBreakers().stream()
                 .map(Contract::circuitBreaker)
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Every event wire name a webhook may subscribe to.
+     *
+     * @return the names, for the webhook editor's picker
+     */
     public Object eventTypes() {
         List<String> types = new ArrayList<>();
         for (EventName name : EventName.values()) {
@@ -41,6 +56,13 @@ public final class OpsHandlers {
         return types;
     }
 
+    /**
+     * The KEDA external-scaler payload: depth, target, and live capacity.
+     *
+     * @param query {@code queue} to report on one queue rather than all, and
+     *     {@code target} for the depth an autoscaler aims at per replica
+     * @return the payload, including a per-queue breakdown when no queue was named
+     */
     public Object scaler(Map<String, String> query) {
         String queueName = query.get("queue");
         long target = Http.longParam(query, "target", DEFAULT_TARGET_QUEUE_DEPTH);
@@ -68,6 +90,8 @@ public final class OpsHandlers {
      * advertised {@code resources} + reported {@code resourceHealth}. A resource
      * a worker advertises but never reports on is {@code not_initialized}; when
      * workers disagree, the worst health wins.
+     *
+     * @return one row per resource any live worker knows about
      */
     public Object resources() {
         return Health.resourceStatus(queue).stream()
@@ -75,12 +99,21 @@ public final class OpsHandlers {
                 .toList();
     }
 
-    /** Real dependency checks — the endpoint used to answer {@code ready} unconditionally. */
+    /**
+     * Real dependency checks — the endpoint used to answer {@code ready} unconditionally.
+     *
+     * @return the readiness body, {@code degraded} rather than thrown when a
+     *     dependency fails
+     */
     public Object readiness() {
         return Health.readiness(queue).toMap();
     }
 
-    /** Prometheus text exposition of the queue's job counts and worker count. */
+    /**
+     * Prometheus text exposition of the queue's job counts and worker count.
+     *
+     * @return the exposition body, ready to serve as {@code text/plain}
+     */
     public String prometheus() {
         QueueStats stats = queue.stats();
         StringBuilder sb = new StringBuilder();

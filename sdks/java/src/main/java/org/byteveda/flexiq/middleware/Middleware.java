@@ -15,12 +15,36 @@ import org.byteveda.flexiq.events.OutcomeEvent;
  * sleeps, and the worker warns once when it sees that shape.
  */
 public interface Middleware {
+    /**
+     * On the producer, before the payload is serialized.
+     *
+     * @param context the job being enqueued; rewrite its payload or options here,
+     *     or throw to abort the enqueue
+     */
     default void onEnqueue(EnqueueContext context) {}
 
+    /**
+     * On the worker, before the handler runs.
+     *
+     * @param context this execution, whose {@code attributes()} carry state to the
+     *     matching {@code after} or {@code onSleep}
+     */
     default void before(TaskContext context) {}
 
+    /**
+     * On the worker, after the handler returned.
+     *
+     * @param context this execution, the same instance {@code before} saw
+     * @param result what the handler returned; {@code null} for a void handler
+     */
     default void after(TaskContext context, Object result) {}
 
+    /**
+     * On the worker, after the handler threw.
+     *
+     * @param context this execution, the same instance {@code before} saw
+     * @param error what the handler threw, before the core classifies it
+     */
     default void onError(TaskContext context, Throwable error) {}
 
     /**
@@ -32,15 +56,36 @@ public interface Middleware {
      * returned null" — a success to a timer, a span or a counter — which is
      * exactly what this hook exists to avoid.
      *
+     * @param context this execution, the same instance {@code before} saw
      * @param wakeAt the deadline the job was rescheduled to, in Unix milliseconds
      */
     default void onSleep(TaskContext context, long wakeAt) {}
 
+    /**
+     * The job finished successfully.
+     *
+     * @param event the outcome the core recorded
+     */
     default void onCompleted(OutcomeEvent event) {}
 
+    /**
+     * The attempt failed and the job will be tried again.
+     *
+     * @param event the outcome the core recorded, carrying the attempt's error
+     */
     default void onRetry(OutcomeEvent event) {}
 
+    /**
+     * The job exhausted its retries and was moved to the dead-letter queue.
+     *
+     * @param event the outcome the core recorded, carrying the final error
+     */
     default void onDeadLetter(OutcomeEvent event) {}
 
+    /**
+     * The job was cancelled rather than run to a verdict.
+     *
+     * @param event the outcome the core recorded
+     */
     default void onCancel(OutcomeEvent event) {}
 }

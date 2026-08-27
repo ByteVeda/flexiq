@@ -6,7 +6,12 @@ import java.util.List;
 public final class Predicates {
     private Predicates() {}
 
-    /** Passes only when every {@code predicate} passes (vacuously true when none). */
+    /**
+     * Passes only when every {@code predicate} passes (vacuously true when none).
+     *
+     * @param predicates the gates, evaluated in order and short-circuited on the first refusal
+     * @return the compound gate
+     */
     public static Predicate allOf(Predicate... predicates) {
         List<Predicate> all = List.of(predicates);
         return context -> {
@@ -19,7 +24,12 @@ public final class Predicates {
         };
     }
 
-    /** Passes when at least one {@code predicate} passes (false when none). */
+    /**
+     * Passes when at least one {@code predicate} passes (false when none).
+     *
+     * @param predicates the gates, evaluated in order and short-circuited on the first pass
+     * @return the compound gate
+     */
     public static Predicate anyOf(Predicate... predicates) {
         List<Predicate> any = List.of(predicates);
         return context -> {
@@ -32,7 +42,12 @@ public final class Predicates {
         };
     }
 
-    /** Inverts {@code predicate}. */
+    /**
+     * Inverts {@code predicate}.
+     *
+     * @param predicate the gate to negate
+     * @return a gate that passes exactly when {@code predicate} refuses
+     */
     public static Predicate not(Predicate predicate) {
         return context -> !predicate.test(context);
     }

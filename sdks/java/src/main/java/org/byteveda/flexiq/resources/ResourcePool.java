@@ -58,6 +58,8 @@ public final class ResourcePool {
     public record Stats(int size, int active, int idle, long totalAcquisitions, long totalTimeouts) {}
 
     /**
+     * A pool for one resource, empty until {@link #prewarm()} or the first acquire.
+     *
      * @param name the resource name (used in error messages and logs)
      * @param config pool sizing and timing
      * @param factory builds one instance; invoked on the acquiring thread
@@ -101,6 +103,7 @@ public final class ResourcePool {
      * for capacity. Reuses an idle instance when one is still within its
      * lifetime; otherwise builds a fresh one on the calling thread.
      *
+     * @return an instance, checked out until it is passed back to {@link #release}
      * @throws ResourceException when the pool stays exhausted past the timeout
      */
     public Object acquire() {
@@ -128,7 +131,11 @@ public final class ResourcePool {
         return instance;
     }
 
-    /** Return a checked-out instance: park it for reuse, or dispose it if the pool has shut down. */
+    /**
+     * Return a checked-out instance: park it for reuse, or dispose it if the pool has shut down.
+     *
+     * @param instance the instance {@link #acquire()} handed out
+     */
     public void release(Object instance) {
         lock.lock();
         try {
@@ -157,7 +164,11 @@ public final class ResourcePool {
         }
     }
 
-    /** A snapshot of the pool's counters. */
+    /**
+     * A snapshot of the pool's counters.
+     *
+     * @return the counters as they stood, taken under the pool's lock
+     */
     public Stats stats() {
         lock.lock();
         try {

@@ -22,7 +22,12 @@ public final class TaskErrors {
 
     private TaskErrors() {}
 
-    /** Encode a thrown task error: fully-qualified class name, verbatim message, stack frames in order. */
+    /**
+     * Encode a thrown task error: fully-qualified class name, verbatim message, stack frames in order.
+     *
+     * @param error what the handler threw
+     * @return the canonical JSON, ready to store in an {@code error} field
+     */
     public static String encode(Throwable error) {
         ObjectNode node = JSON.createObjectNode();
         node.put("errtype", error.getClass().getName());
@@ -40,6 +45,10 @@ public final class TaskErrors {
      * or {@link org.byteveda.flexiq.model.DeadJob#error}. Returns {@code null} unless the
      * string is a JSON object with a string {@code message} — the signal that it is plain
      * legacy/system text and must be surfaced as-is.
+     *
+     * @param raw the stored error string
+     * @return the decoded error, or {@code null} when the string is plain text to
+     *     be shown verbatim
      */
     public static @Nullable TaskError decode(String raw) {
         if (raw == null || raw.isEmpty()) {
@@ -61,7 +70,12 @@ public final class TaskErrors {
         return new TaskError(errtypeText, message.asText(), readTraceback(node.get("traceback")), raw);
     }
 
-    /** One-line human summary: {@code errtype: message} when structured, the raw string otherwise. */
+    /**
+     * One-line human summary: {@code errtype: message} when structured, the raw string otherwise.
+     *
+     * @param raw the stored error string
+     * @return the summary, safe to show whether or not the string was structured
+     */
     public static String summarize(String raw) {
         TaskError decoded = decode(raw);
         return decoded == null ? raw : decoded.summary();

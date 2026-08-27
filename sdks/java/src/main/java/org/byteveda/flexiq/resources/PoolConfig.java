@@ -18,6 +18,7 @@ public record PoolConfig(int poolSize, int poolMin, Duration acquireTimeout, @Nu
 
     private static final Duration DEFAULT_ACQUIRE_TIMEOUT = Duration.ofSeconds(10);
 
+    /** Defaults the acquire timeout and refuses a sizing that could never hand out an instance. */
     public PoolConfig {
         if (poolSize <= 0) {
             throw new IllegalArgumentException("poolSize must be > 0");
@@ -39,22 +40,42 @@ public record PoolConfig(int poolSize, int poolMin, Duration acquireTimeout, @Nu
         }
     }
 
-    /** A pool of {@code poolSize} with no prewarm, a 10s acquire timeout, and unlimited lifetime. */
+    /**
+     * A pool of {@code poolSize} with no prewarm, a 10s acquire timeout, and unlimited lifetime.
+     *
+     * @param poolSize the maximum number of concurrently checked-out instances
+     * @return the sizing
+     */
     public static PoolConfig of(int poolSize) {
         return new PoolConfig(poolSize, 0, DEFAULT_ACQUIRE_TIMEOUT, null);
     }
 
-    /** This configuration with {@code poolMin} instances built eagerly at worker start. */
+    /**
+     * This configuration with {@code poolMin} instances built eagerly at worker start.
+     *
+     * @param poolMin how many to prewarm; at most {@link #poolSize()}
+     * @return the copy
+     */
     public PoolConfig withPoolMin(int poolMin) {
         return new PoolConfig(poolSize, poolMin, acquireTimeout, maxLifetime);
     }
 
-    /** This configuration with a different checkout wait limit. */
+    /**
+     * This configuration with a different checkout wait limit.
+     *
+     * @param acquireTimeout how long a checkout may wait for capacity; must be positive
+     * @return the copy
+     */
     public PoolConfig withAcquireTimeout(Duration acquireTimeout) {
         return new PoolConfig(poolSize, poolMin, acquireTimeout, maxLifetime);
     }
 
-    /** This configuration with a maximum instance lifetime ({@code null} for unlimited). */
+    /**
+     * This configuration with a maximum instance lifetime ({@code null} for unlimited).
+     *
+     * @param maxLifetime an idle instance older than this is disposed instead of reused
+     * @return the copy
+     */
     public PoolConfig withMaxLifetime(Duration maxLifetime) {
         return new PoolConfig(poolSize, poolMin, acquireTimeout, maxLifetime);
     }

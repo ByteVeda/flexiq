@@ -29,6 +29,15 @@ public final class EffectiveRetention {
     /** Per-table windows in milliseconds. */
     public final Windows windows;
 
+    /**
+     * Decoded from the document the elected cleaner publishes.
+     *
+     * @param enabled false when no table has a window — only per-entry TTLs are swept
+     * @param defaulted true when the windows are the recommended defaults, set by no one
+     * @param namespace the namespace the windows cover
+     * @param reportedAt when the cleaner last published this, in Unix milliseconds
+     * @param windows the per-table windows, or {@code null} for none at all
+     */
     @JsonCreator
     public EffectiveRetention(
             @JsonProperty("enabled") boolean enabled,
@@ -64,6 +73,16 @@ public final class EffectiveRetention {
         /** Per-attempt job errors. */
         public final @Nullable Long jobErrorsMs;
 
+        /**
+         * The windows as the cleaner reported them.
+         *
+         * @param archivedJobsMs how long terminal jobs are kept, or {@code null} to keep
+         *     them forever
+         * @param deadLetterMs how long dead-letter entries are kept, or {@code null} forever
+         * @param taskLogsMs how long task logs are kept, or {@code null} forever
+         * @param taskMetricsMs how long task metrics are kept, or {@code null} forever
+         * @param jobErrorsMs how long per-attempt job errors are kept, or {@code null} forever
+         */
         @JsonCreator
         public Windows(
                 @JsonProperty("archived_jobs_ttl_ms") @Nullable Long archivedJobsMs,

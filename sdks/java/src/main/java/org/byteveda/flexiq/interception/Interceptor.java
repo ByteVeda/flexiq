@@ -8,5 +8,12 @@ import org.jspecify.annotations.Nullable;
  */
 @FunctionalInterface
 public interface Interceptor {
+    /**
+     * Decide what to do with one enqueue.
+     *
+     * @param taskName the task the caller asked for
+     * @param payload what the caller passed, before serialization
+     * @return the strategy — pass, convert, redirect or reject
+     */
     Interception intercept(String taskName, @Nullable Object payload);
 }

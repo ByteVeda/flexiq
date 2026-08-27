@@ -9,12 +9,22 @@ public enum GateAction {
     /** Treat the gate as rejected — the node fails. */
     REJECT;
 
-    /** Lowercase wire form used in the persisted gate metadata. */
+    /**
+     * Lowercase wire form used in the persisted gate metadata.
+     *
+     * @return the wire form
+     */
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
-    /** Parse a wire form ({@code "approve"}/{@code "reject"}); defaults to {@link #REJECT}. */
+    /**
+     * Parse a wire form ({@code "approve"}/{@code "reject"}); defaults to {@link #REJECT}.
+     *
+     * @param wire the stored value
+     * @return the matching constant, or {@link #REJECT} for anything unrecognised —
+     *     an unreadable gate must not auto-approve
+     */
     public static GateAction fromWire(String wire) {
         return "approve".equalsIgnoreCase(wire) ? APPROVE : REJECT;
     }

@@ -32,6 +32,13 @@ public final class OAuthHandlers {
     private final @Nullable OAuthFlow flow;
     private final boolean secureCookies;
 
+    /**
+     * Handlers over one flow.
+     *
+     * @param flow the configured flow, or {@code null} when OAuth is off — the routes
+     *     then answer 404 {@code oauth_not_configured}
+     * @param secureCookies whether the session cookies carry {@code Secure}
+     */
     public OAuthHandlers(@Nullable OAuthFlow flow, boolean secureCookies) {
         this.flow = flow;
         this.secureCookies = secureCookies;
@@ -40,6 +47,13 @@ public final class OAuthHandlers {
     /**
      * Serve an OAuth route. Returns {@code false} (so the caller falls through to
      * the normal API pipeline) when the path/method is not one of ours.
+     *
+     * @param exchange the request, which the response is written to
+     * @param path the request path
+     * @param method the HTTP method; only GET reaches an OAuth route
+     * @param query the parsed query string
+     * @return whether this served the request
+     * @throws IOException if the response cannot be written
      */
     public boolean serve(HttpExchange exchange, String path, String method, Map<String, String> query)
             throws IOException {

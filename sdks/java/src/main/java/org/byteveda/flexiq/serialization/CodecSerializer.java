@@ -16,6 +16,13 @@ public final class CodecSerializer implements Serializer {
     private final Serializer delegate;
     private final List<PayloadCodec> codecs;
 
+    /**
+     * A serializer applying {@code codecs} around {@code delegate}.
+     *
+     * @param delegate what turns values into bytes
+     * @param codecs the chain, encoding in order and decoding in reverse; put a
+     *     compressing codec before a signing one so integrity is checked first
+     */
     public CodecSerializer(Serializer delegate, List<PayloadCodec> codecs) {
         this.delegate = delegate;
         this.codecs = List.copyOf(codecs);

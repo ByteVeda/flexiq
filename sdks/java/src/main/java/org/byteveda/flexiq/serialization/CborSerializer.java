@@ -27,10 +27,17 @@ public final class CborSerializer implements Serializer {
 
     private final ObjectMapper mapper;
 
+    /** A serializer over a default {@code CBORMapper}. */
     public CborSerializer() {
         this(CBORMapper.builder().build());
     }
 
+    /**
+     * A serializer over a mapper the application configured.
+     *
+     * @param mapper a CBOR-backed mapper; a mapper of another format would write
+     *     bytes that do not match the {@code 0x02} envelope tag this writes
+     */
     public CborSerializer(ObjectMapper mapper) {
         this.mapper = mapper;
     }

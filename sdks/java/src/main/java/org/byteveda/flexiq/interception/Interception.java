@@ -38,18 +38,42 @@ public sealed interface Interception
      */
     record Reject(String reason) implements Interception {}
 
+    /**
+     * Enqueue the original payload unchanged.
+     *
+     * @return a {@link Pass}
+     */
     static Interception pass() {
         return new Pass();
     }
 
+    /**
+     * Enqueue {@code payload} in place of the original.
+     *
+     * @param payload what to enqueue instead
+     * @return a {@link Convert}
+     */
     static Interception convert(Object payload) {
         return new Convert(payload);
     }
 
+    /**
+     * Enqueue a different task instead of the original.
+     *
+     * @param taskName the task to enqueue instead
+     * @param payload the payload to enqueue it with
+     * @return a {@link Redirect}
+     */
     static Interception redirect(String taskName, Object payload) {
         return new Redirect(taskName, payload);
     }
 
+    /**
+     * Block the enqueue.
+     *
+     * @param reason why, surfaced on the thrown exception
+     * @return a {@link Reject}
+     */
     static Interception reject(String reason) {
         return new Reject(reason);
     }

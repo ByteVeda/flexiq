@@ -29,7 +29,13 @@ public final class Scaler implements AutoCloseable {
         this.server = server;
     }
 
-    /** Start the endpoint; binds immediately and serves on a background selector. */
+    /**
+     * Start the endpoint; binds immediately and serves on a background selector.
+     *
+     * @param queue the queue whose depth is reported
+     * @param options the bind address, target depth, and which queue to report on
+     * @return the running endpoint, to be closed when the process stops
+     */
     public static Scaler start(FlexiQ queue, ScalerOptions options) {
         HttpServer server;
         try {
@@ -43,7 +49,11 @@ public final class Scaler implements AutoCloseable {
         return new Scaler(server);
     }
 
-    /** The bound port (useful when {@code port} was 0). */
+    /**
+     * The bound port (useful when {@code port} was 0).
+     *
+     * @return the port the endpoint actually listens on
+     */
     public int port() {
         return server.getAddress().getPort();
     }

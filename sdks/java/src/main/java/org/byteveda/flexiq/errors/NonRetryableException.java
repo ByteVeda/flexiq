@@ -11,10 +11,21 @@ import org.byteveda.flexiq.FlexiQException;
  * even when the task classifies its failures by type.
  */
 public class NonRetryableException extends FlexiQException {
+    /**
+     * A permanent failure, described in words.
+     *
+     * @param message why this failure will not resolve on a retry
+     */
     public NonRetryableException(String message) {
         super(message);
     }
 
+    /**
+     * A permanent failure wrapping the exception that caused it.
+     *
+     * @param message why this failure will not resolve on a retry
+     * @param cause the failure being marked permanent
+     */
     public NonRetryableException(String message, Throwable cause) {
         super(message, cause);
     }

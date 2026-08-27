@@ -7,7 +7,11 @@ public enum FanMode {
     /** Fan-in: collect every fan-out child's result into one list. */
     ALL;
 
-    /** Lowercase wire strategy string passed to the native layer. */
+    /**
+     * Lowercase wire strategy string passed to the native layer.
+     *
+     * @return the wire form
+     */
     public String wire() {
         return name().toLowerCase(java.util.Locale.ROOT);
     }

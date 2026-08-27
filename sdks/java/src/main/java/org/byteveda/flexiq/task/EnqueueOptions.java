@@ -84,15 +84,29 @@ public final class EnqueueOptions {
         this.debounceKey = b.debounceKey;
     }
 
+    /**
+     * Nothing overridden: every setting resolves from the task, then the core.
+     *
+     * @return options with no field set
+     */
     public static EnqueueOptions none() {
         return builder().build();
     }
 
+    /**
+     * A builder with nothing set.
+     *
+     * @return the builder
+     */
     public static Builder builder() {
         return new Builder();
     }
 
-    /** A builder seeded with this instance's values, for deriving a modified copy. */
+    /**
+     * A builder seeded with this instance's values, for deriving a modified copy.
+     *
+     * @return the builder, carrying every setting this instance holds
+     */
     public Builder toBuilder() {
         Builder b = new Builder();
         b.queue = queue;
@@ -114,37 +128,65 @@ public final class EnqueueOptions {
         return b;
     }
 
-    /** The target queue, or {@code null} for the default. */
+    /**
+     * The target queue, or {@code null} for the default.
+     *
+     * @return the queue name, or {@code null} for the default queue
+     */
     public @Nullable String queue() {
         return queue;
     }
 
-    /** The job priority, or {@code null} for the core default. */
+    /**
+     * The job priority, or {@code null} for the core default.
+     *
+     * @return the priority, or {@code null} for the core default
+     */
     public @Nullable Integer priority() {
         return priority;
     }
 
-    /** The retry budget, or {@code null} for the core default. */
+    /**
+     * The retry budget, or {@code null} for the core default.
+     *
+     * @return the budget, or {@code null} for the core default
+     */
     public @Nullable Integer maxRetries() {
         return maxRetries;
     }
 
-    /** The per-job timeout in milliseconds, or {@code null} for the core default. */
+    /**
+     * The per-job timeout in milliseconds, or {@code null} for the core default.
+     *
+     * @return the timeout in milliseconds, or {@code null} for the core default
+     */
     public @Nullable Long timeoutMs() {
         return timeoutMs;
     }
 
-    /** The enqueue delay in milliseconds, or {@code null} when the job runs as soon as it can. */
+    /**
+     * The enqueue delay in milliseconds, or {@code null} when the job runs as soon as it can.
+     *
+     * @return the delay in milliseconds, or {@code null} to run as soon as possible
+     */
     public @Nullable Long delayMs() {
         return delayMs;
     }
 
-    /** Job ids this enqueue waits on before it can be dequeued, or {@code null} when none. */
+    /**
+     * Job ids this enqueue waits on before it can be dequeued, or {@code null} when none.
+     *
+     * @return the dependency ids, or {@code null} when the job waits on nothing
+     */
     public @Nullable List<String> dependsOn() {
         return dependsOn;
     }
 
-    /** The explicit dedup key, or {@code null} when none was set. */
+    /**
+     * The explicit dedup key, or {@code null} when none was set.
+     *
+     * @return the key, or {@code null} when the enqueue is not deduped
+     */
     public @Nullable String uniqueKey() {
         return uniqueKey;
     }
@@ -152,27 +194,45 @@ public final class EnqueueOptions {
     /**
      * Tri-state idempotency toggle: {@code TRUE} forces auto-derivation of a {@code uniqueKey},
      * {@code FALSE} opts this enqueue out of a task-level default, {@code null} defers to the task.
+     *
+     * @return the toggle, or {@code null} to defer to the task
      */
     public @Nullable Boolean idempotent() {
         return idempotent;
     }
 
-    /** An explicit idempotency key (used as the {@code uniqueKey} when set), or {@code null}. */
+    /**
+     * An explicit idempotency key (used as the {@code uniqueKey} when set), or {@code null}.
+     *
+     * @return the key, or {@code null} when none was set
+     */
     public @Nullable String idempotencyKey() {
         return idempotencyKey;
     }
 
-    /** The debounce window in milliseconds, or {@code null} when this enqueue does not debounce. */
+    /**
+     * The debounce window in milliseconds, or {@code null} when this enqueue does not debounce.
+     *
+     * @return the window in milliseconds, or {@code null} when it does not debounce
+     */
     public @Nullable Long debounceWindowMs() {
         return debounceWindowMs;
     }
 
-    /** The ceiling on a debounced job's total delay, in milliseconds, or {@code null}. */
+    /**
+     * The ceiling on a debounced job's total delay, in milliseconds, or {@code null}.
+     *
+     * @return the ceiling in milliseconds, or {@code null} when it does not debounce
+     */
     public @Nullable Long debounceMaxWaitMs() {
         return debounceMaxWaitMs;
     }
 
-    /** Whether a repeat debounced enqueue overwrites the pending job's payload. */
+    /**
+     * Whether a repeat debounced enqueue overwrites the pending job's payload.
+     *
+     * @return {@code true} to overwrite; the default keeps the payload the window opened with
+     */
     public boolean debounceReplacePayload() {
         return Boolean.TRUE.equals(debounceReplacePayload);
     }
@@ -180,17 +240,27 @@ public final class EnqueueOptions {
     /**
      * The debounce key template (e.g. {@code "report:{userId}"}), or {@code null} when this
      * enqueue does not debounce. Resolved against the payload at enqueue time.
+     *
+     * @return the template, or {@code null} when this enqueue does not debounce
      */
     public @Nullable String debounceKey() {
         return debounceKey;
     }
 
-    /** Whether this enqueue debounces — i.e. whether a window was set. */
+    /**
+     * Whether this enqueue debounces — i.e. whether a window was set.
+     *
+     * @return whether a debounce window was set
+     */
     public boolean debounces() {
         return debounceWindowMs != null;
     }
 
+    /** Collects the overrides for one enqueue. */
     public static final class Builder {
+        /** An empty builder; reach it through {@link EnqueueOptions#builder()}. */
+        public Builder() {}
+
         private @Nullable String queue;
         private @Nullable Integer priority;
         private @Nullable Integer maxRetries;
@@ -208,16 +278,34 @@ public final class EnqueueOptions {
         private @Nullable Boolean debounceReplacePayload;
         private @Nullable String debounceKey;
 
+        /**
+         * Route the job to a queue other than the default.
+         *
+         * @param queue the queue name
+         * @return {@code this}, for chaining
+         */
         public Builder queue(String queue) {
             this.queue = queue;
             return this;
         }
 
+        /**
+         * Dispatch priority; higher runs first within a queue.
+         *
+         * @param priority the dispatch priority; higher runs first within a queue
+         * @return {@code this}, for chaining
+         */
         public Builder priority(int priority) {
             this.priority = priority;
             return this;
         }
 
+        /**
+         * How many attempts this job gets before it dead-letters.
+         *
+         * @param maxRetries the retry ceiling; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder maxRetries(int maxRetries) {
             if (maxRetries < 0) {
                 throw new IllegalArgumentException("maxRetries must be >= 0");
@@ -226,6 +314,12 @@ public final class EnqueueOptions {
             return this;
         }
 
+        /**
+         * Bound how long one attempt may run before it is failed as timed out.
+         *
+         * @param timeoutMs the timeout in milliseconds; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder timeoutMs(long timeoutMs) {
             if (timeoutMs < 0) {
                 throw new IllegalArgumentException("timeoutMs must be >= 0");
@@ -234,6 +328,12 @@ public final class EnqueueOptions {
             return this;
         }
 
+        /**
+         * Hold the job back before it becomes runnable.
+         *
+         * @param delayMs the delay in milliseconds; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder delayMs(long delayMs) {
             if (delayMs < 0) {
                 throw new IllegalArgumentException("delayMs must be >= 0");
@@ -242,34 +342,67 @@ public final class EnqueueOptions {
             return this;
         }
 
-        /** Schedule the job after {@code delay} (Duration form of {@link #delayMs}). */
+        /**
+         * Schedule the job after {@code delay} (Duration form of {@link #delayMs}).
+         *
+         * @param delay the delay; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder delay(Duration delay) {
             this.delayMs = delay.toMillis();
             return this;
         }
 
-        /** Per-job timeout (Duration form of {@link #timeoutMs}). */
+        /**
+         * Per-job timeout (Duration form of {@link #timeoutMs}).
+         *
+         * @param timeout the timeout; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder timeout(Duration timeout) {
             this.timeoutMs = timeout.toMillis();
             return this;
         }
 
-        /** Idempotency key — alias of {@link #uniqueKey} in the guide's vocabulary. */
+        /**
+         * Idempotency key — alias of {@link #uniqueKey} in the guide's vocabulary.
+         *
+         * @param jobId what makes this job the same job
+         * @return {@code this}, for chaining
+         */
         public Builder jobId(String jobId) {
             this.uniqueKey = jobId;
             return this;
         }
 
+        /**
+         * Dedupe this enqueue under an explicit key.
+         *
+         * @param uniqueKey what makes this job the same job; a duplicate is a no-op while the first is live
+         * @return {@code this}, for chaining
+         */
         public Builder uniqueKey(String uniqueKey) {
             this.uniqueKey = uniqueKey;
             return this;
         }
 
+        /**
+         * Attach an opaque blob the SDK never parses, readable at execution.
+         *
+         * @param metadata the blob, for the handler or a middleware to interpret
+         * @return {@code this}, for chaining
+         */
         public Builder metadata(String metadata) {
             this.metadata = metadata;
             return this;
         }
 
+        /**
+         * Enqueue into a namespace other than the client's own.
+         *
+         * @param namespace the deployment namespace
+         * @return {@code this}, for chaining
+         */
         public Builder namespace(String namespace) {
             this.namespace = namespace;
             return this;
@@ -279,13 +412,21 @@ public final class EnqueueOptions {
          * Gate this job on the completion of the given job ids: it stays pending (not dequeued)
          * until every dependency completes, and is cancelled if any dependency fails. Each id
          * must reference a job that is still live or already complete.
+         *
+         * @param jobIds the jobs that must complete first
+         * @return {@code this}, for chaining
          */
         public Builder dependsOn(String... jobIds) {
             this.dependsOn = List.of(jobIds);
             return this;
         }
 
-        /** List form of {@link #dependsOn(String...)}. */
+        /**
+         * List form of {@link #dependsOn(String...)}.
+         *
+         * @param jobIds the jobs that must complete first
+         * @return {@code this}, for chaining
+         */
         public Builder dependsOn(List<String> jobIds) {
             this.dependsOn = List.copyOf(jobIds);
             return this;
@@ -296,6 +437,8 @@ public final class EnqueueOptions {
          * encoded now, so a contract violation fails fast). Distinct from the opaque
          * {@link #metadata} blob. Passing {@code null} clears any previously set notes.
          *
+         * @param notes the annotations, or {@code null} to clear any already set
+         * @return {@code this}, for chaining
          * @throws org.byteveda.flexiq.errors.NotesValidationException if the map breaks the
          *     {@link Notes} contract (field/key/value/depth/size limits)
          */
@@ -309,13 +452,22 @@ public final class EnqueueOptions {
          * payload. A duplicate enqueue is a no-op while the first job is pending or running.
          * An explicit {@link #uniqueKey}/{@link #idempotencyKey} takes precedence; passing
          * {@code false} opts out of a task-level default.
+         *
+         * @param idempotent {@code true} to derive a key from the task and payload,
+         *     {@code false} to opt out of a task-level default
+         * @return {@code this}, for chaining
          */
         public Builder idempotent(boolean idempotent) {
             this.idempotent = idempotent;
             return this;
         }
 
-        /** Dedupe this enqueue under an explicit key (equivalent to a caller-supplied {@code uniqueKey}). */
+        /**
+         * Dedupe this enqueue under an explicit key (equivalent to a caller-supplied {@code uniqueKey}).
+         *
+         * @param idempotencyKey what makes this job the same job
+         * @return {@code this}, for chaining
+         */
         public Builder idempotencyKey(String idempotencyKey) {
             this.idempotencyKey = idempotencyKey;
             return this;
@@ -329,6 +481,9 @@ public final class EnqueueOptions {
          *
          * <p>Setting this turns debouncing on, and so requires both {@link #debounceKey}
          * and {@link #debounceMaxWait} — {@link #build()} rejects an incomplete set.
+         *
+         * @param window how far each further enqueue slides the deadline
+         * @return {@code this}, for chaining
          */
         public Builder debounce(Duration window) {
             this.debounceWindowMs = window.toMillis();
@@ -342,6 +497,9 @@ public final class EnqueueOptions {
          * A placeholder the payload does not provide throws at enqueue rather than
          * degrading to a key every caller shares. A template with no placeholder is a
          * deliberate single window for the task.
+         *
+         * @param debounceKey the template, resolved against the payload at enqueue time
+         * @return {@code this}, for chaining
          */
         public Builder debounceKey(String debounceKey) {
             this.debounceKey = debounceKey;
@@ -352,6 +510,9 @@ public final class EnqueueOptions {
          * Ceiling on the total delay, measured from when the window opened, and never
          * shorter than {@link #debounce}. Mandatory: without it a caller who never stops
          * enqueuing starves the job forever, which is the classic debounce footgun.
+         *
+         * @param maxWait the ceiling; must not be shorter than the window
+         * @return {@code this}, for chaining
          */
         public Builder debounceMaxWait(Duration maxWait) {
             this.debounceMaxWaitMs = maxWait.toMillis();
@@ -363,6 +524,9 @@ public final class EnqueueOptions {
          * payload with its own. The default {@code false} keeps the payload the window
          * opened with — a repeat enqueue is a vote to run again soon, not a redefinition
          * of the run.
+         *
+         * @param debounceReplacePayload {@code true} to let a later enqueue redefine the run
+         * @return {@code this}, for chaining
          */
         public Builder debounceReplacePayload(boolean debounceReplacePayload) {
             this.debounceReplacePayload = debounceReplacePayload;
@@ -370,6 +534,9 @@ public final class EnqueueOptions {
         }
 
         /**
+         * Freeze the overrides collected so far, checking the debounce set is coherent.
+         *
+         * @return the immutable options
          * @throws IllegalArgumentException if the debounce options are incomplete or
          *     contradictory — a window with no key or no max wait, a max wait shorter
          *     than the window, or any debounce field set without a window

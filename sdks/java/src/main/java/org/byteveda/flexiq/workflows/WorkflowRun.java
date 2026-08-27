@@ -14,6 +14,14 @@ public final class WorkflowRun implements AutoCloseable {
     private final String id;
     private final String name;
 
+    /**
+     * A handle on an already-submitted run.
+     *
+     * @param backend where the run's state is read from
+     * @param json decodes the core's status view
+     * @param id the run id the submit returned
+     * @param name the definition this run came from
+     */
     public WorkflowRun(QueueBackend backend, ObjectMapper json, String id, String name) {
         this.backend = backend;
         this.json = json;
@@ -21,30 +29,59 @@ public final class WorkflowRun implements AutoCloseable {
         this.name = name;
     }
 
+    /**
+     * This run's id.
+     *
+     * @return the id
+     */
     public String id() {
         return id;
     }
 
-    /** Alias of {@link #id()} in the guide's vocabulary. */
+    /**
+     * Alias of {@link #id()} in the guide's vocabulary.
+     *
+     * @return the id
+     */
     public String runId() {
         return id;
     }
 
+    /**
+     * The definition this run came from.
+     *
+     * @return the workflow name
+     */
     public String name() {
         return name;
     }
 
-    /** Current run + node snapshot, or empty if the run no longer exists. */
+    /**
+     * Current run + node snapshot, or empty if the run no longer exists.
+     *
+     * @return the snapshot, read fresh from storage
+     */
     public Optional<WorkflowStatus> status() {
         return backend.getWorkflowStatusJson(id).map(this::decode);
     }
 
-    /** Block until the run reaches a terminal state, polling every 100ms. */
+    /**
+     * Block until the run reaches a terminal state, polling every 100ms.
+     *
+     * @param timeout how long to wait before giving up
+     * @return the terminal snapshot
+     */
     public WorkflowStatus await(Duration timeout) {
         return await(timeout, Duration.ofMillis(100));
     }
 
-    /** Block until terminal, polling at {@code pollInterval}; throws on timeout. */
+    /**
+     * Block until terminal, polling at {@code pollInterval}; throws on timeout.
+     *
+     * @param timeout how long to wait before giving up
+     * @param pollInterval how long to sleep between reads
+     * @return the terminal snapshot
+     */
     public WorkflowStatus await(Duration timeout, Duration pollInterval) {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (true) {
