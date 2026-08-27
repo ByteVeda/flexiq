@@ -35,11 +35,22 @@ public final class MiddlewareDisables {
      */
     private final @Nullable QueueBackend backend;
 
+    /**
+     * A resolver over one backend's toggle rows.
+     *
+     * @param backend where the disable lists are read from, or {@code null} for an
+     *     attached executor, which has no storage and disables nothing
+     */
     public MiddlewareDisables(@Nullable QueueBackend backend) {
         this.backend = backend;
     }
 
-    /** The settings key holding {@code taskName}'s disable list. */
+    /**
+     * The settings key holding {@code taskName}'s disable list.
+     *
+     * @param taskName the task's registered name
+     * @return the key, the one spelling both the worker and the admin API use
+     */
     public static String key(String taskName) {
         return KEY_PREFIX + taskName;
     }
@@ -48,6 +59,9 @@ public final class MiddlewareDisables {
      * The stable name a middleware is keyed on. Java has no name property to
      * prefer, so the class name is the only identity available — the same one
      * already used when logging a middleware failure.
+     *
+     * @param middleware the instance to identify
+     * @return its class name, which is what a disable list holds
      */
     public static String nameOf(Middleware middleware) {
         return middleware.getClass().getName();
@@ -60,6 +74,11 @@ public final class MiddlewareDisables {
      * frame rather than from a settings read it has no storage to perform. A
      * corrupt list runs everything, which is the same failure-open stance
      * {@link #disabledFor} takes.
+     *
+     * @param middleware the chain as configured
+     * @param disabledJson a JSON array of middleware names; anything unparseable runs
+     *     the whole chain
+     * @return the chain minus the disabled entries, order preserved
      */
     public static List<Middleware> without(List<Middleware> middleware, String disabledJson) {
         if (middleware.isEmpty()) {
@@ -84,6 +103,9 @@ public final class MiddlewareDisables {
      *
      * <p>A corrupt list must not stop the job — run every middleware, which is
      * the same behaviour as having no list at all.
+     *
+     * @param raw the stored row, or empty when the key is unset
+     * @return the names, mutable, and empty when the row is unset or unreadable
      */
     public static List<String> decode(Optional<String> raw) {
         if (raw.isEmpty()) {
@@ -98,7 +120,12 @@ public final class MiddlewareDisables {
         }
     }
 
-    /** Names disabled for {@code taskName}; empty when none are, or the list is unreadable. */
+    /**
+     * Names disabled for {@code taskName}; empty when none are, or the list is unreadable.
+     *
+     * @param taskName the task's registered name
+     * @return the disabled names, read fresh so a toggle takes effect on the next job
+     */
     public List<String> disabledFor(String taskName) {
         if (backend == null) {
             return List.of();
@@ -113,6 +140,10 @@ public final class MiddlewareDisables {
      * {@code before}/{@code after}/{@code onError}: re-reading between them would
      * let a mid-job toggle run {@code after} on a middleware whose {@code before}
      * never ran, an unbalanced pair authors are entitled to assume cannot happen.
+     *
+     * @param taskName the task's registered name
+     * @param middleware the chain as configured
+     * @return the chain minus the disabled entries, order preserved
      */
     public List<Middleware> resolve(String taskName, List<Middleware> middleware) {
         if (middleware.isEmpty()) {

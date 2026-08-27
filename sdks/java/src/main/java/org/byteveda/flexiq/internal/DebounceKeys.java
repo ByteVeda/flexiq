@@ -33,6 +33,10 @@ public final class DebounceKeys {
      * The concrete key for {@code payload}, or the template itself when it has no
      * placeholder. {@code taskName} only names the task in error messages.
      *
+     * @param template the key template, e.g. {@code "report:{userId}"}
+     * @param taskName the task's registered name, used only in error messages
+     * @param payload the enqueued payload the placeholders are read off
+     * @return the concrete key the window is identified by
      * @throws IllegalArgumentException if a placeholder is empty, names something the
      *     payload does not carry, or resolves to a value that cannot key a window
      */

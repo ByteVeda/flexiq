@@ -25,6 +25,12 @@ public final class JniExecutorControl implements WorkerControl {
     /** Threads inside the native session wait; the handle is freed at zero. */
     private int waiting; // guarded by waiters
 
+    /**
+     * A control over one attached-executor handle.
+     *
+     * @param handle the executor handle from {@link NativeExecutor#attach}; this
+     *     instance owns it and frees it on {@link #close()}
+     */
     public JniExecutorControl(long handle) {
         this.handle = handle;
     }
@@ -89,22 +95,38 @@ public final class JniExecutorControl implements WorkerControl {
         });
     }
 
-    /** Identity the scheduler announced when it accepted the attach. */
+    /**
+     * Identity the scheduler announced when it accepted the attach.
+     *
+     * @return the scheduler's id
+     */
     public String schedulerId() {
         return withOpenHandle(() -> NativeExecutor.schedulerId(handle));
     }
 
-    /** Identity this executor attached under. */
+    /**
+     * Identity this executor attached under.
+     *
+     * @return the id the scheduler knows this executor by
+     */
     public String executorId() {
         return withOpenHandle(() -> NativeExecutor.executorId(handle));
     }
 
-    /** Peer label of the scheduler connection. */
+    /**
+     * Peer label of the scheduler connection.
+     *
+     * @return the label, for logs and diagnostics
+     */
     public String peer() {
         return withOpenHandle(() -> NativeExecutor.peer(handle));
     }
 
-    /** Whether the scheduler session is still open. */
+    /**
+     * Whether the scheduler session is still open.
+     *
+     * @return {@code false} once the session ended or {@code stop()} was called
+     */
     public boolean isRunning() {
         return withOpenHandle(() -> NativeExecutor.isRunning(handle));
     }

@@ -39,10 +39,20 @@ public final class SettingsDocument {
      */
     public interface Codec<T> {
 
-        /** Decode the raw stored value; empty means the key is unset. */
+        /**
+         * Decode the raw stored value; empty means the key is unset.
+         *
+         * @param raw the stored row, or empty when the key is unset
+         * @return the decoded document; an unset key decodes to the empty document
+         */
         T decode(Optional<String> raw);
 
-        /** Encode a document for storage. */
+        /**
+         * Encode a document for storage.
+         *
+         * @param document the document to store
+         * @return its serialized form, which the change detection compares on
+         */
         String encode(T document);
     }
 
@@ -55,7 +65,13 @@ public final class SettingsDocument {
     @FunctionalInterface
     public interface Mutation<T, R> {
 
-        /** Mutate {@code document} in place and return the call's result. */
+        /**
+         * Mutate {@code document} in place and return the call's result.
+         *
+         * @param document the decoded document, to change in place
+         * @return what the calling operation returns; the winning attempt's value is
+         *     the one that reaches the caller
+         */
         R apply(T document);
     }
 
@@ -66,6 +82,13 @@ public final class SettingsDocument {
      * it runs once per attempt. Its return value comes back from the winning
      * attempt, and a mutation that changed nothing writes nothing.
      *
+     * @param settings where the document is read and conditionally written
+     * @param key the document's key
+     * @param codec how the stored value maps to a document and back
+     * @param mutate the change to apply; runs once per attempt
+     * @param <T> the document type
+     * @param <R> what the calling operation returns
+     * @return {@code mutate}'s value from the winning attempt
      * @throws SettingConflictException when every attempt lost the race.
      */
     public static <T, R> R update(ConditionalSettings settings, String key, Codec<T> codec, Mutation<T, R> mutate) {
@@ -89,7 +112,14 @@ public final class SettingsDocument {
         throw new SettingConflictException(key);
     }
 
-    /** A codec built from a decode and an encode function. */
+    /**
+     * A codec built from a decode and an encode function.
+     *
+     * @param decode maps the stored row to a document; empty means the key is unset
+     * @param encode maps a document back to its stored form
+     * @param <T> the document type
+     * @return the codec
+     */
     public static <T> Codec<T> codec(Function<Optional<String>, T> decode, Function<T, String> encode) {
         return new Codec<T>() {
             @Override
