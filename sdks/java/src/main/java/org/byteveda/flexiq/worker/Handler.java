@@ -3,7 +3,12 @@ package org.byteveda.flexiq.worker;
 import org.byteveda.flexiq.task.Task;
 import org.byteveda.flexiq.task.TaskFunction;
 
-/** A task descriptor paired with the function that handles it. */
+/**
+ * A task descriptor paired with the function that handles it.
+ *
+ * @param <T> the task's payload type
+ * @param <R> the handler's result type
+ */
 public final class Handler<T, R> {
     private final Task<T> task;
     private final TaskFunction<T, R> function;

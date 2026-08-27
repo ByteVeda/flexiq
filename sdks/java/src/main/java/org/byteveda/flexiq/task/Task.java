@@ -15,6 +15,8 @@ import org.jspecify.annotations.Nullable;
  * <p>For generic payloads (e.g. {@code Map<String, Object>}) use the
  * {@link TypeReference} factory, which {@code Class} tokens cannot express.
  * The fluent option methods each return a new descriptor (the type is immutable).
+ *
+ * @param <T> the task's payload type
  */
 public final class Task<T> {
     private final String name;
