@@ -292,7 +292,7 @@ public final class EnqueueOptions {
         /**
          * Dispatch priority; higher runs first within a queue.
          *
-         * @param priority the priority
+         * @param priority the dispatch priority; higher runs first within a queue
          * @return {@code this}, for chaining
          */
         public Builder priority(int priority) {
