@@ -3,7 +3,9 @@ package org.byteveda.flexiq.health;
 import java.util.Map;
 
 /** Liveness payload: the process answered, nothing else is asserted. *
- * @param status always {@code ok} — a process that could not answer does not reach this
+ * @param status the liveness status; {@link Health#check()} always reports {@code ok},
+ *     since a process that could not answer would never reach it. The constructor
+ *     itself accepts any value.
  */
 public record HealthReport(String status) {
 
