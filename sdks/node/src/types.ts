@@ -91,12 +91,18 @@ export interface EnqueueOptions
   notes?: Record<string, unknown>;
 }
 
-/** The wire spelling of the debounce fields, replaced by {@link DebounceInput}. */
+/**
+ * The wire spelling of the debounce fields, replaced by {@link DebounceInput}.
+ * `debounceMaxPending` is in here without a public counterpart on purpose: it
+ * is the queue's own `maxPending`, folded onto a debounced enqueue by the
+ * shell, not something a caller sets per job.
+ */
 type NativeDebounceField =
   | "debounceKey"
   | "debounceWindowMs"
   | "debounceMaxWaitMs"
-  | "debounceReplacePayload";
+  | "debounceReplacePayload"
+  | "debounceMaxPending";
 
 /**
  * Per-publish options. Mirrors the native options, but `notes` is a structured

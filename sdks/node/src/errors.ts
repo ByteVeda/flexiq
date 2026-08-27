@@ -152,6 +152,26 @@ export class QueueFullError extends QueueError {
   }
 }
 
+/**
+ * The tail of the core's admission refusal. A debounced enqueue is the one
+ * enqueue whose cap is applied by storage — it alone knows whether the call
+ * inserts a row or slides an open window — so its counts come back on the
+ * error. Anchored on the end, where a queue name can never be mistaken for
+ * the two integers.
+ */
+const QUEUE_FULL_PATTERN = /\bis full: (\d+) pending >= max_pending (\d+)$/;
+
+/**
+ * Rebuild the {@link QueueFullError} a native rejection describes, or
+ * `undefined` when `error` is any other failure — which the caller rethrows
+ * untouched rather than reporting as a full queue.
+ */
+export function queueFullFrom(error: unknown, queue: string): QueueFullError | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = QUEUE_FULL_PATTERN.exec(message);
+  return match === null ? undefined : new QueueFullError(queue, Number(match[1]), Number(match[2]));
+}
+
 /** Thrown by {@link Queue.withLock} when the lock is held by another owner. */
 export class LockNotAcquiredError extends FlexiQError {
   constructor(readonly lockName: string) {
