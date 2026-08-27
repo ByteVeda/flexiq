@@ -16,13 +16,26 @@ public sealed interface Interception
     /** Enqueue the original payload unchanged. */
     record Pass() implements Interception {}
 
-    /** Enqueue {@code payload} in place of the original. */
+    /**
+     * Enqueue {@code payload} in place of the original.
+     *
+     * @param payload what to enqueue instead
+     */
     record Convert(Object payload) implements Interception {}
 
-    /** Enqueue {@code taskName} with {@code payload} instead of the original task. */
+    /**
+     * Enqueue {@code taskName} with {@code payload} instead of the original task.
+     *
+     * @param taskName the task to enqueue instead
+     * @param payload the payload to enqueue it with
+     */
     record Redirect(String taskName, Object payload) implements Interception {}
 
-    /** Block the enqueue; {@code reason} is surfaced on the thrown exception. */
+    /**
+     * Block the enqueue; {@code reason} is surfaced on the thrown exception.
+     *
+     * @param reason why the enqueue was blocked
+     */
     record Reject(String reason) implements Interception {}
 
     static Interception pass() {

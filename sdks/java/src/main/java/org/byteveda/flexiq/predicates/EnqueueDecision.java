@@ -14,10 +14,18 @@ public sealed interface EnqueueDecision
     /** Proceed with the enqueue unchanged. */
     record Allow() implements EnqueueDecision {}
 
-    /** Do not enqueue: {@code tryEnqueue} returns empty, {@code enqueue} throws. */
+    /**
+     * Do not enqueue: {@code tryEnqueue} returns empty, {@code enqueue} throws.
+     *
+     * @param reason why the enqueue was skipped
+     */
     record Skip(String reason) implements EnqueueDecision {}
 
-    /** Enqueue, but delayed by {@code delay} (overrides any delay in the passed options). */
+    /**
+     * Enqueue, but delayed by {@code delay} (overrides any delay in the passed options).
+     *
+     * @param delay how long to hold the job back; never negative
+     */
     record Defer(Duration delay) implements EnqueueDecision {
         public Defer {
             if (delay == null || delay.isNegative()) {
@@ -26,7 +34,11 @@ public sealed interface EnqueueDecision
         }
     }
 
-    /** Refuse the enqueue: both {@code enqueue} and {@code tryEnqueue} throw with {@code reason}. */
+    /**
+     * Refuse the enqueue: both {@code enqueue} and {@code tryEnqueue} throw with {@code reason}.
+     *
+     * @param reason why the enqueue was refused
+     */
     record Reject(String reason) implements EnqueueDecision {}
 
     static EnqueueDecision allow() {

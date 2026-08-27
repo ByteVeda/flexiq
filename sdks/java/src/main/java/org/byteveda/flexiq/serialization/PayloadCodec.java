@@ -11,9 +11,19 @@ package org.byteveda.flexiq.serialization;
  * MessagePack alike. Register them with {@code FlexiQ.builder().codec(...)}.
  */
 public interface PayloadCodec {
-    /** Transform serialized bytes on the way out (producer). */
+    /**
+     * Transform serialized bytes on the way out (producer).
+     *
+     * @param data the serialized payload, as the previous codec in the chain left it
+     * @return the transformed bytes
+     */
     byte[] encode(byte[] data);
 
-    /** Reverse {@link #encode} on the way in (worker). */
+    /**
+     * Reverse {@link #encode} on the way in (worker).
+     *
+     * @param data the stored bytes, as the next codec in the chain left them
+     * @return the bytes {@link #encode} was given
+     */
     byte[] decode(byte[] data);
 }
