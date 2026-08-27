@@ -32,6 +32,10 @@ public final class RetryPolicy {
      * Exponential backoff: retry N waits about {@code base · 2^N}, capped at
      * {@code max}, plus a random jitter of up to {@code base} (spreads retries so
      * a batch of failures doesn't retry in lockstep).
+     *
+     * @param base the first wait, and the jitter's span; must not be negative
+     * @param max the cap the curve flattens at; must not be negative
+     * @return the policy
      */
     public static RetryPolicy exponential(Duration base, Duration max) {
         return new RetryPolicy(nonNegative(base, "base"), nonNegative(max, "max"), Collections.emptyList());
@@ -42,6 +46,9 @@ public final class RetryPolicy {
      * {@code delays[N]}. The list is authoritative for the retries it covers, so
      * supply at least as many delays as the task's {@code maxRetries} — once the
      * list is exhausted any further retries fire immediately.
+     *
+     * @param delays one wait per retry, in order; at least one, none negative
+     * @return the policy
      */
     public static RetryPolicy delays(Duration... delays) {
         if (delays.length == 0) {
@@ -54,17 +61,29 @@ public final class RetryPolicy {
         return new RetryPolicy(null, null, Collections.unmodifiableList(copy));
     }
 
-    /** Exponential base delay, or {@code null} when using {@link #delays}. */
+    /**
+     * The exponential base delay.
+     *
+     * @return the base, or {@code null} when the policy came from {@link #delays}
+     */
     public @Nullable Duration baseDelay() {
         return baseDelay;
     }
 
-    /** Backoff cap, or {@code null} when using {@link #delays}. */
+    /**
+     * The backoff cap.
+     *
+     * @return the cap, or {@code null} when the policy came from {@link #delays}
+     */
     public @Nullable Duration maxDelay() {
         return maxDelay;
     }
 
-    /** Explicit per-attempt delays, or an empty list when using exponential backoff. */
+    /**
+     * The explicit per-attempt delays.
+     *
+     * @return the delays, or an empty list when the policy is exponential
+     */
     public List<Duration> customDelays() {
         return customDelays;
     }

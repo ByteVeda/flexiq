@@ -15,12 +15,21 @@ public enum StorageBackend {
     /** Redis. */
     REDIS;
 
-    /** Lowercase wire form passed to the native layer. */
+    /**
+     * Lowercase wire form passed to the native layer.
+     *
+     * @return the wire form
+     */
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
-    /** Parse a wire form ({@code "sqlite"}/{@code "postgres"}/{@code "redis"}). */
+    /**
+     * Parse a wire form ({@code "sqlite"}/{@code "postgres"}/{@code "redis"}).
+     *
+     * @param wire the configured backend name
+     * @return the matching constant
+     */
     public static StorageBackend fromWire(String wire) {
         if (wire == null) {
             throw new SerializationException("storage backend is null");

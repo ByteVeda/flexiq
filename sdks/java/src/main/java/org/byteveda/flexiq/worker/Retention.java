@@ -25,12 +25,20 @@ public final class Retention {
         this.jobErrors = builder.jobErrors;
     }
 
+    /**
+     * A builder with no window set, so nothing is cleaned up until one is.
+     *
+     * @return the builder
+     */
     public static Builder builder() {
         return new Builder();
     }
 
     /** The set windows as a camelCase map for the native layer (worker options
-     *  and the retention dry-run). */
+     *  and the retention dry-run).
+     *
+     * @return one entry per window that was set; an unset window is absent, not zero
+     */
     public Map<String, Object> toMap() {
         Map<String, Object> map = new LinkedHashMap<>();
         if (archivedJobs != null) {
@@ -53,6 +61,9 @@ public final class Retention {
 
     /** Fluent builder; every window is optional. */
     public static final class Builder {
+        /** A builder with no window set; reach it through {@link Retention#builder()}. */
+        public Builder() {}
+
         private @Nullable Integer archivedJobs;
         private @Nullable Integer deadLetter;
         private @Nullable Integer taskLogs;
@@ -68,36 +79,66 @@ public final class Retention {
             return seconds;
         }
 
-        /** Terminal jobs, every terminal status — the artifact read after completion. */
+        /**
+         * Terminal jobs, every terminal status — the artifact read after completion.
+         *
+         * @param seconds how long a row is kept; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder archivedJobs(int seconds) {
             this.archivedJobs = nonNegative(seconds, "archivedJobs");
             return this;
         }
 
-        /** Dead-letter entries — the only copy of a payload a human must act on. */
+        /**
+         * Dead-letter entries — the only copy of a payload a human must act on.
+         *
+         * @param seconds how long a row is kept; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder deadLetter(int seconds) {
             this.deadLetter = nonNegative(seconds, "deadLetter");
             return this;
         }
 
-        /** Task logs — highest write volume, lowest per-row value. */
+        /**
+         * Task logs — highest write volume, lowest per-row value.
+         *
+         * @param seconds how long a row is kept; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder taskLogs(int seconds) {
             this.taskLogs = nonNegative(seconds, "taskLogs");
             return this;
         }
 
-        /** Task metrics — feeds the dashboard charts. */
+        /**
+         * Task metrics — feeds the dashboard charts.
+         *
+         * @param seconds how long a row is kept; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder taskMetrics(int seconds) {
             this.taskMetrics = nonNegative(seconds, "taskMetrics");
             return this;
         }
 
-        /** Per-attempt job errors. */
+        /**
+         * Per-attempt job errors.
+         *
+         * @param seconds how long a row is kept; must not be negative
+         * @return {@code this}, for chaining
+         */
         public Builder jobErrors(int seconds) {
             this.jobErrors = nonNegative(seconds, "jobErrors");
             return this;
         }
 
+        /**
+         * Freeze the windows collected so far.
+         *
+         * @return the immutable policy
+         */
         public Retention build() {
             return new Retention(this);
         }

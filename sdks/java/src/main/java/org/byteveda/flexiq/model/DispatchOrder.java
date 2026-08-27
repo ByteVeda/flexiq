@@ -13,12 +13,21 @@ public enum DispatchOrder {
     /** Newest-first — a freshness lever for same-priority ties under load. */
     LIFO;
 
-    /** Lowercase wire form passed to the native layer. */
+    /**
+     * Lowercase wire form passed to the native layer.
+     *
+     * @return the wire form
+     */
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
 
-    /** Parse a wire form ({@code "fifo"}/{@code "lifo"}). */
+    /**
+     * Parse a wire form ({@code "fifo"}/{@code "lifo"}).
+     *
+     * @param wire the value the core reported
+     * @return the matching constant
+     */
     public static DispatchOrder fromWire(String wire) {
         if (wire == null) {
             throw new SerializationException("dispatch order is null");

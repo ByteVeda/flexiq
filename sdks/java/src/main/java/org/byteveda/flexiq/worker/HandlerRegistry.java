@@ -17,11 +17,23 @@ public final class HandlerRegistry {
         this.handlers = handlers;
     }
 
+    /**
+     * Bundle handlers for a single {@code register} call.
+     *
+     * @param handlers the pairings; the array is copied, so later caller mutations
+     *     cannot leak in
+     * @return the immutable bundle
+     */
     public static HandlerRegistry of(Handler<?, ?>... handlers) {
         // Copy the varargs array so later caller mutations can't leak in.
         return new HandlerRegistry(Collections.unmodifiableList(new ArrayList<>(Arrays.asList(handlers))));
     }
 
+    /**
+     * The bundled handlers.
+     *
+     * @return the pairings, unmodifiable
+     */
     public List<Handler<?, ?>> handlers() {
         return handlers;
     }

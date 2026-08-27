@@ -25,36 +25,72 @@ public final class CircuitBreakerConfig {
         this.halfOpenSuccessRate = b.halfOpenSuccessRate;
     }
 
-    /** A builder for a breaker that opens after {@code threshold} failures in the window. */
+    /**
+     * A builder for a breaker that opens after {@code threshold} failures in the window.
+     *
+     * @param threshold how many failures in the window trip it; must be positive
+     * @return the builder, pre-loaded with the default window, cooldown and probes
+     */
     public static Builder builder(int threshold) {
         return new Builder(threshold);
     }
 
-    /** A breaker with default window/cooldown/probe settings, opening after {@code threshold} failures. */
+    /**
+     * A breaker with default window/cooldown/probe settings, opening after {@code threshold} failures.
+     *
+     * @param threshold how many failures in the window trip it; must be positive
+     * @return the configuration
+     */
     public static CircuitBreakerConfig of(int threshold) {
         return builder(threshold).build();
     }
 
+    /**
+     * How many failures in the window trip the breaker.
+     *
+     * @return the threshold
+     */
     public int threshold() {
         return threshold;
     }
 
+    /**
+     * The rolling window failures are counted over.
+     *
+     * @return the window
+     */
     public Duration window() {
         return window;
     }
 
+    /**
+     * How long the breaker stays open before admitting probes.
+     *
+     * @return the cooldown
+     */
     public Duration cooldown() {
         return cooldown;
     }
 
+    /**
+     * Probe runs admitted while half-open.
+     *
+     * @return the probe count
+     */
     public int halfOpenProbes() {
         return halfOpenProbes;
     }
 
+    /**
+     * The share of probes that must succeed to re-close the breaker.
+     *
+     * @return the rate, from 0.0 to 1.0
+     */
     public double halfOpenSuccessRate() {
         return halfOpenSuccessRate;
     }
 
+    /** Collects a breaker's optional settings around a required threshold. */
     public static final class Builder {
         private final int threshold;
         private Duration window = Duration.ofSeconds(60);
@@ -69,29 +105,54 @@ public final class CircuitBreakerConfig {
             this.threshold = threshold;
         }
 
-        /** Rolling window in which failures are counted toward the threshold. */
+        /**
+         * Rolling window in which failures are counted toward the threshold.
+         *
+         * @param window the window; must be positive
+         * @return {@code this}, for chaining
+         */
         public Builder window(Duration window) {
             this.window = requirePositive(window, "window");
             return this;
         }
 
-        /** Convenience for {@code window(Duration.ofSeconds(seconds))}. */
+        /**
+         * Convenience for {@code window(Duration.ofSeconds(seconds))}.
+         *
+         * @param seconds the window in seconds; must be positive
+         * @return {@code this}, for chaining
+         */
         public Builder windowSeconds(long seconds) {
             return window(Duration.ofSeconds(seconds));
         }
 
-        /** How long the breaker stays open before admitting half-open probes. */
+        /**
+         * How long the breaker stays open before admitting half-open probes.
+         *
+         * @param cooldown the cooldown; must be positive
+         * @return {@code this}, for chaining
+         */
         public Builder cooldown(Duration cooldown) {
             this.cooldown = requirePositive(cooldown, "cooldown");
             return this;
         }
 
-        /** Convenience for {@code cooldown(Duration.ofSeconds(seconds))}. */
+        /**
+         * Convenience for {@code cooldown(Duration.ofSeconds(seconds))}.
+         *
+         * @param seconds the cooldown in seconds; must be positive
+         * @return {@code this}, for chaining
+         */
         public Builder cooldownSeconds(long seconds) {
             return cooldown(Duration.ofSeconds(seconds));
         }
 
-        /** Number of probe runs admitted while half-open. */
+        /**
+         * Number of probe runs admitted while half-open.
+         *
+         * @param halfOpenProbes the probe count; must be positive
+         * @return {@code this}, for chaining
+         */
         public Builder halfOpenProbes(int halfOpenProbes) {
             if (halfOpenProbes <= 0) {
                 throw new IllegalArgumentException("halfOpenProbes must be > 0");
@@ -100,7 +161,12 @@ public final class CircuitBreakerConfig {
             return this;
         }
 
-        /** Success rate (0.0–1.0) among probes required to re-close the breaker. */
+        /**
+         * Success rate (0.0–1.0) among probes required to re-close the breaker.
+         *
+         * @param halfOpenSuccessRate the rate, within {@code [0.0, 1.0]}
+         * @return {@code this}, for chaining
+         */
         public Builder halfOpenSuccessRate(double halfOpenSuccessRate) {
             if (!(halfOpenSuccessRate >= 0.0 && halfOpenSuccessRate <= 1.0)) {
                 throw new IllegalArgumentException("halfOpenSuccessRate must be within [0.0, 1.0]");
@@ -109,6 +175,11 @@ public final class CircuitBreakerConfig {
             return this;
         }
 
+        /**
+         * Freeze the settings collected so far.
+         *
+         * @return the immutable configuration
+         */
         public CircuitBreakerConfig build() {
             return new CircuitBreakerConfig(this);
         }

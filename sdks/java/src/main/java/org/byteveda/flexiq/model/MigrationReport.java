@@ -20,6 +20,14 @@ public final class MigrationReport {
     /** The backend stores no schema, so there was nothing to migrate. */
     public final boolean schemaless;
 
+    /**
+     * Decoded from the core's JSON migrate report.
+     *
+     * @param applied core schema versions applied by this run, in the order applied
+     * @param workflowApplied workflow schema versions applied by this run
+     * @param archivedJobs terminal jobs the one-time backlog sweep moved into the archive
+     * @param schemaless the backend stores no schema, so there was nothing to migrate
+     */
     @JsonCreator
     public MigrationReport(
             @JsonProperty("applied") List<String> applied,
@@ -32,7 +40,11 @@ public final class MigrationReport {
         this.schemaless = schemaless;
     }
 
-    /** Whether this run changed anything. */
+    /**
+     * Whether this run changed anything.
+     *
+     * @return {@code true} when nothing was applied and nothing was archived
+     */
     public boolean isEmpty() {
         return applied.isEmpty() && workflowApplied.isEmpty() && archivedJobs == 0;
     }

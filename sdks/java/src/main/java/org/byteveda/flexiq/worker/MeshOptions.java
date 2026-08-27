@@ -55,6 +55,11 @@ public final class MeshOptions {
         this.encryptionKey = b.encryptionKey;
     }
 
+    /**
+     * A builder pre-loaded with the core's mesh defaults.
+     *
+     * @return the builder; usually only the seed list needs setting
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -95,6 +100,9 @@ public final class MeshOptions {
 
     /** Mirrors {@code flexiq_mesh::MeshConfig} defaults; only the seed list is usually set. */
     public static final class Builder {
+        /** A builder holding the core's defaults; reach it through {@link MeshOptions#builder()}. */
+        public Builder() {}
+
         private int gossipPort = 7946;
         private final List<String> seeds = new ArrayList<>();
         private String bindAddr = "0.0.0.0";
@@ -108,7 +116,12 @@ public final class MeshOptions {
         private int stealRateLimit = 10;
         private @Nullable String encryptionKey;
 
-        /** Gossip (UDP) port; the work-stealing (TCP) port is {@code port + 1}. */
+        /**
+         * Gossip (UDP) port; the work-stealing (TCP) port is {@code port + 1}.
+         *
+         * @param port the gossip port, within {@code 1..=65534}
+         * @return {@code this}, for chaining
+         */
         public Builder port(int port) {
             if (port < 1 || port > 65534) {
                 throw new IllegalArgumentException("mesh port must be in 1..=65534 (steal port is port+1)");
@@ -117,73 +130,143 @@ public final class MeshOptions {
             return this;
         }
 
-        /** Add a seed peer ({@code host:port}) used for initial cluster join. */
+        /**
+         * Add a seed peer ({@code host:port}) used for initial cluster join.
+         *
+         * @param hostPort a peer to contact on join, as {@code host:port}
+         * @return {@code this}, for chaining
+         */
         public Builder seed(String hostPort) {
             this.seeds.add(hostPort);
             return this;
         }
 
+        /**
+         * Add several seed peers at once.
+         *
+         * @param seeds peers to contact on join, each as {@code host:port}
+         * @return {@code this}, for chaining
+         */
         public Builder seeds(List<String> seeds) {
             this.seeds.addAll(seeds);
             return this;
         }
 
-        /** Listen address for gossip and steal (default {@code 0.0.0.0}). */
+        /**
+         * Listen address for gossip and steal (default {@code 0.0.0.0}).
+         *
+         * @param bindAddr the local address to listen on
+         * @return {@code this}, for chaining
+         */
         public Builder bindAddr(String bindAddr) {
             this.bindAddr = bindAddr;
             return this;
         }
 
-        /** Address advertised to peers; required when {@code bindAddr} is {@code 0.0.0.0} across hosts. */
+        /**
+         * Address advertised to peers; required when {@code bindAddr} is {@code 0.0.0.0} across hosts.
+         *
+         * @param advertiseAddr the address peers should reach this worker on
+         * @return {@code this}, for chaining
+         */
         public Builder advertiseAddr(String advertiseAddr) {
             this.advertiseAddr = advertiseAddr;
             return this;
         }
 
+        /**
+         * Whether an idle worker may pull queued jobs off a busier peer. On by default.
+         *
+         * @param enableStealing {@code false} to leave every job with its hashed owner
+         * @return {@code this}, for chaining
+         */
         public Builder enableStealing(boolean enableStealing) {
             this.enableStealing = enableStealing;
             return this;
         }
 
-        /** 0.0 ignores affinity, 1.0 is strict affinity (default 0.7). */
+        /**
+         * 0.0 ignores affinity, 1.0 is strict affinity (default 0.7).
+         *
+         * @param affinityWeight how strongly a job is pinned to its hashed owner
+         * @return {@code this}, for chaining
+         */
         public Builder affinityWeight(double affinityWeight) {
             this.affinityWeight = affinityWeight;
             return this;
         }
 
-        /** Max jobs prefetched into the local deque (default 64). */
+        /**
+         * Max jobs prefetched into the local deque (default 64).
+         *
+         * @param localBufferCapacity how many jobs to hold locally ahead of dispatch
+         * @return {@code this}, for chaining
+         */
         public Builder localBufferCapacity(int localBufferCapacity) {
             this.localBufferCapacity = localBufferCapacity;
             return this;
         }
 
+        /**
+         * How many jobs one steal moves at a time.
+         *
+         * @param maxStealBatch the batch ceiling
+         * @return {@code this}, for chaining
+         */
         public Builder maxStealBatch(int maxStealBatch) {
             this.maxStealBatch = maxStealBatch;
             return this;
         }
 
+        /**
+         * How far behind a peer must be before its jobs are eligible to be stolen.
+         *
+         * @param stealThreshold the backlog difference that justifies a steal
+         * @return {@code this}, for chaining
+         */
         public Builder stealThreshold(int stealThreshold) {
             this.stealThreshold = stealThreshold;
             return this;
         }
 
+        /**
+         * Replicas per worker on the hash ring; more evens the distribution out.
+         *
+         * @param virtualNodes the replica count
+         * @return {@code this}, for chaining
+         */
         public Builder virtualNodes(int virtualNodes) {
             this.virtualNodes = virtualNodes;
             return this;
         }
 
-        /** Max steal requests served per peer per second; 0 is unlimited (default 10). */
+        /**
+         * Max steal requests served per peer per second; 0 is unlimited (default 10).
+         *
+         * @param stealRateLimit the per-peer ceiling, or 0 for unlimited
+         * @return {@code this}, for chaining
+         */
         public Builder stealRateLimit(int stealRateLimit) {
             this.stealRateLimit = stealRateLimit;
             return this;
         }
 
-        /** Base64 (32-byte) key XOR-applied to gossip datagrams; deters casual sniffing only. */
+        /**
+         * Base64 (32-byte) key XOR-applied to gossip datagrams; deters casual sniffing only.
+         *
+         * @param encryptionKey the base64 key every peer must share
+         * @return {@code this}, for chaining
+         */
         public Builder encryptionKey(String encryptionKey) {
             this.encryptionKey = encryptionKey;
             return this;
         }
 
+        /**
+         * Freeze the settings collected so far.
+         *
+         * @return the immutable options
+         */
         public MeshOptions build() {
             return new MeshOptions(this);
         }

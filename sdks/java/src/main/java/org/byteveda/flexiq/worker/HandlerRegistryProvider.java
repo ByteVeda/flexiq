@@ -20,6 +20,10 @@ package org.byteveda.flexiq.worker;
  * knows how to build them.
  */
 public interface HandlerRegistryProvider {
-    /** The handlers this provider contributes. Called once per executor start. */
+    /**
+     * The handlers this provider contributes. Called once per executor start.
+     *
+     * @return the bundle to register
+     */
     HandlerRegistry registry();
 }

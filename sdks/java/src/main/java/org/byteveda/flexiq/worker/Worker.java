@@ -96,10 +96,28 @@ public final class Worker implements AutoCloseable {
         this.lifecycle = lifecycle;
     }
 
+    /**
+     * A builder over a backend, with no resources or codecs.
+     *
+     * @param backend where jobs are claimed from and outcomes reported to
+     * @param serializer what decodes payloads and encodes results
+     * @param middleware the chain applied around every handler
+     * @return the builder
+     */
     public static Builder builder(QueueBackend backend, Serializer serializer, List<Middleware> middleware) {
         return new Builder(backend, serializer, middleware, new ResourceRuntime(), Map.of());
     }
 
+    /**
+     * A builder over a backend, carrying the client's resources and codecs.
+     *
+     * @param backend where jobs are claimed from and outcomes reported to
+     * @param serializer what decodes payloads and encodes results
+     * @param middleware the chain applied around every handler
+     * @param resources the runtime handlers resolve {@code Resources.use(...)} against
+     * @param codecs the named payload codecs each task's declared list resolves against
+     * @return the builder
+     */
     public static Builder builder(
             QueueBackend backend,
             Serializer serializer,
@@ -125,6 +143,8 @@ public final class Worker implements AutoCloseable {
     /**
      * A snapshot of this worker's mesh cluster view (peer count, capacity, load),
      * or empty when the worker was not started with {@link Builder#mesh}.
+     *
+     * @return the snapshot, or empty when this worker joined no mesh
      */
     public Optional<MeshClusterInfo> meshClusterInfo() {
         return control.meshClusterInfoJson().map(json -> {
@@ -139,12 +159,21 @@ public final class Worker implements AutoCloseable {
     /**
      * Approve a parked workflow gate so its successors run. Requires this worker
      * to be tracking workflows ({@code trackWorkflows()} on the builder).
+     *
+     * @param runId the parked run
+     * @param nodeName the gate node awaiting a decision
      */
     public void approveGate(String runId, String nodeName) {
         requireTracker().resolveGate(runId, nodeName, true, null);
     }
 
-    /** Reject a parked workflow gate; the gate fails and its successors are skipped. */
+    /**
+     * Reject a parked workflow gate; the gate fails and its successors are skipped.
+     *
+     * @param runId the parked run
+     * @param nodeName the gate node awaiting a decision
+     * @param reason why it was rejected, or {@code null} for a generic message
+     */
     public void rejectGate(String runId, String nodeName, @Nullable String reason) {
         requireTracker().resolveGate(runId, nodeName, false, reason == null ? "gate rejected" : reason);
     }
@@ -156,7 +185,11 @@ public final class Worker implements AutoCloseable {
         return tracker;
     }
 
-    /** Block until {@link #close()} is called. */
+    /**
+     * Block until {@link #close()} is called.
+     *
+     * @throws InterruptedException if the waiting thread is interrupted first
+     */
     public void awaitShutdown() throws InterruptedException {
         shutdown.await();
     }
@@ -278,11 +311,30 @@ public final class Worker implements AutoCloseable {
             this.codecs = codecs;
         }
 
+        /**
+         * Handle a task by name, with none of a {@link Task}'s settings.
+         *
+         * @param taskName the registered name producers enqueue under
+         * @param payloadType the type the handler is called with
+         * @param handler what runs when a job of that task is dispatched
+         * @param <T> the payload type
+         * @param <R> the handler's result type
+         * @return {@code this}, for chaining
+         */
         public <T, R> Builder handle(String taskName, Class<T> payloadType, TaskFunction<T, R> handler) {
             handlers.put(taskName, new RegisteredTask(payloadType, cast(handler), List.of(), null));
             return this;
         }
 
+        /**
+         * Handle a task described by a {@link Task}, registering its policy at start.
+         *
+         * @param task the descriptor, carrying retries, throttling and caps
+         * @param handler what runs when a job of that task is dispatched
+         * @param <T> the payload type
+         * @param <R> the handler's result type
+         * @return {@code this}, for chaining
+         */
         public <T, R> Builder handle(Task<T> task, TaskFunction<T, R> handler) {
             handlers.put(
                     task.name(),
@@ -291,7 +343,12 @@ public final class Worker implements AutoCloseable {
             return this;
         }
 
-        /** Apply a customizer to this builder (e.g. a generated {@code XxxTasks.bind}). */
+        /**
+         * Apply a customizer to this builder (e.g. a generated {@code XxxTasks.bind}).
+         *
+         * @param customizer run against this builder, so generated code can register in bulk
+         * @return {@code this}, for chaining
+         */
         public Builder apply(Consumer<Builder> customizer) {
             customizer.accept(this);
             return this;
@@ -309,18 +366,29 @@ public final class Worker implements AutoCloseable {
          * <p>Discovery never replaces a handler already registered on this builder;
          * call {@code handle(...)} or {@code register(...)} <em>after</em> it to
          * override one deliberately.
+         * @return {@code this}, for chaining
          */
         public Builder discover() {
             return discover(HandlerDiscovery.contextLoader());
         }
 
-        /** {@link #discover()} against a specific class loader. */
+        /**
+         * {@link #discover()} against a specific class loader.
+         *
+         * @param loader where to look for {@code META-INF/services} entries
+         * @return {@code this}, for chaining
+         */
         public Builder discover(ClassLoader loader) {
             HandlerDiscovery.load(loader, handlers.keySet(), "worker").forEach(this::register);
             return this;
         }
 
-        /** Register a single {@link Handler} (a task + its function). */
+        /**
+         * Register a single {@link Handler} (a task + its function).
+         *
+         * @param handler the task descriptor paired with the code that runs it
+         * @return {@code this}, for chaining
+         */
         public Builder register(Handler<?, ?> handler) {
             handlers.put(
                     handler.task().name(),
@@ -351,7 +419,12 @@ public final class Worker implements AutoCloseable {
                     || task.maxInFlightPerTask() != null;
         }
 
-        /** Register every handler in a {@link HandlerRegistry} (e.g. a generated {@code XxxTasks.handlers}). */
+        /**
+         * Register every handler in a {@link HandlerRegistry} (e.g. a generated {@code XxxTasks.handlers}).
+         *
+         * @param registry the bundle whose handlers to take on
+         * @return {@code this}, for chaining
+         */
         public Builder register(HandlerRegistry registry) {
             registry.handlers().forEach(this::register);
             return this;
@@ -361,6 +434,9 @@ public final class Worker implements AutoCloseable {
          * Topic subscriptions to register at {@code start()} (wired by
          * {@code FlexiQ.worker()}). Ephemeral entries bind to the started
          * worker's id and are reaped once it stops heartbeating.
+         *
+         * @param subscriptions the topic subscriptions to register at start
+         * @return {@code this}, for chaining
          */
         public Builder subscriptions(List<SubscriptionConfig> subscriptions) {
             this.subscriptions = subscriptions;
@@ -371,6 +447,10 @@ public final class Worker implements AutoCloseable {
          * Managed log-topic consumers to drive with a poll loop for the worker's life
          * (wired by {@code FlexiQ.worker()}). The {@code reader} pulls and acks each
          * topic's cursor; a manually built worker declares none.
+         *
+         * @param logConsumers the consumers to drive, one poll loop each
+         * @param reader the read/ack surface the loops use
+         * @return {@code this}, for chaining
          */
         public Builder logConsumers(List<LogConsumerConfig> logConsumers, LogTopicReader reader) {
             this.logConsumers = logConsumers;
@@ -384,34 +464,66 @@ public final class Worker implements AutoCloseable {
          * and resolved at {@code start()}, so config set *after* the builder was
          * obtained (e.g. {@code FlexiQ.codel(...)}) is still picked up — matching
          * that method's documented timing. A manually built worker leaves it empty.
+         *
+         * @param queueConfigs read at start, so overrides written after the builder was
+         *     assembled still take effect
+         * @return {@code this}, for chaining
          */
         public Builder queueConfigs(Supplier<List<Map<String, Object>>> queueConfigs) {
             this.queueConfigs = queueConfigs;
             return this;
         }
 
+        /**
+         * Which queues this worker dispatches from; the default queue when unset.
+         *
+         * @param queues the queue names
+         * @return {@code this}, for chaining
+         */
         public Builder queues(String... queues) {
             this.queues = Arrays.asList(queues);
             return this;
         }
 
-        /** Fixed handler-thread count; 0 (default) uses a cached pool. */
+        /**
+         * Fixed handler-thread count; 0 (default) uses a cached pool.
+         *
+         * @param concurrency how many jobs run at once, or 0 to size the pool on demand
+         * @return {@code this}, for chaining
+         */
         public Builder concurrency(int concurrency) {
             this.concurrency = concurrency;
             return this;
         }
 
+        /**
+         * How many claimed jobs the dispatch channel buffers ahead of the handlers.
+         *
+         * @param channelCapacity the buffer size
+         * @return {@code this}, for chaining
+         */
         public Builder channelCapacity(int channelCapacity) {
             this.channelCapacity = channelCapacity;
             return this;
         }
 
+        /**
+         * How many jobs one claim round pulls from storage.
+         *
+         * @param batchSize the batch size
+         * @return {@code this}, for chaining
+         */
         public Builder batchSize(int batchSize) {
             this.batchSize = batchSize;
             return this;
         }
 
-        /** Per-table retention windows for auto-cleanup. */
+        /**
+         * Per-table retention windows for auto-cleanup.
+         *
+         * @param retention how long each history table keeps a row
+         * @return {@code this}, for chaining
+         */
         public Builder retention(Retention retention) {
             this.retention = retention;
             return this;
@@ -423,6 +535,9 @@ public final class Worker implements AutoCloseable {
          * dispatch latency floor and the idle database load of polling.
          * Requires the native library to be built with the {@code push-dispatch}
          * cargo feature; otherwise accepted and ignored (polling is kept).
+         *
+         * @param pushDispatch {@code true} to wake the scheduler on enqueue rather than poll
+         * @return {@code this}, for chaining
          */
         public Builder pushDispatch(boolean pushDispatch) {
             this.pushDispatch = pushDispatch;
@@ -433,6 +548,9 @@ public final class Worker implements AutoCloseable {
          * Autoscale the handler pool between {@code min} and {@code max} threads
          * based on queue depth. Replaces the fixed/cached pool with a resizable
          * one driven by an {@link Autoscaler}.
+         *
+         * @param options the thread bounds and re-evaluation cadence
+         * @return {@code this}, for chaining
          */
         public Builder autoscale(AutoscaleOptions options) {
             this.autoscale = options;
@@ -443,6 +561,9 @@ public final class Worker implements AutoCloseable {
          * Join a scheduling mesh: discover peers via gossip and steal work from
          * busy ones. The DB stays the source of truth — mesh only changes how
          * ready jobs are buffered and balanced, so it is safe to add to any worker.
+         *
+         * @param options the gossip, affinity and work-stealing settings
+         * @return {@code this}, for chaining
          */
         public Builder mesh(MeshOptions options) {
             this.mesh = options;
@@ -453,13 +574,23 @@ public final class Worker implements AutoCloseable {
          * Listen to a job outcome's {@link OutcomeEvent}s. Only valid for names
          * where {@link EventName#isJobOutcome()} holds; subscribe to other
          * events via {@link #onEvent}.
+         *
+         * @param name the outcome to subscribe to
+         * @param listener called on the emitting thread
+         * @return {@code this}, for chaining
          */
         public Builder on(EventName name, Consumer<OutcomeEvent> listener) {
             name.requireJobOutcome();
             return onEvent(name, event -> listener.accept((OutcomeEvent) event));
         }
 
-        /** Listen to any of this worker's events by name; the listener narrows to the concrete type. */
+        /**
+         * Listen to any of this worker's events by name; the listener narrows to the concrete type.
+         *
+         * @param name the event to subscribe to
+         * @param listener called on the emitting thread
+         * @return {@code this}, for chaining
+         */
         public Builder onEvent(EventName name, Consumer<FlexiQEvent> listener) {
             listeners.computeIfAbsent(name, key -> new ArrayList<>()).add(listener);
             return this;
@@ -469,6 +600,9 @@ public final class Worker implements AutoCloseable {
          * Forward this worker's events to a queue-level {@link Emitter} (wired by
          * {@code FlexiQ.worker()}), so listeners registered via the queue's
          * {@code onEvent} also see them.
+         *
+         * @param hub the queue-level emitter every event is forwarded to
+         * @return {@code this}, for chaining
          */
         public Builder eventHub(Emitter hub) {
             this.hub = hub;
@@ -479,13 +613,20 @@ public final class Worker implements AutoCloseable {
          * Report this worker's start and close to its owning client (wired by
          * {@code FlexiQ.worker()}), so {@code FlexiQ.shutdown()} can close every
          * worker started from that client. A manually built worker declares none.
+         *
+         * @param lifecycle notified as this worker starts and closes
+         * @return {@code this}, for chaining
          */
         public Builder lifecycle(WorkerLifecycle lifecycle) {
             this.lifecycle = lifecycle;
             return this;
         }
 
-        /** Drive workflow node and run state from this worker's job outcomes. */
+        /**
+         * Drive workflow node and run state from this worker's job outcomes.
+         *
+         * @return {@code this}, for chaining
+         */
         public Builder trackWorkflows() {
             ensureTracker();
             return this;
@@ -494,6 +635,9 @@ public final class Worker implements AutoCloseable {
         /**
          * Track workflows and register {@code workflows} so the tracker can supply
          * the payloads of their deferred nodes (gates' downstream steps, etc.).
+         *
+         * @param workflows the definitions the tracker resolves deferred nodes against
+         * @return {@code this}, for chaining
          */
         public Builder trackWorkflows(Workflow... workflows) {
             WorkflowTracker active = ensureTracker();
@@ -513,6 +657,11 @@ public final class Worker implements AutoCloseable {
             return tracker;
         }
 
+        /**
+         * Register the tasks, open the native worker, and begin dispatching.
+         *
+         * @return the running worker, to be closed when the process stops
+         */
         public Worker start() {
             @Nullable Autoscaler scaler = null;
             ExecutorService executor;
