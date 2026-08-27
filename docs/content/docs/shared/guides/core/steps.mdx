@@ -497,6 +497,8 @@ reschedules the job. A task that passes in memory is a task a worker runs the
 same way.
 
 ```java
+Task<String> checkout = Task.of("checkout", String.class);
+
 try (FlexiQ queue = InMemoryFlexiQ.open()) {
     AtomicInteger charges = new AtomicInteger();
     String id = queue.enqueue(checkout, "go");
