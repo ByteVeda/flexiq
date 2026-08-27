@@ -13,7 +13,11 @@ package org.byteveda.flexiq.steps;
 public final class StepDivergedError extends StepError {
     private static final long serialVersionUID = 1L;
 
-    /** @param message the core's account of which step diverged and how */
+    /**
+     * A divergence the core detected while replaying the step sequence.
+     *
+     * @param message the core's account of which step diverged and how
+     */
     public StepDivergedError(String message) {
         super(message, false);
     }

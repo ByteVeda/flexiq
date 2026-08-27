@@ -21,7 +21,11 @@ public final class StepOptions {
         this.key = key;
     }
 
-    /** No overrides: the step is identified by its name and its position. */
+    /**
+     * No overrides: the step is identified by its name and its position.
+     *
+     * @return the shared empty instance
+     */
     public static StepOptions none() {
         return NONE;
     }
@@ -33,6 +37,9 @@ public final class StepOptions {
      * <p>Reach for it when the position can move — a loop over an unordered
      * collection. A keyed step is matched by key wherever it sits; an unkeyed
      * one is matched at its position, and keyed steps do not spend a position.
+     *
+     * @param key the step's identity, stable wherever the step moves to
+     * @return options carrying that identity
      */
     public static StepOptions key(String key) {
         return new StepOptions(null, key);
@@ -45,27 +52,48 @@ public final class StepOptions {
      * <p>Only sleeps take a name here — {@code run}'s name is its first
      * argument, and passing one both ways is refused rather than silently
      * resolved.
+     *
+     * @param name what this sleep is waiting for, as it should read in the sequence
+     * @return options carrying that name
      */
     public static StepOptions named(String name) {
         return new StepOptions(name, null);
     }
 
-    /** This, with {@code key} as its explicit identity. */
+    /**
+     * This, with {@code key} as its explicit identity.
+     *
+     * @param key the step's identity, stable wherever the step moves to
+     * @return a copy carrying that key
+     */
     public StepOptions withKey(String key) {
         return new StepOptions(name, key);
     }
 
-    /** This, with {@code name} as the sleep's name. */
+    /**
+     * This, with {@code name} as the sleep's name.
+     *
+     * @param name what this sleep is waiting for, as it should read in the sequence
+     * @return a copy carrying that name
+     */
     public StepOptions withName(String name) {
         return new StepOptions(name, key);
     }
 
-    /** The sleep name, or {@code null}. */
+    /**
+     * The sleep name.
+     *
+     * @return the name, or {@code null} to fall back to {@code sleep#<position>}
+     */
     public @Nullable String name() {
         return name;
     }
 
-    /** The explicit identity, or {@code null} to identify by position. */
+    /**
+     * The explicit identity.
+     *
+     * @return the key, or {@code null} to identify the step by its position
+     */
     public @Nullable String key() {
         return key;
     }

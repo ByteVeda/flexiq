@@ -44,12 +44,24 @@ public final class ProxySession implements AutoCloseable {
         this.proxies = proxies;
     }
 
-    /** Deconstruct {@code value} (no expiry or purpose), deduped by instance identity. */
+    /**
+     * Deconstruct {@code value} (no expiry or purpose), deduped by instance identity.
+     *
+     * @param value the resource to proxy
+     * @return the ref, minted once per instance for the length of this session
+     */
     public ProxyRef deconstruct(Object value) {
         return deconstruct(value, null, null);
     }
 
-    /** Deconstruct {@code value} with a TTL, deduped by instance identity. */
+    /**
+     * Deconstruct {@code value} with a TTL, deduped by instance identity.
+     *
+     * @param value the resource to proxy
+     * @param ttl how long the ref stays resolvable; the first call's TTL wins per
+     *     instance, so open a new session to refresh expiry
+     * @return the ref, minted once per instance for the length of this session
+     */
     public ProxyRef deconstruct(Object value, @Nullable Duration ttl) {
         return deconstruct(value, ttl, null);
     }
@@ -57,6 +69,13 @@ public final class ProxySession implements AutoCloseable {
     /**
      * Deconstruct {@code value} bound to {@code ttl}/{@code purpose} (both
      * nullable), deduped by (instance identity, purpose).
+     *
+     * @param value the resource to proxy
+     * @param ttl how long the ref stays resolvable; the first call's TTL wins per
+     *     (instance, purpose), so open a new session to refresh expiry
+     * @param purpose a label the worker can require on reconstruct, and part of
+     *     the dedup key
+     * @return the ref, minted once per (instance, purpose) for the length of this session
      */
     public ProxyRef deconstruct(Object value, @Nullable Duration ttl, @Nullable String purpose) {
         ensureOpen();
@@ -73,7 +92,12 @@ public final class ProxySession implements AutoCloseable {
         return ref;
     }
 
-    /** Verify and reconstruct {@code ref}, deduped by its signature. */
+    /**
+     * Verify and reconstruct {@code ref}, deduped by its signature.
+     *
+     * @param ref the ref that arrived in the payload
+     * @return the live resource, the same instance for every ref with this signature
+     */
     public Object reconstruct(ProxyRef ref) {
         return reconstruct(ref, null);
     }
@@ -81,6 +105,10 @@ public final class ProxySession implements AutoCloseable {
     /**
      * Verify (always — including memo hits, so a ref that expires mid-session
      * stops resolving) and reconstruct {@code ref}, deduped by its signature.
+     *
+     * @param ref the ref that arrived in the payload
+     * @param expectedPurpose the label the ref must carry, or {@code null} to accept any
+     * @return the live resource, the same instance for every ref with this signature
      */
     public Object reconstruct(ProxyRef ref, @Nullable String expectedPurpose) {
         ensureOpen();
@@ -96,13 +124,28 @@ public final class ProxySession implements AutoCloseable {
         return value;
     }
 
-    /** {@link #reconstruct(ProxyRef)} cast to the caller's type. */
+    /**
+     * {@link #reconstruct(ProxyRef)} cast to the caller's type.
+     *
+     * @param ref the ref that arrived in the payload
+     * @param <T> what the caller expects the handler to rebuild; unchecked, so a
+     *     mismatch surfaces as a {@link ClassCastException} at the use site
+     * @return the live resource
+     */
     @SuppressWarnings("unchecked")
     public <T> T resolve(ProxyRef ref) {
         return (T) reconstruct(ref);
     }
 
-    /** {@link #reconstruct(ProxyRef, String)} cast to the caller's type. */
+    /**
+     * {@link #reconstruct(ProxyRef, String)} cast to the caller's type.
+     *
+     * @param ref the ref that arrived in the payload
+     * @param expectedPurpose the label the ref must carry
+     * @param <T> what the caller expects the handler to rebuild; unchecked, so a
+     *     mismatch surfaces as a {@link ClassCastException} at the use site
+     * @return the live resource
+     */
     @SuppressWarnings("unchecked")
     public <T> T resolve(ProxyRef ref, String expectedPurpose) {
         return (T) reconstruct(ref, expectedPurpose);

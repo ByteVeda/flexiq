@@ -18,6 +18,7 @@ public interface StepStore {
      * @param jobId the running job
      * @param attempt the {@code retryCount} this job was dispatched with, checked
      *     against the row so a superseded attempt cannot write into the live one
+     * @return the session this attempt's steps commit through
      */
     StepSession open(String jobId, int attempt);
 }

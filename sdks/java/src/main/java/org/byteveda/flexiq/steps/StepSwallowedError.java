@@ -14,7 +14,11 @@ package org.byteveda.flexiq.steps;
 public final class StepSwallowedError extends StepError {
     private static final long serialVersionUID = 1L;
 
-    /** @param message which signal was swallowed, and what to do instead */
+    /**
+     * Raised by the worker once the latch shows a signal was caught and dropped.
+     *
+     * @param message which signal was swallowed, and what to do instead
+     */
     public StepSwallowedError(String message) {
         super(message, false);
     }

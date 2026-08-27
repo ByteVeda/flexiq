@@ -56,7 +56,13 @@ public final class WebhookManager implements Middleware {
         this.deliveryStore = new DeliveryStore(queue);
     }
 
-    /** Create a manager and register it on {@code queue} for automatic dispatch. */
+    /**
+     * Create a manager and register it on {@code queue} for automatic dispatch.
+     *
+     * @param queue the queue whose events fire the hooks, and whose settings store
+     *     holds them
+     * @return the manager, already registered as middleware and event subscriber
+     */
     public static WebhookManager attach(FlexiQ queue) {
         WebhookManager manager = new WebhookManager(queue);
         queue.use(manager);
@@ -87,18 +93,35 @@ public final class WebhookManager implements Middleware {
      * Build a manager WITHOUT registering middleware. The dashboard uses this for
      * CRUD, test-ping, replay, and delivery history — none of which need the
      * worker-side dispatch hook, and all of which read/write the shared KV store.
+     *
+     * @param queue the queue whose settings store holds the hooks
+     * @return a manager that reads and writes hooks but dispatches nothing
      */
     public static WebhookManager forQueue(FlexiQ queue) {
         return new WebhookManager(queue);
     }
 
-    /** Mint a fresh URL-safe signing secret (32 random bytes, base64url, no padding). */
+    /**
+     * Mint a fresh URL-safe signing secret (32 random bytes, base64url, no padding).
+     *
+     * @return the secret, to be shown to the operator once and stored on the hook
+     */
     public static String generateSecret() {
         byte[] bytes = new byte[SECRET_BYTES];
         SECURE_RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    /**
+     * Persist a draft hook, assigning its id and timestamps.
+     *
+     * <p>No SSRF check: the programmatic API is trusted developer code and may
+     * target an internal service on purpose. Untrusted dashboard input is guarded
+     * where it arrives, and again at delivery time.
+     *
+     * @param spec the draft from {@link Webhook#builder}
+     * @return the stored hook, id and timestamps filled in
+     */
     public synchronized Webhook create(Webhook.Builder spec) {
         // The programmatic API is trusted developer code (it may target internal
         // services). The SSRF guard runs on untrusted dashboard input (see
@@ -123,10 +146,21 @@ public final class WebhookManager implements Middleware {
         return hook;
     }
 
+    /**
+     * Every stored hook.
+     *
+     * @return the hooks, read fresh from the settings store
+     */
     public List<Webhook> list() {
         return store.load();
     }
 
+    /**
+     * One stored hook.
+     *
+     * @param id the hook's id
+     * @return the hook, or empty if no such hook exists
+     */
     public Optional<Webhook> get(String id) {
         return store.load().stream().filter(hook -> hook.id.equals(id)).findFirst();
     }
@@ -135,6 +169,10 @@ public final class WebhookManager implements Middleware {
      * Apply {@code updates} to the webhook with {@code id} (null fields left
      * unchanged), re-stamp {@code updatedAt}, and persist. Re-validates the
      * (possibly new) URL. Empty if no such webhook exists.
+     *
+     * @param id the hook's id
+     * @param updates the fields to change; the rest are left alone
+     * @return the patched hook, or empty if no such hook exists
      */
     public synchronized Optional<Webhook> update(String id, WebhookUpdate updates) {
         Optional<Webhook> merged = store.update(all -> {
@@ -157,11 +195,20 @@ public final class WebhookManager implements Middleware {
     /**
      * Replace the webhook's secret with a freshly minted one. Returns the updated
      * hook WITH the new secret so the caller can surface it exactly once.
+     *
+     * @param id the hook's id
+     * @return the patched hook carrying the new secret, or empty if no such hook exists
      */
     public synchronized Optional<Webhook> rotateSecret(String id) {
         return update(id, WebhookUpdate.builder().secret(generateSecret()).build());
     }
 
+    /**
+     * Remove a hook and its recorded deliveries.
+     *
+     * @param id the hook's id
+     * @return {@code true} if a hook was removed
+     */
     public synchronized boolean delete(String id) {
         boolean removed = store.update(all -> all.removeIf(hook -> hook.id.equals(id)));
         if (removed) {
@@ -175,6 +222,9 @@ public final class WebhookManager implements Middleware {
      * Synchronously POST a synthetic {@code test} event to the hook and record
      * the delivery. Returns whether the endpoint accepted it (2xx). {@code false}
      * if the webhook is missing or its URL fails the SSRF guard.
+     *
+     * @param id the hook's id
+     * @return whether the endpoint answered 2xx
      */
     public boolean test(String id) {
         Optional<Webhook> hook = get(id);
@@ -189,6 +239,10 @@ public final class WebhookManager implements Middleware {
      * Re-send a recorded delivery's payload as a fresh attempt, preserving the
      * original in the log. Returns whether the resend was accepted (2xx).
      * {@code false} if the webhook or delivery is missing, or the URL is unsafe.
+     *
+     * @param id the hook's id
+     * @param deliveryId the recorded delivery to re-send
+     * @return whether the endpoint answered 2xx
      */
     public boolean replay(String id, String deliveryId) {
         Optional<Webhook> hook = get(id);
@@ -201,11 +255,28 @@ public final class WebhookManager implements Middleware {
         return sendSynthetic(hook.get(), ctx, replayPayload(source));
     }
 
+    /**
+     * A page of one hook's recorded deliveries, newest first.
+     *
+     * @param id the hook's id
+     * @param statusFilter keep only deliveries with this status, or {@code null} for all
+     * @param eventFilter keep only deliveries of this event, or {@code null} for all
+     * @param limit the page size
+     * @param offset how many matching deliveries to skip
+     * @return the page
+     */
     public List<Delivery> deliveries(
             String id, @Nullable String statusFilter, @Nullable String eventFilter, int limit, int offset) {
         return deliveryStore.listFor(id, statusFilter, eventFilter, limit, offset);
     }
 
+    /**
+     * One recorded delivery.
+     *
+     * @param id the hook's id
+     * @param deliveryId the delivery's id
+     * @return the delivery, or empty if no such delivery exists
+     */
     public Optional<Delivery> delivery(String id, String deliveryId) {
         return deliveryStore.get(id, deliveryId);
     }

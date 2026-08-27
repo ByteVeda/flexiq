@@ -18,10 +18,18 @@ import org.byteveda.flexiq.errors.ProxyException;
 public final class FileProxyHandler implements ProxyHandler<File> {
     private final List<Path> allowedRoots;
 
+    /** Resolves any absolute path — no allowlist. */
     public FileProxyHandler() {
         this(List.of());
     }
 
+    /**
+     * Resolves only paths under one of {@code allowedRoots}.
+     *
+     * @param allowedRoots the directories a reconstructed path may sit under, each
+     *     resolved to its real path so a symlinked alias cannot escape them; empty
+     *     to permit any path
+     */
     public FileProxyHandler(List<Path> allowedRoots) {
         List<Path> roots = new ArrayList<>(allowedRoots.size());
         for (Path root : allowedRoots) {

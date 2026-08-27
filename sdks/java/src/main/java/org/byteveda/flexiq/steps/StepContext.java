@@ -112,7 +112,18 @@ public final class StepContext {
         return run(name, type, body, StepOptions.none());
     }
 
-    /** {@link #run(String, Class, StepBody)} with explicit identity. */
+    /**
+     * {@link #run(String, Class, StepBody)} with explicit identity.
+     *
+     * @param name this step's name, unique enough to identify it in the sequence
+     * @param type the result type, for decoding a replay
+     * @param body the work
+     * @param options an explicit key, so the step is matched by key rather than
+     *     by where it sits in the sequence
+     * @param <T> the step's result type
+     * @return the step's result, fresh or memoized
+     * @throws Exception whatever {@code body} throws
+     */
     public <T> T run(String name, Class<T> type, StepBody<T> body, StepOptions options) throws Exception {
         return runTyped(name, options, body, type);
     }
@@ -120,12 +131,30 @@ public final class StepContext {
     /**
      * {@link #run(String, Class, StepBody)} for a generic result, e.g.
      * {@code new TypeReference<List<Charge>>() {}}.
+     *
+     * @param name this step's name, unique enough to identify it in the sequence
+     * @param type the result type, with its type arguments preserved
+     * @param body the work
+     * @param <T> the step's result type
+     * @return the step's result, fresh or memoized
+     * @throws Exception whatever {@code body} throws
      */
     public <T> T run(String name, TypeReference<T> type, StepBody<T> body) throws Exception {
         return run(name, type, body, StepOptions.none());
     }
 
-    /** {@link #run(String, TypeReference, StepBody)} with explicit identity. */
+    /**
+     * {@link #run(String, TypeReference, StepBody)} with explicit identity.
+     *
+     * @param name this step's name, unique enough to identify it in the sequence
+     * @param type the result type, with its type arguments preserved
+     * @param body the work
+     * @param options an explicit key, so the step is matched by key rather than
+     *     by where it sits in the sequence
+     * @param <T> the step's result type
+     * @return the step's result, fresh or memoized
+     * @throws Exception whatever {@code body} throws
+     */
     public <T> T run(String name, TypeReference<T> type, StepBody<T> body, StepOptions options) throws Exception {
         return runTyped(name, options, body, type.getType());
     }
@@ -135,13 +164,23 @@ public final class StepContext {
      *
      * <p>Nothing is memoized but the fact that it ran, so the replay skips it.
      *
+     * @param name this step's name, unique enough to identify it in the sequence
+     * @param body the side effect
      * @throws Exception whatever {@code body} throws
      */
     public void run(String name, StepAction body) throws Exception {
         run(name, body, StepOptions.none());
     }
 
-    /** {@link #run(String, StepAction)} with explicit identity. */
+    /**
+     * {@link #run(String, StepAction)} with explicit identity.
+     *
+     * @param name this step's name, unique enough to identify it in the sequence
+     * @param body the side effect
+     * @param options an explicit key, so the step is matched by key rather than
+     *     by where it sits in the sequence
+     * @throws Exception whatever {@code body} throws
+     */
     public void run(String name, StepAction body, StepOptions options) throws Exception {
         checkName(name, options);
         StepSession open = session();
@@ -182,12 +221,21 @@ public final class StepContext {
      * <p>When the deadline is still ahead this throws rather than returning —
      * the attempt is over, and anything the body does past this point runs
      * unclaimed and runs again on wake. Let it propagate.
+     *
+     * @param duration how long to wait, measured from the first commit
      */
     public void sleep(Duration duration) {
         sleep(duration, StepOptions.none());
     }
 
-    /** {@link #sleep(Duration)}, named or keyed. */
+    /**
+     * {@link #sleep(Duration)}, named or keyed.
+     *
+     * @param duration how long to wait, measured from the first commit
+     * @param options the sleep's name — strongly recommended, since
+     *     {@code sleep#0, sleep#1} tells nobody which one diverged — or an
+     *     explicit key
+     */
     public void sleep(Duration duration, StepOptions options) {
         long millis = millis(duration);
         StepSession open = session();
@@ -200,12 +248,21 @@ public final class StepContext {
      * <p>Reach for this over {@link #sleep(Duration)} when the deadline means
      * something outside the job — a billing date, a market open — because an
      * absolute instant is unaffected by how many times the attempt replayed.
+     *
+     * @param when the deadline to wake at
      */
     public void sleepUntil(Instant when) {
         sleepUntil(when, StepOptions.none());
     }
 
-    /** {@link #sleepUntil(Instant)}, named or keyed. */
+    /**
+     * {@link #sleepUntil(Instant)}, named or keyed.
+     *
+     * @param when the deadline to wake at
+     * @param options the sleep's name — strongly recommended, since
+     *     {@code sleep#0, sleep#1} tells nobody which one diverged — or an
+     *     explicit key
+     */
     public void sleepUntil(Instant when, StepOptions options) {
         long wakeAt = epochMillis(when);
         StepSession open = session();
@@ -221,6 +278,7 @@ public final class StepContext {
      * dead-letter retry, and no serializer or codec touches it. Readable only
      * from inside a step body — outside one there is no step for it to name.
      *
+     * @return the running step's key, to send with the downstream request
      * @throws StepError when read outside a step body
      */
     public String idempotencyKey() {
@@ -238,6 +296,8 @@ public final class StepContext {
      * <p>The job's own id, except across an operator's dead-letter retry, which
      * mints a new job for the same run and keeps the original key so a charge is
      * not made twice.
+     *
+     * @return the id this run's steps are keyed under
      */
     public String runKey() {
         StepSession open = session();

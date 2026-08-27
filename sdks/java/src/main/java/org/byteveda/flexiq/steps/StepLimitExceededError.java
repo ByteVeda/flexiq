@@ -10,7 +10,11 @@ package org.byteveda.flexiq.steps;
 public final class StepLimitExceededError extends StepError {
     private static final long serialVersionUID = 1L;
 
-    /** @param message the core's account of which cap was passed, and by how much */
+    /**
+     * A cap the core enforced on a step result or on the job's running total.
+     *
+     * @param message the core's account of which cap was passed, and by how much
+     */
     public StepLimitExceededError(String message) {
         super(message, false);
     }
