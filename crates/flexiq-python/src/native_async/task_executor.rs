@@ -6,6 +6,7 @@ use flexiq_core::job::Job;
 use flexiq_core::scheduler::JobResult;
 
 use crate::py_worker::job_result_from_error;
+use crate::py_worker_steps::PyWorkerSteps;
 
 /// Execute a sync task on the current thread (called inside `spawn_blocking`).
 ///
@@ -15,6 +16,7 @@ use crate::py_worker::job_result_from_error;
 pub fn execute_sync_task(
     task_registry: &Py<PyAny>,
     retry_filters: &Py<PyAny>,
+    worker_steps: &Py<PyWorkerSteps>,
     job: &Job,
     result_tx: &Sender<JobResult>,
 ) {
@@ -24,8 +26,9 @@ pub fn execute_sync_task(
     let start = std::time::Instant::now();
     log::info!("[flexiq] Task {task_name}[{job_id}] received");
 
-    let result =
-        Python::attach(|py| -> PyResult<Option<Vec<u8>>> { run_task(py, task_registry, job) });
+    let result = Python::attach(|py| -> PyResult<Option<Vec<u8>>> {
+        run_task(py, task_registry, worker_steps, job)
+    });
 
     let wall_time_ns: i64 = start.elapsed().as_nanos().try_into().unwrap_or(i64::MAX);
 
@@ -48,7 +51,12 @@ pub fn execute_sync_task(
 
 /// Inner task execution: deserialize payload, look up and call the task function,
 /// serialize the return value.
-fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Option<Vec<u8>>> {
+fn run_task(
+    py: Python<'_>,
+    task_registry: &Py<PyAny>,
+    worker_steps: &Py<PyWorkerSteps>,
+    job: &Job,
+) -> PyResult<Option<Vec<u8>>> {
     let cloudpickle = py.import("cloudpickle")?;
     let registry = task_registry.bind(py);
 
@@ -77,7 +85,8 @@ fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Op
             ))
         })?;
 
-    // Set job context before execution
+    // Set job context before execution, step handle included: the claim a
+    // durable step is fenced on belongs to this worker, not to the queue handle.
     let context_mod = py.import("flexiq.context")?;
     context_mod.call_method1(
         "_set_context",
@@ -87,6 +96,7 @@ fn run_task(py: Python<'_>, task_registry: &Py<PyAny>, job: &Job) -> PyResult<Op
             job.retry_count,
             &job.queue,
             job.namespace.as_deref(),
+            worker_steps.clone_ref(py),
         ),
     )?;
 

@@ -10,7 +10,10 @@ type. Hosting the type here breaks the loop without relying on inline imports.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from flexiq._flexiq import WorkerSteps
 
 
 class _ActiveContext:
@@ -24,6 +27,7 @@ class _ActiveContext:
         "step_context",
         "step_control_raised",
         "task_name",
+        "worker_steps",
     )
 
     def __init__(
@@ -33,12 +37,17 @@ class _ActiveContext:
         retry_count: int,
         queue_name: str,
         namespace: str | None = None,
+        worker_steps: WorkerSteps | None = None,
     ):
         self.job_id = job_id
         self.task_name = task_name
         self.retry_count = retry_count
         self.queue_name = queue_name
         self.namespace = namespace
+        # The running worker's own step handle, fenced on the claim that worker
+        # won. It travels with the dispatch rather than sitting on the queue,
+        # which one process may run several workers from.
+        self.worker_steps = worker_steps
         self.started_mono: float | None = time.monotonic()
         self.soft_timeout: float | None = None
         # Durable steps, opened on first use: the session costs a job read and

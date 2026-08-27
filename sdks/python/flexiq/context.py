@@ -30,6 +30,7 @@ class LogLevel(str, enum.Enum):
 
 
 if TYPE_CHECKING:
+    from flexiq._flexiq import WorkerSteps
     from flexiq.app import Queue
 
 _local = threading.local()
@@ -275,14 +276,21 @@ def _set_context(
     retry_count: int,
     queue_name: str,
     namespace: str | None = None,
+    worker_steps: WorkerSteps | None = None,
 ) -> None:
-    """Set the thread-local job context. Called from Rust worker before each task."""
+    """Set the thread-local job context. Called from Rust worker before each task.
+
+    ``worker_steps`` is the dispatching worker's own step handle. Absent where
+    nothing holds an execution claim — an attached executor, a task under
+    ``test_mode`` — and durable steps refuse there rather than run un-memoized.
+    """
     _local.context = _ActiveContext(
         job_id=job_id,
         task_name=task_name,
         retry_count=retry_count,
         queue_name=queue_name,
         namespace=namespace,
+        worker_steps=worker_steps,
     )
 
 

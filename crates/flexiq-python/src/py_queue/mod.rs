@@ -27,7 +27,6 @@ use flexiq_core::storage::{Storage, StorageBackend};
 use flexiq_core::worker::WorkerDispatcher;
 
 use crate::py_job::PyJob;
-use crate::py_step::CLAIM_OWNER_ENV;
 
 pub(crate) use flexiq_core::storage::cursor::next_cursor;
 
@@ -63,13 +62,6 @@ pub struct PyQueue {
     /// tasks out-of-process (prefork). For in-process pools the trait's
     /// default no-op makes this a free notification.
     pub(crate) dispatcher: Arc<Mutex<Option<Arc<dyn WorkerDispatcher>>>>,
-    /// Worker id the execution claim was won under, which is what every step
-    /// write is fenced on. Never read off task code or a frame: an in-process
-    /// worker sets it when `run_worker` resolves the id, and a prefork child
-    /// inherits it through the environment its parent spawned it with. Absent
-    /// means this process holds no claim — an attached executor, or a plain
-    /// enqueue-side `Queue` — and durable steps refuse rather than degrade.
-    pub(crate) claim_owner: Arc<Mutex<Option<String>>>,
     /// Cached workflow storage handle. Lazily initialized on first workflow API
     /// call; migrations run exactly once per `PyQueue` instance instead of
     /// per-call.
@@ -301,7 +293,6 @@ impl PyQueue {
             #[cfg(feature = "workflows")]
             auto_migrate,
             dispatcher: Arc::new(Mutex::new(None)),
-            claim_owner: Arc::new(Mutex::new(inherited_claim_owner())),
             #[cfg(feature = "workflows")]
             workflow_storage: std::sync::OnceLock::new(),
         })
@@ -1008,28 +999,7 @@ impl PyQueue {
     }
 }
 
-/// The claim owner this process was spawned with, if any.
-///
-/// Set by a prefork parent on the child it spawns, which is the one hop where
-/// the owner may travel: the parent won the claim and the pipe is private to
-/// the pair. It is deliberately **not** a field on the dispatch frame — that
-/// frame also crosses a socket to an attached executor, and an owner an
-/// executor fills in is an owner it can forge.
-fn inherited_claim_owner() -> Option<String> {
-    std::env::var(CLAIM_OWNER_ENV)
-        .ok()
-        .filter(|owner| !owner.is_empty())
-}
-
 impl PyQueue {
-    /// Record the worker id the scheduler claims execution under, so a step
-    /// write from a task running here is fenced on the same owner.
-    pub(crate) fn set_claim_owner(&self, owner: Option<String>) {
-        if let Ok(mut guard) = self.claim_owner.lock() {
-            *guard = owner;
-        }
-    }
-
     /// Install the active worker dispatcher. Called by `run_worker` before
     /// the dispatch loop starts so `request_cancel` can deliver out-of-band
     /// cancel signals to the running pool. Pass `None` on shutdown.

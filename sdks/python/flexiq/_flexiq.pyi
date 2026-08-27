@@ -468,13 +468,8 @@ class PyQueue:
     ) -> None: ...
 
     # -- Durable steps --
-    def open_step_session(
-        self,
-        job_id: str,
-        attempt: int,
-        namespace: str | None = None,
-    ) -> StepSession: ...
     def supports_steps(self) -> bool: ...
+    def inherited_worker_steps(self) -> WorkerSteps | None: ...
 
 class StepDecision:
     """What ``begin_run`` decided, and the token ``commit_run`` needs back."""
@@ -518,6 +513,14 @@ class StepSession:
     def run_key(self) -> str: ...
     def idempotency_key(self, step_key: str) -> str: ...
     def finish(self) -> None: ...
+
+class WorkerSteps:
+    """One running worker's step handle, fenced on the claim that worker won."""
+
+    def open_step_session(self, job_id: str, attempt: int) -> StepSession: ...
+    @property
+    def owner(self) -> str:
+        """The worker id every step opened here is fenced on."""
 
 class PyWorkflowBuilder:
     """Rust-side workflow DAG builder.

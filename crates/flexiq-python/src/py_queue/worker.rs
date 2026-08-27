@@ -18,6 +18,7 @@ use super::PyQueue;
 #[cfg(not(feature = "native-async"))]
 use crate::async_worker::AsyncWorkerPool;
 use crate::py_config::PyTaskConfig;
+use crate::py_worker_steps::PyWorkerSteps;
 
 /// Parse the optional per-queue CoDel config from a `queue_configs` entry. Both
 /// `codel_target_ms` and `codel_interval_ms` must be present and positive for
@@ -420,9 +421,18 @@ impl PyQueue {
             self.namespace.clone(),
         );
         scheduler.set_claim_owner(worker_id.clone());
-        // The same id durable steps fence on: a step written by a task running
-        // here must name the owner the job was actually claimed under.
-        self.set_claim_owner(Some(worker_id.clone()));
+        // This worker's own step handle, fenced on the id it claims execution
+        // under. It belongs to the worker rather than to `self`, because one
+        // `Queue` may run several workers and a shared slot would leave all but
+        // the last of them committing steps under a claim they do not hold.
+        let worker_steps = Arc::new(Py::new(
+            py,
+            PyWorkerSteps::new(
+                self.storage.clone(),
+                self.namespace.clone(),
+                worker_id.clone(),
+            ),
+        )?);
 
         // Build retry filters dict from the Queue's _task_retry_filters
         let retry_filters = PyDict::new(py).into_any();
@@ -597,6 +607,7 @@ impl PyQueue {
                 // prefork must not hold a PyResultSender (a result-channel
                 // clone) it would never send on.
                 let sender = crate::native_async::PyResultSender::new(result_tx.clone());
+                let steps_for_executor = worker_steps.clone();
                 let async_executor = Python::attach(|py| -> PyResult<Arc<Py<PyAny>>> {
                     let sender_obj = pyo3::Py::new(py, sender)?;
                     let mod_ = py.import("flexiq.async_support.executor")?;
@@ -608,6 +619,7 @@ impl PyQueue {
                         registry_arc.clone_ref(py),
                         queue_ref,
                         async_concurrency,
+                        steps_for_executor.clone_ref(py),
                     ))?;
                     executor.call_method0("start")?;
                     Ok(Arc::new(executor.unbind()))
@@ -620,14 +632,19 @@ impl PyQueue {
                         registry_arc.clone(),
                         filters_arc.clone(),
                         async_executor,
+                        worker_steps.clone(),
                     ));
                 pool_arc
             }
             #[cfg(not(feature = "native-async"))]
             {
-                let pool_arc: Arc<dyn flexiq_core::worker::WorkerDispatcher> = Arc::new(
-                    AsyncWorkerPool::new(num_workers, registry_arc.clone(), filters_arc.clone()),
-                );
+                let pool_arc: Arc<dyn flexiq_core::worker::WorkerDispatcher> =
+                    Arc::new(AsyncWorkerPool::new(
+                        num_workers,
+                        registry_arc.clone(),
+                        filters_arc.clone(),
+                        worker_steps.clone(),
+                    ));
                 pool_arc
             }
         };
@@ -867,9 +884,6 @@ impl PyQueue {
         // Clear the dispatcher reference so post-shutdown cancel requests
         // become no-ops instead of forwarding to a torn-down pool.
         self.set_dispatcher(None);
-        // This process no longer claims anything, so a later task body must not
-        // be able to write steps under an id whose claim has been released.
-        self.set_claim_owner(None);
 
         // Unregister worker on shutdown
         let _ = self.storage.unregister_worker(&worker_id);

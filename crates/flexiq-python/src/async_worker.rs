@@ -11,6 +11,7 @@ use flexiq_core::scheduler::JobResult;
 use flexiq_core::worker::WorkerDispatcher;
 
 use crate::py_worker::{execute_task, job_result_from_error};
+use crate::py_worker_steps::PyWorkerSteps;
 
 /// Async worker pool that dispatches jobs via tokio::spawn_blocking.
 /// All GIL acquisition happens inside spawn_blocking — never in async context.
@@ -18,6 +19,9 @@ pub struct AsyncWorkerPool {
     num_workers: usize,
     task_registry: Arc<Py<PyAny>>,
     retry_filters: Arc<Py<PyAny>>,
+    /// This worker's step handle, handed to every task it runs — the claim a
+    /// durable step is fenced on is the one this worker won.
+    worker_steps: Arc<Py<PyWorkerSteps>>,
     shutdown: AtomicBool,
 }
 
@@ -26,11 +30,13 @@ impl AsyncWorkerPool {
         num_workers: usize,
         task_registry: Arc<Py<PyAny>>,
         retry_filters: Arc<Py<PyAny>>,
+        worker_steps: Arc<Py<PyWorkerSteps>>,
     ) -> Self {
         Self {
             num_workers,
             task_registry,
             retry_filters,
+            worker_steps,
             shutdown: AtomicBool::new(false),
         }
     }
@@ -57,6 +63,7 @@ impl WorkerDispatcher for AsyncWorkerPool {
 
             let registry = self.task_registry.clone();
             let filters = self.retry_filters.clone();
+            let steps = self.worker_steps.clone();
             let tx = result_tx.clone();
 
             tokio::task::spawn_blocking(move || {
@@ -69,7 +76,7 @@ impl WorkerDispatcher for AsyncWorkerPool {
                 log::info!("[flexiq] Task {task_name}[{job_id}] received");
 
                 let result = Python::attach(|py| -> PyResult<Option<Vec<u8>>> {
-                    execute_task(py, &registry, &job)
+                    execute_task(py, &registry, &steps, &job)
                 });
 
                 let wall_time_ns: i64 = start.elapsed().as_nanos().try_into().unwrap_or(i64::MAX);
