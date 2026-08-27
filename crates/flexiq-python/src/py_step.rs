@@ -21,7 +21,8 @@ use pyo3::types::{PyBytes, PyDict};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepSession, StepSleep,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepSleep,
+    StorageStepSession,
 };
 use flexiq_core::storage::StorageBackend;
 
@@ -179,11 +180,11 @@ impl PyStepSleep {
 /// for concurrency: a session belongs to one attempt on one thread.
 #[pyclass(name = "StepSession", module = "flexiq._flexiq")]
 pub struct PyStepSession {
-    inner: Mutex<StepSession<StorageBackend>>,
+    inner: Mutex<StorageStepSession<StorageBackend>>,
 }
 
 impl PyStepSession {
-    pub(crate) fn new(session: StepSession<StorageBackend>) -> Self {
+    pub(crate) fn new(session: StorageStepSession<StorageBackend>) -> Self {
         Self {
             inner: Mutex::new(session),
         }
@@ -199,7 +200,7 @@ impl PyStepSession {
     fn with<T: Send>(
         &self,
         py: Python<'_>,
-        body: impl FnOnce(&mut StepSession<StorageBackend>) -> Result<T, QueueError> + Send,
+        body: impl FnOnce(&mut StorageStepSession<StorageBackend>) -> Result<T, QueueError> + Send,
     ) -> PyResult<T> {
         let outcome = py.detach(|| {
             let mut guard = self

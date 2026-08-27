@@ -10,15 +10,17 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use flexiq_core::job::{now_millis, Job, JobStatus, NewJob};
 use flexiq_core::scheduler::{JobResult, SchedulerConfig};
+use flexiq_core::step::StepFailure;
+use flexiq_core::storage::records::StepKind;
 use flexiq_core::storage::sqlite::SqliteStorage;
 use flexiq_core::storage::{Storage, StorageBackend};
 use flexiq_core::worker::auth::Secret;
 use flexiq_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    decode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, ProtocolError,
+    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use flexiq_core::worker::remote::{AttachError, RemoteConfig, RemoteDispatcher};
-use flexiq_core::worker::side_channel::SideChannel;
+use flexiq_core::worker::side_channel::{SideChannel, StorageSideChannel};
 use flexiq_core::worker::transport::{MemoryTransport, ReadHalf, Transport, WriteHalf};
 use flexiq_core::worker::Worker;
 use flexiq_core::worker::WorkerDispatcher;
@@ -69,6 +71,27 @@ impl FakeExecutor {
         )
     }
 
+    /// Attach announcing `capabilities`, so a test can drive both sides of the
+    /// negotiation.
+    fn attach_with_capabilities(
+        dispatcher: &RemoteDispatcher,
+        executor_id: &str,
+        tasks: &[&str],
+        slots: u32,
+        capabilities: &[&str],
+    ) -> Result<Self, AttachError> {
+        let (executor, attached) = Self::dial_with(
+            dispatcher,
+            executor_id,
+            tasks,
+            slots,
+            PROTOCOL_VERSION,
+            None,
+            capabilities,
+        );
+        attached.map(|_| executor)
+    }
+
     fn dial(
         dispatcher: &RemoteDispatcher,
         executor_id: &str,
@@ -76,6 +99,27 @@ impl FakeExecutor {
         slots: u32,
         protocol_version: u32,
         token: Option<&str>,
+    ) -> (Self, Result<String, AttachError>) {
+        Self::dial_with(
+            dispatcher,
+            executor_id,
+            tasks,
+            slots,
+            protocol_version,
+            token,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dial_with(
+        dispatcher: &RemoteDispatcher,
+        executor_id: &str,
+        tasks: &[&str],
+        slots: u32,
+        protocol_version: u32,
+        token: Option<&str>,
+        capabilities: &[&str],
     ) -> (Self, Result<String, AttachError>) {
         let (scheduler_end, executor_end) = MemoryTransport::pair();
         let (read, write, _timeout) = Box::new(executor_end).split().expect("split executor end");
@@ -96,6 +140,7 @@ impl FakeExecutor {
                 )
                 .protocol_version(protocol_version)
                 .token(token.map(Secret::new))
+                .capabilities(capabilities.iter().map(|c| (*c).to_string()).collect())
                 .build(),
             )
             .expect("send hello");
@@ -109,10 +154,17 @@ impl FakeExecutor {
     }
 
     fn expect_hello_ack(&mut self) -> u32 {
+        self.expect_capabilities().0
+    }
+
+    /// The handshake ack, as the version plus what the scheduler advertised.
+    fn expect_capabilities(&mut self) -> (u32, Vec<String>) {
         match self.read().expect("read ack").0 {
             SchedulerMessage::HelloAck {
-                protocol_version, ..
-            } => protocol_version,
+                protocol_version,
+                capabilities,
+                ..
+            } => (protocol_version, capabilities),
             other => panic!("expected hello_ack, got {other:?}"),
         }
     }
@@ -138,6 +190,86 @@ impl FakeExecutor {
                 (other, _) => panic!("expected a job frame, got {other:?}"),
             }
         }
+    }
+
+    /// Read the next job frame along with the snapshot that preceded it, if
+    /// any. `None` means no `job_steps` frame arrived — an empty snapshot.
+    fn expect_job_with_snapshot(
+        &mut self,
+    ) -> (String, Option<Vec<flexiq_core::storage::records::JobStep>>) {
+        let mut snapshot = None;
+        loop {
+            match self.read().expect("read frame") {
+                (SchedulerMessage::HelloAck { .. }, _) => continue,
+                (SchedulerMessage::JobSteps { job_id, .. }, payload) => {
+                    snapshot = Some(decode_step_snapshot(&job_id, &payload).expect("decode"));
+                }
+                (SchedulerMessage::Job { id, .. }, _) => return (id, snapshot),
+                (other, _) => panic!("expected a job frame, got {other:?}"),
+            }
+        }
+    }
+
+    fn commit_step(&mut self, job_id: &str, seq: i32, step_key: &str, result: &[u8]) {
+        self.writer
+            .write(
+                &ExecutorMessage::StepCommit {
+                    job_id: job_id.to_string(),
+                    seq,
+                    step_key: step_key.to_string(),
+                    kind: StepKind::Run,
+                    wake_at: None,
+                    payload_len: result.len(),
+                },
+                result,
+            )
+            .expect("send step commit");
+    }
+
+    fn commit_sleep(&mut self, job_id: &str, seq: i32, step_key: &str, wake_at: i64) {
+        self.writer
+            .write_header(&ExecutorMessage::StepCommit {
+                job_id: job_id.to_string(),
+                seq,
+                step_key: step_key.to_string(),
+                kind: StepKind::Sleep,
+                wake_at: Some(wake_at),
+                payload_len: 0,
+            })
+            .expect("send sleep commit");
+    }
+
+    /// The next `step_ack`, skipping anything queued ahead of it.
+    fn expect_step_ack(&mut self) -> (i32, bool, bool, Option<i64>, Option<StepFailure>) {
+        loop {
+            match self.read().expect("read frame").0 {
+                SchedulerMessage::StepAck {
+                    seq,
+                    ok,
+                    already,
+                    wake_at,
+                    failure,
+                    ..
+                } => return (seq, ok, already, wake_at, failure),
+                SchedulerMessage::HelloAck { .. }
+                | SchedulerMessage::Job { .. }
+                | SchedulerMessage::JobSteps { .. } => continue,
+                other => panic!("expected a step ack, got {other:?}"),
+            }
+        }
+    }
+
+    /// End the attempt in a sleep, the frame an executor writes *after* its
+    /// sleep commit has been acknowledged.
+    fn slept(&mut self, job_id: &str, task_name: &str, wake_at: i64) {
+        self.writer
+            .write_header(&ExecutorMessage::Slept {
+                job_id: job_id.to_string(),
+                task_name: task_name.to_string(),
+                wake_at,
+                wall_time_ns: 1,
+            })
+            .expect("send slept");
     }
 
     fn succeed(&mut self, job_id: &str, task_name: &str, result: Option<&[u8]>) {
@@ -1250,4 +1382,364 @@ fn a_fleet_rolling_onto_one_registry_warns_once() {
         "the first joiner is the one that reports: {}",
         warnings[0]
     );
+}
+
+// ── Durable steps ───────────────────────────────────────────────────
+
+/// A scheduler whose side channel is real storage, so a step commit is a row.
+fn dispatcher_with_storage(storage: &SqliteStorage) -> RemoteDispatcher {
+    let dispatcher = RemoteDispatcher::new(RemoteConfig {
+        scheduler_id: "scheduler-test".to_string(),
+        placement_timeout: Duration::from_secs(5),
+        shutdown_drain: Duration::from_millis(200),
+        side_channel: Some(Arc::new(StorageSideChannel::new(StorageBackend::Sqlite(
+            storage.clone(),
+        )))),
+        ..RemoteConfig::default()
+    });
+    // What a `Worker` does at startup. Without it there is no fence to write
+    // under, and every commit is refused rather than guessed at.
+    dispatcher.set_claim_owner("scheduler-test");
+    dispatcher
+}
+
+/// Enqueue a job and claim it under `owner`, the way the poller does before it
+/// hands one to a dispatcher.
+fn claimed_job(storage: &SqliteStorage, task_name: &str, owner: &str) -> Job {
+    let job = storage
+        .enqueue(NewJob {
+            queue: "default".to_string(),
+            task_name: task_name.to_string(),
+            payload: vec![],
+            priority: 0,
+            scheduled_at: now_millis(),
+            max_retries: 3,
+            timeout_ms: 300_000,
+            unique_key: None,
+            metadata: None,
+            notes: None,
+            depends_on: vec![],
+            expires_at: None,
+            result_ttl_ms: None,
+            namespace: None,
+            debounce_key: None,
+        })
+        .expect("enqueue");
+    storage
+        .dequeue("default", now_millis() + 1_000, None)
+        .expect("dequeue");
+    assert!(storage.claim_execution(&job.id, owner).expect("claim"));
+    storage.get_job(&job.id, None).expect("get").expect("job")
+}
+
+#[test]
+fn a_step_commit_is_written_under_the_schedulers_own_claim_owner() {
+    // The property the whole frame design exists for: the executor said which
+    // job and which step, and nothing else. The owner came from the dispatch.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        jobs.blocking_send(job).expect("dispatch");
+        let (dispatched, snapshot) = executor.expect_job_with_snapshot();
+        assert_eq!(dispatched, job_id);
+        assert!(snapshot.is_none(), "a first attempt has no steps to replay");
+
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        let (seq, ok, already, _, failure) = executor.expect_step_ack();
+        assert_eq!((seq, ok, already), (0, true, false), "{failure:?}");
+    });
+
+    let stored = storage.get_job_steps(&job_id, None).expect("steps");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].step_key, "charge#0");
+    assert_eq!(stored[0].result.as_deref(), Some(b"receipt".as_slice()));
+}
+
+#[test]
+fn a_retransmitted_commit_is_acknowledged_rather_than_refused() {
+    // An ack can be lost, and the executor's only recourse is to send the frame
+    // again. Treating that as a second commit would fail the durable path
+    // exactly when the network is already failing.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        jobs.blocking_send(job).expect("dispatch");
+        executor.expect_job_with_snapshot();
+
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        assert!(!executor.expect_step_ack().2, "the first commit is new");
+
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        let (_, ok, already, _, _) = executor.expect_step_ack();
+        assert!(ok && already, "a byte-identical re-commit is a success");
+    });
+
+    assert_eq!(
+        storage.get_job_steps(&job_id, None).expect("steps").len(),
+        1
+    );
+}
+
+#[test]
+fn a_commit_for_a_job_the_executor_is_not_running_loses_the_fence() {
+    // An authenticated executor is trusted to run its own work, not to speak
+    // for the fleet. `Superseded` is the one classification that ends an
+    // attempt without a result, which is right: the job is someone else's.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    executor.expect_hello_ack();
+    executor.commit_step(&job.id, 0, "charge#0", b"receipt");
+
+    let (_, ok, _, _, failure) = executor.expect_step_ack();
+    assert!(!ok);
+    assert_eq!(failure, Some(StepFailure::Superseded));
+    assert!(storage
+        .get_job_steps(&job.id, None)
+        .expect("steps")
+        .is_empty());
+}
+
+#[test]
+fn a_forged_position_is_refused_permanently() {
+    // Deterministic: the same code produces the same wrong `seq` next attempt,
+    // so a retry would only burn the budget reproducing the error.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        jobs.blocking_send(job).expect("dispatch");
+        executor.expect_job_with_snapshot();
+
+        executor.commit_step(&job_id, 7, "charge#0", b"receipt");
+        let (_, ok, _, _, failure) = executor.expect_step_ack();
+        assert!(!ok);
+        assert_eq!(failure, Some(StepFailure::Permanent));
+    });
+
+    assert!(storage
+        .get_job_steps(&job_id, None)
+        .expect("steps")
+        .is_empty());
+}
+
+#[test]
+fn a_replayed_jobs_snapshot_rides_its_dispatch() {
+    // §9.1: one read per attempt, and it is the scheduler's. Without this the
+    // executor would have to reach for a database it has no credentials for.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+    storage
+        .record_step_result(
+            &flexiq_core::storage::records::NewJobStep {
+                job_id: &job_id,
+                seq: 0,
+                step_key: "charge#0",
+                kind: StepKind::Run,
+                result: Some(b"receipt"),
+            },
+            "scheduler-test",
+            0,
+            &flexiq_core::step::StepLimits::default(),
+            None,
+        )
+        .expect("commit a step the earlier attempt made");
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        jobs.blocking_send(job).expect("dispatch");
+        let (dispatched, snapshot) = executor.expect_job_with_snapshot();
+        assert_eq!(dispatched, job_id);
+        let snapshot = snapshot.expect("the snapshot must precede the job frame");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].step_key, "charge#0");
+        assert_eq!(snapshot[0].result.as_deref(), Some(b"receipt".as_slice()));
+    });
+}
+
+#[test]
+fn an_executor_that_never_claimed_steps_is_sent_no_snapshot() {
+    // The read is not free, and a peer that would only discard the frame should
+    // not be paying for it.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["charge"], 1).expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+    storage
+        .record_step_result(
+            &flexiq_core::storage::records::NewJobStep {
+                job_id: &job_id,
+                seq: 0,
+                step_key: "charge#0",
+                kind: StepKind::Run,
+                result: Some(b"receipt"),
+            },
+            "scheduler-test",
+            0,
+            &flexiq_core::step::StepLimits::default(),
+            None,
+        )
+        .expect("commit");
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        jobs.blocking_send(job).expect("dispatch");
+        let (_, snapshot) = executor.expect_job_with_snapshot();
+        assert!(snapshot.is_none());
+    });
+}
+
+#[test]
+fn a_sleep_commit_reschedules_the_job_and_echoes_the_stored_deadline() {
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["cool"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "cool", "scheduler-test");
+    let job_id = job.id.clone();
+    let deadline = now_millis() + 3_600_000;
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job).expect("dispatch");
+        executor.expect_job_with_snapshot();
+
+        executor.commit_sleep(&job_id, 0, "cool_off#0", deadline);
+        let (_, ok, already, wake_at, failure) = executor.expect_step_ack();
+        assert!(ok, "{failure:?}");
+        assert!(!already);
+        assert_eq!(wake_at, Some(deadline));
+
+        // Only then does the attempt end: a sleep that could not be persisted
+        // is a failed attempt, not a silent one.
+        executor.slept(&job_id, "cool", deadline);
+        assert_eq!(kind(&expect_result(results)), "slept");
+
+        let slept = storage.get_job(&job_id, None).expect("get").expect("job");
+        assert_eq!(slept.status, JobStatus::Pending);
+        assert_eq!(slept.scheduled_at, deadline);
+
+        // The wake: the job comes back through the poller and the replay walks
+        // into the same sleep. It must get the *stored* deadline back — else a
+        // duration sleep pushes its own deadline an hour further out every time
+        // the job crashes into it.
+        storage
+            .dequeue("default", deadline + 1_000, None)
+            .expect("dequeue at the deadline");
+        assert!(storage
+            .claim_execution(&job_id, "scheduler-test")
+            .expect("reclaim"));
+        let woken = storage.get_job(&job_id, None).expect("get").expect("job");
+
+        jobs.blocking_send(woken).expect("dispatch the wake");
+        let (_, snapshot) = executor.expect_job_with_snapshot();
+        let snapshot = snapshot.expect("the sleep is a step row, so it replays");
+        assert_eq!(snapshot[0].kind, StepKind::Sleep);
+        assert_eq!(snapshot[0].wake_at, Some(deadline));
+
+        executor.commit_sleep(&job_id, 0, "cool_off#0", deadline + 3_600_000);
+        let (_, ok, already, wake_at, failure) = executor.expect_step_ack();
+        assert!(ok && already, "{failure:?}");
+        assert_eq!(wake_at, Some(deadline), "the stored deadline stands");
+    });
+}
+
+#[test]
+fn a_scheduler_with_no_step_store_withholds_the_capability() {
+    // Withheld rather than faked: an executor told steps work and then unable
+    // to commit one has already run the side effect by the time it finds out.
+    let sink = Arc::new(RecordingSink::default());
+    let dispatcher = dispatcher_with_sink(sink);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let (_, capabilities) = executor.expect_capabilities();
+    assert!(capabilities.contains(&CAP_SIDE_CHANNEL.to_string()));
+    assert!(!capabilities.contains(&CAP_STEPS.to_string()));
+}
+
+#[test]
+fn a_scheduler_with_a_step_store_advertises_the_capability() {
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let (_, capabilities) = executor.expect_capabilities();
+    assert!(capabilities.contains(&CAP_STEPS.to_string()));
+}
+
+#[test]
+fn a_job_that_slept_is_reported_even_if_the_connection_dies_first() {
+    // The one abandoned job that no reaper will ever recover: `sleep_job` left
+    // it `Pending` at its deadline, and a `Pending` job is not stale. Without
+    // this the scheduler holds its in-flight slot forever.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["cool"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "cool", "scheduler-test");
+    let job_id = job.id.clone();
+    let deadline = now_millis() + 3_600_000;
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job).expect("dispatch");
+        executor.expect_job_with_snapshot();
+
+        executor.commit_sleep(&job_id, 0, "cool_off#0", deadline);
+        let (_, ok, _, wake_at, failure) = executor.expect_step_ack();
+        assert!(ok, "{failure:?}");
+        assert_eq!(wake_at, Some(deadline));
+
+        // The executor dies between the ack and its `slept` frame.
+        drop(executor);
+
+        let reported = expect_result(results);
+        assert_eq!(kind(&reported), "slept");
+        let JobResult::Slept {
+            job_id: reported_id,
+            wake_at: reported_wake,
+            ..
+        } = reported
+        else {
+            unreachable!("just asserted the variant")
+        };
+        assert_eq!(reported_id, job_id);
+        assert_eq!(reported_wake, deadline);
+    });
 }

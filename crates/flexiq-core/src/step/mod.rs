@@ -11,6 +11,7 @@ mod key;
 mod limits;
 mod sequence;
 mod session;
+mod store;
 
 pub use failure::{classify_step_failure, StepFailure};
 pub use idempotency::{idempotency_key, run_key, ORIGIN_JOB_ID_KEY};
@@ -23,4 +24,5 @@ pub use limits::{
     MAX_STEPS_CEILING, MAX_STEP_BYTES_CEILING, MAX_TOTAL_BYTES_CEILING,
 };
 pub use sequence::{PendingStep, SleepDecision, StepDecision, StepSequence, DEFAULT_SLEEP_NAME};
-pub use session::{StepSession, StepSleep};
+pub use session::{StepSession, StepSleep, StorageStepSession};
+pub use store::{StepStore, StorageSteps};

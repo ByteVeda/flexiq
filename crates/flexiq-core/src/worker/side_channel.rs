@@ -12,11 +12,20 @@
 //! rather than an `Arc<dyn Storage>` so the dispatcher can be tested against a
 //! fake, and so the settings key a toggle list lives under is spelled in one
 //! place instead of at every call site.
+//!
+//! Durable steps are the sixth operation and the odd one out: every other entry
+//! here is fire-and-forget, and a step commit is the one thing whose answer the
+//! task is waiting on. "The write may or may not have landed" means "the step
+//! may or may not re-run", so those three methods return a `Result` the
+//! scheduler acknowledges rather than a failure it logs and drops.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::error::{QueueError, Result};
+use crate::step::StepLimits;
+use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit};
 use crate::storage::{Storage, StorageBackend};
 
 /// How long a resolved toggle list is reused before it is re-read.
@@ -51,6 +60,65 @@ pub trait SideChannel: Send + Sync + 'static {
     /// Middleware the operator has disabled for `task_name`, for attaching to a
     /// dispatch frame.
     fn disabled_middleware(&self, task_name: &str) -> Vec<String>;
+
+    // ── Durable inline steps ──────────────────────────────────────
+    //
+    // Fallible, unlike everything above: a step commit is what a running task
+    // is blocked on, and an unacknowledged one is indistinguishable from one
+    // that never happened. Defaulted so a channel that predates steps — or a
+    // test fake — keeps compiling and simply never advertises `CAP_STEPS`.
+
+    /// Whether durable steps work across this channel. `false` withholds
+    /// [`CAP_STEPS`](super::protocol::CAP_STEPS), and every step is then
+    /// refused rather than run un-memoized.
+    fn supports_steps(&self) -> bool {
+        false
+    }
+
+    /// The steps a job has already committed, read once at dispatch so the
+    /// snapshot can ride the job frame.
+    fn job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
+        let _ = (job_id, namespace);
+        Err(steps_unsupported())
+    }
+
+    /// Commit one step under the fence the *scheduler* holds.
+    ///
+    /// `owner` and `attempt` come from the dispatch this scheduler recorded,
+    /// never off the frame: an owner an executor supplies is an owner it can
+    /// forge, and a forged one writes into the live attempt's sequence.
+    fn record_step(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<StepCommit> {
+        let _ = (step, owner, attempt, namespace);
+        Err(steps_unsupported())
+    }
+
+    /// Commit a `step.sleep`: the row, the claim release and the reschedule as
+    /// one fenced operation. `wake_at` is a candidate; the answer carries the
+    /// deadline the job was actually rescheduled to.
+    fn sleep_job(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        wake_at: i64,
+        namespace: Option<&str>,
+    ) -> Result<SleepOutcome> {
+        let _ = (step, owner, attempt, wake_at, namespace);
+        Err(steps_unsupported())
+    }
+}
+
+/// What a channel with no step store answers. Permanent by
+/// [`classify_step_failure`](crate::step::classify_step_failure): retrying
+/// reaches the same scheduler, which will still have no store.
+fn steps_unsupported() -> QueueError {
+    QueueError::Config("this scheduler does not implement the step store".to_string())
 }
 
 /// The [`SideChannel`] a real deployment installs: straight through to storage.
@@ -59,15 +127,29 @@ pub struct StorageSideChannel {
     /// Resolved toggle lists, with the instant each was read. Bounded by the
     /// number of distinct task names, which is the app's own vocabulary.
     disables: Mutex<HashMap<String, (Vec<String>, Instant)>>,
+    /// Caps every step commit crossing this channel is held to.
+    ///
+    /// The scheduler's, not the executor's, and deliberately: the caps are the
+    /// operator's policy, and the operator runs the scheduler. An executor
+    /// checks its own copy first only so the error can name the value the
+    /// caller passed; this is the check that holds.
+    step_limits: StepLimits,
 }
 
 impl StorageSideChannel {
-    /// Wrap the scheduler's storage.
+    /// Wrap the scheduler's storage, holding steps to the default caps.
     pub fn new(storage: StorageBackend) -> Self {
         Self {
             storage,
             disables: Mutex::new(HashMap::new()),
+            step_limits: StepLimits::default(),
         }
+    }
+
+    /// Hold step commits to `limits` rather than the defaults.
+    pub fn with_step_limits(mut self, limits: StepLimits) -> Self {
+        self.step_limits = limits;
+        self
     }
 
     /// The settings key holding `task_name`'s disable list.
@@ -164,6 +246,37 @@ impl SideChannel for StorageSideChannel {
             .unwrap_or_else(recover)
             .insert(task_name.to_string(), (disabled.clone(), Instant::now()));
         disabled
+    }
+
+    fn supports_steps(&self) -> bool {
+        self.storage.supports_steps()
+    }
+
+    fn job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
+        self.storage.get_job_steps(job_id, namespace)
+    }
+
+    fn record_step(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        namespace: Option<&str>,
+    ) -> Result<StepCommit> {
+        self.storage
+            .record_step_result(step, owner, attempt, &self.step_limits, namespace)
+    }
+
+    fn sleep_job(
+        &self,
+        step: &NewJobStep<'_>,
+        owner: &str,
+        attempt: i32,
+        wake_at: i64,
+        namespace: Option<&str>,
+    ) -> Result<SleepOutcome> {
+        self.storage
+            .sleep_job(step, owner, attempt, wake_at, &self.step_limits, namespace)
     }
 }
 
@@ -282,5 +395,104 @@ mod tests {
         assert!(crate::settings::is_reserved_setting_key(
             &StorageSideChannel::disable_key("resize")
         ));
+    }
+
+    /// A job dequeued and claimed by `owner`, ready for a step commit.
+    fn claimed(channel: &StorageSideChannel, owner: &str) -> String {
+        let job_id = enqueued(channel);
+        channel
+            .storage
+            .dequeue("default", now_millis() + 1_000, None)
+            .expect("dequeue");
+        assert!(channel
+            .storage
+            .claim_execution(&job_id, owner)
+            .expect("claim"));
+        job_id
+    }
+
+    #[test]
+    fn a_step_commits_under_the_owner_the_scheduler_supplies() {
+        let channel = channel();
+        let job_id = claimed(&channel, "scheduler-1");
+
+        let step = NewJobStep {
+            job_id: &job_id,
+            seq: 0,
+            step_key: "charge#0",
+            kind: crate::storage::records::StepKind::Run,
+            result: Some(b"receipt"),
+        };
+        assert_eq!(
+            channel
+                .record_step(&step, "scheduler-1", 0, None)
+                .expect("commit"),
+            StepCommit::Committed
+        );
+
+        // And a retransmission after a lost ack is a success, not a second row.
+        assert_eq!(
+            channel
+                .record_step(&step, "scheduler-1", 0, None)
+                .expect("recommit"),
+            StepCommit::AlreadyCommitted
+        );
+        assert_eq!(channel.job_steps(&job_id, None).expect("read").len(), 1);
+    }
+
+    #[test]
+    fn a_commit_naming_another_owner_loses_the_fence() {
+        // The reason a step frame carries no owner: this is what an executor
+        // would be able to forge if it did.
+        let channel = channel();
+        let job_id = claimed(&channel, "scheduler-1");
+
+        let refused = channel.record_step(
+            &NewJobStep {
+                job_id: &job_id,
+                seq: 0,
+                step_key: "charge#0",
+                kind: crate::storage::records::StepKind::Run,
+                result: Some(b"receipt"),
+            },
+            "an-impostor",
+            0,
+            None,
+        );
+        assert!(
+            matches!(refused, Err(QueueError::ClaimLost(_))),
+            "{refused:?}"
+        );
+        assert!(channel.job_steps(&job_id, None).expect("read").is_empty());
+    }
+
+    #[test]
+    fn a_channel_with_no_step_store_refuses_rather_than_reporting_none() {
+        // "No steps recorded" is the one answer that re-runs a charge, so the
+        // default is an error and the capability is simply withheld.
+        struct Bare;
+        impl SideChannel for Bare {
+            fn update_progress(&self, _: &str, _: i32, _: Option<&str>) {}
+            fn write_task_log(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+                _: Option<&str>,
+            ) {
+            }
+            fn disabled_middleware(&self, _: &str) -> Vec<String> {
+                Vec::new()
+            }
+        }
+
+        assert!(!Bare.supports_steps());
+        assert!(Bare.job_steps("job-1", None).is_err());
+        assert_eq!(
+            crate::step::classify_step_failure(&steps_unsupported()),
+            crate::step::StepFailure::Permanent
+        );
     }
 }

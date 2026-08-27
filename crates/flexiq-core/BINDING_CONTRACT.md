@@ -128,13 +128,17 @@ bytes of the section above, unchanged. `MAX_HEADER_BYTES` (64 KiB) and
 | `hello_ack` | scheduler → executor | `{scheduler_id, protocol_version, capabilities[]}` |
 | `heartbeat` | executor → scheduler | `{free_slots}` |
 | `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace, disabled_middleware[], metadata}` + blob |
+| `job_steps` | scheduler → executor | `{job_id, payload_len}` + snapshot blob |
 | `cancel` | scheduler → executor | `{job_id}` |
 | `shutdown` | scheduler → executor | — |
+| `step_ack` | scheduler → executor | `{job_id, seq, ok, already, wake_at?, error?, failure?}` |
 | `progress` | executor → scheduler | `{job_id, progress}` |
 | `task_log` | executor → scheduler | `{job_id, task_name, level, message, extra_len}` + blob |
+| `step_commit` | executor → scheduler | `{job_id, seq, step_key, kind, wake_at?, payload_len}` + blob |
 | `success` | executor → scheduler | `{job_id, result_len, task_name, wall_time_ns}` + blob |
 | `failure` | executor → scheduler | `{job_id, error, retry_count, max_retries, task_name, wall_time_ns, should_retry, timed_out}` |
 | `cancelled` | executor → scheduler | `{job_id, task_name, wall_time_ns}` |
+| `slept` | executor → scheduler | `{job_id, task_name, wake_at, wall_time_ns}` |
 
 Rules:
 - `hello` is the first frame on every connection; no `job` may precede its ack.
@@ -147,9 +151,12 @@ Rules:
   core never inspects one.
 - **Optional behaviour is negotiated, not versioned.** `capabilities` lists what
   the scheduler will do on an executor's behalf; `side_channel` means it applies
-  `progress` and `task_log` frames to storage. An executor sends neither frame
-  unless it was advertised. Adding one never bumps `protocol_version`, which
-  would force scheduler and executors to upgrade together.
+  `progress` and `task_log` frames to storage, and `steps` means it applies
+  `step_commit` frames. An executor sends neither frame unless it was
+  advertised. Adding one never bumps `protocol_version`, which would force
+  scheduler and executors to upgrade together. `hello` carries a `capabilities`
+  list too, for the direction that runs the other way: the scheduler sends a
+  `job_steps` snapshot only to an executor that claimed `steps`.
 - **An unknown frame type is skipped, not fatal.** A reader that cannot name a
   frame reads its declared payload length, discards that many bytes, logs once
   and continues — the stream stays aligned, and a session keeps its in-flight
@@ -176,6 +183,54 @@ Rules:
   running. `progress` is 0–100; a value outside that range is never written —
   SDK boundaries clamp where they can, and the scheduler drops what still
   reaches it rather than failing the job over a progress report.
+
+### Durable steps
+
+`step_commit` is the one executor→scheduler frame that expects an answer. The
+executor blocks on its `step_ack` before returning from `step.run`: an
+unconfirmed commit is indistinguishable from one that never happened, and
+proceeding would re-run the step on the next attempt with the side effect
+already applied.
+
+- **A step frame never carries an owner, a namespace or a cap.** The fence is
+  `(owner, attempt)`, and an owner an executor fills in is an owner it can
+  forge — after a reclaim, a stale executor sending the *current* owner's id
+  would write straight into the live attempt's sequence. The scheduler supplies
+  both halves from the dispatch it recorded, scopes the write to the namespace
+  it dispatched in, and enforces its own caps. The frame says only which job and
+  which step; the authenticated connection is the claim of identity, and a frame
+  naming a job the sender is not running is refused.
+- **Correlation is `(job_id, seq)`.** One executor runs many jobs concurrently,
+  and the pairing must not depend on a job having only one step in flight.
+- **A commit is idempotent, because an ack can be lost.** A retransmission of
+  the same `(seq, step_key)` and payload answers `ok: true, already: true`;
+  anything else stored at that position is a divergence and is refused.
+- **A refusal carries a verdict, not just a message.** `failure` is
+  `retryable` (the backend, not the request, failed — fail the attempt and let
+  the job's retry policy have it), `permanent` (a divergence, a cap, a bad
+  encoding — fail without retrying) or `superseded` (the fence is lost: emit
+  **no result at all**, because the job is proceeding correctly under another
+  owner). The variant of the underlying error does not cross; the verdict and
+  the message do.
+- **A sleep is a commit, then a result.** `step_commit` with `kind: "sleep"` and
+  a candidate `wake_at` commits the row, releases the claim and reschedules the
+  job as one operation; the ack echoes the deadline the job was *actually*
+  rescheduled to, which on a replay is the stored one rather than the candidate.
+  Only then does the executor write `slept` to end the attempt.
+- **The snapshot rides the dispatch.** `job_steps` arrives immediately before
+  the `job` frame it belongs to, and only for a job that has steps — no frame
+  means an empty snapshot, never an unknown one. Its payload is a JSON metadata
+  line (`[{seq, step_key, kind, result_len, wake_at, created_at}, …]`), a
+  newline, then every step's blob concatenated in `seq` order. Same shape as the
+  frame itself, one level down: parseable with any standard library, and a
+  megabyte of step results costs a megabyte.
+- **No capability, no steps.** An executor attached to a scheduler that did not
+  advertise `steps` fails the first `step.run` with a retryable error naming the
+  capability. It does not run un-memoized — there is no version of "your charge
+  step silently lost its memo" that beats a failure naming the reason.
+- Every `step.run` costs one round trip where an in-process worker costs one
+  local write. That is the price of durability without credentials: steps are
+  checkpoints, not a loop body.
 
 ### Registry fingerprint
 

@@ -17,13 +17,15 @@ use serde::{Deserialize, Serialize};
 
 use flexiq_core::job::{Job, JobStatus};
 use flexiq_core::scheduler::JobResult;
+use flexiq_core::step::{classify_step_failure, StepFailure, StepLimits};
+use flexiq_core::storage::records::{JobStep, StepKind};
 use flexiq_core::worker::auth::Secret;
 use flexiq_core::worker::executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
 };
 use flexiq_core::worker::protocol::{
-    ExecutorMessage, Frame, FrameReader, FrameWriter, ProtocolError, SchedulerMessage,
-    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    encode_step_snapshot, ExecutorMessage, Frame, FrameReader, FrameWriter, ProtocolError,
+    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use flexiq_core::worker::remote::{RemoteConfig, RemoteDispatcher};
 use flexiq_core::worker::transport::{Connection, MemoryTransport, ReadHalf, Transport, WriteHalf};
@@ -347,19 +349,26 @@ impl Write for StallingWriter {
     }
 }
 
-/// How a test wants the executor's outbound side-channel wired.
-struct SideChannelTuning {
-    /// Queued operations allowed before the oldest task logs are shed.
+/// How a test wants the executor end of the attach built.
+struct ExecutorTuning {
+    /// Queued side-channel operations allowed before the oldest logs are shed.
     capacity: usize,
     /// Holds the executor's writer, so the queue behind it can be filled.
     gate: Option<Arc<Gate>>,
+    /// What the executor announces in its own `hello`.
+    capabilities: Vec<String>,
+    /// How long a step commit waits for its ack.
+    step_ack_timeout: Duration,
 }
 
-impl Default for SideChannelTuning {
+impl Default for ExecutorTuning {
     fn default() -> Self {
+        let defaults = ExecutorConfig::new("test", "0.0.0");
         Self {
-            capacity: ExecutorConfig::new("test", "0.0.0").side_channel_capacity,
+            capacity: defaults.side_channel_capacity,
             gate: None,
+            capabilities: Vec::new(),
+            step_ack_timeout: defaults.step_ack_timeout,
         }
     }
 }
@@ -388,7 +397,37 @@ impl FakeScheduler {
         slots: u32,
         capabilities: Vec<String>,
     ) -> (Self, ExecutorHandle, Arc<TestPool>) {
-        Self::attach_tuned(tasks, slots, capabilities, SideChannelTuning::default())
+        Self::attach_tuned(tasks, slots, capabilities, ExecutorTuning::default())
+    }
+
+    /// Handshake with both sides claiming [`CAP_STEPS`].
+    ///
+    /// The ack budget is deliberately generous. Only one test here wants a
+    /// commit to *time out*, and it asks for that itself
+    /// ([`Self::attach_with_step_budget`]); every other one only needs the
+    /// budget to outlast a loaded CI machine's scheduling. Defaulting it short
+    /// makes each of those a race whose failure reads as a real bug.
+    fn attach_with_steps(tasks: &[&str], slots: u32) -> (Self, ExecutorHandle, Arc<TestPool>) {
+        Self::attach_with_step_budget(tasks, slots, Duration::from_secs(5))
+    }
+
+    /// The same, with the ack budget spelled out — for the test that needs a
+    /// commit to run out of it without sitting for the production default.
+    fn attach_with_step_budget(
+        tasks: &[&str],
+        slots: u32,
+        step_ack_timeout: Duration,
+    ) -> (Self, ExecutorHandle, Arc<TestPool>) {
+        Self::attach_tuned(
+            tasks,
+            slots,
+            vec![CAP_STEPS.to_string()],
+            ExecutorTuning {
+                capabilities: vec![CAP_STEPS.to_string()],
+                step_ack_timeout,
+                ..ExecutorTuning::default()
+            },
+        )
     }
 
     /// Handshake with the outbound queue sized to `capacity` and the executor's
@@ -403,9 +442,10 @@ impl FakeScheduler {
             tasks,
             slots,
             vec![CAP_SIDE_CHANNEL.to_string()],
-            SideChannelTuning {
+            ExecutorTuning {
                 capacity,
                 gate: Some(gate.clone()),
+                ..ExecutorTuning::default()
             },
         );
         (scheduler, handle, pool, gate)
@@ -415,7 +455,7 @@ impl FakeScheduler {
         tasks: &[&str],
         slots: u32,
         capabilities: Vec<String>,
-        tuning: SideChannelTuning,
+        tuning: ExecutorTuning,
     ) -> (Self, ExecutorHandle, Arc<TestPool>) {
         let (scheduler_end, executor_end) = MemoryTransport::pair();
         let executor_end: Box<dyn Transport> = match tuning.gate {
@@ -459,6 +499,8 @@ impl FakeScheduler {
                 heartbeat_interval: Duration::from_millis(50),
                 shutdown_drain: Duration::from_secs(2),
                 side_channel_capacity: tuning.capacity,
+                capabilities: tuning.capabilities.clone(),
+                step_ack_timeout: tuning.step_ack_timeout,
                 ..ExecutorConfig::new("test", "0.0.0")
             },
         )
@@ -1598,5 +1640,338 @@ fn a_result_never_overtakes_what_the_task_already_reported() {
         "both must precede the result, saw {seen:?}"
     );
 
+    handle.shutdown();
+}
+
+// ── Durable steps ───────────────────────────────────────────────────
+
+impl FakeScheduler {
+    /// Send the snapshot a dispatch would carry.
+    fn send_snapshot(&mut self, job_id: &str, steps: &[JobStep]) {
+        let payload = encode_step_snapshot(steps);
+        self.writer
+            .write(
+                &SchedulerMessage::JobSteps {
+                    job_id: job_id.to_string(),
+                    payload_len: payload.len(),
+                },
+                &payload,
+            )
+            .expect("send snapshot");
+    }
+
+    /// The next `step_commit`, skipping heartbeats.
+    fn expect_step_commit(&mut self) -> (String, i32, String, StepKind, Option<i64>, Vec<u8>) {
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            assert!(Instant::now() < deadline, "no step commit arrived");
+            let (frame, payload) = self.next_frame();
+            match frame {
+                ExecutorMessage::Heartbeat { .. } => continue,
+                ExecutorMessage::StepCommit {
+                    job_id,
+                    seq,
+                    step_key,
+                    kind,
+                    wake_at,
+                    ..
+                } => return (job_id, seq, step_key, kind, wake_at, payload),
+                other => panic!("expected a step commit, got {other:?}"),
+            }
+        }
+    }
+
+    fn ack_step(&mut self, job_id: &str, seq: i32, already: bool, wake_at: Option<i64>) {
+        self.writer
+            .write_header(&SchedulerMessage::StepAck {
+                job_id: job_id.to_string(),
+                seq,
+                ok: true,
+                already,
+                wake_at,
+                error: None,
+                failure: None,
+            })
+            .expect("send ack");
+    }
+
+    fn refuse_step(&mut self, job_id: &str, seq: i32, error: &str, failure: StepFailure) {
+        self.writer
+            .write_header(&SchedulerMessage::StepAck {
+                job_id: job_id.to_string(),
+                seq,
+                ok: false,
+                already: false,
+                wake_at: None,
+                error: Some(error.to_string()),
+                failure: Some(failure),
+            })
+            .expect("send refusal");
+    }
+}
+
+/// A job as an executor sees one: what `into_dispatch` rebuilds from a frame.
+fn running_job(id: &str) -> Job {
+    Job {
+        id: id.to_string(),
+        queue: "default".to_string(),
+        task_name: "charge".to_string(),
+        payload: Vec::new(),
+        status: JobStatus::Running,
+        priority: 0,
+        created_at: 0,
+        scheduled_at: 0,
+        started_at: None,
+        completed_at: None,
+        retry_count: 0,
+        max_retries: 3,
+        result: None,
+        error: None,
+        timeout_ms: 300_000,
+        unique_key: None,
+        progress: None,
+        metadata: None,
+        notes: None,
+        cancel_requested: false,
+        expires_at: None,
+        result_ttl_ms: None,
+        namespace: None,
+        has_deps: false,
+        debounce_key: None,
+    }
+}
+
+fn memoized(seq: i32, step_key: &str, result: &[u8]) -> JobStep {
+    JobStep {
+        job_id: "job-1".to_string(),
+        seq,
+        step_key: step_key.to_string(),
+        kind: StepKind::Run,
+        result: Some(result.to_vec()),
+        wake_at: None,
+        created_at: 0,
+    }
+}
+
+#[test]
+fn a_step_commit_blocks_until_the_scheduler_answers_it() {
+    // The whole reason this frame pair exists: an unconfirmed commit is
+    // indistinguishable from one that never happened, so the task must not
+    // proceed past it.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let job = running_job("job-1");
+    let mut session = handle
+        .steps()
+        .open_session(&job, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+
+    let (job_id, seq, step_key, kind, wake_at, payload) = scheduler.expect_step_commit();
+    assert_eq!(
+        (job_id.as_str(), seq, step_key.as_str()),
+        ("job-1", 0, "charge#0")
+    );
+    assert_eq!(kind, StepKind::Run);
+    assert_eq!(wake_at, None);
+    assert_eq!(
+        payload, b"receipt",
+        "the blob is the encoded result, verbatim"
+    );
+
+    scheduler.ack_step("job-1", 0, false, None);
+    assert_eq!(
+        running.join().expect("the step thread").expect("commit"),
+        b"receipt"
+    );
+    handle.shutdown();
+}
+
+#[test]
+fn a_refused_commit_arrives_with_the_classification_the_scheduler_made() {
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let job = running_job("job-1");
+    let mut session = handle
+        .steps()
+        .open_session(&job, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+    scheduler.expect_step_commit();
+    scheduler.refuse_step(
+        "job-1",
+        0,
+        "step divergence on job job-1 at position 0",
+        StepFailure::Permanent,
+    );
+
+    let error = running
+        .join()
+        .expect("the step thread")
+        .expect_err("a refused commit must fail the step");
+    // The message reads whole — no wrapper prefix — and the verdict survived
+    // the crossing, which is what keeps a retry from burning the budget.
+    assert_eq!(
+        error.to_string(),
+        "step divergence on job job-1 at position 0"
+    );
+    assert_eq!(classify_step_failure(&error), StepFailure::Permanent);
+    handle.shutdown();
+}
+
+#[test]
+fn a_lost_fence_comes_back_as_a_lost_claim() {
+    // `Superseded` is the one verdict that ends an attempt without a result:
+    // the job is running correctly under another owner, and failing it here
+    // would kill that run.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let job = running_job("job-1");
+    let mut session = handle
+        .steps()
+        .open_session(&job, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+    scheduler.expect_step_commit();
+    scheduler.refuse_step("job-1", 0, "claim lost", StepFailure::Superseded);
+
+    let error = running
+        .join()
+        .expect("the step thread")
+        .expect_err("refused");
+    assert_eq!(classify_step_failure(&error), StepFailure::Superseded);
+    assert_eq!(error.to_string(), "execution claim lost for job job-1");
+    handle.shutdown();
+}
+
+#[test]
+fn an_ack_for_another_step_leaves_this_one_waiting() {
+    // Correlation is `(job_id, seq)`. One executor runs many jobs, and the
+    // pairing must not depend on only one step being in flight.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let job = running_job("job-1");
+    let mut session = handle
+        .steps()
+        .open_session(&job, StepLimits::default())
+        .expect("open a session");
+
+    let (done_tx, done) = crossbeam_channel::bounded(1);
+    let running = thread::spawn(move || {
+        let outcome = session.run("charge", None, |_| Ok(b"receipt".to_vec()));
+        let _ = done_tx.send(());
+        outcome
+    });
+
+    scheduler.expect_step_commit();
+    scheduler.ack_step("job-1", 7, false, None);
+    scheduler.ack_step("job-2", 0, false, None);
+    assert!(
+        done.recv_timeout(Duration::from_millis(150)).is_err(),
+        "an ack for another step must not release this one"
+    );
+
+    scheduler.ack_step("job-1", 0, false, None);
+    assert_eq!(running.join().expect("thread").expect("commit"), b"receipt");
+    handle.shutdown();
+}
+
+#[test]
+fn a_scheduler_that_stops_answering_fails_the_step_retryably() {
+    // The only genuinely uncertain case, and the replay re-runs the step under
+    // the same downstream idempotency key, which is what makes it safe.
+    //
+    // The one test that wants the budget to run out, so it is the one that asks
+    // for a short one rather than every other test paying for it.
+    let (mut scheduler, handle, _pool) =
+        FakeScheduler::attach_with_step_budget(&["charge"], 1, Duration::from_millis(300));
+    let job = running_job("job-1");
+    let mut session = handle
+        .steps()
+        .open_session(&job, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+    scheduler.expect_step_commit();
+
+    let error = running
+        .join()
+        .expect("the step thread")
+        .expect_err("an unanswered commit must fail the step");
+    assert_eq!(classify_step_failure(&error), StepFailure::Retryable);
+    assert!(error.to_string().contains("did not acknowledge"), "{error}");
+    handle.shutdown();
+}
+
+#[test]
+fn a_snapshot_that_rode_the_dispatch_answers_a_memo_hit() {
+    // No storage read, and no closure: the executor replays from the bytes the
+    // scheduler already had in hand.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    scheduler.send_snapshot("job-1", &[memoized(0, "charge#0", b"receipt")]);
+
+    // The frame has to land before the session reads it; the reader thread is
+    // the only thing between them.
+    let job = running_job("job-1");
+    let deadline = Instant::now() + SETTLE;
+    let mut session = loop {
+        let session = handle
+            .steps()
+            .open_session(&job, StepLimits::default())
+            .expect("open a session");
+        if session.sequence().recorded_keys() == vec!["charge#0".to_string()] {
+            break session;
+        }
+        assert!(Instant::now() < deadline, "the snapshot never arrived");
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    let replayed = session
+        .run("charge", None, |_| panic!("a memoized step must not run"))
+        .expect("memo");
+    assert_eq!(replayed, b"receipt");
+    handle.shutdown();
+}
+
+#[test]
+fn a_scheduler_without_the_capability_refuses_every_step() {
+    // §9.4. Refusing is the whole point: there is no version of "your charge
+    // step silently lost its memo" that beats a failure naming the reason.
+    let (_scheduler, handle, _pool) = FakeScheduler::attach(&["charge"], 1);
+    let steps = handle.steps();
+    assert!(!steps.is_supported());
+
+    let error = steps
+        .open_session(&running_job("job-1"), StepLimits::default())
+        .err()
+        .expect("a session must not open without a step store");
+    // The message names the scheduler, not "this storage backend": there is no
+    // backend on this side, and that line would send an operator to the wrong
+    // process.
+    assert!(
+        error.to_string().contains("offers no step store"),
+        "{error}"
+    );
+    assert_eq!(classify_step_failure(&error), StepFailure::Retryable);
+    handle.shutdown();
+}
+
+#[test]
+fn a_job_with_no_execution_timeout_still_waits_the_configured_budget() {
+    // `timeout_ms <= 0` means *no* timeout — zero included. Reading a bare zero
+    // as a zero-length budget would time out every commit before the scheduler
+    // could possibly answer it.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let mut untimed = running_job("job-1");
+    untimed.timeout_ms = 0;
+
+    let mut session = handle
+        .steps()
+        .open_session(&untimed, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+    scheduler.expect_step_commit();
+    scheduler.ack_step("job-1", 0, false, None);
+    assert_eq!(running.join().expect("thread").expect("commit"), b"receipt");
     handle.shutdown();
 }

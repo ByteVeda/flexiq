@@ -42,7 +42,8 @@ pub use scheduler::{
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
 pub use step::{
     classify_step_failure, idempotency_key, run_key, PendingStep, SleepDecision, StepDecision,
-    StepFailure, StepKey, StepLimits, StepSequence, StepSession, StepSleep, ORIGIN_JOB_ID_KEY,
+    StepFailure, StepKey, StepLimits, StepSequence, StepSession, StepSleep, StepStore,
+    StorageStepSession, StorageSteps, ORIGIN_JOB_ID_KEY,
 };
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]
@@ -62,8 +63,8 @@ pub use worker::registry_fingerprint;
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
     ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession,
-    ExecutorSideChannel, HelloBuilder, NativeDispatcher, ProtocolError, RemoteConfig,
-    RemoteDispatcher, SchedulerMessage, Secret, SideChannel, StorageSideChannel, TaskError,
-    TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL,
-    PROTOCOL_VERSION,
+    ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, HelloBuilder, NativeDispatcher,
+    ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret, SideChannel,
+    StorageSideChannel, TaskError, TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher,
+    WorkerHandle, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };

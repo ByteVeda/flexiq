@@ -212,6 +212,9 @@ impl Worker {
 
         let mut scheduler = Scheduler::new(storage.clone(), queues, scheduler_config, namespace);
         scheduler.set_claim_owner(worker_id.clone());
+        // The same id, to the pool: a dispatcher that writes on the scheduler's
+        // behalf has to fence on the claim this scheduler actually holds.
+        dispatcher.set_claim_owner(&worker_id);
         for (task_name, config) in task_configs {
             scheduler.register_task(task_name, config);
         }

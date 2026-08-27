@@ -13,6 +13,7 @@ pub mod registry;
 pub mod remote;
 pub mod runner;
 pub mod side_channel;
+mod step_pump;
 pub mod transport;
 
 pub use auth::Secret;
@@ -21,12 +22,12 @@ pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
 pub use executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    ExecutorSideChannel,
+    ExecutorSideChannel, ExecutorStepStore, ExecutorSteps,
 };
 pub use fingerprint::registry_fingerprint;
 pub use protocol::{
-    Dispatch, ExecutorMessage, HelloBuilder, Incoming, ProtocolError, SchedulerMessage,
-    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    decode_step_snapshot, encode_step_snapshot, Dispatch, ExecutorMessage, HelloBuilder, Incoming,
+    ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
@@ -61,4 +62,14 @@ pub trait WorkerDispatcher: Send + Sync {
     /// a side-channel signal so the worker observes the cancel without polling
     /// storage.
     fn notify_cancel(&self, _job_id: &str) {}
+
+    /// Tell the pool which worker id the scheduler wins its execution claims
+    /// under.
+    ///
+    /// Only a pool that performs a *fenced* write on the scheduler's behalf
+    /// needs it, which today means the [`RemoteDispatcher`]: an attached
+    /// executor cannot supply the owner for its own step commits, because an
+    /// owner it supplies is an owner it can forge. Everyone else runs where the
+    /// claim was won and ignores this.
+    fn set_claim_owner(&self, _owner: &str) {}
 }

@@ -14,7 +14,7 @@ use std::time::Duration;
 use flexiq_core::worker::protocol::{FrameReader, FrameWriter, ProtocolError};
 use flexiq_core::{
     ExecutorMessage, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
-    Storage, StorageSideChannel, CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    Storage, StorageSideChannel, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use flexiq_server::config::listen::AttachListen;
 use flexiq_server::runtime::listener;
@@ -394,10 +394,15 @@ fn an_executor_reports_progress_and_logs_through_the_scheduler() {
     let harness = Harness::start(&storage);
     let (mut executor, capabilities) =
         Executor::attach_reporting_capabilities(harness.port(), &["greet"]);
-    assert_eq!(
-        capabilities,
-        [CAP_SIDE_CHANNEL],
-        "a scheduler with storage must advertise the side-channel"
+    // Membership, not the whole list: the capability set grows, and a scheduler
+    // with a step store now advertises `steps` here too.
+    assert!(
+        capabilities.iter().any(|cap| cap == CAP_SIDE_CHANNEL),
+        "a scheduler with storage must advertise the side-channel, got {capabilities:?}"
+    );
+    assert!(
+        capabilities.iter().any(|cap| cap == CAP_STEPS),
+        "a scheduler over a backend with a step store must advertise steps, got {capabilities:?}"
     );
 
     let dispatched = executor.expect_job();
