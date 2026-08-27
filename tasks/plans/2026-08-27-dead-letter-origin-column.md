@@ -9,7 +9,7 @@ stamps that key so a resurrected run keeps minting the downstream idempotency
 keys it has always minted. The stamp rides in the metadata blob, and
 `move_to_dlq` / `shed_to_dlq` let a caller **replace** that blob wholesale.
 
-#727 closed the object-shaped replacements by merging the origin back in
+PR #727 closed the object-shaped replacements by merging the origin back in
 (`carry_origin_job_id`). It cannot close a replacement that is not a JSON
 object, and there is exactly one: `RETRY_BUDGET_EXHAUSTED`, the bare string
 `"retry_budget_exhausted"`, which three SDK suites match byte-for-byte and so
