@@ -97,6 +97,13 @@ mavenPublishing {
     }
 }
 
+// Javadoc caps its output at 100 warnings by default, which is how a backlog of
+// a few thousand read as "104" for as long as anyone had looked. Raise the cap so
+// the number the build prints is the real one.
+tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).addStringOption("Xmaxwarns", "100000")
+}
+
 // --- Code integrity: formatting + static analysis -------------------------
 
 spotless {
