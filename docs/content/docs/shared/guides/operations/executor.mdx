@@ -173,6 +173,29 @@ Middleware disabled from the dashboard is honoured too. The executor cannot read
 settings, so the scheduler resolves the list and attaches it to each dispatch —
 a toggle still takes effect on the next job, with nothing to restart.
 
+### Durable steps
+
+Durable steps work on an attached executor, and they cost a round trip each.
+
+The executor has no database, so neither half of a step happens locally: the
+steps a job already committed ride in on its dispatch, and every new one crosses
+to the scheduler, which performs the write under the execution claim it holds.
+The executor blocks until that write is acknowledged. It has to — a step whose
+commit was never confirmed may or may not have landed, and carrying on would
+re-run it on the next attempt with the side effect already applied.
+
+That makes a step a checkpoint, not a loop body. An in-process worker pays one
+local write per step; an attached one pays a network round trip. Checkpoint
+around the things you would hate to repeat — a charge, a provisioning call, an
+email — not around every iteration.
+
+Two failures are worth knowing by name. A commit the scheduler could not apply
+because its backend was unavailable fails the attempt *retryably*, and the
+replay re-runs the step under the same downstream idempotency key, which is what
+makes it safe. A scheduler that never advertised the `steps` capability — no
+database configured for it, or a backend without a step store — refuses the
+step outright rather than running it un-memoized.
+
 ### What is not available
 
 Anything that needs the database directly. An enqueue, a workflow submission or
@@ -197,6 +220,11 @@ or task-log frames, and those calls become no-ops (logged once). Everything else
 — dispatch, results, retries, cancellation — is unaffected. The executor logs
 which capabilities it negotiated at attach.
 
+`steps` is the one capability that fails rather than degrades. Progress that
+goes nowhere costs a dashboard bar; a step that goes nowhere re-runs a charge.
+The failure is retryable, so a fleet mid-rollout still makes progress: the next
+attempt may land on a worker or an executor that can commit.
+
 Skew in the other direction is covered too. A frame type the receiving side has
 never heard of is logged once and skipped rather than treated as a corrupt
 stream: a header declares its own payload length, so the reader stays aligned on
@@ -210,4 +238,5 @@ need.
 |---|---|
 | CPU-heavy tasks compete with request latency in the app container | Cap `--slots`; or run a second replica set from the same image with the HTTP server off |
 | A network hop per job | Use a Unix socket for same-pod sidecars; attach is a poor fit for microsecond-scale tasks |
+| A round trip per durable step | Checkpoint around what you would hate to repeat, not around every iteration |
 | The attach port dispatches code | A Unix socket where the peer is same-pod; off loopback, proxy-terminated mTLS *and* the token, never the token alone |
