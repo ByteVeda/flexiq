@@ -83,6 +83,11 @@ macro_rules! impl_diesel_dead_letter_ops {
                         subscription_name: subscription_name.as_deref(),
                         shed,
                         origin_job_id: Some(&origin_job_id),
+                        // Only when the replacement would otherwise displace
+                        // it: with no replacement, `metadata` already is the
+                        // job's own and copying an unbounded blob twice buys
+                        // nothing. See `m0015_dead_letter_job_metadata`.
+                        job_metadata: metadata.and(job.metadata.as_deref()),
                     };
 
                     diesel::insert_into(dead_letter::table)
@@ -261,9 +266,15 @@ macro_rules! impl_diesel_dead_letter_ops {
 
                 let retry_metadata = {
                     let next_count = dead_row.dlq_retry_count + 1;
+                    // The job's own metadata, which is `metadata` unless a
+                    // caller's replacement displaced it. Rebuilding the job
+                    // from the replacement would hand the operator a job
+                    // stripped of the keys it was enqueued with — and, for a
+                    // marker that is not even an object, an empty blob.
                     let mut obj = dead_row
-                        .metadata
+                        .job_metadata
                         .as_deref()
+                        .or(dead_row.metadata.as_deref())
                         .and_then(|m| {
                             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(m)
                                 .ok()

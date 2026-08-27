@@ -136,6 +136,11 @@ pub struct DeadLetterRow {
     /// `metadata` argument of `move_to_dlq` replaces that blob wholesale.
     /// `None` on rows written before `0014_dead_letter_origin`.
     pub origin_job_id: Option<String>,
+    /// The job's own metadata, held apart from [`Self::metadata`] when a
+    /// caller's replacement would otherwise displace it. `None` means
+    /// `metadata` *is* the job's own — the common no-replacement case, and
+    /// every row written before `0015_dead_letter_job_metadata`.
+    pub job_metadata: Option<String>,
 }
 
 /// A `dead_letter` row without the `payload` blob. Listing paths select this so
@@ -200,6 +205,11 @@ pub struct NewDeadLetterRow<'a> {
     /// `metadata` argument of `move_to_dlq` replaces that blob wholesale.
     /// `None` on rows written before `0014_dead_letter_origin`.
     pub origin_job_id: Option<&'a str>,
+    /// The job's own metadata, held apart from [`Self::metadata`] when a
+    /// caller's replacement would otherwise displace it. `None` means
+    /// `metadata` *is* the job's own — the common no-replacement case, and
+    /// every row written before `0015_dead_letter_job_metadata`.
+    pub job_metadata: Option<&'a str>,
 }
 
 /// A row in the `rate_limits` table.

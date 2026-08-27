@@ -40,6 +40,13 @@ struct DeadJobEntry {
     /// migrate, so this is the counterpart of `m0014_dead_letter_origin`.
     #[serde(default)]
     pub origin_job_id: Option<String>,
+    /// The job's own metadata, held apart from [`Self::metadata`] when a
+    /// caller's replacement would otherwise displace it. `default` so entries
+    /// written before the field existed still deserialize; absent means
+    /// `metadata` *is* the job's own. Counterpart of
+    /// `m0015_dead_letter_job_metadata`.
+    #[serde(default)]
+    pub job_metadata: Option<String>,
 }
 
 impl From<DeadJobEntry> for DeadJob {
@@ -122,6 +129,10 @@ impl RedisStorage {
             dlq_retry_count,
             shed,
             origin_job_id: Some(crate::step::run_key(job)),
+            // Only when the replacement would otherwise displace it: with no
+            // replacement, `metadata` already is the job's own and copying an
+            // unbounded blob twice buys nothing.
+            job_metadata: metadata.and(job.metadata.as_deref()).map(str::to_string),
         };
 
         let json = serde_json::to_string(&entry)?;
@@ -401,12 +412,18 @@ impl RedisStorage {
         let dead_notes = entry.notes.clone();
         let dead_member = entry.original_job_id.clone();
         let dead_origin = entry.origin_job_id.clone();
+        let dead_job_metadata = entry.job_metadata.clone();
 
         let retry_metadata = {
             let next_count = entry.dlq_retry_count + 1;
-            let mut obj = entry
-                .metadata
+            // The job's own metadata, which is `metadata` unless a caller's
+            // replacement displaced it. Rebuilding the job from the
+            // replacement would hand the operator a job stripped of the keys it
+            // was enqueued with — and, for a marker that is not even an object,
+            // an empty blob.
+            let mut obj = dead_job_metadata
                 .as_deref()
+                .or(entry.metadata.as_deref())
                 .and_then(|m| {
                     serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(m).ok()
                 })

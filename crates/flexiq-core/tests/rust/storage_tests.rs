@@ -2031,6 +2031,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_step_session_memoizes_across_attempts(s);
     test_step_idempotency_key_survives_a_dlq_retry(s);
     test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s);
+    test_dlq_retry_restores_the_jobs_own_metadata(s);
     test_step_session_refuses_a_changed_sequence(s);
     test_step_session_sleeps_by_ending_the_attempt(s);
     test_an_elapsed_sleep_wakes_the_job_immediately(s);
@@ -2529,6 +2530,55 @@ fn test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s: &impl Stor
         [expected.clone(), expected],
         "one idempotency key across two resurrections, so one charge"
     );
+}
+
+/// An operator's DLQ retry gives back the job the user enqueued, not one
+/// stripped by the marker that recorded how it died.
+///
+/// `move_to_dlq`'s `metadata` argument *replaces* the blob, so every marker
+/// path — `{"codel":true}`, `{"shed":"rate_limit"}`, `RETRY_BUDGET_EXHAUSTED` —
+/// used to take the job's `tenant`/`user_id`/correlation keys with it. Worse
+/// for the bare-string marker, which is not even an object: the resurrection
+/// came back with an empty blob. The marker still owns the DLQ row's
+/// `metadata`, which three SDK suites match on; the job's own rides
+/// `job_metadata` now.
+fn test_dlq_retry_restores_the_jobs_own_metadata(s: &impl Storage) {
+    let q = "q-dlq-metadata-roundtrip";
+    let enqueued = r#"{"tenant":"acme","user_id":"u1"}"#;
+
+    // Both marker shapes: an object the old merge could survive, and the bare
+    // string it could not.
+    for (label, marker) in [
+        ("object marker", r#"{"shed":"rate_limit"}"#),
+        ("bare-string marker", RETRY_BUDGET_EXHAUSTED),
+    ] {
+        let mut new_job = make_job(q, "charge_card");
+        new_job.metadata = Some(enqueued.to_string());
+        let job = s.enqueue(new_job).unwrap();
+        s.move_to_dlq(&job, "boom", Some(marker)).unwrap();
+
+        let dead = newest_dead_for(s, &job.id);
+        assert_eq!(
+            dead.metadata.as_deref(),
+            Some(marker),
+            "{label}: the marker still owns the DLQ row's metadata"
+        );
+
+        let resurrected = s.retry_dead(&dead.id, None).unwrap();
+        let retried = s.get_job(&resurrected, None).unwrap().unwrap();
+        let meta: serde_json::Value =
+            serde_json::from_str(retried.metadata.as_deref().expect("metadata")).unwrap();
+        assert_eq!(meta["tenant"], "acme", "{label}");
+        assert_eq!(meta["user_id"], "u1", "{label}");
+        assert_eq!(
+            meta["__dlq_retry_count"], 1,
+            "{label}: the runtime's own keys are still stamped"
+        );
+        assert!(
+            meta.get("shed").is_none(),
+            "{label}: the marker describes that death, not the new job"
+        );
+    }
 }
 
 /// The newest dead-letter entry for a job that died.

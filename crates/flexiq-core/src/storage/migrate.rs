@@ -461,6 +461,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn m0015_renders_a_nullable_job_metadata_column() {
+        let backends = [
+            (Backend::Sqlite, "sqlite"),
+            #[cfg(feature = "postgres")]
+            (Backend::Postgres, "postgres"),
+        ];
+        for (backend, label) in backends {
+            let joined = crate::storage::migrations::all()
+                .iter()
+                .find(|m| m.version() == "0015_dead_letter_job_metadata")
+                .expect("m0015 registered")
+                .up(backend)
+                .iter()
+                .map(|s| s.sql.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(joined.contains("job_metadata"), "{label}: {joined}");
+            // Nullable by design: NULL is what tells the reader that `metadata`
+            // is itself the job's own, which is both the no-replacement case
+            // and every row written before this migration.
+            assert!(
+                !joined.contains("NOT NULL"),
+                "{label}: the column must stay nullable: {joined}"
+            );
+        }
+    }
+
     #[cfg(feature = "postgres")]
     #[test]
     fn add_column_renders_if_not_exists_on_postgres() {

@@ -52,6 +52,7 @@ diesel::table! {
         subscription_name -> Nullable<Text>,
         shed -> Bool,
         origin_job_id -> Nullable<Text>,
+        job_metadata -> Nullable<Text>,
     }
 }
 
