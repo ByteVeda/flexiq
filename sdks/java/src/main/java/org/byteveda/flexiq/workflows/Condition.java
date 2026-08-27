@@ -8,5 +8,11 @@ package org.byteveda.flexiq.workflows;
  */
 @FunctionalInterface
 public interface Condition {
+    /**
+     * Decide whether the step runs.
+     *
+     * @param context the run's node results and statuses, as they stand now
+     * @return {@code true} to run the step, {@code false} to skip it
+     */
     boolean test(WorkflowContext context);
 }

@@ -20,12 +20,22 @@ public record WorkflowContext(
         int successCount,
         int failureCount) {
 
-    /** The result of {@code nodeName}, if it completed. */
+    /**
+     * The result of {@code nodeName}, if it completed.
+     *
+     * @param nodeName the node's name within the workflow
+     * @return its deserialized result, or empty when it has not completed
+     */
     public Optional<Object> result(String nodeName) {
         return Optional.ofNullable(results.get(nodeName));
     }
 
-    /** The status of {@code nodeName}, if it has settled. */
+    /**
+     * The status of {@code nodeName}, if it has settled.
+     *
+     * @param nodeName the node's name within the workflow
+     * @return its status, or empty when it has not settled
+     */
     public Optional<NodeStatus> status(String nodeName) {
         return Optional.ofNullable(statuses.get(nodeName));
     }

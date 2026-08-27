@@ -86,6 +86,13 @@ public final class WorkflowTracker {
     /** The owning worker's emitter (bound at worker start); null until then. */
     private volatile @Nullable Emitter emitter;
 
+    /**
+     * A tracker over one backend, with nothing registered yet.
+     *
+     * @param backend where run and node state is read and written
+     * @param serializer encodes deferred payloads and decodes node results, so it must
+     *     match the one the producer enqueued with
+     */
     public WorkflowTracker(QueueBackend backend, Serializer serializer) {
         this.backend = backend;
         this.serializer = serializer;
@@ -96,6 +103,8 @@ public final class WorkflowTracker {
      * Register a workflow so the tracker can supply its deferred nodes' payloads
      * at runtime. Required for any workflow with a gate (or other deferred node)
      * whose downstream steps run a task.
+     *
+     * @param workflow the definition whose payloads and callable conditions to hold
      */
     public void register(Workflow workflow) {
         Map<String, byte[]> byNode = new HashMap<>();
@@ -112,7 +121,11 @@ public final class WorkflowTracker {
         callableConditions.put(workflow.name(), conditions);
     }
 
-    /** Bind the emitter workflow lifecycle events dispatch through (wired by the worker at start). */
+    /**
+     * Bind the emitter workflow lifecycle events dispatch through (wired by the worker at start).
+     *
+     * @param emitter the worker's emitter; until one is bound, workflow events are dropped
+     */
     public void bindEmitter(Emitter emitter) {
         this.emitter = emitter;
     }
@@ -125,12 +138,20 @@ public final class WorkflowTracker {
         }
     }
 
-    /** Route a successful job outcome. */
+    /**
+     * Route a successful job outcome.
+     *
+     * @param event the outcome; ignored when its job belongs to no tracked run
+     */
     public void onSuccess(OutcomeEvent event) {
         onOutcome(event.jobId, true, null);
     }
 
-    /** Route a dead-lettered (terminally failed) job outcome. */
+    /**
+     * Route a dead-lettered (terminally failed) job outcome.
+     *
+     * @param event the outcome; ignored when its job belongs to no tracked run
+     */
     public void onDead(OutcomeEvent event) {
         onOutcome(event.jobId, false, event.error);
     }
@@ -552,6 +573,11 @@ public final class WorkflowTracker {
      * Resolve a parked gate: complete it (and run its successors) when
      * {@code approved}, else fail it (and skip its successors). Idempotent — the
      * first of a manual call and a timeout wins.
+     *
+     * @param runId the parked run
+     * @param nodeName the gate node; anything else, or an already-settled gate, is ignored
+     * @param approved {@code true} to complete the gate, {@code false} to fail it
+     * @param error why it was rejected, or {@code null}
      */
     public void resolveGate(String runId, String nodeName, boolean approved, @Nullable String error) {
         NodeSnapshot snap = statusMap(runId).get(nodeName);
