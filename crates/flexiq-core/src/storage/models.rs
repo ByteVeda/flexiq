@@ -130,6 +130,12 @@ pub struct DeadLetterRow {
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
     pub dlq_retry_count: i32,
+    /// The run this entry belongs to — the id the run *began* under, which is
+    /// `original_job_id` unless the job was itself resurrected from the DLQ.
+    /// A column rather than a `__origin_job_id` metadata key because the
+    /// `metadata` argument of `move_to_dlq` replaces that blob wholesale.
+    /// `None` on rows written before `0014_dead_letter_origin`.
+    pub origin_job_id: Option<String>,
 }
 
 /// A `dead_letter` row without the `payload` blob. Listing paths select this so
@@ -154,6 +160,12 @@ pub struct NarrowDeadLetterRow {
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
     pub dlq_retry_count: i32,
+    /// The run this entry belongs to — the id the run *began* under, which is
+    /// `original_job_id` unless the job was itself resurrected from the DLQ.
+    /// A column rather than a `__origin_job_id` metadata key because the
+    /// `metadata` argument of `move_to_dlq` replaces that blob wholesale.
+    /// `None` on rows written before `0014_dead_letter_origin`.
+    pub origin_job_id: Option<String>,
 }
 
 /// Insertable struct for dead letter entries.
@@ -182,6 +194,12 @@ pub struct NewDeadLetterRow<'a> {
     /// `list_dead_for_retry` can exclude it in the query. See
     /// [`DlqDisposition`](crate::storage::records::DlqDisposition).
     pub shed: bool,
+    /// The run this entry belongs to — the id the run *began* under, which is
+    /// `original_job_id` unless the job was itself resurrected from the DLQ.
+    /// A column rather than a `__origin_job_id` metadata key because the
+    /// `metadata` argument of `move_to_dlq` replaces that blob wholesale.
+    /// `None` on rows written before `0014_dead_letter_origin`.
+    pub origin_job_id: Option<&'a str>,
 }
 
 /// A row in the `rate_limits` table.

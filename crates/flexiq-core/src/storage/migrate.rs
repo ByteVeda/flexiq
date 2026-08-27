@@ -431,6 +431,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn m0014_renders_a_nullable_origin_column() {
+        let backends = [
+            (Backend::Sqlite, "sqlite"),
+            #[cfg(feature = "postgres")]
+            (Backend::Postgres, "postgres"),
+        ];
+        for (backend, label) in backends {
+            let joined = crate::storage::migrations::all()
+                .iter()
+                .find(|m| m.version() == "0014_dead_letter_origin")
+                .expect("m0014 registered")
+                .up(backend)
+                .iter()
+                .map(|s| s.sql.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(joined.contains("origin_job_id"), "{label}: {joined}");
+            // Nullable by design: NULL is what sends `retry_dead` to the blob
+            // fallback for a row written before the column. A `NOT NULL DEFAULT`
+            // would make a pre-migration row indistinguishable from one whose
+            // run genuinely began at `original_job_id`.
+            assert!(
+                !joined.contains("NOT NULL"),
+                "{label}: the column must stay nullable: {joined}"
+            );
+        }
+    }
+
     #[cfg(feature = "postgres")]
     #[test]
     fn add_column_renders_if_not_exists_on_postgres() {

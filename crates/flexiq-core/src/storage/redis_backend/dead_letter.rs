@@ -33,6 +33,13 @@ struct DeadJobEntry {
     /// guard.
     #[serde(default)]
     pub shed: bool,
+    /// The run this entry belongs to — the id the run *began* under. Kept out
+    /// of `metadata`, which the `metadata` argument replaces wholesale. `default`
+    /// so entries written before the field existed still deserialize; they read
+    /// back as `None` and fall through to the blob. Redis has no schema to
+    /// migrate, so this is the counterpart of `m0014_dead_letter_origin`.
+    #[serde(default)]
+    pub origin_job_id: Option<String>,
 }
 
 impl From<DeadJobEntry> for DeadJob {
@@ -54,6 +61,7 @@ impl From<DeadJobEntry> for DeadJob {
             result_ttl_ms: e.result_ttl_ms,
             namespace: e.namespace,
             dlq_retry_count: e.dlq_retry_count,
+            origin_job_id: e.origin_job_id,
         }
     }
 }
@@ -100,10 +108,11 @@ impl RedisStorage {
             retry_count: job.retry_count,
             failed_at: now,
             // Preserve the job's own metadata so it survives the round trip;
-            // an explicit `metadata` arg overrides it — but never the run's
-            // origin, which `retry_dead` would otherwise restamp with this
-            // job's id instead of the one the run has been sending downstream.
-            metadata: crate::step::carry_origin_job_id(metadata, job),
+            // an explicit `metadata` arg overrides it. The run's origin rides
+            // its own field instead, out of reach of that replacement.
+            metadata: metadata
+                .map(str::to_string)
+                .or_else(|| job.metadata.clone()),
             notes: job.notes.clone(),
             priority: job.priority,
             max_retries: job.max_retries,
@@ -112,6 +121,7 @@ impl RedisStorage {
             namespace: job.namespace.clone(),
             dlq_retry_count,
             shed,
+            origin_job_id: Some(crate::step::run_key(job)),
         };
 
         let json = serde_json::to_string(&entry)?;
@@ -390,6 +400,7 @@ impl RedisStorage {
         // re-attributes the fresh job into sub:pending via its carried notes.
         let dead_notes = entry.notes.clone();
         let dead_member = entry.original_job_id.clone();
+        let dead_origin = entry.origin_job_id.clone();
 
         let retry_metadata = {
             let next_count = entry.dlq_retry_count + 1;
@@ -406,8 +417,10 @@ impl RedisStorage {
             );
             // The one path that changes a run's job id, so the one that
             // records what it was: an operator's DLQ retry must send the step
-            // keys the first attempt sent, not fresh ones.
-            crate::step::stamp_origin_job_id(&mut obj, &dead_member);
+            // keys the first attempt sent, not fresh ones. The dedicated field
+            // outranks the blob, which a caller's replacement metadata may have
+            // emptied; an entry written before the field still resolves from it.
+            crate::step::stamp_origin_job_id(&mut obj, dead_origin.as_deref(), &dead_member);
             Some(serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default())
         };
 

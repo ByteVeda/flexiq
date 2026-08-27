@@ -84,66 +84,38 @@ pub fn idempotency_key(run_key: &str, step_key: &str) -> String {
 /// Stamp the metadata of a job resurrected from the dead-letter queue with the
 /// run it belongs to, so its steps keep minting the keys they always have.
 ///
-/// Preserves a usable value already there: a job dead-lettered and retried
-/// twice must keep the id its *first* attempt ran under, not the id of the
-/// resurrection before it. A missing or unusable one is replaced rather than
-/// left — [`run_key`] would otherwise fall back to the new job id, which is
-/// exactly the double charge this stamp exists to prevent.
+/// The precedence is the whole point of the `dead_letter.origin_job_id` column:
+///
+/// 1. **The column**, which `move_to_dlq`'s `metadata` argument cannot reach.
+///    A caller replacing the blob with `RETRY_BUDGET_EXHAUSTED` — a bare string,
+///    so nothing can be merged into it — used to take the origin with it.
+/// 2. **The blob**, for rows written before `0014_dead_letter_origin`. Read
+///    from `metadata` itself, which is already the parsed dead-letter blob.
+/// 3. **`original_job_id`**, the job that died, for a run that began there.
+///
+/// Written unconditionally rather than preserved: an entry whose column and
+/// blob disagree is one whose blob a caller wrote, and the column is the one
+/// this crate controls. A blank or non-string value at either level is unusable
+/// and falls through — never to a *blank* run key, which would put every job in
+/// the deployment in one key space and dedupe each other's charges away.
 pub(crate) fn stamp_origin_job_id(
     metadata: &mut serde_json::Map<String, serde_json::Value>,
+    origin_column: Option<&str>,
     original_job_id: &str,
 ) {
     let carried = metadata
         .get(ORIGIN_JOB_ID_KEY)
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|origin| !origin.is_empty());
-    if !carried {
-        metadata.insert(
-            ORIGIN_JOB_ID_KEY.to_string(),
-            serde_json::Value::from(original_job_id),
-        );
-    }
-}
-
-/// The metadata a dead-letter row should carry, given a caller's replacement.
-///
-/// `move_to_dlq` lets its caller replace the job's metadata wholesale — a shed
-/// marker, a retry-budget marker — which takes `__origin_job_id` with it. The
-/// next `retry_dead` then stamps the *intermediate* job id, and a run already
-/// resurrected once starts sending different downstream keys than it has been.
-///
-/// A replacement that *is* an object has the job's origin written over anything
-/// it claims of its own: `move_to_dlq` is public, so that blob is caller-supplied.
-///
-/// A replacement that is not a JSON object is left byte-for-byte alone, so such
-/// a run does lose its origin here. `RETRY_BUDGET_EXHAUSTED` is a bare string
-/// three SDK suites match on exactly; that path already discards the rest of the
-/// job's metadata on the way back out. Closing it needs the origin off the
-/// metadata blob entirely — a `dead_letter` column no replacement can reach —
-/// which is a migration on three backends and a design call the epic owns.
-/// Tracked as issue 728.
-pub(crate) fn carry_origin_job_id(replacement: Option<&str>, job: &Job) -> Option<String> {
-    let Some(replacement) = replacement else {
-        return job.metadata.clone();
-    };
-    let Some(origin) = origin_job_id(job.metadata.as_deref()) else {
-        return Some(replacement.to_string());
-    };
-    let Ok(mut obj) =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(replacement)
-    else {
-        return Some(replacement.to_string());
-    };
-    // Overwrite, never preserve: `move_to_dlq` is a public `Storage` method, so
-    // a replacement blob carrying an `__origin_job_id` of its own is a caller's
-    // assertion about a run it does not own. The job's is the authoritative one.
-    obj.insert(
+        .filter(|origin| !origin.is_empty());
+    let origin = origin_column
+        .filter(|origin| !origin.is_empty())
+        .or(carried)
+        .unwrap_or(original_job_id)
+        .to_string();
+    metadata.insert(
         ORIGIN_JOB_ID_KEY.to_string(),
         serde_json::Value::from(origin),
     );
-    serde_json::to_string(&serde_json::Value::Object(obj))
-        .ok()
-        .or_else(|| Some(replacement.to_string()))
 }
 
 /// The stamped origin id, if the metadata carries a usable one.
@@ -215,16 +187,22 @@ mod tests {
         );
     }
 
-    fn stamped(metadata: &str, original_job_id: &str) -> serde_json::Value {
+    /// The metadata `retry_dead` would hand back, given a dead-letter row's
+    /// blob and whatever its `origin_job_id` column holds.
+    fn stamped(
+        metadata: &str,
+        origin_column: Option<&str>,
+        original_job_id: &str,
+    ) -> serde_json::Value {
         let mut obj: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(metadata).unwrap();
-        stamp_origin_job_id(&mut obj, original_job_id);
+        stamp_origin_job_id(&mut obj, origin_column, original_job_id);
         serde_json::Value::Object(obj)
     }
 
     #[test]
     fn a_resurrection_stamps_the_job_that_died() {
-        let meta = stamped(r#"{"user_id":"u1"}"#, "job-1");
+        let meta = stamped(r#"{"user_id":"u1"}"#, None, "job-1");
         assert_eq!(meta["__origin_job_id"], "job-1");
         assert_eq!(meta["user_id"], "u1", "user metadata is left alone");
     }
@@ -232,9 +210,36 @@ mod tests {
     #[test]
     fn a_second_resurrection_keeps_the_first_run() {
         // job-1 died, was retried as job-2, died again, retried as job-3. Every
-        // one of them must send the keys job-1 sent.
-        let meta = stamped(r#"{"__origin_job_id":"job-1"}"#, "job-2");
-        assert_eq!(meta["__origin_job_id"], "job-1");
+        // one of them must send the keys job-1 sent — whether the row records
+        // the run in its column or only in the blob it predates the column with.
+        assert_eq!(
+            stamped(r#"{"__origin_job_id":"job-1"}"#, Some("job-1"), "job-2")["__origin_job_id"],
+            "job-1"
+        );
+        assert_eq!(
+            stamped(r#"{"__origin_job_id":"job-1"}"#, None, "job-2")["__origin_job_id"],
+            "job-1",
+            "a row written before the column falls back to its blob"
+        );
+    }
+
+    #[test]
+    fn the_column_outranks_a_blob_a_caller_replaced() {
+        // The case the column exists for: `RETRY_BUDGET_EXHAUSTED` is a bare
+        // string, so the blob `retry_dead` parses is empty and carries nothing.
+        // Without the column the intermediate job id would be stamped and the
+        // run would start sending fresh downstream keys.
+        assert_eq!(
+            stamped("{}", Some("job-1"), "job-2")["__origin_job_id"],
+            "job-1"
+        );
+        // And a blob a caller *did* shape is still not its own authority:
+        // `move_to_dlq` is public, so its claim about a run it does not own
+        // loses to the column this crate wrote.
+        assert_eq!(
+            stamped(r#"{"__origin_job_id":"forged"}"#, Some("job-1"), "job-2")["__origin_job_id"],
+            "job-1"
+        );
     }
 
     #[test]
@@ -245,7 +250,7 @@ mod tests {
             r#"{"__origin_job_id":""}"#,
         ] {
             assert_eq!(
-                stamped(metadata, "job-2")["__origin_job_id"],
+                stamped(metadata, None, "job-2")["__origin_job_id"],
                 "job-2",
                 "{metadata}"
             );
@@ -253,52 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn replacement_dlq_metadata_still_carries_the_origin() {
-        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
-        let carried: serde_json::Value = serde_json::from_str(
-            &carry_origin_job_id(Some(r#"{"shed":"rate_limit"}"#), &job).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(carried["__origin_job_id"], "job-1");
-        assert_eq!(carried["shed"], "rate_limit", "the marker is kept");
-    }
-
-    #[test]
-    fn a_replacement_may_not_assert_a_different_origin() {
-        // `move_to_dlq` is public, so the blob is caller-supplied; the job's own
-        // origin wins over whatever a caller claims about the run.
-        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
-        let carried: serde_json::Value = serde_json::from_str(
-            &carry_origin_job_id(Some(r#"{"__origin_job_id":"forged"}"#), &job).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(carried["__origin_job_id"], "job-1");
-    }
-
-    #[test]
-    fn dlq_metadata_without_a_replacement_is_the_jobs_own() {
-        let job = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
+    fn a_blank_column_falls_through_rather_than_blanking_the_run() {
+        // A blank run key would put every job in the deployment in one key
+        // space and dedupe each other's charges away.
         assert_eq!(
-            carry_origin_job_id(None, &job).as_deref(),
-            Some(r#"{"__origin_job_id":"job-1"}"#)
+            stamped(r#"{"__origin_job_id":"job-1"}"#, Some(""), "job-2")["__origin_job_id"],
+            "job-1"
         );
-        assert_eq!(carry_origin_job_id(None, &job_with("job-1", None)), None);
-    }
-
-    #[test]
-    fn a_replacement_is_untouched_when_there_is_nothing_to_carry() {
-        // No origin on the job, and a bare-string marker three SDK suites match
-        // on exactly — neither may be rewritten.
-        let plain = job_with("job-1", None);
-        assert_eq!(
-            carry_origin_job_id(Some("retry_budget_exhausted"), &plain).as_deref(),
-            Some("retry_budget_exhausted")
-        );
-        let resurrected = job_with("job-2", Some(r#"{"__origin_job_id":"job-1"}"#));
-        assert_eq!(
-            carry_origin_job_id(Some("retry_budget_exhausted"), &resurrected).as_deref(),
-            Some("retry_budget_exhausted")
-        );
+        assert_eq!(stamped("{}", Some(""), "job-2")["__origin_job_id"], "job-2");
     }
 
     #[test]
