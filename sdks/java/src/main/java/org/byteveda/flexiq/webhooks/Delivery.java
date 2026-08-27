@@ -12,6 +12,20 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>Jackson maps this record by component name; unknown fields are ignored so
  * a log written by a newer build still loads.
+ *
+ * @param id this delivery's own id
+ * @param subscriptionId the webhook whose log this belongs to
+ * @param event the event name that triggered it
+ * @param taskName the task the event was about, or {@code null} when it names none
+ * @param jobId the job the event was about, or {@code null} when it names none
+ * @param status {@code pending}, {@code delivered}, {@code failed}, or {@code dead}
+ * @param attempts how many requests were made, retries included
+ * @param responseCode the last HTTP status received, or {@code null} when nothing answered
+ * @param responseBody the last response body, truncated, or {@code null}
+ * @param latencyMs how long the last request took, or {@code null} when it did not complete
+ * @param error why the last attempt failed, or {@code null}
+ * @param createdAt when the delivery was first queued, in Unix milliseconds
+ * @param completedAt when it stopped being retried, in Unix milliseconds, or {@code null} while pending
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record Delivery(

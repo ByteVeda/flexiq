@@ -11,6 +11,14 @@ import org.jspecify.annotations.Nullable;
  * Everything a route handler needs: the exchange, matched path parameters
  * (decoded), the parsed query, the request body (null for non-body methods),
  * and the resolved auth context.
+ *
+ * @param exchange the underlying HTTP exchange
+ * @param method the request method, uppercased
+ * @param path the request path, without its query string
+ * @param params the route's matched path parameters, decoded, in declaration order
+ * @param query the parsed query string
+ * @param body the request body, or {@code null} for a method that carries none
+ * @param ctx the resolved auth context for this request
  */
 public record Req(
         HttpExchange exchange,

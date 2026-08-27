@@ -5,8 +5,19 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Readiness payload: {@code ready} only when every check passed, {@code degraded}
- * otherwise. {@code resources} is absent when no worker advertises any.
+ * Readiness payload: {@code ready} when storage answered and no advertised resource
+ * is unhealthy, {@code degraded} otherwise. {@code resources} is absent when no
+ * worker advertises any.
+ *
+ * <p><b>The worker count does not enter into it.</b> A queue with nothing running
+ * against it reports {@code ready} with a worker check of {@code none}; only a
+ * worker lookup that <i>failed</i> degrades the status.
+ *
+ * @param status {@code ready} when storage answered and no advertised resource is
+ *     unhealthy, else {@code degraded}
+ * @param storage the storage check's own status
+ * @param workers the worker check
+ * @param resources the worker-resource check, or {@code null} when no worker advertises any
  */
 public record ReadinessReport(String status, String storage, WorkersCheck workers, @Nullable ResourcesCheck resources) {
 

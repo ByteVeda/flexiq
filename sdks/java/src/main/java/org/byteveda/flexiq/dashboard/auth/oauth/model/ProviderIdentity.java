@@ -10,6 +10,13 @@ import org.jspecify.annotations.Nullable;
  * GitHub numeric id) — never the email, which can change. Together with
  * {@code slot} it forms the FlexiQ username {@code <slot>:<subject>}.
  * {@code email}/{@code name}/{@code picture} may be {@code null}.
+ *
+ * @param slot which configured provider authenticated this identity
+ * @param subject the provider's stable unique id — never the email, which can change
+ * @param email the address the provider reported, or {@code null}
+ * @param emailVerified whether the provider vouches for that address
+ * @param name the display name the provider reported, or {@code null}
+ * @param picture the avatar URL the provider reported, or {@code null}
  */
 public record ProviderIdentity(
         String slot,

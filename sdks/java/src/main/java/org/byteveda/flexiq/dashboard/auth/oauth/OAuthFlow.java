@@ -48,7 +48,12 @@ public final class OAuthFlow {
         }
     }
 
-    /** The landed session plus the sanitised post-login redirect target. */
+    /**
+     * The landed session plus the sanitised post-login redirect target.
+     *
+     * @param session the session the completed flow landed
+     * @param nextUrl the sanitised post-login redirect target, or {@code null} for the default
+     */
     public record CallbackResult(Session session, @Nullable String nextUrl) {}
 
     /** Instantiate one provider per configured slot, keyed by slot, in display order. */
