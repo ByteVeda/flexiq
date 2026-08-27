@@ -11,9 +11,12 @@ import org.jspecify.annotations.Nullable;
  * swapped, not merged). Consumed by {@link WebhookManager#update}.
  *
  * @param url the endpoint to post to
- * @param events the event names to subscribe to, replacing the whole list
- * @param taskFilters the task names to restrict delivery to, replacing the whole list
- * @param headers the extra request headers, replacing the whole map
+ * @param events the event names to subscribe to, replacing the whole list; an empty
+ *     list is a replacement like any other and unsubscribes from everything
+ * @param taskFilters the task names to restrict delivery to, replacing the whole list;
+ *     an empty list clears the restriction rather than being ignored
+ * @param headers the extra request headers, replacing the whole map; an empty map
+ *     removes every header
  * @param secret the HMAC signing secret
  * @param maxRetries how many times a failed delivery is retried
  * @param timeoutMs how long one request may take
