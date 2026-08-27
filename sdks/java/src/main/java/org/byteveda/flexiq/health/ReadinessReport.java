@@ -7,6 +7,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * Readiness payload: {@code ready} only when every check passed, {@code degraded}
  * otherwise. {@code resources} is absent when no worker advertises any.
+ *
+ * @param status {@code ready} when every check passed, else {@code degraded}
+ * @param storage the storage check's own status
+ * @param workers the worker check
+ * @param resources the worker-resource check, or {@code null} when no worker advertises any
  */
 public record ReadinessReport(String status, String storage, WorkersCheck workers, @Nullable ResourcesCheck resources) {
 

@@ -8,6 +8,10 @@ import org.jspecify.annotations.Nullable;
  * Worker check: how many workers heartbeated recently. {@code status} is
  * {@code ok}, {@code none} when nothing is running, or {@code error} when the
  * lookup itself failed — in which case {@link #error} carries the reason.
+ *
+ * @param count workers that heartbeated inside the liveness window
+ * @param status {@code ok}, {@code none}, or {@code error}
+ * @param error why the lookup failed, or {@code null} when it did not
  */
 public record WorkersCheck(int count, String status, @Nullable String error) {
 
