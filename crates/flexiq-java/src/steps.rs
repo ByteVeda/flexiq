@@ -23,8 +23,8 @@ use std::sync::Mutex;
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSession,
-    StepSleep,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSleep,
+    StorageStepSession,
 };
 use flexiq_core::storage::{Storage, StorageBackend};
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
@@ -73,7 +73,7 @@ pub fn step_error(error: QueueError) -> BindingError {
 
 /// The session plus the one step it has handed out and not yet stored.
 struct SessionState {
-    session: StepSession<StorageBackend>,
+    session: StorageStepSession<StorageBackend>,
     /// The step `beginRun` issued, waiting for its bytes. Cleared by
     /// `commitRun`, whether or not the write succeeded: a refused commit has
     /// already failed the attempt, and keeping the token would let a later call
@@ -97,7 +97,7 @@ pub struct StepSessionHandle {
 }
 
 impl StepSessionHandle {
-    fn new(session: StepSession<StorageBackend>) -> Self {
+    fn new(session: StorageStepSession<StorageBackend>) -> Self {
         Self {
             state: Mutex::new(SessionState {
                 session,
@@ -424,7 +424,7 @@ fn open_step_session(
     // The defaults, not a caller-supplied value: §4.2's answer to a result that
     // will not fit is to store it elsewhere and memoize the handle, not to
     // raise the cap, so there is nothing for a shell knob to do yet.
-    let session = StepSession::load(
+    let session = StorageStepSession::load(
         worker.storage.clone(),
         &job,
         &worker.worker_id,

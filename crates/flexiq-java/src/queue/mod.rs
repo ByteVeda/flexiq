@@ -272,7 +272,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_setProgress
 
 /// `boolean supportsSteps(long handle)` — whether this backend has a step store.
 ///
-/// A capability probe, not the gate: `StepSession::load` refuses on its own, and
+/// A capability probe, not the gate: `StorageStepSession::load` refuses on its own, and
 /// mirroring that rule in the shell is how a shell drifts from the core. This is
 /// for an application that wants the answer without paying for a job read.
 #[no_mangle]

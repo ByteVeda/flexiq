@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSession,
-    StepSleep,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSleep,
+    StorageStepSession,
 };
 use flexiq_core::storage::{Storage, StorageBackend};
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Result, Status};
@@ -116,7 +116,7 @@ impl From<StepSleep> for JsStepSleepOutcome {
 
 /// The session plus the one step it has handed out and not yet stored.
 struct SessionState {
-    session: StepSession<StorageBackend>,
+    session: StorageStepSession<StorageBackend>,
     /// The step `beginRun` issued, waiting for its bytes. Cleared by
     /// `commitRun`, whether or not the write succeeded: a refused commit has
     /// already failed the attempt, and keeping the token would let a later
@@ -136,7 +136,7 @@ pub struct JsStepSession {
 }
 
 impl JsStepSession {
-    pub(crate) fn new(session: StepSession<StorageBackend>) -> Self {
+    pub(crate) fn new(session: StorageStepSession<StorageBackend>) -> Self {
         Self {
             state: Arc::new(Mutex::new(SessionState {
                 session,
@@ -326,7 +326,7 @@ impl JsWorker {
             // result that will not fit is to store it elsewhere and memoize the
             // handle, not to raise the cap, so there is nothing for a shell
             // knob to do yet.
-            let session = StepSession::load(storage, &job, &owner, StepLimits::default())
+            let session = StorageStepSession::load(storage, &job, &owner, StepLimits::default())
                 .map_err(step_error)?;
             Ok(JsStepSession::new(session))
         })

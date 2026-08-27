@@ -16,7 +16,7 @@
 use pyo3::prelude::*;
 
 use flexiq_core::error::QueueError;
-use flexiq_core::step::{StepLimits, StepSession};
+use flexiq_core::step::{StepLimits, StorageStepSession};
 use flexiq_core::storage::{Storage, StorageBackend};
 
 use crate::py_step::{step_error, PyStepSession, CLAIM_OWNER_ENV};
@@ -76,33 +76,37 @@ impl PyWorkerSteps {
         // Two synchronous round trips; holding the GIL across them would stall
         // every other job running in this worker, exactly as the session's own
         // methods avoid.
-        let session = py.detach(|| -> Result<StepSession<StorageBackend>, QueueError> {
-            let job = self
-                .storage
-                .get_job(job_id, self.namespace.as_deref())?
-                .ok_or_else(|| QueueError::ClaimLost(format!("job {job_id} no longer exists")))?;
+        let session = py.detach(
+            || -> Result<StorageStepSession<StorageBackend>, QueueError> {
+                let job = self
+                    .storage
+                    .get_job(job_id, self.namespace.as_deref())?
+                    .ok_or_else(|| {
+                        QueueError::ClaimLost(format!("job {job_id} no longer exists"))
+                    })?;
 
-            if job.retry_count != attempt {
-                // Reported as a lost claim, which is what it is: this attempt is
-                // not the one the job is on, so its writes are refused and its
-                // result is dropped by the scheduler's own fence.
-                return Err(QueueError::ClaimLost(format!(
-                    "job {job_id} is on attempt {} and this one is {attempt}",
-                    job.retry_count
-                )));
-            }
+                if job.retry_count != attempt {
+                    // Reported as a lost claim, which is what it is: this attempt is
+                    // not the one the job is on, so its writes are refused and its
+                    // result is dropped by the scheduler's own fence.
+                    return Err(QueueError::ClaimLost(format!(
+                        "job {job_id} is on attempt {} and this one is {attempt}",
+                        job.retry_count
+                    )));
+                }
 
-            // The defaults, not a caller-supplied value: §4.2's answer to a
-            // result that will not fit is to store it elsewhere and memoize the
-            // handle, not to raise the cap, so there is nothing for a shell
-            // knob to do yet.
-            StepSession::load(
-                self.storage.clone(),
-                &job,
-                &self.owner,
-                StepLimits::default(),
-            )
-        });
+                // The defaults, not a caller-supplied value: §4.2's answer to a
+                // result that will not fit is to store it elsewhere and memoize the
+                // handle, not to raise the cap, so there is nothing for a shell
+                // knob to do yet.
+                StorageStepSession::load(
+                    self.storage.clone(),
+                    &job,
+                    &self.owner,
+                    StepLimits::default(),
+                )
+            },
+        );
 
         session
             .map(PyStepSession::new)

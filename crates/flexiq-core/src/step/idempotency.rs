@@ -55,9 +55,10 @@ pub fn run_key(job: &Job) -> String {
 /// window closes:
 ///
 /// ```no_run
-/// # use flexiq_core::{Result, StepSession, Storage};
+/// # use flexiq_core::step::StepStore;
+/// # use flexiq_core::{Result, StepSession};
 /// # fn charge(amount: i64, idempotency_key: &str) -> Result<Vec<u8>> { Ok(vec![]) }
-/// # fn example<S: Storage>(session: &mut StepSession<S>, amount: i64) -> Result<()> {
+/// # fn example<S: StepStore>(session: &mut StepSession<S>, amount: i64) -> Result<()> {
 /// // `key` is "{run_key}:charge#0" — the same string on every attempt.
 /// let receipt = session.run("charge", None, |key| charge(amount, key))?;
 /// # let _ = receipt;

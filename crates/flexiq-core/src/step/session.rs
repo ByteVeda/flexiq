@@ -6,7 +6,10 @@
 //! commits exactly what it is handed and returns exactly what it read, which is
 //! what makes an encrypting codec work here with no extra plumbing.
 
-use super::{idempotency, PendingStep, SleepDecision, StepDecision, StepLimits, StepSequence};
+use super::{
+    idempotency, PendingStep, SleepDecision, StepDecision, StepLimits, StepSequence, StepStore,
+    StorageSteps,
+};
 use crate::error::{QueueError, Result};
 use crate::job::{now_millis, Job};
 use crate::storage::records::{NewJobStep, StepCommit, StepKind};
@@ -36,28 +39,34 @@ pub enum StepSleep {
     },
 }
 
+/// A session over storage this process can reach: the shape every in-process
+/// and prefork worker opens.
+///
+/// Spelled out because the wrapper is otherwise the only thing a caller has to
+/// name — [`StepSession::load`] builds it for them.
+pub type StorageStepSession<S> = StepSession<StorageSteps<S>>;
+
 /// Durable inline steps for one attempt of one job.
 ///
 /// Reads the job's committed steps **once**, at construction (§5.1), then
 /// answers every `step.run` from that snapshot. A step that already ran returns
-/// its stored bytes and the closure never runs; a new one is committed under the
-/// `(owner, attempt)` fence the storage layer requires.
-pub struct StepSession<S: Storage> {
-    storage: S,
+/// its stored bytes and the closure never runs; a new one is committed through
+/// the [`StepStore`], which is what carries the `(owner, attempt)` fence.
+pub struct StepSession<S: StepStore> {
+    store: S,
     job_id: String,
     /// The id this durable run began under, which is the job's own except
     /// across a `retry_dead`. Resolved once here: it is what every
     /// idempotency key this attempt mints is built from.
     run_key: String,
     namespace: Option<String>,
-    owner: String,
-    attempt: i32,
     limits: StepLimits,
     sequence: StepSequence,
 }
 
-impl<S: Storage> StepSession<S> {
-    /// Load the job's committed steps and open a session over them.
+impl<S: Storage> StorageStepSession<S> {
+    /// Load the job's committed steps and open a session over them, fenced on
+    /// the claim this worker won.
     ///
     /// `owner` is the worker id the execution claim was won with — never
     /// something the running code asserts about itself. The attempt is the
@@ -67,22 +76,37 @@ impl<S: Storage> StepSession<S> {
     /// A backend without a step store fails here. It must never degrade to "no
     /// steps recorded": that answer re-runs a charge.
     pub fn load(storage: S, job: &Job, owner: &str, limits: StepLimits) -> Result<Self> {
-        if !storage.supports_steps() {
+        Self::open(
+            StorageSteps::new(storage, owner, job.retry_count),
+            job,
+            limits,
+        )
+    }
+}
+
+impl<S: StepStore> StepSession<S> {
+    /// Load the job's committed steps and open a session over an arbitrary
+    /// store.
+    ///
+    /// The general form, for a store that fences its writes some other way —
+    /// an attached executor's, where the scheduler holds the claim and the
+    /// executor holds only the channel. [`StepSession::load`] is this over
+    /// storage.
+    pub fn open(store: S, job: &Job, limits: StepLimits) -> Result<Self> {
+        if !store.supports_steps() {
             return Err(QueueError::Config(format!(
                 "job {} uses durable steps, which this storage backend does not implement",
                 job.id
             )));
         }
         let namespace = job.namespace.clone();
-        let recorded = storage.get_job_steps(&job.id, namespace.as_deref())?;
+        let recorded = store.load_steps(&job.id, namespace.as_deref())?;
         let sequence = StepSequence::new(job.id.clone(), recorded)?;
         Ok(Self {
-            storage,
+            store,
             job_id: job.id.clone(),
             run_key: idempotency::run_key(job),
             namespace,
-            owner: owner.to_string(),
-            attempt: job.retry_count,
             limits,
             sequence,
         })
@@ -145,13 +169,9 @@ impl<S: Storage> StepSession<S> {
             kind: pending.kind(),
             result: Some(encoded),
         };
-        let commit = self.storage.record_step_result(
-            &step,
-            &self.owner,
-            self.attempt,
-            &self.limits,
-            self.namespace.as_deref(),
-        )?;
+        let commit = self
+            .store
+            .commit_step(&step, &self.limits, self.namespace.as_deref())?;
         // Only after storage has it: a failed commit leaves the sequence where
         // it was, and the attempt ends there anyway.
         self.sequence.commit(pending, encoded.len())?;
@@ -219,14 +239,9 @@ impl<S: Storage> StepSession<S> {
             kind: StepKind::Sleep,
             result: None,
         };
-        let outcome = self.storage.sleep_job(
-            &step,
-            &self.owner,
-            self.attempt,
-            wake_at,
-            &self.limits,
-            self.namespace.as_deref(),
-        )?;
+        let outcome =
+            self.store
+                .commit_sleep(&step, wake_at, &self.limits, self.namespace.as_deref())?;
         self.sequence.commit_sleep(&pending, outcome)?;
         Ok(StepSleep::Sleeping {
             step_key: pending.step_key().to_string(),
@@ -335,7 +350,7 @@ mod tests {
         storage.get_job(&job.id, None).unwrap().unwrap()
     }
 
-    fn open(storage: &SqliteStorage, job: &Job) -> StepSession<SqliteStorage> {
+    fn open(storage: &SqliteStorage, job: &Job) -> StorageStepSession<SqliteStorage> {
         StepSession::load(storage.clone(), job, "worker-1", StepLimits::default()).unwrap()
     }
 
@@ -823,14 +838,15 @@ mod tests {
         let mut session = open(&storage, &job);
 
         let seen = RefCell::new(Vec::new());
-        let record = |session: &mut StepSession<SqliteStorage>, name: &str, key: Option<&str>| {
-            session
-                .run(name, key, |minted| {
-                    seen.borrow_mut().push(minted.to_string());
-                    Ok(vec![])
-                })
-                .unwrap();
-        };
+        let record =
+            |session: &mut StorageStepSession<SqliteStorage>, name: &str, key: Option<&str>| {
+                session
+                    .run(name, key, |minted| {
+                        seen.borrow_mut().push(minted.to_string());
+                        Ok(vec![])
+                    })
+                    .unwrap();
+            };
         record(&mut session, "charge", None);
         record(&mut session, "charge", None);
         record(&mut session, "notify", Some("a@b.c"));
