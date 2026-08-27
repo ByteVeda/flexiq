@@ -530,7 +530,7 @@ processes racing — point the test at a file-backed queue instead, which is a
 two-line change and always exact:
 
 ```java
-FlexiQ queue = FlexiQ.builder().backend("sqlite").url(tempDir + "/steps.db").open();
+FlexiQ queue = FlexiQ.builder().sqlite(tempDir + "/steps.db").open();
 ```
 
 </SdkOnly>

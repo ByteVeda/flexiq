@@ -42,7 +42,7 @@ import org.byteveda.flexiq.serialization.Serializer;
  * queue instead:
  *
  * <pre>{@code
- * FlexiQ queue = FlexiQ.builder().backend("sqlite").url(tempDir + "/steps.db").open();
+ * FlexiQ queue = FlexiQ.builder().sqlite(tempDir + "/steps.db").open();
  * }</pre>
  */
 public final class InMemoryFlexiQ {

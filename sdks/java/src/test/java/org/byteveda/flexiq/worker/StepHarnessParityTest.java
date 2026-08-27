@@ -86,8 +86,7 @@ class StepHarnessParityTest {
         } else {
             scratch = Files.createTempDirectory("flexiq-parity");
             queue = FlexiQ.builder()
-                    .backend("sqlite")
-                    .url(scratch.resolve("steps.db").toString())
+                    .sqlite(scratch.resolve("steps.db").toString())
                     .open();
         }
         open.add(queue);
