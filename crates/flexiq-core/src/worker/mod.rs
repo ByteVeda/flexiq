@@ -22,7 +22,7 @@ pub use dial::AttachAddress;
 pub use dispatcher::NativeDispatcher;
 pub use executor::{
     ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    ExecutorSideChannel,
+    ExecutorSideChannel, ExecutorStepStore, ExecutorSteps,
 };
 pub use fingerprint::registry_fingerprint;
 pub use protocol::{

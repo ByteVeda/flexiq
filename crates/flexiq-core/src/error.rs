@@ -120,6 +120,17 @@ pub enum QueueError {
         allowed: u64,
     },
 
+    /// A step commit was refused for a reason that will not be different next
+    /// attempt, by a side of a process boundary this one cannot see.
+    ///
+    /// An attached executor's commits are applied by the scheduler, which sends
+    /// back the message and the classification but not the error itself. This
+    /// is what a permanent refusal arrives as: the message reads whole, and
+    /// [`classify_step_failure`](crate::step::classify_step_failure) still
+    /// answers "do not retry".
+    #[error("{0}")]
+    StepRefused(String),
+
     /// Any other failure that fits no specific variant.
     #[error("{0}")]
     Other(String),

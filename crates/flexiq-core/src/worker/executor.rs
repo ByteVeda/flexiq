@@ -36,18 +36,21 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tokio::sync::mpsc::error::TrySendError;
 
 use super::auth::Secret;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError, SchedulerMessage,
-    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    decode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError,
+    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
+use crate::error::QueueError;
 use crate::job::Job;
 use crate::scheduler::JobResult;
+use crate::step::{StepFailure, StepLimits, StepSession, StepStore};
+use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
 
 /// How often a waiting loop wakes to re-check its condition.
 const POLL: Duration = Duration::from_millis(20);
@@ -88,6 +91,15 @@ pub struct ExecutorConfig {
     /// How long a drain waits for in-flight jobs to finish and their results to
     /// reach the scheduler before the connection is closed anyway.
     pub shutdown_drain: Duration,
+    /// How long a durable step waits for the scheduler to acknowledge its
+    /// commit.
+    ///
+    /// Bounded further by the job's own `timeout_ms`, when that is shorter:
+    /// waiting past the job's deadline only delays a reap already decided.
+    /// Running out is a **retryable** failure — an unconfirmed commit is
+    /// indistinguishable from one that never happened, and the replay re-runs
+    /// the step under the same downstream idempotency key.
+    pub step_ack_timeout: Duration,
     /// How many side-channel operations may be queued before the oldest task
     /// log lines are dropped.
     ///
@@ -116,6 +128,7 @@ impl ExecutorConfig {
             write_timeout: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(5),
             shutdown_drain: Duration::from_secs(30),
+            step_ack_timeout: Duration::from_secs(30),
             side_channel_capacity: 4096,
         }
     }
@@ -231,6 +244,15 @@ impl ExecutorClient {
         self.capabilities.iter().any(|cap| cap == CAP_SIDE_CHANNEL)
     }
 
+    /// Whether durable steps work across this attach.
+    ///
+    /// False against a scheduler whose storage has no step store, or one built
+    /// before steps existed. A step is then refused rather than run
+    /// un-memoized — see [`ExecutorSteps`].
+    pub fn supports_steps(&self) -> bool {
+        self.capabilities.iter().any(|cap| cap == CAP_STEPS)
+    }
+
     /// Peer label of the scheduler connection, for logs.
     pub fn peer(&self) -> &str {
         &self.peer
@@ -242,6 +264,7 @@ impl ExecutorClient {
     /// scheduler to end the session, or asks for a drain of its own.
     pub fn spawn(self, dispatcher: Arc<dyn WorkerDispatcher>) -> ExecutorHandle {
         let side_channel = self.supports_side_channel();
+        let steps = self.supports_steps();
         let Self {
             config,
             reader,
@@ -276,6 +299,10 @@ impl ExecutorClient {
             log_shed: log_rx.clone(),
             dropped_logs: AtomicU64::new(0),
             toggles: Mutex::new(HashMap::new()),
+            steps,
+            snapshots: Mutex::new(HashMap::new()),
+            step_acks: Mutex::new(HashMap::new()),
+            step_ack_timeout: config.step_ack_timeout,
         });
 
         let threads = vec![
@@ -401,6 +428,18 @@ impl ExecutorSideChannel {
         self.shared.dropped_logs.load(Ordering::Relaxed)
     }
 
+    /// Durable inline steps for jobs this executor is running.
+    ///
+    /// Separate from the rest of this handle because it is the one thing here
+    /// that blocks and can fail: a step commit is what a task is waiting on,
+    /// and "the write may or may not have landed" means "the step may or may
+    /// not re-run".
+    pub fn steps(&self) -> ExecutorSteps {
+        ExecutorSteps {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
     /// Middleware the operator has disabled for a running job's task.
     ///
     /// Resolved by the scheduler at dispatch and carried on the job frame, so
@@ -464,6 +503,13 @@ impl ExecutorHandle {
     /// The handle a running task reports progress and logs through.
     pub fn side_channel(&self) -> ExecutorSideChannel {
         ExecutorSideChannel {
+            shared: self.shared.clone(),
+        }
+    }
+
+    /// Durable inline steps for jobs this executor is running.
+    pub fn steps(&self) -> ExecutorSteps {
+        ExecutorSteps {
             shared: self.shared.clone(),
         }
     }
@@ -557,6 +603,165 @@ impl ExecutorHandle {
     }
 }
 
+/// Durable inline steps for an attached executor.
+///
+/// The executor holds no database credentials, so neither half of a step
+/// happens here: the snapshot it replays from rode in on the dispatch, and every
+/// commit crosses to the scheduler, which applies the write under the execution
+/// claim *it* holds. What is local is everything that decides — step identity,
+/// the sequence check, the caps, the divergence rule — because those are
+/// [`StepSession`]'s and it runs wherever its store does.
+///
+/// Cheap to clone and safe to use from any thread. A task body reaches one of
+/// these through its SDK's job context.
+///
+/// Unlike [`ExecutorSideChannel`], nothing here is fire-and-forget: a commit
+/// blocks until the scheduler answers it, and a scheduler that never advertised
+/// [`CAP_STEPS`] refuses rather than pretending. There is no version of "your
+/// charge step silently lost its memo" that beats a failure naming the reason.
+#[derive(Clone)]
+pub struct ExecutorSteps {
+    shared: Arc<Shared>,
+}
+
+impl ExecutorSteps {
+    /// Whether durable steps work across this attach.
+    ///
+    /// False against a scheduler whose storage has no step store, or one built
+    /// before steps existed. Callers need not check — [`open_session`] refuses
+    /// on its own — but an SDK can use it to warn once at attach rather than at
+    /// the first `step.run`.
+    ///
+    /// [`open_session`]: Self::open_session
+    pub fn is_supported(&self) -> bool {
+        self.shared.steps
+    }
+
+    /// Open a step session for a job this executor is running.
+    ///
+    /// Answers every `step.run` from the snapshot the dispatch carried, and
+    /// commits each new one over the connection. `limits` is the shell's copy of
+    /// the caps: it is what lets an over-cap step be refused with an error
+    /// naming the value the caller passed, but the check that *holds* is the
+    /// scheduler's, inside the write's own transaction.
+    ///
+    /// No `owner` argument, and deliberately: the fence is the scheduler's,
+    /// resolved from the dispatch it recorded. An owner this side supplied would
+    /// be an owner it could get wrong.
+    pub fn open_session(
+        &self,
+        job: &Job,
+        limits: StepLimits,
+    ) -> crate::error::Result<StepSession<ExecutorStepStore>> {
+        let store = ExecutorStepStore {
+            shared: Arc::clone(&self.shared),
+            ack_timeout: self.shared.step_ack_timeout.min(job_deadline(job)),
+        };
+        StepSession::open(store, job, limits)
+    }
+}
+
+/// How long this job leaves for an ack, from its own execution timeout.
+///
+/// A commit that outlives the job's deadline is answering into an attempt the
+/// scheduler has already decided to reap. `timeout_ms <= 0` means no timeout, so
+/// the configured ceiling stands alone.
+fn job_deadline(job: &Job) -> Duration {
+    u64::try_from(job.timeout_ms)
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::MAX)
+}
+
+/// The [`StepStore`] behind [`ExecutorSteps`]: a socket where a worker would
+/// have a database.
+///
+/// Every write is a request/response, and the answer is what the task is
+/// blocked on. Built by [`ExecutorSteps::open_session`].
+pub struct ExecutorStepStore {
+    shared: Arc<Shared>,
+    ack_timeout: Duration,
+}
+
+impl StepStore for ExecutorStepStore {
+    fn supports_steps(&self) -> bool {
+        self.shared.steps
+    }
+
+    /// The snapshot the dispatch carried. `namespace` is ignored: the scheduler
+    /// scoped the read when it made it, and an executor cannot re-scope a read
+    /// it did not perform.
+    fn load_steps(
+        &self,
+        job_id: &str,
+        _namespace: Option<&str>,
+    ) -> crate::error::Result<Vec<JobStep>> {
+        self.shared.snapshot_for(job_id)
+    }
+
+    /// `limits` are checked by the session before this is called, and again by
+    /// the scheduler inside the write. Nothing to send: the caps are the
+    /// operator's, and the operator runs the scheduler.
+    fn commit_step(
+        &self,
+        step: &NewJobStep<'_>,
+        _limits: &StepLimits,
+        _namespace: Option<&str>,
+    ) -> crate::error::Result<StepCommit> {
+        let answer = self.shared.commit_step(
+            step.job_id,
+            step.seq,
+            step.step_key,
+            StepKind::Run,
+            None,
+            step.result.unwrap_or(&[]),
+            self.ack_timeout,
+        )?;
+        if !answer.ok {
+            return Err(answer.into_error(step.job_id));
+        }
+        Ok(if answer.already {
+            StepCommit::AlreadyCommitted
+        } else {
+            StepCommit::Committed
+        })
+    }
+
+    fn commit_sleep(
+        &self,
+        step: &NewJobStep<'_>,
+        wake_at: i64,
+        _limits: &StepLimits,
+        _namespace: Option<&str>,
+    ) -> crate::error::Result<SleepOutcome> {
+        let answer = self.shared.commit_step(
+            step.job_id,
+            step.seq,
+            step.step_key,
+            StepKind::Sleep,
+            Some(wake_at),
+            &[],
+            self.ack_timeout,
+        )?;
+        if !answer.ok {
+            return Err(answer.into_error(step.job_id));
+        }
+        // The deadline storage settled on, which on a replay is the stored one
+        // rather than the candidate this call proposed. An ack without it is a
+        // broken scheduler, not a deadline to invent.
+        let settled = answer.wake_at.ok_or_else(|| {
+            QueueError::Other(format!(
+                "the scheduler acknowledged the sleep of job {} without a deadline",
+                step.job_id
+            ))
+        })?;
+        Ok(if answer.already {
+            SleepOutcome::AlreadySleeping { wake_at: settled }
+        } else {
+            SleepOutcome::Slept { wake_at: settled }
+        })
+    }
+}
+
 /// The scheduler connection: one writer, shared, plus its lifetime controls.
 struct Link {
     /// Behind a lock because the result loop and the heartbeat both write.
@@ -611,6 +816,61 @@ struct Shared {
     ///
     /// [`CancelSignals`]: super::cancel::CancelSignals
     toggles: Mutex<HashMap<String, Vec<String>>>,
+    /// Whether the scheduler advertised [`CAP_STEPS`]. False refuses every
+    /// durable step rather than running it un-memoized: an executor with no
+    /// channel to commit on cannot make a step durable, and a step that
+    /// silently loses its memo re-runs a charge.
+    steps: bool,
+    /// Job id → the steps its dispatch carried, decoded once on arrival.
+    ///
+    /// The error is kept rather than discarded: a snapshot that would not
+    /// decode must fail the step, and "no steps recorded" is precisely the
+    /// wrong answer. A job with no `job_steps` frame is simply absent here,
+    /// which *is* an empty snapshot.
+    snapshots: Mutex<HashMap<String, std::result::Result<Vec<JobStep>, String>>>,
+    /// `(job_id, seq)` → where that commit's ack goes.
+    ///
+    /// Keyed on both because one executor runs many jobs concurrently; the
+    /// pairing should not depend on a job having only one step in flight, even
+    /// though it does. Cleared when the reader's conversation ends, which turns
+    /// every waiter's park into a disconnect instead of a full timeout.
+    step_acks: Mutex<HashMap<(String, i32), Sender<StepAnswer>>>,
+    /// Ceiling on how long a commit waits for its ack.
+    step_ack_timeout: Duration,
+}
+
+/// A scheduler's answer to one step commit.
+#[derive(Debug, Clone)]
+struct StepAnswer {
+    ok: bool,
+    already: bool,
+    wake_at: Option<i64>,
+    error: Option<String>,
+    failure: Option<StepFailure>,
+}
+
+impl StepAnswer {
+    /// Rebuild the error a refusal represents, so the shell above sees the same
+    /// classification an in-process worker would.
+    ///
+    /// Only the message and the classification cross the wire, so the *variant*
+    /// is not reconstructed: a divergence and a cap violation both arrive as
+    /// [`QueueError::StepRefused`], which
+    /// [`classify_step_failure`](crate::step::classify_step_failure) answers
+    /// `Permanent` for, exactly as it does for the originals. The two cases a
+    /// shell branches on independently — §3 divergence and §4 caps — are caught
+    /// locally by the session before a frame is ever written, so they never take
+    /// this path.
+    fn into_error(self, job_id: &str) -> QueueError {
+        let message = self.error.unwrap_or_else(|| {
+            format!("the scheduler refused a step commit for job {job_id} without saying why")
+        });
+        match self.failure.unwrap_or(StepFailure::Retryable) {
+            StepFailure::Superseded => QueueError::ClaimLost(job_id.to_string()),
+            StepFailure::Permanent => QueueError::StepRefused(message),
+            StepFailure::Retryable => QueueError::Other(message),
+        }
+    }
 }
 
 /// One task log line waiting to be framed to the scheduler.
@@ -715,9 +975,126 @@ impl Shared {
             .unwrap_or_default()
     }
 
-    /// Release a finished job's toggle list.
-    fn forget_toggles(&self, job_id: &str) {
+    /// Release everything a finished job's dispatch carried beside the job
+    /// itself — its toggle list and its step snapshot — so neither map grows
+    /// for the life of the process.
+    fn forget_dispatch(&self, job_id: &str) {
         self.toggles.lock().unwrap_or_else(recover).remove(job_id);
+        self.snapshots.lock().unwrap_or_else(recover).remove(job_id);
+    }
+
+    /// Decode and keep the snapshot a `job_steps` frame carried.
+    ///
+    /// Decoded here, once, rather than when a session opens: a snapshot that
+    /// will not parse is a fact about the dispatch, and finding out at the
+    /// first `step.run` would be finding out after the job started.
+    fn remember_snapshot(&self, job_id: String, payload: Vec<u8>) {
+        let decoded = decode_step_snapshot(&job_id, &payload).map_err(|error| {
+            log::warn!("[flexiq] executor {} {error}", self.executor_id);
+            error.to_string()
+        });
+        self.snapshots
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(job_id, decoded);
+    }
+
+    /// The steps a job's dispatch carried. Absent means an empty snapshot: the
+    /// scheduler sends no frame for a job with no steps.
+    fn snapshot_for(&self, job_id: &str) -> crate::error::Result<Vec<JobStep>> {
+        match self.snapshots.lock().unwrap_or_else(recover).get(job_id) {
+            None => Ok(Vec::new()),
+            Some(Ok(steps)) => Ok(steps.clone()),
+            Some(Err(reason)) => Err(QueueError::Other(reason.clone())),
+        }
+    }
+
+    /// Hand one ack to whoever is blocked on it.
+    fn deliver_ack(&self, job_id: String, seq: i32, answer: StepAnswer) {
+        let waiter = self
+            .step_acks
+            .lock()
+            .unwrap_or_else(recover)
+            .remove(&(job_id.clone(), seq));
+        match waiter {
+            // Capacity 1 and one send per waiter, so this cannot block.
+            Some(tx) => {
+                let _ = tx.send(answer);
+            }
+            // A duplicate ack, or one for a commit that already timed out. The
+            // attempt has moved on either way, and the commit stays durable.
+            None => log::debug!(
+                "[flexiq] executor {} received a step ack for job {job_id} step {seq} that \
+                 nothing was waiting on",
+                self.executor_id
+            ),
+        }
+    }
+
+    /// Release everyone blocked on an ack, because none is coming.
+    ///
+    /// Dropping the senders turns each waiter's park into a disconnect rather
+    /// than a full `step_ack_timeout` of silence.
+    fn abandon_acks(&self) {
+        self.step_acks.lock().unwrap_or_else(recover).clear();
+    }
+
+    /// Frame one step commit and block until the scheduler answers it.
+    ///
+    /// Blocking is the point: an unconfirmed commit is indistinguishable from
+    /// one that never happened, and carrying on past it would re-run the step
+    /// on the next attempt with the side effect already applied.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_step(
+        &self,
+        job_id: &str,
+        seq: i32,
+        step_key: &str,
+        kind: StepKind,
+        wake_at: Option<i64>,
+        result: &[u8],
+        ack_timeout: Duration,
+    ) -> crate::error::Result<StepAnswer> {
+        if !self.steps {
+            // Retryable on purpose: a heterogeneous fleet mid-rollout may place
+            // the next attempt somewhere that can commit. Exhausting the
+            // retries dead-letters it with an error naming the capability.
+            return Err(QueueError::Other(format!(
+                "step '{step_key}' of job {job_id} cannot be committed: the scheduler this \
+                 executor is attached to offers no step store"
+            )));
+        }
+
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        // Registered before the frame goes out, or a fast scheduler could
+        // answer before there is anything to answer to.
+        let _waiter = AckWaiter::register(self, job_id, seq, tx);
+
+        let frame = ExecutorMessage::StepCommit {
+            job_id: job_id.to_string(),
+            seq,
+            step_key: step_key.to_string(),
+            kind,
+            wake_at,
+            payload_len: result.len(),
+        };
+        if !self.send(&frame, result) {
+            return Err(QueueError::Other(format!(
+                "step '{step_key}' of job {job_id} could not be sent to the scheduler"
+            )));
+        }
+
+        match rx.recv_timeout(ack_timeout) {
+            Ok(answer) => Ok(answer),
+            Err(RecvTimeoutError::Timeout) => Err(QueueError::Other(format!(
+                "the scheduler did not acknowledge step '{step_key}' of job {job_id} within \
+                 {ack_timeout:?}"
+            ))),
+            Err(RecvTimeoutError::Disconnected) => Err(QueueError::Other(format!(
+                "the connection to the scheduler ended before step '{step_key}' of job {job_id} \
+                 was acknowledged"
+            ))),
+        }
     }
 
     /// Record the newest progress for a job and ask the result loop to frame it.
@@ -796,6 +1173,38 @@ fn recover<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
 }
 
+/// Keeps the ack table honest: one registration, removed however the commit
+/// that made it returns.
+///
+/// A leaked entry would route a later commit's ack — `(job_id, seq)` repeats
+/// across attempts — to a channel nobody is listening on.
+struct AckWaiter<'a> {
+    shared: &'a Shared,
+    key: (String, i32),
+}
+
+impl<'a> AckWaiter<'a> {
+    fn register(shared: &'a Shared, job_id: &str, seq: i32, tx: Sender<StepAnswer>) -> Self {
+        let key = (job_id.to_string(), seq);
+        shared
+            .step_acks
+            .lock()
+            .unwrap_or_else(recover)
+            .insert(key.clone(), tx);
+        Self { shared, key }
+    }
+}
+
+impl Drop for AckWaiter<'_> {
+    fn drop(&mut self) {
+        self.shared
+            .step_acks
+            .lock()
+            .unwrap_or_else(recover)
+            .remove(&self.key);
+    }
+}
+
 /// Runtime thread: drives the pool, exactly as `Worker::spawn` does.
 ///
 /// `result_tx` moves in, so the result loop sees a disconnect the moment
@@ -842,6 +1251,34 @@ fn spawn_reader(
                     Ok(Incoming::Known(SchedulerMessage::Cancel { job_id }, _)) => {
                         dispatcher.notify_cancel(&job_id);
                     }
+                    // Arrives immediately before the job frame it belongs to,
+                    // so a handler reaching for a memo on its first line already
+                    // finds it.
+                    Ok(Incoming::Known(SchedulerMessage::JobSteps { job_id, .. }, payload)) => {
+                        shared.remember_snapshot(job_id, payload);
+                    }
+                    Ok(Incoming::Known(
+                        SchedulerMessage::StepAck {
+                            job_id,
+                            seq,
+                            ok,
+                            already,
+                            wake_at,
+                            error,
+                            failure,
+                        },
+                        _,
+                    )) => shared.deliver_ack(
+                        job_id,
+                        seq,
+                        StepAnswer {
+                            ok,
+                            already,
+                            wake_at,
+                            error,
+                            failure,
+                        },
+                    ),
                     Ok(Incoming::Known(frame, payload)) => accept_job(&shared, frame, payload),
                     // A frame from a scheduler newer than this executor. The
                     // session is otherwise fine, and ending it would fail every
@@ -876,7 +1313,10 @@ fn spawn_reader(
                 }
             }
 
-            // Whatever ended the loop, no more jobs are coming.
+            // Whatever ended the loop, no more jobs are coming — and no ack
+            // is either, so anyone parked on one is released now rather than
+            // waiting out a full timeout for silence.
+            shared.abandon_acks();
             shared.begin_drain();
             dispatcher.shutdown();
             shared.session_over.store(true, Ordering::Release);
@@ -941,7 +1381,7 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
     // This job reports here instead of through `send_result`, so the entry
     // `accept_job` recorded before it knew the job would be declined has to be
     // released on this path too.
-    shared.forget_toggles(&job.id);
+    shared.forget_dispatch(&job.id);
     let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Failure {
         job_id: job.id.clone(),
         error: format!("executor did not run '{}': {reason}", job.task_name),
@@ -1043,7 +1483,7 @@ fn flush_side_channel(shared: &Arc<Shared>, log_rx: &Receiver<PendingLog>) -> bo
 
 /// Frame one job outcome. Returns whether the connection is still usable.
 fn send_result(shared: &Arc<Shared>, result: JobResult) -> bool {
-    shared.forget_toggles(result.job_id());
+    shared.forget_dispatch(result.job_id());
     let (frame, payload) = ExecutorMessage::from_job_result(result);
     let sent = shared.send(&frame, &payload);
     shared.job_finished();

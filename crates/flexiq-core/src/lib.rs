@@ -63,8 +63,8 @@ pub use worker::registry_fingerprint;
 pub use worker::{
     AttachAddress, AttachError, AttachedExecutor, Capacity, Dispatch, ExecutorClient,
     ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorMessage, ExecutorSession,
-    ExecutorSideChannel, HelloBuilder, NativeDispatcher, ProtocolError, RemoteConfig,
-    RemoteDispatcher, SchedulerMessage, Secret, SideChannel, StorageSideChannel, TaskError,
-    TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher, WorkerHandle, CAP_SIDE_CHANNEL,
-    CAP_STEPS, PROTOCOL_VERSION,
+    ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, HelloBuilder, NativeDispatcher,
+    ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret, SideChannel,
+    StorageSideChannel, TaskError, TaskRegistry, TaskResult, Transport, Worker, WorkerDispatcher,
+    WorkerHandle, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };

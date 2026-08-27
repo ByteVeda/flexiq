@@ -52,7 +52,9 @@ pub fn classify_step_failure(error: &crate::error::QueueError) -> StepFailure {
         | E::Json(_)
         | E::Config(_)
         | E::TaskNotRegistered(_)
-        | E::ContractTooOld { .. } => StepFailure::Permanent,
+        | E::ContractTooOld { .. }
+        // Already classified as permanent by whoever could see the real error.
+        | E::StepRefused(_) => StepFailure::Permanent,
 
         // A violated constraint is a permanently-bad write; everything else
         // Diesel reports is the database being unreachable or busy.
