@@ -400,16 +400,31 @@ impl FakeScheduler {
         Self::attach_tuned(tasks, slots, capabilities, ExecutorTuning::default())
     }
 
-    /// Handshake with both sides claiming [`CAP_STEPS`], and a short ack budget
-    /// so a test that never answers a commit does not sit for the default 30s.
+    /// Handshake with both sides claiming [`CAP_STEPS`].
+    ///
+    /// The ack budget is deliberately generous. Only one test here wants a
+    /// commit to *time out*, and it asks for that itself
+    /// ([`Self::attach_with_step_budget`]); every other one only needs the
+    /// budget to outlast a loaded CI machine's scheduling. Defaulting it short
+    /// makes each of those a race whose failure reads as a real bug.
     fn attach_with_steps(tasks: &[&str], slots: u32) -> (Self, ExecutorHandle, Arc<TestPool>) {
+        Self::attach_with_step_budget(tasks, slots, Duration::from_secs(5))
+    }
+
+    /// The same, with the ack budget spelled out — for the test that needs a
+    /// commit to run out of it without sitting for the production default.
+    fn attach_with_step_budget(
+        tasks: &[&str],
+        slots: u32,
+        step_ack_timeout: Duration,
+    ) -> (Self, ExecutorHandle, Arc<TestPool>) {
         Self::attach_tuned(
             tasks,
             slots,
             vec![CAP_STEPS.to_string()],
             ExecutorTuning {
                 capabilities: vec![CAP_STEPS.to_string()],
-                step_ack_timeout: Duration::from_millis(300),
+                step_ack_timeout,
                 ..ExecutorTuning::default()
             },
         )
@@ -1864,7 +1879,11 @@ fn an_ack_for_another_step_leaves_this_one_waiting() {
 fn a_scheduler_that_stops_answering_fails_the_step_retryably() {
     // The only genuinely uncertain case, and the replay re-runs the step under
     // the same downstream idempotency key, which is what makes it safe.
-    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    //
+    // The one test that wants the budget to run out, so it is the one that asks
+    // for a short one rather than every other test paying for it.
+    let (mut scheduler, handle, _pool) =
+        FakeScheduler::attach_with_step_budget(&["charge"], 1, Duration::from_millis(300));
     let job = running_job("job-1");
     let mut session = handle
         .steps()
