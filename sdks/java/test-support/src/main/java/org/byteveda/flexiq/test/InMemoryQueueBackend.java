@@ -38,6 +38,10 @@ import org.byteveda.flexiq.steps.StepSupersededError;
  * retries, and dead-lettering — it is not the production scheduler.
  */
 public final class InMemoryQueueBackend implements QueueBackend {
+
+    /** A backend holding no jobs. Reach it through {@link InMemoryFlexiQ} unless a queue has to share one. */
+    public InMemoryQueueBackend() {}
+
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String DEFAULT_QUEUE = "default";
 

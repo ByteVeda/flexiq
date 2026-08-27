@@ -48,12 +48,21 @@ import org.byteveda.flexiq.serialization.Serializer;
 public final class InMemoryFlexiQ {
     private InMemoryFlexiQ() {}
 
-    /** A queue over a fresh in-memory backend using the default JSON serializer. */
+    /**
+     * A queue over a fresh in-memory backend using the default JSON serializer.
+     *
+     * @return an open queue; close it to stop its workers
+     */
     public static FlexiQ open() {
         return FlexiQ.builder().open(new InMemoryQueueBackend());
     }
 
-    /** A queue over a fresh in-memory backend with a custom serializer. */
+    /**
+     * A queue over a fresh in-memory backend with a custom serializer.
+     *
+     * @param serializer the serializer payloads and results are encoded with
+     * @return an open queue; close it to stop its workers
+     */
     public static FlexiQ open(Serializer serializer) {
         return FlexiQ.builder().serializer(serializer).open(new InMemoryQueueBackend());
     }
