@@ -178,15 +178,37 @@ def test_a_keyed_step_is_matched_wherever_it_sits(
 
 
 def test_a_step_needs_a_name(queue: Queue) -> None:
-    """An unnamed step is a TypeError, never inferred from the callable."""
+    """An unnamed step is refused, never inferred from the callable.
+
+    And refused *permanently*: the name is in the code, so every later attempt
+    rejects it in the same place. Raised as a step failure rather than the bare
+    ``TypeError`` it once was, because that carried no verdict and the retry
+    filters kept re-running it to the same end.
+    """
     with queue.test_mode(propagate_errors=True):
 
         @queue.task()
         def unnamed() -> None:
             current_job.step.run("", lambda: None)
 
-        with pytest.raises(TypeError, match="a step needs a name"):
+        with pytest.raises(StepError, match="a step needs a name") as refused:
             unnamed.delay()
+
+    assert refused.value.flexiq_should_retry is False
+
+
+def test_an_unparseable_sleep_is_refused_permanently(queue: Queue) -> None:
+    """A duration the grammar rejects ends the attempt without spending a retry."""
+    with queue.test_mode(propagate_errors=True):
+
+        @queue.task()
+        def naps() -> None:
+            current_job.step.sleep("next tuesday", name="nap")
+
+        with pytest.raises(StepError, match="is not a duration") as refused:
+            naps.delay()
+
+    assert refused.value.flexiq_should_retry is False
 
 
 # ---------------------------------------------------------- idempotency keys

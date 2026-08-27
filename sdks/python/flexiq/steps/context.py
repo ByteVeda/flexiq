@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 from flexiq._active_context import _ActiveContext
 from flexiq._flexiq import derive_step_key
@@ -105,7 +105,8 @@ class StepContext:
             The step's result — freshly computed, or decoded from the row.
 
         Raises:
-            TypeError: ``name`` is empty or not a string.
+            StepError: ``name`` is empty or not a string. Not retried — the
+                next attempt would reject it identically.
             StepDivergedError: The recorded sequence and this code disagree.
             StepLimitExceededError: The result, or the job's total, is past the cap.
         """
@@ -178,7 +179,7 @@ class StepContext:
         ``sleep#0, sleep#1, sleep#2`` tells nobody which one diverged.
         """
         with self._control():
-            millis = sleep_duration_ms(duration)
+            millis = self._millis(sleep_duration_ms, duration)
             session = self._session_or_inline()
             if session is None:
                 return
@@ -208,7 +209,7 @@ class StepContext:
         instant is unaffected by how many times the attempt replayed.
         """
         with self._control():
-            millis = sleep_deadline_ms(when)
+            millis = self._millis(sleep_deadline_ms, when)
             session = self._session_or_inline()
             if session is None:
                 return
@@ -266,10 +267,29 @@ class StepContext:
         """Latch the context for anything that unwinds the body from here."""
         return _ControlScope(self._ctx)
 
+    def _refuse(self, message: str, cause: BaseException | None = None) -> NoReturn:
+        """Reject a misuse this attempt cannot recover from.
+
+        An empty name or an unparseable duration is deterministic: the next
+        attempt rejects it in exactly the same place, so retrying it burns the
+        budget for nothing. Raised as a step control signal rather than as the
+        ``TypeError`` the parsers speak, which is how the verdict reaches the
+        worker — ``flexiq_should_retry`` outranks ``retry_on`` — and how
+        ``_control`` gets to latch a body that catches it and carries on.
+        """
+        raise StepError(message) from cause
+
+    def _millis(self, parse: Callable[[Any], int], value: Any) -> int:
+        """Parse a sleep's duration or deadline, refusing a bad one for good."""
+        try:
+            return parse(value)
+        except (TypeError, ValueError) as bad:
+            self._refuse(str(bad), bad)
+
     def _begin(self, name: str, key: str | None) -> StepDecision | None:
         """Decide this step, or ``None`` when steps run inline (test mode)."""
         if not isinstance(name, str) or not name:
-            raise TypeError("a step needs a name: step.run('charge', ...)")
+            self._refuse("a step needs a name: step.run('charge', ...)")
         session = self._session_or_inline()
         if session is None:
             return None
