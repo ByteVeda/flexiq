@@ -15,14 +15,23 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import org.byteveda.flexiq.FlexiQException;
 import org.byteveda.flexiq.spi.QueueBackend;
+import org.byteveda.flexiq.spi.StepSession;
 import org.byteveda.flexiq.spi.WorkerBridge;
 import org.byteveda.flexiq.spi.WorkerControl;
+import org.byteveda.flexiq.steps.StepDivergedError;
+import org.byteveda.flexiq.steps.StepSupersededError;
 
 /**
  * A pure-Java, in-memory {@link QueueBackend} for fast unit tests — no JNI, no
  * disk. It runs jobs on a small polling worker (dispatch → complete/fail → retry
  * or dead-letter), and supports inspection, admin, settings, locks, and topic
  * pub/sub (fan-out, per-subscriber dedup, ephemeral reaping).
+ *
+ * <p>Durable steps are supported: committed steps are recorded per job, replays
+ * are answered from that record, and every write is fenced on the claim its
+ * worker won. The rules are restated in Java rather than asked of the core,
+ * which is JNI-free by construction — see {@link InMemoryFlexiQ} for what that
+ * does and does not buy.
  *
  * <p>Not supported: workflows (use a native backend). Periodic registration is
  * recorded but never fires. Behaviour approximates the core for testing handlers,
@@ -44,6 +53,9 @@ public final class InMemoryQueueBackend implements QueueBackend {
     private final Map<String, String> settings = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> periodics = new ConcurrentHashMap<>();
     private final Map<String, LockRec> locks = new ConcurrentHashMap<>();
+    /** Committed durable steps per job, ordered by seq. The rows die with the job. */
+    private final Map<String, List<StepRecord>> steps = new ConcurrentHashMap<>();
+
     private final List<Map<String, Object>> dead = new CopyOnWriteArrayList<>();
     private final Map<String, List<Map<String, Object>>> logs = new ConcurrentHashMap<>();
     private final java.util.Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -174,6 +186,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
         if (job != null && "pending".equals(job.status)) {
             job.status = "cancelled";
             job.completedAt = now();
+            release(job);
             return true;
         }
         return false;
@@ -194,6 +207,9 @@ public final class InMemoryQueueBackend implements QueueBackend {
         job.error = null;
         // A stale cancel request must not kill the fresh attempt.
         job.cancelRequested = false;
+        // The claim is gone, so a step the old attempt is still holding is
+        // refused as superseded rather than landing in the live attempt.
+        job.owner = null;
         return true;
     }
 
@@ -975,10 +991,115 @@ public final class InMemoryQueueBackend implements QueueBackend {
         return unsupported();
     }
 
+    // ── Durable steps ───────────────────────────────────────────────
+
+    /**
+     * Metadata key carrying the id a durable run started under.
+     *
+     * <p>Written by {@link #retryDead}, which mints a <b>new</b> job id: without
+     * it an operator retrying a dead-lettered charge sends a fresh idempotency
+     * key and charges the customer a second time.
+     */
+    static final String ORIGIN_JOB_ID_KEY = "__origin_job_id";
+
+    /** What committing a sleep did. */
+    record SleepCommit(long wakeAt, boolean fresh) {}
+
+    /** Every committed step of a job, ordered by seq. Read once per attempt. */
+    synchronized List<StepRecord> loadSteps(String jobId) {
+        return List.copyOf(steps.getOrDefault(jobId, List.of()));
+    }
+
+    /**
+     * The id this job's durable run began under: its own, except across an
+     * operator's dead-letter retry, which mints a new job for the same run.
+     */
+    synchronized String runKeyOf(String jobId) {
+        JobRec job = jobs.get(jobId);
+        String origin = job == null ? null : text(readNode(job.metadata), ORIGIN_JOB_ID_KEY);
+        return origin == null || origin.isEmpty() ? jobId : origin;
+    }
+
+    /** Commit one step, fenced on the writer still owning the execution claim. */
+    synchronized void commitStep(String jobId, String owner, int attempt, StepRecord step) {
+        fence(jobId, owner, attempt);
+        List<StepRecord> committed = steps.computeIfAbsent(jobId, id -> new ArrayList<>());
+        if (step.seq() != committed.size()) {
+            // The unique (job_id, seq) index, restated: a double commit of the
+            // same position is an error rather than a race.
+            throw new StepDivergedError("step divergence on job " + jobId + " at position " + step.seq()
+                    + ": expected the next free position " + committed.size() + ", found a step already there");
+        }
+        committed.add(step);
+    }
+
+    /**
+     * End the attempt in a sleep: commit the sleep row, release the execution
+     * claim and reschedule the job, as one fenced operation — the shape the core
+     * gives it, so nothing can observe the row without the reschedule.
+     *
+     * <p>{@code wakeAt} is a <b>candidate</b>: a sleep row already committed at
+     * this position keeps the deadline it was first given, which is what stops a
+     * crash loop from producing a sleep that outlives the job.
+     */
+    synchronized SleepCommit commitSleep(String jobId, String owner, int attempt, StepRecord step) {
+        JobRec job = fence(jobId, owner, attempt);
+        List<StepRecord> committed = steps.computeIfAbsent(jobId, id -> new ArrayList<>());
+        boolean fresh = step.seq() == committed.size();
+        long wakeAt;
+        if (fresh) {
+            committed.add(step);
+            wakeAt = Objects.requireNonNull(step.wakeAt());
+        } else {
+            // The position is taken, so the deadline it already holds stands —
+            // the (job_id, seq) uniqueness restated, and what stops a crash loop
+            // from starting the clock again. Only a sequence-level resume asks
+            // for this, which needs an attempt to come back while its own sleep
+            // row is still ahead; this harness releases the claim in the same
+            // operation that writes the row, so nothing here produces that state.
+            StepRecord recorded = committed.get(step.seq());
+            Long stored = recorded.wakeAt();
+            if (!recorded.sleep() || stored == null) {
+                throw new StepDivergedError("step divergence on job " + jobId + " at position " + step.seq()
+                        + ": expected a sleep step with a deadline, found '" + recorded.stepKey() + "' with none");
+            }
+            wakeAt = stored;
+        }
+        job.status = "pending";
+        job.scheduledAt = wakeAt;
+        job.startedAt = null;
+        // A sleep costs no retry: retryCount, the budget and the metrics are all
+        // untouched. Only the claim goes.
+        job.owner = null;
+        return new SleepCommit(wakeAt, fresh);
+    }
+
+    /**
+     * The job this write still speaks for, or a refusal.
+     *
+     * <p>{@code (owner, attempt)} is what proves a write belongs to the live
+     * attempt. A superseded one is refused here rather than landing in the live
+     * attempt's sequence — which is why a task that lost its claim to
+     * {@link #requeueJob} reports a superseded step instead of quietly
+     * memoizing over the run now proceeding elsewhere.
+     */
+    private JobRec fence(String jobId, String owner, int attempt) {
+        JobRec job = jobs.get(jobId);
+        if (job == null) {
+            throw new StepSupersededError("execution claim lost for job " + jobId + ": the job is gone");
+        }
+        if (!"running".equals(job.status) || !owner.equals(job.owner) || job.retryCount != attempt) {
+            throw new StepSupersededError("execution claim lost for job " + jobId + ": attempt " + attempt
+                    + " of worker " + owner + " no longer holds it (now " + job.status + ", attempt "
+                    + job.retryCount + ")");
+        }
+        return job;
+    }
+
     // ── Internals ───────────────────────────────────────────────────
 
     /** Claim a dispatchable pending job (status → running); null if none right now. */
-    private synchronized JobRec claimNext(java.util.Set<String> queues) {
+    private synchronized JobRec claimNext(java.util.Set<String> queues, String workerId) {
         long now = now();
         JobRec best = null;
         for (JobRec job : jobs.values()) {
@@ -991,6 +1112,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
                 job.status = "cancelled";
                 job.completedAt = now;
                 job.error = "expired before execution";
+                release(job);
                 continue;
             }
             // Honor the worker's queue filter; empty filter = every queue.
@@ -1004,6 +1126,9 @@ public final class InMemoryQueueBackend implements QueueBackend {
         if (best != null) {
             best.status = "running";
             best.startedAt = now;
+            // Half of the step fence, and never something the running task
+            // asserts about itself: it is the id this claim was won under.
+            best.owner = workerId;
         }
         return best;
     }
@@ -1023,6 +1148,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
         job.result = result;
         job.status = "complete";
         job.completedAt = now();
+        release(job);
     }
 
     /** Mirrors the core: a non-retryable failure skips the budget and dead-letters. */
@@ -1032,6 +1158,10 @@ public final class InMemoryQueueBackend implements QueueBackend {
             job.status = "pending";
             job.startedAt = null;
             job.scheduledAt = now();
+            // The claim is released, but the steps are not: memoizing across a
+            // retry is the whole point. The next attempt reads them back and the
+            // fence moves with the bumped retryCount.
+            job.owner = null;
         } else {
             job.status = "dead";
             job.error = error;
@@ -1047,12 +1177,26 @@ public final class InMemoryQueueBackend implements QueueBackend {
             entry.put("metadata", job.metadata);
             entry.put("dlqRetryCount", 0);
             dead.add(entry);
+            release(job);
         }
     }
 
     private synchronized void onCancel(JobRec job) {
         job.status = "cancelled";
         job.completedAt = now();
+        release(job);
+    }
+
+    /**
+     * Drop a finished job's claim and its committed steps.
+     *
+     * <p>The rows die with the job, as they do in the core: a job that completed
+     * has no later attempt to memoize for, and one that dead-lettered mints a new
+     * job if an operator retries it.
+     */
+    private void release(JobRec job) {
+        job.owner = null;
+        steps.remove(job.id);
     }
 
     private Map<String, Object> statsFor(String queue) {
@@ -1179,6 +1323,8 @@ public final class InMemoryQueueBackend implements QueueBackend {
         String metadata;
         String notes;
         volatile boolean cancelRequested;
+        /** Worker holding the execution claim, or null when unclaimed. Half of the step fence. */
+        String owner;
     }
 
     /** A topic subscription row. Keyed by {@link #subscriptionKey}. */
@@ -1264,7 +1410,7 @@ public final class InMemoryQueueBackend implements QueueBackend {
         private void run() {
             while (running) {
                 JobRec job;
-                while (running && (job = claimNext(queues)) != null) {
+                while (running && (job = claimNext(queues, workerId)) != null) {
                     long token = seq.incrementAndGet();
                     inFlight.put(token, job.id);
                     dispatchedAt.put(token, System.nanoTime());
@@ -1358,6 +1504,36 @@ public final class InMemoryQueueBackend implements QueueBackend {
                 onCancel(job);
             }
             bridge.onOutcome("cancelled", job.id, job.taskName, null, job.retryCount, false, wallTimeNs);
+        }
+
+        /**
+         * Open this attempt's durable-step session, fenced on the claim
+         * <i>this</i> worker won.
+         *
+         * <p>On the control rather than the backend for the reason the real one
+         * is: the owner must be the id the execution claim was won under, never
+         * something the running task asserts about itself. A backend-level slot
+         * would be overwritten by a second worker on the same handle.
+         */
+        @Override
+        public StepSession openStepSession(String jobId, int attempt) {
+            return new InMemoryStepSession(InMemoryQueueBackend.this, jobId, workerId, attempt);
+        }
+
+        /**
+         * Acknowledge an attempt that ended in a durable {@code step.sleep}.
+         *
+         * <p>Neither a completion nor a failure, and deliberately not where the
+         * job moves: {@link InMemoryQueueBackend#commitSleep} already wrote the
+         * row, released the claim and left the job {@code Pending} at
+         * {@code wakeAt} as one fenced operation. This only drops the token's
+         * bookkeeping, so no outcome, no hook and no retry is spent — the
+         * dispatch bridge already announced the sleep on the sleeping thread.
+         */
+        @Override
+        public void sleepJob(long token, long wakeAt) {
+            inFlight.remove(token);
+            dispatchedAt.remove(token);
         }
 
         /** Elapsed nanos since this token was dispatched; 0 when it wasn't (unmeasured). */
