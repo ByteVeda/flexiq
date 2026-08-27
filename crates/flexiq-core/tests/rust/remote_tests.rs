@@ -1701,3 +1701,45 @@ fn a_scheduler_with_a_step_store_advertises_the_capability() {
     let (_, capabilities) = executor.expect_capabilities();
     assert!(capabilities.contains(&CAP_STEPS.to_string()));
 }
+
+#[test]
+fn a_job_that_slept_is_reported_even_if_the_connection_dies_first() {
+    // The one abandoned job that no reaper will ever recover: `sleep_job` left
+    // it `Pending` at its deadline, and a `Pending` job is not stale. Without
+    // this the scheduler holds its in-flight slot forever.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage(&storage);
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["cool"], 1, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "cool", "scheduler-test");
+    let job_id = job.id.clone();
+    let deadline = now_millis() + 3_600_000;
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job).expect("dispatch");
+        executor.expect_job_with_snapshot();
+
+        executor.commit_sleep(&job_id, 0, "cool_off#0", deadline);
+        let (_, ok, _, wake_at, failure) = executor.expect_step_ack();
+        assert!(ok, "{failure:?}");
+        assert_eq!(wake_at, Some(deadline));
+
+        // The executor dies between the ack and its `slept` frame.
+        drop(executor);
+
+        let reported = expect_result(results);
+        assert_eq!(kind(&reported), "slept");
+        let JobResult::Slept {
+            job_id: reported_id,
+            wake_at: reported_wake,
+            ..
+        } = reported
+        else {
+            unreachable!("just asserted the variant")
+        };
+        assert_eq!(reported_id, job_id);
+        assert_eq!(reported_wake, deadline);
+    });
+}

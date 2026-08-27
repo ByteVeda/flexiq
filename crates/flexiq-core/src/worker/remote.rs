@@ -294,6 +294,14 @@ struct InFlight {
     /// same reason the namespace is: a step frame carries only a job id, and an
     /// attempt an executor supplied would be an attempt it could get wrong.
     attempt: i32,
+    /// Deadline this job was rescheduled to by an acknowledged `step.sleep`,
+    /// once one has landed.
+    ///
+    /// A slept job is already `Pending` at its deadline, so nothing reaps it. If
+    /// the connection dies before the executor's `slept` frame arrives, this is
+    /// the only record that the attempt ended — without it the scheduler holds
+    /// the job's in-flight slot for the life of the process.
+    slept_at: Option<i64>,
 }
 
 /// One attached executor: what it can run, what it is running, and how to
@@ -1109,6 +1117,7 @@ impl Shared {
                 task_name: job.task_name.clone(),
                 namespace: job.namespace.clone(),
                 attempt: job.retry_count,
+                slept_at: None,
             },
         );
 
@@ -1344,7 +1353,29 @@ impl Shared {
     ) {
         let reply = {
             let executor = Arc::clone(executor);
+            let slept = job_id.clone();
             move |ack: SchedulerMessage| {
+                // An acknowledged sleep has already left the job `Pending` at
+                // its deadline. Remembered here so that if the connection dies
+                // before the `slept` frame arrives, `abandon` can still report
+                // the attempt that ended — no reaper will, because a `Pending`
+                // job is not stale.
+                if let SchedulerMessage::StepAck {
+                    ok: true,
+                    wake_at: Some(wake_at),
+                    ..
+                } = &ack
+                {
+                    if let Some(dispatched) = executor
+                        .in_flight
+                        .lock()
+                        .unwrap_or_else(recover)
+                        .get_mut(&slept)
+                    {
+                        dispatched.slept_at = Some(*wake_at);
+                    }
+                }
+
                 if let Err(error) = executor
                     .writer
                     .lock()
@@ -1508,13 +1539,30 @@ impl Shared {
     /// the only correct answer when a lost result may still have run.
     fn abandon(&self, executor: &Arc<Executor>) {
         self.deregister(&executor.id);
-        let abandoned: Vec<String> = executor
+        let held: Vec<(String, InFlight)> = executor
             .in_flight
             .lock()
             .unwrap_or_else(recover)
             .drain()
-            .map(|(job_id, _)| job_id)
             .collect();
+
+        // A job that already slept is not abandoned — it is scheduled, and the
+        // reaper never touches a `Pending` job. Draining the map is the
+        // exactly-once token, so this and the `slept` frame cannot both report
+        // it. The wall time is lost with the connection; the deadline is not.
+        let (slept, abandoned): (Vec<_>, Vec<_>) = held
+            .into_iter()
+            .partition(|(_, dispatched)| dispatched.slept_at.is_some());
+        for (job_id, dispatched) in slept {
+            self.emit(JobResult::Slept {
+                job_id,
+                task_name: dispatched.task_name,
+                wake_at: dispatched.slept_at.unwrap_or_default(),
+                wall_time_ns: 0,
+            });
+        }
+
+        let abandoned: Vec<String> = abandoned.into_iter().map(|(job_id, _)| job_id).collect();
         if !abandoned.is_empty() {
             log::warn!(
                 "[flexiq] executor {} ({}) left {} job(s) in flight; they will be reaped: {}",
