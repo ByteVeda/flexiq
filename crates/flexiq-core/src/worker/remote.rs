@@ -17,14 +17,17 @@ use tokio::sync::Notify;
 use super::auth::Secret;
 use super::fingerprint::registry_fingerprint;
 use super::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError, SchedulerMessage,
-    CAP_SIDE_CHANNEL, PROTOCOL_VERSION,
+    encode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError,
+    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use super::side_channel::SideChannel;
+use super::step_pump::{refusal, StepPump, StepWrite};
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
+use crate::error::QueueError;
 use crate::job::Job;
 use crate::scheduler::JobResult;
+use crate::storage::records::StepKind;
 
 /// Tuning for a [`RemoteDispatcher`].
 #[derive(Clone)]
@@ -64,6 +67,14 @@ pub struct RemoteConfig {
     /// How many side-channel operations may be queued for application before
     /// the oldest logs are dropped.
     pub side_channel_capacity: usize,
+    /// Threads applying executor step commits, so a database write never parks
+    /// the connection's reader behind another job's result.
+    pub step_workers: usize,
+    /// Step commits that may be queued for application. A full queue is
+    /// answered retryably rather than waited on — the executor's own replay is
+    /// the backpressure, and an unbounded queue would only turn a slow database
+    /// into unbounded memory.
+    pub step_capacity: usize,
 }
 
 impl Default for RemoteConfig {
@@ -78,6 +89,8 @@ impl Default for RemoteConfig {
             cancel_capacity: 1024,
             side_channel: None,
             side_channel_capacity: 4096,
+            step_workers: 4,
+            step_capacity: 1024,
         }
     }
 }
@@ -96,6 +109,8 @@ impl std::fmt::Debug for RemoteConfig {
             .field("cancel_capacity", &self.cancel_capacity)
             .field("side_channel", &self.side_channel.is_some())
             .field("side_channel_capacity", &self.side_channel_capacity)
+            .field("step_workers", &self.step_workers)
+            .field("step_capacity", &self.step_capacity)
             .finish()
     }
 }
@@ -199,6 +214,16 @@ impl RemoteDispatcher {
             None => (None, None),
         };
 
+        // Started only when the store behind the channel actually implements
+        // steps: the pump's existence is what advertises `CAP_STEPS`, and a
+        // capability advertised without a store behind it fails the step after
+        // its side effect has already run.
+        let steps = config
+            .side_channel
+            .clone()
+            .filter(|sink| sink.supports_steps())
+            .map(|sink| StepPump::start(sink, config.step_workers, config.step_capacity));
+
         Self {
             shared: Arc::new(Shared {
                 config,
@@ -211,6 +236,8 @@ impl RemoteDispatcher {
                 started_at: Instant::now(),
                 side_channel,
                 side_channel_drain: Mutex::new(drain),
+                steps,
+                claim_owner: Mutex::new(None),
             }),
         }
     }
@@ -247,6 +274,10 @@ impl WorkerDispatcher for RemoteDispatcher {
     fn notify_cancel(&self, job_id: &str) {
         self.shared.notify_cancel(job_id);
     }
+
+    fn set_claim_owner(&self, owner: &str) {
+        *self.shared.claim_owner.lock().unwrap_or_else(recover) = Some(owner.to_string());
+    }
 }
 
 /// What the scheduler remembers about a job it handed to an executor.
@@ -258,6 +289,11 @@ impl WorkerDispatcher for RemoteDispatcher {
 struct InFlight {
     task_name: String,
     namespace: Option<String>,
+    /// `retry_count` the job carried when it was dispatched — half of the fence
+    /// a step commit from this executor is written under. Recorded here for the
+    /// same reason the namespace is: a step frame carries only a job id, and an
+    /// attempt an executor supplied would be an attempt it could get wrong.
+    attempt: i32,
 }
 
 /// One attached executor: what it can run, what it is running, and how to
@@ -272,6 +308,11 @@ struct Executor {
     registry_fingerprint: Option<String>,
     slots: u32,
     free: AtomicU32,
+    /// Whether this executor advertised [`CAP_STEPS`]. A snapshot is sent only
+    /// to a peer that claimed it: a fleet that never uses steps should not pay
+    /// a storage read per dispatch, and an unclaimed frame would only be
+    /// skipped at the far end anyway.
+    steps: bool,
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
     /// for emitting that job's single `JobResult`; holding one is also this
     /// executor's authority to report progress or logs against that job.
@@ -649,6 +690,16 @@ struct Shared {
     side_channel: Option<Arc<SideChannelPump>>,
     /// Stopped after the readers, so a frame read on the way down still lands.
     side_channel_drain: Mutex<Option<SideChannelDrain>>,
+    /// Applies executor step commits. `None` when there is no storage to commit
+    /// through, or when its backend has no step store — which is also what the
+    /// handshake tells executors, so a step is refused rather than run
+    /// un-memoized.
+    steps: Option<StepPump>,
+    /// Worker id this scheduler wins its execution claims under, installed by
+    /// [`WorkerDispatcher::set_claim_owner`]. Every step commit is fenced on
+    /// it; without one, steps are refused, because a write fenced on a guess is
+    /// a write into whichever attempt happens to hold the job.
+    claim_owner: Mutex<Option<String>>,
 }
 
 impl Drop for Shared {
@@ -691,7 +742,7 @@ impl Shared {
             tasks,
             slots,
             protocol_version,
-            capabilities: _,
+            capabilities,
             token,
         } = hello
         else {
@@ -749,6 +800,7 @@ impl Shared {
             registry_fingerprint,
             slots,
             free: AtomicU32::new(slots),
+            steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
             in_flight: Mutex::new(HashMap::new()),
             writer: Mutex::new(writer),
             connection,
@@ -811,11 +863,24 @@ impl Shared {
     /// Announcing rather than versioning is the point: an executor that sees no
     /// capability sends no frame the scheduler could not handle, so the two
     /// sides upgrade independently.
+    /// The claim owner this scheduler writes steps under, or `None` before the
+    /// worker has installed one.
+    fn claim_owner(&self) -> Option<String> {
+        self.claim_owner.lock().unwrap_or_else(recover).clone()
+    }
+
     fn capabilities(&self) -> Vec<String> {
-        match self.side_channel {
-            Some(_) => vec![CAP_SIDE_CHANNEL.to_string()],
-            None => Vec::new(),
+        let mut capabilities = Vec::new();
+        if self.side_channel.is_some() {
+            capabilities.push(CAP_SIDE_CHANNEL.to_string());
         }
+        // Withheld, never faked: an executor that is told steps work and then
+        // cannot commit one has already run the side effect by the time it
+        // finds out.
+        if self.steps.is_some() {
+            capabilities.push(CAP_STEPS.to_string());
+        }
+        capabilities
     }
 
     /// Milliseconds since the dispatcher was created — a monotonic clock for
@@ -896,7 +961,21 @@ impl Shared {
             let reason = match self.try_acquire(&job.task_name) {
                 Placement::Ready(executor) => {
                     let disabled = self.resolve_toggles(&job.task_name).await;
-                    self.dispatch_to(&executor, job, disabled);
+                    match self.resolve_snapshot(&executor, &job).await {
+                        Ok(snapshot) => self.dispatch_to(&executor, job, disabled, snapshot),
+                        // Dispatching anyway would hand the executor an empty
+                        // snapshot, and an empty snapshot re-runs every step the
+                        // job already committed. Give the slot back and let the
+                        // job retry instead.
+                        Err(error) => {
+                            executor.free.fetch_add(1, Ordering::Relaxed);
+                            self.capacity_changed.notify_waiters();
+                            self.fail_unplaceable(
+                                &job,
+                                &format!("its committed steps could not be read: {error}"),
+                            );
+                        }
+                    }
                     return;
                 }
                 Placement::Saturated => "every executor advertising it is busy",
@@ -974,6 +1053,42 @@ impl Shared {
             })
     }
 
+    /// Read the steps this job has already committed, encoded for its
+    /// `job_steps` frame, off the runtime thread.
+    ///
+    /// `None` when there is nothing to send: no step pump, an executor that
+    /// never claimed [`CAP_STEPS`], or a job with no steps — which is every job
+    /// on its first attempt, and so the overwhelmingly common case. No frame
+    /// therefore means an *empty* snapshot, never an unknown one.
+    ///
+    /// An error here is not "no steps": it is "we do not know", and the caller
+    /// refuses the dispatch rather than guessing.
+    async fn resolve_snapshot(
+        &self,
+        executor: &Arc<Executor>,
+        job: &Job,
+    ) -> crate::error::Result<Option<Vec<u8>>> {
+        if !executor.steps || self.steps.is_none() {
+            return Ok(None);
+        }
+        let Some(pump) = self.side_channel.as_ref() else {
+            return Ok(None);
+        };
+        let sink = Arc::clone(&pump.sink);
+        let job_id = job.id.clone();
+        let namespace = job.namespace.clone();
+        let steps =
+            tokio::task::spawn_blocking(move || sink.job_steps(&job_id, namespace.as_deref()))
+                .await
+                .map_err(|error| {
+                    crate::error::QueueError::Other(format!(
+                        "the step snapshot read panicked: {error}"
+                    ))
+                })??;
+
+        Ok((!steps.is_empty()).then(|| encode_step_snapshot(&steps)))
+    }
+
     /// Send a reserved job to its executor.
     ///
     /// Registers the job before writing so a fast executor cannot return a
@@ -981,20 +1096,40 @@ impl Shared {
     /// means the connection is gone: the slot is released, the executor is
     /// dropped, and the job is left to the scheduler's reaper — the same
     /// recovery path a mid-job executor crash takes.
-    fn dispatch_to(&self, executor: &Arc<Executor>, job: Job, disabled: Vec<String>) {
+    fn dispatch_to(
+        &self,
+        executor: &Arc<Executor>,
+        job: Job,
+        disabled: Vec<String>,
+        snapshot: Option<Vec<u8>>,
+    ) {
         executor.in_flight.lock().unwrap_or_else(recover).insert(
             job.id.clone(),
             InFlight {
                 task_name: job.task_name.clone(),
                 namespace: job.namespace.clone(),
+                attempt: job.retry_count,
             },
         );
 
-        let write = executor
-            .writer
-            .lock()
-            .unwrap_or_else(recover)
-            .write_job_with(&job, disabled);
+        let write = {
+            let mut writer = executor.writer.lock().unwrap_or_else(recover);
+            // Immediately before the job, and on the same writer lock: the
+            // executor has to have the snapshot in hand before the job frame
+            // that lets it start running.
+            snapshot
+                .map(|snapshot| {
+                    writer.write(
+                        &SchedulerMessage::JobSteps {
+                            job_id: job.id.clone(),
+                            payload_len: snapshot.len(),
+                        },
+                        &snapshot,
+                    )
+                })
+                .unwrap_or(Ok(()))
+                .and_then(|()| writer.write_job_with(&job, disabled))
+        };
 
         if let Err(e) = write {
             executor
@@ -1136,6 +1271,17 @@ impl Shared {
                 self.apply_task_log(executor, &job_id, &level, &text, extra);
                 return;
             }
+            ExecutorMessage::StepCommit {
+                job_id,
+                seq,
+                step_key,
+                kind,
+                wake_at,
+                payload_len: _,
+            } => {
+                self.apply_step_commit(executor, job_id, seq, step_key, kind, wake_at, payload);
+                return;
+            }
             other => other,
         };
 
@@ -1175,6 +1321,105 @@ impl Shared {
         executor.free.fetch_add(1, Ordering::Relaxed);
         self.capacity_changed.notify_waiters();
         self.emit(result);
+    }
+
+    /// Queue a step commit an executor asked this scheduler to apply.
+    ///
+    /// The frame says which job and which step; everything that decides whether
+    /// the write is *allowed* comes from here. The executor must be running the
+    /// job — the same authority check every side-channel frame passes — and the
+    /// fence is the owner this scheduler claims under plus the attempt it
+    /// dispatched at. An owner off the frame would let a stale executor write
+    /// straight into the live attempt's sequence.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_step_commit(
+        &self,
+        executor: &Arc<Executor>,
+        job_id: String,
+        seq: i32,
+        step_key: String,
+        kind: StepKind,
+        wake_at: Option<i64>,
+        result: Vec<u8>,
+    ) {
+        let reply = {
+            let executor = Arc::clone(executor);
+            move |ack: SchedulerMessage| {
+                if let Err(error) = executor
+                    .writer
+                    .lock()
+                    .unwrap_or_else(recover)
+                    .write_header(&ack)
+                {
+                    // Nothing to do but log: the executor is waiting on an ack
+                    // it will now never see, and its own bounded wait ends the
+                    // attempt retryably — which is right, because a commit
+                    // whose answer was lost may or may not have landed.
+                    log::warn!(
+                        "[flexiq] could not answer a step commit from executor {}: {error}",
+                        executor.id
+                    );
+                }
+            }
+        };
+
+        let Some(pump) = self.steps.as_ref() else {
+            // Never advertised, so a correct executor never sent this.
+            log::warn!(
+                "[flexiq] executor {} sent a step commit but this scheduler advertised no step \
+                 store; refusing it",
+                executor.id
+            );
+            reply(refusal(
+                job_id,
+                seq,
+                QueueError::Config("this scheduler does not implement the step store".to_string()),
+            ));
+            return;
+        };
+
+        let Some(dispatched) = executor.running(&job_id) else {
+            log::warn!(
+                "[flexiq] executor {} sent a step commit for job {job_id}, which it is not \
+                 running; refusing it",
+                executor.id
+            );
+            // `ClaimLost`, not a generic refusal: the executor is not entitled
+            // to this attempt, and that is the one classification that ends it
+            // without a result rather than failing a job running elsewhere.
+            let lost = QueueError::ClaimLost(job_id.clone());
+            reply(refusal(job_id, seq, lost));
+            return;
+        };
+
+        let Some(owner) = self.claim_owner() else {
+            // Unreachable through `Worker`, which installs the owner before the
+            // first dispatch. Refused rather than guessed: a write fenced on a
+            // guess lands in whichever attempt happens to hold the job.
+            log::error!(
+                "[flexiq] a step commit arrived before this dispatcher was told its claim owner; \
+                 refusing it"
+            );
+            reply(refusal(
+                job_id,
+                seq,
+                QueueError::Other("the dispatcher has no execution-claim owner".to_string()),
+            ));
+            return;
+        };
+
+        pump.submit(StepWrite {
+            job_id,
+            seq,
+            step_key,
+            kind,
+            wake_at,
+            result,
+            owner,
+            attempt: dispatched.attempt,
+            namespace: dispatched.namespace,
+            reply: Box::new(reply),
+        });
     }
 
     /// Record progress an executor reported for a job it is running.

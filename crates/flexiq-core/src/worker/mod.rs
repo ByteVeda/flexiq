@@ -13,6 +13,7 @@ pub mod registry;
 pub mod remote;
 pub mod runner;
 pub mod side_channel;
+mod step_pump;
 pub mod transport;
 
 pub use auth::Secret;
@@ -61,4 +62,14 @@ pub trait WorkerDispatcher: Send + Sync {
     /// a side-channel signal so the worker observes the cancel without polling
     /// storage.
     fn notify_cancel(&self, _job_id: &str) {}
+
+    /// Tell the pool which worker id the scheduler wins its execution claims
+    /// under.
+    ///
+    /// Only a pool that performs a *fenced* write on the scheduler's behalf
+    /// needs it, which today means the [`RemoteDispatcher`]: an attached
+    /// executor cannot supply the owner for its own step commits, because an
+    /// owner it supplies is an owner it can forge. Everyone else runs where the
+    /// claim was won and ignores this.
+    fn set_claim_owner(&self, _owner: &str) {}
 }
