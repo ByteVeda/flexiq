@@ -278,6 +278,7 @@ between.
 | A subscription target | <SdkSwap python={<>The window never engages — a publish is fanned out by the core, one delivery per subscription, and never passes through the enqueue path</>} node={<>Rejected at <code>subscriber()</code> registration — a publish is fanned out by the core and never passes through the enqueue path</>} java={<>Rejected when the subscription is registered — a publish is fanned out by the core and never passes through the enqueue path</>} /> |
 | A caller-supplied delay | <SdkSwap python={<><strong>Rejected</strong> rather than silently dropped</>} node={<>Ignored — <code>delayMs</code> has no effect</>} java={<><strong>Rejected</strong> rather than silently dropped</>} />. The deadline is recomputed from the window inside the storage operation, so a delay could never survive |
 | An enqueue gate's defer | Ignored. It is a scheduling hint from a <SdkLink to="guides/core/predicates">predicate</SdkLink>, not something the caller asked for, but the window still owns the deadline |
+| A queue admission cap | Honoured, but only by the enqueue that inserts. The cap travels into the debounce write and is applied there, so a queue already at its limit still accepts a call that slides the open window — that call adds no pending job for the cap to be about |
 
 <SdkOnly sdk="python">
 
