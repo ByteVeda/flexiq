@@ -29,7 +29,7 @@ from flexiq.middleware import TaskMiddleware
 from flexiq.steps import StepContext, StepError, StepUnavailableError
 
 PollUntil = Any  # the conftest fixture's runtime type
-WorkerFactory = Callable[[Queue], threading.Thread]
+WorkerFactory = Callable[..., threading.Thread]
 
 # Only an ``async def`` task reaches the native executor, and only that path
 # reports a sleep through ``try_report_slept``.
@@ -40,7 +40,7 @@ requires_native_async = pytest.mark.skipif(
 
 
 @pytest.fixture
-def start_worker() -> Generator[Callable[[Queue], threading.Thread]]:
+def start_worker() -> Generator[WorkerFactory]:
     """Start workers and stop every one of them at teardown.
 
     Leaking a worker thread between tests leaves it polling a deleted temp
@@ -49,8 +49,8 @@ def start_worker() -> Generator[Callable[[Queue], threading.Thread]]:
     """
     started: list[tuple[Queue, threading.Thread]] = []
 
-    def _start(queue: Queue) -> threading.Thread:
-        thread = threading.Thread(target=queue.run_worker, daemon=True)
+    def _start(queue: Queue, queues: list[str] | None = None) -> threading.Thread:
+        thread = threading.Thread(target=partial(queue.run_worker, queues=queues), daemon=True)
         thread.start()
         started.append((queue, thread))
         return thread
@@ -516,25 +516,64 @@ def test_a_sleep_calls_on_sleep_rather_than_after(
     assert events == ["before", "on_sleep:True", "before", "after"]
 
 
+# ------------------------------------------------------- claims per worker
+
+
+def test_each_worker_fences_on_its_own_claim(queue: Queue, start_worker: WorkerFactory) -> None:
+    """Two workers off one ``Queue`` both commit their steps.
+
+    The owner half of the ``(owner, attempt)`` fence belongs to the worker that
+    won the claim. Held on the queue handle instead, the second ``run_worker``
+    overwrote the first's id, every step the first worker went on to commit was
+    refused as superseded, and its jobs dead-lettered instead of running.
+    """
+    ran: list[str] = []
+
+    @queue.task(queue="alpha", max_retries=0)
+    def on_alpha() -> str:
+        return current_job.step.run("work", partial(_mark, ran, "alpha"))
+
+    @queue.task(queue="beta", max_retries=0)
+    def on_beta() -> str:
+        return current_job.step.run("work", partial(_mark, ran, "beta"))
+
+    # Both started before either job is enqueued, so whichever worker a shared
+    # slot stranded would be holding a claim it no longer names.
+    start_worker(queue, queues=["alpha"])
+    start_worker(queue, queues=["beta"])
+
+    first, second = on_alpha.delay(), on_beta.delay()
+
+    assert first.result(timeout=30) == "done:alpha"
+    assert second.result(timeout=30) == "done:beta"
+    assert sorted(ran) == ["alpha", "beta"]
+    assert queue.dead_letters() == []
+
+
 # ------------------------------------------------------------------ refusal
 
 
 def test_steps_refuse_without_an_execution_claim(queue: Queue) -> None:
     """No claim, no fence — so the step refuses instead of running un-memoized.
 
-    This is the attached-executor case: a process that runs a scheduler's work
-    without ever owning it has nothing to commit against, and a silently lost
-    memo is worse than a failure naming the reason.
+    A context carries the step handle of the worker that dispatched the job;
+    nothing dispatched this one, so there is no claim to fence a commit on and
+    a silently lost memo is worse than a failure naming the reason.
     """
-    with pytest.raises(StepUnavailableError, match="holds no execution claim"):
-        queue._inner.open_step_session("some-job", 0, None)
+    ctx = _ActiveContext(job_id="j", task_name="t", retry_count=0, queue_name="default")
+
+    with pytest.raises(StepUnavailableError, match="execution claim") as refusal:
+        StepContext(ctx, queue).run("charge", lambda: "x")
+
+    assert refusal.value.flexiq_should_retry, "the next attempt may land on a worker that can"
 
 
 def test_steps_refuse_on_an_attached_executor(queue: Queue) -> None:
-    """An executor's queue answers the capability probe with "no", and steps stop.
+    """An executor holds no claim of its own, so steps stop there.
 
-    Surfaced as a step failure rather than a missing attribute, so the message
-    names the reason and the task body cannot catch it away.
+    Its queue is storage-free, and nothing in the step path touches it: the
+    refusal is a step failure naming the reason, never an ``AttributeError``
+    escaping the detached stand-in, and the task body cannot catch it away.
     """
     queue._inner = DetachedNative()  # type: ignore[assignment]
     ctx = _ActiveContext(job_id="j", task_name="t", retry_count=0, queue_name="default")

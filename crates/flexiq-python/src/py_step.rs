@@ -9,7 +9,8 @@
 //!
 //! Nothing in here reads an owner or an attempt from the running code. Both
 //! are resolved by the worker that won the execution claim and handed in by
-//! [`PyQueue::open_step_session`], because an owner task code can assert is an
+//! [`PyWorkerSteps::open_step_session`](crate::py_worker_steps::PyWorkerSteps),
+//! because an owner task code can assert is an
 //! owner it can forge — and a forged one writes straight into the live
 //! attempt's sequence.
 
@@ -171,8 +172,10 @@ impl PyStepSleep {
 
 /// One attempt's durable steps.
 ///
-/// Built by [`PyQueue::open_step_session`], which is the only place the owner
-/// and the attempt come from. The mutex is for pyo3's `Sync` requirement, not
+/// Built by [`PyWorkerSteps::open_step_session`](crate::py_worker_steps::PyWorkerSteps),
+/// which is the only place the owner and the attempt come from — the owner off
+/// the worker that won the claim, never off the queue handle it was started
+/// from. The mutex is for pyo3's `Sync` requirement, not
 /// for concurrency: a session belongs to one attempt on one thread.
 #[pyclass(name = "StepSession", module = "flexiq._flexiq")]
 pub struct PyStepSession {

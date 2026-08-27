@@ -13,6 +13,7 @@ use flexiq_core::worker::WorkerDispatcher;
 
 use super::permit::PyJobPermit;
 use super::task_executor::execute_sync_task;
+use crate::py_worker_steps::PyWorkerSteps;
 
 /// Dual-dispatch worker pool: async tasks run natively on a Python event loop,
 /// sync tasks use `spawn_blocking`. Each branch is bounded by its own semaphore —
@@ -24,6 +25,9 @@ pub struct NativeAsyncPool {
     task_registry: Arc<Py<PyAny>>,
     retry_filters: Arc<Py<PyAny>>,
     async_executor: Arc<Py<PyAny>>,
+    /// This worker's step handle. Only the blocking branch carries it per job —
+    /// the executor was constructed with its own copy for the coroutines.
+    worker_steps: Arc<Py<PyWorkerSteps>>,
     shutdown: AtomicBool,
 }
 
@@ -34,6 +38,7 @@ impl NativeAsyncPool {
         task_registry: Arc<Py<PyAny>>,
         retry_filters: Arc<Py<PyAny>>,
         async_executor: Arc<Py<PyAny>>,
+        worker_steps: Arc<Py<PyWorkerSteps>>,
     ) -> Self {
         Self {
             num_workers,
@@ -41,6 +46,7 @@ impl NativeAsyncPool {
             task_registry,
             retry_filters,
             async_executor,
+            worker_steps,
             shutdown: AtomicBool::new(false),
         }
     }
@@ -134,11 +140,12 @@ impl WorkerDispatcher for NativeAsyncPool {
 
                 let registry = self.task_registry.clone();
                 let filters = self.retry_filters.clone();
+                let steps = self.worker_steps.clone();
                 let tx = result_tx.clone();
 
                 tokio::task::spawn_blocking(move || {
                     let _permit = permit;
-                    execute_sync_task(&registry, &filters, &job, &tx);
+                    execute_sync_task(&registry, &filters, &steps, &job, &tx);
                 });
             }
         }

@@ -25,7 +25,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from flexiq import __version__
 from flexiq.async_support.helpers import run_maybe_async
@@ -52,6 +52,9 @@ from flexiq.worker_protocol import (
     read_frame,
     write_frame,
 )
+
+if TYPE_CHECKING:
+    from flexiq._flexiq import WorkerSteps
 
 logger = logging.getLogger("flexiq.prefork.child")
 
@@ -192,8 +195,13 @@ def _execute_job(
     queue: Any,
     job: dict[str, Any],
     payload: bytes,
+    worker_steps: WorkerSteps | None = None,
 ) -> tuple[dict[str, Any], bytes]:
-    """Execute a single job and return its result frame and result payload."""
+    """Execute a single job and return its result frame and result payload.
+
+    ``worker_steps`` is the claim this child inherited from the pool that
+    spawned it — resolved once in :func:`main`, never read off a frame.
+    """
     task_name = job["task_name"]
     job_id = job["id"]
     retry_count = job.get("retry_count", 0)
@@ -220,6 +228,7 @@ def _execute_job(
         retry_count,
         job.get("queue", "default"),
         job.get("namespace"),
+        worker_steps,
     )
     # Resolved by the scheduler and carried on the frame, because an executor
     # has no settings store of its own to read the toggle list from. Empty from
@@ -411,6 +420,11 @@ def main() -> None:
     # and writes its own progress and logs, so it has nothing to forward.
     if is_detached():
         install_sink(_ParentSink())
+    # The claim this child runs under, read once from the environment its parent
+    # spawned it with — the one hop the owner is allowed to travel. ``None``
+    # under an executor, which holds no claim of its own, and durable steps
+    # refuse there.
+    worker_steps = None if is_detached() else queue._inner.inherited_worker_steps()
     _spawn_stdin_reader(job_queue, cancels)
 
     logger.info("child ready (app=%s, pid=%d)", app_path, os.getpid())
@@ -421,7 +435,7 @@ def main() -> None:
             if item is None:
                 break
             job, payload = item
-            result, result_payload = _execute_job(queue, job, payload)
+            result, result_payload = _execute_job(queue, job, payload, worker_steps)
             _write_message(result, result_payload)
             # Drop the cancel marker once the result is written so a future
             # job with the same ID (extremely unlikely, but possible across

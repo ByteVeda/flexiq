@@ -385,23 +385,30 @@ class StepContext:
         return session
 
     def _open(self) -> StepSession | None:
+        """Open this attempt's session on the handle of the worker running it.
+
+        The handle rides with the dispatch, so the ``(owner, attempt)`` fence
+        names the claim *this* worker won — one process may run several workers
+        off one ``Queue``, and a queue-level owner would be the last one
+        started. No handle means no claim: an attached executor, which has no
+        channel to commit a step on, or a task running outside a worker
+        entirely. Either way the attempt fails rather than running the step
+        un-memoized, and it fails as a control signal the body cannot catch
+        away.
+        """
         if self._queue is None:
             return None
-        # An attached executor's queue stands in for the native one and answers
-        # a capability probe with "no". Checked before the call so the failure
-        # names the step rather than surfacing as a missing attribute — and so
-        # it is a control signal the task body cannot catch away.
-        if not hasattr(self._queue._inner, "open_step_session"):
+        worker_steps = self._ctx.worker_steps
+        if worker_steps is None:
             raise StepUnavailableError(
-                "durable steps need a worker that reaches storage, and this task is "
-                "running on an attached executor, which has none. Run it on an "
-                "in-process or prefork worker.",
+                "durable steps need a worker that holds this job's execution claim, and "
+                "this task is not running on one — an attached executor commits nothing "
+                "and would re-run every step. Run it on an in-process or prefork worker.",
                 should_retry=True,
             )
-        self._session = self._queue._inner.open_step_session(
+        self._session = worker_steps.open_step_session(
             self._ctx.job_id,
             self._ctx.retry_count,
-            self._ctx.namespace,
         )
         return self._session
 

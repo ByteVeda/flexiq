@@ -16,6 +16,7 @@ from flexiq.task_errors import encode_task_error
 from flexiq.task_lifecycle import run_lifecycle
 
 if TYPE_CHECKING:
+    from flexiq._flexiq import WorkerSteps
     from flexiq.app import Queue
 
 logger = logging.getLogger("flexiq.async")
@@ -40,11 +41,16 @@ class AsyncTaskExecutor:
         task_registry: dict[str, Any],
         queue_ref: Queue,
         max_concurrency: int = 100,
+        worker_steps: WorkerSteps | None = None,
     ) -> None:
         self._sender = result_sender
         self._registry = task_registry
         self._queue_ref = queue_ref
         self._max_concurrency = max_concurrency
+        # The step handle of the worker this executor belongs to. One executor
+        # is built per ``run_worker``, so it names that worker's claim and no
+        # other's — the fence a durable step is written under.
+        self._worker_steps = worker_steps
         self._semaphore: asyncio.Semaphore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -151,7 +157,9 @@ class AsyncTaskExecutor:
         assert self._semaphore is not None
         async with self._semaphore:
             start_ns = time.monotonic_ns()
-            token = set_async_context(job_id, task_name, retry_count, queue_name)
+            token = set_async_context(
+                job_id, task_name, retry_count, queue_name, self._worker_steps
+            )
             # Set before the hand-off so a raising send can't also fire report_failure
             # for the same job — the scheduler would then see two results for one job.
             reported = False

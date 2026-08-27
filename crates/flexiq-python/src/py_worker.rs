@@ -4,9 +4,12 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use flexiq_core::job::Job;
 use flexiq_core::scheduler::JobResult;
 
+use crate::py_worker_steps::PyWorkerSteps;
+
 pub fn execute_task(
     py: Python<'_>,
     task_registry: &Py<PyAny>,
+    worker_steps: &Py<PyWorkerSteps>,
     job: &Job,
 ) -> PyResult<Option<Vec<u8>>> {
     let cloudpickle = py.import("cloudpickle")?;
@@ -39,7 +42,9 @@ pub fn execute_task(
             ))
         })?;
 
-    // Set job context before execution
+    // Set job context before execution. The step handle rides with it because
+    // it is *this* worker's: the claim a step is fenced on belongs to the
+    // worker that won it, not to the queue handle the worker was started from.
     let context_mod = py.import("flexiq.context")?;
     context_mod.call_method1(
         "_set_context",
@@ -49,6 +54,7 @@ pub fn execute_task(
             job.retry_count,
             &job.queue,
             job.namespace.as_deref(),
+            worker_steps.clone_ref(py),
         ),
     )?;
 
