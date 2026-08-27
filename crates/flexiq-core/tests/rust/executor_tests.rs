@@ -1928,3 +1928,24 @@ fn a_scheduler_without_the_capability_refuses_every_step() {
     assert!(error.to_string().contains("does not implement"), "{error}");
     handle.shutdown();
 }
+
+#[test]
+fn a_job_with_no_execution_timeout_still_waits_the_configured_budget() {
+    // `timeout_ms <= 0` means *no* timeout — zero included. Reading a bare zero
+    // as a zero-length budget would time out every commit before the scheduler
+    // could possibly answer it.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let mut untimed = running_job("job-1");
+    untimed.timeout_ms = 0;
+
+    let mut session = handle
+        .steps()
+        .open_session(&untimed, StepLimits::default())
+        .expect("open a session");
+
+    let running = thread::spawn(move || session.run("charge", None, |_| Ok(b"receipt".to_vec())));
+    scheduler.expect_step_commit();
+    scheduler.ack_step("job-1", 0, false, None);
+    assert_eq!(running.join().expect("thread").expect("commit"), b"receipt");
+    handle.shutdown();
+}

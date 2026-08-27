@@ -664,12 +664,14 @@ impl ExecutorSteps {
 /// How long this job leaves for an ack, from its own execution timeout.
 ///
 /// A commit that outlives the job's deadline is answering into an attempt the
-/// scheduler has already decided to reap. `timeout_ms <= 0` means no timeout, so
-/// the configured ceiling stands alone.
+/// scheduler has already decided to reap. `timeout_ms <= 0` means *no* timeout —
+/// zero included, which is why this is not a bare `try_from` — so the configured
+/// ceiling stands alone.
 fn job_deadline(job: &Job) -> Duration {
-    u64::try_from(job.timeout_ms)
-        .map(Duration::from_millis)
-        .unwrap_or(Duration::MAX)
+    if job.timeout_ms <= 0 {
+        return Duration::MAX;
+    }
+    Duration::from_millis(job.timeout_ms.unsigned_abs())
 }
 
 /// The [`StepStore`] behind [`ExecutorSteps`]: a socket where a worker would
