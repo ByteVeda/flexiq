@@ -499,7 +499,7 @@ same way.
 ```java
 try (FlexiQ queue = InMemoryFlexiQ.open()) {
     AtomicInteger charges = new AtomicInteger();
-    queue.enqueue(checkout, "go");
+    String id = queue.enqueue(checkout, "go");
 
     try (Worker worker = queue.worker()
             .handle(checkout, payload -> {
