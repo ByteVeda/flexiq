@@ -9,6 +9,17 @@ import org.jspecify.annotations.Nullable;
  * corresponding webhook field unchanged, while a provided value replaces it
  * wholesale (for {@code events} and {@code headers} the whole collection is
  * swapped, not merged). Consumed by {@link WebhookManager#update}.
+ *
+ * @param url the endpoint to post to
+ * @param events the event names to subscribe to, replacing the whole list
+ * @param taskFilters the task names to restrict delivery to, replacing the whole list
+ * @param headers the extra request headers, replacing the whole map
+ * @param secret the HMAC signing secret
+ * @param maxRetries how many times a failed delivery is retried
+ * @param timeoutMs how long one request may take
+ * @param retryBackoff the multiplier between retries
+ * @param enabled whether the webhook delivers at all
+ * @param description the operator-facing note
  */
 public record WebhookUpdate(
         @Nullable String url,
