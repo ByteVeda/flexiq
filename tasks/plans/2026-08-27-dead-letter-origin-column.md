@@ -34,6 +34,9 @@ reach.
 | D3 | `carry_origin_job_id` is **deleted**, and the DLQ blob goes back to `metadata.or(job.metadata)`. | The column now covers every replacement shape, object or not. Keeping the merge would leave a second, weaker source of truth that can disagree with the column. |
 | D4 | The origin is surfaced as `DeadJob.origin_job_id`, not left as a blob key. | A typed field beats a reserved `__` key for anyone who wants to see which run a dead entry belongs to. The shells' DLQ types are left alone — the issue says they need not carry it. |
 | D5 | `run_key(&Job)` is unchanged: a **live** job still reads its origin off metadata. | `retry_dead` writes the resolved origin into the new job's metadata, so the live-job read is still correct. The column is the dead-letter carrier, not a second key derivation. |
+| D6 | The job's **own** metadata gets a second column, `job_metadata` (`m0015`), and `retry_dead` rebuilds the resurrection from it. | The origin was not the only thing a replacement destroyed — the note at the end of the issue. `dead_letter.metadata` is two things at once, and three SDK suites pin its observable value to the marker, so the job's metadata is what has to move. |
+| D7 | `job_metadata` is written **only when a replacement is supplied**; NULL means `metadata` already is the job's own. | The one place the "write it unconditionally" rule of D1 is worth bending: a metadata blob is unbounded, and copying it on the common no-replacement path would double DLQ storage for nothing. `job_metadata.or(metadata)` covers the no-replacement case and the pre-migration rows with one rule. |
+| D8 | The marker does **not** ride onto the resurrection. | It records *that* death. Today an object marker does leak through — a retried job comes back carrying `{"shed":"rate_limit"}` though nothing shed it. |
 
 ## Steps
 
@@ -50,6 +53,12 @@ reach.
    `run_key(job)` into the column/field, read it back in `retry_dead`. Redis has
    no schema to migrate, so `DeadJobEntry` gains a `#[serde(default)]` field and
    entries written before it read back as `None`.
+7. `migrations/m0015_dead_letter_job_metadata.rs` — the same split, a second
+   time, for the job's own metadata. `DeadLetterRow`/`NewDeadLetterRow` and the
+   Redis entry only; the listing projection never needs it, so
+   `NarrowDeadLetterRow` and `DeadJob` are left alone.
+8. `retry_dead` on both backends sources the resurrection from
+   `job_metadata.or(metadata)`.
 
 ## Tests
 
@@ -61,6 +70,14 @@ reach.
 - `tests/rust/storage_tests.rs` — the four-step sequence from the issue, with
   the bare-string `RETRY_BUDGET_EXHAUSTED` marker, so it is checked on SQLite,
   Postgres and Redis.
+- `tests/rust/storage_tests.rs` — the metadata round trip through both marker
+  shapes (an object and the bare string), asserting the DLQ row still shows the
+  marker, the resurrection carries the enqueued keys, and the marker does not
+  ride along.
+
+Both contract tests were **mutation-proved**: reverting `retry_dead` to read the
+column it used to reds each at its own assertion. A test that cannot fail is not
+coverage.
 
 ## Verification
 
