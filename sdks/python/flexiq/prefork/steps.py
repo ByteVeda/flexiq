@@ -16,6 +16,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from flexiq.worker_protocol import ProtocolError
+
 __all__ = ["StepRelay"]
 
 #: Backstop on how long a commit waits, in seconds.
@@ -94,7 +96,7 @@ class StepRelay:
 
         try:
             self._send(header, result)
-        except (OSError, EOFError, ValueError) as broken:
+        except (OSError, EOFError, ValueError, ProtocolError) as broken:
             self._forget(key)
             return _refused(f"step '{step_key}' of job {job_id} could not be sent: {broken}")
 
