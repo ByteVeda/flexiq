@@ -11,7 +11,8 @@
 //! worker that won the execution claim, read off that worker's own handle by
 //! [`JsWorker::open_step_session`], because an owner task code can assert is an
 //! owner it can forge — and a forged one writes straight into the live
-//! attempt's sequence.
+//! attempt's sequence. An attached executor supplies none at all: the claim is
+//! the scheduler's, and so is the fence (`attached_steps.rs`).
 //!
 //! Every storage round trip is `spawn_blocking` behind a `Promise`. Node has
 //! one thread for every task on the worker, so a synchronous commit would
@@ -22,10 +23,10 @@ use std::sync::{Arc, Mutex};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSleep,
-    StorageStepSession,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSession,
+    StepSleep, StepStore, StorageSteps,
 };
-use flexiq_core::storage::{Storage, StorageBackend};
+use flexiq_core::storage::Storage;
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Result, Status};
 use napi_derive::napi;
 
@@ -114,9 +115,18 @@ impl From<StepSleep> for JsStepSleepOutcome {
     }
 }
 
+/// One attempt's durable steps, however its writes leave this process.
+///
+/// The store is erased because a `#[napi]` class cannot be generic and the two
+/// deployments write through different ones — storage for a worker, the
+/// scheduler connection for an attached executor. Erasing it here rather than
+/// duplicating the class is what keeps the split form of the session (`beginRun`
+/// … `commitRun`) written once.
+pub(crate) type BoxedStepSession = StepSession<Box<dyn StepStore + Send>>;
+
 /// The session plus the one step it has handed out and not yet stored.
 struct SessionState {
-    session: StorageStepSession<StorageBackend>,
+    session: BoxedStepSession,
     /// The step `beginRun` issued, waiting for its bytes. Cleared by
     /// `commitRun`, whether or not the write succeeded: a refused commit has
     /// already failed the attempt, and keeping the token would let a later
@@ -126,8 +136,10 @@ struct SessionState {
 
 /// One attempt's durable steps.
 ///
-/// Built by [`JsWorker::open_step_session`], which is the only place the owner
-/// and the attempt come from. The mutex guards the hand-off
+/// Built by [`JsWorker::open_step_session`] or its attached twin, which are the
+/// only places the fence comes from — the owner off the worker that won the
+/// claim, or nothing at all for an executor, whose scheduler supplies both
+/// halves from the dispatch it recorded. The mutex guards the hand-off
 /// between the JS thread and the blocking pool, not concurrency: a session
 /// belongs to one attempt, and the core refuses two steps at once.
 #[napi]
@@ -136,7 +148,7 @@ pub struct JsStepSession {
 }
 
 impl JsStepSession {
-    pub(crate) fn new(session: StorageStepSession<StorageBackend>) -> Self {
+    pub(crate) fn new(session: BoxedStepSession) -> Self {
         Self {
             state: Arc::new(Mutex::new(SessionState {
                 session,
@@ -294,8 +306,9 @@ impl JsWorker {
     /// into the live attempt's sequence, and finding out here gives a clearer
     /// error than the storage fence's refusal on the first commit.
     ///
-    /// An attached executor never reaches this: it holds no worker handle, so
-    /// it has no channel to commit a step on and refuses in the shell instead.
+    /// An attached executor holds no worker handle and reaches
+    /// [`JsExecutor::open_step_session`](crate::JsExecutor) instead, whose
+    /// writes are fenced by the scheduler rather than here.
     #[napi]
     pub async fn open_step_session(&self, job_id: String, attempt: i32) -> Result<JsStepSession> {
         let storage = self.storage.clone();
@@ -326,9 +339,13 @@ impl JsWorker {
             // result that will not fit is to store it elsewhere and memoize the
             // handle, not to raise the cap, so there is nothing for a shell
             // knob to do yet.
-            let session = StorageStepSession::load(storage, &job, &owner, StepLimits::default())
-                .map_err(step_error)?;
-            Ok(JsStepSession::new(session))
+            let session = StepSession::open(
+                StorageSteps::new(storage, &owner, attempt),
+                &job,
+                StepLimits::default(),
+            )
+            .map_err(step_error)?;
+            Ok(JsStepSession::new(session.boxed()))
         })
         .await
         .map_err(join_to_napi_err)?
