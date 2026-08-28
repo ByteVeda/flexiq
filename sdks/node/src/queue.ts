@@ -23,6 +23,7 @@ import {
   PredicateRejectedError,
   QueueError,
   QueueFullError,
+  queueFullFrom,
   ResourceError,
   ResultTimeoutError,
   SerializationError,
@@ -715,15 +716,45 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     args: Parameters<TTasks[Name]> | undefined,
     options: EnqueueOptions | undefined,
   ): string | null {
-    this.rejectIfQueueFull(options?.queue ?? "default");
     const prepared = this.prepareEnqueue(name, args, options);
     if (prepared === null) {
       return null;
     }
     const { taskName, payload, options: nativeOpts } = prepared;
-    const jobId = this.native.enqueue(taskName, payload, nativeOpts);
-    this.emitter.emit("job.enqueued", { jobId, taskName, queue: nativeOpts.queue ?? "default" });
+    const queue = nativeOpts.queue ?? "default";
+    // A debounced enqueue carries the cap into the write instead of being
+    // checked against it here: a call that lands on an open window inserts
+    // nothing, and only the debounce write knows which of the two it is.
+    if (nativeOpts.debounceWindowMs === undefined) {
+      this.rejectIfQueueFull(queue);
+    } else {
+      nativeOpts.debounceMaxPending = this.queueLimits.get(queue)?.maxPending;
+    }
+    const jobId = this.enqueueNative(taskName, payload, nativeOpts, queue);
+    this.emitter.emit("job.enqueued", { jobId, taskName, queue });
     return jobId;
+  }
+
+  /**
+   * The native enqueue, with a storage-side admission refusal rebuilt as the
+   * {@link QueueFullError} the producer-side check would have thrown.
+   */
+  private enqueueNative(
+    taskName: string,
+    payload: Buffer,
+    nativeOpts: NativeEnqueueOptions,
+    queue: string,
+  ): string {
+    try {
+      return this.native.enqueue(taskName, payload, nativeOpts);
+    } catch (error) {
+      const full =
+        nativeOpts.debounceMaxPending === undefined ? undefined : queueFullFrom(error, queue);
+      if (full === undefined) {
+        throw error;
+      }
+      throw full;
+    }
   }
 
   /**

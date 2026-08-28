@@ -3,6 +3,7 @@ package org.byteveda.flexiq.test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.errors.QueueFullException;
 import org.byteveda.flexiq.errors.TaskError;
 import org.byteveda.flexiq.errors.TaskErrors;
 import org.byteveda.flexiq.model.DeadJob;
@@ -56,6 +58,32 @@ class InMemoryQueueBackendTest {
 
             assertEquals(first, second, "a repeat enqueue lands on the open window");
             assertNotEquals(first, other, "a different key opens its own window");
+            assertEquals(2, queue.countPendingByQueue("default"));
+        }
+    }
+
+    @Test
+    @Timeout(20)
+    void aFullQueueTakesADebouncedSlideButNotANewWindow() {
+        // The cap rides down on a debounced enqueue because only the write knows whether it
+        // inserts a row; the fake applies it on the same branch the core does, so a test
+        // written against it never sees a rejection the native backend would not give.
+        Task<Report> report = Task.of("im.debounce.cap", Report.class)
+                .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+        Task<String> noop = Task.of("im.debounce.cap.noop", String.class);
+        try (FlexiQ queue = InMemoryFlexiQ.open()) {
+            queue.maxPending("default", 2);
+            String opened = queue.enqueue(report, new Report("u1", 1));
+            queue.enqueue(noop, "filler");
+            assertEquals(2, queue.countPendingByQueue("default"));
+
+            assertEquals(opened, queue.enqueue(report, new Report("u1", 2)), "a full queue still slides");
+
+            QueueFullException full =
+                    assertThrows(QueueFullException.class, () -> queue.enqueue(report, new Report("u2", 1)));
+            assertEquals("default", full.queue());
+            assertEquals(2, full.pending());
+            assertEquals(2, full.cap());
             assertEquals(2, queue.countPendingByQueue("default"));
         }
     }

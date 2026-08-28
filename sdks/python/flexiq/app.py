@@ -35,6 +35,7 @@ from flexiq.debounce import (
     DebounceConfig,
     Duration,
     normalize_debounce,
+    queue_full_counts,
     resolve_debounce_key,
 )
 from flexiq.detached import DetachedNative, is_detached
@@ -687,10 +688,19 @@ class Queue(
             return
         pending = self._inner.count_pending_by_queue(queue_name)
         if pending + incoming > cap:
-            raise QueueFullError(
-                f"queue '{queue_name}' is full: {pending} pending + {incoming} "
-                f"would exceed max_pending {cap}"
-            )
+            raise self._queue_full(queue_name, pending, cap, incoming)
+
+    @staticmethod
+    def _queue_full(queue_name: str, pending: int, cap: int, incoming: int = 1) -> QueueFullError:
+        """The rejection this queue reports when its admission cap is reached.
+
+        Shared with the debounced path, where storage decides the refusal and
+        hands back the same two counts, so both read identically to a caller.
+        """
+        return QueueFullError(
+            f"queue '{queue_name}' is full: {pending} pending + {incoming} "
+            f"would exceed max_pending {cap}"
+        )
 
     def enqueue(
         self,
@@ -915,35 +925,49 @@ class Queue(
         if depends_on is not None:
             dep_ids = [depends_on] if isinstance(depends_on, str) else list(depends_on)
 
-        self._reject_if_queue_full(queue or "default")
-
+        queue_name = queue or "default"
         resolved_key, debounce_config = debounce_plan or (None, None)
-        py_job = self._inner.enqueue(
-            task_name=task_name,
-            payload=payload,
-            queue=queue or "default",
-            priority=priority,
-            delay_seconds=delay,
-            max_retries=max_retries,
-            timeout=timeout,
-            unique_key=unique_key,
-            metadata=metadata,
-            notes=notes_encoded,
-            depends_on=dep_ids,
-            expires=expires,
-            result_ttl=result_ttl,
-            debounce_key=resolved_key,
-            debounce_window_ms=debounce_config.window_ms if debounce_config else None,
-            debounce_max_wait_ms=debounce_config.max_wait_ms if debounce_config else None,
-            debounce_replace_payload=bool(debounce_config and debounce_config.replace_payload),
-        )
+        # A debounced enqueue carries the cap into storage instead of being
+        # checked against it here: a call that lands on an open window inserts
+        # nothing, and only the debounce write knows which of the two it is.
+        if debounce_config is None:
+            self._reject_if_queue_full(queue_name)
+
+        try:
+            py_job = self._inner.enqueue(
+                task_name=task_name,
+                payload=payload,
+                queue=queue_name,
+                priority=priority,
+                delay_seconds=delay,
+                max_retries=max_retries,
+                timeout=timeout,
+                unique_key=unique_key,
+                metadata=metadata,
+                notes=notes_encoded,
+                depends_on=dep_ids,
+                expires=expires,
+                result_ttl=result_ttl,
+                debounce_key=resolved_key,
+                debounce_window_ms=debounce_config.window_ms if debounce_config else None,
+                debounce_max_wait_ms=debounce_config.max_wait_ms if debounce_config else None,
+                debounce_replace_payload=bool(debounce_config and debounce_config.replace_payload),
+                debounce_max_pending=(
+                    self._max_pending.get(queue_name) if debounce_config else None
+                ),
+            )
+        except RuntimeError as exc:
+            counts = queue_full_counts(str(exc)) if debounce_config else None
+            if counts is None:
+                raise
+            raise self._queue_full(queue_name, *counts) from None
 
         self._emit_event(
             EventType.JOB_ENQUEUED,
             {
                 "task_name": task_name,
                 "job_id": py_job.id,
-                "queue": queue or "default",
+                "queue": queue_name,
             },
         )
 

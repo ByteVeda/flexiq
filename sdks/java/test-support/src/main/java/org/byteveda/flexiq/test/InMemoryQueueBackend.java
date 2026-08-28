@@ -126,12 +126,24 @@ public final class InMemoryQueueBackend implements QueueBackend {
                 }
             }
         }
+        String queue = optText(opts, "queue", DEFAULT_QUEUE);
+        // Only the branch that inserts owes the admission cap an answer, and a debounced
+        // enqueue is the one write whose caller cannot tell which branch it took — so the
+        // cap arrives on the options and is applied here, exactly as the core does it.
+        Long maxPending = boxedLong(opts, "debounceMaxPending");
+        if (maxPending != null) {
+            long pending = count("pending", queue);
+            if (pending + 1 > maxPending) {
+                throw new FlexiQException(
+                        "queue '" + queue + "' is full: " + pending + " pending >= max_pending " + maxPending);
+            }
+        }
         JobRec job = new JobRec();
         job.enqueueSeq = seq.incrementAndGet();
         job.id = "im-" + job.enqueueSeq;
         job.taskName = taskName;
         job.payload = payload;
-        job.queue = optText(opts, "queue", DEFAULT_QUEUE);
+        job.queue = queue;
         job.priority = optInt(opts, "priority", 0);
         job.maxRetries = optInt(opts, "maxRetries", 0);
         job.timeoutMs = optLong(opts, "timeoutMs", 0);

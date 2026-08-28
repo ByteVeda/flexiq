@@ -312,7 +312,12 @@ impl PyQueue {
     /// single run. Supplying only some of them is a caller error rather than a
     /// partially-applied window — an absent `max_wait_ms` in particular would
     /// mean an unbounded debounce, which starves the job.
-    #[pyo3(signature = (task_name, payload, queue="default", priority=None, delay_seconds=None, max_retries=None, timeout=None, unique_key=None, metadata=None, notes=None, depends_on=None, expires=None, result_ttl=None, debounce_key=None, debounce_window_ms=None, debounce_max_wait_ms=None, debounce_replace_payload=false))]
+    ///
+    /// `debounce_max_pending` is the target queue's admission cap, and only a
+    /// debounced enqueue carries one: it is the one write whose caller cannot
+    /// apply the cap itself, because only storage knows whether the call adds a
+    /// pending row or slides an open window.
+    #[pyo3(signature = (task_name, payload, queue="default", priority=None, delay_seconds=None, max_retries=None, timeout=None, unique_key=None, metadata=None, notes=None, depends_on=None, expires=None, result_ttl=None, debounce_key=None, debounce_window_ms=None, debounce_max_wait_ms=None, debounce_replace_payload=false, debounce_max_pending=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn enqueue(
         &self,
@@ -333,25 +338,32 @@ impl PyQueue {
         debounce_window_ms: Option<i64>,
         debounce_max_wait_ms: Option<i64>,
         debounce_replace_payload: bool,
+        debounce_max_pending: Option<i64>,
     ) -> PyResult<PyJob> {
         let debounce = match (
             debounce_key.as_deref(),
             debounce_window_ms,
             debounce_max_wait_ms,
         ) {
-            (None, None, None) if !debounce_replace_payload => None,
+            (None, None, None) if !debounce_replace_payload && debounce_max_pending.is_none() => {
+                None
+            }
             (Some(_), Some(window_ms), Some(max_wait_ms)) => Some(DebounceOptions {
                 window_ms,
                 max_wait_ms,
                 replace_payload: debounce_replace_payload,
+                max_pending: debounce_max_pending,
             }),
-            // `replace_payload` only means anything to a debounced write, so on
-            // its own it is a window the caller thinks they configured and did
-            // not. Its own arm because the message names the missing three.
+            // `replace_payload` and `max_pending` only mean anything to a
+            // debounced write, so on their own they are a window the caller
+            // thinks they configured and did not — and the cap in particular
+            // would be silently dropped by the plain insert this would fall
+            // through to. Its own arm because the message names the missing
+            // three.
             (None, None, None) => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    "debounce_replace_payload requires debounce_key, debounce_window_ms \
-                     and debounce_max_wait_ms",
+                    "debounce_replace_payload and debounce_max_pending require \
+                     debounce_key, debounce_window_ms and debounce_max_wait_ms",
                 ))
             }
             _ => {

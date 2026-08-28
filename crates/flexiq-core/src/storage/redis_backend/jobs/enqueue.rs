@@ -69,11 +69,17 @@ static DEBOUNCE_RESOLVE: LazyLock<redis::Script> =
 /// the meantime, so the caller slides that one rather than inserting a second
 /// job.
 ///
+/// Three replies, told apart by type: nil for an insert, a bulk string for the
+/// document to slide instead, and a one-element array holding the pending count
+/// when the queue is at its admission cap. The array is what keeps the cap
+/// check inside the write — the count is taken here, after the scan has proven
+/// no window is open, so nothing is refused for a burst that inserts nothing.
+///
 /// KEYS (after the index): job, status set, queue zset, by_queue, by_task, all,
 /// and — only for a pub/sub delivery — its subscription's pending backlog.
 /// ARGV (after the scan's four): job id, job JSON, queue score, `created_at`,
-/// dependency count, then one `(depends_on_key, dep_id, dependents_key)` triple
-/// per dependency.
+/// dependency count, the admission cap (negative = uncapped), then one
+/// `(depends_on_key, dep_id, dependents_key)` triple per dependency.
 static DEBOUNCE_INSERT: LazyLock<redis::Script> =
     LazyLock::new(|| redis::Script::new(&format!("{DEBOUNCE_SCAN}{DEBOUNCE_INSERT_BODY}")));
 
@@ -84,7 +90,17 @@ const DEBOUNCE_INSERT_BODY: &str = r#"
     local score = tonumber(ARGV[7])
     local created_at = tonumber(ARGV[8])
     local num_deps = tonumber(ARGV[9])
-    local dep_args_base = 10
+    local max_pending = tonumber(ARGV[10])
+    local dep_args_base = 11
+
+    -- KEYS[3] is the status set of the job being inserted, which is always
+    -- Pending, so this is `count_pending_by_queue` computed server-side.
+    if max_pending >= 0 then
+        local pending = redis.call('SINTERCARD', 2, KEYS[5], KEYS[3])
+        if pending + 1 > max_pending then
+            return { pending }
+        end
+    end
 
     redis.call('SET', KEYS[2], job_json)
     redis.call('SADD', KEYS[3], job_id)
@@ -131,6 +147,16 @@ const DEBOUNCE_SLIDE: &str = r#"
 /// surfaces as an error rather than a second job or a phantom one. Mirrors
 /// `MAX_ENQUEUE_ATTEMPTS` in [`RedisStorage::enqueue_unique`].
 const MAX_DEBOUNCE_ATTEMPTS: usize = 3;
+
+/// What [`DEBOUNCE_INSERT`] wrote. Refusing the insert for the admission cap is
+/// not a variant here: it is the error the caller returns either way, and the
+/// script is the only thing that knows the count behind it.
+enum DebounceInsert {
+    /// The window was opened by this job.
+    Opened,
+    /// A concurrent caller opened it first; this is its document to slide.
+    Raced(String),
+}
 
 impl RedisStorage {
     /// Validate that each `dep_id` references a job that exists, shares
@@ -380,15 +406,16 @@ impl RedisStorage {
         Ok((applied == 1).then_some(target))
     }
 
-    /// Open a window with `job`. `Some(document)` means a concurrent caller
-    /// opened it first and that job is the one to slide.
+    /// Open a window with `job`. [`DebounceInsert::Raced`] means a concurrent
+    /// caller opened it first and that job is the one to slide.
     fn insert_debounced(
         &self,
         conn: &mut redis::Connection,
         index_key: &str,
         job: &Job,
         depends_on: &[String],
-    ) -> Result<Option<String>> {
+        max_pending: Option<i64>,
+    ) -> Result<DebounceInsert> {
         let mut invocation = DEBOUNCE_INSERT.prepare_invoke();
         invocation
             .key(index_key)
@@ -411,7 +438,11 @@ impl RedisStorage {
             .arg(serde_json::to_string(job)?)
             .arg(dequeue_score(job.priority, job.scheduled_at))
             .arg(job.created_at)
-            .arg(depends_on.len());
+            .arg(depends_on.len())
+            // An uncapped queue is a negative cap rather than a nil argument:
+            // Lua reads ARGV positionally, and a missing one would shift every
+            // dependency triple after it.
+            .arg(max_pending.unwrap_or(-1));
         for dep_id in depends_on {
             invocation
                 .arg(self.key(&["job", &job.id, "depends_on"]))
@@ -419,7 +450,28 @@ impl RedisStorage {
                 .arg(self.key(&["job", dep_id, "dependents"]));
         }
 
-        invocation.invoke(conn).map_err(map_err)
+        match (max_pending, invocation.invoke(conn).map_err(map_err)?) {
+            (_, redis::Value::Nil) => Ok(DebounceInsert::Opened),
+            // A one-element array is the cap refusal carrying its count. The
+            // script only counts when it was given a cap, so the same shape
+            // with no cap behind it is the script disagreeing with this
+            // function, and falls through as an unreadable document below.
+            (Some(cap), redis::Value::Array(reply)) => match reply.first() {
+                Some(&redis::Value::Int(pending)) => Err(QueueError::QueueFull {
+                    queue: job.queue.clone(),
+                    pending,
+                    cap,
+                }),
+                _ => Err(QueueError::Other(format!(
+                    "unreadable debounced cap refusal: {reply:?}"
+                ))),
+            },
+            (_, document) => Ok(DebounceInsert::Raced(
+                redis::from_redis_value(document).map_err(|e| {
+                    QueueError::Other(format!("unreadable debounced insert reply: {e}"))
+                })?,
+            )),
+        }
     }
 
     /// Enqueue under a debounce window. See
@@ -457,9 +509,15 @@ impl RedisStorage {
                     // not redefine the run, so its dependencies are discarded
                     // unread.
                     self.validate_dep_ids(&mut conn, &depends_on, job.namespace.as_deref(), None)?;
-                    match self.insert_debounced(&mut conn, &index_key, &job, &depends_on)? {
-                        None => return Ok(job),
-                        Some(raced) => raced,
+                    match self.insert_debounced(
+                        &mut conn,
+                        &index_key,
+                        &job,
+                        &depends_on,
+                        options.max_pending,
+                    )? {
+                        DebounceInsert::Opened => return Ok(job),
+                        DebounceInsert::Raced(raced) => raced,
                     }
                 }
             };

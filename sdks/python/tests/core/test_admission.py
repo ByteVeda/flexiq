@@ -149,3 +149,49 @@ def test_cap_frees_after_drain(tmp_path: Path) -> None:
         q.shutdown()
         worker.join(timeout=5)
         assert not worker.is_alive(), "worker did not stop during cleanup"
+
+
+def _register_debounced(queue: Queue) -> None:
+    @queue.task(
+        name="report",
+        debounce="5m",
+        debounce_key="report:{user_id}",
+        debounce_max_wait="30m",
+    )
+    def report(user_id: int) -> None:  # pragma: no cover - never executed (no worker)
+        return None
+
+
+def test_debounced_enqueue_collapses_onto_a_full_queue(queue: Queue) -> None:
+    """A full queue still admits an enqueue that only slides the open window.
+
+    The cap is admission control on pending rows and a coalescing enqueue adds
+    none, so it is applied inside the debounce write — on the branch that
+    inserts — rather than before the call.
+    """
+    _register(queue)
+    _register_debounced(queue)
+    queue.set_queue_max_pending("default", 2)
+
+    opened = queue.enqueue("report", (7,))
+    queue.enqueue("noop")
+    assert queue._inner.count_pending_by_queue("default") == 2
+
+    slid = queue.enqueue("report", (7,))
+    assert slid.id == opened.id
+    assert queue._inner.count_pending_by_queue("default") == 2
+
+
+def test_debounced_enqueue_still_rejected_with_no_window_open(queue: Queue) -> None:
+    """No open window means a row to insert, so the same full queue refuses it."""
+    _register(queue)
+    _register_debounced(queue)
+    queue.set_queue_max_pending("default", 2)
+    queue.enqueue("noop")
+    queue.enqueue("noop")
+
+    with pytest.raises(QueueFullError) as exc:
+        queue.enqueue("report", (7,))
+    # The count comes back from the write that refused it, not from a producer-side read.
+    assert "2 pending + 1 would exceed max_pending 2" in str(exc.value)
+    assert queue._inner.count_pending_by_queue("default") == 2

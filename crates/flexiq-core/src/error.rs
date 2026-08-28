@@ -44,6 +44,26 @@ pub enum QueueError {
     #[error("rate limit exceeded for: {0}")]
     RateLimitExceeded(String),
 
+    /// An enqueue was refused because the queue is at its admission cap.
+    ///
+    /// Only a write that storage itself has to decide raises this — a debounced
+    /// enqueue, whose slide-or-insert branch is not knowable outside the
+    /// transaction. A caller that can tell it is inserting checks the cap
+    /// itself and never gets here.
+    ///
+    /// The message is a cross-SDK contract: an SDK reads `pending` and `cap`
+    /// back off it to rebuild its own typed rejection, so the two integers stay
+    /// at the end where a queue name can never be mistaken for them.
+    #[error("queue '{queue}' is full: {pending} pending >= max_pending {cap}")]
+    QueueFull {
+        /// The queue that refused the enqueue.
+        queue: String,
+        /// Pending rows counted on that queue, inside the write.
+        pending: i64,
+        /// The cap the count was measured against.
+        cap: i64,
+    },
+
     /// A job exceeded its execution timeout.
     #[error("job timed out: {0}")]
     Timeout(String),
@@ -171,3 +191,29 @@ pub struct StepDivergence {
 
 /// Crate-wide result alias over [`QueueError`].
 pub type Result<T> = std::result::Result<T, QueueError>;
+
+#[cfg(test)]
+mod tests {
+    use super::QueueError;
+
+    /// Every SDK reads `pending` and `cap` back off this message to rebuild its
+    /// own typed rejection — there is no typed channel to use instead, since a
+    /// binding's fast path may carry only a string. Changing the wording
+    /// silently turns a full queue into an unrecognised failure in three
+    /// shells, so it is pinned here alongside the parsers that consume it.
+    #[test]
+    fn queue_full_message_is_the_cross_sdk_wire() {
+        let refused = QueueError::QueueFull {
+            // A queue name that itself reads like the tail the parsers anchor
+            // on: they match the *end* of the message, so it cannot fool them.
+            queue: "is full: 9 pending >= max_pending 9".to_string(),
+            pending: 4,
+            cap: 4,
+        };
+        assert_eq!(
+            refused.to_string(),
+            "queue 'is full: 9 pending >= max_pending 9' is full: 4 pending >= max_pending 4"
+        );
+        assert!(refused.to_string().ends_with("4 pending >= max_pending 4"));
+    }
+}

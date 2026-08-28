@@ -125,6 +125,7 @@ class PyQueue:
         debounce_window_ms: int | None = None,
         debounce_max_wait_ms: int | None = None,
         debounce_replace_payload: bool = False,
+        debounce_max_pending: int | None = None,
     ) -> PyJob: ...
     def enqueue_batch(
         self,

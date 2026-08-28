@@ -335,14 +335,18 @@ def test_per_call_dedup_key_with_debounce_is_refused(queue: Queue) -> None:
         build.apply_async(args=(1,), idempotency_key="explicit")
 
 
-def test_replace_payload_alone_is_refused_at_the_binding(queue: Queue) -> None:
-    """The low-level binding refuses it too, not just ``normalize_debounce``.
+def test_a_lone_debounce_field_is_refused_at_the_binding(queue: Queue) -> None:
+    """The low-level binding refuses them too, not just ``normalize_debounce``.
 
-    On its own the flag is a window the caller thinks they configured and did
-    not, so it must not fall through to a plain insert.
+    On its own either field is a window the caller thinks they configured and
+    did not, so neither may fall through to a plain insert — which would drop
+    the admission cap silently.
     """
-    with pytest.raises(ValueError, match="debounce_replace_payload requires"):
+    with pytest.raises(ValueError, match="debounce_replace_payload and debounce_max_pending"):
         queue._inner.enqueue(task_name="t", payload=b"x", debounce_replace_payload=True)
+
+    with pytest.raises(ValueError, match="debounce_replace_payload and debounce_max_pending"):
+        queue._inner.enqueue(task_name="t", payload=b"x", debounce_max_pending=5)
 
 
 def test_delay_with_debounce_is_refused(queue: Queue) -> None:

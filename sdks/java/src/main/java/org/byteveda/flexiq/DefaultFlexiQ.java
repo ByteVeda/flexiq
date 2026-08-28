@@ -3,6 +3,7 @@ package org.byteveda.flexiq;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,6 +38,7 @@ import org.byteveda.flexiq.events.WorkflowEvent;
 import org.byteveda.flexiq.interception.Interception;
 import org.byteveda.flexiq.interception.InterceptionAnalysis;
 import org.byteveda.flexiq.interception.Interceptor;
+import org.byteveda.flexiq.internal.AdmissionRefusal;
 import org.byteveda.flexiq.internal.DebounceKeys;
 import org.byteveda.flexiq.internal.IdempotencyKeys;
 import org.byteveda.flexiq.internal.MiddlewareDisables;
@@ -416,7 +418,14 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                     .build();
         }
         // Admission cap: reject before serializing/inserting if the target queue is full.
-        rejectIfQueueFull(finalOptions.queue(), 1);
+        // A debounced enqueue is the exception — it may only slide the open window, inserting
+        // nothing for the cap to be about, and only the debounce write can tell the two apart.
+        // It carries the cap down instead, and storage applies it on the branch that inserts.
+        String queue = queueOrDefault(finalOptions.queue());
+        Integer cap = debounced ? maxPending.get(queue) : null;
+        if (!debounced) {
+            rejectIfQueueFull(queue, 1);
+        }
         // Serialize before codec-encoding so the idempotency key hashes the deterministic
         // pre-codec payload — a non-deterministic codec (e.g. an AES-GCM nonce) must not
         // change the dedup key.
@@ -443,9 +452,40 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                     .build();
         }
         byte[] data = encodeCodecs(payloadBytes, codecNames);
-        String jobId = backend.enqueue(taskName, data, encode(finalOptions));
-        events.emit(new EnqueuedEvent(jobId, taskName, queueOrDefault(finalOptions.queue())));
+        String jobId = enqueueNative(taskName, data, encodeEnqueue(finalOptions, cap), queue, cap);
+        events.emit(new EnqueuedEvent(jobId, taskName, queue));
         return Optional.of(jobId);
+    }
+
+    /**
+     * The wire options for one enqueue. {@code cap} is folded in rather than added to
+     * {@link EnqueueOptions}: it is the queue's own configuration, not something a caller sets
+     * per job, and it only means anything on a debounced write.
+     */
+    private static String encodeEnqueue(EnqueueOptions options, @Nullable Integer cap) {
+        if (cap == null) {
+            return encode(options);
+        }
+        ObjectNode wire = VIEWS.valueToTree(options);
+        wire.put("debounceMaxPending", cap.longValue());
+        return encode(wire);
+    }
+
+    /**
+     * The native enqueue, with a storage-side admission refusal rebuilt as the
+     * {@link QueueFullException} the producer-side check would have thrown.
+     */
+    private String enqueueNative(
+            String taskName, byte[] payload, String optionsJson, String queue, @Nullable Integer cap) {
+        try {
+            return backend.enqueue(taskName, payload, optionsJson);
+        } catch (RuntimeException failure) {
+            QueueFullException full = cap == null ? null : AdmissionRefusal.from(failure, queue);
+            if (full == null) {
+                throw failure;
+            }
+            throw full;
+        }
     }
 
     /**

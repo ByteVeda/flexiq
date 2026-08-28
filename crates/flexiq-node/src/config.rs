@@ -73,6 +73,11 @@ pub struct EnqueueOptions {
     /// Overwrite the pending job's payload with this one. Omitted keeps the
     /// payload the window opened with.
     pub debounce_replace_payload: Option<bool>,
+    /// The target queue's admission cap, applied inside the debounce write and
+    /// only on the branch that inserts. Set for a debounced enqueue onto a
+    /// capped queue and nowhere else — every other enqueue can tell it is
+    /// inserting and checks the cap itself.
+    pub debounce_max_pending: Option<i64>,
 }
 
 /// One entry in a batch enqueue: an opaque payload plus its own options.

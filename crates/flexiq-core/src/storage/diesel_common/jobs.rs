@@ -454,6 +454,26 @@ macro_rules! impl_diesel_job_ops {
                     // No open window: insert, validating dependencies exactly as
                     // `enqueue` does (RollbackTransaction → DependencyNotFound).
                     Self::validate_dependencies(conn, &depends_on, job.namespace.as_deref())?;
+
+                    // Only this branch adds a pending row, so only this branch
+                    // owes the admission cap an answer — and it is counted here,
+                    // inside the write, because a count taken before the call
+                    // could not know which branch it was paying for.
+                    if let Some(cap) = options.max_pending {
+                        let pending: i64 = jobs::table
+                            .filter(jobs::queue.eq(&job.queue))
+                            .filter(jobs::status.eq(JobStatus::Pending as i32))
+                            .count()
+                            .get_result(conn)?;
+                        if pending + 1 > cap {
+                            return Err(QueueError::QueueFull {
+                                queue: job.queue.clone(),
+                                pending,
+                                cap,
+                            });
+                        }
+                    }
+
                     Self::insert_job_with_deps(conn, &job, &depends_on)?;
 
                     Ok(job.clone())

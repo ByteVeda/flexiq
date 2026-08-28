@@ -1,50 +1,57 @@
-# Issue #748 — clear the 2579 javadoc warnings in the Java runtime jar
+# #695 — queue cap rejects a debounced enqueue that inserts nothing
 
-Branch: `docs/748-java-javadoc-runtime`, stacked on `origin/docs/java-javadoc-warnings` (#747),
-with `origin/master` merged in (picks up #746's in-memory durable steps).
-Baseline verified: `./gradlew :javadoc --rerun-tasks` → **2579 warnings**. Final: **0**.
+## Problem
+Every shell runs its `max_pending` admission pre-check before routing to
+`Storage::enqueue_debounced`. A coalescing enqueue inserts no row, so a queue at
+its cap rejects a call that would only have slid the open window's deadline. The
+shell cannot tell slide from insert without asking storage, and asking separately
+reopens the race the debounce transaction exists to close.
 
-Decisions taken (the issue asked for both up front):
-- `internal` **is documented**, not excluded from the javadoc task.
-- No filler. `@param queue the queue` is not an acceptable tag; every tag says what the
-  component is *for*, or what a caller has to get right about it.
+## Design
+The cap travels *into* the debounce write and is enforced on the branch that
+inserts, inside the same transaction / Lua script.
 
-## Steps — one commit each, smallest-first
+- `DebounceOptions` grows `max_pending: Option<i64>` (rather than a third trait
+  argument: 7 struct literals vs 53 call sites, and the compiler still forces
+  every constructor to answer).
+- New `QueueError::QueueFull { queue, pending, cap }`. Its `Display` is the
+  cross-SDK wire contract — suffix-anchored so a shell reads the two integers
+  back without trusting the queue name:
+  `queue '<name>' is full: <pending> pending >= max_pending <cap>`
+- Rejection rule matches the shells' today: reject when `pending + 1 > cap`.
 
-- [x] 1. `steps`, `webhooks`, `pubsub`, `proxies` — 2579 → 2315
-- [x] 2. small tail (`errors`, `resources`, `predicates`, `serialization`, `middleware`,
-      `events`, `logging`, `annotation`, `scheduling`, `locks`, `health`, `scaler`,
-      `autoscale`, `interception`, `core`, `batch`, `contrib`, `cli`) — 2315 → 1999
-- [x] 3. `dashboard` and its subpackages — 1999 → 1643
-- [x] 4. `model`, `task`, `worker` — 1643 → 1187
-- [x] 5. `workflows` — 1187 → 954
-- [x] 6. `spi` — 954 → 713
-- [x] 7. `internal` — 713 → 332
-- [x] 8. root package, `FlexiQ.java` last — 332 → 0
-- [x] 9. `-Xwerror` on the runtime javadoc
+## Checklist
+- [x] core: `QueueError::QueueFull`, `DebounceOptions.max_pending`, trait doc
+- [x] diesel_common: count pending inside the write txn, insert branch only
+- [x] redis: fold `SINTERCARD` into `DEBOUNCE_INSERT`, new "full" return shape
+- [x] contract suite: at-cap + open window collapses; at-cap + no window rejects
+- [x] python: binding arg + stub, drop the pre-check on the debounced path
+- [x] node: napi field + TS, drop the pre-check on the debounced path
+- [x] java: wire field + `DefaultFlexiQ`, in-memory backend parity
+- [x] docs: flow-control + debouncing guides
+- [x] verify: cargo (4 feature combos), pytest, node, gradle
 
 ## Review
 
-**Result.** 2579 → 0 across 226 files; ~3,070 `@param`/`@return`/`@throws` tags and every
-undocumented public member. `-Xwerror` now holds the runtime at zero, the way #747 holds
-`flexiq-test`, so the backlog cannot re-accumulate.
+**Shape.** The cap is now an argument of the write. Diesel counts pending inside
+`write_transaction`; Redis folds `SINTERCARD 2 KEYS[5] KEYS[3]` into
+`DEBOUNCE_INSERT`, whose reply grew a third shape (nil = inserted, bulk string =
+the document to slide, one-element array = the refusal and its count). Both
+enforce only after the scan has proven no window is open, and both leave the
+queue untouched when they refuse.
 
-**Verification.**
-- `./gradlew :javadoc --rerun-tasks` → 0 warnings, at every step, not just at the end.
-- `./gradlew build` green: spotless, checkstyle, NullAway, every module's tests.
-- The gate was *proved* to bite: deleting one `@return` from `Queue.name()` fails the build
-  with `error: warnings found and -Werror specified`. Restored, green again.
+**The error is a wire.** `QueueError::QueueFull { queue, pending, cap }`, whose
+`Display` every shell parses to rebuild its own typed rejection. A typed channel
+was not on offer: java's FFM fast path reports errors as a bare string and napi
+carries only a status plus a reason. The two integers therefore sit at the *end*
+of the message, so an arbitrary queue name in the middle cannot be mistaken for
+them; `queue_full_message_is_the_cross_sdk_wire` pins that with a queue named
+after the tail itself.
 
-**Two things worth knowing for review.**
-- The repetitive surfaces (JSON DTOs, the JNI holders, `QueueBackend`, `FlexiQ`) were
-  documented through generators driven by a per-file glossary of parameter meanings, so
-  the same concept reads the same everywhere — `handle` is "the queue handle from
-  `open`" in all 168 places it appears. The prose is hand-written per method; only the
-  mechanical repetition is generated.
-- A record's explicit compact constructor needs a *description* but no `@param`s: javadoc
-  inherits those from the record's component docs. That is why those blocks look shorter
-  than the rest.
+**Behaviour change worth naming.** Node's cap check moved after
+`prepareEnqueue` — it has to know the resolved debounce — which also stopped it
+reading the pre-middleware queue name. That now matches python and java.
 
-**Not done.** Nothing in scope was left out. The one deliberate omission is that `internal`
-was documented rather than excluded, which is what was chosen up front; the alternative
-one-line exclusion is still available and would take ~380 tags back out.
+**Trap.** A debounce window is keyed by `(namespace, key)` alone, not by queue.
+A new contract test reusing another test's key silently slid *that* test's job
+in a different queue and inserted nothing.

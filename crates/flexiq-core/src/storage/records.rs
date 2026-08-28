@@ -433,6 +433,27 @@ pub struct DebounceOptions {
     /// Overwrite the pending job's payload with the newest one. `false` keeps
     /// the payload the window opened with.
     pub replace_payload: bool,
+    /// The target queue's `max_pending` admission cap, or `None` when the queue
+    /// is uncapped (then nothing is counted and no query is spent).
+    ///
+    /// It rides here because this is the one enqueue whose caller cannot apply
+    /// it: a coalescing call adds no pending row, and slide-vs-insert is only
+    /// decided inside the write. Enforced on the inserting branch alone, and
+    /// with the callers' rule — refused once `pending + 1` would exceed `cap`.
+    ///
+    /// Still admission control, not a barrier: two enqueues under *different*
+    /// debounce keys serialize on nothing (the write only locks the key it
+    /// coalesces on), so both can count the same backlog and both insert. A
+    /// brief overshoot under concurrent producers is accepted here for the same
+    /// reason it is accepted by the producer-side check this replaces, and by
+    /// the rate limiter. Making it exact would mean a per-queue lock on every
+    /// debounced insert, which would serialize unrelated keys and still leave
+    /// the plain enqueue path — which counts and inserts outside any shared
+    /// transaction — soft.
+    ///
+    /// A negative cap is a caller error, not a sentinel: `None` is the uncapped
+    /// case. Refused by `validated_debounce_key` before any backend sees it.
+    pub max_pending: Option<i64>,
 }
 
 /// Everything a worker announces about itself when it joins the registry.

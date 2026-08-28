@@ -62,6 +62,13 @@ pub trait Storage: Send + Sync + Clone {
     /// `debounce_key`, a non-positive window, and a `max_wait_ms` below the
     /// window with [`QueueError::Config`].
     ///
+    /// `options.max_pending` is the target queue's admission cap, enforced on
+    /// the inserting branch only and in the same transaction as the write —
+    /// a caller checking it beforehand would refuse a burst that adds no
+    /// pending row, and checking it separately reopens the race this
+    /// transaction closes. Over the cap, nothing is written and the call
+    /// reports [`QueueError::QueueFull`](crate::error::QueueError::QueueFull).
+    ///
     /// The Diesel backends get their atomicity from the transaction; the Redis
     /// backend has none, so it decides slide-vs-insert in a Lua script and
     /// commits a slide as a document compare-and-swap. Contended enough to lose

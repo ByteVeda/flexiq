@@ -84,3 +84,47 @@ it("QueueFullError is a QueueError", () => {
   expect(err.queue).toBe("q");
   expect(err.cap).toBe(5);
 });
+
+// #695 — the cap is admission control on pending rows, and a coalescing enqueue
+// adds none, so a debounced enqueue carries the cap into the write instead of
+// being checked against it producer-side.
+
+function debouncing(): Queue {
+  const queue = newQueue();
+  queue.task("noop", () => undefined);
+  queue.task("report", (_userId: number) => undefined, {
+    debounce: "5m",
+    debounceKey: "report:{0}",
+    debounceMaxWait: "30m",
+  });
+  return queue;
+}
+
+it("a full queue still takes a debounced slide", () => {
+  const queue = debouncing();
+  queue.configureQueue("default", { maxPending: 2 });
+  const opened = queue.enqueue("report", [7]);
+  queue.enqueue("noop");
+  expect(queue.countPendingByQueue("default")).toBe(2);
+
+  expect(queue.enqueue("report", [7])).toBe(opened);
+  expect(queue.countPendingByQueue("default")).toBe(2);
+});
+
+it("a full queue still refuses to open a debounce window", () => {
+  const queue = debouncing();
+  queue.configureQueue("default", { maxPending: 2 });
+  queue.enqueue("noop");
+  queue.enqueue("noop");
+
+  try {
+    queue.enqueue("report", [7]);
+    expect.unreachable("the cap must refuse an enqueue that opens a window");
+  } catch (error) {
+    expect(error).toBeInstanceOf(QueueFullError);
+    expect((error as QueueFullError).queue).toBe("default");
+    expect((error as QueueFullError).pending).toBe(2);
+    expect((error as QueueFullError).cap).toBe(2);
+  }
+  expect(queue.countPendingByQueue("default")).toBe(2);
+});

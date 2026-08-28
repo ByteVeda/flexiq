@@ -188,6 +188,13 @@ concurrency caps are per task name.
 
 </SdkOnly>
 
+One pairing is worth calling out: the admission cap and a debounce window. The
+cap counts *pending jobs*, and a debounced enqueue that lands on an open window
+creates none — it only slides that job's deadline. So the cap is not checked
+before a debounced enqueue; it travels into the storage write and is applied on
+the branch that actually inserts. A queue sitting at its limit keeps collapsing
+a burst, and only refuses the enqueue that would open a new window.
+
 See <SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink>,
 <SdkLink to="guides/reliability/concurrency">Concurrency</SdkLink>, and
 <SdkLink to="guides/reliability/circuit-breakers">Circuit breakers</SdkLink> for
