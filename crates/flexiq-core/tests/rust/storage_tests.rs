@@ -2890,6 +2890,20 @@ fn test_enqueue_debounced_rejects_unusable_options(s: &impl Storage) {
     assert!(s
         .enqueue_debounced(debounced(q, "bad:user-1"), debounce_opts(5_000, 1_000))
         .is_err());
+    // A negative cap has no reading the backends agree on — a Diesel count can
+    // never be under it, while the Redis script reserves a negative for the
+    // uncapped case — so it is refused as a caller mistake before either sees
+    // it. Asserted as `Config` rather than merely an error: left to the
+    // backends this is `QueueFull` on one and a successful insert on the other,
+    // and both of those are also `is_err()`-shaped answers to the wrong
+    // question.
+    let bad_cap = s
+        .enqueue_debounced(debounced(q, "bad:user-1"), capped_opts(-1))
+        .unwrap_err();
+    assert!(
+        matches!(bad_cap, QueueError::Config(_)),
+        "a negative cap is a caller mistake, got {bad_cap:?}"
+    );
 
     let written = s.list_jobs(None, Some(q), None, 10, 0, None).unwrap();
     assert!(written.is_empty(), "a rejected call must write nothing");

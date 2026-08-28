@@ -73,12 +73,16 @@ pub(crate) const DEBOUNCE_CANDIDATE_SCAN: i64 = 8;
 /// Check the arguments of a debounced enqueue and hand back the key it
 /// coalesces on.
 ///
-/// All three rules are load-bearing. A missing key would debounce every job of
+/// All four rules are load-bearing. A missing key would debounce every job of
 /// the task against every other — the design calls for a payload-derived key
 /// like `report:{user_id}`. A non-positive window would schedule the job in the
-/// past, so nothing ever coalesces. And a `max_wait_ms` below the window would
+/// past, so nothing ever coalesces. A `max_wait_ms` below the window would
 /// cap the very first insert, silently making the window meaningless; that is a
-/// caller mistake worth surfacing rather than absorbing.
+/// caller mistake worth surfacing rather than absorbing. And a negative
+/// `max_pending` has no reading a backend could agree on — a count can never be
+/// under it, while the Redis script reserves a negative for the uncapped case
+/// it normalizes `None` to — so it is refused here rather than left to mean
+/// "always full" on one backend and "never full" on another.
 pub(crate) fn validated_debounce_key(
     new_job: &NewJob,
     options: &records::DebounceOptions,
@@ -100,6 +104,14 @@ pub(crate) fn validated_debounce_key(
             "debounce max_wait_ms ({}) must be at least window_ms ({})",
             options.max_wait_ms, options.window_ms
         )));
+    }
+    if let Some(cap) = options.max_pending {
+        if cap < 0 {
+            return Err(crate::error::QueueError::Config(format!(
+                "debounce max_pending must be non-negative, got {cap} — an uncapped \
+                 queue is `None`, not a negative cap"
+            )));
+        }
     }
     Ok(key.to_string())
 }
