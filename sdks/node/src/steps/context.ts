@@ -33,7 +33,14 @@ import { type SleepDeadline, sleepDeadlineMs, sleepDurationMs } from "./duration
 import { StepError, StepSleepSignal, StepUnavailableError, stepErrorFrom } from "./errors";
 import type { StepLatch } from "./latch";
 
-/** Where a durable step commits — one worker's own claim on one job. */
+/**
+ * Where a durable step commits.
+ *
+ * A worker's own claim on one job, or — on an attached executor — the connection
+ * to the scheduler that holds that claim. Either way the shell supplies only a
+ * job and an attempt: an owner this side could name is an owner it could get
+ * wrong.
+ */
 export interface StepStore {
   openStepSession(jobId: string, attempt: number): Promise<NativeStepSession>;
 }
@@ -83,7 +90,7 @@ export class StepContext {
     private readonly attempt: number,
     private readonly serializer: Serializer,
     private readonly latch: StepLatch,
-    /** Absent where this process cannot commit a step — an attached executor. */
+    /** Absent where this process has no route to a step store at all. */
     private readonly store?: StepStore,
   ) {}
 
@@ -266,14 +273,14 @@ export class StepContext {
 
   private async open(): Promise<NativeStepSession> {
     if (!this.store) {
-      // An attached executor has no storage and no channel to commit a step on
-      // (the design's `job_steps` / `step_commit` / `step_ack` frames do not
-      // exist), so it refuses rather than running the step un-memoized.
-      // Retryable: a heterogeneous fleet mid-rollout may put the next attempt
-      // on a worker that can commit.
+      // Neither a worker's storage nor an executor's connection to a scheduler
+      // that has one, so there is nowhere to commit and the step refuses rather
+      // than running un-memoized. Retryable: a heterogeneous fleet mid-rollout
+      // may put the next attempt somewhere that can commit.
       throw new StepUnavailableError(
-        "durable steps need a worker that reaches storage, and this task is running on an " +
-          "attached executor, which has none. Run it on an in-process worker (runWorker).",
+        "durable steps need somewhere to commit, and this task is running with no route to " +
+          "one. Run it on an in-process worker (runWorker), or on an executor attached to a " +
+          "scheduler whose storage keeps steps.",
       );
     }
     const session = await this.store.openStepSession(this.jobId, this.attempt);

@@ -62,6 +62,42 @@ pub trait StepStore {
     ) -> Result<SleepOutcome>;
 }
 
+/// A store held behind a `dyn` boundary.
+///
+/// Written for the shells whose session type cannot be generic — a binding class
+/// is one concrete type on the far side of its FFI — and which therefore need
+/// one `StepSession` however its writes leave the process. Erasing the store is
+/// what keeps the split form of the session written once rather than duplicated
+/// per transport. See [`StepSession::boxed`](super::StepSession::boxed).
+impl StepStore for Box<dyn StepStore + Send> {
+    fn supports_steps(&self) -> bool {
+        (**self).supports_steps()
+    }
+
+    fn load_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
+        (**self).load_steps(job_id, namespace)
+    }
+
+    fn commit_step(
+        &self,
+        step: &NewJobStep<'_>,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<StepCommit> {
+        (**self).commit_step(step, limits, namespace)
+    }
+
+    fn commit_sleep(
+        &self,
+        step: &NewJobStep<'_>,
+        wake_at: i64,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<SleepOutcome> {
+        (**self).commit_sleep(step, wake_at, limits, namespace)
+    }
+}
+
 /// A [`StepStore`] over storage this process can reach, fenced on the claim the
 /// writer won.
 ///

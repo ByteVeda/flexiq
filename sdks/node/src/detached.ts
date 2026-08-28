@@ -138,9 +138,11 @@ function degraded(warnOnce: (what: string) => void, holder: SinkHolder): Record<
     isCancelRequested(): boolean {
       return false;
     },
-    // Answered rather than thrown: a durable step is fenced on the claim of the
-    // worker that won it, and an executor holds none. `false` is the true
-    // answer, and the proxy's default would make a capability *probe* throw.
+    // Whether *this queue's* storage keeps steps, which in an executor process
+    // is no storage at all. Not whether `ctx.step` works there: a step on an
+    // executor commits through the scheduler, which has its own answer.
+    // Answered rather than thrown — the proxy's default would make a capability
+    // *probe* throw.
     supportsSteps(): boolean {
       return false;
     },

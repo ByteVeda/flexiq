@@ -112,6 +112,28 @@ impl<S: StepStore> StepSession<S> {
         })
     }
 
+    /// Erase this session's store behind a `dyn` boundary, keeping the loaded
+    /// sequence exactly as it is.
+    ///
+    /// For a shell whose session type cannot be generic: a binding class is one
+    /// concrete type on the far side of its FFI, and the store it writes through
+    /// differs by deployment. Reopening the session instead would re-read the
+    /// snapshot, which §5.1 allows exactly once per attempt — and for a store
+    /// whose constructor is not public, reopening is not available at all.
+    pub fn boxed(self) -> StepSession<Box<dyn StepStore + Send>>
+    where
+        S: Send + 'static,
+    {
+        StepSession {
+            store: Box::new(self.store),
+            job_id: self.job_id,
+            run_key: self.run_key,
+            namespace: self.namespace,
+            limits: self.limits,
+            sequence: self.sequence,
+        }
+    }
+
     /// Run one step, or return what it returned last time.
     ///
     /// `body` is handed this step's downstream idempotency key and produces the
@@ -390,6 +412,38 @@ mod tests {
         assert_eq!(replayed, b"receipt-1", "the memo must win over a fresh run");
         assert!(!ran.get(), "a memoized step must not run its closure");
         assert_eq!(storage.get_job_steps(&job.id, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_boxed_session_writes_through_the_store_it_erased() {
+        // The shells that cannot hold a generic session hold this one, so the
+        // erasure has to keep both halves: the fence the store carries, and the
+        // sequence already loaded from the snapshot.
+        let storage = SqliteStorage::in_memory().unwrap();
+        let job = claimed_job(&storage, "checkout");
+
+        let mut boxed = open(&storage, &job).boxed();
+        boxed
+            .run("charge", None, |_| Ok(b"receipt".to_vec()))
+            .unwrap();
+        // The position is the erased session's, not a fresh one's.
+        boxed.run("email", None, |_| Ok(b"sent".to_vec())).unwrap();
+
+        let stored = storage.get_job_steps(&job.id, None).unwrap();
+        let keys: Vec<&str> = stored.iter().map(|step| step.step_key.as_str()).collect();
+        assert_eq!(keys, vec!["charge#0", "email#0"]);
+
+        // And a replay through an unboxed session reads exactly what it wrote,
+        // which is what makes the two forms one feature rather than two.
+        let ran = Cell::new(false);
+        let replayed = open(&storage, &job)
+            .run("charge", None, |_| {
+                ran.set(true);
+                Ok(b"other".to_vec())
+            })
+            .unwrap();
+        assert_eq!(replayed, b"receipt");
+        assert!(!ran.get());
     }
 
     #[test]
