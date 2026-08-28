@@ -49,7 +49,7 @@ use super::WorkerDispatcher;
 use crate::error::QueueError;
 use crate::job::Job;
 use crate::scheduler::JobResult;
-use crate::step::{StepFailure, StepLimits, StepSession, StepStore};
+use crate::step::{classify_step_failure, StepFailure, StepLimits, StepSession, StepStore};
 use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
 
 /// How often a waiting loop wakes to re-check its condition.
@@ -671,19 +671,110 @@ impl ExecutorSteps {
         };
         StepSession::open(store, job, limits)
     }
+
+    /// The steps a job's dispatch carried, for a shell that has to pass them on.
+    ///
+    /// [`open_session`] answers a memo hit from this without anyone asking. This
+    /// is the same snapshot for the case where the session is not opened here:
+    /// a shell whose task bodies run one process further out — the Python
+    /// prefork child — re-frames it with [`encode_step_snapshot`] and the child
+    /// opens the session over the pipe.
+    ///
+    /// An empty vector is a job with nothing committed. An **error** is a
+    /// snapshot that arrived unreadable, and a caller must not dispatch on it:
+    /// "no steps recorded" is the one wrong answer, because it re-runs every
+    /// step the job already paid for.
+    ///
+    /// [`open_session`]: Self::open_session
+    /// [`encode_step_snapshot`]: super::protocol::encode_step_snapshot
+    pub fn snapshot(&self, job_id: &str) -> crate::error::Result<Vec<JobStep>> {
+        self.shared.snapshot_for(job_id)
+    }
+
+    /// Forward one `step_commit` and hand back the `step_ack` to answer it with.
+    ///
+    /// For a shell that *relays* these frames rather than terminating them: the
+    /// Python prefork pool, whose children speak this same protocol over their
+    /// stdio pipe and hold the session. Such a pool is a proxy, not a second
+    /// session — it re-derives nothing, so the classification the scheduler made
+    /// is the one the task body sees.
+    ///
+    /// Always answers, and answers exactly once: an unadvertised step store, a
+    /// dead connection and a silent scheduler all come back as a refused ack
+    /// rather than an error the caller has to turn into one. A peer blocked on
+    /// an ack that never arrives waits out its whole timeout, so there is no
+    /// path here that may skip the reply.
+    pub fn relay_commit(&self, commit: StepRelay<'_>) -> SchedulerMessage {
+        let StepRelay {
+            job_id,
+            timeout_ms,
+            seq,
+            step_key,
+            kind,
+            wake_at,
+            result,
+        } = commit;
+
+        // The same budget `open_session` gives a local commit: the configured
+        // ceiling, bounded by the job's own deadline, because an ack arriving
+        // after that answers into an attempt already being reaped.
+        let ack_timeout = self
+            .shared
+            .step_ack_timeout
+            .min(timeout_from_millis(timeout_ms));
+
+        match self
+            .shared
+            .commit_step(job_id, seq, step_key, kind, wake_at, result, ack_timeout)
+        {
+            Ok(answer) => answer.into_ack(job_id.to_string(), seq),
+            Err(error) => StepAnswer::refused(error).into_ack(job_id.to_string(), seq),
+        }
+    }
+}
+
+/// One `step_commit` frame on its way through a relay.
+///
+/// The frame's own fields, plus the timeout of the job it belongs to — which is
+/// what bounds the wait for its ack, and which the frame does not carry because
+/// the peer that sent it already knows it.
+pub struct StepRelay<'a> {
+    /// Job the commit named.
+    pub job_id: &'a str,
+    /// Execution timeout of that job, in milliseconds. `<= 0` is *no* timeout,
+    /// zero included.
+    pub timeout_ms: i64,
+    /// Position the commit named.
+    pub seq: i32,
+    /// Identity of the step within the job.
+    pub step_key: &'a str,
+    /// Whether this commits a memoized value or a deadline.
+    pub kind: StepKind,
+    /// Candidate deadline, for a [`StepKind::Sleep`].
+    pub wake_at: Option<i64>,
+    /// Encoded result, for a [`StepKind::Run`]. Empty for a sleep.
+    pub result: &'a [u8],
 }
 
 /// How long this job leaves for an ack, from its own execution timeout.
 ///
 /// A commit that outlives the job's deadline is answering into an attempt the
-/// scheduler has already decided to reap. `timeout_ms <= 0` means *no* timeout —
-/// zero included, which is why this is not a bare `try_from` — so the configured
-/// ceiling stands alone.
+/// scheduler has already decided to reap.
 fn job_deadline(job: &Job) -> Duration {
-    if job.timeout_ms <= 0 {
+    timeout_from_millis(job.timeout_ms)
+}
+
+/// An execution timeout as a duration, so the configured ceiling stands alone
+/// when there is none.
+///
+/// `timeout_ms <= 0` means *no* timeout — zero included, which is why this is
+/// not a bare `try_from`: read as a zero-length ack budget, every commit on an
+/// untimed job times out before the scheduler could answer it.
+fn timeout_from_millis(timeout_ms: i64) -> Duration {
+    if timeout_ms <= 0 {
         return Duration::MAX;
     }
-    Duration::from_millis(job.timeout_ms.unsigned_abs())
+    Duration::from_millis(timeout_ms.unsigned_abs())
 }
 
 /// The [`StepStore`] behind [`ExecutorSteps`]: a socket where a worker would
@@ -883,6 +974,39 @@ impl StepAnswer {
             StepFailure::Superseded => QueueError::ClaimLost(job_id.to_string()),
             StepFailure::Permanent => QueueError::StepRefused(message),
             StepFailure::Retryable => QueueError::Other(message),
+        }
+    }
+
+    /// The answer as the frame it came from, for a relay to pass on unaltered.
+    ///
+    /// The inverse of [`into_error`](Self::into_error), and the reason a relay
+    /// does not use that one: rebuilding an ack out of a `QueueError` loses what
+    /// the scheduler actually said — a `Superseded` refusal comes back as a bare
+    /// job id — and a proxy that rewrites the message is a proxy an operator
+    /// cannot read through.
+    fn into_ack(self, job_id: String, seq: i32) -> SchedulerMessage {
+        SchedulerMessage::StepAck {
+            job_id,
+            seq,
+            ok: self.ok,
+            already: self.already,
+            wake_at: self.wake_at,
+            error: self.error,
+            failure: self.failure,
+        }
+    }
+
+    /// A refusal this side produced, rather than one the scheduler sent.
+    ///
+    /// Retryable unless the error says otherwise: nothing was written, so the
+    /// replay re-runs the step under the same downstream idempotency key.
+    fn refused(error: QueueError) -> Self {
+        Self {
+            ok: false,
+            already: false,
+            wake_at: None,
+            failure: Some(classify_step_failure(&error)),
+            error: Some(error.to_string()),
         }
     }
 }
