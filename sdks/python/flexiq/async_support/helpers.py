@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+_T = TypeVar("_T")
 
 
 def run_maybe_async(result: Any) -> Any:
@@ -31,3 +34,17 @@ def run_maybe_async(result: Any) -> Any:
         "method (e.g. `aresult()`, `aenqueue()`), `await` the coroutine "
         "directly, or invoke the sync API from a worker thread."
     )
+
+
+async def run_off_loop(fn: Callable[[], _T]) -> _T:
+    """Run a blocking call on a worker thread, keeping the event loop free.
+
+    For the calls an async task body makes that are synchronous underneath — a
+    durable step's commit is one, and on an attached executor it is a network
+    round trip rather than a local write. Blocking the loop for it would stall
+    every other coroutine the worker is running, including the ones whose
+    answers this one is waiting behind.
+
+    The default executor, as the rest of the async surface uses.
+    """
+    return await asyncio.get_running_loop().run_in_executor(None, fn)

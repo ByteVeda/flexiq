@@ -47,6 +47,9 @@ BOOM = "attach_app.boom"
 SLOW = "attach_app.slow"
 REPORTS = "attach_app.reports"
 MIDDLEWARED = "attach_app.middlewared"
+CHARGED = "attach_app.charged"
+ACHARGED = "attach_app.acharged"
+NAPS = "attach_app.naps"
 BOUND = "deferred_app.bound"
 SEND_INVOICE = "deferred_tasks.send_invoice"
 BUILD_REPORT = "deferred_tasks.build_report"
@@ -140,6 +143,50 @@ class FakeScheduler:
                 "metadata": None,
             },
             payload,
+        )
+
+    def send_job_steps(self, job_id: str, steps: list[dict[str, Any]]) -> None:
+        """Send the snapshot a dispatch carries, immediately before the job."""
+        payload = encode_snapshot(steps)
+        self.send({"type": "job_steps", "job_id": job_id, "payload_len": len(payload)}, payload)
+
+    def next_step_commit(self, timeout: float = FRAME_TIMEOUT) -> tuple[dict[str, Any], bytes]:
+        """The next step commit, skipping heartbeats.
+
+        Anything else arriving first is the failure: a result before a commit
+        means the step never reached this end.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            assert time.monotonic() < deadline, "no step commit arrived"
+            header, payload = read_frame(self._rfile)
+            if header.get("type") == "heartbeat":
+                continue
+            assert header.get("type") == "step_commit", f"expected a step commit, got {header}"
+            return header, payload
+
+    def ack_step(
+        self, job_id: str, seq: int, *, already: bool = False, wake_at: int | None = None
+    ) -> None:
+        """Confirm a commit, which is what unblocks the step."""
+        ack: dict[str, Any] = {"type": "step_ack", "job_id": job_id, "seq": seq, "ok": True}
+        if already:
+            ack["already"] = True
+        if wake_at is not None:
+            ack["wake_at"] = wake_at
+        self.send(ack)
+
+    def refuse_step(self, job_id: str, seq: int, error: str, failure: str) -> None:
+        """Refuse a commit, carrying the verdict only this end can make."""
+        self.send(
+            {
+                "type": "step_ack",
+                "job_id": job_id,
+                "seq": seq,
+                "ok": False,
+                "error": error,
+                "failure": failure,
+            }
         )
 
     def next_result(self, timeout: float = FRAME_TIMEOUT) -> tuple[dict[str, Any], bytes]:
@@ -285,19 +332,65 @@ def release_tasks(markers: Path) -> None:
     (markers / "release").write_text("1")
 
 
-def payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
-    """Encode a call the way the enqueue path does."""
+def encode_snapshot(steps: list[dict[str, Any]]) -> bytes:
+    """Frame a job's committed steps the way a scheduler does.
+
+    A JSON metadata line, then every blob concatenated in ``seq`` order — the
+    frame format's own shape, one level down. Written out here rather than
+    borrowed from the native module, because a fake that encodes with the code
+    under test proves nothing about the format.
+    """
+    meta = [
+        {
+            "seq": step["seq"],
+            "step_key": step["step_key"],
+            "kind": step.get("kind", "run"),
+            # ``None`` is "no result", which is every sleep; ``0`` is an empty one.
+            "result_len": None if step.get("result") is None else len(step["result"]),
+            "wake_at": step.get("wake_at"),
+            "created_at": step.get("created_at", 0),
+        }
+        for step in steps
+    ]
+    blobs = b"".join(step["result"] for step in steps if step.get("result") is not None)
+    return json.dumps(meta, separators=(",", ":")).encode() + b"\n" + blobs
+
+
+def app_queue() -> Any:
+    """The app's own ``Queue``, importable once ``_app_importable`` has run.
+
+    Imported inside the call because the app directory reaches ``sys.path`` from
+    a fixture, which runs after this module is imported.
+    """
     from attach_app import queue  # type: ignore[import-not-found]
 
-    payload: bytes = queue._get_serializer(task_name).dumps((args, kwargs))
+    return queue
+
+
+def step_blob(value: Any) -> bytes:
+    """Encode a step result the way ``ctx.step`` stores it.
+
+    The **queue's** serializer, not the task's: that is the chain a
+    ``Queue(codecs=…)`` puts encryption in, and it is what reaches ``job_steps``.
+    """
+    blob: bytes = app_queue()._serializer.dumps(value)
+    return blob
+
+
+def failure_message(header: dict[str, Any]) -> str:
+    """The human-readable half of a failure frame's structured error."""
+    return str(json.loads(header["error"])["message"])
+
+
+def payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
+    """Encode a call the way the enqueue path does."""
+    payload: bytes = app_queue()._get_serializer(task_name).dumps((args, kwargs))
     return payload
 
 
 def decode_result(task_name: str, payload: bytes) -> Any:
     """Decode a success frame's blob with the task's own serializer."""
-    from attach_app import queue
-
-    return queue._get_serializer(task_name).loads(payload)
+    return app_queue()._get_serializer(task_name).loads(payload)
 
 
 def deferred_payload_for(task_name: str, *args: Any, **kwargs: Any) -> bytes:
@@ -691,6 +784,223 @@ def test_progress_and_logs_reach_a_scheduler_that_advertised_the_side_channel(
         partial, extra = next((frame, blob) for frame, blob in logs if frame["level"] == "result")
         assert partial["extra_len"] == len(extra)
         assert json.loads(extra) == {"stage": "halfway"}
+    finally:
+        terminate(process)
+
+
+# ------------------------------------------------------------- durable steps
+
+
+def test_a_snapshot_on_the_dispatch_answers_a_memo_hit(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """§9.1: the executor replays without a storage read it has no credentials for.
+
+    Two hops: the snapshot rides the socket to the executor and the pipe to the
+    prefork child that holds the session. ``ran`` empty is what proves the
+    closure never ran — a charge replayed rather than made twice.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job_steps(
+            "job-1",
+            [{"seq": 0, "step_key": "charge#0", "result": step_blob("receipt-from-attempt-0")}],
+        )
+        scheduler.send_job("job-1", CHARGED, payload_for(CHARGED, 500), retry_count=1)
+
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(CHARGED, payload) == {
+            "receipt": "receipt-from-attempt-0",
+            "ran": [],
+        }
+    finally:
+        terminate(process)
+
+
+def test_a_new_step_commits_through_the_scheduler(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """§9.2: the executor holds no database, so the write crosses to the one that does.
+
+    The commit blocks the task until it is acknowledged — an unconfirmed commit
+    is indistinguishable from one that never happened.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", CHARGED, payload_for(CHARGED, 700))
+
+        commit, blob = scheduler.next_step_commit()
+        assert commit["job_id"] == "job-1"
+        assert commit["seq"] == 0
+        assert commit["step_key"] == "charge#0"
+        assert commit["kind"] == "run"
+        assert commit["payload_len"] == len(blob)
+        assert step_blob("receipt-700") == blob, "the blob is the encoded result, verbatim"
+        # No owner on the frame, and there must never be one: an owner an
+        # executor fills in is an owner it can forge.
+        assert "owner" not in commit, commit
+
+        scheduler.ack_step("job-1", 0)
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(CHARGED, payload) == {
+            "receipt": "receipt-700",
+            # `{run_key}:{step_key}` — what the step hands a downstream API, and
+            # the same string on every attempt.
+            "ran": ["job-1:charge#0"],
+        }
+    finally:
+        terminate(process)
+
+
+def test_an_async_step_commits_the_same_way(scheduler: FakeScheduler, tmp_path: Path) -> None:
+    """``await ctx.step.arun`` crosses the same wire, and still blocks on its ack."""
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", ACHARGED, payload_for(ACHARGED, 42))
+
+        commit, blob = scheduler.next_step_commit()
+        assert commit["step_key"] == "charge#0"
+        assert step_blob("receipt-42") == blob
+
+        scheduler.ack_step("job-1", 0)
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(ACHARGED, payload)["receipt"] == "receipt-42"
+    finally:
+        terminate(process)
+
+
+def test_a_sleep_is_two_frames_and_keeps_the_deadline_storage_settled_on(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """A sleep commits through the same pair, then ends the attempt separately.
+
+    It cannot be folded into the terminal frame: ``step.sleep`` has to return
+    the deadline *storage* settled on before the body unwinds, and the terminal
+    frame is only written once it has. On a wake the stored deadline has passed,
+    so the sleep is a memo hit and the body runs to the end.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", NAPS, payload_for(NAPS))
+
+        commit, blob = scheduler.next_step_commit()
+        assert commit["kind"] == "sleep"
+        assert commit["step_key"] == "cooldown#0"
+        assert (commit["payload_len"], blob) == (0, b""), "a sleep commits no bytes"
+
+        # Deliberately not the deadline the attempt proposed: a sleep row
+        # already at this position keeps the one it was first given, and that
+        # is the value the body must be handed back.
+        settled = commit["wake_at"] + 60_000
+        scheduler.ack_step("job-1", 0, wake_at=settled)
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "slept", header
+        assert header["wake_at"] == settled, (
+            "the terminal frame reports where the job actually went"
+        )
+
+        # The wake: the recorded sleep is behind us, so it elapses and the body
+        # carries on past it without a second commit.
+        scheduler.send_job_steps(
+            "job-2",
+            [
+                {
+                    "seq": 0,
+                    "step_key": "cooldown#0",
+                    "kind": "sleep",
+                    "result": None,
+                    "wake_at": int(time.time() * 1000) - 60_000,
+                }
+            ],
+        )
+        scheduler.send_job("job-2", NAPS, payload_for(NAPS))
+
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(NAPS, payload) == "woken"
+    finally:
+        terminate(process)
+
+
+def test_a_refused_commit_carries_the_scheduler_s_own_verdict(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """The classification is made where storage is, and survives both hops.
+
+    Getting it wrong either way is expensive: a retried permanent failure burns
+    the whole budget, and a dead-lettered transient one throws work away.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", CHARGED, payload_for(CHARGED, 700))
+
+        scheduler.next_step_commit()
+        scheduler.refuse_step("job-1", 0, "the step store is unreachable", "retryable")
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "failure", header
+        assert header["should_retry"] is True
+        assert failure_message(header) == "the step store is unreachable", (
+            "the message reads whole — no wrapper, and nothing re-derived on the way"
+        )
+    finally:
+        terminate(process)
+
+
+def test_a_commit_the_scheduler_never_answers_fails_the_attempt_retryably(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """Silence ends the attempt rather than parking the job on it.
+
+    Two deadlines bound it — the executor's ack budget, which the job's own
+    timeout caps, and the prefork watchdog on that same timeout. They are the
+    same instant by construction, so which one fires is not the assertion;
+    that the attempt ends *and is retried* is.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", CHARGED, payload_for(CHARGED, 700), timeout_ms=2_000)
+
+        scheduler.next_step_commit()  # deliberately never acknowledged
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "failure", header
+        assert header["should_retry"] is True, (
+            "nothing confirmed the write landed, so the replay is safe and owed"
+        )
+    finally:
+        terminate(process)
+
+
+def test_a_scheduler_without_the_step_capability_refuses_the_step(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """§9.4. There is no version of "your charge step silently lost its memo".
+
+    The refusal names the scheduler rather than a storage backend: there is no
+    backend on this side, and that line would send an operator to the wrong
+    process. Retryable, so a fleet mid-rollout can still place the next attempt
+    somewhere that commits.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["side_channel"])
+        scheduler.send_job("job-1", CHARGED, payload_for(CHARGED, 700))
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "failure", header
+        assert header["should_retry"] is True
+        assert "offers no step store" in failure_message(header), header
     finally:
         terminate(process)
 

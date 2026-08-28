@@ -575,32 +575,33 @@ def test_each_worker_fences_on_its_own_claim(queue: Queue, start_worker: WorkerF
 # ------------------------------------------------------------------ refusal
 
 
-def test_steps_refuse_without_an_execution_claim(queue: Queue) -> None:
-    """No claim, no fence — so the step refuses instead of running un-memoized.
+def test_steps_refuse_outside_a_worker(queue: Queue) -> None:
+    """Nothing dispatched this, so there is nothing to commit through.
 
-    A context carries the step handle of the worker that dispatched the job;
-    nothing dispatched this one, so there is no claim to fence a commit on and
-    a silently lost memo is worse than a failure naming the reason.
+    A context carries the handle the dispatch gave it — a worker's own claim, or
+    an attached executor's channel to the scheduler holding one. This context has
+    neither, and a silently lost memo is worse than a failure naming the reason.
     """
     ctx = _ActiveContext(job_id="j", task_name="t", retry_count=0, queue_name="default")
 
-    with pytest.raises(StepUnavailableError, match="execution claim") as refusal:
+    with pytest.raises(StepUnavailableError, match="outside both") as refusal:
         StepContext(ctx, queue).run("charge", lambda: "x")
 
-    assert refusal.value.flexiq_should_retry, "the next attempt may land on a worker that can"
+    assert refusal.value.flexiq_should_retry, "the next attempt may land somewhere that can"
 
 
-def test_steps_refuse_on_an_attached_executor(queue: Queue) -> None:
-    """An executor holds no claim of its own, so steps stop there.
+def test_the_refusal_never_reaches_a_detached_queue(queue: Queue) -> None:
+    """An executor's queue is storage-free, and the step path must not touch it.
 
-    Its queue is storage-free, and nothing in the step path touches it: the
-    refusal is a step failure naming the reason, never an ``AttributeError``
+    The refusal is a step failure naming the reason, never an ``AttributeError``
     escaping the detached stand-in, and the task body cannot catch it away.
+    Steps themselves *do* work on an executor — through the channel its dispatch
+    carries, which this context, having no dispatch, does not have.
     """
     queue._inner = DetachedNative()  # type: ignore[assignment]
     ctx = _ActiveContext(job_id="j", task_name="t", retry_count=0, queue_name="default")
 
-    with pytest.raises(StepUnavailableError, match="attached executor"):
+    with pytest.raises(StepUnavailableError, match="outside both"):
         StepContext(ctx, queue).run("charge", lambda: "x")
 
 

@@ -21,7 +21,7 @@ use flexiq_core::step::{classify_step_failure, StepFailure, StepLimits};
 use flexiq_core::storage::records::{JobStep, StepKind};
 use flexiq_core::worker::auth::Secret;
 use flexiq_core::worker::executor::{
-    ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
+    ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, StepRelay,
 };
 use flexiq_core::worker::protocol::{
     encode_step_snapshot, ExecutorMessage, Frame, FrameReader, FrameWriter, ProtocolError,
@@ -1929,6 +1929,119 @@ fn a_snapshot_that_rode_the_dispatch_answers_a_memo_hit() {
         .run("charge", None, |_| panic!("a memoized step must not run"))
         .expect("memo");
     assert_eq!(replayed, b"receipt");
+    handle.shutdown();
+}
+
+#[test]
+fn a_relay_can_read_the_snapshot_without_opening_a_session() {
+    // A shell whose task bodies run one process further out — the Python
+    // prefork child — re-frames the snapshot rather than replaying from it, so
+    // it needs the steps without the session that would consume them.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let steps = handle.steps();
+    assert!(
+        steps.snapshot("job-1").expect("read").is_empty(),
+        "a job whose dispatch carried no frame has an empty snapshot, not an unknown one"
+    );
+
+    scheduler.send_snapshot("job-1", &[memoized(0, "charge#0", b"receipt")]);
+    let deadline = Instant::now() + SETTLE;
+    let recorded = loop {
+        let recorded = steps.snapshot("job-1").expect("read");
+        if !recorded.is_empty() {
+            break recorded;
+        }
+        assert!(Instant::now() < deadline, "the snapshot never arrived");
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(recorded[0].step_key, "charge#0");
+    assert_eq!(recorded[0].result.as_deref(), Some(&b"receipt"[..]));
+    handle.shutdown();
+}
+
+#[test]
+fn a_relayed_commit_answers_with_the_scheduler_s_own_ack() {
+    // The point of `relay_commit` over rebuilding one: a proxy that rewrites
+    // the answer is a proxy an operator cannot read through.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach_with_steps(&["charge"], 1);
+    let steps = handle.steps();
+
+    let relaying = thread::spawn(move || {
+        steps.relay_commit(StepRelay {
+            job_id: "job-1",
+            timeout_ms: 0,
+            seq: 0,
+            step_key: "charge#0",
+            kind: StepKind::Run,
+            wake_at: None,
+            result: b"receipt",
+        })
+    });
+
+    let (job_id, seq, step_key, kind, _, payload) = scheduler.expect_step_commit();
+    assert_eq!(
+        (job_id.as_str(), seq, step_key.as_str(), kind),
+        ("job-1", 0, "charge#0", StepKind::Run)
+    );
+    assert_eq!(payload, b"receipt");
+    scheduler.refuse_step(
+        "job-1",
+        0,
+        "step divergence on job job-1 at position 0",
+        StepFailure::Permanent,
+    );
+
+    let ack = relaying.join().expect("the relay thread");
+    let SchedulerMessage::StepAck {
+        job_id,
+        seq,
+        ok,
+        error,
+        failure,
+        ..
+    } = ack
+    else {
+        panic!("a relay always answers with an ack");
+    };
+    assert_eq!((job_id.as_str(), seq, ok), ("job-1", 0, false));
+    assert_eq!(
+        error.as_deref(),
+        Some("step divergence on job job-1 at position 0"),
+        "the scheduler's own message, not one derived from an error variant"
+    );
+    assert_eq!(failure, Some(StepFailure::Permanent));
+    handle.shutdown();
+}
+
+#[test]
+fn a_relay_answers_even_when_the_scheduler_offers_no_step_store() {
+    // Every path answers exactly once: a peer blocked on an ack that never
+    // comes waits out its whole timeout, so a refusal must still be a frame.
+    let (_scheduler, handle, _pool) = FakeScheduler::attach(&["charge"], 1);
+    let ack = handle.steps().relay_commit(StepRelay {
+        job_id: "job-1",
+        timeout_ms: 0,
+        seq: 0,
+        step_key: "charge#0",
+        kind: StepKind::Run,
+        wake_at: None,
+        result: b"receipt",
+    });
+
+    let SchedulerMessage::StepAck {
+        ok, error, failure, ..
+    } = ack
+    else {
+        panic!("a relay always answers with an ack");
+    };
+    assert!(!ok);
+    assert!(
+        error.unwrap_or_default().contains("offers no step store"),
+        "the refusal names the capability that is missing"
+    );
+    // Retryable: a fleet mid-rollout may place the next attempt somewhere that
+    // commits, and nothing was written here to make a replay unsafe.
+    assert_eq!(failure, Some(StepFailure::Retryable));
     handle.shutdown();
 }
 

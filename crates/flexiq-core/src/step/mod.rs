@@ -13,7 +13,7 @@ mod sequence;
 mod session;
 mod store;
 
-pub use failure::{classify_step_failure, StepFailure};
+pub use failure::{classify_step_failure, refusal_error, StepFailure};
 pub use idempotency::{idempotency_key, run_key, ORIGIN_JOB_ID_KEY};
 // Written only by `retry_dead`, the one path that changes a run's job id.
 pub(crate) use idempotency::stamp_origin_job_id;

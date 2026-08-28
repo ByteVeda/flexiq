@@ -4,10 +4,11 @@ Each child is an independent Python interpreter that:
 1. Imports the app module and builds the task registry.
 2. Initializes resources (if any).
 3. Completes the ``hello``/``hello_ack`` handshake with the parent.
-4. Runs a stdin reader thread that demultiplexes ``job``, ``cancel``, and
-   ``shutdown`` frames from the parent. Jobs go on an internal queue;
-   cancels populate a local set that ``current_job.check_cancelled()`` reads
-   via a registered hook.
+4. Runs a stdin reader thread that demultiplexes ``job``, ``job_steps``,
+   ``step_ack``, ``cancel``, and ``shutdown`` frames from the parent. Jobs go
+   on an internal queue with the step snapshot that preceded them; cancels
+   populate a local set that ``current_job.check_cancelled()`` reads via a
+   registered hook; acks settle the step commit blocked on them.
 5. Pulls jobs off the internal queue on the main thread, executes them,
    and writes result frames to stdout.
 
@@ -17,6 +18,7 @@ Spawned by the Rust ``PreforkPool`` via ``python -m flexiq.prefork <app_path>``.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
 import queue as _queue_mod
@@ -28,6 +30,7 @@ import traceback
 from typing import TYPE_CHECKING, Any
 
 from flexiq import __version__
+from flexiq._flexiq import CAP_STEPS, AttachedSteps
 from flexiq.async_support.helpers import run_maybe_async
 from flexiq.context import (
     _clear_context,
@@ -44,6 +47,7 @@ from flexiq.detached import (
 )
 from flexiq.exceptions import TaskCancelledError
 from flexiq.log_config import silence_asyncio_pipe_noise
+from flexiq.prefork.steps import StepRelay
 from flexiq.steps import StepError, StepSleepSignal
 from flexiq.task_errors import encode_task_error
 from flexiq.worker_protocol import (
@@ -55,6 +59,10 @@ from flexiq.worker_protocol import (
 
 if TYPE_CHECKING:
     from flexiq._flexiq import WorkerSteps
+
+#: One queued dispatch: the job frame, its task payload, and the step snapshot
+#: the ``job_steps`` frame in front of it carried (empty when there was none).
+_Dispatch = tuple[dict[str, Any], bytes, bytes]
 
 logger = logging.getLogger("flexiq.prefork.child")
 
@@ -136,10 +144,13 @@ class _ParentSink:
             logger.debug("could not forward %s to the parent", header["type"], exc_info=True)
 
 
-def _handshake(queue: Any) -> None:
+def _handshake(queue: Any) -> bool:
     """Announce what this child can run and check the parent speaks our version.
 
     Runs before the stdin reader thread starts so the ack is not consumed by it.
+    Returns whether the parent will carry this child's durable steps — false for
+    an in-process worker's pool, which has nothing to carry, and for an executor
+    attached to a scheduler with no step store.
     """
     _write_message(
         {
@@ -150,6 +161,9 @@ def _handshake(queue: Any) -> None:
             "tasks": sorted(queue._task_registry),
             "slots": _SLOTS,
             "protocol_version": WORKER_PROTOCOL_VERSION,
+            # Claimed unconditionally: this child speaks the step frames, and
+            # a pool with nothing to relay simply never sends one.
+            "capabilities": [CAP_STEPS],
         }
     )
 
@@ -164,6 +178,8 @@ def _handshake(queue: Any) -> None:
             f"we speak {WORKER_PROTOCOL_VERSION} — check FLEXIQ_PYTHON points "
             f"at the interpreter holding the same flexiq install"
         )
+
+    return CAP_STEPS in (ack.get("capabilities") or ())
 
 
 class _CancelSignal:
@@ -195,12 +211,14 @@ def _execute_job(
     queue: Any,
     job: dict[str, Any],
     payload: bytes,
-    worker_steps: WorkerSteps | None = None,
+    worker_steps: WorkerSteps | AttachedSteps | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     """Execute a single job and return its result frame and result payload.
 
-    ``worker_steps`` is the claim this child inherited from the pool that
-    spawned it — resolved once in :func:`main`, never read off a frame.
+    ``worker_steps`` is how this child's durable steps are written: the claim it
+    inherited from the pool that spawned it, or — under an executor, which holds
+    no claim — the relay that carries each commit to the scheduler that does.
+    Neither is ever read off a job frame.
     """
     task_name = job["task_name"]
     job_id = job["id"]
@@ -326,17 +344,23 @@ def _execute_job(
 
 
 def _spawn_stdin_reader(
-    job_queue: _queue_mod.Queue[tuple[dict[str, Any], bytes] | None],
+    job_queue: _queue_mod.Queue[_Dispatch | None],
     cancels: _CancelSignal,
+    relay: StepRelay | None,
 ) -> threading.Thread:
     """Run a background thread that demultiplexes parent → child frames.
 
     The main thread is blocked inside ``_execute_job`` while a job is
     running, so reading stdin must happen elsewhere. This thread turns the
-    frame stream into queue items + cancel-set updates.
+    frame stream into queue items, cancel-set updates and step acks.
     """
 
     def reader() -> None:
+        # A job's snapshot arrives immediately before the job itself, on the
+        # parent's one writer lock, so it is held only until that frame lands.
+        # Keyed by job id rather than kept in a single slot because a pool may
+        # write two dispatches back to back.
+        snapshots: dict[str, bytes] = {}
         try:
             while True:
                 try:
@@ -351,7 +375,16 @@ def _spawn_stdin_reader(
                 if msg_type == "shutdown":
                     return
                 if msg_type == "job":
-                    job_queue.put((msg, payload))
+                    job_id = msg.get("id")
+                    snapshot = snapshots.pop(job_id, b"") if isinstance(job_id, str) else b""
+                    job_queue.put((msg, payload, snapshot))
+                elif msg_type == "job_steps":
+                    job_id = msg.get("job_id")
+                    if isinstance(job_id, str):
+                        snapshots[job_id] = payload
+                elif msg_type == "step_ack":
+                    if relay is not None:
+                        relay.deliver(msg)
                 elif msg_type == "cancel":
                     job_id = msg.get("job_id")
                     if isinstance(job_id, str):
@@ -361,6 +394,10 @@ def _spawn_stdin_reader(
         except (BrokenPipeError, EOFError, KeyboardInterrupt):
             logger.debug("child stdin closed")
         finally:
+            # No ack is coming for anything still in flight; releasing them
+            # ends those attempts retryably instead of parking them.
+            if relay is not None:
+                relay.abandon()
             # Wake the main loop even if stdin closed without a shutdown
             # frame (e.g. the parent died).
             job_queue.put(None)
@@ -368,6 +405,21 @@ def _spawn_stdin_reader(
     thread = threading.Thread(target=reader, name="flexiq-prefork-stdin", daemon=True)
     thread.start()
     return thread
+
+
+def _attached_steps(
+    relay: StepRelay,
+    job: dict[str, Any],
+    snapshot: bytes,
+    supported: bool,
+) -> AttachedSteps:
+    """Build this dispatch's step channel.
+
+    Built even when the pool relays nothing: the refusal a task then gets names
+    the scheduler that has no step store, which is the one thing an operator
+    needs to read. Refusing without that would say only "no worker".
+    """
+    return AttachedSteps(relay, json.dumps(job, separators=(",", ":")), snapshot, supported)
 
 
 def _install_shutdown_signal_handler() -> None:
@@ -411,21 +463,23 @@ def main() -> None:
     if runtime is not None:
         runtime.initialize()
 
-    _handshake(queue)
+    relays_steps = _handshake(queue)
 
-    job_queue: _queue_mod.Queue[tuple[dict[str, Any], bytes] | None] = _queue_mod.Queue()
+    job_queue: _queue_mod.Queue[_Dispatch | None] = _queue_mod.Queue()
     cancels = _CancelSignal()
     set_local_cancel_check(cancels.is_requested)
+    detached = is_detached()
     # Only under an executor: a child of an in-process worker holds real storage
     # and writes its own progress and logs, so it has nothing to forward.
-    if is_detached():
+    if detached:
         install_sink(_ParentSink())
     # The claim this child runs under, read once from the environment its parent
     # spawned it with — the one hop the owner is allowed to travel. ``None``
-    # under an executor, which holds no claim of its own, and durable steps
-    # refuse there.
-    worker_steps = None if is_detached() else queue._inner.inherited_worker_steps()
-    _spawn_stdin_reader(job_queue, cancels)
+    # under an executor, which holds no claim of its own; there a step commits
+    # through the pool instead, under the claim the scheduler holds.
+    worker_steps = None if detached else queue._inner.inherited_worker_steps()
+    relay = StepRelay(_write_message) if detached else None
+    _spawn_stdin_reader(job_queue, cancels, relay)
 
     logger.info("child ready (app=%s, pid=%d)", app_path, os.getpid())
 
@@ -434,8 +488,11 @@ def main() -> None:
             item = job_queue.get()
             if item is None:
                 break
-            job, payload = item
-            result, result_payload = _execute_job(queue, job, payload, worker_steps)
+            job, payload, snapshot = item
+            steps = worker_steps
+            if relay is not None:
+                steps = _attached_steps(relay, job, snapshot, relays_steps)
+            result, result_payload = _execute_job(queue, job, payload, steps)
             _write_message(result, result_payload)
             # Drop the cancel marker once the result is written so a future
             # job with the same ID (extremely unlikely, but possible across

@@ -6,6 +6,7 @@ mod executor;
 #[cfg(feature = "native-async")]
 mod native_async;
 mod prefork;
+mod py_attached_steps;
 mod py_config;
 mod py_job;
 mod py_queue;
@@ -51,6 +52,9 @@ fn _flexiq(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "WORKER_PROTOCOL_VERSION",
         flexiq_core::worker::protocol::PROTOCOL_VERSION,
     )?;
+    // Same reason: a capability a child spells out by hand is one that drifts
+    // out of agreement with the pool negotiating against it.
+    m.add("CAP_STEPS", flexiq_core::worker::protocol::CAP_STEPS)?;
     m.add_class::<PyQueue>()?;
     m.add_class::<PyJob>()?;
     m.add_class::<PyTaskConfig>()?;
@@ -58,6 +62,7 @@ fn _flexiq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py_step::PyStepDecision>()?;
     m.add_class::<py_step::PyStepSleep>()?;
     m.add_class::<py_worker_steps::PyWorkerSteps>()?;
+    m.add_class::<py_attached_steps::PyAttachedSteps>()?;
     m.add_function(wrap_pyfunction!(py_step::derive_step_key, m)?)?;
     m.add_class::<executor::PyExecutor>()?;
     #[cfg(feature = "native-async")]

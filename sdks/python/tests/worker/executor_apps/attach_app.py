@@ -89,6 +89,47 @@ def reports() -> str:
     return "reported"
 
 
+@queue.task(max_retries=3)
+def charged(amount: int) -> dict[str, Any]:
+    """Commit one durable step, reporting whether its body ran this attempt.
+
+    ``ran`` is empty on a memo hit, which is the whole observable difference
+    between replaying a committed step and running it again.
+    """
+    ran: list[str] = []
+
+    def charge() -> str:
+        # Captured rather than asserted here: the key is what a downstream API
+        # would dedupe on, and a test can only check it is stable if it sees it.
+        ran.append(current_job.step.idempotency_key)
+        return f"receipt-{amount}"
+
+    return {"receipt": current_job.step.run("charge", charge), "ran": ran}
+
+
+@queue.task(max_retries=3)
+async def acharged(amount: int) -> dict[str, Any]:
+    """Await twin of :func:`charged`, so both surfaces cross the same wire."""
+    ran: list[str] = []
+
+    async def charge() -> str:
+        ran.append(current_job.step.idempotency_key)
+        return f"receipt-{amount}"
+
+    return {"receipt": await current_job.step.arun("charge", charge), "ran": ran}
+
+
+@queue.task(max_retries=3)
+def naps() -> str:
+    """Sleep once, which ends the attempt, and finish on the wake.
+
+    Named, because a sequence reading ``sleep#0, sleep#1`` tells nobody which
+    one diverged.
+    """
+    current_job.step.sleep("1h", name="cooldown")
+    return "woken"
+
+
 #: Middleware that ran for the job this child is executing. A prefork child
 #: runs one job at a time, and its result is how the test reads this back —
 #: an executor has no storage to record it in.

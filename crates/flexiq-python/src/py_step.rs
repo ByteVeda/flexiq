@@ -21,10 +21,10 @@ use pyo3::types::{PyBytes, PyDict};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepSleep,
-    StorageStepSession,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepKey, StepLimits, StepSleep,
+    StepStore,
 };
-use flexiq_core::storage::StorageBackend;
+use flexiq_core::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit};
 
 /// Attribute every step exception carries, naming what the attempt should do.
 ///
@@ -171,20 +171,73 @@ impl PyStepSleep {
     }
 }
 
+/// A [`StepStore`] behind a `dyn` boundary.
+///
+/// Python sees one `StepSession` class whichever way the writes leave the
+/// process — storage for a worker, a pipe for a prefork child under an attached
+/// executor — because a `#[pyclass]` cannot be generic. Erasing the store here
+/// rather than duplicating the class is what keeps the split form of the
+/// session (`begin_run` … `commit_run`) written once.
+pub(crate) struct BoxedStepStore(Box<dyn StepStore + Send>);
+
+impl BoxedStepStore {
+    pub(crate) fn new(store: impl StepStore + Send + 'static) -> Self {
+        Self(Box::new(store))
+    }
+}
+
+impl StepStore for BoxedStepStore {
+    fn supports_steps(&self) -> bool {
+        self.0.supports_steps()
+    }
+
+    fn load_steps(
+        &self,
+        job_id: &str,
+        namespace: Option<&str>,
+    ) -> Result<Vec<JobStep>, QueueError> {
+        self.0.load_steps(job_id, namespace)
+    }
+
+    fn commit_step(
+        &self,
+        step: &NewJobStep<'_>,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<StepCommit, QueueError> {
+        self.0.commit_step(step, limits, namespace)
+    }
+
+    fn commit_sleep(
+        &self,
+        step: &NewJobStep<'_>,
+        wake_at: i64,
+        limits: &StepLimits,
+        namespace: Option<&str>,
+    ) -> Result<SleepOutcome, QueueError> {
+        self.0.commit_sleep(step, wake_at, limits, namespace)
+    }
+}
+
+/// One attempt's durable steps, however its writes leave this process.
+pub(crate) type BoxedStepSession = flexiq_core::step::StepSession<BoxedStepStore>;
+
 /// One attempt's durable steps.
 ///
-/// Built by [`PyWorkerSteps::open_step_session`](crate::py_worker_steps::PyWorkerSteps),
-/// which is the only place the owner and the attempt come from — the owner off
-/// the worker that won the claim, never off the queue handle it was started
-/// from. The mutex is for pyo3's `Sync` requirement, not
-/// for concurrency: a session belongs to one attempt on one thread.
+/// Built by [`PyWorkerSteps::open_step_session`](crate::py_worker_steps::PyWorkerSteps)
+/// or its attached twin, which are the only places the fence comes from — the
+/// owner off the worker that won the claim, or nothing at all for an executor,
+/// whose scheduler supplies both halves from the dispatch it recorded. Never off
+/// the queue handle the worker was started from. The mutex is for pyo3's `Sync`
+/// requirement, not for concurrency: a session belongs to one attempt on one
+/// thread.
 #[pyclass(name = "StepSession", module = "flexiq._flexiq")]
 pub struct PyStepSession {
-    inner: Mutex<StorageStepSession<StorageBackend>>,
+    inner: Mutex<BoxedStepSession>,
 }
 
 impl PyStepSession {
-    pub(crate) fn new(session: StorageStepSession<StorageBackend>) -> Self {
+    pub(crate) fn new(session: BoxedStepSession) -> Self {
         Self {
             inner: Mutex::new(session),
         }
@@ -200,7 +253,7 @@ impl PyStepSession {
     fn with<T: Send>(
         &self,
         py: Python<'_>,
-        body: impl FnOnce(&mut StorageStepSession<StorageBackend>) -> Result<T, QueueError> + Send,
+        body: impl FnOnce(&mut BoxedStepSession) -> Result<T, QueueError> + Send,
     ) -> PyResult<T> {
         let outcome = py.detach(|| {
             let mut guard = self

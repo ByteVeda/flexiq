@@ -1,6 +1,7 @@
 //! Child process handle — spawn, write jobs, read results.
 //!
-//! A child is split into three halves after spawning:
+//! A child is split into three halves after spawning, handed back together as
+//! a [`SpawnedChild`]:
 //! - `ChildWriter`: sends frames to the child's stdin (owned by dispatch thread)
 //! - `ChildReader`: reads frames from the child's stdout (owned by reader thread)
 //! - `ChildProcess`: holds the process handle for lifecycle management
@@ -12,7 +13,7 @@ use std::io::BufReader;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use flexiq_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, SchedulerMessage, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, SchedulerMessage, CAP_STEPS, PROTOCOL_VERSION,
 };
 
 /// Identity this pool announces in `hello_ack`. Informational — it only ever
@@ -68,17 +69,37 @@ impl ChildProcess {
     }
 }
 
+/// A child that has completed its handshake, split into the halves the pool's
+/// threads own.
+pub struct SpawnedChild {
+    /// Sends frames to the child's stdin. Owned by the dispatch thread, and
+    /// borrowed by the cancel router and the step relay.
+    pub writer: ChildWriter,
+    /// Reads frames from the child's stdout. Owned by the reader thread.
+    pub reader: ChildReader,
+    /// Process handle, for the watchdog and the shutdown path.
+    pub process: ChildProcess,
+    /// Whether the child claimed [`CAP_STEPS`] in its `hello`.
+    ///
+    /// A pool pays a snapshot read per dispatch only for a child that says it
+    /// will use one — the same negotiation the socket hop makes, one level
+    /// down.
+    pub steps: bool,
+}
+
 /// Spawn a child worker process and complete the `hello`/`hello_ack` handshake.
 ///
-/// Returns the three split halves: writer, reader, and process handle. The ack
-/// is sent even on a version mismatch so both sides can log both versions —
-/// `FLEXIQ_PYTHON` lets the child run from a different interpreter, so a
-/// mismatched flexiq install is reachable in practice.
+/// `steps` is what this pool can offer: `true` only when it relays durable
+/// steps to a scheduler that advertised a step store. The ack is sent even on a
+/// version mismatch so both sides can log both versions — `FLEXIQ_PYTHON` lets
+/// the child run from a different interpreter, so a mismatched flexiq install is
+/// reachable in practice.
 pub fn spawn_child(
     python: &str,
     app_path: &str,
     claim_owner: Option<&str>,
-) -> Result<(ChildWriter, ChildReader, ChildProcess), String> {
+    steps: bool,
+) -> Result<SpawnedChild, String> {
     let mut command = Command::new(python);
     command
         .args(["-m", "flexiq.prefork", app_path])
@@ -112,9 +133,13 @@ pub fn spawn_child(
     // notices (it is only ever reached via `is_alive()` on a live handle).
     let mut child = ChildProcess { process };
 
-    let handshake = handshake(&mut reader, &mut writer);
-    match handshake {
-        Ok(()) => Ok((writer, reader, child)),
+    match handshake(&mut reader, &mut writer, steps) {
+        Ok(claimed_steps) => Ok(SpawnedChild {
+            writer,
+            reader,
+            process: child,
+            steps: claimed_steps,
+        }),
         Err(e) => {
             child.kill_and_reap();
             Err(e)
@@ -123,7 +148,13 @@ pub fn spawn_child(
 }
 
 /// Read the child's `hello`, acknowledge it, and check the protocol version.
-fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), String> {
+///
+/// Returns whether the child claimed [`CAP_STEPS`].
+fn handshake(
+    reader: &mut ChildReader,
+    writer: &mut ChildWriter,
+    steps: bool,
+) -> Result<bool, String> {
     let hello = reader
         .read::<ExecutorMessage>()
         .map_err(|e| format!("child handshake failed: {e}"))?
@@ -132,6 +163,7 @@ fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), S
         sdk,
         version,
         protocol_version,
+        capabilities,
         ..
     } = hello
     else {
@@ -142,10 +174,15 @@ fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), S
         .write_header(&SchedulerMessage::HelloAck {
             scheduler_id: SCHEDULER_ID.to_string(),
             protocol_version: PROTOCOL_VERSION,
-            // Nothing to advertise: a child of an in-process worker holds real
-            // storage and writes its own progress and logs, so it has no reason
-            // to send them to this pool.
-            capabilities: Vec::new(),
+            // A child of an in-process worker holds real storage and writes its
+            // own progress, logs and steps, so it is told nothing: there is
+            // nothing for this pool to do on its behalf. Under an executor the
+            // pool relays, and `steps` is what the scheduler said it can apply.
+            capabilities: if steps {
+                vec![CAP_STEPS.to_string()]
+            } else {
+                Vec::new()
+            },
         })
         .map_err(|e| format!("failed to acknowledge child handshake: {e}"))?;
 
@@ -156,5 +193,5 @@ fn handshake(reader: &mut ChildReader, writer: &mut ChildWriter) -> Result<(), S
         ));
     }
 
-    Ok(())
+    Ok(capabilities.iter().any(|cap| cap == CAP_STEPS))
 }

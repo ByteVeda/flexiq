@@ -45,7 +45,10 @@ def declared_payload_len(header: dict[str, Any]) -> int:
     drains the connection to EOF.
     """
     kind = header.get("type")
-    if kind == "job":
+    # A dispatch's task payload, a job's step snapshot and a step's encoded
+    # result all ride behind the header for the same reason: any of them can be
+    # megabytes, and a header is capped.
+    if kind in ("job", "job_steps", "step_commit"):
         return _checked_len(header.get("payload_len") or 0, "payload_len")
     if kind == "success":
         result_len = header.get("result_len")

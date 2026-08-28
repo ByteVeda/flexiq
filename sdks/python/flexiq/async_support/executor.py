@@ -16,7 +16,7 @@ from flexiq.task_errors import encode_task_error
 from flexiq.task_lifecycle import run_lifecycle
 
 if TYPE_CHECKING:
-    from flexiq._flexiq import WorkerSteps
+    from flexiq._flexiq import AttachedSteps, WorkerSteps
     from flexiq.app import Queue
 
 logger = logging.getLogger("flexiq.async")
@@ -41,7 +41,7 @@ class AsyncTaskExecutor:
         task_registry: dict[str, Any],
         queue_ref: Queue,
         max_concurrency: int = 100,
-        worker_steps: WorkerSteps | None = None,
+        worker_steps: WorkerSteps | AttachedSteps | None = None,
     ) -> None:
         self._sender = result_sender
         self._registry = task_registry

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 from flexiq._active_context import _ActiveContext
 from flexiq._flexiq import derive_step_key
+from flexiq.async_support.helpers import run_off_loop
 from flexiq.steps.durations import (
     SleepDeadline,
     SleepDuration,
@@ -147,7 +148,12 @@ class StepContext:
             if decision.memoized is not None:
                 return self._replay(decision.memoized)
             value = await self._ainvoke(decision.step_key, decision.idempotency_key, fn)
-            self._commit(decision, value)
+            # Off the loop: a commit is synchronous underneath, and on an
+            # attached executor it is a round trip to the scheduler rather than
+            # a local write. It still blocks *this* step — an unconfirmed commit
+            # is indistinguishable from one that never happened — but it no
+            # longer blocks every other coroutine in the worker.
+            await run_off_loop(lambda: self._commit(decision, value))
             return value
 
     # -------------------------------------------------------------- sleep
@@ -192,8 +198,11 @@ class StepContext:
         name: str | None = None,
         key: str | None = None,
     ) -> None:
-        """Await twin of :meth:`sleep`."""
-        self.sleep(duration, name=name, key=key)
+        """Await twin of :meth:`sleep`.
+
+        The commit runs off the event loop, for the reason :meth:`arun` gives.
+        """
+        await run_off_loop(lambda: self.sleep(duration, name=name, key=key))
 
     def sleep_until(
         self,
@@ -223,7 +232,7 @@ class StepContext:
         key: str | None = None,
     ) -> None:
         """Await twin of :meth:`sleep_until`."""
-        self.sleep_until(when, name=name, key=key)
+        await run_off_loop(lambda: self.sleep_until(when, name=name, key=key))
 
     # ---------------------------------------------------------------- keys
 
@@ -405,25 +414,26 @@ class StepContext:
         return session
 
     def _open(self) -> StepSession | None:
-        """Open this attempt's session on the handle of the worker running it.
+        """Open this attempt's session on the handle the dispatch carried.
 
-        The handle rides with the dispatch, so the ``(owner, attempt)`` fence
-        names the claim *this* worker won — one process may run several workers
-        off one ``Queue``, and a queue-level owner would be the last one
-        started. No handle means no claim: an attached executor, which has no
-        channel to commit a step on, or a task running outside a worker
-        entirely. Either way the attempt fails rather than running the step
-        un-memoized, and it fails as a control signal the body cannot catch
-        away.
+        The handle rides with the dispatch, so the fence names *this* run: the
+        ``(owner, attempt)`` the worker won, or — on an attached executor, which
+        holds no claim — the channel to the scheduler that supplies both halves
+        itself. One process may run several workers off one ``Queue``, and a
+        queue-level owner would be the last one started.
+
+        No handle at all means the task is running outside a worker. The attempt
+        then fails rather than running the step un-memoized, and it fails as a
+        control signal the body cannot catch away.
         """
         if self._queue is None:
             return None
         worker_steps = self._ctx.worker_steps
         if worker_steps is None:
             raise StepUnavailableError(
-                "durable steps need a worker that holds this job's execution claim, and "
-                "this task is not running on one — an attached executor commits nothing "
-                "and would re-run every step. Run it on an in-process or prefork worker.",
+                "durable steps need a worker or an attached executor to commit through, "
+                "and this task is running outside both. Nothing here could record the "
+                "step, and running it un-memoized would repeat it on the next attempt.",
                 should_retry=True,
             )
         self._session = worker_steps.open_step_session(
