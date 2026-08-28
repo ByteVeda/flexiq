@@ -597,6 +597,9 @@ impl PyQueue {
                     num_workers,
                     app_path.unwrap_or_default(),
                     Some(worker_id.clone()),
+                    // Nothing to relay: these children reach storage and open
+                    // their own sessions under the claim inherited from here.
+                    false,
                 ));
             self.set_dispatcher(Some(pool_arc.clone()));
             pool_arc

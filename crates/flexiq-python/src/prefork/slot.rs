@@ -51,6 +51,15 @@ pub fn set(slots: &SlotState, idx: usize, job: ActiveJob) -> Option<ActiveJob> {
         .replace(job)
 }
 
+/// Clone whatever is in slot `idx` without taking it.
+///
+/// For the readers that need the job's identity but must not become
+/// responsible for completing it — the step relay, which answers a frame about
+/// a job that is still running.
+pub fn peek(slots: &SlotState, idx: usize) -> Option<ActiveJob> {
+    slots[idx].lock().unwrap_or_else(recover_poison).clone()
+}
+
 /// Atomically take whatever is in slot `idx`, leaving it empty.
 pub fn take(slots: &SlotState, idx: usize) -> Option<ActiveJob> {
     slots[idx].lock().unwrap_or_else(recover_poison).take()

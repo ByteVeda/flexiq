@@ -18,7 +18,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use flexiq_core::worker::{
-    AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
+    AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, CAP_STEPS,
 };
 
 use crate::prefork::PreforkPool;
@@ -73,19 +73,16 @@ impl PyExecutor {
             tasks,
             slots,
             token: token.map(flexiq_core::Secret::new),
+            // Claimed because this executor's children speak these frames
+            // themselves: a job's committed steps ride the dispatch down the
+            // pipe, and each new one is carried back up. Announced only here,
+            // so a scheduler sends a snapshot to nobody who would discard it.
+            capabilities: vec![CAP_STEPS.to_string()],
             ..ExecutorConfig::new("python", env!("CARGO_PKG_VERSION"))
         };
         if let Some(id) = executor_id {
             config.executor_id = id;
         }
-
-        // Kept typed as well as erased: the side-channel handle only exists
-        // once the handshake has completed, so it is installed after `spawn`.
-        // No claim owner: an executor runs a scheduler's work without ever
-        // holding its execution claim, so its children have nothing to fence a
-        // durable-step write on and refuse steps rather than degrade to
-        // running them un-memoized.
-        let pool = Arc::new(PreforkPool::new(slots as usize, app_path.to_string(), None));
 
         // Dialling and the handshake both block on the network; holding the GIL
         // across them would freeze every other Python thread in the process.
@@ -106,10 +103,38 @@ impl PyExecutor {
 
         let scheduler_id = client.scheduler_id().to_string();
         let peer = client.peer().to_string();
+
+        // Built after the handshake, because whether the scheduler offers a
+        // step store is settled by it — and a child has to be told at *its*
+        // handshake, which happens as the pool starts.
+        //
+        // No claim owner: an executor runs a scheduler's work without ever
+        // holding its execution claim. Its children therefore commit steps
+        // through the scheduler, under the claim it holds, rather than fencing
+        // a write on an owner they would have to invent.
+        let pool = Arc::new(PreforkPool::new(
+            slots as usize,
+            app_path.to_string(),
+            None,
+            client.supports_steps(),
+        ));
+        let steps = client.supports_steps();
+
         let handle = client.spawn(pool.clone() as Arc<dyn flexiq_core::WorkerDispatcher>);
+        if !steps {
+            log::info!(
+                "[flexiq] scheduler {scheduler_id} advertises no step store; durable steps on \
+                 executor {} will be refused rather than run un-memoized",
+                handle.executor_id()
+            );
+        }
         // A child's progress and task logs reach storage only through the
         // scheduler, and this is the relay they travel the second hop on.
         pool.set_side_channel(handle.side_channel());
+        // The same second hop for durable steps, which unlike progress cannot
+        // be dropped: a job dispatched before this is installed is failed
+        // retryably rather than run against an empty snapshot.
+        pool.set_steps(handle.steps());
 
         Ok(Self {
             executor_id: handle.executor_id().to_string(),
