@@ -119,6 +119,17 @@ async def acharged(amount: int) -> dict[str, Any]:
     return {"receipt": await current_job.step.arun("charge", charge), "ran": ran}
 
 
+@queue.task(max_retries=3)
+def naps() -> str:
+    """Sleep once, which ends the attempt, and finish on the wake.
+
+    Named, because a sequence reading ``sleep#0, sleep#1`` tells nobody which
+    one diverged.
+    """
+    current_job.step.sleep("1h", name="cooldown")
+    return "woken"
+
+
 #: Middleware that ran for the job this child is executing. A prefork child
 #: runs one job at a time, and its result is how the test reads this back —
 #: an executor has no storage to record it in.

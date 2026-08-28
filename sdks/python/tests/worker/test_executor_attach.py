@@ -49,6 +49,7 @@ REPORTS = "attach_app.reports"
 MIDDLEWARED = "attach_app.middlewared"
 CHARGED = "attach_app.charged"
 ACHARGED = "attach_app.acharged"
+NAPS = "attach_app.naps"
 BOUND = "deferred_app.bound"
 SEND_INVOICE = "deferred_tasks.send_invoice"
 BUILD_REPORT = "deferred_tasks.build_report"
@@ -870,6 +871,61 @@ def test_an_async_step_commits_the_same_way(scheduler: FakeScheduler, tmp_path: 
         header, payload = scheduler.next_result()
         assert header["type"] == "success", header
         assert decode_result(ACHARGED, payload)["receipt"] == "receipt-42"
+    finally:
+        terminate(process)
+
+
+def test_a_sleep_is_two_frames_and_keeps_the_deadline_storage_settled_on(
+    scheduler: FakeScheduler, tmp_path: Path
+) -> None:
+    """A sleep commits through the same pair, then ends the attempt separately.
+
+    It cannot be folded into the terminal frame: ``step.sleep`` has to return
+    the deadline *storage* settled on before the body unwinds, and the terminal
+    frame is only written once it has. On a wake the stored deadline has passed,
+    so the sleep is a memo hit and the body runs to the end.
+    """
+    process = spawn_executor(scheduler.port, tmp_path / "t.db")
+    try:
+        scheduler.accept(capabilities=["steps"])
+        scheduler.send_job("job-1", NAPS, payload_for(NAPS))
+
+        commit, blob = scheduler.next_step_commit()
+        assert commit["kind"] == "sleep"
+        assert commit["step_key"] == "cooldown#0"
+        assert (commit["payload_len"], blob) == (0, b""), "a sleep commits no bytes"
+
+        # Deliberately not the deadline the attempt proposed: a sleep row
+        # already at this position keeps the one it was first given, and that
+        # is the value the body must be handed back.
+        settled = commit["wake_at"] + 60_000
+        scheduler.ack_step("job-1", 0, wake_at=settled)
+
+        header, _ = scheduler.next_result()
+        assert header["type"] == "slept", header
+        assert header["wake_at"] == settled, (
+            "the terminal frame reports where the job actually went"
+        )
+
+        # The wake: the recorded sleep is behind us, so it elapses and the body
+        # carries on past it without a second commit.
+        scheduler.send_job_steps(
+            "job-2",
+            [
+                {
+                    "seq": 0,
+                    "step_key": "cooldown#0",
+                    "kind": "sleep",
+                    "result": None,
+                    "wake_at": int(time.time() * 1000) - 60_000,
+                }
+            ],
+        )
+        scheduler.send_job("job-2", NAPS, payload_for(NAPS))
+
+        header, payload = scheduler.next_result()
+        assert header["type"] == "success", header
+        assert decode_result(NAPS, payload) == "woken"
     finally:
         terminate(process)
 
