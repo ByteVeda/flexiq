@@ -35,6 +35,13 @@ _ACK_BACKSTOP_S = 120.0
 #: replay re-runs the step under the same downstream idempotency key.
 _RETRYABLE = "retryable"
 
+#: Refusal for a commit the frame stream can no longer carry — one caught
+#: mid-flight when the reader ended, and one made after it did.
+_ENDED = (
+    "the connection to the executor ended before step '{step_key}' of "
+    "job {job_id} was acknowledged"
+)
+
 
 class _Waiter:
     """One commit's parking spot, and where its answer lands."""
@@ -61,6 +68,11 @@ class StepRelay:
         self._send = send
         self._lock = threading.Lock()
         self._waiters: dict[tuple[str, int], _Waiter] = {}
+        # Latched once the frame stream has ended. Without it a commit made
+        # *after* the reader returned would register a waiter nothing can ever
+        # settle and park for the whole backstop — reachable, because the job
+        # thread runs on past the reader's exit and may take another step.
+        self._over = False
 
     def commit(
         self,
@@ -81,6 +93,8 @@ class StepRelay:
         # Registered before the frame goes out, or a fast pool could answer
         # before there is anything to answer to.
         with self._lock:
+            if self._over:
+                return _refused(_ENDED.format(step_key=step_key, job_id=job_id))
             self._waiters[key] = waiter
 
         header: dict[str, Any] = {
@@ -111,10 +125,7 @@ class StepRelay:
 
         answer = waiter.answer
         if answer is None:
-            return _refused(
-                f"the connection to the executor ended before step '{step_key}' of "
-                f"job {job_id} was acknowledged"
-            )
+            return _refused(_ENDED.format(step_key=step_key, job_id=job_id))
         return answer
 
     def deliver(self, ack: dict[str, Any]) -> None:
@@ -139,6 +150,7 @@ class StepRelay:
         turns a dead pool into a disconnect rather than a full backstop wait.
         """
         with self._lock:
+            self._over = True
             waiters = list(self._waiters.values())
             self._waiters.clear()
         for waiter in waiters:
