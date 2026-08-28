@@ -36,7 +36,10 @@ let executor: Executor | undefined;
 let scheduler: FakeScheduler | undefined;
 
 afterEach(async () => {
-  worker?.stop();
+  // Awaited: `stop()` resolves once the native worker has quiesced and its
+  // resources are disposed, and a test starting before that shares a database
+  // with the last one's threads.
+  await worker?.stop();
   worker = undefined;
   await executor?.stop();
   executor = undefined;
