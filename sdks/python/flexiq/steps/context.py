@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 from flexiq._active_context import _ActiveContext
 from flexiq._flexiq import derive_step_key
+from flexiq.async_support.helpers import run_off_loop
 from flexiq.steps.durations import (
     SleepDeadline,
     SleepDuration,
@@ -147,7 +148,12 @@ class StepContext:
             if decision.memoized is not None:
                 return self._replay(decision.memoized)
             value = await self._ainvoke(decision.step_key, decision.idempotency_key, fn)
-            self._commit(decision, value)
+            # Off the loop: a commit is synchronous underneath, and on an
+            # attached executor it is a round trip to the scheduler rather than
+            # a local write. It still blocks *this* step — an unconfirmed commit
+            # is indistinguishable from one that never happened — but it no
+            # longer blocks every other coroutine in the worker.
+            await run_off_loop(lambda: self._commit(decision, value))
             return value
 
     # -------------------------------------------------------------- sleep
@@ -192,8 +198,11 @@ class StepContext:
         name: str | None = None,
         key: str | None = None,
     ) -> None:
-        """Await twin of :meth:`sleep`."""
-        self.sleep(duration, name=name, key=key)
+        """Await twin of :meth:`sleep`.
+
+        The commit runs off the event loop, for the reason :meth:`arun` gives.
+        """
+        await run_off_loop(lambda: self.sleep(duration, name=name, key=key))
 
     def sleep_until(
         self,
@@ -223,7 +232,7 @@ class StepContext:
         key: str | None = None,
     ) -> None:
         """Await twin of :meth:`sleep_until`."""
-        self.sleep_until(when, name=name, key=key)
+        await run_off_loop(lambda: self.sleep_until(when, name=name, key=key))
 
     # ---------------------------------------------------------------- keys
 
