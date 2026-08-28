@@ -132,6 +132,18 @@ export class Executor {
       setProgress: (jobId, progress) => attached?.reportProgress(jobId, progress),
       writeTaskLog: (jobId, taskName, level, message, extra) =>
         attached?.writeTaskLog(jobId, taskName, level, message, extra),
+      // Durable steps commit through the scheduler, under the execution claim
+      // it holds — nothing here is fenced on an owner this process could name,
+      // and nothing here reads a database. A scheduler that offers no step
+      // store is refused by the native call, retryably.
+      steps: {
+        openStepSession: async (jobId, attempt) => {
+          if (!attached) {
+            throw new Error("the executor detached before its step session could open");
+          }
+          return attached.openStepSession(jobId, attempt);
+        },
+      },
     });
 
     const taskCallback: typeof invoke = async (invocation) => {
@@ -167,6 +179,18 @@ export class Executor {
         () =>
           `scheduler ${native.schedulerId} applies no progress or task logs on this executor's ` +
           "behalf; they will be dropped. Upgrade the scheduler to keep them.",
+      );
+    }
+    if (!native.supportsSteps()) {
+      // Said once at attach rather than at the first `step.run`. Info, not warn
+      // as the side channel is: progress belongs to every job, while steps are
+      // opt-in, and a fleet that uses none would be warned for nothing. The
+      // refusal itself names the reason for anyone who does use them.
+      log.info(
+        () =>
+          `scheduler ${native.schedulerId} offers no step store, so durable steps on this ` +
+          "executor will be refused rather than run un-memoized. Upgrade the scheduler to " +
+          "run tasks that use ctx.step here.",
       );
     }
     markAttached();
@@ -206,6 +230,17 @@ export class Executor {
   /** Whether the scheduler session is still open. */
   get running(): boolean {
     return this.native.isRunning();
+  }
+
+  /**
+   * Whether durable steps work across this attach.
+   *
+   * False against a scheduler whose storage has no step store, or one built
+   * before steps existed; `ctx.step` then refuses rather than running a step
+   * un-memoized. Not a gate — the refusal happens whether or not this is read.
+   */
+  get supportsSteps(): boolean {
+    return this.native.supportsSteps();
   }
 
   /**

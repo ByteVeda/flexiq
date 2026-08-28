@@ -18,6 +18,7 @@ use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::Env;
 use tokio::sync::{oneshot, Semaphore};
 
+use crate::attached_steps::RunningJobs;
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
 
 /// Task callback registered from JS: `(invocation) => Promise<JsTaskOutcome>`.
@@ -41,6 +42,10 @@ pub struct NodeDispatcher {
     /// bounds what it *runs*, and is the only bound on the mesh path, where
     /// stolen jobs never pass through this scheduler's in-flight accounting.
     concurrency: Arc<Semaphore>,
+    /// Where a dispatched job is recorded for as long as it runs, so a durable
+    /// step opened from JS can find the dispatch it belongs to. `None` for a
+    /// worker, which reads the job row from its own storage instead.
+    running: Option<Arc<RunningJobs>>,
 }
 
 impl NodeDispatcher {
@@ -56,13 +61,25 @@ impl NodeDispatcher {
             callback,
             Arc::new(CancelSignals::from_storage(storage, namespace)),
             concurrency,
+            None,
         )
     }
 
     /// A dispatcher with no storage, for an attached executor. Cancels arrive
-    /// only through [`WorkerDispatcher::notify_cancel`].
-    pub fn detached(callback: TaskCallback, concurrency: Option<usize>) -> Self {
-        Self::with_cancels(callback, Arc::new(CancelSignals::detached()), concurrency)
+    /// only through [`WorkerDispatcher::notify_cancel`], and `running` is what
+    /// lets a task on this executor open a durable-step session for its own
+    /// dispatch.
+    pub fn detached(
+        callback: TaskCallback,
+        concurrency: Option<usize>,
+        running: Arc<RunningJobs>,
+    ) -> Self {
+        Self::with_cancels(
+            callback,
+            Arc::new(CancelSignals::detached()),
+            concurrency,
+            Some(running),
+        )
     }
 
     /// The cancel source this dispatcher reads. An attached executor hands it to
@@ -76,6 +93,7 @@ impl NodeDispatcher {
         callback: TaskCallback,
         cancels: Arc<CancelSignals>,
         concurrency: Option<usize>,
+        running: Option<Arc<RunningJobs>>,
     ) -> Self {
         let permits = concurrency
             .map(|c| c.max(1))
@@ -84,6 +102,7 @@ impl NodeDispatcher {
             callback: Arc::new(callback),
             cancels,
             concurrency: Arc::new(Semaphore::new(permits)),
+            running,
         }
     }
 }
@@ -109,11 +128,12 @@ impl WorkerDispatcher for NodeDispatcher {
             };
             let callback = self.callback.clone();
             let cancels = self.cancels.clone();
+            let running = self.running.clone();
             let result_tx = result_tx.clone();
             spawn(async move {
                 let _permit = permit;
                 let job_id = job.id.clone();
-                let result = run_one(&callback, &cancels, job).await;
+                let result = run_one(&callback, &cancels, running.as_ref(), job).await;
                 // Release the cancel record now the job has reported, so a
                 // long-lived process does not accumulate ids.
                 cancels.forget(&job_id);
@@ -140,7 +160,12 @@ impl WorkerDispatcher for NodeDispatcher {
 }
 
 /// Invoke the JS task for one job and translate the outcome into a [`JobResult`].
-async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job) -> JobResult {
+async fn run_one(
+    callback: &TaskCallback,
+    cancels: &CancelSignals,
+    running: Option<&Arc<RunningJobs>>,
+    mut job: Job,
+) -> JobResult {
     let started = Instant::now();
     let invocation = JsTaskInvocation {
         id: job.id.clone(),
@@ -151,6 +176,11 @@ async fn run_one(callback: &TaskCallback, cancels: &CancelSignals, mut job: Job)
         attempt: job.retry_count,
         queue: job.queue.clone(),
     };
+    // After the payload has been moved out, so the recorded copy is a handful of
+    // strings rather than however many megabytes the task was called with. The
+    // guard drops on every exit below, including the timeout: a step opened past
+    // that point would commit into an attempt already being reaped.
+    let _running = running.map(|registry| registry.enter(&job));
 
     // The callback runs on the JS thread and returns a Promise; bridge its
     // awaited value back to this async context through a oneshot. The JS view

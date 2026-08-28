@@ -5,6 +5,7 @@
 //! marshals between JS values and the core and (later) dispatches task
 //! execution back into JavaScript.
 
+mod attached_steps;
 mod backend;
 mod config;
 mod convert;

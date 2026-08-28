@@ -14,12 +14,13 @@ use std::time::Duration;
 
 use flexiq_core::worker::{
     AttachAddress, CancelSignals, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle,
-    ExecutorSession, ExecutorSideChannel, WorkerDispatcher,
+    ExecutorSession, ExecutorSideChannel, ExecutorSteps, WorkerDispatcher, CAP_STEPS,
 };
 use napi::bindgen_prelude::{spawn_blocking, Promise, Result, Status};
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi_derive::napi;
 
+use crate::attached_steps::RunningJobs;
 use crate::convert::{JsTaskInvocation, JsTaskOutcome};
 use crate::dispatcher::NodeDispatcher;
 use crate::error::invalid_arg;
@@ -63,6 +64,12 @@ pub struct JsExecutor {
     /// Progress, task logs and toggles — the storage-shaped operations the
     /// scheduler performs on this executor's behalf.
     side_channel: ExecutorSideChannel,
+    /// Durable steps, which unlike the side channel block and can be refused:
+    /// a commit is what the task is waiting on. Read by `attached_steps.rs`.
+    pub(crate) steps: ExecutorSteps,
+    /// The jobs this executor is running, which is where a step session finds
+    /// the dispatch it must be opened against.
+    pub(crate) running: Arc<RunningJobs>,
     scheduler_id: String,
     executor_id: String,
     peer: String,
@@ -223,6 +230,11 @@ pub async fn start_executor(
         tasks: options.tasks,
         slots,
         token: options.token.map(flexiq_core::Secret::new),
+        // Claimed because a job context here can actually open a session: task
+        // bodies run in this process, so the snapshot that rides a dispatch is
+        // read by the code that replays from it. Announced only where that is
+        // true, so a scheduler sends a snapshot to nobody who would discard it.
+        capabilities: vec![CAP_STEPS.to_string()],
         ..ExecutorConfig::new("node", env!("CARGO_PKG_VERSION"))
     };
     if let Some(id) = options.executor_id {
@@ -259,7 +271,12 @@ pub async fn start_executor(
         let scheduler_id = client.scheduler_id().to_string();
         let peer = client.peer().to_string();
 
-        let dispatcher = NodeDispatcher::detached(callback, Some(slots as usize));
+        // Recorded by the dispatcher, read when a task asks for a step session:
+        // `ExecutorSteps::open_session` needs the dispatch itself, and JS asks
+        // for one by job id.
+        let running = Arc::new(RunningJobs::default());
+        let dispatcher =
+            NodeDispatcher::detached(callback, Some(slots as usize), Arc::clone(&running));
         let cancels = dispatcher.cancels();
         let handle = client.spawn(Arc::new(dispatcher) as Arc<dyn WorkerDispatcher>);
 
@@ -267,6 +284,8 @@ pub async fn start_executor(
             executor_id: handle.executor_id().to_string(),
             session: handle.session(),
             side_channel: handle.side_channel(),
+            steps: handle.steps(),
+            running,
             cancels,
             handle: Arc::new(Mutex::new(Some(handle))),
             scheduler_id,
