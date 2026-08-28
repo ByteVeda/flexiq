@@ -405,25 +405,26 @@ class StepContext:
         return session
 
     def _open(self) -> StepSession | None:
-        """Open this attempt's session on the handle of the worker running it.
+        """Open this attempt's session on the handle the dispatch carried.
 
-        The handle rides with the dispatch, so the ``(owner, attempt)`` fence
-        names the claim *this* worker won — one process may run several workers
-        off one ``Queue``, and a queue-level owner would be the last one
-        started. No handle means no claim: an attached executor, which has no
-        channel to commit a step on, or a task running outside a worker
-        entirely. Either way the attempt fails rather than running the step
-        un-memoized, and it fails as a control signal the body cannot catch
-        away.
+        The handle rides with the dispatch, so the fence names *this* run: the
+        ``(owner, attempt)`` the worker won, or — on an attached executor, which
+        holds no claim — the channel to the scheduler that supplies both halves
+        itself. One process may run several workers off one ``Queue``, and a
+        queue-level owner would be the last one started.
+
+        No handle at all means the task is running outside a worker. The attempt
+        then fails rather than running the step un-memoized, and it fails as a
+        control signal the body cannot catch away.
         """
         if self._queue is None:
             return None
         worker_steps = self._ctx.worker_steps
         if worker_steps is None:
             raise StepUnavailableError(
-                "durable steps need a worker that holds this job's execution claim, and "
-                "this task is not running on one — an attached executor commits nothing "
-                "and would re-run every step. Run it on an in-process or prefork worker.",
+                "durable steps need a worker or an attached executor to commit through, "
+                "and this task is running outside both. Nothing here could record the "
+                "step, and running it un-memoized would repeat it on the next attempt.",
                 should_retry=True,
             )
         self._session = worker_steps.open_step_session(

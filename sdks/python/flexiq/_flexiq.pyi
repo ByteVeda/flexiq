@@ -523,6 +523,18 @@ class WorkerSteps:
     def owner(self) -> str:
         """The worker id every step opened here is fenced on."""
 
+class AttachedSteps:
+    """One attached dispatch's step channel, for a process that holds no claim.
+
+    Built per job from the dispatch frame's JSON and the snapshot that preceded
+    it. ``relay`` frames each commit to the pool; ``supported`` is false when the
+    scheduler advertised no step store, which refuses rather than running a step
+    un-memoized.
+    """
+
+    def __init__(self, relay: Any, job_frame: str, snapshot: bytes, supported: bool) -> None: ...
+    def open_step_session(self, job_id: str, attempt: int) -> StepSession: ...
+
 class PyWorkflowBuilder:
     """Rust-side workflow DAG builder.
 
@@ -710,4 +722,5 @@ def reserved_setting_prefixes() -> list[str]:
     ...
 
 WORKER_PROTOCOL_VERSION: int
+CAP_STEPS: str
 """Frame-format version an executor must announce to attach."""

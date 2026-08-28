@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from flexiq._flexiq import WorkerSteps
+    from flexiq._flexiq import AttachedSteps, WorkerSteps
 
 
 class _ActiveContext:
@@ -37,16 +37,18 @@ class _ActiveContext:
         retry_count: int,
         queue_name: str,
         namespace: str | None = None,
-        worker_steps: WorkerSteps | None = None,
+        worker_steps: WorkerSteps | AttachedSteps | None = None,
     ):
         self.job_id = job_id
         self.task_name = task_name
         self.retry_count = retry_count
         self.queue_name = queue_name
         self.namespace = namespace
-        # The running worker's own step handle, fenced on the claim that worker
-        # won. It travels with the dispatch rather than sitting on the queue,
-        # which one process may run several workers from.
+        # How this attempt's durable steps are written: the running worker's
+        # own handle, fenced on the claim it won, or an attached executor's
+        # channel to the scheduler that holds one. It travels with the dispatch
+        # rather than sitting on the queue, which one process may run several
+        # workers from.
         self.worker_steps = worker_steps
         self.started_mono: float | None = time.monotonic()
         self.soft_timeout: float | None = None
