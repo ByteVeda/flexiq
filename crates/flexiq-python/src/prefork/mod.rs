@@ -95,9 +95,14 @@ impl StepRelayState {
         }
     }
 
-    /// Whether a dispatch to child `idx` carries a step snapshot.
+    /// Whether child `idx` claimed `CAP_STEPS` in its own `hello`.
+    fn claimed(&self, idx: usize) -> bool {
+        self.claimed[idx].load(Ordering::Relaxed)
+    }
+
+    /// Whether steps travel between this pool and child `idx` at all.
     fn active_for(&self, idx: usize) -> bool {
-        self.supported && self.claimed[idx].load(Ordering::Relaxed)
+        self.supported && self.claimed(idx)
     }
 
     fn handle(&self) -> Option<ExecutorSteps> {
@@ -495,24 +500,47 @@ fn dispatch_job(
 ///
 /// `None` is an empty snapshot — a job with nothing committed, or a hop that
 /// carries no steps at all — and no frame is written for it. An error is a
-/// snapshot that exists but could not be produced, which the caller must treat
-/// as a reason not to dispatch.
+/// snapshot that exists but could not be *delivered*, which the caller must
+/// treat as a reason not to dispatch.
 fn step_snapshot(
     steps: &StepRelayState,
     idx: usize,
     job_id: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    if !steps.active_for(idx) {
+    if !steps.supported {
+        // This pool relays no steps at all, so there is nothing to withhold: a
+        // step attempted on such a child refuses, naming the scheduler.
         return Ok(None);
     }
-    // Advertised, so the child will use it — and there is no honest empty
-    // answer to give. In practice unreachable: the handle is installed on the
-    // thread that spawned this pool, before a scheduler can dispatch anything.
+    // Advertised, so a step-using job may arrive — and there is no honest empty
+    // answer to give one. In practice unreachable: the handle is installed on
+    // the thread that spawned this pool, before a scheduler can dispatch.
     let Some(handle) = steps.handle() else {
         return Err("the attach has not installed its step channel yet".to_string());
     };
     let recorded = handle.snapshot(job_id).map_err(|error| error.to_string())?;
+    deliverable(steps, idx, recorded.len())?;
     Ok((!recorded.is_empty()).then(|| encode_step_snapshot(&recorded)))
+}
+
+/// Whether a dispatch carrying `recorded` committed steps can go to child `idx`.
+///
+/// The count is read *first*, because a job with nothing committed is safe on
+/// any child and only a job carrying steps is not.
+///
+/// An executor announces `CAP_STEPS` before it has spawned a single child, so a
+/// child from an older install — `FLEXIQ_PYTHON` can point at one — reaches here
+/// having claimed nothing. Withholding the snapshot from it would hand it an
+/// *empty* one, and an empty snapshot re-runs every step the job already paid
+/// for. Refusing the dispatch is the only fail-closed answer.
+fn deliverable(steps: &StepRelayState, idx: usize, recorded: usize) -> Result<(), String> {
+    if recorded == 0 || steps.claimed(idx) {
+        return Ok(());
+    }
+    Err(format!(
+        "the task runner for this job did not claim the step capability, so it cannot replay \
+         the {recorded} step(s) already committed"
+    ))
 }
 
 /// Write one dispatch: the step snapshot, then the job itself.
@@ -834,5 +862,61 @@ fn deadline_from_timeout(timeout_ms: i64) -> Option<Instant> {
         None
     } else {
         Instant::now().checked_add(Duration::from_millis(timeout_ms as u64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relay state with no channel installed, which is all these need: the
+    /// decisions under test are made before the handle is ever consulted.
+    fn state(supported: bool, claimed: bool) -> StepRelayState {
+        let steps = StepRelayState::new(supported, 1, Arc::new(Mutex::new(None)));
+        steps.claimed[0].store(claimed, Ordering::Relaxed);
+        steps
+    }
+
+    #[test]
+    fn a_pool_that_relays_no_steps_carries_no_snapshot() {
+        // Nothing to withhold: a step attempted on such a child refuses on its
+        // own, naming the scheduler that offers no step store.
+        let steps = state(false, true);
+        assert!(matches!(step_snapshot(&steps, 0, "job-1"), Ok(None)));
+    }
+
+    #[test]
+    fn a_child_that_claimed_nothing_is_not_handed_a_job_with_steps() {
+        // Refusing is the only fail-closed answer: the alternative is an empty
+        // snapshot, which re-runs every step the job already paid for.
+        let steps = state(true, false);
+        assert!(
+            deliverable(&steps, 0, 2).is_err(),
+            "a snapshot that cannot be replayed must stop the dispatch, not travel empty"
+        );
+    }
+
+    #[test]
+    fn a_child_that_claimed_nothing_still_takes_a_job_with_no_steps() {
+        // The count is what decides, not the capability: a job with nothing
+        // committed has nothing to lose, and refusing it would strand every
+        // ordinary job on a fleet mid-upgrade.
+        let steps = state(true, false);
+        assert!(deliverable(&steps, 0, 0).is_ok());
+    }
+
+    #[test]
+    fn a_child_that_claimed_the_capability_takes_the_snapshot() {
+        let steps = state(true, true);
+        assert!(deliverable(&steps, 0, 2).is_ok());
+    }
+
+    #[test]
+    fn an_advertised_pool_with_no_channel_yet_refuses_to_dispatch() {
+        // Unreachable in practice — the handle is installed on the thread that
+        // spawned this pool — but the honest answer is still a refusal, because
+        // there is no empty snapshot that is safe to send.
+        let steps = state(true, true);
+        assert!(step_snapshot(&steps, 0, "job-1").is_err());
     }
 }
