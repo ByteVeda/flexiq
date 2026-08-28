@@ -1,24 +1,21 @@
 /**
  * End-to-end tests for the attached executor.
  *
- * A scheduler is played by a plain socket speaking the frame protocol, so these
- * run without building the Rust server binary. `executorAttachServer.test.ts`
- * runs the same assertions against the real `flexiq-server` when one is
- * available — that pairing is what keeps this fake honest.
+ * A scheduler is played by `FakeScheduler`, a plain socket speaking the frame
+ * protocol, so these run without building the Rust server binary.
+ * `executorAttachServer.test.ts` runs the same assertions against the real
+ * `flexiq-server` when one is available — that pairing is what keeps this fake
+ * honest. Durable steps over the same attach live in `steps.test.ts`, beside
+ * the worker's.
  */
 
 import { mkdtempSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { DETACHED_ENV } from "../../src/detached";
 import { currentJob, DetachedStorageError, type Executor, Queue } from "../../src/index";
-
-/** Frame-format version this build speaks; mirrored from the core. */
-const PROTOCOL_VERSION = 1;
-
-const SETTLE_MS = 15_000;
+import { FakeScheduler, PROTOCOL_VERSION, SETTLE_MS, sleep } from "./fakeScheduler";
 
 let executor: Executor | undefined;
 let scheduler: FakeScheduler | undefined;
@@ -29,248 +26,6 @@ afterEach(async () => {
   scheduler?.close();
   scheduler = undefined;
 });
-
-interface Frame {
-  header: Record<string, unknown>;
-  payload: Buffer;
-}
-
-/**
- * The scheduler end of an attach, driven frame by frame.
- *
- * A frame is a JSON header line followed by exactly the number of raw payload
- * bytes it declares, so decoding has to be length-driven rather than
- * line-driven — a payload can contain newlines.
- */
-class FakeScheduler {
-  private server: Server;
-  private socket?: Socket;
-  private buffer = Buffer.alloc(0);
-  private frames: Frame[] = [];
-  private waiters: (() => void)[] = [];
-  private connected: Promise<void>;
-  port = 0;
-  /** The `hello` the executor opened with, once it has attached. */
-  hello?: Record<string, unknown>;
-  /** Set when the handshake should be refused rather than acked. */
-  refuse = false;
-  /** Optional behaviours this scheduler advertises in its `hello_ack`. */
-  capabilities: readonly string[] = [];
-  /** Run immediately after the ack, to dispatch into the attach window. */
-  afterAck?: () => void;
-
-  private constructor(server: Server, port: number, connected: Promise<void>) {
-    this.server = server;
-    this.port = port;
-    this.connected = connected;
-  }
-
-  static async listen(options?: { refuse?: boolean }): Promise<FakeScheduler> {
-    const server = createServer();
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-      throw new Error("expected a TCP address");
-    }
-
-    let onConnected: () => void = () => {};
-    const connected = new Promise<void>((resolve) => {
-      onConnected = resolve;
-    });
-    const fake = new FakeScheduler(server, address.port, connected);
-    if (options?.refuse) {
-      fake.refuse = true;
-    }
-
-    server.on("connection", (socket) => {
-      fake.socket = socket;
-      socket.on("data", (chunk: Buffer) => {
-        fake.buffer = Buffer.concat([fake.buffer, chunk]);
-        fake.drain();
-        onConnected();
-      });
-      socket.on("error", () => {});
-    });
-    return fake;
-  }
-
-  /** Decode every whole frame currently buffered. */
-  private drain(): void {
-    for (;;) {
-      const newline = this.buffer.indexOf(0x0a);
-      if (newline < 0) {
-        return;
-      }
-      const header = JSON.parse(this.buffer.subarray(0, newline).toString()) as Record<
-        string,
-        unknown
-      >;
-      const declared = declaredPayloadLength(header);
-      const total = newline + 1 + declared;
-      if (this.buffer.length < total) {
-        return;
-      }
-      const payload = this.buffer.subarray(newline + 1, total);
-      this.buffer = this.buffer.subarray(total);
-
-      if (header.type === "hello") {
-        this.hello = header;
-        if (!this.refuse) {
-          this.send({
-            type: "hello_ack",
-            schedulerId: undefined,
-            scheduler_id: "fake-scheduler",
-            protocol_version: PROTOCOL_VERSION,
-            // Whatever this scheduler promises to do on the executor's behalf.
-            // Empty by default: that is a scheduler built before the
-            // side-channel existed, and the case worth defaulting to.
-            capabilities: this.capabilities,
-          });
-          this.afterAck?.();
-        } else {
-          this.socket?.destroy();
-        }
-        continue;
-      }
-      this.frames.push({ header, payload: Buffer.from(payload) });
-      for (const wake of this.waiters.splice(0)) {
-        wake();
-      }
-    }
-  }
-
-  send(header: Record<string, unknown>, payload: Buffer = Buffer.alloc(0)): void {
-    const clean = Object.fromEntries(Object.entries(header).filter(([, v]) => v !== undefined));
-    this.socket?.write(`${JSON.stringify(clean)}\n`);
-    if (payload.length > 0) {
-      this.socket?.write(payload);
-    }
-  }
-
-  sendJob(
-    id: string,
-    taskName: string,
-    payload: Buffer,
-    options?: {
-      retryCount?: number;
-      maxRetries?: number;
-      timeoutMs?: number;
-      disabledMiddleware?: readonly string[];
-    },
-  ): void {
-    this.send(
-      {
-        type: "job",
-        id,
-        task_name: taskName,
-        payload_len: payload.length,
-        retry_count: options?.retryCount ?? 0,
-        max_retries: options?.maxRetries ?? 3,
-        queue: "default",
-        timeout_ms: options?.timeoutMs ?? 30_000,
-        namespace: null,
-        // Resolved by the scheduler, because an executor has no settings store
-        // of its own to read the toggle list from.
-        disabled_middleware: options?.disabledMiddleware ?? [],
-        metadata: null,
-      },
-      payload,
-    );
-  }
-
-  /**
-   * Every side-channel frame a job produced, plus its result.
-   *
-   * The result is ordered behind them on one connection, so its arrival is
-   * what proves the collection is complete rather than merely early.
-   */
-  async collectUntilResult(): Promise<{ result: Frame; sideChannel: Frame[] }> {
-    const sideChannel: Frame[] = [];
-    for (;;) {
-      const frame = await this.nextResult();
-      if (frame.header.type === "progress" || frame.header.type === "task_log") {
-        sideChannel.push(frame);
-        continue;
-      }
-      return { result: frame, sideChannel };
-    }
-  }
-
-  /** Wait for the executor's `hello` to arrive. */
-  async attached(): Promise<Record<string, unknown>> {
-    await this.connected;
-    const deadline = Date.now() + SETTLE_MS;
-    while (this.hello === undefined && Date.now() < deadline) {
-      await sleep(10);
-    }
-    if (this.hello === undefined) {
-      throw new Error("the executor never sent a hello");
-    }
-    return this.hello;
-  }
-
-  /** The next frame that is not a heartbeat. */
-  async nextResult(): Promise<Frame> {
-    const deadline = Date.now() + SETTLE_MS;
-    for (;;) {
-      const found = this.frames.findIndex((frame) => frame.header.type !== "heartbeat");
-      const frame = found >= 0 ? this.frames.splice(found, 1)[0] : undefined;
-      if (frame !== undefined) {
-        return frame;
-      }
-      if (Date.now() > deadline) {
-        throw new Error("no result frame arrived");
-      }
-      await new Promise<void>((resolve) => {
-        this.waiters.push(resolve);
-        setTimeout(resolve, 50);
-      });
-    }
-  }
-
-  /** Block until the executor reports exactly `free` slots. */
-  async heartbeat(free: number): Promise<void> {
-    const deadline = Date.now() + SETTLE_MS;
-    for (;;) {
-      const found = this.frames.findIndex(
-        (frame) => frame.header.type === "heartbeat" && frame.header.free_slots === free,
-      );
-      if (found >= 0) {
-        this.frames.splice(0, found + 1);
-        return;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`no heartbeat reporting ${free} free slots`);
-      }
-      await sleep(20);
-    }
-  }
-
-  close(): void {
-    this.socket?.destroy();
-    this.server.close();
-  }
-}
-
-/** Bytes of payload a header says follow it — the reader's framing rule. */
-function declaredPayloadLength(header: Record<string, unknown>): number {
-  if (header.type === "job") {
-    return typeof header.payload_len === "number" ? header.payload_len : 0;
-  }
-  if (header.type === "success") {
-    return typeof header.result_len === "number" ? header.result_len : 0;
-  }
-  if (header.type === "task_log") {
-    // A published partial can be arbitrarily large, so `extra` rides as the
-    // frame's blob rather than inside the header.
-    return typeof header.extra_len === "number" ? header.extra_len : 0;
-  }
-  return 0;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function newQueue(): Queue {
   return new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "flexiq-exec-")), "q.db") });
@@ -341,6 +96,9 @@ it("announces itself and the tasks it can run", async () => {
   expect(hello.tasks).toEqual(expect.arrayContaining(["echo", "boom"]));
   // A token that was never configured must not appear on the wire.
   expect(hello).not.toHaveProperty("token");
+  // Claimed only where the job context can open a session; `steps.test.ts`
+  // covers what the scheduler then sends.
+  expect(hello.capabilities).toEqual(expect.arrayContaining(["steps"]));
   expect(executor.schedulerId).toBe("fake-scheduler");
 });
 
@@ -378,29 +136,6 @@ it("reports a task failure with its retry verdict", async () => {
   // The frame's retry count is echoed back so the scheduler's backoff is right.
   expect(frame.header.retry_count).toBe(2);
   expect(String(frame.header.error)).toContain("deliberate failure");
-});
-
-it("refuses a durable step rather than running it un-memoized", async () => {
-  // An executor holds no execution claim and has no channel to commit a step
-  // on, so `ctx.step` refuses. Retryably: a heterogeneous fleet mid-rollout may
-  // put the next attempt on a worker that can commit, and there is no version
-  // of "your charge step silently lost its memo" that beats a failure naming
-  // the reason.
-  scheduler = await FakeScheduler.listen();
-  const queue = newQueue();
-  queue.task("checkout", async () => {
-    const job = currentJob();
-    return job?.step.run("charge", () => "charged");
-  });
-
-  executor = await queue.runExecutor({ attach: `127.0.0.1:${scheduler.port}` });
-  await scheduler.attached();
-  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
-
-  const frame = await scheduler.nextResult();
-  expect(frame.header.type).toBe("failure");
-  expect(frame.header.should_retry).toBe(true);
-  expect(String(frame.header.error)).toContain("attached executor");
 });
 
 it("honours a task's retryOn predicate over the wire", async () => {
