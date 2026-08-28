@@ -195,3 +195,20 @@ def test_debounced_enqueue_still_rejected_with_no_window_open(queue: Queue) -> N
     # The count comes back from the write that refused it, not from a producer-side read.
     assert "2 pending + 1 would exceed max_pending 2" in str(exc.value)
     assert queue._inner.count_pending_by_queue("default") == 2
+
+
+def test_binding_refuses_a_cap_without_a_window(queue: Queue) -> None:
+    """The cap only means something to a debounced write.
+
+    Passed without the window fields it would fall through to a plain insert and
+    be silently dropped, so the binding refuses it the way it already refuses a
+    lone ``debounce_replace_payload``.
+    """
+    _register(queue)
+    with pytest.raises(ValueError, match="debounce_max_pending"):
+        queue._inner.enqueue(
+            task_name="noop",
+            payload=b"",
+            queue="default",
+            debounce_max_pending=5,
+        )

@@ -73,9 +73,11 @@ pub fn debounce_options(opts: &EnqueueOptions) -> Result<Option<DebounceOptions>
         if opts.debounce_key.is_some()
             || opts.debounce_max_wait_ms.is_some()
             || opts.debounce_replace_payload.is_some()
+            || opts.debounce_max_pending.is_some()
         {
             return Err(invalid_arg(
-                "debounceKey/debounceMaxWaitMs/debounceReplacePayload require debounceWindowMs",
+                "debounceKey/debounceMaxWaitMs/debounceReplacePayload/debounceMaxPending \
+                 require debounceWindowMs",
             ));
         }
         return Ok(None);
