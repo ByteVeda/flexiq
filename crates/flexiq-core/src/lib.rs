@@ -42,9 +42,9 @@ pub use scheduler::{
 };
 pub use settings::{is_reserved_setting_key, RESERVED_SETTING_PREFIXES};
 pub use step::{
-    classify_step_failure, idempotency_key, run_key, PendingStep, SleepDecision, StepDecision,
-    StepFailure, StepKey, StepLimits, StepSequence, StepSession, StepSleep, StepStore,
-    StorageStepSession, StorageSteps, ORIGIN_JOB_ID_KEY,
+    classify_step_failure, idempotency_key, refusal_error, run_key, PendingStep, SleepDecision,
+    StepDecision, StepFailure, StepKey, StepLimits, StepSequence, StepSession, StepSleep,
+    StepStore, StorageStepSession, StorageSteps, ORIGIN_JOB_ID_KEY,
 };
 pub use storage::cursor::Page;
 #[cfg(feature = "postgres")]

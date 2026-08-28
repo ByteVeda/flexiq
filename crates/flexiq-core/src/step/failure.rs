@@ -72,6 +72,36 @@ pub fn classify_step_failure(error: &crate::error::QueueError) -> StepFailure {
     }
 }
 
+/// Rebuild the error a refused step commit represents.
+///
+/// The inverse of [`classify_step_failure`], and the one place it lives: an ack
+/// carries the message and the verdict, never the variant, so every reader of
+/// one — the attached executor, and any shell relaying its frames a hop further
+/// — has to turn the pair back into an error the same way. Two copies of this
+/// drift, and the direction they drift in decides whether a retry happens.
+///
+/// A missing verdict is [`StepFailure::Retryable`]: nothing was confirmed
+/// written, so a replay is safe and the job's own retry policy gets to decide.
+/// A `Superseded` refusal keeps only the job id, because
+/// [`QueueError::ClaimLost`] renders one itself and the attempt it names emits
+/// no result for anyone to read the message on.
+pub fn refusal_error(
+    job_id: &str,
+    message: Option<String>,
+    failure: Option<StepFailure>,
+) -> crate::error::QueueError {
+    use crate::error::QueueError as E;
+
+    let message = message.unwrap_or_else(|| {
+        format!("a step commit for job {job_id} was refused without saying why")
+    });
+    match failure.unwrap_or(StepFailure::Retryable) {
+        StepFailure::Superseded => E::ClaimLost(job_id.to_string()),
+        StepFailure::Permanent => E::StepRefused(message),
+        StepFailure::Retryable => E::Other(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +144,28 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn a_refusal_round_trips_through_its_classification() {
+        // The pair the ack carries is enough to rebuild an error that
+        // classifies back the same way; nothing else has to cross.
+        for failure in [
+            StepFailure::Retryable,
+            StepFailure::Permanent,
+            StepFailure::Superseded,
+        ] {
+            let error = refusal_error("job-1", Some("refused".into()), Some(failure));
+            assert_eq!(classify_step_failure(&error), failure, "{error}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_with_no_verdict_is_retried() {
+        // Nothing was confirmed written, so the safe reading is "try again".
+        let error = refusal_error("job-1", None, None);
+        assert_eq!(classify_step_failure(&error), StepFailure::Retryable);
+        assert!(error.to_string().contains("without saying why"), "{error}");
     }
 
     #[test]

@@ -49,7 +49,9 @@ use super::WorkerDispatcher;
 use crate::error::QueueError;
 use crate::job::Job;
 use crate::scheduler::JobResult;
-use crate::step::{classify_step_failure, StepFailure, StepLimits, StepSession, StepStore};
+use crate::step::{
+    classify_step_failure, refusal_error, StepFailure, StepLimits, StepSession, StepStore,
+};
 use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
 
 /// How often a waiting loop wakes to re-check its condition.
@@ -967,14 +969,7 @@ impl StepAnswer {
     /// locally by the session before a frame is ever written, so they never take
     /// this path.
     fn into_error(self, job_id: &str) -> QueueError {
-        let message = self.error.unwrap_or_else(|| {
-            format!("the scheduler refused a step commit for job {job_id} without saying why")
-        });
-        match self.failure.unwrap_or(StepFailure::Retryable) {
-            StepFailure::Superseded => QueueError::ClaimLost(job_id.to_string()),
-            StepFailure::Permanent => QueueError::StepRefused(message),
-            StepFailure::Retryable => QueueError::Other(message),
-        }
+        refusal_error(job_id, self.error, self.failure)
     }
 
     /// The answer as the frame it came from, for a relay to pass on unaltered.
