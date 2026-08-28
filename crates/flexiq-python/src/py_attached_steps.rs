@@ -16,6 +16,8 @@
 //! that does ([`PyWorkerSteps`](crate::py_worker_steps::PyWorkerSteps)) is a
 //! separate type rather than the same one with a `None`.
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -37,8 +39,10 @@ struct PipeStepStore {
     /// The Python object that frames a commit and waits for its ack. Duck-typed
     /// on one method (`commit`) so the framing stays where the pipe is.
     relay: Py<PyAny>,
-    /// The steps this job's dispatch carried, still encoded.
-    snapshot: Vec<u8>,
+    /// The steps this job's dispatch carried, still encoded. Shared rather than
+    /// copied: a snapshot runs to the step store's own ceiling, and a session is
+    /// opened once per attempt for bytes nobody mutates.
+    snapshot: Arc<Vec<u8>>,
 }
 
 impl PipeStepStore {
@@ -252,7 +256,7 @@ fn parse_failure(value: &str) -> Option<StepFailure> {
 pub struct PyAttachedSteps {
     relay: Py<PyAny>,
     job: Job,
-    snapshot: Vec<u8>,
+    snapshot: Arc<Vec<u8>>,
     supported: bool,
 }
 
@@ -293,7 +297,7 @@ impl PyAttachedSteps {
         Ok(Self {
             relay,
             job,
-            snapshot,
+            snapshot: Arc::new(snapshot),
             supported,
         })
     }
@@ -348,7 +352,7 @@ impl PyAttachedSteps {
         StepSession::open(
             BoxedStepStore::new(PipeStepStore {
                 relay: self.relay.clone_ref(py),
-                snapshot: self.snapshot.clone(),
+                snapshot: Arc::clone(&self.snapshot),
             }),
             &self.job,
             StepLimits::default(),
