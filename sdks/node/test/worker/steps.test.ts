@@ -1,11 +1,16 @@
 /**
- * Durable inline steps on a worker: `ctx.step.run` and `ctx.step.sleep`.
+ * Durable inline steps: `ctx.step.run` and `ctx.step.sleep`.
  *
- * Everything is asserted through the public surface — events, `queue.getJob`
- * and counters closed over by the handlers. Nothing here opens the queue's
- * database: a second SQLite in the test process does not share the worker's
- * WAL index, so it reads a table the worker has already written as empty, with
- * no error to say so.
+ * Two deployments, one set of rules. On a **worker** everything is asserted
+ * through the public surface — events, `queue.getJob` and counters closed over
+ * by the handlers. Nothing here opens the queue's database: a second SQLite in
+ * the test process does not share the worker's WAL index, so it reads a table
+ * the worker has already written as empty, with no error to say so.
+ *
+ * On an **attached executor** there is no database on this side at all, so the
+ * assertions are the frames themselves: the snapshot a replay answers from
+ * rides in on the dispatch, and every new step crosses to the scheduler and
+ * blocks on its acknowledgement. `FakeScheduler` plays that end.
  */
 
 import { mkdtempSync } from "node:fs";
@@ -15,6 +20,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   currentJob,
   type Duration,
+  type Executor,
   type Middleware,
   type OutcomeEvent,
   Queue,
@@ -23,12 +29,19 @@ import {
   StepUnavailableError,
   type Worker,
 } from "../../src/index";
+import { FakeScheduler } from "./fakeScheduler";
 
 let worker: Worker | undefined;
+let executor: Executor | undefined;
+let scheduler: FakeScheduler | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   worker?.stop();
   worker = undefined;
+  await executor?.stop();
+  executor = undefined;
+  scheduler?.close();
+  scheduler = undefined;
 });
 
 function newQueue(): Queue {
@@ -573,4 +586,177 @@ it("refuses a step where nothing can commit it", async () => {
   });
   // Latched, so a body that caught the refusal and returned anyway still fails.
   expect(latch.swallowed).toBe(true);
+});
+
+// ── On an attached executor ──────────────────────────────────────────────
+//
+// No storage on this side: the steps a job already committed arrive as a
+// `job_steps` frame in front of its dispatch, and each new one crosses as a
+// `step_commit` the task waits on. The fence stays the scheduler's, so nothing
+// below sends an owner and nothing below could.
+
+/** Reach the queue's own serializer — the one a step result is encoded with. */
+interface QueueSerializer {
+  serialize(value: unknown): Uint8Array;
+  deserialize(bytes: Uint8Array): unknown;
+}
+
+function serializerOf(queue: Queue): QueueSerializer {
+  return (queue as unknown as { serializer: QueueSerializer }).serializer;
+}
+
+/** Encode a call the way the enqueue path does. */
+function payloadFor(queue: Queue, args: unknown[]): Buffer {
+  return Buffer.from(serializerOf(queue).serialize([args, {}]));
+}
+
+/** Attach an executor to `scheduler` and wait for the handshake. */
+async function attach(queue: Queue, fake: FakeScheduler): Promise<Executor> {
+  const started = await queue.runExecutor({ attach: `127.0.0.1:${fake.port}` });
+  await fake.attached();
+  return started;
+}
+
+it("announces that it can run durable steps", async () => {
+  // Only an executor whose job context can actually open a session may claim
+  // this: a scheduler sends the snapshot to nobody who would discard it.
+  scheduler = await FakeScheduler.listen();
+  const queue = newQueue();
+  queue.task("checkout", () => "done");
+
+  executor = await attach(queue, scheduler);
+  const hello = await scheduler.attached();
+
+  expect(hello.capabilities).toEqual(expect.arrayContaining(["steps"]));
+});
+
+it("replays a step from the dispatch's snapshot instead of running it", async () => {
+  // The read half of §9: one snapshot per attempt, and it is the scheduler's
+  // read, not one this process has credentials to make.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["steps"];
+  const queue = newQueue();
+  let charges = 0;
+  queue.task("checkout", async () => {
+    return step().run("charge", () => {
+      charges += 1;
+      return { id: `ch_${charges}` };
+    });
+  });
+
+  executor = await attach(queue, scheduler);
+  const memoized = serializerOf(queue).serialize({ id: "ch_1" });
+  scheduler.sendJobSteps("job-1", [{ seq: 0, stepKey: "charge#0", result: Buffer.from(memoized) }]);
+  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
+
+  const frame = await scheduler.nextResult();
+  expect(frame.header.type).toBe("success");
+  // The point of the whole feature, over a wire this time: the card is not
+  // charged again on the attempt that replays it.
+  expect(charges).toBe(0);
+  expect(serializerOf(queue).deserialize(frame.payload)).toEqual({ id: "ch_1" });
+});
+
+it("commits a new step through the scheduler and waits for the ack", async () => {
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["steps"];
+  const queue = newQueue();
+  queue.task("checkout", async () => step().run("charge", () => ({ id: "ch_1" })));
+
+  executor = await attach(queue, scheduler);
+  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
+
+  const commit = await scheduler.nextFrame("step_commit");
+  expect(commit.header.job_id).toBe("job-1");
+  expect(commit.header.seq).toBe(0);
+  expect(commit.header.step_key).toBe("charge#0");
+  expect(commit.header.kind).toBe("run");
+  // Post-serializer, post-codec: these are the bytes the scheduler stores, and
+  // the ones a replay hands back. No owner rides with them.
+  expect(serializerOf(queue).deserialize(commit.payload)).toEqual({ id: "ch_1" });
+  expect(commit.header).not.toHaveProperty("owner");
+
+  scheduler.ackStep(commit);
+  const frame = await scheduler.nextResult();
+  expect(frame.header.type).toBe("success");
+});
+
+it("ends the attempt in a sleep the scheduler settled", async () => {
+  // Two frames, not one: `step.sleep` has to return the deadline storage
+  // settled on before the body unwinds, and the terminal frame is only written
+  // once it has.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["steps"];
+  const queue = newQueue();
+  const settled = Date.now() + 90_000;
+  queue.task("cool_off", async () => {
+    await step().sleep("1h", { name: "cool_off" });
+    return "never reached this attempt";
+  });
+
+  executor = await attach(queue, scheduler);
+  scheduler.sendJob("job-1", "cool_off", payloadFor(queue, []));
+
+  const commit = await scheduler.nextFrame("step_commit");
+  expect(commit.header.kind).toBe("sleep");
+  expect(commit.header.step_key).toBe("cool_off#0");
+  expect(commit.header.payload_len).toBe(0);
+  // The ack echoes the deadline the job was *actually* rescheduled to, which on
+  // a replay is the stored one rather than the one proposed here.
+  scheduler.ackStep(commit, { wakeAt: settled });
+
+  const frame = await scheduler.nextResult();
+  expect(frame.header.type).toBe("slept");
+  expect(frame.header.wake_at).toBe(settled);
+});
+
+it("fails the attempt retryably when a commit is never acknowledged", async () => {
+  // The one genuinely uncertain case in §9.2's taxonomy. An unconfirmed commit
+  // is indistinguishable from one that never happened, so the attempt must not
+  // proceed past it — and the replay re-runs the step under the same downstream
+  // idempotency key, which is what makes retrying safe.
+  scheduler = await FakeScheduler.listen();
+  scheduler.capabilities = ["steps"];
+  const queue = newQueue();
+  let refusal: unknown;
+  queue.task("checkout", async () => {
+    try {
+      return await step().run("charge", () => ({ id: "ch_1" }));
+    } catch (error) {
+      refusal = error;
+      throw error;
+    }
+  });
+
+  executor = await attach(queue, scheduler);
+  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
+
+  // Asserted in the handler rather than off a frame: the connection carrying
+  // the answer is the one being dropped, so there is no failure frame to read.
+  const commit = await scheduler.nextFrame("step_commit");
+  expect(commit.header.step_key).toBe("charge#0");
+  scheduler.disconnect();
+
+  expect(await waitFor(() => refusal !== undefined)).toBe(true);
+  expect(refusal).toBeInstanceOf(StepUnavailableError);
+  expect(refusal).toMatchObject({ flexiqShouldRetry: true });
+});
+
+it("refuses a step when the scheduler offers no step store", async () => {
+  // §9.4, and it stays: an executor attached to a scheduler that never
+  // advertised the capability has no channel to commit on, and says so.
+  // Retryably, because a fleet mid-rollout may place the next attempt somewhere
+  // that can commit — and there is no version of "your charge step silently
+  // lost its memo" that beats a failure naming the reason.
+  scheduler = await FakeScheduler.listen();
+  const queue = newQueue();
+  queue.task("checkout", async () => step().run("charge", () => "charged"));
+
+  executor = await attach(queue, scheduler);
+  scheduler.sendJob("job-1", "checkout", payloadFor(queue, []));
+
+  const frame = await scheduler.nextResult();
+  expect(frame.header.type).toBe("failure");
+  expect(frame.header.should_retry).toBe(true);
+  expect(String(frame.header.error)).toContain("no step store");
 });
