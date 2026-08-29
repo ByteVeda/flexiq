@@ -54,6 +54,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function renderPlaceholder(value: unknown, name: string, context: string): string {
   switch (typeof value) {
     case "string":
+      // An empty value still leaves a key — "report:" — that every call with an
+      // empty property shares, the same silent collapse a missing one throws for.
+      if (value === "") {
+        throw new QueueError(
+          `${context}: debounceKey placeholder "{${name}}" is empty — a key segment must ` +
+            "carry a value, or every call missing it shares one window",
+        );
+      }
       return value;
     case "number":
       if (!Number.isFinite(value)) break;

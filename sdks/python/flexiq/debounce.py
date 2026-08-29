@@ -13,6 +13,8 @@ from __future__ import annotations
 import inspect
 import math
 import re
+import string
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,6 +180,51 @@ def normalize_debounce(
     )
 
 
+class _KeySegmentFormatter(string.Formatter):
+    """``str.format`` that refuses a placeholder which renders to nothing.
+
+    Checking only the assembled key catches a template that resolved to nothing
+    at all; ``"report:{user_id}"`` with an empty ``user_id`` still leaves
+    ``"report:"``, one window shared by every call in that state — the same
+    silent collapse an unresolvable placeholder is refused for.
+    """
+
+    def __init__(self, template: str, task_name: str) -> None:
+        super().__init__()
+        self._template = template
+        self._task_name = task_name
+        self._field = ""
+
+    def get_field(
+        self, field_name: str, args: Sequence[Any], kwargs: Mapping[str, Any]
+    ) -> tuple[Any, str]:
+        # ``format_field`` is handed the value alone, so the name is carried
+        # across from here to keep the error pointing at the empty placeholder.
+        self._field = field_name
+        field: tuple[Any, str] = super().get_field(field_name, args, kwargs)
+        # Checked before the conversion and the format spec run, since either
+        # turns an empty value back into text: ``{user_id!r}`` renders ``''``
+        # and ``{user_id:>5}`` renders spaces, each a key every caller with an
+        # empty value would share again.
+        if not str(field[0]):
+            raise self._empty_segment()
+        return field
+
+    def format_field(self, value: Any, format_spec: str) -> str:
+        # The value carried something and the spec threw it away — ``{user_id:.0}``
+        # truncates to nothing. The same empty segment, one step later.
+        rendered: str = super().format_field(value, format_spec)
+        if not rendered:
+            raise self._empty_segment()
+        return rendered
+
+    def _empty_segment(self) -> ValueError:
+        return ValueError(
+            f"debounce_key {self._template!r} for task {self._task_name!r} references "
+            f"{{{self._field}}}, which is empty — a key segment must carry a value"
+        )
+
+
 def resolve_debounce_key(
     template: str,
     task_name: str,
@@ -192,13 +239,14 @@ def resolve_debounce_key(
     callers that reach ``enqueue`` with no registered signature to bind
     against.
 
-    An unresolvable placeholder raises rather than degrading to a literal or a
-    global key: silently debouncing every user's report against every other
-    user's is a data bug that would only surface as mysteriously missing runs.
+    A placeholder that cannot be resolved — or that resolves to an empty value
+    — raises rather than degrading to a literal or a global key: silently
+    debouncing every user's report against every other user's is a data bug
+    that would only surface as mysteriously missing runs.
 
     Raises:
-        ValueError: the template names something the call does not provide, or
-            resolves to the empty string.
+        ValueError: the template names something the call does not provide, a
+            placeholder is empty, or the whole key resolves to nothing.
     """
     named: dict[str, Any] = dict(kwargs)
     if signature is not None:
@@ -221,7 +269,7 @@ def resolve_debounce_key(
                 named.pop(name, None)
 
     try:
-        key = template.format(*args, **named)
+        key = _KeySegmentFormatter(template, task_name).vformat(template, args, named)
     except (KeyError, IndexError, AttributeError) as exc:
         # KeyError stringifies to the bare field name; the other two carry a
         # sentence, so only the first is quoted as a placeholder.
@@ -232,6 +280,8 @@ def resolve_debounce_key(
             f"which this call does not provide (available: {available})"
         ) from exc
 
+    # Only reachable for a template that is placeholder-free and empty, which
+    # ``normalize_debounce`` already refuses — kept for a direct caller.
     if not key:
         raise ValueError(
             f"debounce_key {template!r} for task {task_name!r} resolved to an empty key"

@@ -126,7 +126,7 @@ Task<Report> SYNC_USER = Task.of("sync-user", Report.class)
 </SdkOnly>
 
 A placeholder that resolves to nothing — a missing name, an out-of-range
-position, an object where a scalar was expected —
+position, an object where a scalar was expected, or a value that is empty —
 <SdkSwap python={<>raises <code>ValueError</code></>} node={<>throws a <code>QueueError</code></>} java={<>throws <code>IllegalArgumentException</code></>} />
 at enqueue, and nothing is inserted. The alternative would be one global window
 silently shared by every caller, which is the failure debouncing exists to
