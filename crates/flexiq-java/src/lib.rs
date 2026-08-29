@@ -8,6 +8,7 @@
 //! `Java_org_byteveda_flexiq_internal_NativeQueue_<method>` so the JVM links it
 //! to the matching `native` method on the `NativeQueue` Java class.
 
+mod attached_steps;
 mod backend;
 mod convert;
 mod dispatcher;

@@ -21,6 +21,7 @@ use flexiq_core::StorageBackend;
 use jni::objects::{GlobalRef, JObject, JValue};
 use tokio::sync::oneshot;
 
+use crate::attached_steps::RunningJobs;
 use crate::jvm;
 
 /// The outcome Java reports for a submitted job. A failure carries whether it
@@ -76,6 +77,9 @@ pub struct JavaDispatcher {
     /// Behind a lock because the handle only exists once the handshake has
     /// completed, and `run` may already be going by then.
     side_channel: Mutex<Option<ExecutorSideChannel>>,
+    /// Where a step session finds the dispatch it is opened against. `None` for
+    /// a worker, which reads the job row from its own storage instead.
+    running: Option<Arc<RunningJobs>>,
 }
 
 impl JavaDispatcher {
@@ -90,17 +94,24 @@ impl JavaDispatcher {
             registry,
             cancels: Arc::new(CancelSignals::from_storage(storage, namespace)),
             side_channel: Mutex::new(None),
+            running: None,
         }
     }
 
     /// A dispatcher with no storage, for an attached executor. Cancels arrive
-    /// only through [`WorkerDispatcher::notify_cancel`].
-    pub fn detached(callbacks: GlobalRef, registry: Arc<Registry>) -> Self {
+    /// only through [`WorkerDispatcher::notify_cancel`], and `running` is what
+    /// lets a task open a durable-step session against its own dispatch.
+    pub fn detached(
+        callbacks: GlobalRef,
+        registry: Arc<Registry>,
+        running: Arc<RunningJobs>,
+    ) -> Self {
         Self {
             callbacks,
             registry,
             cancels: Arc::new(CancelSignals::detached()),
             side_channel: Mutex::new(None),
+            running: Some(running),
         }
     }
 
@@ -144,9 +155,18 @@ impl WorkerDispatcher for JavaDispatcher {
             // Resolved here, on the dispatch path, rather than inside the task:
             // it is the toggle list this job was dispatched with.
             let disabled = self.disabled_middleware(&job.id);
+            let running = self.running.clone();
             tokio::spawn(async move {
                 let job_id = job.id.clone();
-                let result = run_one(&callbacks, &registry, &cancels, job, disabled).await;
+                let result = run_one(
+                    &callbacks,
+                    &registry,
+                    &cancels,
+                    running.as_ref(),
+                    job,
+                    disabled,
+                )
+                .await;
                 // Release the cancel record now the job has reported, so a
                 // long-lived process does not accumulate ids.
                 cancels.forget(&job_id);
@@ -167,13 +187,32 @@ async fn run_one(
     callbacks: &GlobalRef,
     registry: &Registry,
     cancels: &CancelSignals,
-    job: Job,
+    running: Option<&Arc<RunningJobs>>,
+    mut job: Job,
     disabled_middleware: Option<String>,
 ) -> JobResult {
     let started = Instant::now();
     let (token, rx) = registry.register();
 
-    if let Err(err) = submit_to_java(callbacks, token, &job, disabled_middleware.as_deref()) {
+    // Taken, not cloned: the recorded dispatch below is a handful of strings
+    // rather than a copy of however many megabytes the task was called with.
+    // `job` stays whole for the later `failure(job, ...)` moves, which never
+    // read the payload.
+    let payload = std::mem::take(&mut job.payload);
+    // Registered *before* the dispatch crosses into Java: `onJob` hands the job
+    // to a handler thread and returns, so the body may ask for a step session
+    // the moment it does. The guard drops on every exit below, including the
+    // timeout — a step opened past that point would commit into an attempt
+    // already being reaped.
+    let _running = running.map(|registry| registry.enter(&job));
+
+    if let Err(err) = submit_to_java(
+        callbacks,
+        token,
+        &job,
+        &payload,
+        disabled_middleware.as_deref(),
+    ) {
         registry.forget(token);
         return failure(job, err, started.elapsed().as_nanos() as i64, false, true);
     }
@@ -237,6 +276,7 @@ fn submit_to_java(
     callbacks: &GlobalRef,
     token: u64,
     job: &Job,
+    payload: &[u8],
     disabled_middleware: Option<&str>,
 ) -> Result<(), String> {
     let vm = jvm::vm();
@@ -246,7 +286,7 @@ fn submit_to_java(
     let job_id = env.new_string(&job.id).map_err(|e| e.to_string())?;
     let task_name = env.new_string(&job.task_name).map_err(|e| e.to_string())?;
     let payload = env
-        .byte_array_from_slice(&job.payload)
+        .byte_array_from_slice(payload)
         .map_err(|e| e.to_string())?;
     // Both nullable, and both carried rather than looked up: an executor has no
     // storage to read the job row or the toggle list from, and a worker's
