@@ -10,7 +10,7 @@ import {
 } from "@/components/ui";
 import type { Worker } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
-import { divergentFingerprints, isWorkerStale, parseQueues } from "../utils";
+import { divergentWorkers, isWorkerStale, parseQueues } from "../utils";
 
 interface WorkersTableProps {
   workers: Worker[] | undefined;
@@ -24,8 +24,9 @@ const TIME_CELL =
 
 export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableProps) {
   // Recomputed from the whole page because "odd one out" is a property of the
-  // fleet, not of a row: a worker's fingerprint says nothing on its own.
-  const divergent = useMemo(() => divergentFingerprints(workers ?? []), [workers]);
+  // group a worker shares queues with, not of a row: a fingerprint says nothing
+  // on its own.
+  const divergent = useMemo(() => divergentWorkers(workers ?? []), [workers]);
 
   const columns = useMemo<DataTableColumn<Worker>[]>(
     () => [
@@ -79,7 +80,7 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
         cell: ({ row }) => {
           const fingerprint = row.original.registry_fingerprint;
           if (!fingerprint) return <span className="text-[var(--fg-subtle)]">—</span>;
-          if (!divergent.has(fingerprint)) {
+          if (!divergent.has(row.original.worker_id)) {
             return (
               <span className="font-mono text-xs text-[var(--fg-subtle)]" title={fingerprint}>
                 {fingerprint.slice(0, 8)}
@@ -89,7 +90,7 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
           return (
             <Badge
               tone="danger"
-              title={`Task registry ${fingerprint} — no other worker here runs this set of tasks. A job for a task only some workers know fails wherever it lands.`}
+              title={`Task registry ${fingerprint} — the other workers on its queues run a different set of tasks. A job for a task only some of them know fails wherever it lands.`}
             >
               <span className="font-mono">{fingerprint.slice(0, 8)}</span>
             </Badge>

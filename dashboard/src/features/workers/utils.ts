@@ -21,19 +21,72 @@ export function parseQueues(queues: string): string[] {
 }
 
 /**
- * Registry fingerprints that are not the fleet's agreed-on one.
+ * Workers partitioned so that any two whose queue sets intersect land in the
+ * same group, transitively.
  *
- * The column exists to spot the odd worker out, so the largest group of workers
- * running the same task registry is taken as the intended one and every other
- * fingerprint is flagged. Workers that report no fingerprint take no part: an
- * SDK that predates the field, or a worker with nothing registered, is a
- * registry nobody can see rather than one that differs.
- *
- * A tie for largest flags every group. With no majority there is no intended
- * registry to measure against, and picking one arbitrarily would clear half a
- * split fleet of a problem it has.
+ * Comparing registries across the whole page flags a heterogeneous fleet for a
+ * divergence it does not have — an `email` worker and a `video` worker never
+ * see each other's jobs. Comparing only exact queue sets hides the opposite
+ * case: a worker on `default,email` and a worker on `default` are not the same
+ * group, yet a `default` job lands on either. Transitive overlap keeps that
+ * pair together and still leaves disjoint fleets apart.
  */
-export function divergentFingerprints(workers: readonly Worker[]): ReadonlySet<string> {
+function queueComponents(workers: readonly Worker[]): Worker[][] {
+  const parent = workers.map((_, index) => index);
+
+  const find = (index: number): number => {
+    let root = index;
+    while (parent[root] !== root) {
+      root = parent[root] as number;
+    }
+    // Path compression: the same worker is looked up once per queue it serves.
+    let walk = index;
+    while (parent[walk] !== root) {
+      const next = parent[walk] as number;
+      parent[walk] = root;
+      walk = next;
+    }
+    return root;
+  };
+
+  const firstOnQueue = new Map<string, number>();
+  workers.forEach((worker, index) => {
+    for (const queue of parseQueues(worker.queues)) {
+      const other = firstOnQueue.get(queue);
+      if (other === undefined) {
+        firstOnQueue.set(queue, index);
+      } else {
+        parent[find(index)] = find(other);
+      }
+    }
+  });
+
+  const grouped = new Map<number, Worker[]>();
+  workers.forEach((worker, index) => {
+    const root = find(index);
+    const members = grouped.get(root);
+    if (members) {
+      members.push(worker);
+    } else {
+      grouped.set(root, [worker]);
+    }
+  });
+  return [...grouped.values()];
+}
+
+/**
+ * Registry fingerprints within one group that are not the group's agreed-on one.
+ *
+ * The largest group of workers running the same task registry is taken as the
+ * intended one and every other fingerprint is flagged. Workers that report no
+ * fingerprint take no part: an SDK that predates the field, or a worker with
+ * nothing registered, is a registry nobody can see rather than one that differs.
+ *
+ * A tie for largest flags every fingerprint. With no majority there is no
+ * intended registry to measure against, and picking one arbitrarily would clear
+ * half a split fleet of a problem it has.
+ */
+function oddFingerprints(workers: readonly Worker[]): ReadonlySet<string> {
   const counts = new Map<string, number>();
   for (const worker of workers) {
     const fingerprint = worker.registry_fingerprint;
@@ -51,4 +104,31 @@ export function divergentFingerprints(workers: readonly Worker[]): ReadonlySet<s
   }
   const [agreed] = leaders;
   return new Set([...counts.keys()].filter((fingerprint) => fingerprint !== agreed));
+}
+
+/**
+ * Ids of the workers whose task registry differs from the others they share
+ * queues with.
+ *
+ * The verdict is per worker rather than per fingerprint because it is only
+ * meaningful inside a queue group: one registry can be the odd one out among
+ * the `default` workers and the agreed-on one among the `video` workers, and
+ * flagging the fingerprint would badge both.
+ *
+ * Always a diagnostic, never a gate — nothing refuses work over it.
+ */
+export function divergentWorkers(workers: readonly Worker[]): ReadonlySet<string> {
+  const flagged = new Set<string>();
+  for (const component of queueComponents(workers)) {
+    const odd = oddFingerprints(component);
+    if (odd.size === 0) {
+      continue;
+    }
+    for (const worker of component) {
+      if (worker.registry_fingerprint && odd.has(worker.registry_fingerprint)) {
+        flagged.add(worker.worker_id);
+      }
+    }
+  }
+  return flagged;
 }
