@@ -52,15 +52,27 @@ impl RunningJobs {
     /// Record `job` for the length of one attempt. The returned guard removes
     /// it however the attempt ends, including a panic on the way out.
     ///
+    /// The newest attempt for an id wins. Each dispatch runs in its own spawned
+    /// task, so two that overlap can reach this in either order, and an entry
+    /// rolled back to the earlier one would refuse the live attempt's session as
+    /// a lost claim. A registration that loses still gets a guard: its token is
+    /// not the one under the key, so its exit takes nothing with it.
     pub fn enter(self: &Arc<Self>, job: &Job) -> RunningJob {
         let token = self.next_token.fetch_add(1, Ordering::Relaxed);
-        self.locked().insert(
-            job.id.clone(),
-            Registered {
-                token,
-                job: job.clone(),
-            },
-        );
+        let mut jobs = self.locked();
+        let supersedes = jobs
+            .get(&job.id)
+            .is_none_or(|entry| job.retry_count >= entry.job.retry_count);
+        if supersedes {
+            jobs.insert(
+                job.id.clone(),
+                Registered {
+                    token,
+                    job: job.clone(),
+                },
+            );
+        }
+        drop(jobs);
         RunningJob {
             registry: Arc::clone(self),
             job_id: job.id.clone(),
@@ -234,6 +246,38 @@ mod tests {
         assert_eq!(found.retry_count, 1);
 
         // And the live guard still cleans up after itself.
+        drop(live);
+        assert!(registry.get("job-1").is_none());
+    }
+
+    #[test]
+    fn an_out_of_order_registration_does_not_roll_the_registry_back() {
+        // Each dispatch runs in its own spawned task, so a later attempt can
+        // reach `enter` before an earlier one that was delayed on its way there.
+        // The registry must still hold the newest: rolling back to a reported
+        // attempt refuses the live one's session as a lost claim.
+        let registry = Arc::new(RunningJobs::default());
+        let live = registry.enter(&dispatched("job-1", 1));
+        let stale = registry.enter(&dispatched("job-1", 0));
+
+        assert_eq!(
+            registry
+                .get("job-1")
+                .expect("the live dispatch should be registered")
+                .retry_count,
+            1
+        );
+
+        // And the losing registration's guard takes nothing with it.
+        drop(stale);
+        assert_eq!(
+            registry
+                .get("job-1")
+                .expect("the live dispatch should have survived")
+                .retry_count,
+            1
+        );
+
         drop(live);
         assert!(registry.get("job-1").is_none());
     }
