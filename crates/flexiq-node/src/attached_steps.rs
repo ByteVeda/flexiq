@@ -13,7 +13,8 @@
 //! into the live attempt's sequence.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use flexiq_core::error::QueueError;
 use flexiq_core::job::Job;
@@ -37,27 +38,55 @@ use crate::steps::{step_error, JsStepSession};
 /// however many megabytes the task was called with.
 #[derive(Default)]
 pub struct RunningJobs {
-    jobs: Mutex<HashMap<String, Job>>,
+    jobs: Mutex<HashMap<String, Registered>>,
+    next_token: AtomicU64,
+}
+
+/// One registration, tagged so its guard can tell it from a later one.
+struct Registered {
+    token: u64,
+    job: Job,
 }
 
 impl RunningJobs {
     /// Record `job` for the length of one attempt. The returned guard removes
     /// it however the attempt ends, including a panic on the way out.
+    ///
+    /// The newest attempt for an id wins. Each dispatch runs in its own spawned
+    /// task, so two that overlap can reach this in either order, and an entry
+    /// rolled back to the earlier one would refuse the live attempt's session as
+    /// a lost claim. A registration that loses still gets a guard: its token is
+    /// not the one under the key, so its exit takes nothing with it.
     pub fn enter(self: &Arc<Self>, job: &Job) -> RunningJob {
-        self.locked().insert(job.id.clone(), job.clone());
+        let token = self.next_token.fetch_add(1, Ordering::Relaxed);
+        let mut jobs = self.locked();
+        let supersedes = jobs
+            .get(&job.id)
+            .is_none_or(|entry| job.retry_count >= entry.job.retry_count);
+        if supersedes {
+            jobs.insert(
+                job.id.clone(),
+                Registered {
+                    token,
+                    job: job.clone(),
+                },
+            );
+        }
+        drop(jobs);
         RunningJob {
             registry: Arc::clone(self),
             job_id: job.id.clone(),
+            token,
         }
     }
 
     /// The dispatch a step session would be opened against, if it is still
     /// running here.
     fn get(&self, job_id: &str) -> Option<Job> {
-        self.locked().get(job_id).cloned()
+        self.locked().get(job_id).map(|entry| entry.job.clone())
     }
 
-    fn locked(&self) -> std::sync::MutexGuard<'_, HashMap<String, Job>> {
+    fn locked(&self) -> MutexGuard<'_, HashMap<String, Registered>> {
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -70,11 +99,26 @@ impl RunningJobs {
 pub struct RunningJob {
     registry: Arc<RunningJobs>,
     job_id: String,
+    /// Which registration this guard owns. Two dispatches of one job id can
+    /// overlap here — a reaper reclaims a job this executor is still running
+    /// and the poller places the next attempt on the same connection — and an
+    /// entry keyed by id alone cannot tell them apart.
+    token: u64,
 }
 
 impl Drop for RunningJob {
     fn drop(&mut self) {
-        self.registry.locked().remove(&self.job_id);
+        let mut jobs = self.registry.locked();
+        // Only what this guard registered. Removing by id alone would let the
+        // older attempt's exit strand the newer one, whose session would then
+        // be refused as a lost claim while it is the attempt actually holding
+        // the job.
+        if jobs
+            .get(&self.job_id)
+            .is_some_and(|entry| entry.token == self.token)
+        {
+            jobs.remove(&self.job_id);
+        }
     }
 }
 
@@ -179,6 +223,62 @@ mod tests {
         // the only thing keeping the map from growing for the life of the
         // process.
         drop(guard);
+        assert!(registry.get("job-1").is_none());
+    }
+
+    #[test]
+    fn an_overlapping_dispatch_survives_the_attempt_it_replaced() {
+        // Two dispatches of one job id can be in flight here at once: a reaper
+        // reclaims a job this executor is still running, and the poller places
+        // the next attempt on the same connection. The older attempt finishing
+        // must not take the newer one's entry with it — its session would then
+        // be refused as a lost claim while it is the attempt actually holding
+        // the job.
+        let registry = Arc::new(RunningJobs::default());
+        let stale = registry.enter(&dispatched("job-1", 0));
+        let live = registry.enter(&dispatched("job-1", 1));
+
+        drop(stale);
+
+        let found = registry
+            .get("job-1")
+            .expect("the live dispatch should still be registered");
+        assert_eq!(found.retry_count, 1);
+
+        // And the live guard still cleans up after itself.
+        drop(live);
+        assert!(registry.get("job-1").is_none());
+    }
+
+    #[test]
+    fn an_out_of_order_registration_does_not_roll_the_registry_back() {
+        // Each dispatch runs in its own spawned task, so a later attempt can
+        // reach `enter` before an earlier one that was delayed on its way there.
+        // The registry must still hold the newest: rolling back to a reported
+        // attempt refuses the live one's session as a lost claim.
+        let registry = Arc::new(RunningJobs::default());
+        let live = registry.enter(&dispatched("job-1", 1));
+        let stale = registry.enter(&dispatched("job-1", 0));
+
+        assert_eq!(
+            registry
+                .get("job-1")
+                .expect("the live dispatch should be registered")
+                .retry_count,
+            1
+        );
+
+        // And the losing registration's guard takes nothing with it.
+        drop(stale);
+        assert_eq!(
+            registry
+                .get("job-1")
+                .expect("the live dispatch should have survived")
+                .retry_count,
+            1
+        );
+
+        drop(live);
         assert!(registry.get("job-1").is_none());
     }
 
