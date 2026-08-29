@@ -260,13 +260,19 @@ def test_literal_key_debounces_the_whole_task(queue: Queue) -> None:
     assert rebuild.delay(1).id == rebuild.delay(2).id
 
 
-def test_key_resolving_to_empty_raises(queue: Queue) -> None:
-    @queue.task(debounce="5m", debounce_key="{user_id}", debounce_max_wait="30m")
+@pytest.mark.parametrize("template", ["{user_id}", "report:{user_id}"])
+def test_empty_placeholder_cannot_key_a_window(queue: Queue, template: str) -> None:
+    """An empty value still leaves a key — ``report:`` — that every call with an
+    empty ``user_id`` shares, the same collapse a missing name is refused for."""
+
+    @queue.task(debounce="5m", debounce_key=template, debounce_max_wait="30m")
     def build_report(user_id: str) -> str:
         return user_id
 
-    with pytest.raises(ValueError, match="empty key"):
+    with pytest.raises(ValueError, match="is empty"):
         build_report.delay("")
+
+    assert queue.stats()["pending"] == 0
 
 
 # ── Validation ────────────────────────────────────────────────────────
