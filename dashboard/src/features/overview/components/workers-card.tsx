@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronRight, Server, Skull } from "lucide-react";
 import { Badge, Card, EmptyState, Skeleton } from "@/components/ui";
-import { isWorkerStale } from "@/features/workers/utils";
+import { isWorkerStale, parseQueues } from "@/features/workers/utils";
 import type { Worker } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
 
@@ -34,11 +34,7 @@ export function WorkersCard({ workers, loading }: WorkersCardProps) {
       <div className="flex flex-col gap-2.5 p-[var(--pad)]">
         {list.slice(0, VISIBLE_LIMIT).map((w) => {
           const stale = isWorkerStale(w);
-          const queues = w.queues
-            .split(",")
-            .map((q) => q.trim())
-            .filter(Boolean)
-            .join(" · ");
+          const queues = parseQueues(w.queues).join(" · ");
           return (
             <div key={w.worker_id} className="flex items-center gap-3">
               <span

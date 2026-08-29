@@ -12,6 +12,14 @@ export function isWorkerStale(worker: Worker, now: number = Date.now()): boolean
   return now - worker.last_heartbeat > WORKER_STALE_AFTER_MS;
 }
 
+/** The queue names a worker consumes, parsed from the CSV its row carries. */
+export function parseQueues(queues: string): string[] {
+  return queues
+    .split(",")
+    .map((queue) => queue.trim())
+    .filter(Boolean);
+}
+
 /**
  * Registry fingerprints that are not the fleet's agreed-on one.
  *

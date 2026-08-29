@@ -10,7 +10,7 @@ import {
 } from "@/components/ui";
 import type { Worker } from "@/lib/api-types";
 import { formatRelative } from "@/lib/time";
-import { divergentFingerprints, isWorkerStale } from "../utils";
+import { divergentFingerprints, isWorkerStale, parseQueues } from "../utils";
 
 interface WorkersTableProps {
   workers: Worker[] | undefined;
@@ -40,10 +40,7 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
         accessorKey: "queues",
         header: "Queues",
         cell: ({ getValue }) => {
-          const parts = getValue<string>()
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
+          const parts = parseQueues(getValue<string>());
           return (
             <div className="flex flex-wrap gap-1">
               {parts.map((q) => (
