@@ -384,3 +384,14 @@ it("resolves a key against a later object argument", () => {
   });
   expect(options?.resolveKey("t", ["ignored", { userId: "u1" }])).toBe("report:u1");
 });
+
+it("rejects a placeholder that resolves to an empty value", () => {
+  // "report:" is still a key, so every caller with an empty userId would share
+  // one window — the same silent collapse a missing property is rejected for.
+  const options = DebounceOptions.from("t", {
+    debounce: "1m",
+    debounceKey: "report:{userId}",
+    debounceMaxWait: "5m",
+  });
+  expect(() => options?.resolveKey("t", [{ userId: "" }])).toThrow(/is empty/);
+});
