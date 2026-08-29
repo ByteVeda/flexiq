@@ -260,7 +260,17 @@ def test_literal_key_debounces_the_whole_task(queue: Queue) -> None:
     assert rebuild.delay(1).id == rebuild.delay(2).id
 
 
-@pytest.mark.parametrize("template", ["{user_id}", "report:{user_id}"])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{user_id}",
+        "report:{user_id}",
+        # A conversion or a format spec renders an empty value back into
+        # text — "report:''" and "report:     " are shared windows too.
+        "report:{user_id!r}",
+        "report:{user_id:>5}",
+    ],
+)
 def test_empty_placeholder_cannot_key_a_window(queue: Queue, template: str) -> None:
     """An empty value still leaves a key — ``report:`` — that every call with an
     empty ``user_id`` shares, the same collapse a missing name is refused for."""
@@ -271,6 +281,19 @@ def test_empty_placeholder_cannot_key_a_window(queue: Queue, template: str) -> N
 
     with pytest.raises(ValueError, match="is empty"):
         build_report.delay("")
+
+    assert queue.stats()["pending"] == 0
+
+
+def test_a_format_spec_that_truncates_to_nothing_is_refused(queue: Queue) -> None:
+    """The value carries something; the spec throws it away. Still no key."""
+
+    @queue.task(debounce="5m", debounce_key="report:{user_id:.0}", debounce_max_wait="30m")
+    def build_report(user_id: str) -> str:
+        return user_id
+
+    with pytest.raises(ValueError, match="is empty"):
+        build_report.delay("u1")
 
     assert queue.stats()["pending"] == 0
 

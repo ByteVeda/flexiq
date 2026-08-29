@@ -202,16 +202,27 @@ class _KeySegmentFormatter(string.Formatter):
         # across from here to keep the error pointing at the empty placeholder.
         self._field = field_name
         field: tuple[Any, str] = super().get_field(field_name, args, kwargs)
+        # Checked before the conversion and the format spec run, since either
+        # turns an empty value back into text: ``{user_id!r}`` renders ``''``
+        # and ``{user_id:>5}`` renders spaces, each a key every caller with an
+        # empty value would share again.
+        if not str(field[0]):
+            raise self._empty_segment()
         return field
 
     def format_field(self, value: Any, format_spec: str) -> str:
+        # The value carried something and the spec threw it away — ``{user_id:.0}``
+        # truncates to nothing. The same empty segment, one step later.
         rendered: str = super().format_field(value, format_spec)
         if not rendered:
-            raise ValueError(
-                f"debounce_key {self._template!r} for task {self._task_name!r} references "
-                f"{{{self._field}}}, which is empty — a key segment must carry a value"
-            )
+            raise self._empty_segment()
         return rendered
+
+    def _empty_segment(self) -> ValueError:
+        return ValueError(
+            f"debounce_key {self._template!r} for task {self._task_name!r} references "
+            f"{{{self._field}}}, which is empty — a key segment must carry a value"
+        )
 
 
 def resolve_debounce_key(
