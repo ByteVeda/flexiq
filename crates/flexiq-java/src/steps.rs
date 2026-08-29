@@ -11,7 +11,8 @@
 //! worker that won the execution claim, read off that worker's own handle by
 //! [`open_step_session`], because an owner task code can assert is an owner it
 //! can forge — and a forged one writes straight into the live attempt's
-//! sequence.
+//! sequence. An attached executor supplies none at all: the claim is the
+//! scheduler's, and so is the fence ([`crate::attached_steps`]).
 //!
 //! **The retry verdict crosses as a class.** JNI can throw any `Throwable`, so
 //! `classify_step_failure`'s answer is the exception class itself and
@@ -23,10 +24,10 @@ use std::sync::Mutex;
 
 use flexiq_core::error::QueueError;
 use flexiq_core::step::{
-    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSleep,
-    StorageStepSession,
+    classify_step_failure, PendingStep, StepDecision, StepFailure, StepLimits, StepSession,
+    StepSleep, StepStore, StorageStepSession,
 };
-use flexiq_core::storage::{Storage, StorageBackend};
+use flexiq_core::storage::Storage;
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jint, jlong, jobject};
 use jni::JNIEnv;
@@ -71,9 +72,18 @@ pub fn step_error(error: QueueError) -> BindingError {
     BindingError::with_class(class, error.to_string())
 }
 
+/// One attempt's durable steps, however its writes leave this process.
+///
+/// The store is erased because a handle crossing JNI is one concrete type and
+/// the two deployments write through different ones — storage for a worker, the
+/// scheduler connection for an attached executor. Erasing it here rather than
+/// duplicating the handle is what keeps the split form of the session
+/// (`beginRun` … `commitRun`) written once.
+pub type BoxedStepSession = StepSession<Box<dyn StepStore + Send>>;
+
 /// The session plus the one step it has handed out and not yet stored.
 struct SessionState {
-    session: StorageStepSession<StorageBackend>,
+    session: BoxedStepSession,
     /// The step `beginRun` issued, waiting for its bytes. Cleared by
     /// `commitRun`, whether or not the write succeeded: a refused commit has
     /// already failed the attempt, and keeping the token would let a later call
@@ -88,16 +98,21 @@ struct SessionState {
 
 /// One attempt's durable steps, behind a `long` handle.
 ///
+/// Built by [`open_step_session`] or by its attached twin
+/// ([`crate::attached_steps`]), which are the only places the fence comes from —
+/// the owner off the worker that won the claim, or nothing at all for an
+/// executor, whose scheduler supplies both halves from the dispatch it recorded.
+///
 /// The mutex guards the state, not concurrency: a session belongs to one
 /// attempt and the core refuses two steps at once. Every call runs on the Java
-/// thread that made it — a durable step is a storage write, and this shell has
-/// a pool thread per task rather than Node's single event loop.
+/// thread that made it — a durable step is a write, and this shell has a pool
+/// thread per task.
 pub struct StepSessionHandle {
     state: Mutex<SessionState>,
 }
 
 impl StepSessionHandle {
-    fn new(session: StorageStepSession<StorageBackend>) -> Self {
+    pub fn new(session: BoxedStepSession) -> Self {
         Self {
             state: Mutex::new(SessionState {
                 session,
@@ -378,8 +393,9 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeStepSession_close
 /// the live attempt's sequence, and finding out here gives a clearer error than
 /// the storage fence's refusal on the first commit.
 ///
-/// An attached executor never reaches this: it holds no worker handle, so it
-/// has no channel to commit a step on and refuses in the shell instead.
+/// An attached executor holds no worker handle and reaches
+/// [`crate::attached_steps`]'s twin instead, whose writes are fenced by the
+/// scheduler rather than here.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorker_openStepSession<'local>(
     mut env: JNIEnv<'local>,
@@ -431,5 +447,5 @@ fn open_step_session(
         StepLimits::default(),
     )
     .map_err(step_error)?;
-    Ok(StepSessionHandle::new(session))
+    Ok(StepSessionHandle::new(session.boxed()))
 }
