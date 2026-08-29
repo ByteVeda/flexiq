@@ -49,7 +49,7 @@ public final class StepContext {
     private final Serializer serializer;
     private final StepLatch latch;
 
-    /** Absent where this process cannot commit a step — an attached executor. */
+    /** Absent where this process reaches neither storage nor a scheduler. */
     private final @Nullable StepStore store;
 
     private @Nullable StepSession session;
@@ -392,12 +392,12 @@ public final class StepContext {
         }
         StepStore steps = store;
         if (steps == null) {
-            // An attached executor has no storage and no channel to commit a
-            // step on, so it refuses rather than running the step un-memoized.
-            // Retryable: a heterogeneous fleet mid-rollout may put the next
-            // attempt on a worker that can commit.
-            throw refuseUnavailable("durable steps need a worker that reaches storage, and this task is "
-                    + "running on an attached executor, which has none. Run it on an in-process worker.");
+            // Nowhere to commit: this attempt reaches neither storage nor a
+            // scheduler, so it refuses rather than running the step
+            // un-memoized. Retryable: a heterogeneous fleet mid-rollout may put
+            // the next attempt somewhere that can commit.
+            throw refuseUnavailable("durable steps need a worker that reaches storage or a scheduler that "
+                    + "commits on its behalf, and this task is running on neither.");
         }
         StepSession fresh = guard(() -> steps.open(jobId, attempt));
         session = fresh;

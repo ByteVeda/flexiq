@@ -2,6 +2,7 @@ package org.byteveda.flexiq.internal;
 
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
+import org.byteveda.flexiq.spi.StepSession;
 import org.byteveda.flexiq.spi.WorkerControl;
 import org.jspecify.annotations.Nullable;
 
@@ -64,11 +65,49 @@ public final class JniExecutorControl implements WorkerControl {
     }
 
     @Override
+    public void sleepJob(long token, long wakeAt) {
+        withOpenHandle(() -> {
+            NativeExecutor.sleepJob(handle, token, wakeAt);
+            return null;
+        });
+    }
+
+    @Override
     public void cancelJob(long token) {
         withOpenHandle(() -> {
             NativeExecutor.cancelJob(handle, token);
             return null;
         });
+    }
+
+    /**
+     * Open the durable-step session for one attempt of {@code jobId}.
+     *
+     * <p>The steps of a job running here are fenced by the <b>scheduler</b>, not
+     * by this process: it holds the execution claim and performs every write.
+     * The snapshot a replay answers from rode in on the dispatch, so a memo hit
+     * costs nothing, and each new step costs one round trip — the commit blocks
+     * until the scheduler acknowledges it, because an unconfirmed commit is
+     * indistinguishable from one that never happened.
+     *
+     * <p>A scheduler that never advertised the step capability is refused by the
+     * core, retryably: a fleet mid-rollout may place the next attempt somewhere
+     * that can commit.
+     */
+    @Override
+    public StepSession openStepSession(String jobId, int attempt) {
+        return withOpenHandle(() -> new JniStepSession(NativeExecutor.openStepSession(handle, jobId, attempt)));
+    }
+
+    /**
+     * Whether durable steps work across this attach.
+     *
+     * @return {@code false} against a scheduler whose storage has no step store,
+     *     or one built before steps existed; {@code ctx.step()} then refuses
+     *     rather than running a step un-memoized
+     */
+    public boolean supportsSteps() {
+        return withOpenHandle(() -> NativeExecutor.supportsSteps(handle));
     }
 
     @Override

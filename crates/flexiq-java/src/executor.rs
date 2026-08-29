@@ -19,9 +19,10 @@ use serde::Deserialize;
 
 use flexiq_core::worker::{
     AttachAddress, ExecutorClient, ExecutorConfig, ExecutorError, ExecutorHandle, ExecutorSession,
-    ExecutorSideChannel, WorkerDispatcher,
+    ExecutorSideChannel, ExecutorSteps, WorkerDispatcher, CAP_STEPS,
 };
 
+use crate::attached_steps::RunningJobs;
 use crate::convert::parse_json;
 use crate::dispatcher::{JavaDispatcher, Registry, TaskOutcome};
 use crate::error::BindingError;
@@ -63,6 +64,12 @@ pub struct AttachedHandle {
     /// Progress and task logs — the storage-shaped writes the scheduler
     /// performs on this executor's behalf.
     side_channel: ExecutorSideChannel,
+    /// Durable steps, which unlike the side channel block and can be refused: a
+    /// commit is what the task is waiting on. Read by [`crate::attached_steps`].
+    pub(crate) steps: ExecutorSteps,
+    /// The jobs this executor is running, which is where a step session finds
+    /// the dispatch it must be opened against.
+    pub(crate) running: Arc<RunningJobs>,
     scheduler_id: String,
     executor_id: String,
     peer: String,
@@ -92,6 +99,11 @@ fn attach(options: ExecutorOptions, callbacks: GlobalRef) -> Result<AttachedHand
         tasks: options.tasks,
         slots,
         token: options.token.map(flexiq_core::Secret::new),
+        // Claimed because a job context here can actually open a session: task
+        // bodies run in this process, so the snapshot that rides a dispatch is
+        // read by the code that replays from it. Announced only where that is
+        // true, so a scheduler sends a snapshot to nobody who would discard it.
+        capabilities: vec![CAP_STEPS.to_string()],
         ..ExecutorConfig::new("java", env!("CARGO_PKG_VERSION"))
     };
     if let Some(id) = options.executor_id {
@@ -126,7 +138,15 @@ fn attach(options: ExecutorOptions, callbacks: GlobalRef) -> Result<AttachedHand
     let peer = client.peer().to_string();
 
     let registry = Arc::new(Registry::default());
-    let pool = Arc::new(JavaDispatcher::detached(callbacks, registry.clone()));
+    // Recorded by the dispatcher, read when a task asks for a step session:
+    // `ExecutorSteps::open_session` needs the dispatch itself, and Java asks for
+    // one by job id.
+    let running = Arc::new(RunningJobs::default());
+    let pool = Arc::new(JavaDispatcher::detached(
+        callbacks,
+        registry.clone(),
+        Arc::clone(&running),
+    ));
     let handle = client.spawn(pool.clone() as Arc<dyn WorkerDispatcher>);
     // Installed after the handshake, which is the earliest it exists. The
     // dispatcher reads each job's toggle list through it.
@@ -136,6 +156,8 @@ fn attach(options: ExecutorOptions, callbacks: GlobalRef) -> Result<AttachedHand
         executor_id: handle.executor_id().to_string(),
         session: handle.session(),
         side_channel: handle.side_channel(),
+        steps: handle.steps(),
+        running,
         handle: Some(handle),
         registry,
         scheduler_id,
@@ -206,6 +228,30 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeExecutor_failJob<
             token as u64,
             TaskOutcome::Failure(message, retryable != JNI_FALSE),
         );
+        Ok(())
+    })
+}
+
+/// `void sleepJob(long handle, long token, long wakeAt)` — the attempt ended in
+/// a `step.sleep`.
+///
+/// Not a completion and not a failure: the sleep was committed through the
+/// scheduler, which released the claim and left the job `Pending` at `wakeAt`,
+/// so this only tells it what happened. The deadline is the one storage settled
+/// on, echoed by the commit's ack, which on a replay is not the one proposed.
+#[no_mangle]
+pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeExecutor_sleepJob(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    token: jlong,
+    wake_at: jlong,
+) {
+    guard(&mut env, (), |_env| {
+        let executor = unsafe { borrow(handle) };
+        executor
+            .registry
+            .complete(token as u64, TaskOutcome::Slept(wake_at));
         Ok(())
     })
 }

@@ -107,6 +107,19 @@ public final class Executor implements AutoCloseable {
     }
 
     /**
+     * Whether durable steps work across this attach.
+     *
+     * <p>Not a gate: {@code ctx.step()} refuses on its own whether or not this
+     * is read.
+     *
+     * @return {@code false} against a scheduler whose storage has no step store,
+     *     or one built before steps existed
+     */
+    public boolean supportsSteps() {
+        return control.supportsSteps();
+    }
+
+    /**
      * Block until this executor stops accepting work — the scheduler ending the
      * session, or a local {@link #stop()}. Does not drain; {@link #close()} does.
      */
@@ -413,6 +426,16 @@ public final class Executor implements AutoCloseable {
             JniExecutorControl control = new JniExecutorControl(handle);
             try {
                 bridge.bind(control);
+                if (!control.supportsSteps()) {
+                    // Said once at attach rather than at the first step.run.
+                    // Info, not warn: progress belongs to every job, while steps
+                    // are opt-in, and a fleet that uses none would be warned for
+                    // nothing. The refusal itself names the reason for anyone
+                    // who does use them.
+                    LOG.info("scheduler " + control.schedulerId()
+                            + " offers no step store, so durable steps on this executor will be refused rather"
+                            + " than run un-memoized; upgrade the scheduler to run tasks that use ctx.step() here");
+                }
                 emitter.emit(new WorkerEvent(EventName.WORKER_STARTED, List.of()));
                 // Lease worker resources only after the attach succeeded, so a
                 // refused handshake leaks nothing.

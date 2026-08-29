@@ -45,12 +45,54 @@ public final class NativeExecutor {
     public static native void failJob(long handle, long token, String error, boolean retryable);
 
     /**
+     * Report that an attempt ended in a durable {@code step.sleep}.
+     *
+     * <p>Neither a completion nor a failure: the sleep was committed through the
+     * scheduler, which released the claim and left the job {@code Pending} at
+     * {@code wakeAt}.
+     *
+     * @param handle the executor handle from {@link #attach}
+     * @param token the dispatch token the bridge was handed
+     * @param wakeAt the deadline the job was rescheduled to, in Unix milliseconds
+     */
+    public static native void sleepJob(long handle, long token, long wakeAt);
+
+    /**
      * Report that a dispatched job was cancelled.
      *
      * @param handle the executor handle from {@link #attach}
      * @param token the dispatch token the bridge was handed
      */
     public static native void cancelJob(long handle, long token);
+
+    /**
+     * Whether durable steps work across this attach.
+     *
+     * <p>False against a scheduler whose storage has no step store, or one built
+     * before steps existed. Not a gate — {@link #openStepSession} refuses on its
+     * own — but it lets the shell say so once at attach rather than at the first
+     * {@code step.run}.
+     *
+     * @param handle the executor handle from {@link #attach}
+     * @return whether the scheduler can commit a durable step
+     */
+    public static native boolean supportsSteps(long handle);
+
+    /**
+     * Open the durable-step session for one attempt of {@code jobId}.
+     *
+     * <p>On the <b>executor</b>, whose steps are fenced by the scheduler: the
+     * snapshot a replay answers from rode in on the dispatch, and every new step
+     * crosses the connection to be written under the claim the scheduler holds.
+     * No owner travels with it, and none is invented here.
+     *
+     * @param handle the executor handle from {@link #attach}
+     * @param jobId the running job
+     * @param attempt the {@code retryCount} the job was dispatched with, checked
+     *     against the dispatch so a reported attempt cannot write into the live one
+     * @return the session handle this attempt's steps commit through
+     */
+    public static native long openStepSession(long handle, String jobId, int attempt);
 
     /**
      * Report a running job's progress (0-100) to the scheduler.

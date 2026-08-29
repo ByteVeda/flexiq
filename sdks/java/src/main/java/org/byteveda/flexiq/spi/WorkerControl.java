@@ -58,9 +58,11 @@ public interface WorkerControl extends AutoCloseable {
      * worker on the same handle, and every step the first worker went on to
      * commit would then be refused as superseded.
      *
-     * <p>The default refuses, which is the honest answer for an attached
-     * executor (no storage, and no channel to commit a step on) and for any
-     * backend without a step store. Retryable: a heterogeneous fleet
+     * <p>An attached executor overrides this rather than inheriting it: it holds
+     * no claim of its own, so its steps are fenced by the scheduler and commit
+     * over the connection instead. The default refuses, which stays the honest
+     * answer for a backend without a step store and for any control that reaches
+     * neither storage nor a scheduler. Retryable: a heterogeneous fleet
      * mid-rollout may put the next attempt somewhere that can commit.
      *
      * @param jobId the running job
