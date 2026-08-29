@@ -2,29 +2,14 @@ package org.byteveda.flexiq.worker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.byteveda.flexiq.JobContext;
 import org.byteveda.flexiq.middleware.Middleware;
@@ -44,8 +29,8 @@ import org.junit.jupiter.api.Timeout;
  */
 class ExecutorAttachTest {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final int PROTOCOL_VERSION = 1;
-    private static final long SETTLE_MS = 20_000;
+    private static final int PROTOCOL_VERSION = FakeScheduler.PROTOCOL_VERSION;
+    private static final long SETTLE_MS = FakeScheduler.SETTLE_MS;
 
     private @Nullable FakeScheduler scheduler;
     private @Nullable Executor executor;
@@ -59,216 +44,6 @@ class ExecutorAttachTest {
         if (scheduler != null) {
             scheduler.close();
             scheduler = null;
-        }
-    }
-
-    /** The scheduler end of an attach, driven frame by frame. */
-    private static final class FakeScheduler implements AutoCloseable {
-        private final ServerSocket server;
-        private final Thread accepting;
-        private final CountDownLatch connected = new CountDownLatch(1);
-        private final AtomicReference<@Nullable Socket> socket = new AtomicReference<>();
-        private final AtomicReference<@Nullable JsonNode> hello = new AtomicReference<>();
-        private final Deque<Frame> results = new ArrayDeque<>();
-        private final boolean refuse;
-
-        /**
-         * What this scheduler promises to do on the executor's behalf. Empty by
-         * default — a scheduler built before the side-channel existed, which is
-         * the compatibility case worth defaulting to.
-         */
-        private final List<String> capabilities;
-
-        private @Nullable InputStream in;
-        private @Nullable OutputStream out;
-
-        FakeScheduler(boolean refuse) throws IOException {
-            this(refuse, List.of());
-        }
-
-        FakeScheduler(boolean refuse, List<String> capabilities) throws IOException {
-            this.refuse = refuse;
-            this.capabilities = capabilities;
-            this.server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-            this.accepting = new Thread(this::accept, "fake-scheduler");
-            this.accepting.setDaemon(true);
-            this.accepting.start();
-        }
-
-        int port() {
-            return server.getLocalPort();
-        }
-
-        private void accept() {
-            try {
-                Socket client = server.accept();
-                socket.set(client);
-                in = client.getInputStream();
-                out = client.getOutputStream();
-                Frame frame = readFrame();
-                hello.set(frame == null ? null : frame.header());
-                if (refuse) {
-                    client.close();
-                } else {
-                    send(Map.of(
-                            "type",
-                            "hello_ack",
-                            "scheduler_id",
-                            "fake-scheduler",
-                            "protocol_version",
-                            PROTOCOL_VERSION,
-                            "capabilities",
-                            capabilities));
-                }
-                connected.countDown();
-            } catch (IOException e) {
-                connected.countDown();
-            }
-        }
-
-        /** A frame header and the blob that followed it. */
-        record Frame(JsonNode header, byte[] payload) {
-            String type() {
-                return header.path("type").asText("");
-            }
-        }
-
-        /** Read one frame: a JSON header line, then exactly the payload it declares. */
-        private @Nullable Frame readFrame() throws IOException {
-            InputStream stream = in;
-            if (stream == null) {
-                return null;
-            }
-            ByteArrayOutputStream header = new ByteArrayOutputStream();
-            int b;
-            while ((b = stream.read()) != -1 && b != '\n') {
-                header.write(b);
-            }
-            if (header.size() == 0) {
-                return null;
-            }
-            JsonNode node = JSON.readTree(header.toString(StandardCharsets.UTF_8));
-            int declared = declaredPayloadLength(node);
-            byte[] payload = declared > 0 ? stream.readNBytes(declared) : new byte[0];
-            return new Frame(node, payload);
-        }
-
-        private static int declaredPayloadLength(JsonNode header) {
-            String type = header.path("type").asText("");
-            if (type.equals("job")) {
-                return header.path("payload_len").asInt(0);
-            }
-            if (type.equals("success")) {
-                JsonNode len = header.get("result_len");
-                return len == null || len.isNull() ? 0 : len.asInt(0);
-            }
-            if (type.equals("task_log")) {
-                // A published partial can be arbitrarily large, so `extra` rides
-                // as the frame's blob rather than inside the header.
-                JsonNode len = header.get("extra_len");
-                return len == null || len.isNull() ? 0 : len.asInt(0);
-            }
-            return 0;
-        }
-
-        JsonNode awaitHello() throws InterruptedException {
-            assertTrue(connected.await(SETTLE_MS, TimeUnit.MILLISECONDS), "the executor never attached");
-            JsonNode frame = hello.get();
-            assertNotNull(frame, "no hello frame arrived");
-            return frame;
-        }
-
-        void send(Map<String, Object> header) throws IOException {
-            OutputStream stream = out;
-            if (stream == null) {
-                return;
-            }
-            stream.write(JSON.writeValueAsBytes(header));
-            stream.write('\n');
-            stream.flush();
-        }
-
-        void sendJob(String id, String taskName, byte[] payload) throws IOException {
-            sendJob(id, taskName, payload, List.of(), null);
-        }
-
-        void sendJob(
-                String id,
-                String taskName,
-                byte[] payload,
-                List<String> disabledMiddleware,
-                @Nullable String metadataJson)
-                throws IOException {
-            OutputStream stream = out;
-            if (stream == null) {
-                return;
-            }
-            Map<String, Object> header = new LinkedHashMap<>();
-            header.put("type", "job");
-            header.put("id", id);
-            header.put("task_name", taskName);
-            header.put("payload_len", payload.length);
-            header.put("retry_count", 0);
-            header.put("max_retries", 3);
-            header.put("queue", "default");
-            header.put("timeout_ms", 30_000);
-            // Resolved by the scheduler, because an executor has no storage of
-            // its own to read the settings or the job row from.
-            header.put("disabled_middleware", disabledMiddleware);
-            header.put("metadata", metadataJson);
-            stream.write(JSON.writeValueAsBytes(header));
-            stream.write('\n');
-            stream.write(payload);
-            stream.flush();
-        }
-
-        /**
-         * Every side-channel frame a job produced, plus its result.
-         *
-         * <p>The result is ordered behind them on one connection, so its arrival
-         * is what proves the collection is complete rather than merely early.
-         */
-        List<Frame> collectUntilResult() throws IOException {
-            List<Frame> collected = new ArrayList<>();
-            for (; ; ) {
-                Frame frame = nextFrame();
-                collected.add(frame);
-                if (!frame.type().equals("progress") && !frame.type().equals("task_log")) {
-                    return collected;
-                }
-            }
-        }
-
-        /** The next frame that is not a heartbeat. */
-        JsonNode nextResult() throws IOException {
-            return nextFrame().header();
-        }
-
-        Frame nextFrame() throws IOException {
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SETTLE_MS);
-            while (System.nanoTime() < deadline) {
-                if (!results.isEmpty()) {
-                    return results.removeFirst();
-                }
-                Frame frame = readFrame();
-                if (frame == null) {
-                    break;
-                }
-                if (!frame.type().equals("heartbeat")) {
-                    return frame;
-                }
-            }
-            throw new AssertionError("no result frame arrived");
-        }
-
-        @Override
-        public void close() throws IOException {
-            Socket client = socket.get();
-            if (client != null) {
-                client.close();
-            }
-            server.close();
-            accepting.interrupt();
         }
     }
 
