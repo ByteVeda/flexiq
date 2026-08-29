@@ -138,6 +138,20 @@ describe("divergentWorkers", () => {
     expect([...flagged]).toEqual(["e3"]);
   });
 
+  it("judges a worker against its whole group, not just its queue-mates", () => {
+    // `b` is served only by `bridge` and `b1`, and they agree — but `bridge`
+    // also serves `a`, which links both into a group whose majority runs
+    // something else. Comparing only direct queue-mates would clear `b1`.
+    const flagged = divergentWorkers([
+      worker("a1", "aaaa", "a"),
+      worker("a2", "aaaa", "a"),
+      worker("a3", "aaaa", "a"),
+      worker("bridge", "bbbb", "a,b"),
+      worker("b1", "bbbb", "b"),
+    ]);
+    expect([...flagged].sort()).toEqual(["b1", "bridge"]);
+  });
+
   it("leaves a worker that lists no queue out of every group", () => {
     // It shares a queue with nobody, so there is no registry to compare it to.
     const flagged = divergentWorkers([

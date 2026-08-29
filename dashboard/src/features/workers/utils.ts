@@ -107,13 +107,19 @@ function oddFingerprints(workers: readonly Worker[]): ReadonlySet<string> {
 }
 
 /**
- * Ids of the workers whose task registry differs from the others they share
- * queues with.
+ * Ids of the workers whose task registry is not the agreed-on one of the group
+ * they reach through shared queues.
  *
  * The verdict is per worker rather than per fingerprint because it is only
  * meaningful inside a queue group: one registry can be the odd one out among
  * the `default` workers and the agreed-on one among the `video` workers, and
  * flagging the fingerprint would badge both.
+ *
+ * The comparison spans the whole component, not just a worker's immediate
+ * queue-mates, so a flagged worker's own queue can agree with it — it is linked
+ * to the majority through a worker that serves both. That is deliberate: the
+ * component is one interlinked set of queues, and a fleet serving it off two
+ * builds is worth surfacing wherever along the chain the mismatch sits.
  *
  * Always a diagnostic, never a gate — nothing refuses work over it.
  */

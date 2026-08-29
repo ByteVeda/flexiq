@@ -90,7 +90,7 @@ export function WorkersTable({ workers, loading, error, onRetry }: WorkersTableP
           return (
             <Badge
               tone="danger"
-              title={`Task registry ${fingerprint} — the other workers on its queues run a different set of tasks. A job for a task only some of them know fails wherever it lands.`}
+              title={`Task registry ${fingerprint} — most workers it reaches through shared queues run a different set of tasks. A job for a task only some of them registered fails if it lands on one that did not.`}
             >
               <span className="font-mono">{fingerprint.slice(0, 8)}</span>
             </Badge>
