@@ -101,6 +101,19 @@ class MiddlewareDeadlineTest {
         assertFalse(hook.isAlive(), "the hook thread should have finished");
     }
 
+    @Test
+    @Timeout(30)
+    void roundsASubMillisecondBudgetUpRatherThanDownToDisabled() {
+        // Duration.ZERO is the only value that disables the bound. toMillis()
+        // truncates, so without the round-up the tightest budget a caller can
+        // express would mean no bound at all.
+        assertEquals(0L, HookDeadline.millis(Duration.ZERO));
+        assertEquals(1L, HookDeadline.millis(Duration.ofNanos(1)));
+        assertEquals(1L, HookDeadline.millis(Duration.ofNanos(999_999)));
+        assertEquals(20L, HookDeadline.millis(Duration.ofMillis(20)));
+        assertThrows(IllegalArgumentException.class, () -> HookDeadline.millis(Duration.ofMillis(-1)));
+    }
+
     /** Blocks in {@code before} until something interrupts it. */
     static final class Blocking implements Middleware {
         final CountDownLatch interrupted = new CountDownLatch(1);

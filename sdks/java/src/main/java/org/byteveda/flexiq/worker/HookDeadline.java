@@ -47,10 +47,15 @@ final class HookDeadline {
     private HookDeadline() {}
 
     /**
-     * A configured budget as milliseconds.
+     * A configured budget as milliseconds, rounded up.
+     *
+     * <p>{@link Duration#ZERO} is the only value that disables the bound.
+     * {@code toMillis()} truncates, so a sub-millisecond budget would otherwise
+     * round down to zero and mean "no bound at all" — the opposite of what a
+     * caller asking for the tightest possible one wants.
      *
      * @param timeout the per-hook budget; {@link Duration#ZERO} disables the bound
-     * @return the budget in milliseconds
+     * @return the budget in milliseconds, at least 1 for any positive duration
      * @throws IllegalArgumentException if {@code timeout} is negative
      */
     static long millis(Duration timeout) {
@@ -58,7 +63,7 @@ final class HookDeadline {
         if (timeout.isNegative()) {
             throw new IllegalArgumentException("middlewareTimeout must not be negative");
         }
-        return timeout.toMillis();
+        return timeout.isZero() ? 0L : Math.max(1L, timeout.toMillis());
     }
 
     /**
