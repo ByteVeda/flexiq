@@ -91,12 +91,13 @@ override only what you need.
 
 <SdkOnly sdk="python">
 
-`TaskMiddleware` exposes 7 hooks:
+`TaskMiddleware` exposes 8 hooks:
 
 | Hook | Called when |
 |---|---|
 | `before(ctx)` | Before task execution |
 | `after(ctx, result, error)` | After task execution (success or failure) |
+| `on_sleep(ctx, wake_at)` | An attempt ended in a durable `step.sleep`, so there is no result to report |
 | `on_retry(ctx, error, retry_count)` | A job fails and will be retried |
 | `on_enqueue(task_name, args, kwargs, options)` | A job is about to be enqueued |
 | `on_dead_letter(ctx, error)` | A job exhausts all retries and moves to the dead letter queue |
@@ -123,13 +124,14 @@ timeout itself independently of the job's eventual fate.
 
 <SdkOnly sdk="node">
 
-`Middleware` exposes 8 hooks:
+`Middleware` exposes 9 hooks:
 
 | Hook | When | Awaited |
 |---|---|---|
 | `onEnqueue(ctx)` | Producer-side, inside `enqueue`, before serialization. | no (sync) |
 | `before(ctx)` | Before each execution attempt. | yes |
 | `after(ctx, result)` | After a successful attempt. | yes |
+| `onSleep(ctx, wakeAt)` | An attempt ended in a durable `step.sleep`, so there is no result to report. | yes |
 | `onError(ctx, err)` | When an attempt throws (before the retry/dead decision). | yes |
 | `onCompleted(e)` | After a job completes successfully. | no |
 | `onRetry(e)` | After the core schedules a retry. | no |
@@ -146,13 +148,14 @@ the run).
 
 <SdkOnly sdk="java">
 
-`Middleware` exposes 8 hooks:
+`Middleware` exposes 9 hooks:
 
 | Hook | When |
 |---|---|
 | `onEnqueue(context)` | Producer-side, inside `enqueue`, before serialization. |
 | `before(context)` | Before each execution attempt. |
 | `after(context, result)` | After a successful attempt. |
+| `onSleep(context, wakeAt)` | An attempt ended in a durable `step.sleep`, so there is no result to report. |
 | `onError(context, error)` | When an attempt throws (before the retry/dead decision). |
 | `onCompleted(event)` | After a job completes successfully. |
 | `onRetry(event)` | After the core schedules a retry. |
@@ -282,7 +285,7 @@ Multiple middlewares run in registration order for every phase — `before`,
 If a middleware hook raises an exception:
 
 - **`before()`**: the exception is logged, but subsequent middleware `before()` hooks still run. The task executes normally.
-- **`after()`**: the exception is logged. Other `after()` hooks still run.
+- **`after()` / `on_sleep()`**: the exception is logged. The other hooks in the chain still run.
 - **`on_retry()` / `on_dead_letter()` / `on_timeout()` / `on_cancel()`**: logged and swallowed — these are notification hooks, not control flow.
 
 Middleware exceptions never prevent task execution or result handling.
@@ -293,8 +296,9 @@ Middleware exceptions never prevent task execution or result handling.
 
 The execution hooks (`before`/`after`/`onError`) are awaited in the hot path:
 a rejected `before` or `after` fails the attempt like a thrown handler error.
-`onError` itself is wrapped so a throwing `onError` never masks the original
-task failure. The outcome hooks (`onCompleted`/`onRetry`/`onDeadLetter`/
+`onError` and `onSleep` are each wrapped per middleware, so a throwing
+`onError` never masks the original task failure and a throwing `onSleep` never
+un-commits a sleep that already happened; both are logged at `debug`. The outcome hooks (`onCompleted`/`onRetry`/`onDeadLetter`/
 `onCancel`) are isolated per middleware — one that throws or rejects is
 logged at `debug` and doesn't stop the rest from running.
 
@@ -304,8 +308,10 @@ logged at `debug` and doesn't stop the rest from running.
 
 The execution hooks run inside the attempt — a `before` or `after` that
 throws fails the attempt like a handler error, and is caught by the same
-`onError` path. Outcome hooks are isolated — one that throws is caught and
-logged so it never starves the others.
+`onError` path. `onError` and `onSleep` are isolated per middleware instead: one
+that throws is caught and logged, because escaping there would leave the
+dispatch with no outcome to report at all. Outcome hooks are isolated for the
+same reason.
 
 </SdkOnly>
 
