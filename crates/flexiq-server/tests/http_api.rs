@@ -51,6 +51,12 @@ async fn probes_answer_without_credentials_in_open_mode() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], json!("ready"));
     assert_eq!(body["checks"]["storage"], json!("ok"));
+    // The cross-SDK contract: an empty fleet is reported, never folded into the
+    // status. Degrading here would leave every producer-only instance unready.
+    assert_eq!(
+        body["checks"]["workers"],
+        json!({ "count": 0, "status": "none" })
+    );
 }
 
 #[tokio::test]
