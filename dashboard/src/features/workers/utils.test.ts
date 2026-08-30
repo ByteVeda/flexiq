@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Worker } from "@/lib/api-types";
-import { divergentFingerprints } from "./utils";
+import { divergentWorkers, parseQueues } from "./utils";
 
-function worker(worker_id: string, registry_fingerprint: string | null): Worker {
+function worker(
+  worker_id: string,
+  registry_fingerprint: string | null,
+  queues = "default",
+): Worker {
   return {
     worker_id,
-    queues: "default",
+    queues,
     status: "active",
     last_heartbeat: 1_700_000_000_000,
     registered_at: 1_700_000_000_000,
@@ -20,48 +24,141 @@ function worker(worker_id: string, registry_fingerprint: string | null): Worker 
   };
 }
 
-describe("divergentFingerprints", () => {
+describe("parseQueues", () => {
+  it("splits, trims, and drops empties", () => {
+    expect(parseQueues(" default , email ,,")).toEqual(["default", "email"]);
+  });
+
+  it("returns nothing for a worker that lists no queue", () => {
+    expect(parseQueues("")).toEqual([]);
+  });
+});
+
+describe("divergentWorkers", () => {
   it("flags nothing when the fleet agrees", () => {
-    const flagged = divergentFingerprints([worker("a", "aaaa"), worker("b", "aaaa")]);
+    const flagged = divergentWorkers([worker("a", "aaaa"), worker("b", "aaaa")]);
     expect([...flagged]).toEqual([]);
   });
 
   it("flags the odd worker out, not the group it differs from", () => {
-    const flagged = divergentFingerprints([
+    const flagged = divergentWorkers([
       worker("a", "aaaa"),
       worker("b", "aaaa"),
       worker("c", "bbbb"),
     ]);
-    expect([...flagged]).toEqual(["bbbb"]);
+    expect([...flagged]).toEqual(["c"]);
   });
 
-  it("flags every group when no registry has a majority", () => {
-    const flagged = divergentFingerprints([
+  it("flags every worker when no registry has a majority", () => {
+    const flagged = divergentWorkers([
       worker("a", "aaaa"),
       worker("b", "bbbb"),
       worker("c", "cccc"),
     ]);
     // A split fleet has no intended registry, so clearing any of them would be
     // telling the operator that side is fine.
-    expect([...flagged].sort()).toEqual(["aaaa", "bbbb", "cccc"]);
+    expect([...flagged].sort()).toEqual(["a", "b", "c"]);
   });
 
   it("ignores workers that report no registry", () => {
     // An SDK that predates the field must not turn a fleet that agrees into
     // one that looks split.
-    const flagged = divergentFingerprints([
-      worker("a", "aaaa"),
-      worker("b", null),
-      worker("c", "aaaa"),
-    ]);
+    const flagged = divergentWorkers([worker("a", "aaaa"), worker("b", null), worker("c", "aaaa")]);
     expect([...flagged]).toEqual([]);
   });
 
   it("flags nothing when only one worker reports", () => {
-    expect([...divergentFingerprints([worker("a", "aaaa")])]).toEqual([]);
+    expect([...divergentWorkers([worker("a", "aaaa")])]).toEqual([]);
   });
 
   it("flags nothing for an empty fleet", () => {
-    expect([...divergentFingerprints([])]).toEqual([]);
+    expect([...divergentWorkers([])]).toEqual([]);
+  });
+
+  it("does not compare fleets that share no queue", () => {
+    // Three email workers and three video workers is the normal shape of a
+    // heterogeneous fleet, not a six-way tie.
+    const flagged = divergentWorkers([
+      worker("e1", "aaaa", "email"),
+      worker("e2", "aaaa", "email"),
+      worker("e3", "aaaa", "email"),
+      worker("v1", "bbbb", "video"),
+      worker("v2", "bbbb", "video"),
+      worker("v3", "bbbb", "video"),
+    ]);
+    expect([...flagged]).toEqual([]);
+  });
+
+  it("compares workers whose queue sets only partly overlap", () => {
+    // A `default` job lands on either, so a registry only one of them has is
+    // exactly what the column exists to catch. Grouping by the exact queue key
+    // would have put them in separate groups of one and said nothing.
+    const flagged = divergentWorkers([
+      worker("a", "aaaa", "default,email"),
+      worker("b", "aaaa", "default"),
+      worker("c", "bbbb", "default"),
+    ]);
+    expect([...flagged]).toEqual(["c"]);
+  });
+
+  it("joins workers linked only through a third", () => {
+    // `email` and `video` never meet directly, but a worker serving both means
+    // a job on either can land beside the other's registry.
+    const flagged = divergentWorkers([
+      worker("a", "aaaa", "email"),
+      worker("bridge", "aaaa", "email,video"),
+      worker("c", "bbbb", "video"),
+    ]);
+    expect([...flagged]).toEqual(["c"]);
+  });
+
+  it("keeps a tie inside one group from touching a group that agrees", () => {
+    // Page-wide, `aaaa` has the majority and only `e2` looks odd. Inside
+    // `email` there is no majority at all, and a split group has no intended
+    // registry to clear either half against.
+    const flagged = divergentWorkers([
+      worker("e1", "aaaa", "email"),
+      worker("e2", "bbbb", "email"),
+      worker("v1", "aaaa", "video"),
+      worker("v2", "aaaa", "video"),
+    ]);
+    expect([...flagged].sort()).toEqual(["e1", "e2"]);
+  });
+
+  it("judges the same registry per group, not once for the page", () => {
+    // `bbbb` is the odd one out on `email` and the agreed-on one on `video`.
+    // Reporting divergence by fingerprint would badge the video workers too.
+    const flagged = divergentWorkers([
+      worker("e1", "aaaa", "email"),
+      worker("e2", "aaaa", "email"),
+      worker("e3", "bbbb", "email"),
+      worker("v1", "bbbb", "video"),
+      worker("v2", "bbbb", "video"),
+    ]);
+    expect([...flagged]).toEqual(["e3"]);
+  });
+
+  it("judges a worker against its whole group, not just its queue-mates", () => {
+    // `b` is served only by `bridge` and `b1`, and they agree — but `bridge`
+    // also serves `a`, which links both into a group whose majority runs
+    // something else. Comparing only direct queue-mates would clear `b1`.
+    const flagged = divergentWorkers([
+      worker("a1", "aaaa", "a"),
+      worker("a2", "aaaa", "a"),
+      worker("a3", "aaaa", "a"),
+      worker("bridge", "bbbb", "a,b"),
+      worker("b1", "bbbb", "b"),
+    ]);
+    expect([...flagged].sort()).toEqual(["b1", "bridge"]);
+  });
+
+  it("leaves a worker that lists no queue out of every group", () => {
+    // It shares a queue with nobody, so there is no registry to compare it to.
+    const flagged = divergentWorkers([
+      worker("a", "aaaa", "default"),
+      worker("b", "aaaa", "default"),
+      worker("orphan", "bbbb", ""),
+    ]);
+    expect([...flagged]).toEqual([]);
   });
 });
