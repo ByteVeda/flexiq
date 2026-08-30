@@ -99,7 +99,8 @@ every live worker's heartbeat.
   answers whether *this* process can serve the queue API, and workers are a
   separate deployment that may legitimately scale to zero, so degrading on an
   empty fleet would leave every producer-only instance permanently unready. Only
-  a worker lookup that *threw* degrades the status.
+  a worker lookup that *threw* degrades the status, the way unreachable storage
+  or an unhealthy resource does.
 
   A green `/readiness` therefore does not mean jobs are being consumed. Alert on
   the fleet size as its own signal — `(await queue.listWorkers()).length`, or the

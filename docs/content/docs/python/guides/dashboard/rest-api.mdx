@@ -459,9 +459,10 @@ Public liveness check. Always returns `{"status": "ok"}`.
 
 ### `GET /readiness`
 
-Public readiness check. `ready` (HTTP `200`) when storage answered and no
-advertised worker resource is unhealthy; `degraded` (HTTP `503`, with the same
-body) when one of those checks failed, so an orchestrator drains the instance.
+Public readiness check. `ready` (HTTP `200`) when storage answered, the worker
+registry could be read, and no advertised worker resource is unhealthy;
+`degraded` (HTTP `503`, with the same body) when any of those checks failed, so
+an orchestrator drains the instance.
 
 The worker count is reported but never folded into the status: with no worker
 running, `checks.workers` is `{"count": 0, "status": "none"}` and the response

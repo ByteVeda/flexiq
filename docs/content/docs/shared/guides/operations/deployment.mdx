@@ -812,7 +812,8 @@ that dispatches code and the port people browse are never the same object.
   can reach the port is whether storage answers and how many workers are
   registered. Leave it off and probe `/health` for both if that is too much.
 
-  `/readiness` answers `ready` whenever storage answers. The worker count is
+  `/readiness` answers `ready` whenever storage answers and the worker registry
+  can be read — a check that failed is what degrades it. The count itself is
   reported but never folded into the status, so an instance whose fleet has
   scaled to zero — or a producer-only one — still goes Ready; probe it for "can
   this process serve the queue API", and alert on the worker count separately
