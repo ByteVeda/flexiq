@@ -3,6 +3,7 @@ import { middlewareKey } from "./dashboard/stores/middlewareDisables";
 import { SerializationError, TaskNotRegisteredError } from "./errors";
 import type { Emitter } from "./events";
 import type { Middleware, TaskContext } from "./middleware";
+import { DEFAULT_MIDDLEWARE_TIMEOUT_MS, withHookDeadline } from "./middleware-deadline";
 import type { JsTaskInvocation, JsTaskOutcome, NativeQueue } from "./native";
 import { type ResourceRuntime, runWithResolver } from "./resources";
 import { deserializeCall, type PayloadCodec, type Serializer } from "./serializers";
@@ -76,6 +77,14 @@ export interface TaskCallbackDeps {
    * too, because the job belongs to the scheduler.
    */
   steps?: StepStore;
+  /**
+   * Per-hook budget for `before`/`after`/`onError`/`onSleep`, in milliseconds.
+   *
+   * A task's own timeout bounds only its handler, so a hook that blocks holds
+   * the attempt open past it. `0` disables the bound; absent takes
+   * {@link DEFAULT_MIDDLEWARE_TIMEOUT_MS}.
+   */
+  middlewareTimeoutMs?: number;
 }
 
 /**
@@ -93,6 +102,7 @@ export function createTaskCallback(
   const setProgress =
     deps.setProgress ??
     ((jobId: string, progress: number) => queue.updateProgress(jobId, progress));
+  const hookTimeoutMs = deps.middlewareTimeoutMs ?? DEFAULT_MIDDLEWARE_TIMEOUT_MS;
   const writeTaskLog =
     deps.writeTaskLog ??
     ((jobId: string, taskName: string, level: string, message: string, extra?: string) =>
@@ -179,15 +189,25 @@ export function createTaskCallback(
 
     const startedAt = performance.now();
     try {
-      for (const mw of chain) {
-        await mw.before?.(ctx);
+      for (const [index, mw] of chain.entries()) {
+        if (!mw.before) {
+          continue;
+        }
+        await withHookDeadline(hookTimeoutMs, middlewareKey(mw, index), "before", () =>
+          mw.before?.(ctx),
+        );
       }
       const result = await runWithResolver(scope.resolver, () => runInContext(context, invoke));
       // Before the `after` hooks, which exist to see a result: a body that
       // caught a step control signal and returned did not produce one.
       latch.check();
-      for (const mw of chain) {
-        await mw.after?.(ctx, result);
+      for (const [index, mw] of chain.entries()) {
+        if (!mw.after) {
+          continue;
+        }
+        await withHookDeadline(hookTimeoutMs, middlewareKey(mw, index), "after", () =>
+          mw.after?.(ctx, result),
+        );
       }
       return { result: Buffer.from(serializer.serialize(result)) };
     } catch (error) {
@@ -197,9 +217,15 @@ export function createTaskCallback(
       // no `onError`, and emits `job.sleeping` instead of `job.failed`.
       if (error instanceof StepSleepSignal) {
         warnUnpairedMiddleware(chain);
-        for (const mw of chain) {
+        const { wakeAt } = error;
+        for (const [index, mw] of chain.entries()) {
+          if (!mw.onSleep) {
+            continue;
+          }
           try {
-            await mw.onSleep?.(ctx, error.wakeAt);
+            await withHookDeadline(hookTimeoutMs, middlewareKey(mw, index), "onSleep", () =>
+              mw.onSleep?.(ctx, wakeAt),
+            );
           } catch (hookError) {
             // A sleep is already committed; a hook cannot undo it.
             log.debug(() => `onSleep middleware hook failed for ${invocation.id}`, hookError);
@@ -215,9 +241,14 @@ export function createTaskCallback(
         });
         return { sleptUntil: error.wakeAt };
       }
-      for (const mw of chain) {
+      for (const [index, mw] of chain.entries()) {
+        if (!mw.onError) {
+          continue;
+        }
         try {
-          await mw.onError?.(ctx, error);
+          await withHookDeadline(hookTimeoutMs, middlewareKey(mw, index), "onError", () =>
+            mw.onError?.(ctx, error),
+          );
         } catch {
           // onError hooks must not mask the original task failure.
         }

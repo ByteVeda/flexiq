@@ -54,6 +54,8 @@ export interface ExecutorStartParams {
   middlewareFor: (taskName: string, disabled: readonly string[]) => readonly Middleware[];
   emitter: Emitter;
   resources: ResourceRuntime;
+  /** Per-hook budget for the execution middleware, in ms. `0` disables. */
+  middlewareTimeoutMs?: number;
   run?: ExecutorRunOptions;
 }
 
@@ -122,6 +124,7 @@ export class Executor {
       emitter,
       resources,
       queue,
+      middlewareTimeoutMs: params.middlewareTimeoutMs,
       isCancelled: (jobId) => attached?.isCancelRequested(jobId) ?? false,
       // Overridden rather than left to `queue`, which is only the detached
       // stand-in when this process is a `flexiq executor`. An executor started

@@ -164,6 +164,17 @@ export interface QueueOptions {
    * on the queue serializer).
    */
   codecs?: Record<string, PayloadCodec>;
+  /**
+   * Per-hook budget for the execution middleware — `before`, `after`,
+   * `onError` and `onSleep` — in milliseconds. Defaults to 5000; `0` disables.
+   *
+   * A task's own timeout bounds its handler and nothing else, so a hook that
+   * blocks holds the attempt open past that limit. Past this budget the chain
+   * stops awaiting the hook, logs a warning naming it, and carries on: failing
+   * an attempt over its instrumentation is the failure mode the hooks exist to
+   * avoid.
+   */
+  middlewareTimeoutMs?: number;
 }
 
 /**
@@ -196,6 +207,8 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private readonly pendingLogConsumers: PendingLogConsumer[] = [];
   private readonly queueLimits = new Map<string, QueueLimits>();
   private readonly middleware: Middleware[] = [];
+  /** Per-hook middleware budget in ms; `undefined` takes the default. */
+  private readonly middlewareTimeoutMs?: number;
   private readonly interceptors: Interceptor[] = [];
   private readonly interceptionMetrics = new InterceptionMetrics();
   private readonly gates = new Map<string, EnqueueGate[]>();
@@ -221,6 +234,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     this.serializer =
       chain.length > 0 ? new CodecSerializer(baseSerializer, chain) : baseSerializer;
     this.codecs = new Map(Object.entries(options.codecs ?? {}));
+    this.middlewareTimeoutMs = options.middlewareTimeoutMs;
     this.webhookManager = new WebhookManager(this.native, this.emitter);
     // Claim any `task()` declared before this queue existed — under ESM a static
     // import of the task modules runs before the module body that constructs the
@@ -1862,6 +1876,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
       workflowTracker: this.trackerIfSupported(),
       declareSubscriptions: (workerId) => this.declareWorkerSubscriptions(workerId),
       logConsumers: this.pendingLogConsumers,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
       run: options,
     });
     this.liveWorkers.add(worker);
@@ -1892,6 +1907,7 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
           : this.middleware.filter((mw, index) => !disabled.includes(middlewareKey(mw, index))),
       emitter: this.emitter,
       resources: this.resources,
+      middlewareTimeoutMs: this.middlewareTimeoutMs,
       run: options,
     });
     this.liveExecutors.add(executor);
