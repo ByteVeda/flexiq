@@ -38,6 +38,7 @@ import {
 } from "./interception";
 import { Lock, type LockOptions } from "./locks";
 import type { EnqueueContext, Middleware } from "./middleware";
+import { validateMiddlewareTimeoutMs } from "./middleware-deadline";
 import {
   JsQueue,
   type JsTopicMessage,
@@ -167,6 +168,7 @@ export interface QueueOptions {
   /**
    * Per-hook budget for the execution middleware — `before`, `after`,
    * `onError` and `onSleep` — in milliseconds. Defaults to 5000; `0` disables.
+   * A negative or non-finite value throws.
    *
    * A task's own timeout bounds its handler and nothing else, so a hook that
    * blocks holds the attempt open past that limit. Past this budget the chain
@@ -225,6 +227,9 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
   private workflowTracker?: WorkflowTracker;
 
   constructor(options: QueueOptions = {}) {
+    // Before anything is opened, so a budget that could never be honoured costs
+    // no database file.
+    this.middlewareTimeoutMs = validateMiddlewareTimeoutMs(options.middlewareTimeoutMs);
     // An executor imports this app only to find its handlers; connecting here
     // would put the database credentials back in the app image that the attach
     // split exists to keep them out of.
@@ -234,7 +239,6 @@ export class Queue<TTasks extends TaskMap = TaskMap> {
     this.serializer =
       chain.length > 0 ? new CodecSerializer(baseSerializer, chain) : baseSerializer;
     this.codecs = new Map(Object.entries(options.codecs ?? {}));
-    this.middlewareTimeoutMs = options.middlewareTimeoutMs;
     this.webhookManager = new WebhookManager(this.native, this.emitter);
     // Claim any `task()` declared before this queue existed — under ESM a static
     // import of the task modules runs before the module body that constructs the

@@ -20,7 +20,7 @@ import {
   setLogSink,
   type Worker,
 } from "../../src/index";
-import { withHookDeadline } from "../../src/middleware-deadline";
+import { validateMiddlewareTimeoutMs, withHookDeadline } from "../../src/middleware-deadline";
 
 let worker: Worker | undefined;
 const lines: string[] = [];
@@ -95,6 +95,17 @@ it("waits forever when the budget is disabled", async () => {
 
   expect(resolved).toBe(true);
   expect(overruns()).toEqual([]);
+});
+
+it("rejects a budget it could never honour", () => {
+  // `NaN > 0` is false, so it would silently disable the bound; Node normalizes
+  // an out-of-range setTimeout delay to 1ms, so `Infinity` would expire every
+  // hook rather than none. Both fail quietly, so the constructor refuses them.
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    expect(() => new Queue({ middlewareTimeoutMs: bad })).toThrow(RangeError);
+  }
+  expect(() => validateMiddlewareTimeoutMs(undefined)).not.toThrow();
+  expect(validateMiddlewareTimeoutMs(0)).toBe(0);
 });
 
 it("runs the task even when a middleware's before never returns", async () => {

@@ -8,6 +8,27 @@ const log = createLogger("middleware");
  */
 export const DEFAULT_MIDDLEWARE_TIMEOUT_MS = 5000;
 
+/**
+ * Validate a configured budget, in milliseconds.
+ *
+ * Both non-finite values fail quietly rather than loudly: `NaN > 0` is false,
+ * so it would silently disable the bound, and `Infinity` is worse — Node
+ * normalizes an out-of-range `setTimeout` delay to 1ms, so it would expire
+ * every hook rather than none.
+ *
+ * @param value the configured budget, or `undefined` to take the default
+ * @returns the validated value, unchanged
+ * @throws RangeError if the value is negative or non-finite
+ */
+export function validateMiddlewareTimeoutMs(value: number | undefined): number | undefined {
+  if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+    throw new RangeError(
+      `middlewareTimeoutMs must be 0 (disabled) or a finite positive number, got ${value}`,
+    );
+  }
+  return value;
+}
+
 /** Race marker. A symbol, so no hook return value can be mistaken for it. */
 const EXPIRED = Symbol("hook-deadline");
 
