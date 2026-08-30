@@ -354,10 +354,16 @@ FlexiQ flexiq = FlexiQ.builder()
 </CodeTabs>
 
 Going over budget is never a job failure: the overrun is logged against the
-middleware that caused it and the chain carries on. Failing an attempt over its
-instrumentation is the failure mode these hooks exist to avoid — and a hook that
-throws *on its own* still behaves exactly as [Exception handling](#exception-handling)
-describes.
+middleware that caused it and the rest of the chain still runs. Failing an
+attempt over its instrumentation is the failure mode these hooks exist to avoid
+— and a hook that throws *on its own* still behaves exactly as
+[Exception handling](#exception-handling) describes.
+
+**When the chain resumes differs by SDK**, because what a runtime can do to a
+hook that will not return differs. Only Node moves on at the deadline; Python
+waits for the hook regardless, and Java waits too whenever the hook ignores the
+interrupt. Read the budget as "when you will be told", and on Python and Java as
+"when the attempt will be *tried*".
 
 <Callout type="warn">
 A hook that overruns on the sleep path is the expensive one. An attempt that
