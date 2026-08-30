@@ -22,6 +22,12 @@ pub async fn health() -> Json<Value> {
 
 /// Readiness: storage answers and the worker registry is reachable.
 ///
+/// The worker count does not enter into it: an empty registry still answers 200,
+/// reporting `"workers": {"count": 0, "status": "none"}` — readiness asks
+/// whether this process can serve the queue API, and workers are a separate
+/// deployment. Only a lookup that failed degrades the status, as a failing
+/// storage check does.
+///
 /// Gated like `/metrics` unless `FLEXIQ_DASHBOARD_PUBLIC_READINESS` says
 /// otherwise. That switch exists because the caller is an orchestrator probe:
 /// it carries no credential, and a Kubernetes probe header is a literal string

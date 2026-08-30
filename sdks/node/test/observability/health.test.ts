@@ -34,6 +34,8 @@ it("reports liveness without touching storage", () => {
 });
 
 it("is ready over a live queue with no workers", async () => {
+  // The fleet size is reported, never folded into the status — degrading here
+  // would leave every producer-only instance permanently unready.
   const report = await checkReadiness(newQueue());
   expect(report.status).toBe("ready");
   expect(report.checks.storage).toBe("ok");

@@ -13,6 +13,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from flexiq import Queue  # noqa: E402
+from flexiq.contrib import fastapi as router_module  # noqa: E402
 from flexiq.contrib.fastapi import FlexiQRouter  # noqa: E402
 
 
@@ -169,6 +170,30 @@ def test_progress_stream(populated: tuple[Queue, TestClient, list[Any], Any]) ->
 def test_progress_stream_not_found(client: TestClient) -> None:
     resp = client.get("/tasks/jobs/nonexistent/progress")
     assert resp.status_code == 404
+
+
+# ── Probes ───────────────────────────────────────────────
+
+
+def test_readiness_ready(client: TestClient) -> None:
+    resp = client.get("/tasks/readiness")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ready"
+
+
+def test_readiness_answers_503_when_degraded(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A degraded probe must fail the check, or the orchestrator keeps routing here."""
+    monkeypatch.setattr(
+        router_module,
+        "check_readiness",
+        lambda _queue: {"status": "degraded", "checks": {"storage": "error: db gone"}},
+    )
+    resp = client.get("/tasks/readiness")
+    assert resp.status_code == 503
+    # The body still explains which dependency failed.
+    assert resp.json()["checks"]["storage"] == "error: db gone"
 
 
 # ── Router config ────────────────────────────────────────

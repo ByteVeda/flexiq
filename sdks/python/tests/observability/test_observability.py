@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from flexiq import Queue
+from flexiq.health import check_readiness
 from flexiq.resources import ResourceDefinition, ResourceRuntime
 
 # ---------------------------------------------------------------------------
@@ -234,6 +235,14 @@ class TestHealthCheckIntegration:
             "resources" not in result["checks"]
             or result["checks"].get("resources", {}).get("count", 0) == 0
         )
+
+    def test_readiness_is_ready_with_no_workers(self, tmp_path: Any) -> None:
+        """An empty fleet is reported, never folded into the status."""
+        queue = Queue(db_path=str(tmp_path / "q.db"))
+
+        result = check_readiness(queue)
+        assert result["status"] == "ready"
+        assert result["checks"]["workers"] == {"count": 0, "status": "none"}
 
     def test_health_check_always_ok(self) -> None:
         """check_health is always ok regardless of resources."""

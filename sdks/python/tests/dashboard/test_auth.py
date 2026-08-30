@@ -20,6 +20,7 @@ import pytest
 
 from flexiq import Queue
 from flexiq.dashboard import _make_handler
+from flexiq.dashboard import server as dashboard_module
 from flexiq.dashboard.auth import (
     SESSION_PREFIX,
     AuthStore,
@@ -701,6 +702,26 @@ def test_readiness_requires_session_when_auth_enabled(
     session = store.create_session(user)
     status, _, _ = _get(f"{base}/readiness", cookies={"flexiq_session": session.token})
     assert status == 200
+
+
+def test_readiness_answers_503_when_degraded(
+    open_dashboard_server: tuple[str, Queue],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A degraded probe must fail the check, or the orchestrator keeps routing here."""
+    base, _ = open_dashboard_server
+    status, _, _ = _get(f"{base}/readiness")
+    assert status == 200
+
+    monkeypatch.setattr(
+        dashboard_module,
+        "check_readiness",
+        lambda _queue: {"status": "degraded", "checks": {"storage": "error: db gone"}},
+    )
+    status, body, _ = _get(f"{base}/readiness")
+    assert status == 503
+    # The body still explains which dependency failed.
+    assert body["checks"]["storage"] == "error: db gone"
 
 
 def test_metrics_requires_auth_when_enabled(dashboard_server: tuple[str, Queue]) -> None:

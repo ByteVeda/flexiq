@@ -33,7 +33,14 @@ export interface ReadinessChecks {
   resources?: ResourcesCheck | string;
 }
 
-/** Readiness payload: `ready` only when every check passed. */
+/**
+ * Readiness payload: `ready` when storage answered and no advertised resource
+ * is unhealthy, `degraded` otherwise.
+ *
+ * The worker count does not enter into it. A queue with nothing running against
+ * it reports `ready` with a worker check of `none` — only a worker lookup that
+ * *failed* degrades the status.
+ */
 export interface ReadinessReport {
   status: "ready" | "degraded";
   checks: ReadinessChecks;
@@ -45,9 +52,13 @@ export function checkHealth(): HealthReport {
 }
 
 /**
- * Readiness: storage reachable, workers alive, resources healthy. Never
- * throws — a failing dependency lands in `checks` and degrades the status,
- * so a probe endpoint can always answer.
+ * Readiness: storage reachable, the worker registry readable, advertised
+ * resources healthy. Never throws — a failing dependency lands in `checks` and
+ * degrades the status, so a probe endpoint can always answer.
+ *
+ * An empty fleet is not a failure: `workers: { count: 0, status: "none" }` still
+ * reports `ready`, because readiness answers whether this process can serve the
+ * queue API, and workers scale to zero on their own deployment.
  */
 export async function checkReadiness(queue: Queue): Promise<ReadinessReport> {
   const checks: ReadinessChecks = { storage: "ok", workers: { count: 0, status: "none" } };

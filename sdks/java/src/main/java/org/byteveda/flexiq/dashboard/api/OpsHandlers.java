@@ -9,6 +9,7 @@ import org.byteveda.flexiq.FlexiQ;
 import org.byteveda.flexiq.dashboard.support.Http;
 import org.byteveda.flexiq.events.EventName;
 import org.byteveda.flexiq.health.Health;
+import org.byteveda.flexiq.health.ReadinessReport;
 import org.byteveda.flexiq.health.ResourceStatusEntry;
 import org.byteveda.flexiq.model.QueueStats;
 import org.byteveda.flexiq.model.WorkerInfo;
@@ -106,7 +107,17 @@ public final class OpsHandlers {
      *     dependency fails
      */
     public Object readiness() {
-        return Health.readiness(queue).toMap();
+        return readinessReport().toMap();
+    }
+
+    /**
+     * The same checks, typed, so an HTTP caller can derive its status code from
+     * {@link ReadinessReport#ready()} rather than re-reading the body.
+     *
+     * @return the report, {@code degraded} rather than thrown when a dependency fails
+     */
+    public ReadinessReport readinessReport() {
+        return Health.readiness(queue);
     }
 
     /**

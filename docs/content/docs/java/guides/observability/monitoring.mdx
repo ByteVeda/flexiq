@@ -71,7 +71,7 @@ import org.byteveda.flexiq.health.ReadinessReport;
 Health.check();                                  // HealthReport[status=ok] — liveness, never touches storage
 
 ReadinessReport report = Health.readiness(flexiq);
-report.ready();                                  // true only when every check passed
+report.ready();                                  // true when storage answered and no resource is unhealthy
 report.toMap();
 // {
 //   "status": "ready",
@@ -90,6 +90,20 @@ advertises a [worker resource](/java/api-reference/resources); when one does,
 it is built from `Health.resourceStatus(flexiq)`, which aggregates
 per-resource health across every live worker's heartbeat.
 
+<Callout type="warn" title="`ready` does not mean workers are running">
+  An empty fleet is not a failure. `workers` reports
+  `{"count": 0, "status": "none"}` and the overall status stays `ready` —
+  readiness answers whether *this* process can serve the queue API, and workers
+  are a separate deployment that may legitimately scale to zero, so degrading on
+  an empty fleet would leave every producer-only instance permanently unready.
+  Only a worker lookup that *threw* degrades the status, the way unreachable
+  storage or an unhealthy resource does.
+
+  A green `/readiness` therefore does not mean jobs are being consumed. Alert on
+  the fleet size as its own signal — `flexiq.listWorkers()`, or the
+  `flexiq_workers` gauge the dashboard exports on `/metrics`.
+</Callout>
+
 Serve them behind your own routes — return `503` on `degraded` so orchestrators
 drain the instance:
 
@@ -99,7 +113,7 @@ int status = report.ready() ? 200 : 503;
 ```
 
 The [dashboard](/java/guides/operations/dashboard) serves these same helpers on
-`/health` and `/readiness`.
+`/health` and `/readiness`, answering `503` on `degraded` for you.
 
 ## Metrics scraping & tracing
 

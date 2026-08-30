@@ -459,7 +459,18 @@ Public liveness check. Always returns `{"status": "ok"}`.
 
 ### `GET /readiness`
 
-Public readiness check with storage, worker, and resource health.
+Public readiness check. `ready` (HTTP `200`) when storage answered, the worker
+registry could be read, and no advertised worker resource is unhealthy;
+`degraded` (HTTP `503`, with the same body) when any of those checks failed, so
+an orchestrator drains the instance.
+
+The worker count is reported but never folded into the status: with no worker
+running, `checks.workers` is `{"count": 0, "status": "none"}` and the response
+is still `ready`. Readiness answers whether this process can serve the queue
+API, and workers are a separate deployment that may legitimately scale to zero —
+so a green `/readiness` does not mean jobs are being consumed. Alert on the
+fleet size as its own signal (`queue.workers()`, or the dashboard Workers
+panel).
 
 ### `GET /metrics`
 

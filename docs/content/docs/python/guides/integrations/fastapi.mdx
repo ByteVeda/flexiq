@@ -52,7 +52,7 @@ uvicorn myapp:app --reload
 | `GET` | `/dead-letters` | List dead letter entries (paginated) |
 | `POST` | `/dead-letters/{dead_id}/retry` | Re-enqueue a dead letter |
 | `GET` | `/health` | Liveness check |
-| `GET` | `/readiness` | Readiness check |
+| `GET` | `/readiness` | Readiness check — `503` when degraded |
 | `GET` | `/resources` | Worker resource status |
 
 ## Configuration
