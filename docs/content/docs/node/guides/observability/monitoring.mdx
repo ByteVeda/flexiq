@@ -119,7 +119,8 @@ app.get("/readyz", async (_req, res) => {
 
 The [dashboard](/node/guides/operations/dashboard) and the
 [Express](/node/guides/integrations/express) / [Fastify](/node/guides/integrations/fastify)
-helpers serve these same helpers on `/health` and `/readiness`. The
+helpers serve these same helpers on `/health` and `/readiness`, answering `503`
+on `degraded` for you. The
 [KEDA scaler](/node/guides/operations/keda) server carries liveness only —
 `/health`, alongside its `/api/scaler` metric.
 
