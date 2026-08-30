@@ -20,6 +20,7 @@ from __future__ import annotations
 import heapq
 import itertools
 import logging
+import math
 import threading
 import time
 from collections.abc import Iterator
@@ -137,14 +138,19 @@ def hook_deadline(
     nothing at all.
 
     Args:
-        timeout: Budget in seconds, per hook call. ``0`` or less disables.
+        timeout: Budget in seconds, per hook call. ``0`` or less disables, and
+            so does a non-finite one — the watchdog would otherwise wait on
+            ``inf`` (``OverflowError``) or round ``nan`` (``ValueError``), and
+            either kills the one thread every later deadline depends on.
+            :class:`~flexiq.app.Queue` rejects a non-finite budget outright;
+            this is the backstop for a direct caller.
         middleware: Stable key of the middleware, for the log line.
         hook: Hook name, for the log line (``"before"``, ``"after"``, …).
         slept: Whether this hook runs on the sleep path, where nothing will
             reclaim the attempt the hook is holding.
         watchdog: Overrides the process-wide watchdog. For tests.
     """
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         yield
         return
     armed = watchdog if watchdog is not None else _WATCHDOG

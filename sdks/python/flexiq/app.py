@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+import math
 import os
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -268,13 +269,24 @@ class Queue(
                 ``set_queue_max_pending``.
             middleware_timeout: Seconds a single middleware hook (``before``,
                 ``after``, ``on_sleep``) may take before the worker logs a
-                warning naming it. Defaults to 5. ``0`` disables the check.
+                warning naming it. Defaults to 5. ``0`` disables the check;
+                a negative or non-finite value is rejected.
                 A task's ``timeout`` bounds only its handler, so a hook that
                 blocks holds the attempt open past that limit; this reports it.
                 Python cannot abandon the call — see
                 :mod:`flexiq.hook_deadline` — but the prefork pool kills a
                 child that outruns its ``timeout`` regardless.
         """
+        # Before anything is created or opened, so a bad value costs no database
+        # file. `inf` would have the hook watchdog wait on a timeout CPython
+        # refuses and `nan` would have it round one, and either kills the single
+        # thread every later deadline depends on.
+        if not math.isfinite(middleware_timeout) or middleware_timeout < 0:
+            raise ValueError(
+                "middleware_timeout must be 0 (disabled) or a finite positive "
+                f"number of seconds, got {middleware_timeout!r}"
+            )
+
         # Unwrap the enum to its wire string; a raw string still passes through
         # so the native layer's aliases (e.g. "postgresql") keep working.
         if isinstance(backend, StorageBackend):

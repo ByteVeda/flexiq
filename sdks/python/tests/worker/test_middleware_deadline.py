@@ -87,6 +87,34 @@ def test_a_non_positive_budget_never_arms() -> None:
     assert armed == []
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0], ids=["nan", "inf", "negative"])
+def test_a_budget_the_watchdog_could_not_honour_is_rejected(tmp_path: Path, bad: float) -> None:
+    """``inf`` and ``nan`` would kill the watchdog, so the queue refuses them.
+
+    ``Condition.wait(inf)`` raises ``OverflowError`` and ``round(nan)`` raises
+    ``ValueError``, either of which ends the one thread every later deadline
+    depends on — silently, since nothing waits on it.
+    """
+    with pytest.raises(ValueError, match="middleware_timeout"):
+        Queue(db_path=str(tmp_path / "bad.db"), middleware_timeout=bad)
+
+    assert not (tmp_path / "bad.db").exists(), "a rejected budget must cost no database file"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_a_non_finite_budget_reaching_the_guard_disables_it(
+    caplog: pytest.LogCaptureFixture, watchdog: _HookWatchdog, bad: float
+) -> None:
+    """The backstop for a direct caller, below the queue's own check."""
+    caplog.set_level(logging.WARNING, logger="flexiq")
+
+    with hook_deadline(bad, "pkg.X", "before", watchdog=watchdog):
+        pass
+    time.sleep(0.05)
+
+    assert _overruns(caplog) == []
+
+
 def test_the_sleep_path_says_nothing_will_reclaim_the_attempt(
     caplog: pytest.LogCaptureFixture, watchdog: _HookWatchdog
 ) -> None:
