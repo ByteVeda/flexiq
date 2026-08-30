@@ -112,7 +112,7 @@ int status = report.ready() ? 200 : 503;
 ```
 
 The [dashboard](/java/guides/operations/dashboard) serves these same helpers on
-`/health` and `/readiness`.
+`/health` and `/readiness`, answering `503` on `degraded` for you.
 
 ## Metrics scraping & tracing
 

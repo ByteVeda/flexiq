@@ -115,6 +115,23 @@ class DashboardOpsTest {
     }
 
     @Test
+    void readinessAnswers503WhenDegraded(@TempDir Path dir) throws Exception {
+        FlexiQ queue = seededQueue(dir);
+        try (DashboardServer server = DashboardServer.start(queue, 0)) {
+            int port = server.port();
+            assertEquals(200, probe(port, "/readiness").statusCode());
+
+            // Storage gone: the probe must fail the check, or an orchestrator
+            // keeps routing to an instance that cannot serve the queue API.
+            queue.close();
+            HttpResponse<String> degraded = probe(port, "/readiness");
+            assertEquals(503, degraded.statusCode());
+            // The body still explains which dependency failed.
+            assertTrue(degraded.body().contains("\"status\":\"degraded\""));
+        }
+    }
+
+    @Test
     void malformedNumericParamsReturn400(@TempDir Path dir) throws Exception {
         try (FlexiQ queue = seededQueue(dir);
                 DashboardServer server = DashboardServer.start(queue, 0)) {

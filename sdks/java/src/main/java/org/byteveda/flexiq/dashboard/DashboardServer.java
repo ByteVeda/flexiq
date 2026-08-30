@@ -42,6 +42,7 @@ import org.byteveda.flexiq.dashboard.store.OverridesStore;
 import org.byteveda.flexiq.dashboard.store.SettingsAccess;
 import org.byteveda.flexiq.dashboard.support.DashboardError;
 import org.byteveda.flexiq.dashboard.support.Http;
+import org.byteveda.flexiq.health.ReadinessReport;
 import org.byteveda.flexiq.logging.FlexiQLogger;
 import org.jspecify.annotations.Nullable;
 
@@ -529,7 +530,10 @@ public final class DashboardServer implements AutoCloseable {
             Http.respondError(exchange, 401, "unauthorized");
             return;
         }
-        Http.respondJson(exchange, 200, ops.readiness());
+        ReadinessReport report = ops.readinessReport();
+        // Non-2xx on degraded so orchestrators stop routing to this instance —
+        // the body still explains which dependency failed.
+        Http.respondJson(exchange, report.ready() ? 200 : 503, report.toMap());
     }
 
     private void serveMetrics(HttpExchange exchange) throws IOException {
