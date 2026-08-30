@@ -26,10 +26,12 @@ import logging
 from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
+from flexiq.health import check_health, check_readiness
+
 logger = logging.getLogger(__name__)
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, HTTPException, Query, Response
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel
 except ImportError as e:
@@ -412,18 +414,21 @@ class FlexiQRouter(APIRouter):
             @self.get("/health", response_model=HealthResponse)
             async def health() -> HealthResponse:
                 """Liveness check."""
-                from flexiq.health import check_health
-
                 return HealthResponse(**check_health())
 
         if self._should_register("readiness"):
 
-            @self.get("/readiness", response_model=ReadinessResponse)
-            async def readiness() -> ReadinessResponse:
-                """Readiness check."""
-                from flexiq.health import check_readiness
-
-                return ReadinessResponse(**check_readiness(queue))
+            @self.get(
+                "/readiness",
+                response_model=ReadinessResponse,
+                responses={503: {"description": "Degraded — a dependency check failed"}},
+            )
+            async def readiness(response: Response) -> ReadinessResponse:
+                """Readiness check — 503 when degraded, so orchestrators drain the instance."""
+                report = check_readiness(queue)
+                if report["status"] != "ready":
+                    response.status_code = 503
+                return ReadinessResponse(**report)
 
         if self._should_register("resources"):
 

@@ -320,7 +320,11 @@ def _make_handler(
                 self._json_response(check_health())
             elif path == "/readiness":
                 if self._probe_authorized(ctx):
-                    self._json_response(check_readiness(queue))
+                    report = check_readiness(queue)
+                    # Non-2xx on degraded so orchestrators stop routing to this
+                    # instance — the body still explains which check failed.
+                    ready = report["status"] == "ready"
+                    self._json_response(report, status=200 if ready else 503)
             elif path == "/metrics":
                 if self._probe_authorized(ctx):
                     self._serve_prometheus_metrics()
