@@ -1,47 +1,73 @@
-# #696 — an empty debounce placeholder makes a shared window
+# #738 — bound before, after, onError and onSleep
 
 ## Problem
-A debounce key template resolves per enqueue. Python and node check only the
-*assembled* key, so an empty substitution still leaves a non-empty key:
-`"report:{user_id}"` with an empty `user_id` becomes `"report:"`, one window
-every caller in that state shares. That is the silent global key a
-payload-derived key exists to avoid — it surfaces only as missing runs. Java
-rejects it per placeholder (`DebounceKeys.lookup`, #694), so the shells disagree.
+`timeout_ms` bounds the handler, not the middleware around it. A `before`,
+`after`, `onError` or `onSleep` that blocks — an exporter flushing to an
+unreachable collector — holds the attempt open past the task's own limit, on
+every shell. Worst on the sleep path: a slept attempt is already Pending and
+unclaimed, so nothing reaps it and the leaked worker slot accumulates until the
+hook returns.
 
 ## Design
-Move the check from the key to the segment, in both shells, mirroring java's
-message ("… which is empty — a key segment must carry a value").
+One policy, one knob per shell, three mechanisms. A hook that overruns is never
+a job failure: log and continue.
 
-- Node: `renderPlaceholder` throws on `""`, next to the guard that already
-  refuses an object or a non-finite number.
-- Python: substitution runs through `str.format`, which offers no per-field
-  hook, so a private `string.Formatter` subclass checks each *rendered* field.
-  The name is carried from `get_field` because `format_field` sees the value
-  alone. The assembled-key guard stays as defence for a direct caller.
-- A key with no placeholder at all stays legal in every shell: a deliberate
-  single window, not an accident.
+Hooks cannot be moved off the dispatch thread — java's `FlexiQObservation.before`
+opens a Micrometer `Observation.Scope` (ThreadLocal) *for the handler*, python's
+`SentryMiddleware.before` does `push_scope()`, and python passes the per-thread
+`current_job` proxy. So the deadline is enforced without moving the call:
 
-## Checklist
-- [x] node: guard in `renderPlaceholder` + test
-- [x] python: `_KeySegmentFormatter` + test (parametrized over `{user_id}` and
-      `report:{user_id}` — the second is the case the old guard missed)
-- [x] docs: the debouncing guide's list of rejected placeholders
-- [x] verify: both tests red before the guard, full pytest + vitest after,
-      ruff/mypy/biome/tsc
+- node: `Promise.race` — stop awaiting, detach the hook with `.catch`.
+- java: shared daemon scheduler interrupts the dispatch thread; disarm under a
+  lock so no interrupt lands after the hook returns; clear the flag afterwards.
+- python: one process-wide daemon watchdog thread; warn only. Prefork is already
+  bounded by `prefork/watchdog.rs`, which SIGKILLs on `timeout_ms`.
+
+Budget is per hook call and comes from its own knob, not `timeout_ms` — a task
+with no timeout still wants bounded hooks. `0` disables.
+
+| SDK | knob | default |
+|---|---|---|
+| python | `Queue(middleware_timeout=5.0)` seconds | 5.0 |
+| node | `new Queue({ middlewareTimeoutMs: 5000 })` | 5000 |
+| java | `FlexiQ.builder().middlewareTimeout(Duration)` | 5s |
+
+Scope is the four execution hooks. Python has three (its `after` carries the
+error, so it has no `onError`). `onEnqueue` and the outcome hooks stay out.
+
+## Tasks
+- [x] python: `flexiq/hook_deadline.py` — watchdog + `hook_deadline()` guard
+- [x] python: knob on `Queue.__init__`, wired at the three `task_lifecycle` sites
+- [x] python: tests
+- [x] node: `src/middleware-deadline.ts` — `withHookDeadline()`
+- [x] node: `middlewareTimeoutMs` through `QueueOptions` → worker + executor
+- [x] node: tests
+- [x] java: `worker/HookDeadline.java` — arm/disarm interrupt
+- [x] java: `middlewareTimeout` through `FlexiQ.Builder` → `DefaultFlexiQ` → bridge
+- [x] java: tests
+- [x] docs: one section in `shared/guides/extensibility/middleware.mdx`
+- [x] checks: cargo (unchanged), ruff/mypy/pytest, biome/tsc/vitest, gradle test
 
 ## Review
 
-**One guard each, not one guard plus a rewrite.** Node's is three lines inside
-the `case "string"` it already had. Python's is a class only because
-`template.format(...)` resolves every field in one call: `Formatter.vformat`
-walks the same fields with the same errors (`KeyError`/`IndexError` still reach
-the existing handler), so the surrounding code is untouched.
+Shipped as designed. What the implementation added to the plan:
 
-**The old python test asserted the weaker rule.** `test_key_resolving_to_empty_raises`
-used the bare template `"{user_id}"`, which the whole-key guard already caught —
-the prefixed template was the actual gap. It became one parametrized test over
-both shapes rather than a near-duplicate alongside the new one.
-
-**Error string is an interface.** The python message changed from "resolved to
-an empty key" to "… is empty"; `grep`ed every `match=`/`toThrow` in all three
-SDKs first — the only other hits on "empty key" belong to durable steps.
+- **The knob has to reach three constructors, not one.** Node's callback is
+  built by both `worker.ts` and `executor.ts`, so `middlewareTimeoutMs` rides
+  `WorkerStartParams` *and* `ExecutorStartParams`; java's bridge is built by
+  `Worker.Builder` and `Executor.Builder`, so both grew a
+  `middlewareTimeout(Duration)` and `FlexiQ.Builder`'s value is nullable —
+  `null` means "leave the worker's own default", which keeps the 5s literal in
+  one place (`HookDeadline.DEFAULT_TIMEOUT_MILLIS`).
+- **Java runs `after` for a hook whose `before` was interrupted.** Java has no
+  `completed_mw` list, so the whole chain gets its pairing hook. That is the
+  right answer for the same reason python keeps one: a middleware that got
+  partway through setting something up is owed the chance to take it down.
+- **`_FakeQueue` in `tests/worker/test_native_async.py` needed the attribute.**
+  It declares `__slots__` precisely so a new lifecycle dependency fails loudly
+  rather than silently — which is what happened, 14 red tests deep.
+- **Only the overrun is swallowed.** A hook that throws on its own still
+  behaves as it did: node rejects out of `withHookDeadline`, java rethrows
+  after disarming. Both are pinned by a test, because the obvious
+  implementation (catch everything) would have quietly broken a `before` that
+  means to reject a job.

@@ -309,6 +309,87 @@ logged so it never starves the others.
 
 </SdkOnly>
 
+## Bounded hooks
+
+A task's timeout bounds its *handler*. It does not bound the middleware around
+it, so a hook that blocks — an exporter flushing to an unreachable collector, a
+tracing backend with no client-side timeout — holds the attempt open past the
+task's own limit. The execution hooks therefore carry a budget of their own,
+per hook call, defaulting to **5 seconds**:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# 2s per before()/after()/on_sleep() call; 0 disables the check
+queue = Queue(middleware=[LoggingMiddleware()], middleware_timeout=2.0)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// 2s per before/after/onError/onSleep call; 0 disables the bound
+const queue = new Queue({ middlewareTimeoutMs: 2000 });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// 2s per before/after/onError/onSleep call; Duration.ZERO disables the bound
+FlexiQ flexiq = FlexiQ.builder()
+        .sqlite("app.db")
+        .middlewareTimeout(Duration.ofSeconds(2))
+        .open();
+```
+
+  </Tab>
+</CodeTabs>
+
+Going over budget is never a job failure: the overrun is logged against the
+middleware that caused it and the chain carries on. Failing an attempt over its
+instrumentation is the failure mode these hooks exist to avoid — and a hook that
+throws *on its own* still behaves exactly as [Exception handling](#exception-handling)
+describes.
+
+<Callout type="warn">
+A hook that overruns on the sleep path is the expensive one. An attempt that
+ended in a durable `step.sleep` is already pending at its wake-up deadline and
+holds no claim, so nothing will ever reap it — unlike a hung `after`, whose job
+a stale-job sweep eventually fails. Close what you opened and return.
+</Callout>
+
+<SdkOnly sdk="python">
+
+The hook keeps its thread: a middleware may push a thread-local scope in
+`before` for the handler to run inside, so moving the call somewhere it could be
+abandoned would break it. The budget therefore *reports* an overrun rather than
+ending it — the log names the middleware and the hook, and the attempt stays
+blocked until the hook returns. Under the prefork pool the attempt is bounded
+regardless: a child that outruns its task's `timeout` is killed, hooks included.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Past the budget the chain stops awaiting the hook and moves on. Nothing can
+cancel a promise, so the hook itself keeps running; what ends is the attempt's
+wait for it. A rejection that arrives after that point is logged at `debug`.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+The hook keeps the dispatch thread — a middleware may open a thread-bound scope
+in `before` for the handler and close it from `after` — so the budget is
+enforced by interrupting that thread. Blocking that honours interrupts
+(`Future.get`, `awaitTermination`, a socket with a timeout) ends there; anything
+that ignores them runs on, and the overrun is logged either way. The interrupt
+flag is cleared before the handler runs, so it never inherits one.
+
+</SdkOnly>
+
 ## Per-task middleware
 
 <SdkOnly sdk="python">
