@@ -119,6 +119,9 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     private final CoreFacade facade;
     private final Serializer serializer;
     private final Map<String, PayloadCodec> codecs;
+    /** Per-hook middleware budget; {@code null} leaves the worker's own default. */
+    private final @Nullable Duration middlewareTimeout;
+
     private final List<Middleware> middleware = new CopyOnWriteArrayList<>();
     private final ResourceRuntime resources = new ResourceRuntime();
     private final Map<String, List<EnqueueGate>> gates = new ConcurrentHashMap<>();
@@ -139,11 +142,16 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
     /** Workers started from this client and not yet closed — the shutdown set. */
     private final Set<Worker> liveWorkers = ConcurrentHashMap.newKeySet();
 
-    DefaultFlexiQ(QueueBackend backend, Serializer serializer, Map<String, PayloadCodec> codecs) {
+    DefaultFlexiQ(
+            QueueBackend backend,
+            Serializer serializer,
+            Map<String, PayloadCodec> codecs,
+            @Nullable Duration middlewareTimeout) {
         this.backend = backend;
         this.facade = new CoreFacade(backend);
         this.serializer = serializer;
         this.codecs = codecs;
+        this.middlewareTimeout = middlewareTimeout;
     }
 
     @Override
@@ -1556,7 +1564,7 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
         // Each worker gets its own runtime (own WORKER-scoped cache) over shared definitions.
         // The live subscription list is shared so subscribe() calls made before
         // start() are registered under the started worker's id.
-        return Worker.builder(backend, serializer, middleware, resources.forWorker(), codecs)
+        Worker.Builder builder = Worker.builder(backend, serializer, middleware, resources.forWorker(), codecs)
                 .subscriptions(subscriptions)
                 .logConsumers(logConsumers, this)
                 .queueConfigs(this::encodeQueueConfigs)
@@ -1572,6 +1580,10 @@ final class DefaultFlexiQ implements FlexiQ, LogTopicReader {
                     }
                 })
                 .eventHub(events);
+        if (middlewareTimeout != null) {
+            builder.middlewareTimeout(middlewareTimeout);
+        }
+        return builder;
     }
 
     @Override
