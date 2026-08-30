@@ -17,7 +17,13 @@ def check_health() -> dict[str, str]:
 
 
 def check_readiness(queue: Queue) -> dict[str, Any]:
-    """Readiness check — verifies storage is accessible and workers are alive."""
+    """Readiness — storage answers and no advertised resource is unhealthy.
+
+    The worker count does not enter into the status: a queue with nothing
+    running against it reports ``ready`` with a worker check of ``none``, since
+    readiness answers whether this process can serve the queue API. Only a
+    worker lookup that *raised* degrades it.
+    """
     checks: dict[str, Any] = {}
     all_ok = True
 

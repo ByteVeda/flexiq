@@ -30,9 +30,12 @@ public final class Health {
     }
 
     /**
-     * Readiness: storage reachable, workers alive, resources healthy. Never
-     * throws — a failing dependency lands in its own check and degrades the
-     * status, so a probe endpoint can always answer.
+     * Readiness: storage reachable, the worker registry readable, advertised
+     * resources healthy. Never throws — a failing dependency lands in its own
+     * check and degrades the status, so a probe endpoint can always answer.
+     *
+     * <p>An empty fleet is not a failure: a worker check of {@code none} still
+     * reports {@code ready} — see {@link ReadinessReport}.
      *
      * @param queue the queue to probe
      * @return the report, {@code degraded} rather than thrown when a dependency fails
