@@ -812,10 +812,15 @@ that dispatches code and the port people browse are never the same object.
   can reach the port is whether storage answers and how many workers are
   registered. Leave it off and probe `/health` for both if that is too much.
 
-  On an attach deployment `/readiness` reports `workers: none` — executors are
-  not workers — and still answers 200. Both routes are dashboard routes, so any
-  probing needs `FLEXIQ_DASHBOARD` set; a listener-only server has no HTTP
-  port, and a `tcpSocket` probe on the attach port is the fallback.
+  `/readiness` answers `ready` whenever storage answers. The worker count is
+  reported but never folded into the status, so an instance whose fleet has
+  scaled to zero — or a producer-only one — still goes Ready; probe it for "can
+  this process serve the queue API", and alert on the worker count separately
+  for "is anything draining the queue". On an attach deployment `/readiness`
+  reports `workers: none` for the same reason — executors are not workers — and
+  still answers 200. Both routes are dashboard routes, so any probing needs
+  `FLEXIQ_DASHBOARD` set; a listener-only server has no HTTP port, and a
+  `tcpSocket` probe on the attach port is the fallback.
 </Callout>
 
 #### With Helm

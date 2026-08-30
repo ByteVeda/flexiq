@@ -93,6 +93,19 @@ advertises a [worker resource](/node/guides/resources); when one does, it is
 built from `resourceStatus(queue)`, which aggregates per-resource health across
 every live worker's heartbeat.
 
+<Callout type="warn" title="`ready` does not mean workers are running">
+  An empty fleet is not a failure. `workers` reports
+  `{ count: 0, status: "none" }` and the overall status stays `ready` — readiness
+  answers whether *this* process can serve the queue API, and workers are a
+  separate deployment that may legitimately scale to zero, so degrading on an
+  empty fleet would leave every producer-only instance permanently unready. Only
+  a worker lookup that *threw* degrades the status.
+
+  A green `/readiness` therefore does not mean jobs are being consumed. Alert on
+  the fleet size as its own signal — `(await queue.listWorkers()).length`, or the
+  dashboard Workers panel.
+</Callout>
+
 Serve them behind your own routes — return `503` on `degraded` so orchestrators
 drain the instance:
 

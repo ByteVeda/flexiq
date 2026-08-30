@@ -184,7 +184,7 @@ Three routes sit outside `/api/*`:
 | Route | Access | What it does |
 |---|---|---|
 | `GET /health` | Always public | Liveness — always `{"status": "ok"}` |
-| `GET /readiness` | Gated when auth is on (see below) | Storage/worker/resource readiness |
+| `GET /readiness` | Gated when auth is on (see below) | Storage and worker-resource readiness — the [worker count never degrades it](/java/guides/observability/monitoring#health--readiness) |
 | `GET /metrics` | Gated when auth is on (see below) | Prometheus text exposition |
 
 With session or token auth enabled, `/readiness` and `/metrics` require either
