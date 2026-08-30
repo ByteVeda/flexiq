@@ -44,6 +44,7 @@ class _FakeQueue:
         "_hooks",
         "_interceptor",
         "_max_reconstruction_timeout",
+        "_middleware_timeout",
         "_proxy_metrics",
         "_proxy_registry",
         "_recipe_signing_key",
@@ -73,6 +74,7 @@ class _FakeQueue:
         self._proxy_metrics = None
         self._recipe_signing_key = None
         self._max_reconstruction_timeout = None
+        self._middleware_timeout = 5.0
         self._test_mode_active = False
         self._resource_runtime = None
         self._workflow_tracker = None
