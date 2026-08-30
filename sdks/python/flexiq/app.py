@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+import math
 import os
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -169,6 +170,7 @@ class Queue(
         retention: Retention | None = None,
         max_pending: dict[str, int] | None = None,
         auto_migrate: bool = True,
+        middleware_timeout: float = 5.0,
     ):
         """Initialize a new task queue.
 
@@ -265,7 +267,26 @@ class Queue(
                 overshoot is possible under concurrent producers — the same soft
                 guarantee as the rate limiter. Also settable at runtime via
                 ``set_queue_max_pending``.
+            middleware_timeout: Seconds a single middleware hook (``before``,
+                ``after``, ``on_sleep``) may take before the worker logs a
+                warning naming it. Defaults to 5. ``0`` disables the check;
+                a negative or non-finite value is rejected.
+                A task's ``timeout`` bounds only its handler, so a hook that
+                blocks holds the attempt open past that limit; this reports it.
+                Python cannot abandon the call — see
+                :mod:`flexiq.hook_deadline` — but the prefork pool kills a
+                child that outruns its ``timeout`` regardless.
         """
+        # Before anything is created or opened, so a bad value costs no database
+        # file. `inf` would have the hook watchdog wait on a timeout CPython
+        # refuses and `nan` would have it round one, and either kills the single
+        # thread every later deadline depends on.
+        if not math.isfinite(middleware_timeout) or middleware_timeout < 0:
+            raise ValueError(
+                "middleware_timeout must be 0 (disabled) or a finite positive "
+                f"number of seconds, got {middleware_timeout!r}"
+            )
+
         # Unwrap the enum to its wire string; a raw string still passes through
         # so the native layer's aliases (e.g. "postgresql") keep working.
         if isinstance(backend, StorageBackend):
@@ -363,6 +384,10 @@ class Queue(
         self._task_soft_timeouts: dict[str, float] = {}
         self._batch_accumulator: BatchAccumulator | None = None
         self._global_middleware: list[TaskMiddleware] = middleware or []
+        # Per-hook budget for the execution middleware, in seconds. Read by the
+        # lifecycle rather than closed over, so a queue built before a worker
+        # starts still governs it.
+        self._middleware_timeout: float = middleware_timeout
         self._task_middleware: dict[str, list[TaskMiddleware]] = {}
         # Per-task middleware-chain cache (chain, disable_version, computed_at).
         # Bumping ``_mw_disable_version`` invalidates same-process readers

@@ -3,6 +3,7 @@ package org.byteveda.flexiq.worker;
 import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
@@ -295,6 +296,7 @@ public final class Worker implements AutoCloseable {
         private @Nullable MeshOptions mesh;
         private @Nullable Retention retention;
         private boolean pushDispatch;
+        private long middlewareTimeoutMillis = HookDeadline.DEFAULT_TIMEOUT_MILLIS;
         private @Nullable Emitter hub;
         private @Nullable WorkerLifecycle lifecycle;
 
@@ -483,6 +485,25 @@ public final class Worker implements AutoCloseable {
          */
         public Builder queues(String... queues) {
             this.queues = Arrays.asList(queues);
+            return this;
+        }
+
+        /**
+         * How long one middleware hook may take before the worker interrupts it.
+         *
+         * <p>A task's own timeout bounds its handler and nothing else, so a
+         * {@code before}, {@code after}, {@code onError} or {@code onSleep} that
+         * blocks holds the attempt open past that limit. Past this budget the
+         * hook's thread is interrupted, the overrun is logged against the
+         * middleware that caused it, and the chain carries on — failing an
+         * attempt over its instrumentation is the failure mode the hooks exist
+         * to avoid. Defaults to 5 seconds.
+         *
+         * @param timeout the per-hook budget; {@link Duration#ZERO} disables the bound
+         * @return {@code this}, for chaining
+         */
+        public Builder middlewareTimeout(Duration timeout) {
+            this.middlewareTimeoutMillis = HookDeadline.millis(timeout);
             return this;
         }
 
@@ -685,7 +706,15 @@ public final class Worker implements AutoCloseable {
                 tracker.bindEmitter(emitter);
             }
             WorkerDispatchBridge bridge = new WorkerDispatchBridge(
-                    backend, handlers, serializer, executor, emitter, middleware, resources, codecs);
+                    backend,
+                    handlers,
+                    serializer,
+                    executor,
+                    emitter,
+                    middleware,
+                    resources,
+                    codecs,
+                    middlewareTimeoutMillis);
             List<String> servedQueues = queues == null ? List.of() : List.copyOf(queues);
             WorkerControl control = backend.startWorker(bridge, encodeOptions());
             bridge.bind(control);

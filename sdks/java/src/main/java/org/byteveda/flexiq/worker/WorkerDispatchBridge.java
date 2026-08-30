@@ -66,6 +66,8 @@ final class WorkerDispatchBridge implements WorkerBridge {
     private final ResourceRuntime resources;
     private final Map<String, PayloadCodec> codecs;
     private final MiddlewareDisables disables;
+    /** Per-hook budget for the execution middleware, in millis. {@code 0} disables. */
+    private final long middlewareTimeoutMillis;
     // Resolved once startWorker returns; job tasks await it before completing.
     private final CompletableFuture<WorkerControl> control = new CompletableFuture<>();
 
@@ -77,7 +79,8 @@ final class WorkerDispatchBridge implements WorkerBridge {
             Emitter emitter,
             List<Middleware> middleware,
             ResourceRuntime resources,
-            Map<String, PayloadCodec> codecs) {
+            Map<String, PayloadCodec> codecs,
+            long middlewareTimeoutMillis) {
         this.backend = backend;
         this.handlers = handlers;
         this.serializer = serializer;
@@ -86,6 +89,7 @@ final class WorkerDispatchBridge implements WorkerBridge {
         this.middleware = middleware;
         this.resources = resources;
         this.codecs = codecs;
+        this.middlewareTimeoutMillis = middlewareTimeoutMillis;
         this.disables = new MiddlewareDisables(backend);
     }
 
@@ -167,7 +171,7 @@ final class WorkerDispatchBridge implements WorkerBridge {
                     ? disables.resolve(taskName, middleware)
                     : MiddlewareDisables.without(middleware, disabledMiddlewareJson);
             for (Middleware m : chain) {
-                m.before(context);
+                HookDeadline.run(middlewareTimeoutMillis, m.getClass().getName(), "before", () -> m.before(context));
             }
             Object argument = serializer.deserializeCall(decodePayload(payload, task.codecs), task.payloadType);
             Object result = task.handler.apply(argument);
@@ -175,7 +179,8 @@ final class WorkerDispatchBridge implements WorkerBridge {
             // caught a step control signal and returned did not produce one.
             latch.check();
             for (Middleware m : chain) {
-                m.after(context, result);
+                HookDeadline.run(
+                        middlewareTimeoutMillis, m.getClass().getName(), "after", () -> m.after(context, result));
             }
             bound.completeJob(token, serializer.serialize(result));
         } catch (StepSleepSignal sleeping) {
@@ -187,7 +192,8 @@ final class WorkerDispatchBridge implements WorkerBridge {
         } catch (Throwable t) {
             for (Middleware m : chain) {
                 try {
-                    m.onError(context, t);
+                    HookDeadline.run(
+                            middlewareTimeoutMillis, m.getClass().getName(), "onError", () -> m.onError(context, t));
                 } catch (RuntimeException | Error e) {
                     // Same rule as onSleep below, and as onOutcome: a hook that
                     // throws here escapes runJob without reporting, and the
@@ -237,7 +243,11 @@ final class WorkerDispatchBridge implements WorkerBridge {
             warnUnpairedMiddleware(chain);
             for (Middleware m : chain) {
                 try {
-                    m.onSleep(context, sleeping.wakeAt());
+                    HookDeadline.run(
+                            middlewareTimeoutMillis,
+                            m.getClass().getName(),
+                            "onSleep",
+                            () -> m.onSleep(context, sleeping.wakeAt()));
                 } catch (RuntimeException | Error e) {
                     // The sleep is already committed; a hook cannot undo it, and
                     // one faulty middleware must not starve the rest.

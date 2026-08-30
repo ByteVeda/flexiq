@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -1443,6 +1444,8 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
         private Serializer serializer = new JsonSerializer();
         private final List<PayloadCodec> codecs = new ArrayList<>();
         private final Map<String, PayloadCodec> namedCodecs = new LinkedHashMap<>();
+        /** Per-hook middleware budget; {@code null} leaves the worker's own default. */
+        private @Nullable Duration middlewareTimeout;
 
         /**
          * The storage to open over, by its wire name.
@@ -1615,6 +1618,25 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
             return this;
         }
 
+        /**
+         * How long one middleware hook may take before the worker interrupts it.
+         *
+         * <p>A task's own timeout bounds its handler and nothing else, so a
+         * {@code before}, {@code after}, {@code onError} or {@code onSleep} that
+         * blocks holds the attempt open past that limit. Past this budget the
+         * hook's thread is interrupted, the overrun is logged against the
+         * middleware that caused it, and the chain carries on — failing an
+         * attempt over its instrumentation is the failure mode the hooks exist
+         * to avoid. Defaults to 5 seconds.
+         *
+         * @param timeout the per-hook budget; {@link Duration#ZERO} disables the bound
+         * @return {@code this}, for chaining
+         */
+        public Builder middlewareTimeout(Duration timeout) {
+            this.middlewareTimeout = Objects.requireNonNull(timeout, "middlewareTimeout");
+            return this;
+        }
+
         /** The serializer wrapped in the configured codec chain (if any). */
         private Serializer effectiveSerializer() {
             return codecs.isEmpty() ? serializer : new CodecSerializer(serializer, codecs);
@@ -1627,7 +1649,7 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
          * @return the client
          */
         public FlexiQ open(QueueBackend backend) {
-            return new DefaultFlexiQ(backend, effectiveSerializer(), namedCodecs);
+            return new DefaultFlexiQ(backend, effectiveSerializer(), namedCodecs, middlewareTimeout);
         }
 
         /**
@@ -1643,7 +1665,8 @@ public interface FlexiQ extends AutoCloseable, ConditionalSettings {
             } else if (!options.containsKey("dsn")) {
                 throw new ConfigurationException("url (dsn) is required");
             }
-            return new DefaultFlexiQ(JniQueueBackend.open(encodeOptions()), effectiveSerializer(), namedCodecs);
+            return new DefaultFlexiQ(
+                    JniQueueBackend.open(encodeOptions()), effectiveSerializer(), namedCodecs, middlewareTimeout);
         }
 
         /** Create the SQLite file's parent directory (skip in-memory databases). */

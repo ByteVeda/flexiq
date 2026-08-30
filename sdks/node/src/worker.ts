@@ -60,6 +60,8 @@ export interface WorkerStartParams {
   logConsumers?: readonly PendingLogConsumer[];
   /** Fired once on stop so the queue can drop this worker from its live set. @internal */
   onStopped?: () => void;
+  /** Per-hook budget for the execution middleware, in ms. `0` disables. */
+  middlewareTimeoutMs?: number;
   run?: WorkerRunOptions;
 }
 
@@ -138,6 +140,7 @@ export class Worker {
       emitter,
       resources,
       queue,
+      middlewareTimeoutMs: params.middlewareTimeoutMs,
       steps: {
         openStepSession: async (jobId, attempt) => {
           await workerReady;

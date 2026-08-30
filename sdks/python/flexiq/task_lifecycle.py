@@ -43,8 +43,9 @@ from flexiq.batching.item_result import (
 from flexiq.context import current_job
 from flexiq.events import EventType
 from flexiq.exceptions import TaskCancelledError
+from flexiq.hook_deadline import hook_deadline
 from flexiq.interception.reconstruct import reconstruct_args
-from flexiq.middleware import TaskMiddleware
+from flexiq.middleware import TaskMiddleware, middleware_key
 from flexiq.proxies import cleanup_proxies, reconstruct_proxies
 from flexiq.steps import StepError, StepSleepSignal
 from flexiq.workflows.saga.context import (
@@ -143,6 +144,10 @@ async def run_lifecycle(
     job_id = current_job.id
     logger.info("Task %s[%s] received", task_name, job_id)
     started_at = time.perf_counter()
+    # Read once, before the setup block: the teardown below runs even when setup
+    # failed before it reached the middleware chain, and still owes every
+    # completed before() its pairing hook.
+    hook_timeout = queue_ref._middleware_timeout
 
     # Worker-dispatch predicate gate. Evaluated on the raw deserialized payload
     # (before arg/proxy reconstruction) so re-enqueue on defer can round-trip
@@ -213,7 +218,8 @@ async def run_lifecycle(
             if not mw._should_apply(current_job):
                 continue
             try:
-                mw.before(current_job)
+                with hook_deadline(hook_timeout, middleware_key(mw), "before"):
+                    mw.before(current_job)
                 completed_mw.append(mw)
             except Exception:
                 logger.exception("middleware before() error")
@@ -243,7 +249,8 @@ async def run_lifecycle(
             _reset_compensation_context(comp_ctx_token)
         for mw in completed_mw:
             try:
-                mw.after(current_job, None, exc)
+                with hook_deadline(hook_timeout, middleware_key(mw), "after"):
+                    mw.after(current_job, None, exc)
             except Exception:
                 logger.exception("middleware after() error")
         _release_acquired(release_callbacks, proxy_cleanup, queue_ref)
@@ -383,9 +390,13 @@ async def run_lifecycle(
             for mw in completed_mw:
                 try:
                     if slept is not None:
-                        mw.on_sleep(current_job, slept.wake_at)
+                        with hook_deadline(
+                            hook_timeout, middleware_key(mw), "on_sleep", slept=True
+                        ):
+                            mw.on_sleep(current_job, slept.wake_at)
                     else:
-                        mw.after(current_job, result, error)
+                        with hook_deadline(hook_timeout, middleware_key(mw), "after"):
+                            mw.after(current_job, result, error)
                 except Exception:
                     logger.exception("middleware after() error")
             # Emit job lifecycle events. The Rust outcome loop skips Success on

@@ -1,6 +1,7 @@
 package org.byteveda.flexiq.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -177,6 +178,7 @@ public final class Executor implements AutoCloseable {
         private final Map<EventName, List<Consumer<FlexiQEvent>>> listeners = new LinkedHashMap<>();
         private Serializer serializer = new JsonSerializer();
         private List<Middleware> middleware = List.of();
+        private long middlewareTimeoutMillis = HookDeadline.DEFAULT_TIMEOUT_MILLIS;
         private Map<String, PayloadCodec> codecs = Map.of();
         private ResourceRuntime resources = new ResourceRuntime();
         private @Nullable String address;
@@ -345,6 +347,24 @@ public final class Executor implements AutoCloseable {
         }
 
         /**
+         * How long one middleware hook may take before the executor interrupts it.
+         *
+         * <p>A task's own timeout bounds its handler and nothing else, so a
+         * {@code before}, {@code after}, {@code onError} or {@code onSleep} that
+         * blocks holds the attempt open past that limit. Past this budget the
+         * hook's thread is interrupted, the overrun is logged against the
+         * middleware that caused it, and the chain carries on. Defaults to 5
+         * seconds.
+         *
+         * @param timeout the per-hook budget; {@link Duration#ZERO} disables the bound
+         * @return {@code this}, for chaining
+         */
+        public Builder middlewareTimeout(Duration timeout) {
+            this.middlewareTimeoutMillis = HookDeadline.millis(timeout);
+            return this;
+        }
+
+        /**
          * Named payload codecs, for tasks declaring {@code codecs}.
          *
          * @param codecs the codecs by name, resolved against each task's declared list
@@ -413,8 +433,8 @@ public final class Executor implements AutoCloseable {
             // No QueueBackend: an executor reads no storage, which is the point
             // of the split. Job metadata and dashboard middleware toggles are
             // storage-backed and so unavailable here.
-            WorkerDispatchBridge bridge =
-                    new WorkerDispatchBridge(null, handlers, serializer, pool, emitter, middleware, resources, codecs);
+            WorkerDispatchBridge bridge = new WorkerDispatchBridge(
+                    null, handlers, serializer, pool, emitter, middleware, resources, codecs, middlewareTimeoutMillis);
 
             long handle;
             try {

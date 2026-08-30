@@ -91,12 +91,13 @@ override only what you need.
 
 <SdkOnly sdk="python">
 
-`TaskMiddleware` exposes 7 hooks:
+`TaskMiddleware` exposes 8 hooks:
 
 | Hook | Called when |
 |---|---|
 | `before(ctx)` | Before task execution |
 | `after(ctx, result, error)` | After task execution (success or failure) |
+| `on_sleep(ctx, wake_at)` | An attempt ended in a durable `step.sleep`, so there is no result to report |
 | `on_retry(ctx, error, retry_count)` | A job fails and will be retried |
 | `on_enqueue(task_name, args, kwargs, options)` | A job is about to be enqueued |
 | `on_dead_letter(ctx, error)` | A job exhausts all retries and moves to the dead letter queue |
@@ -123,13 +124,14 @@ timeout itself independently of the job's eventual fate.
 
 <SdkOnly sdk="node">
 
-`Middleware` exposes 8 hooks:
+`Middleware` exposes 9 hooks:
 
 | Hook | When | Awaited |
 |---|---|---|
 | `onEnqueue(ctx)` | Producer-side, inside `enqueue`, before serialization. | no (sync) |
 | `before(ctx)` | Before each execution attempt. | yes |
 | `after(ctx, result)` | After a successful attempt. | yes |
+| `onSleep(ctx, wakeAt)` | An attempt ended in a durable `step.sleep`, so there is no result to report. | yes |
 | `onError(ctx, err)` | When an attempt throws (before the retry/dead decision). | yes |
 | `onCompleted(e)` | After a job completes successfully. | no |
 | `onRetry(e)` | After the core schedules a retry. | no |
@@ -146,13 +148,14 @@ the run).
 
 <SdkOnly sdk="java">
 
-`Middleware` exposes 8 hooks:
+`Middleware` exposes 9 hooks:
 
 | Hook | When |
 |---|---|
 | `onEnqueue(context)` | Producer-side, inside `enqueue`, before serialization. |
 | `before(context)` | Before each execution attempt. |
 | `after(context, result)` | After a successful attempt. |
+| `onSleep(context, wakeAt)` | An attempt ended in a durable `step.sleep`, so there is no result to report. |
 | `onError(context, error)` | When an attempt throws (before the retry/dead decision). |
 | `onCompleted(event)` | After a job completes successfully. |
 | `onRetry(event)` | After the core schedules a retry. |
@@ -282,7 +285,7 @@ Multiple middlewares run in registration order for every phase — `before`,
 If a middleware hook raises an exception:
 
 - **`before()`**: the exception is logged, but subsequent middleware `before()` hooks still run. The task executes normally.
-- **`after()`**: the exception is logged. Other `after()` hooks still run.
+- **`after()` / `on_sleep()`**: the exception is logged. The other hooks in the chain still run.
 - **`on_retry()` / `on_dead_letter()` / `on_timeout()` / `on_cancel()`**: logged and swallowed — these are notification hooks, not control flow.
 
 Middleware exceptions never prevent task execution or result handling.
@@ -293,8 +296,9 @@ Middleware exceptions never prevent task execution or result handling.
 
 The execution hooks (`before`/`after`/`onError`) are awaited in the hot path:
 a rejected `before` or `after` fails the attempt like a thrown handler error.
-`onError` itself is wrapped so a throwing `onError` never masks the original
-task failure. The outcome hooks (`onCompleted`/`onRetry`/`onDeadLetter`/
+`onError` and `onSleep` are each wrapped per middleware, so a throwing
+`onError` never masks the original task failure and a throwing `onSleep` never
+un-commits a sleep that already happened; both are logged at `debug`. The outcome hooks (`onCompleted`/`onRetry`/`onDeadLetter`/
 `onCancel`) are isolated per middleware — one that throws or rejects is
 logged at `debug` and doesn't stop the rest from running.
 
@@ -304,8 +308,97 @@ logged at `debug` and doesn't stop the rest from running.
 
 The execution hooks run inside the attempt — a `before` or `after` that
 throws fails the attempt like a handler error, and is caught by the same
-`onError` path. Outcome hooks are isolated — one that throws is caught and
-logged so it never starves the others.
+`onError` path. `onError` and `onSleep` are isolated per middleware instead: one
+that throws is caught and logged, because escaping there would leave the
+dispatch with no outcome to report at all. Outcome hooks are isolated for the
+same reason.
+
+</SdkOnly>
+
+## Bounded hooks
+
+A task's timeout bounds its *handler*. It does not bound the middleware around
+it, so a hook that blocks — an exporter flushing to an unreachable collector, a
+tracing backend with no client-side timeout — holds the attempt open past the
+task's own limit. The execution hooks therefore carry a budget of their own,
+per hook call, defaulting to **5 seconds**:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# 2s per before()/after()/on_sleep() call; 0 disables the check
+queue = Queue(middleware=[LoggingMiddleware()], middleware_timeout=2.0)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// 2s per before/after/onError/onSleep call; 0 disables the bound
+const queue = new Queue({ middlewareTimeoutMs: 2000 });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// 2s per before/after/onError/onSleep call; Duration.ZERO disables the bound
+FlexiQ flexiq = FlexiQ.builder()
+        .sqlite("app.db")
+        .middlewareTimeout(Duration.ofSeconds(2))
+        .open();
+```
+
+  </Tab>
+</CodeTabs>
+
+Going over budget is never a job failure: the overrun is logged against the
+middleware that caused it and the rest of the chain still runs. Failing an
+attempt over its instrumentation is the failure mode these hooks exist to avoid
+— and a hook that throws *on its own* still behaves exactly as
+[Exception handling](#exception-handling) describes.
+
+**When the chain resumes differs by SDK**, because what a runtime can do to a
+hook that will not return differs. Only Node moves on at the deadline; Python
+waits for the hook regardless, and Java waits too whenever the hook ignores the
+interrupt. Read the budget as "when you will be told", and on Python and Java as
+"when the attempt will be *tried*".
+
+<Callout type="warn">
+A hook that overruns on the sleep path is the expensive one. An attempt that
+ended in a durable `step.sleep` is already pending at its wake-up deadline and
+holds no claim, so nothing will ever reap it — unlike a hung `after`, whose job
+a stale-job sweep eventually fails. Close what you opened and return.
+</Callout>
+
+<SdkOnly sdk="python">
+
+The hook keeps its thread: a middleware may push a thread-local scope in
+`before` for the handler to run inside, so moving the call somewhere it could be
+abandoned would break it. The budget therefore *reports* an overrun rather than
+ending it — the log names the middleware and the hook, and the attempt stays
+blocked until the hook returns. Under the prefork pool the attempt is bounded
+regardless: a child that outruns its task's `timeout` is killed, hooks included.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Past the budget the chain stops awaiting the hook and moves on. Nothing can
+cancel a promise, so the hook itself keeps running; what ends is the attempt's
+wait for it. A rejection that arrives after that point is logged at `debug`.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+The hook keeps the dispatch thread — a middleware may open a thread-bound scope
+in `before` for the handler and close it from `after` — so the budget is
+enforced by interrupting that thread. Blocking that honours interrupts
+(`Future.get`, `awaitTermination`, a socket with a timeout) ends there; anything
+that ignores them runs on, and the overrun is logged either way. The interrupt
+flag is cleared before the handler runs, so it never inherits one.
 
 </SdkOnly>
 
