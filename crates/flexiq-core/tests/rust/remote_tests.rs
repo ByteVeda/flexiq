@@ -746,6 +746,16 @@ fn shutdown_is_bounded_by_the_drain_budget() {
     );
 }
 
+/// How many jobs one attached executor is running, by id.
+fn in_flight_at(dispatcher: &RemoteDispatcher, executor_id: &str) -> usize {
+    dispatcher
+        .executors()
+        .into_iter()
+        .find(|executor| executor.executor_id == executor_id)
+        .map(|executor| executor.in_flight)
+        .unwrap_or_default()
+}
+
 fn wait_until(mut condition: impl FnMut() -> bool, message: &str) {
     let deadline = Instant::now() + SETTLE;
     while !condition() {
@@ -1388,9 +1398,18 @@ fn a_fleet_rolling_onto_one_registry_warns_once() {
 
 /// A scheduler whose side channel is real storage, so a step commit is a row.
 fn dispatcher_with_storage(storage: &SqliteStorage) -> RemoteDispatcher {
+    dispatcher_with_storage_placing_within(storage, Duration::from_secs(5))
+}
+
+/// The same, for a test that asserts a job *fails* placement and would
+/// otherwise wait out the default budget to do it.
+fn dispatcher_with_storage_placing_within(
+    storage: &SqliteStorage,
+    placement_timeout: Duration,
+) -> RemoteDispatcher {
     let dispatcher = RemoteDispatcher::new(RemoteConfig {
         scheduler_id: "scheduler-test".to_string(),
-        placement_timeout: Duration::from_secs(5),
+        placement_timeout,
         shutdown_drain: Duration::from_millis(200),
         side_channel: Some(Arc::new(StorageSideChannel::new(StorageBackend::Sqlite(
             storage.clone(),
@@ -1741,5 +1760,171 @@ fn a_job_that_slept_is_reported_even_if_the_connection_dies_first() {
         };
         assert_eq!(reported_id, job_id);
         assert_eq!(reported_wake, deadline);
+    });
+}
+
+// ── Overlapping dispatches of one job id ────────────────────────────
+
+#[test]
+fn a_superseded_dispatch_never_relabels_the_running_attempts_fence() {
+    // The fence an executor's commit is written under comes from the dispatch
+    // record, because the executor cannot be trusted to supply its own attempt.
+    // A second dispatch of one id on one connection would make that record say
+    // the wrong thing — and the wrong thing is the live attempt, which is
+    // precisely the write the fence exists to refuse.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let dispatcher = dispatcher_with_storage_placing_within(&storage, Duration::from_millis(200));
+    let mut executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["charge"], 2, &[CAP_STEPS])
+            .expect("attach");
+
+    let job = claimed_job(&storage, "charge", "scheduler-test");
+    let job_id = job.id.clone();
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(job).expect("dispatch attempt 0");
+        let (dispatched, _) = executor.expect_job_with_snapshot();
+        assert_eq!(dispatched, job_id);
+
+        // What the reaper does to a slow attempt: it is indistinguishable from
+        // a dead one, so the job moves on to attempt 1 while attempt 0 is still
+        // running here — and this executor still has a free slot to be given
+        // the new attempt on.
+        storage.retry(&job_id, now_millis(), None).expect("retry");
+        storage
+            .dequeue("default", now_millis() + 1_000, None)
+            .expect("dequeue");
+        assert!(storage
+            .claim_execution(&job_id, "scheduler-test")
+            .expect("re-claim"));
+        let live = storage.get_job(&job_id, None).expect("get").expect("job");
+        assert_eq!(live.retry_count, 1, "storage is at the second attempt");
+        jobs.blocking_send(live).expect("dispatch attempt 1");
+
+        // Refused, and retryably: the attempt is placed again once no
+        // connection is running an earlier one of it.
+        match expect_result(results) {
+            JobResult::Failure {
+                job_id: failed,
+                should_retry,
+                error,
+                ..
+            } => {
+                assert_eq!(failed, job_id);
+                assert!(should_retry, "a superseded placement must be retryable");
+                assert!(
+                    error.contains("already running"),
+                    "the reason names the aliasing: {error}"
+                );
+            }
+            ref other => panic!("expected a retryable failure, got {}", kind(other)),
+        }
+
+        // Attempt 0, still running, commits. Fenced on the attempt it was
+        // dispatched at, which storage has moved past — so it is refused. Under
+        // an aliased entry it would be fenced on attempt 1 and land in the live
+        // attempt's sequence.
+        executor.commit_step(&job_id, 0, "charge#0", b"receipt");
+        let (_, ok, _, _, failure) = executor.expect_step_ack();
+        assert!(
+            !ok,
+            "a stale attempt must not commit under the live attempt's fence"
+        );
+        assert_eq!(failure, Some(StepFailure::Superseded));
+    });
+
+    assert!(storage
+        .get_job_steps(&job_id, None)
+        .expect("steps")
+        .is_empty());
+}
+
+#[test]
+fn a_superseded_dispatch_leaves_the_running_attempt_reportable() {
+    // Taking the in-flight entry is the exactly-once token for a job's single
+    // outcome. Two dispatches of one id share one entry, so whichever attempt
+    // reports first spends it and the other's result is dropped as unknown —
+    // leaving the job with no outcome at all until the reaper takes it.
+    let dispatcher = dispatcher_with(Duration::from_millis(200));
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 2).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch attempt 0");
+        let (dispatched, _, _) = executor.expect_job();
+        assert_eq!(dispatched, "job-1");
+
+        let mut superseding = make_job("job-1", "resize", b"");
+        superseding.retry_count = 1;
+        jobs.blocking_send(superseding).expect("dispatch attempt 1");
+
+        match expect_result(results) {
+            JobResult::Failure {
+                job_id,
+                should_retry,
+                ..
+            } => {
+                assert_eq!(job_id, "job-1");
+                assert!(should_retry);
+            }
+            ref other => panic!("expected a retryable failure, got {}", kind(other)),
+        }
+
+        // The running attempt still holds its own entry, and can still report.
+        assert_eq!(
+            dispatcher.executors()[0].in_flight,
+            1,
+            "one dispatch of a job id per connection"
+        );
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+
+    // The next frame after the first job is the shutdown: the second dispatch
+    // was never written to a connection already running that id.
+    executor.expect_shutdown();
+}
+
+#[test]
+fn a_job_an_executor_is_already_running_is_placed_on_its_peer() {
+    // The placement half. Both executors advertise the task and the busy one
+    // has the most free slots, so it wins on capacity alone — it must lose on
+    // the job id.
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    let mut busy = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 3).expect("attach");
+    let mut peer = FakeExecutor::attach(&dispatcher, "exec-2", &["resize"], 1).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch attempt 0");
+        let (first, _, _) = busy.expect_job();
+        assert_eq!(first, "job-1", "the executor with the most free slots wins");
+
+        let mut superseding = make_job("job-1", "resize", b"");
+        superseding.retry_count = 1;
+        jobs.blocking_send(superseding).expect("dispatch attempt 1");
+
+        // Asserted against the dispatcher's own bookkeeping before the frame is
+        // read: a placement that went to the wrong executor must fail the test
+        // rather than park it on a read that will never return.
+        wait_until(
+            || in_flight_at(&dispatcher, "exec-2") == 1,
+            "the second attempt must be placed on the executor not running it",
+        );
+        assert_eq!(
+            in_flight_at(&dispatcher, "exec-1"),
+            1,
+            "the busy executor keeps the attempt it is running, and only that one"
+        );
+        let (second, _, _) = peer.expect_job();
+        assert_eq!(second, "job-1");
+
+        // Two connections, two entries, two reportable outcomes — which is the
+        // point: the fence sorts out which attempt still speaks for the job,
+        // and it can only do that if both are reported.
+        busy.succeed("job-1", "resize", None);
+        peer.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+        assert_eq!(kind(&expect_result(results)), "success");
     });
 }
