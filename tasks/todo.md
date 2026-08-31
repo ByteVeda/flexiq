@@ -1,73 +1,69 @@
-# #738 — bound before, after, onError and onSleep
+# #759 — an executor's in-flight map keys overlapping dispatches together
 
 ## Problem
-`timeout_ms` bounds the handler, not the middleware around it. A `before`,
-`after`, `onError` or `onSleep` that blocks — an exporter flushing to an
-unreachable collector — holds the attempt open past the task's own limit, on
-every shell. Worst on the sleep path: a slept attempt is already Pending and
-unclaimed, so nothing reaps it and the leaked worker slot accumulates until the
-hook returns.
+`Executor::in_flight` (`crates/flexiq-core/src/worker/remote.rs`) is a
+`HashMap<String, InFlight>` keyed by job id alone. `dispatch_to` inserted
+unconditionally and the result path removes by id, both correct only while one
+job id is in flight on one connection at a time — which nothing enforced. The
+reaper cannot tell a slow attempt from a dead one, so it reclaims a job an
+executor is still running, and the poller may place the next attempt on that
+same connection.
+
+Two failures follow, neither needing a thread race:
+
+1. A stale attempt's step commit resolves against the newer entry, so it is
+   fenced on the *live* attempt and accepted — the one write the fence exists to
+   refuse.
+2. Whichever attempt reports first spends the shared exactly-once token; the
+   other result is logged as "unknown job" and dropped, leaving the live attempt
+   unreported until the reaper takes it.
 
 ## Design
-One policy, one knob per shell, three mechanisms. A hook that overruns is never
-a job failure: log and continue.
+The issue offers two shapes. The token-and-newest-wins one closes (2) but not
+(1): "newest wins" keeps the very entry a stale commit is then fenced under.
+Nothing on the wire carries an attempt — a `step_commit`, `success`, `cancelled`
+or `slept` frame names a job and nothing else — so while two dispatches of one id
+coexist on a connection, a frame is unattributable and the aliasing cannot be
+resolved after the fact, only prevented.
 
-Hooks cannot be moved off the dispatch thread — java's `FlexiQObservation.before`
-opens a Micrometer `Observation.Scope` (ThreadLocal) *for the handler*, python's
-`SentryMiddleware.before` does `push_scope()`, and python passes the per-thread
-`current_job` proxy. So the deadline is enforced without moving the call:
+So: prevent it, at both ends of the same invariant.
 
-- node: `Promise.race` — stop awaiting, detach the hook with `.catch`.
-- java: shared daemon scheduler interrupts the dispatch thread; disarm under a
-  lock so no interrupt lands after the hook returns; clear the flag afterwards.
-- python: one process-wide daemon watchdog thread; warn only. Prefork is already
-  bounded by `prefork/watchdog.rs`, which SIGKILLs on `timeout_ms`.
+- `register_dispatch` makes registration a vacant-entry insert. An occupied entry
+  gives the slot back and fails the job retryably rather than aliasing. This is
+  where the invariant every reader depends on is established.
+- `try_acquire` takes the `&Job` and skips an executor already running that id,
+  so a peer takes the attempt, or it waits for the entry to be released. New
+  `Placement::AlreadyRunning` keeps the fail-back reason honest.
 
-Budget is per hook call and comes from its own knob, not `timeout_ms` — a task
-with no timeout still wants bounded hooks. `0` disables.
-
-| SDK | knob | default |
-|---|---|---|
-| python | `Queue(middleware_timeout=5.0)` seconds | 5.0 |
-| node | `new Queue({ middlewareTimeoutMs: 5000 })` | 5000 |
-| java | `FlexiQ.builder().middlewareTimeout(Duration)` | 5s |
-
-Scope is the four execution hooks. Python has three (its `after` carries the
-error, so it has no `onError`). `onEnqueue` and the outcome hooks stay out.
+No dispatch token is needed once the map holds one dispatch per id: "is this id
+here" and "is this the dispatch I am reasoning about" become the same question.
 
 ## Tasks
-- [x] python: `flexiq/hook_deadline.py` — watchdog + `hook_deadline()` guard
-- [x] python: knob on `Queue.__init__`, wired at the three `task_lifecycle` sites
-- [x] python: tests
-- [x] node: `src/middleware-deadline.ts` — `withHookDeadline()`
-- [x] node: `middlewareTimeoutMs` through `QueueOptions` → worker + executor
-- [x] node: tests
-- [x] java: `worker/HookDeadline.java` — arm/disarm interrupt
-- [x] java: `middlewareTimeout` through `FlexiQ.Builder` → `DefaultFlexiQ` → bridge
-- [x] java: tests
-- [x] docs: one section in `shared/guides/extensibility/middleware.mdx`
-- [x] checks: cargo (unchanged), ruff/mypy/pytest, biome/tsc/vitest, gradle test
+- [x] `register_dispatch` — vacant-entry insert, `Err` carries the running attempt
+- [x] `dispatch_to` — refuse an aliasing dispatch, release the slot, fail retryably
+- [x] `Executor::is_running` + `Placement::AlreadyRunning` + `try_acquire(&job)`
+- [x] `place` — a reason string that names the aliasing
+- [x] Docs: the rule and its symptom, in the executor guide
+- [x] Unit tests on `register_dispatch` (refusal, release, per-id scope)
+- [x] Integration test: a stale attempt's commit is never fenced under the live one
+- [x] Integration test: a superseded dispatch leaves the running attempt reportable
+- [x] Integration test: the attempt is placed on the peer, not the executor running it
 
 ## Review
+All three integration tests red-checked against the unfixed code — two by
+`expect_result` timing out on a failure the aliasing never produced, one by the
+attempt landing on the busy executor. The unit tests red-check against a mutation
+that makes `register_dispatch` insert unconditionally.
 
-Shipped as designed. What the implementation added to the plan:
+The two halves are pinned separately, both checked: removing the placement guard
+reds only the third integration test — the first two then fall through to
+`dispatch_to`'s refusal and still pass — and the write-side refusal is what the
+unit tests cover, red against an unconditional insert.
 
-- **The knob has to reach three constructors, not one.** Node's callback is
-  built by both `worker.ts` and `executor.ts`, so `middlewareTimeoutMs` rides
-  `WorkerStartParams` *and* `ExecutorStartParams`; java's bridge is built by
-  `Worker.Builder` and `Executor.Builder`, so both grew a
-  `middlewareTimeout(Duration)` and `FlexiQ.Builder`'s value is nullable —
-  `null` means "leave the worker's own default", which keeps the 5s literal in
-  one place (`HookDeadline.DEFAULT_TIMEOUT_MILLIS`).
-- **Java runs `after` for a hook whose `before` was interrupted.** Java has no
-  `completed_mw` list, so the whole chain gets its pairing hook. That is the
-  right answer for the same reason python keeps one: a middleware that got
-  partway through setting something up is owed the chance to take it down.
-- **`_FakeQueue` in `tests/worker/test_native_async.py` needed the attribute.**
-  It declares `__slots__` precisely so a new lifecycle dependency fails loudly
-  rather than silently — which is what happened, 14 red tests deep.
-- **Only the overrun is swallowed.** A hook that throws on its own still
-  behaves as it did: node rejects out of `withHookDeadline`, java rethrows
-  after disarming. Both are pinned by a test, because the obvious
-  implementation (catch everything) would have quietly broken a `before` that
-  means to reject a job.
+Verified: `cargo fmt --all --check`; `cargo clippy --all-targets --all-features
+-D warnings`; `cargo check --workspace` on postgres, redis and native-async;
+`cargo test --workspace` (32 suites, 0 failures); `pnpm --dir docs lint`.
+
+Not in scope: cancelling the superseded attempt still running on that executor.
+It holds a slot until it reports and its writes are refused by the fence — a
+separate change.
