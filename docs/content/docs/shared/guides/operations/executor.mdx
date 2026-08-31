@@ -90,6 +90,17 @@ application `main` has to run to register them.
 only to executors that advertised it, so a handler missing from an executor is a
 job that never reaches it.
 
+A job an executor is **already running** is never sent to it a second time. Every
+frame an executor sends back names a job by id and nothing else, so two attempts
+of one job on one connection would be indistinguishable: a step could not be
+fenced to the attempt that committed it, and one of the two results would be
+dropped. This is reachable in normal operation — the reaper cannot tell a slow
+attempt from a dead one, so it reclaims the job while the executor is still
+running it. The next attempt then goes to another executor, or waits for the
+first to report and fails retryably with `was not dispatched: every executor with
+a free slot is already running an earlier attempt of it` if the placement timeout
+elapses first.
+
 <Callout type="warn" title="The token is read from the environment, never a flag">
   A secret in `argv` shows up in `ps` output and shell history. Every SDK reads
   `FLEXIQ_ATTACH_TOKEN` from the environment and offers no flag for it.

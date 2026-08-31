@@ -4,6 +4,7 @@
 //! those tasks only. The scheduler is untouched: this is a [`WorkerDispatcher`]
 //! like any other, so the same claim, retry, and reaper machinery applies.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -293,6 +294,10 @@ struct InFlight {
     /// a step commit from this executor is written under. Recorded here for the
     /// same reason the namespace is: a step frame carries only a job id, and an
     /// attempt an executor supplied would be an attempt it could get wrong.
+    ///
+    /// Answers for the connection's *only* dispatch of this id, which is what
+    /// makes an id-keyed lookup enough to resolve it — see
+    /// [`register_dispatch`].
     attempt: i32,
     /// Deadline this job was rescheduled to by an acknowledged `step.sleep`,
     /// once one has landed.
@@ -302,6 +307,38 @@ struct InFlight {
     /// the only record that the attempt ended — without it the scheduler holds
     /// the job's in-flight slot for the life of the process.
     slept_at: Option<i64>,
+}
+
+/// Record a dispatch, refusing to alias one this connection is already running.
+///
+/// The map is keyed by job id alone, and everything that reads it asks only "is
+/// this id here": the fence a step commit is written under, the exactly-once
+/// token a result spends, and the deadline an acknowledged sleep leaves behind.
+/// That is the right question exactly while one job id is in flight on one
+/// connection at a time — and this is the write that would break it, by
+/// relabelling a running attempt's entry with a newer attempt's `retry_count`.
+///
+/// Prevented rather than tolerated, because nothing an executor sends back
+/// carries an attempt: a frame naming a job it holds twice cannot be attributed
+/// to either dispatch after the fact, only kept from ever being ambiguous. The
+/// reaper is what creates the pressure — it reclaims a job a slow executor is
+/// still running, and the next attempt is then placed on whichever executor has
+/// a slot.
+///
+/// `Err` carries the attempt already in flight, for the caller's refusal.
+fn register_dispatch(in_flight: &mut HashMap<String, InFlight>, job: &Job) -> Result<(), i32> {
+    match in_flight.entry(job.id.clone()) {
+        Entry::Occupied(running) => Err(running.get().attempt),
+        Entry::Vacant(slot) => {
+            slot.insert(InFlight {
+                task_name: job.task_name.clone(),
+                namespace: job.namespace.clone(),
+                attempt: job.retry_count,
+                slept_at: None,
+            });
+            Ok(())
+        }
+    }
 }
 
 /// One attached executor: what it can run, what it is running, and how to
@@ -324,6 +361,11 @@ struct Executor {
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
     /// for emitting that job's single `JobResult`; holding one is also this
     /// executor's authority to report progress or logs against that job.
+    ///
+    /// At most one dispatch of a job id at a time, enforced by
+    /// [`register_dispatch`] rather than assumed: every frame that reaches this
+    /// map names a job and nothing else, so two dispatches of one id would be
+    /// indistinguishable to all three of those uses.
     in_flight: Mutex<HashMap<String, InFlight>>,
     writer: Mutex<FrameWriter<WriteHalf>>,
     connection: Connection,
@@ -335,6 +377,18 @@ struct Executor {
 impl Executor {
     fn is_busy(executor: &Arc<Self>) -> bool {
         !executor.in_flight.lock().unwrap_or_else(recover).is_empty()
+    }
+
+    /// Whether this executor is already running `job_id`.
+    ///
+    /// The placement half of [`register_dispatch`]'s invariant: a job an
+    /// executor is already running goes to a peer, or waits for the entry to be
+    /// released, rather than reaching the dispatch that would have to refuse it.
+    fn is_running(&self, job_id: &str) -> bool {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(recover)
+            .contains_key(job_id)
     }
 
     /// What this executor is running `job_id` as, or `None` when it is not.
@@ -674,6 +728,9 @@ enum Placement {
     Ready(Arc<Executor>),
     /// Some executor advertises the task but all of them are busy.
     Saturated,
+    /// Every executor with a free slot is already running this job id. Waiting
+    /// is the answer: the entry is released as soon as that attempt reports.
+    AlreadyRunning,
     /// No attached executor advertises the task at all.
     Unadvertised,
 }
@@ -966,7 +1023,7 @@ impl Shared {
             let mut changed = std::pin::pin!(self.capacity_changed.notified());
             changed.as_mut().enable();
 
-            let reason = match self.try_acquire(&job.task_name) {
+            let reason = match self.try_acquire(&job) {
                 Placement::Ready(executor) => {
                     let disabled = self.resolve_toggles(&job.task_name).await;
                     match self.resolve_snapshot(&executor, &job).await {
@@ -987,6 +1044,9 @@ impl Shared {
                     return;
                 }
                 Placement::Saturated => "every executor advertising it is busy",
+                Placement::AlreadyRunning => {
+                    "every executor with a free slot is already running an earlier attempt of it"
+                }
                 Placement::Unadvertised => "no attached executor advertises it",
             };
 
@@ -1003,20 +1063,28 @@ impl Shared {
         }
     }
 
-    /// Pick the executor with the most free slots that advertises `task_name`,
-    /// reserving one of its slots.
-    fn try_acquire(&self, task_name: &str) -> Placement {
+    /// Pick the executor with the most free slots that advertises the job's
+    /// task and is not already running it, reserving one of its slots.
+    fn try_acquire(&self, job: &Job) -> Placement {
         let executors = self.executors.lock().unwrap_or_else(recover);
         let mut advertised = false;
+        let mut aliased = false;
         let mut best: Option<&Arc<Executor>> = None;
 
         for executor in executors.values() {
-            if !executor.tasks.contains(task_name) {
+            if !executor.tasks.contains(&job.task_name) {
                 continue;
             }
             advertised = true;
             let free = executor.free.load(Ordering::Relaxed);
             if free == 0 {
+                continue;
+            }
+            // One attempt of a job id per connection ([`register_dispatch`]).
+            // A peer may take it: its entry is its own, and which attempt still
+            // speaks for the job is the storage fence's question, not this map's.
+            if executor.is_running(&job.id) {
+                aliased = true;
                 continue;
             }
             if best.is_none_or(|current| free > current.free.load(Ordering::Relaxed)) {
@@ -1031,6 +1099,7 @@ impl Shared {
                 executor.free.fetch_sub(1, Ordering::Relaxed);
                 Placement::Ready(executor.clone())
             }
+            None if aliased => Placement::AlreadyRunning,
             None if advertised => Placement::Saturated,
             None => Placement::Unadvertised,
         }
@@ -1104,6 +1173,9 @@ impl Shared {
     /// means the connection is gone: the slot is released, the executor is
     /// dropped, and the job is left to the scheduler's reaper — the same
     /// recovery path a mid-job executor crash takes.
+    ///
+    /// A job this executor is already running is refused, not dispatched: see
+    /// [`register_dispatch`] for why the aliasing cannot be resolved later.
     fn dispatch_to(
         &self,
         executor: &Arc<Executor>,
@@ -1111,15 +1183,28 @@ impl Shared {
         disabled: Vec<String>,
         snapshot: Option<Vec<u8>>,
     ) {
-        executor.in_flight.lock().unwrap_or_else(recover).insert(
-            job.id.clone(),
-            InFlight {
-                task_name: job.task_name.clone(),
-                namespace: job.namespace.clone(),
-                attempt: job.retry_count,
-                slept_at: None,
-            },
-        );
+        // Bound to a local so the guard drops at the end of this statement: a
+        // temporary in an `if let` condition lives for the whole block, and the
+        // refusal below emits — a bounded-channel send that must not be made
+        // while a reader thread is waiting on this same lock.
+        let registered =
+            register_dispatch(&mut executor.in_flight.lock().unwrap_or_else(recover), &job);
+        if let Err(running) = registered {
+            // Not reachable through `place`, which skips an executor already
+            // running the job — kept because this is where the invariant every
+            // reader of the map depends on is established. Retryable: the
+            // attempt is placeable again the moment the earlier one reports.
+            executor.free.fetch_add(1, Ordering::Relaxed);
+            self.capacity_changed.notify_waiters();
+            self.fail_unplaceable(
+                &job,
+                &format!(
+                    "executor {} is already running attempt {running} of it",
+                    executor.id
+                ),
+            );
+            return;
+        }
 
         let write = {
             let mut writer = executor.writer.lock().unwrap_or_else(recover);
@@ -1701,12 +1786,86 @@ impl Shared {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
-    use super::{divergent_peer, only_in, MAX_LOGGED_TASK_NAMES};
+    use super::{divergent_peer, only_in, register_dispatch, MAX_LOGGED_TASK_NAMES};
+    use crate::job::Job;
+    use crate::worker::protocol::SchedulerMessage;
 
     fn set(names: &[&str]) -> HashSet<String> {
         names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    /// A dispatch as the far end would parse it, rather than a `Job` literal:
+    /// the frame is what a dispatch actually carries, and a literal here is one
+    /// more site to touch every time the row grows a column.
+    fn dispatch(id: &str, retry_count: i32) -> Job {
+        SchedulerMessage::Job {
+            id: id.to_string(),
+            task_name: "charge".to_string(),
+            payload_len: 0,
+            retry_count,
+            max_retries: 3,
+            queue: "default".to_string(),
+            timeout_ms: 30_000,
+            namespace: None,
+            disabled_middleware: Vec::new(),
+            metadata: None,
+        }
+        .into_dispatch(Vec::new())
+        .expect("a job frame is a dispatch")
+        .job
+    }
+
+    /// The invariant every reader of the map depends on: an id-keyed lookup
+    /// resolves the connection's *only* dispatch of that id, so the attempt it
+    /// answers with is the attempt the executor is actually running.
+    #[test]
+    fn a_second_dispatch_of_one_job_id_is_refused() {
+        let mut in_flight = HashMap::new();
+        assert_eq!(
+            register_dispatch(&mut in_flight, &dispatch("job-1", 0)),
+            Ok(())
+        );
+
+        assert_eq!(
+            register_dispatch(&mut in_flight, &dispatch("job-1", 1)),
+            Err(0),
+            "the refusal names the attempt already in flight"
+        );
+        assert_eq!(in_flight.len(), 1);
+        assert_eq!(
+            in_flight["job-1"].attempt, 0,
+            "the running attempt keeps its own fence"
+        );
+    }
+
+    /// The refusal is not a ban on the id: the entry is the running attempt's,
+    /// and reporting releases it.
+    #[test]
+    fn a_released_entry_admits_the_next_attempt() {
+        let mut in_flight = HashMap::new();
+        register_dispatch(&mut in_flight, &dispatch("job-1", 0)).expect("first");
+        in_flight.remove("job-1");
+
+        assert_eq!(
+            register_dispatch(&mut in_flight, &dispatch("job-1", 1)),
+            Ok(())
+        );
+        assert_eq!(in_flight["job-1"].attempt, 1);
+    }
+
+    /// Two jobs are two entries — the guard is per id, not per connection.
+    #[test]
+    fn a_different_job_id_is_admitted_alongside() {
+        let mut in_flight = HashMap::new();
+        register_dispatch(&mut in_flight, &dispatch("job-1", 0)).expect("first");
+
+        assert_eq!(
+            register_dispatch(&mut in_flight, &dispatch("job-2", 0)),
+            Ok(())
+        );
+        assert_eq!(in_flight.len(), 2);
     }
 
     #[test]
