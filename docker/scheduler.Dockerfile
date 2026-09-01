@@ -39,14 +39,17 @@ WORKDIR /src
 COPY . .
 COPY --from=dashboard /src/dashboard/dist ./dashboard/dist
 # Postgres and Redis are compiled in so one image covers every backend; the DSN
-# picks at runtime. The binary is copied out of the cache mount because cache
-# mounts are not part of the resulting layer, and the PT_INTERP check fails the
-# build rather than the container: distroless/static ships no dynamic loader.
+# picks at runtime. `grpc` too, so FLEXIQ_GRPC_LISTEN turns the role on rather
+# than being refused by a binary that has no gRPC server to start.
+#
+# The binary is copied out of the cache mount because cache mounts are not part
+# of the resulting layer, and the PT_INTERP check fails the build rather than
+# the container: distroless/static ships no dynamic loader.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
-    cargo build --release --locked -p flexiq-server --features postgres,redis \
+    cargo build --release --locked -p flexiq-server --features postgres,redis,grpc \
     && cp target/release/flexiq-server /flexiq-server \
     && if readelf -l /flexiq-server | grep -q INTERP; then \
          echo "flexiq-server is dynamically linked — distroless/static cannot run it" >&2; \
@@ -68,8 +71,9 @@ LABEL org.opencontainers.image.title="flexiq-server" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /flexiq-server /usr/local/bin/flexiq-server
-# Attach listener and dashboard. Both stay off until FLEXIQ_LISTEN /
-# FLEXIQ_DASHBOARD are set, so this documents the ports rather than opening them.
-EXPOSE 7777 8080
+# Attach listener, dashboard and gRPC. All stay off until FLEXIQ_LISTEN /
+# FLEXIQ_DASHBOARD / FLEXIQ_GRPC_LISTEN are set, so this documents the ports
+# rather than opening them.
+EXPOSE 7777 8080 50051
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/flexiq-server"]
