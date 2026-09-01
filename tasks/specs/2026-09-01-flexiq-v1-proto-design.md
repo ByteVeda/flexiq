@@ -673,6 +673,29 @@ message EnqueueRequest {
 - An absent `body` is not an empty body. `raw = ""` is a zero-length payload;
   no arm set is `INVALID_ARGUMENT`.
 
+**Amended during #715: Rust had no envelope encoder to share, and now has
+exactly one.** "The same encoder the shells use" was written expecting one to
+exist; each shell in fact uses its own language's CBOR library, and the
+published `flexiq` crate handed a Rust producer nothing. `flexiq_core::wire`
+(`encode_call`, `encode_result`) is that one Rust implementation, asserted
+against every `encode` vector in `contracts/wire-vectors.json` from the crate
+that owns it. The `structured` arm encodes through it and adds no bytes of its
+own.
+
+**Amended during #715: `structured` normalises object key order, and cannot
+not.** `google.protobuf.Value` is the arm's type because proto3 JSON renders it
+as plain JSON — which is what lets `curl` and the #718 facade send a call at
+all. Its object arm is `google.protobuf.Struct`, a proto3 `map`, and a proto3
+map is unordered by definition: prost decodes it into a `BTreeMap` and the order
+a client wrote is not on the wire to recover. So keys reach the envelope sorted.
+Eight of the nine `encode` vectors are byte-identical through `structured`; the
+ninth, `single-object-arg`, differs only in the order of a two-key map, and is
+pinned in its sorted form beside the conversion. Nothing decodes differently.
+The one thing that notices is the SDKs' `auto:` idempotency key, a hash over the
+payload bytes — and a `structured` client cannot compute one anyway, it sets
+`unique_key`. E10's ceiling is unchanged: the ceiling is what JSON can *hold*,
+this is what a protobuf map can *order*.
+
 ### 7.2 `EnqueueOptions` mirrors `NewJob`
 
 `NewJob` has fifteen fields (`crates/flexiq-core/src/job.rs:291-322`). The proto

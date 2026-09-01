@@ -19,10 +19,13 @@ use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
 use flexiq_server::grpc::pb::{
     enqueue_batch_item_result, enqueue_request, CancelJobRequest, EnqueueBatchRequest,
     EnqueueOptions, EnqueueRequest, GetJobRequest, JobStatus, ListJobsRequest, QueueStatsRequest,
+    StructuredArgs,
 };
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
+use prost_types::value::Kind;
+use prost_types::Value;
 use tonic::transport::Channel;
 use tonic::Code;
 use tonic_types::StatusExt;
@@ -85,6 +88,29 @@ fn request(task: &str, payload: Vec<u8>, options: EnqueueOptions) -> EnqueueRequ
         options: Some(options),
     }
 }
+
+/// `f(1, "a")` sent as values the server encodes, rather than as bytes.
+fn structured_request(task: &str, options: EnqueueOptions) -> EnqueueRequest {
+    EnqueueRequest {
+        task_name: task.to_string(),
+        body: Some(enqueue_request::Body::Structured(StructuredArgs {
+            args: vec![
+                Value {
+                    kind: Some(Kind::NumberValue(1.0)),
+                },
+                Value {
+                    kind: Some(Kind::StringValue("a".to_string())),
+                },
+            ],
+            kwargs: Default::default(),
+        })),
+        options: Some(options),
+    }
+}
+
+/// The envelope for `f(1, "a")`, pinned in BINDING_CONTRACT.md and in
+/// contracts/wire-vectors.json.
+const CALL_ENVELOPE: [u8; 7] = [0x02, 0x82, 0x82, 0x01, 0x61, 0x61, 0xa0];
 
 fn in_queue(queue: &str) -> EnqueueOptions {
     EnqueueOptions {
@@ -502,6 +528,138 @@ async fn stats_count_one_queue_or_the_whole_namespace() {
         .expect("queue_stats")
         .into_inner();
     assert_eq!(all.pending, 4);
+
+    harness.stop().await;
+}
+
+/// The two body arms are two ways to say the same thing, and storage cannot
+/// tell them apart.
+///
+/// That is the whole promise of the `structured` arm: a client with no CBOR
+/// library sends values, a client with one sends bytes, and the row a worker
+/// eventually claims is identical. If these ever diverge, a job's payload
+/// depends on which door its producer used.
+#[tokio::test]
+async fn a_structured_body_and_a_raw_one_land_the_same_payload() {
+    let mut harness = Harness::start("grpc-producer-structured").await;
+
+    let structured = harness
+        .client
+        .enqueue(structured_request("send_email", in_queue("emails")))
+        .await
+        .expect("enqueue")
+        .into_inner()
+        .job
+        .expect("a response carries its job");
+
+    let raw = harness
+        .client
+        .enqueue(request(
+            "send_email",
+            CALL_ENVELOPE.to_vec(),
+            in_queue("emails"),
+        ))
+        .await
+        .expect("enqueue")
+        .into_inner()
+        .job
+        .expect("a response carries its job");
+
+    // Read back over the wire, and again straight out of storage — a worker
+    // reads the row, not the response.
+    for id in [&structured.id, &raw.id] {
+        let read = harness
+            .client
+            .get_job(GetJobRequest {
+                job_id: id.clone(),
+                include_payload: true,
+                include_result: false,
+            })
+            .await
+            .expect("get_job")
+            .into_inner()
+            .job
+            .expect("a response carries its job");
+        assert_eq!(read.payload, Some(CALL_ENVELOPE.to_vec()));
+
+        let stored = harness
+            .storage
+            .get_job(id, Some(NAMESPACE))
+            .expect("read")
+            .expect("the job exists in storage");
+        assert_eq!(stored.payload, CALL_ENVELOPE);
+    }
+
+    // And the arm travels through a batch unchanged, because a batch item is
+    // the same message one Enqueue takes.
+    let results = harness
+        .client
+        .enqueue_batch(EnqueueBatchRequest {
+            items: vec![
+                structured_request("send_email", in_queue("batched")),
+                request("send_email", CALL_ENVELOPE.to_vec(), in_queue("batched")),
+            ],
+        })
+        .await
+        .expect("enqueue_batch")
+        .into_inner()
+        .results;
+    assert_eq!(results.len(), 2);
+    for result in results {
+        let Some(enqueue_batch_item_result::Outcome::Enqueued(response)) = result.outcome else {
+            panic!("both items must land");
+        };
+        let id = response.job.expect("a result carries its job").id;
+        let stored = harness
+            .storage
+            .get_job(&id, Some(NAMESPACE))
+            .expect("read")
+            .expect("the job exists in storage");
+        assert_eq!(stored.payload, CALL_ENVELOPE);
+    }
+
+    harness.stop().await;
+}
+
+/// A number JSON cannot hold is refused, and no job is written.
+///
+/// 9007199254740993 reaches the server as 9007199254740992 — a `double` has no
+/// room for the odd one. Enqueuing it would answer success and store a call
+/// nobody made, so the door refuses instead. `raw` is where that number goes.
+#[tokio::test]
+async fn a_structured_integer_past_the_exact_range_is_refused() {
+    let mut harness = Harness::start("grpc-producer-structured-precision").await;
+
+    let error = harness
+        .client
+        .enqueue(EnqueueRequest {
+            task_name: "charge".to_string(),
+            body: Some(enqueue_request::Body::Structured(StructuredArgs {
+                args: vec![Value {
+                    kind: Some(Kind::NumberValue(9_007_199_254_740_993.0)),
+                }],
+                kwargs: Default::default(),
+            })),
+            options: Some(in_queue("payments")),
+        })
+        .await
+        .expect_err("a number a double cannot hold must be refused");
+
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(
+        error.get_details_error_info().expect("an ErrorInfo").reason,
+        reason::INVALID_REQUEST
+    );
+
+    let stats = harness
+        .client
+        .queue_stats(QueueStatsRequest {
+            queue: Some("payments".to_string()),
+        })
+        .await
+        .expect("queue_stats")
+        .into_inner();
+    assert_eq!(stats.pending, 0);
 
     harness.stop().await;
 }

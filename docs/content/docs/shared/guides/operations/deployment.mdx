@@ -1038,13 +1038,54 @@ A job enqueued this way is an ordinary row: the same scheduler dispatches it and
 an unmodified SDK worker runs it, with nothing about the job recording which
 door it came through.
 
-Three things the surface deliberately does not offer. There is **no admin
+Two things the surface deliberately does not offer. There is **no admin
 surface** on this door — pausing queues, settings, dead-letter operations and
 webhook secrets stay behind the dashboard's session and role check, because an
-operator surface and a producer surface should not share a credential. There is
-**no way to name a namespace**; see below. And `raw` is the tagged envelope from
-the binding contract, carried opaquely — a client that cannot build one needs
-the structured-argument door, which is not here yet.
+operator surface and a producer surface should not share a credential. And there
+is **no way to name a namespace**; see below.
+
+### Two doors for one payload, and only one of them is lossless
+
+`Job.payload` is the tagged envelope from the binding contract: one tag byte,
+then CBOR `[args, kwargs]`. `EnqueueRequest` gives you two ways to supply it,
+and choosing between them is a precision decision rather than a matter of taste.
+
+`raw` carries the envelope you built, byte for byte, all the way to storage. It
+loses nothing, and it needs a CBOR library — it is what an SDK sends.
+
+`structured` takes the arguments as ordinary JSON values and lets the server
+build that same envelope, so a shell script or a `curl` one-liner can enqueue
+work with no codec at all. Nothing downstream can tell the two apart: the row is
+an ordinary row, and for a call with no multi-key object the bytes are the ones
+an SDK would have produced. Object key order is the one exception, below.
+
+```bash
+grpcurl -plaintext -d '{
+  "task_name": "charge",
+  "structured": {"args": [{"order_id": "ord-0001", "amount_cents": 1000}]},
+  "options": {"queue": "payments"}
+}' localhost:50051 flexiq.v1.ProducerService/Enqueue
+```
+
+What `structured` cannot carry, it refuses — it never rounds:
+
+- **Integers beyond ±9007199254740991** (`2^53 - 1`). A JSON number is a
+  double, so 9007199254740993 would arrive as 9007199254740992. The request is
+  rejected with `INVALID_ARGUMENT` instead of being quietly rewritten.
+- **Non-finite numbers.** `NaN` and the infinities have no JSON form.
+- **Byte strings, CBOR tags, and anything else JSON has no syntax for.** There
+  is no way to express them here at all, which is a refusal by construction.
+
+And one thing it normalises rather than refuses: **object key order is not
+preserved.** Keys arrive in a protobuf map, which is unordered by definition, so
+they are encoded sorted. Nothing decodes differently — a CBOR map is unordered
+too — but the bytes differ from what an SDK would have produced for the same
+call, so the SDKs' automatic `auto:` idempotency key, which is a hash over those
+bytes, will not match across the two doors. Set `unique_key` yourself if you
+need deduplication; it is the only mechanism this door offers in any case.
+
+Send `raw` when any of that matters. That both arms exist is the reason none of
+it has to be guessed at.
 
 Two things it does not promise, worth stating before a client assumes
 otherwise. **`unique_key` is not an idempotency key without an expiry**: it
