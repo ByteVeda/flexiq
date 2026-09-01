@@ -1054,9 +1054,10 @@ and choosing between them is a precision decision rather than a matter of taste.
 loses nothing, and it needs a CBOR library — it is what an SDK sends.
 
 `structured` takes the arguments as ordinary JSON values and lets the server
-build the identical envelope, so a shell script or a `curl` one-liner can
-enqueue work with no codec at all. Nothing downstream can tell the two apart:
-the row is the same, and so are its bytes.
+build that same envelope, so a shell script or a `curl` one-liner can enqueue
+work with no codec at all. Nothing downstream can tell the two apart: the row is
+an ordinary row, and for a call with no multi-key object the bytes are the ones
+an SDK would have produced. Object key order is the one exception, below.
 
 ```bash
 grpcurl -plaintext -d '{
