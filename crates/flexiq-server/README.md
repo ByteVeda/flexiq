@@ -45,10 +45,10 @@ cargo build -p flexiq-server --features grpc
 ## The gRPC door
 
 `FLEXIQ_GRPC_LISTEN` binds a fourth listener beside the other three, serving
-`grpc.health.v1` and server reflection today — the `flexiq.v1` services land on
-it as they arrive. Reflection is seeded from `contracts/descriptor.binpb`, the
-descriptor the buf gate builds and commits, so a client needs no `.proto` on
-hand:
+`flexiq.v1.ProducerService` — enqueue, read, cancel, count — alongside
+`grpc.health.v1` and server reflection. Reflection is seeded from
+`contracts/descriptor.binpb`, the descriptor the buf gate builds and commits, so
+a client needs no `.proto` on hand:
 
 ```bash
 FLEXIQ_DSN=/var/lib/flexiq/app.db \
@@ -57,21 +57,25 @@ FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
 flexiq-server
 
 grpcurl -plaintext localhost:50051 list
-grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
+  localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
 
-Two things it refuses. Without `FLEXIQ_NAMESPACE` it will not start: an unset
-namespace means "every namespace" to an id-addressed read and "only the
-unnamespaced rows" to a dequeue, and a wire that can express that is one bug
-away from a cross-tenant read. And a binary built without the `grpc` feature
-rejects the variable outright rather than ignoring it, so a misconfigured
-deployment fails at boot instead of serving nothing on the port its clients
-dial.
+Three things it refuses. **A non-loopback bind**, because nothing on this door
+asks for a credential yet and an unauthenticated port that accepts `Enqueue` is
+not a thing to leave running behind a warning — use loopback or
+`unix:/run/flexiq-grpc.sock`, where the socket's `0660` mode is the boundary.
+**A missing `FLEXIQ_NAMESPACE`**, because an unset namespace means "every
+namespace" to an id-addressed read and "only the unnamespaced rows" to a
+dequeue, and a wire that can express that is one bug away from a cross-tenant
+read. And **the variable itself** on a binary built without the `grpc` feature,
+so a misconfigured deployment fails at boot instead of serving nothing on the
+port its clients dial.
 
 Health is answered out of storage — the same question `/readiness` answers — so
 an orchestrator can take a replica that cannot reach its database out of
-rotation. TLS is not terminated here and no caller is authenticated yet; put a
-proxy or a service mesh in front of a listener that is reachable off-host.
+rotation. TLS is not terminated here either; that belongs to a sidecar proxy or
+a service mesh.
 
 ## Container image
 
