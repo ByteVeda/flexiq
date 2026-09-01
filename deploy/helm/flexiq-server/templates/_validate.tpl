@@ -53,6 +53,20 @@ token.
 {{- end -}}
 
 {{/*
+The gRPC door now carries the producer service — enqueue, read, cancel — and
+nothing on it asks for a credential yet. So the server refuses a non-loopback
+bind, and a pod is only ever a non-loopback bind: kubelet dials the pod IP for
+both the `grpc` and the `tcpSocket` probe, so a loopback listener would never
+pass readiness either.
+
+Refusing here rather than rendering a deployment that CrashLoopBackOffs is the
+same trade the checks above make. It lifts when the door has a credential.
+*/}}
+{{- if .Values.grpc.enabled -}}
+{{- fail "flexiq-server: grpc.enabled is not available yet. The gRPC door now serves the flexiq.v1 producer service — enqueue, read and cancel — and it authenticates no caller, so the server refuses to bind it anywhere but loopback. A pod cannot use a loopback bind: kubelet probes the pod IP. This value works again in the release that adds a gRPC credential." -}}
+{{- end -}}
+
+{{/*
 The gRPC door serves exactly one namespace and refuses to start without one:
 an unset namespace means "every namespace" to a read and "only the unnamespaced
 rows" to a dequeue, and neither is a thing to put on a network port.

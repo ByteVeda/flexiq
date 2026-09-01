@@ -43,10 +43,8 @@ jobs:
           render --set attach.enabled=false --set dashboard.enabled=false --set webhook.enabled=true
           render --set storage.existingSecret=s --set attach.existingSecret=s
           render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false --set dashboard.ingress.enabled=true
-          render --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
-            --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod
           render --set storage.dsn=postgres://u:p@db/x --set attach.token="$TOKEN" \
-            --set grpc.enabled=true --set namespace=prod --set webhook.enabled=true
+            --set namespace=prod --set webhook.enabled=true
 
       - name: Invalid combinations are refused, not rendered
         run: |
@@ -70,6 +68,11 @@ jobs:
           refuses "a gRPC door with no namespace" \
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set grpc.enabled=true
+          # And the door itself, while it authenticates no caller: the server
+          # refuses any bind but loopback, and a pod is never loopback.
+          refuses "a gRPC door with no credential" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod
 
       # A readiness probe that 401s leaves the pod NotReady forever, and the
       # only thing distinguishing the two cases is one env var reaching the
@@ -98,41 +101,16 @@ jobs:
           [ "$on" = "/readiness True" ] || { echo "::error::default must probe /readiness with the env var set"; exit 1; }
           [ "$off" = "/health False" ] || { echo "::error::opting out must fall back to /health"; exit 1; }
 
-      # A gRPC-only release has no HTTP route to probe, and the fallback it
-      # lands on decides whether the pod ever goes Ready.
-      - name: A gRPC-only release probes health, not just the socket
-        run: |
-          set -euo pipefail
-          helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
-            --set attach.enabled=false --set dashboard.enabled=false \
-            --set grpc.enabled=true --set namespace=prod \
-            | python3 -c '
-          import sys, yaml
-          for doc in yaml.safe_load_all(sys.stdin):
-              if not doc or doc.get("kind") != "Deployment":
-                  continue
-              container = doc["spec"]["template"]["spec"]["containers"][0]
-              readiness = container["readinessProbe"]
-              liveness = container["livenessProbe"]
-              assert "grpc" in readiness, f"readiness must use the gRPC health probe: {readiness}"
-              # Health reports storage, so it must not restart the pod on an outage.
-              assert "tcpSocket" in liveness, f"liveness must be a socket probe: {liveness}"
-              print("gRPC-only readiness:", readiness, "liveness:", liveness)
-          '
-          # Pre-1.24 clusters reject the `grpc` probe field outright, so the
-          # documented opt-out has to actually change the rendered probe.
-          helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
-            --set attach.enabled=false --set dashboard.enabled=false \
-            --set grpc.enabled=true --set namespace=prod --set grpc.healthProbe=false \
-            | python3 -c '
-          import sys, yaml
-          for doc in yaml.safe_load_all(sys.stdin):
-              if not doc or doc.get("kind") != "Deployment":
-                  continue
-              readiness = doc["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
-              assert "tcpSocket" in readiness, f"the opt-out must fall back to a socket: {readiness}"
-              print("opted out of the gRPC probe:", readiness)
-          '
+      # A gRPC-only release used to be checked here: readiness on the gRPC
+      # health probe, liveness on the socket (health reports storage, so as a
+      # liveness probe it would restart a pod during a database outage), and
+      # `grpc.healthProbe=false` falling back to a socket for clusters older
+      # than 1.24, whose API server rejects the `grpc` probe field outright.
+      #
+      # `grpc.enabled` is refused above while the door authenticates no caller,
+      # so none of those combinations can be rendered. The probe wiring is still
+      # in deployment.yaml, and these assertions come back with the credential
+      # that makes the value usable again.
 
       # The regression this exists for: `genCA` is random, so a helper called
       # once per template would hand the MutatingWebhookConfiguration a CA that
