@@ -53,17 +53,17 @@ token.
 {{- end -}}
 
 {{/*
-The gRPC door now carries the producer service — enqueue, read, cancel — and
-nothing on it asks for a credential yet. So the server refuses a non-loopback
-bind, and a pod is only ever a non-loopback bind: kubelet dials the pod IP for
-both the `grpc` and the `tcpSocket` probe, so a loopback listener would never
-pass readiness either.
-
-Refusing here rather than rendering a deployment that CrashLoopBackOffs is the
-same trade the checks above make. It lifts when the door has a credential.
+The gRPC port binds 0.0.0.0 so producers in other pods can reach it — and a pod
+is only ever a non-loopback bind, because kubelet dials the pod IP for both the
+`grpc` and the `tcpSocket` probe. The server refuses that bind without a token,
+so requiring one here is the same rule stated a step earlier.
 */}}
-{{- if .Values.grpc.enabled -}}
-{{- fail "flexiq-server: grpc.enabled is not available yet. The gRPC door now serves the flexiq.v1 producer service — enqueue, read and cancel — and it authenticates no caller, so the server refuses to bind it anywhere but loopback. A pod cannot use a loopback bind: kubelet probes the pod IP. This value works again in the release that adds a gRPC credential." -}}
+{{- if and .Values.grpc.enabled (not (or .Values.grpc.token .Values.grpc.existingSecret)) -}}
+{{- fail "flexiq-server: grpc.token or grpc.existingSecret is required — the gRPC door accepts enqueues and binds beyond loopback in a pod. Generate one with `openssl rand -base64 32`." -}}
+{{- end -}}
+
+{{- if and .Values.grpc.token (lt (len .Values.grpc.token) 16) -}}
+{{- fail "flexiq-server: grpc.token must be at least 16 characters — the server rejects a guessable one." -}}
 {{- end -}}
 
 {{/*

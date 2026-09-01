@@ -24,6 +24,20 @@ spec:
         {{- if .Values.webhook.enabled }}
         checksum/webhook-tls: {{ include "flexiq-server.webhookCert" . | sha256sum }}
         {{- end }}
+        # Same reason, for every credential the chart owns: a Secret referenced
+        # through secretKeyRef is resolved into the container's environment once,
+        # at pod start. Changing grpc.token or attach.token rewrites the Secret
+        # and leaves the Deployment spec untouched, so without this the pods keep
+        # presenting the old value and reject the new one until someone restarts
+        # them by hand — a rotation that silently does not take effect.
+        #
+        # A Secret this chart does not own cannot be hashed: `lookup` returns
+        # nothing under `helm template`, so the annotation would differ between a
+        # render and an install. Rotating an *existingSecret* therefore still
+        # needs `kubectl rollout restart`, which the README says.
+        {{- if include "flexiq-server.createsSecret" . }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -132,6 +146,16 @@ spec:
             {{- if .Values.grpc.enabled }}
             - name: FLEXIQ_GRPC_LISTEN
               value: "0.0.0.0:{{ .Values.grpc.port }}"
+            - name: FLEXIQ_GRPC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.grpc.existingSecret }}
+                  name: {{ .Values.grpc.existingSecret }}
+                  key: {{ .Values.grpc.existingSecretKey }}
+                  {{- else }}
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: grpc-token
+                  {{- end }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN

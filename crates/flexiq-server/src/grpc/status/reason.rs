@@ -22,6 +22,18 @@ pub const STORAGE_UNAVAILABLE: &str = "STORAGE_UNAVAILABLE";
 pub const STORAGE_CONSTRAINT: &str = "STORAGE_CONSTRAINT";
 /// A server-side fault with nothing useful to say to the caller.
 pub const INTERNAL: &str = "INTERNAL";
+/// No usable credential was presented.
+///
+/// One reason for every way of failing, and a message that names none of them:
+/// telling a missing credential from a wrong one is an oracle for whether a
+/// guessed token exists. A client refreshes its credential and retries once.
+pub const UNAUTHENTICATED: &str = "UNAUTHENTICATED";
+/// The credential is genuine but is not for this package.
+///
+/// A scope is "may call this package" (D1), so this is the answer to a
+/// `produce` credential opening an executor stream. Never retryable: the same
+/// credential will be refused again.
+pub const SCOPE_DENIED: &str = "SCOPE_DENIED";
 /// Bytes the client sent could not be decoded.
 pub const MALFORMED_PAYLOAD: &str = "MALFORMED_PAYLOAD";
 /// The request itself is not a shape this service accepts — no `body` arm, an
@@ -90,6 +102,9 @@ pub const KEY_LIMIT: &str = "limit";
 pub const KEY_ACTUAL: &str = "actual";
 /// The permitted value, `uint64`, in `limit`'s unit. `STEP_LIMIT_EXCEEDED`.
 pub const KEY_ALLOWED: &str = "allowed";
+/// The scope the credential lacks — one of `produce`, `execute`.
+/// `SCOPE_DENIED`.
+pub const KEY_SCOPE: &str = "scope";
 /// 0-based position in an `EnqueueBatch` request, `int32`.
 ///
 /// The one cross-cutting key: it accompanies whatever reason the failing item

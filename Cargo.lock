@@ -1113,6 +1113,7 @@ dependencies = [
  "flexiq-core",
  "flexiq-workflows",
  "hmac",
+ "http",
  "jsonwebtoken",
  "log",
  "pbkdf2",
@@ -1135,6 +1136,8 @@ dependencies = [
  "tonic-reflection",
  "tonic-types",
  "tower",
+ "tower-layer",
+ "tower-service",
  "url",
  "uuid",
 ]

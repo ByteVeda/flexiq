@@ -10,10 +10,15 @@
 //! lands on this listener when it arrives; the contract all of them must keep
 //! lives in `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
 //!
-//! The one rule that shapes everything above it: **this door serves exactly one
-//! namespace**, the process's own, and refuses to start without one. See
-//! [`crate::config::grpc`].
+//! The two rules that shape everything above it: **this door serves exactly
+//! one namespace**, the process's own, and refuses to start without one; and
+//! **every call on it is authenticated in one place**, [`auth::AuthLayer`],
+//! which wraps the whole router so a new RPC cannot land outside the check.
+//! The two `grpc.health.v1` RPCs are the one exception, because a kubelet probe
+//! carries no credential.
+//! See [`crate::config::grpc`] and [`auth`].
 
+pub mod auth;
 pub mod blocking;
 pub mod health;
 pub mod limits;

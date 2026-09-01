@@ -32,6 +32,10 @@ fn config(listen: ListenAddress) -> GrpcConfig {
     GrpcConfig {
         listen,
         namespace: NAMESPACE.to_string(),
+        // Loopback with no credential: the shape a developer runs, and the one
+        // `config::grpc` allows without a token. Authentication has its own
+        // suite in `grpc_auth.rs`.
+        token: None,
     }
 }
 

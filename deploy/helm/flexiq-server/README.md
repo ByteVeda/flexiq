@@ -20,7 +20,7 @@ tasks, so the app image needs no DSN and no inbound port.
 | `attach.enabled` | `true` | The attach listener and, once an executor attaches, the scheduler |
 | `dashboard.enabled` | `true` | The dashboard SPA and its JSON API |
 | `webhook.enabled` | `false` | The mutating admission webhook that injects executor sidecars |
-| `grpc.enabled` | `false` | The gRPC producer door, on its own Service. **Refused while the door has no credential** — see below |
+| `grpc.enabled` | `false` | The gRPC producer door, on its own Service. Needs a credential and `namespace` |
 
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
@@ -30,15 +30,29 @@ this chart mounts no volume for it, and a second replica would not see the first
 one's jobs; the chart refuses the DSN rather than shipping a database that
 disappears with the pod.
 
-`grpc.enabled` is **refused outright for now**. The door serves the `flexiq.v1`
-producer service — enqueue, read, cancel — and authenticates no caller, so the
-server refuses to bind it anywhere but loopback; a pod can never use a loopback
-bind, because kubelet dials the pod IP for every probe type. Failing at
-`helm template` time with that reason beats rendering a Deployment that
-CrashLoopBackOffs. The value works again in the release that gives the door a
-credential, and nothing else in the chart has to change then.
+`grpc.enabled` requires a credential: either `grpc.token`, which the chart puts
+in the Secret it generates under the key `grpc-token`, or `grpc.existingSecret`
+naming a Secret you already manage. The key read from that Secret is
+`grpc.existingSecretKey`, which defaults to `grpc-token` — set it if yours is
+named something else. The door serves the `flexiq.v1` producer service —
+enqueue, read, cancel — and the chart binds it `0.0.0.0`, because kubelet dials
+the pod IP for every probe type and a loopback listener would never pass
+readiness. The server refuses that bind without a credential, so the chart
+refuses it a step earlier, where the message can name the value to set.
 
-`grpc.enabled` additionally requires `namespace`. The gRPC door serves exactly
+**Rotating a token needs the pods to restart.** A `secretKeyRef` is resolved
+into the container's environment once, at pod start. The chart annotates the pod
+template with a checksum of the Secret it generates, so changing `grpc.token` or
+`attach.token` rolls the Deployment on the next `helm upgrade`. A Secret the
+chart does not own cannot be hashed at render time, so after rotating an
+`existingSecret` run `kubectl rollout restart deploy/<release>-flexiq-server`
+yourself.
+
+It is a **shared secret**: one string every client presents, granting the whole
+producer surface, revocable only by rotating it everywhere. Keep the
+`-grpc` Service reachable only from workloads that should be enqueueing.
+
+`grpc.enabled` also requires `namespace`. The gRPC door serves exactly
 one namespace, because an unset one means "every namespace" to a read and "only
 the unnamespaced rows" to a dequeue — neither is a thing to put on a network
 port. The cost is worth naming: jobs written without a namespace are invisible

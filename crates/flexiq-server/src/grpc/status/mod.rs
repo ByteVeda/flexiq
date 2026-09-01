@@ -95,6 +95,38 @@ impl WireError {
         }
     }
 
+    /// No usable credential.
+    ///
+    /// There is exactly one constructor, and it takes no argument, because the
+    /// acceptance criterion is that a caller cannot tell a missing credential
+    /// from a wrong one. A constructor that accepted a message would be one
+    /// call site away from `"no authorization header"`.
+    pub fn unauthenticated() -> Self {
+        Self {
+            code: Code::Unauthenticated,
+            reason: reason::UNAUTHENTICATED,
+            message: "no usable credential was presented".to_string(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// A genuine credential that does not carry `scope`.
+    ///
+    /// Distinct from [`Self::unauthenticated`] on purpose: the caller is known,
+    /// so there is no oracle in saying what it lacks, and a client that cannot
+    /// tell "your token is wrong" from "your token is for the other door" has
+    /// no way to act on either.
+    pub fn scope_denied(scope: &'static str) -> Self {
+        Self {
+            code: Code::PermissionDenied,
+            reason: reason::SCOPE_DENIED,
+            message: format!("this credential does not carry the `{scope}` scope"),
+            metadata: HashMap::from([(reason::KEY_SCOPE.to_string(), scope.to_string())]),
+            retry_after: None,
+        }
+    }
+
     /// A fault of the server's own, with nothing useful to say to the caller.
     ///
     /// The cause is logged by whoever raises this; the response carries only

@@ -9,7 +9,7 @@ use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
 use super::cursor::Cursor;
-use super::Producer;
+use super::Scoped;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
@@ -23,18 +23,18 @@ const DEFAULT_PAGE_SIZE: i32 = 50;
 const MAX_PAGE_SIZE: i32 = 500;
 
 /// Read one job by id.
-pub async fn get_job(
-    producer: &Producer,
+pub(crate) async fn get_job(
+    scoped: &Scoped<'_>,
     request: pb::GetJobRequest,
 ) -> Result<Response<pb::GetJobResponse>, Status> {
     let id = require_job_id(&request.job_id)?;
-    let namespace = producer.namespace().to_string();
+    let namespace = scoped.namespace().to_string();
     let blobs = Blobs {
         payload: request.include_payload,
         result: request.include_result,
     };
 
-    let job = on_storage(producer.storage(), move |storage| {
+    let job = on_storage(scoped.storage(), move |storage| {
         storage.get_job(&id, Some(&namespace))
     })
     .await?
@@ -50,8 +50,8 @@ pub async fn get_job(
 }
 
 /// Page through jobs, newest first.
-pub async fn list_jobs(
-    producer: &Producer,
+pub(crate) async fn list_jobs(
+    scoped: &Scoped<'_>,
     request: pb::ListJobsRequest,
 ) -> Result<Response<pb::ListJobsResponse>, Status> {
     let limit = page_size(request.page_size)?;
@@ -74,11 +74,11 @@ pub async fn list_jobs(
         .and_then(convert::status_from_wire)
         .map(|status| status as i32);
 
-    let namespace = producer.namespace().to_string();
+    let namespace = scoped.namespace().to_string();
     let queue = request.queue;
     let task_name = request.task_name;
 
-    let jobs = on_storage(producer.storage(), move |storage| {
+    let jobs = on_storage(scoped.storage(), move |storage| {
         storage.list_jobs_after(
             status,
             queue.as_deref(),
@@ -119,14 +119,14 @@ pub async fn list_jobs(
 }
 
 /// Per-status counts, for one queue or for the whole namespace.
-pub async fn queue_stats(
-    producer: &Producer,
+pub(crate) async fn queue_stats(
+    scoped: &Scoped<'_>,
     request: pb::QueueStatsRequest,
 ) -> Result<Response<pb::QueueStatsResponse>, Status> {
-    let namespace = producer.namespace().to_string();
+    let namespace = scoped.namespace().to_string();
     let queue = request.queue;
 
-    let stats = on_storage(producer.storage(), move |storage| match queue {
+    let stats = on_storage(scoped.storage(), move |storage| match queue {
         Some(queue) => storage.stats_by_queue(&queue, Some(&namespace)),
         None => storage.stats(Some(&namespace)),
     })
