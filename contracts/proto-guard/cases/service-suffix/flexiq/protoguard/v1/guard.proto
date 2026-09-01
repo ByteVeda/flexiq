@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 priority = 3;
+}
+
+message CheckRequest {}
+
+message CheckResponse {}
+
+// SERVICE_SUFFIX is in STANDARD and not in BASIC. It is what renames #714's
+// `Producer` to `ProducerService` (§1.2).
+service Guard {
+  rpc Check(CheckRequest) returns (CheckResponse);
+}

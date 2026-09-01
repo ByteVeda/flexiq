@@ -1,0 +1,26 @@
+# The buf module root for the FlexiQ wire contract.
+#
+# Governed by tasks/specs/2026-09-01-flexiq-v1-proto-design.md. Two settings
+# here are decisions, not defaults:
+#
+#   lint STANDARD    — §1.2. It was spelled DEFAULT until buf v1.40.0 and the
+#                      old name still resolves, so STANDARD reads like a typo
+#                      to anyone working from older knowledge. It is not one.
+#   breaking WIRE_JSON — D4. Field *names* are part of the contract because the
+#                      JSON facade (#718) publishes them to clients that have no
+#                      .proto. WIRE alone lets a field be removed while only its
+#                      number is reserved, and lets a field be renamed outright;
+#                      both are invisible to binary protobuf and fatal to JSON.
+#                      contracts/proto-guard pins that difference.
+version: v2
+
+modules:
+  - path: .
+
+lint:
+  use:
+    - STANDARD
+
+breaking:
+  use:
+    - WIRE_JSON

@@ -84,3 +84,10 @@ repos:
         language: system
         files: ^docs/(app/|tsconfig\.json|package\.json)
         pass_filenames: false
+
+      - id: proto-check
+        name: proto check (buf format, lint, descriptor drift)
+        entry: ./scripts/proto-check.sh
+        language: system
+        files: ^contracts/proto/
+        pass_filenames: false

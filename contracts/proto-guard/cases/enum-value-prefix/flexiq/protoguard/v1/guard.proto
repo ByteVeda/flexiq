@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 priority = 3;
+}
+
+// ENUM_VALUE_PREFIX is in STANDARD and not in BASIC. It is why the §4 error
+// `reason` list is a Rust module and not a proto enum.
+enum GuardKind {
+  UNSPECIFIED = 0;
+  ORDINARY = 1;
+}

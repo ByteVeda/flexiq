@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// The sanctioned removal: both the number and the name are reserved (§2.1).
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+
+  reserved 3;
+  reserved "priority";
+}

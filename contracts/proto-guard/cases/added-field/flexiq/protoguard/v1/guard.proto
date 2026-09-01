@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// Additive, and must stay allowed: over-tightening the category until this
+// fails would make every new field a breaking change (§2.1 rule 4).
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 priority = 3;
+  string notes = 4;
+}

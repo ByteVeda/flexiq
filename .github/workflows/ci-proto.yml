@@ -1,0 +1,68 @@
+name: CI Proto
+
+# Reusable workflow: the buf gate on the FlexiQ wire contract.
+# Called by ci.yml when contracts/ or the proto scripts change.
+#
+# What it enforces, and why each line is the one it is, lives in
+# tasks/specs/2026-09-01-flexiq-v1-proto-design.md §1.2, §2 and §11. Field
+# numbers are permanent from the first release, so this runs before #714 puts
+# any of them in the ground.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  proto:
+    name: Proto (buf)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          # The breaking check compares against origin/master. A shallow clone
+          # of the PR ref does not have it.
+          fetch-depth: 0
+
+      - name: Read the pinned buf version
+        id: pin
+        # One pin in contracts/BUF_VERSION, read by CI and by
+        # scripts/proto-check.sh alike. A buf release that adds a lint rule
+        # should not turn a green branch red on a morning nobody touched a
+        # proto — and the committed descriptor is only byte-stable for a fixed
+        # version, so the pin is what makes the drift check meaningful.
+        run: echo "version=$(tr -d '[:space:]' < contracts/BUF_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@v1.5.0
+        with:
+          setup_only: true
+          version: ${{ steps.pin.outputs.version }}
+
+      - name: Format, lint and descriptor drift
+        run: ./scripts/proto-check.sh
+
+      - name: The gate catches what it claims to
+        run: ./scripts/proto-guard.sh
+
+      - name: Note the sanctioned break
+        if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'proto-breaking') }}
+        run: |
+          echo "::warning::The 'proto-breaking' label is set — the buf breaking check is skipped for this PR."
+          echo "::warning::Until the release that first ships the gRPC role this is sanctioned (design doc §2.2). After it, the label is for reverting a mistake made in the same release train, never for changing a shipped shape."
+
+      # Only on pull_request: on a push to master the baseline is the commit
+      # being tested, so the comparison is vacuous.
+      - name: Breaking change check
+        if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'proto-breaking') }}
+        run: |
+          set -euo pipefail
+          # The PR that introduces the module is the one case where master has
+          # nothing to compare against. This self-disarms once it merges.
+          if ! git cat-file -e origin/master:contracts/proto/buf.yaml 2>/dev/null; then
+            echo "::notice::master has no contracts/proto module yet — nothing to compare against."
+            exit 0
+          fi
+          buf breaking contracts/proto --against '.git#ref=origin/master,subdir=contracts/proto'

@@ -1,0 +1,4 @@
+# The committed descriptor is a protobuf FileDescriptorSet, not text. Without
+# this git tries to diff and merge it line-wise and produces noise, or worse a
+# "successful" merge of two binary halves.
+contracts/descriptor.binpb binary

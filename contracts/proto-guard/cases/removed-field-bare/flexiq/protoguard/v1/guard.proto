@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// `priority` deleted outright, reserving nothing.
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+}

@@ -1,0 +1,47 @@
+// UNSTABLE. Until the release that first ships the gRPC role, these files may
+// change under the `proto-breaking` label (§2.2 of
+// tasks/specs/2026-09-01-flexiq-v1-proto-design.md). After that release the
+// label is for reverting a mistake made in the same release train, never for
+// changing a shipped shape.
+//
+// The rules this package is held to, because a client reads the .proto and not
+// the design document:
+//
+//   1. Field numbers are never reused and never renumbered.
+//   2. Fields are deprecated in place, and on removal both the number and the
+//      name are reserved — the name because JSON clients encode against it.
+//   3. New RPCs, messages, fields and enum values are additive and never bump
+//      the package version.
+//   4. A field's meaning and units are frozen with its number.
+//   5. Readers tolerate what they do not know: unknown fields, unknown enum
+//      values, unknown oneof arms.
+
+syntax = "proto3";
+
+package flexiq.v1;
+
+// Lifecycle state of a job.
+//
+// One-to-one with `JobStatus` in crates/flexiq-core/src/job.rs, but offset by
+// one: the Rust discriminants start at `Pending = 0` and zero is spent here on
+// `_UNSPECIFIED`. The conversion is an exhaustive match with no wildcard, so
+// adding a variant on either side fails to compile rather than silently
+// mapping to something wrong.
+//
+// A reader that does not recognise a value must treat the job as **not
+// terminal** — never as failed. Only the values it knows are terminal are.
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  // Waiting to be dequeued, or scheduled for the future.
+  JOB_STATUS_PENDING = 1;
+  // Claimed by a worker and executing.
+  JOB_STATUS_RUNNING = 2;
+  // Finished successfully.
+  JOB_STATUS_COMPLETE = 3;
+  // Failed; may still be retried.
+  JOB_STATUS_FAILED = 4;
+  // Exhausted its retries and moved to the dead-letter queue.
+  JOB_STATUS_DEAD = 5;
+  // Cancelled before or during execution.
+  JOB_STATUS_CANCELLED = 6;
+}
