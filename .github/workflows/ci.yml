@@ -60,6 +60,9 @@ jobs:
               - '.github/actions/rust-prelude/**'
               - '.github/actions/setup-python/**'
               - 'rust-toolchain.toml'
+              # flexiq-server's build.rs generates the flexiq.v1 types from the
+              # committed descriptor, so the wire contract is now Rust input.
+              - 'contracts/descriptor.binpb'
               - '.github/workflows/ci-rust.yml'
             python:
               - *shared
@@ -108,8 +111,10 @@ jobs:
             chart:
               - 'deploy/helm/**'
               - '.github/workflows/ci-chart.yml'
-            # Deliberately not `*shared`: the wire contract is checked by buf
-            # against its own committed descriptor, and no Rust consumes it yet.
+            # Deliberately not `*shared`: buf checks the contract against its
+            # own committed descriptor, which is a different question from
+            # whether the Rust generated off that descriptor still compiles —
+            # the `rust` filter above watches the descriptor for that.
             proto:
               - 'contracts/**'
               - 'scripts/proto-check.sh'
