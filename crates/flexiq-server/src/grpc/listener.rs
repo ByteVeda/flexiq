@@ -18,8 +18,9 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 
-use crate::config::grpc::{GrpcConfig, LISTEN_VAR};
+use crate::config::grpc::{GrpcConfig, LISTEN_VAR, TOKEN_VAR};
 use crate::config::listen::ListenAddress;
+use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::producer::Producer;
 use crate::grpc::{health, reflection};
@@ -52,18 +53,18 @@ impl Listener {
                 // The socket is already open, so check before anything is
                 // served on it and let the drop close it.
                 //
-                // `config::grpc` refuses a non-loopback address, and it checks
-                // the *resolved* one — `listen::resolve` runs `to_socket_addrs`
-                // — so no reachable path should arrive here. That is exactly why
-                // it fails rather than warns: the value of a guard on an
-                // unreachable branch is that it stays correct when the branch
-                // stops being unreachable, and the thing on the other side of
-                // this one is an unauthenticated `Enqueue`.
-                if !bound.ip().is_loopback() {
+                // `config::grpc` refuses a credential-free non-loopback address,
+                // and it checks the *resolved* one — `listen::resolve` runs
+                // `to_socket_addrs` — so no reachable path should arrive here.
+                // That is exactly why it fails rather than warns: the value of a
+                // guard on an unreachable branch is that it stays correct when
+                // the branch stops being unreachable, and the thing on the other
+                // side of this one is an unauthenticated `Enqueue`.
+                if !bound.ip().is_loopback() && config.token.is_none() {
                     anyhow::bail!(
-                        "{LISTEN_VAR} bound {bound}, which is reachable beyond loopback. \
-                         This listener authenticates no caller and terminates no TLS, so it \
-                         serves loopback and Unix sockets only."
+                        "{LISTEN_VAR} bound {bound}, which is reachable beyond loopback, \
+                         with no {TOKEN_VAR} set. A door that enqueues work does not serve \
+                         an unauthenticated network."
                     );
                 }
                 log::info!("[flexiq] gRPC listener on tcp://{bound}");
@@ -101,9 +102,18 @@ impl Listener {
 
     /// Serve the producer service, health and reflection until `shutdown` fires.
     pub async fn serve(self, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
-        let producer = Producer::new(storage.clone(), self.config.namespace.clone());
+        let producer = Producer::new(storage.clone());
         let health = health::serve(storage, self.config.namespace.clone(), shutdown.clone()).await;
+        // One layer over the whole router, not one per service: `Server::layer`
+        // takes `Layer<Routes>`, so every service registered below — and every
+        // service registered below in future — is gated by this line and by
+        // nothing else. It is also what supplies the namespace: the producer
+        // holds none of its own and reads it off the request's principal.
         let router = Server::builder()
+            .layer(AuthLayer::new(auth::authenticator(
+                self.config.token.as_ref(),
+                &self.config.namespace,
+            )))
             .add_service(producer.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))

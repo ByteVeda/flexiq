@@ -11,22 +11,22 @@ use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
 use super::reads::{not_found, require_job_id};
-use super::Producer;
+use super::Scoped;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 
 /// Cancel a job, and report the state that leaves it in.
-pub async fn cancel_job(
-    producer: &Producer,
+pub(crate) async fn cancel_job(
+    scoped: &Scoped<'_>,
     request: pb::CancelJobRequest,
 ) -> Result<Response<pb::CancelJobResponse>, Status> {
     let id = require_job_id(&request.job_id)?;
-    let namespace = producer.namespace().to_string();
+    let namespace = scoped.namespace().to_string();
 
     // All three calls share one hop onto the blocking pool: they are one
     // logical operation, and three round trips through the pool would be three
     // chances to interleave with something else.
-    let job = on_storage(producer.storage(), move |storage| {
+    let job = on_storage(scoped.storage(), move |storage| {
         // A pending job is cancelled outright. A running one cannot be stopped
         // from outside — only the task can notice — so the flag is set and the
         // task stops at its next check. A job already terminal matches neither,

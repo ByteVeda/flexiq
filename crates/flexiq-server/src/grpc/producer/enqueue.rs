@@ -13,19 +13,19 @@ use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
 use super::structured;
-use super::Producer;
+use super::Scoped;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
 
 /// Submit one job.
-pub async fn one(
-    producer: &Producer,
+pub(crate) async fn one(
+    scoped: &Scoped<'_>,
     request: pb::EnqueueRequest,
 ) -> Result<Response<pb::EnqueueResponse>, Status> {
-    let prepared = prepare(request, producer.namespace())?;
+    let prepared = prepare(request, scoped.namespace())?;
     let (job, deduplicated) =
-        on_storage(producer.storage(), move |storage| prepared.submit(storage)).await?;
+        on_storage(scoped.storage(), move |storage| prepared.submit(storage)).await?;
 
     Ok(Response::new(pb::EnqueueResponse {
         // A producer that just submitted a job already has the payload it sent,
@@ -48,8 +48,8 @@ pub async fn one(
 ///
 /// A client that treats an `enqueued` arm as durable is correct under both,
 /// which is the property the split exists to give it.
-pub async fn batch(
-    producer: &Producer,
+pub(crate) async fn batch(
+    scoped: &Scoped<'_>,
     request: pb::EnqueueBatchRequest,
 ) -> Result<Response<pb::EnqueueBatchResponse>, Status> {
     if request.items.is_empty() {
@@ -62,7 +62,7 @@ pub async fn batch(
     // and they are refused before anything is written, whatever the backend.
     let mut prepared = Vec::with_capacity(request.items.len());
     for (index, item) in request.items.into_iter().enumerate() {
-        let item = prepare(item, producer.namespace()).map_err(|error| error.at_index(index))?;
+        let item = prepare(item, scoped.namespace()).map_err(|error| error.at_index(index))?;
         // Storage has no batched debounce, so honouring one here would mean
         // leaving the batch to submit the rest — which silently costs the
         // transactional backends the atomicity that is the reason to send a
@@ -77,8 +77,8 @@ pub async fn batch(
         prepared.push(item);
     }
 
-    let atomic = batch_is_atomic(producer.storage());
-    let results = on_storage(producer.storage(), move |storage| {
+    let atomic = batch_is_atomic(scoped.storage());
+    let results = on_storage(scoped.storage(), move |storage| {
         Ok(if atomic {
             submit_atomically(storage, prepared)
         } else {
