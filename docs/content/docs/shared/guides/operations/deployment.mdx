@@ -974,9 +974,11 @@ is the smaller change; an executor is the one that reclaims the RAM.
 ## The gRPC door
 
 `flexiq-server` binds one listener per role, and `FLEXIQ_GRPC_LISTEN` adds a
-fourth beside attach, the dashboard and the admission webhook. It is the
-network-side producer door: a client enqueues over gRPC instead of over a
-database connection, so the credential it holds is a token rather than a DSN.
+fourth beside attach, the dashboard and the admission webhook. It is where the
+network-side producer door will live — enqueue over gRPC rather than over a
+database connection, holding a token rather than a DSN — and **today it serves
+`grpc.health.v1` and server reflection only**. The FlexiQ services land on this
+listener as they arrive; no caller is authenticated yet.
 
 ```bash
 FLEXIQ_DSN=postgres://user:pass@host/db \
@@ -1032,7 +1034,9 @@ queue with no workers is still a queue, but a door that cannot reach its
 database can only fail every call it is handed. In Kubernetes that makes the
 gRPC health check the right **readiness** probe and the wrong liveness one — a
 database outage should take a replica out of rotation, not restart it — which is
-how the Helm chart wires a gRPC-only release.
+how the Helm chart wires a gRPC-only release. The `grpc` probe field needs
+Kubernetes 1.24; on an older cluster set `grpc.healthProbe=false` and readiness
+falls back to a socket connect.
 
 ### Security
 
