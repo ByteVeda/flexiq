@@ -35,6 +35,7 @@ jobs:
       polyglot: ${{ steps.decide.outputs.polyglot }}
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
+      proto: ${{ steps.decide.outputs.proto }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -104,6 +105,13 @@ jobs:
             chart:
               - 'deploy/helm/**'
               - '.github/workflows/ci-chart.yml'
+            # Deliberately not `*shared`: the wire contract is checked by buf
+            # against its own committed descriptor, and no Rust consumes it yet.
+            proto:
+              - 'contracts/**'
+              - 'scripts/proto-check.sh'
+              - 'scripts/proto-guard.sh'
+              - '.github/workflows/ci-proto.yml'
 
       - name: Decide which suites run
         id: decide
@@ -118,6 +126,7 @@ jobs:
           POLYGLOT: ${{ steps.filter.outputs.polyglot }}
           SERVER: ${{ steps.filter.outputs.server }}
           CHART: ${{ steps.filter.outputs.chart }}
+          PROTO: ${{ steps.filter.outputs.proto }}
         run: |
           decide() {
             if [ "$FORCE" = "true" ] || [ "$2" = "true" ]; then
@@ -133,6 +142,7 @@ jobs:
           decide polyglot "$POLYGLOT"
           decide server "$SERVER"
           decide chart "$CHART"
+          decide proto "$PROTO"
 
   versions:
     name: Version consistency
@@ -187,10 +197,16 @@ jobs:
     if: needs.changes.outputs.chart == 'true'
     uses: ./.github/workflows/ci-chart.yml
 
+  proto:
+    name: Proto
+    needs: changes
+    if: needs.changes.outputs.proto == 'true'
+    uses: ./.github/workflows/ci-proto.yml
+
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, polyglot, server-image, chart]
+    needs: [changes, versions, rust, python, node, java, polyglot, server-image, chart, proto]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed
