@@ -355,20 +355,31 @@ metadata = map<string, string>, per reason         # never parsed out of prose
 
 **`ErrorInfo.metadata` is `map<string, string>`, so every numeric value needs a
 stated encoding.** Values are **base-10 ASCII, no grouping, no unit suffix, `-`
-for negative**, and every one of them is a signed 64-bit integer parsed with the
-client's `int64` parser:
+for negative**. The width and signedness are per key, and they are the Rust
+field's, not a uniform `int64` — a byte count that is `u64` in
+`crates/flexiq-core/src/error.rs` must not be narrowed to fit one parser:
 
 | Key | Reason | Type and unit |
 |---|---|---|
 | `queue` | `QUEUE_FULL` | queue name, verbatim |
-| `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
-| `speaks`, `required` | `CONTRACT_TOO_OLD` | `int64`, contract level |
+| `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs (`error.rs:62,64`) |
+| `speaks`, `required` | `CONTRACT_TOO_OLD` | `uint32`, contract level (`error.rs:93,95`) |
 | `limit` | `STEP_LIMIT_EXCEEDED` | one of `step bytes`, `total bytes`, `step count` |
-| `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `int64`, in `limit`'s unit |
+| `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `uint64`, in `limit`'s unit (`error.rs:138,140`) |
+| `index` | any, from `EnqueueBatch` | `int32`, 0-based position in the request (§7.4) |
 
-A key absent from a reason's row is not sent. A value that will not parse is a
-server bug, and a client treats it as absent rather than failing the response —
-the code and the reason already carry the decision.
+`actual` is unsigned because its producers cast a `usize` byte count, and a
+signed reading would turn a value above `i64::MAX` into a negative one. Nothing
+realistic reaches that, which is exactly why it would be found late.
+
+`index` is the one cross-cutting key: it accompanies whatever reason the failing
+item raised rather than getting a reason of its own, because a client that gets
+`QUEUE_FULL` on a batch needs both facts — what went wrong and which item. Every
+other key is sent only with the reason its row names.
+
+A value that will not parse is a server bug, and a client treats it as absent
+rather than failing the response — the code and the reason already carry the
+decision.
 
 `RESOURCE_EXHAUSTED` additionally carries `google.rpc.RetryInfo`. The human
 message is for logs and may be reworded in any release; `reason` may not.
@@ -385,7 +396,7 @@ from either (listed so a future RPC does not invent a second answer).
 
 | `QueueError` | Code | `reason` | Retry? | Where |
 |---|---|---|---|---|
-| `Storage(Diesel, non-`DatabaseError`)`, `Pool`, `Redis` | `UNAVAILABLE` | `STORAGE_UNAVAILABLE` | yes, backoff | P, X |
+| `Storage(Diesel, neither `DatabaseError` nor `NotFound`)`, `Pool`, `Redis` | `UNAVAILABLE` | `STORAGE_UNAVAILABLE` | yes, backoff | P, X |
 | `Storage(DatabaseError(any other kind))` | `UNAVAILABLE` | `STORAGE_UNAVAILABLE` | yes, backoff | P, X |
 | `Storage(diesel::result::Error::NotFound)` | `INTERNAL` | `INTERNAL` | no | P, X |
 | `Storage(DatabaseError(Unique/FK/NotNull/Check))` | `INTERNAL` | `STORAGE_CONSTRAINT` | no | P, X |
@@ -419,7 +430,9 @@ which is exactly what `INVALID_ARGUMENT` means and exactly what
 is a deployment that must be upgraded, the other is a queue that will drain.
 
 **`Storage` wraps *every* Diesel error, including `NotFound`, which is why it has
-a row of its own.** A row that is genuinely absent is normalised before it
+a row of its own and why the generic row excludes it by name** — an
+implementation that matched the rows in order would otherwise settle `NotFound`
+on `UNAVAILABLE` and never reach its own row. A row that is genuinely absent is normalised before it
 becomes an error — `get_job` returns `Option` via `.optional()`
 (`diesel_common/jobs.rs:1422-1447`) and the id-addressed paths answer `false` —
 so a raw `NotFound` reaching the boundary is a query that forgot `.optional()`,
@@ -466,10 +479,22 @@ the first list, `DEADLINE_EXCEEDED` and `CANCELLED` included.
 `Enqueue`, `EnqueueBatch` and `SubmitWorkflow` are `IDEMPOTENCY_UNKNOWN` and
 **must not be retried automatically**. `UNAVAILABLE` does not promise the write
 did not land: a commit followed by a dropped connection produces it. The single
-exception is an `Enqueue` carrying a `unique_key`, which makes the resend
-converge on one job — which is what the key is for, and why §10 tells clients
-that intend to retry to always set one. `EnqueueBatch` has no equivalent unless
-every item carries a key, and `SubmitWorkflow` has none at all.
+exception is an `Enqueue` carrying a `unique_key`, which is what the key is for
+and why §10 tells clients that intend to retry to always set one.
+`EnqueueBatch` has no equivalent unless every item carries a key, and
+`SubmitWorkflow` has none at all.
+
+**The `unique_key` window is the job's active life, not forever.**
+`enqueue_unique` "returns the existing **active** job when a duplicate is found"
+(`traits.rs:34-35`) — a terminal job releases the key, which is the behaviour a
+recurring task needs and not a defect. So a retry converges only while the
+original is still pending or running; the same request replayed after the job
+completed or dead-lettered enqueues a second one, correctly by that rule and
+surprisingly to a client that read "idempotent". A client's total retry deadline
+therefore has to be shorter than the job's own life, and a producer that needs
+convergence beyond it needs a durable key of its own — an application-level
+record, not a queue primitive. Stated here so the reference page (#721) can say
+it rather than implying `unique_key` is an idempotency key without an expiry.
 
 ### 4.4 The two invariants a test enforces
 
@@ -765,8 +790,10 @@ backend rather than papering over it:
 
 - **A backend whose batch is one transaction** — Diesel — fails the *RPC*. One
   item's failure rolls back every insert, so returning earlier items as
-  `enqueued` would report jobs that do not exist. The top-level `Status` carries
-  the failing item's index in `ErrorInfo.metadata{index}`.
+  `enqueued` would report jobs that do not exist. The top-level `Status` keeps
+  the failing item's own reason and adds `metadata{index}` — the 0-based position
+  in the request, per §4.1's table — so a client learns what went wrong and which
+  item in one answer.
 - **A backend that can partially apply** — Redis, an unrolled-back pipeline —
   answers `OK` with per-item results, and an `error` arm means that item alone
   did not land.
@@ -908,6 +935,9 @@ belong in the `.proto` comments as well as in #721.
     `EnqueueBatch` needs one per item and `SubmitWorkflow` has no equivalent, so
     neither is automatically retryable at all (§4.3). This is the single most
     important sentence in the reference page.
+    **And a `unique_key` is not an idempotency key without an expiry** — it
+    dedupes against the *active* job only, so a retry that arrives after the
+    original finished enqueues a second one (§4.3).
 11. **Not a replacement for embedded mode.** Local, no daemon, straight to
     SQLite stays the default. Server mode is additive, and #721 must answer this
     above the fold.
@@ -933,7 +963,7 @@ document first.
 | **#718** JSON facade | D2, D15, D22, §4.1 | A route exists for an `flexiq.executor.v1` RPC; a `GET` serves an RPC that is not `NO_SIDE_EFFECTS`; the body cap and the gRPC cap disagree; errors are rendered in a shape other than §4.1; the drift test checks a hand-written list instead of the package. |
 | **#719** lease token | E7, §8 | The token is minted or chosen by the executor; any frame that settles or advances an attempt — `cancelled` and `slept` included — goes without one; a reclaim or reap does not move the epoch; a stale completion is swallowed rather than raised; it is negotiated by a version bump instead of a capability. |
 | **#720** executor transport | D1, D22, D24, §8 | It becomes a second dispatcher rather than a fourth `Transport`; capabilities become an enum; a fingerprint rides the wire; heartbeats ride the dispatch stream; an unknown frame arm is fatal; the message limit is set to the payload limit rather than above it; the executor package gains an HTTP binding. |
-| **#721** docs | §5.2, §10 | The page reads as though embedded mode is deprecated; the NULL-namespace cost is unstated; the `raw`/`structured` precision loss is a footnote; the untrusted-network warning is missing while #717 is open. |
+| **#721** docs | §4.3, §5.2, §10 | The page reads as though embedded mode is deprecated; the NULL-namespace cost is unstated; `unique_key` is presented as an idempotency key without saying it expires with the job; the `raw`/`structured` precision loss is a footnote; the untrusted-network warning is missing while #717 is open. |
 
 ---
 

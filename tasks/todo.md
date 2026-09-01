@@ -103,3 +103,21 @@ Rejected: the review read `buf lint`'s `STANDARD` category as a typo for
 8. `max_decoding_message_size` measures the serialized message, so setting it to
    `MAX_PAYLOAD_BYTES` rejects a maximum payload. 64 MiB payload, 68 MiB message,
    and the acceptance test sends the maximum rather than something under it.
+
+### Third round, 4 findings — each one a consequence of a second-round fix
+
+1. The metadata table declared every number `int64`. `actual`/`allowed` are `u64`
+   in `error.rs:138,140` and `speaks`/`required` are `u32`; widths are now per
+   key and cited, since a signed reading of a `usize` byte count turns a value
+   above `i64::MAX` negative.
+2. The new `NotFound` row was shadowed by the generic Diesel row above it — an
+   implementation matching in order never reaches it. The generic row now
+   excludes `NotFound` by name.
+3. "A `unique_key` makes the resend converge" is true only inside the active
+   window: `enqueue_unique` dedupes against the **active** job
+   (`traits.rs:34-35`), so a terminal job releases the key and a late retry
+   enqueues a second one. §4.3 and §10 now say so, and #721 is reviewed against
+   it — the failure mode is a producer trusting the word "idempotent".
+4. `metadata{index}` was introduced in §7.4 without appearing in §4.1's table.
+   Added, as the one cross-cutting key: it rides whatever reason the failing item
+   raised, because a client needs both facts at once.
