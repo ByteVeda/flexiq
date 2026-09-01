@@ -47,7 +47,7 @@ pub fn from_env(env: &Env, allow_insecure: bool) -> Result<Option<DashboardConfi
     let Some(spec) = value(env, "FLEXIQ_DASHBOARD") else {
         return Ok(None);
     };
-    let bind = resolve(&spec)?;
+    let bind = resolve("FLEXIQ_DASHBOARD", &spec)?;
     let auth = auth_mode(env)?;
 
     // An unauthenticated dashboard exposes every operate action (cancel,

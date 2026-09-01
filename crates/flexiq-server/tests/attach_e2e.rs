@@ -16,7 +16,7 @@ use flexiq_core::{
     ExecutorMessage, JobStatus, NewJob, RemoteConfig, RemoteDispatcher, SchedulerMessage, Secret,
     Storage, StorageSideChannel, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
-use flexiq_server::config::listen::AttachListen;
+use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::runtime::listener;
 use flexiq_server::runtime::scheduler::{SchedulerSettings, SchedulerSupervisor};
 use flexiq_server::runtime::shutdown::Shutdown;
@@ -202,7 +202,7 @@ impl Harness {
         let shutdown = Shutdown::default();
         let listener = listener::spawn(
             // Port 0: the OS picks a free port, so parallel tests never clash.
-            AttachListen::Tcp("127.0.0.1:0".parse().expect("valid address")),
+            ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
             dispatcher,
             supervisor.clone(),
             shutdown.clone(),

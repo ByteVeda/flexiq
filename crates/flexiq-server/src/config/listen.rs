@@ -1,6 +1,11 @@
 //! Where executors attach, and the guards that keep that port from being a
 //! remote code-dispatch hole.
 //!
+//! [`ListenAddress`] and [`parse`] are the shared half: every role that binds a
+//! port takes its address through them, so `unix:` and a bare `:port` mean the
+//! same thing whichever variable named them. Everything else here belongs to
+//! attach alone.
+//!
 //! An attach connection receives jobs, so the listener is deliberately harder
 //! to expose than the dashboard: there is no insecure escape hatch. A bind
 //! reachable off-host requires `FLEXIQ_ATTACH_TOKEN`, and the token is a
@@ -28,22 +33,22 @@ const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_LISTEN_TLS_CERT", "FLEXIQ_LISTEN
 #[derive(Debug, Clone)]
 pub struct AttachConfig {
     /// Address executors dial.
-    pub listen: AttachListen,
+    pub listen: ListenAddress,
     /// Secret an executor must present in its `hello`.
     pub token: Option<Secret>,
 }
 
-/// Address executors dial to attach.
+/// An address a role binds: either half of one `FLEXIQ_*_LISTEN` variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachListen {
-    /// TCP, for an executor in another container.
+pub enum ListenAddress {
+    /// TCP, for a peer in another container.
     Tcp(SocketAddr),
     /// Unix domain socket, the same-pod sidecar case.
     #[cfg(unix)]
     Unix(PathBuf),
 }
 
-impl std::fmt::Display for AttachListen {
+impl std::fmt::Display for ListenAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tcp(addr) => write!(f, "tcp://{addr}"),
@@ -69,9 +74,9 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
         }
     }
 
-    let listen = parse(&spec)?;
+    let listen = parse("FLEXIQ_LISTEN", &spec)?;
     let token = token(env)?;
-    if let AttachListen::Tcp(addr) = &listen {
+    if let ListenAddress::Tcp(addr) = &listen {
         if !addr.ip().is_loopback() && token.is_none() {
             bail!(
                 "FLEXIQ_LISTEN={spec} binds a non-loopback address, and an attach port \
@@ -107,25 +112,28 @@ pub fn scrub_attach_token() {
 }
 
 /// Parse one listen spec: `unix:/path`, `host:port`, or `:port`.
-pub fn parse(spec: &str) -> Result<AttachListen> {
+///
+/// `var` is the variable the spec came from, so a role that is not attach
+/// still reports the name the operator actually set.
+pub fn parse(var: &str, spec: &str) -> Result<ListenAddress> {
     if let Some(path) = spec.strip_prefix("unix:") {
         #[cfg(unix)]
         {
             if path.is_empty() {
-                bail!("FLEXIQ_LISTEN=unix: needs a socket path, e.g. unix:/run/flexiq.sock");
+                bail!("{var}=unix: needs a socket path, e.g. unix:/run/flexiq.sock");
             }
-            return Ok(AttachListen::Unix(PathBuf::from(path)));
+            return Ok(ListenAddress::Unix(PathBuf::from(path)));
         }
         #[cfg(not(unix))]
-        bail!("Unix socket listeners are not supported on this platform");
+        bail!("{var} asks for a Unix socket listener, which this platform does not support");
     }
-    Ok(AttachListen::Tcp(resolve(spec)?))
+    Ok(ListenAddress::Tcp(resolve(var, spec)?))
 }
 
 /// Resolve `host:port` to a single socket address. A bare `:port` binds
 /// loopback rather than every interface — the safe reading of an ambiguous
 /// value.
-pub fn resolve(spec: &str) -> Result<SocketAddr> {
+pub fn resolve(var: &str, spec: &str) -> Result<SocketAddr> {
     let normalised = if let Some(port) = spec.strip_prefix(':') {
         format!("127.0.0.1:{port}")
     } else {
@@ -133,9 +141,9 @@ pub fn resolve(spec: &str) -> Result<SocketAddr> {
     };
     normalised
         .to_socket_addrs()
-        .with_context(|| format!("'{spec}' is not a valid host:port"))?
+        .with_context(|| format!("{var}='{spec}' is not a valid host:port"))?
         .next()
-        .with_context(|| format!("'{spec}' resolved to no address"))
+        .with_context(|| format!("{var}='{spec}' resolved to no address"))
 }
 
 #[cfg(test)]
@@ -162,7 +170,7 @@ mod tests {
         let config = attach(&[("FLEXIQ_LISTEN", "127.0.0.1:7777")]);
         assert_eq!(
             config.listen,
-            AttachListen::Tcp("127.0.0.1:7777".parse().unwrap())
+            ListenAddress::Tcp("127.0.0.1:7777".parse().unwrap())
         );
         assert!(config.token.is_none());
     }
@@ -181,7 +189,7 @@ mod tests {
         ]);
         assert_eq!(
             config.listen,
-            AttachListen::Tcp("0.0.0.0:7777".parse().unwrap())
+            ListenAddress::Tcp("0.0.0.0:7777".parse().unwrap())
         );
         assert!(config
             .token
@@ -213,7 +221,7 @@ mod tests {
         let config = attach(&[("FLEXIQ_LISTEN", ":7777")]);
         assert_eq!(
             config.listen,
-            AttachListen::Tcp("127.0.0.1:7777".parse().unwrap())
+            ListenAddress::Tcp("127.0.0.1:7777".parse().unwrap())
         );
     }
 
@@ -223,7 +231,7 @@ mod tests {
         let config = attach(&[("FLEXIQ_LISTEN", "unix:/run/flexiq.sock")]);
         assert_eq!(
             config.listen,
-            AttachListen::Unix(PathBuf::from("/run/flexiq.sock"))
+            ListenAddress::Unix(PathBuf::from("/run/flexiq.sock"))
         );
     }
 

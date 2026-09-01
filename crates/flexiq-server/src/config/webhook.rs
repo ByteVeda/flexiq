@@ -34,7 +34,7 @@ pub fn from_env(env: &Env) -> Result<Option<WebhookConfig>> {
     let Some(spec) = value(env, "FLEXIQ_WEBHOOK_LISTEN") else {
         return Ok(None);
     };
-    let bind = resolve(&spec)?;
+    let bind = resolve("FLEXIQ_WEBHOOK_LISTEN", &spec)?;
 
     let cert = required_path(env, "FLEXIQ_WEBHOOK_TLS_CERT")?;
     let key = required_path(env, "FLEXIQ_WEBHOOK_TLS_KEY")?;
