@@ -20,7 +20,7 @@ tasks, so the app image needs no DSN and no inbound port.
 | `attach.enabled` | `true` | The attach listener and, once an executor attaches, the scheduler |
 | `dashboard.enabled` | `true` | The dashboard SPA and its JSON API |
 | `webhook.enabled` | `false` | The mutating admission webhook that injects executor sidecars |
-| `grpc.enabled` | `false` | The `flexiq.v1` gRPC door, on its own Service |
+| `grpc.enabled` | `false` | The gRPC listener — `grpc.health.v1` and reflection today — on its own Service |
 
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
@@ -148,9 +148,13 @@ Kubernetes takes one probe of each type, so a release without a dashboard falls
 back through the roles it does run: the webhook's own `/health` over HTTPS,
 then — for a gRPC-only release — a TCP connect for liveness and `grpc.health.v1`
 for readiness, which this server answers out of storage exactly as `/readiness`
-does. The `grpc` probe type needs Kubernetes 1.24 or newer; on anything older,
-override readiness with a `tcpSocket`. Last of all, a bare TCP connect to the
-attach port, which speaks no protocol a kubelet knows.
+does. Last of all, a bare TCP connect to the attach port, which speaks no
+protocol a kubelet knows.
+
+The `grpc` probe field is only understood from Kubernetes 1.24, and an older API
+server rejects it rather than ignoring it. Set `grpc.healthProbe=false` there and
+readiness falls back to a `tcpSocket` on the same port — which only says the
+process is listening, so a replica that cannot reach storage stays in rotation.
 
 ## Multiple replicas
 

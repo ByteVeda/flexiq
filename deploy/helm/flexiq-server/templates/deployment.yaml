@@ -192,13 +192,21 @@ spec:
           says the process is there, and grpc.health.v1 — which this server
           answers out of storage — says it can serve. Health must not be the
           liveness probe: a database outage would then restart the pod instead
-          of taking it out of rotation. The grpc probe type needs Kubernetes
-          1.24+; on anything older, override readiness with a tcpSocket.
+          of taking it out of rotation.
+
+          The `grpc` probe field is only understood from Kubernetes 1.24, and an
+          older API server rejects it rather than ignoring it, so
+          grpc.healthProbe=false falls readiness back to the socket. That loses
+          the storage signal, which is why it is opt-out and not the default.
           */}}
           livenessProbe:
             tcpSocket: { port: grpc }
           readinessProbe:
+            {{- if .Values.grpc.healthProbe }}
             grpc: { port: {{ .Values.grpc.port }} }
+            {{- else }}
+            tcpSocket: { port: grpc }
+            {{- end }}
           {{- else }}
           {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}

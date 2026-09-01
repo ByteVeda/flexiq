@@ -93,11 +93,17 @@ dashboard:
     pathType: Prefix
     tls: []
 
-# The flexiq.v1 gRPC door: producers enqueue over the network instead of over a
-# database connection.
+# The gRPC listener. It is where the network-side producer door will live —
+# enqueue over gRPC rather than over a database connection — and today it serves
+# grpc.health.v1 and server reflection.
 grpc:
   enabled: false
   port: 50051
+  # Readiness by gRPC health rather than a bare TCP connect. The health check is
+  # the better signal, because the server answers it out of storage. Turn it off
+  # for a cluster older than Kubernetes 1.24, whose API server rejects the
+  # `grpc` probe field outright.
+  healthProbe: true
   # Its own Service, like attach: the door clients dial and the port people
   # browse should not be one object an annotation can widen by accident.
   service:
