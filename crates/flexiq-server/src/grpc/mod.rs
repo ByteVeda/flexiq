@@ -17,6 +17,7 @@
 pub mod health;
 pub mod limits;
 pub mod listener;
+pub mod pb;
 pub mod reflection;
 
 use anyhow::Result;

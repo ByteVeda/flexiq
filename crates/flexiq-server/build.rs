@@ -1,4 +1,5 @@
-//! Embed the compiled dashboard SPA into the binary, when one is present.
+//! Two generated files: the embedded dashboard SPA, and — behind the `grpc`
+//! feature — the Rust types for the `flexiq.v1` wire contract.
 //!
 //! The SPA is a pnpm/vite build that lives outside the cargo tree, so it may
 //! simply not exist — `cargo check` in CI never runs pnpm. A missing bundle
@@ -13,8 +14,17 @@ use std::path::{Path, PathBuf};
 /// overrides all of them (the deploy image sets it explicitly).
 const CANDIDATE_DIRS: [&str; 2] = ["dashboard/dist", "sdks/python/flexiq/static/dashboard"];
 
+/// The `FileDescriptorSet` buf builds from `contracts/proto`, committed and
+/// version-gated. Codegen reads it, and `grpc/reflection.rs` embeds the same
+/// bytes, so the types and what the server advertises cannot disagree.
+#[cfg(feature = "grpc")]
+const DESCRIPTOR: &str = "contracts/descriptor.binpb";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=FLEXIQ_DASHBOARD_ASSETS_DIR");
+
+    #[cfg(feature = "grpc")]
+    generate_proto_types();
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("cargo always sets OUT_DIR"));
     let generated = match locate_assets() {
@@ -30,6 +40,45 @@ fn main() {
 
     fs::write(out_dir.join("dashboard_assets.rs"), generated)
         .expect("failed to write the generated asset table");
+}
+
+/// Generate the `flexiq.v1` messages, service trait and client from the
+/// committed descriptor.
+///
+/// Compiling the `FileDescriptorSet` rather than the `.proto` files is what
+/// keeps `protoc` off the build path entirely — and it means the generated Rust
+/// is derived from the exact artifact `scripts/proto-check.sh` gates and the
+/// binary serves over reflection. Editing a `.proto` without regenerating the
+/// descriptor therefore changes nothing here, which is the same staleness CI's
+/// proto job already fails on.
+#[cfg(feature = "grpc")]
+fn generate_proto_types() {
+    use prost::Message;
+
+    let descriptor = workspace_root().join(DESCRIPTOR);
+    println!("cargo:rerun-if-changed={}", descriptor.display());
+
+    let bytes = fs::read(&descriptor).unwrap_or_else(|error| {
+        panic!(
+            "failed to read {}: {error}. Build it with scripts/proto-check.sh --fix",
+            descriptor.display()
+        )
+    });
+    let set = prost_types::FileDescriptorSet::decode(&bytes[..])
+        .expect("contracts/descriptor.binpb is not a FileDescriptorSet");
+
+    tonic_prost_build::configure()
+        .build_server(true)
+        // The integration tests dial the listener with the generated client,
+        // which is also what a Rust consumer of this contract would use.
+        .build_client(true)
+        // google.rpc.Status is already generated, once, in tonic-types — and
+        // that is the crate whose StatusExt attaches the ErrorInfo details the
+        // error model requires, so a second copy of the type here would be two
+        // spellings of one message inside one process.
+        .extern_path(".google.rpc", "::tonic_types::pb")
+        .compile_fds(set)
+        .expect("failed to generate the flexiq.v1 types");
 }
 
 /// Resolve the asset root, preferring an explicit override over the two
