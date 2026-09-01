@@ -978,12 +978,13 @@ fourth beside attach, the dashboard and the admission webhook. It is the
 network-side producer door — enqueue, read and cancel over gRPC rather than over
 a database connection — alongside `grpc.health.v1` and server reflection.
 
-<Callout type="warn" title="Loopback only, until the door has a credential">
-No caller is authenticated yet, so the door refuses to bind beyond
-loopback. A `FLEXIQ_GRPC_LISTEN` naming a non-loopback address is rejected at
-boot, and the Helm chart refuses `grpc.enabled` at template time for the same
-reason. Until a credential lands, this door is reachable from the same host
-only — over loopback or a Unix socket — and it is not deployable to a cluster.
+<Callout type="warn" title="A shared secret is not a finished credential">
+`FLEXIQ_GRPC_TOKEN` is one secret every client presents. It cannot be revoked
+for one client, it carries no scope, and it leaves no audit trail. It is enough
+to keep an anonymous caller off an `Enqueue` port, and it is not enough to put
+that port on an untrusted network: terminate TLS in front of the listener and
+keep it reachable only from networks you already trust, until scoped tokens
+land.
 </Callout>
 
 ```bash
@@ -996,9 +997,8 @@ flexiq-server
 The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
 (which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
 Unix socket lands at mode `0660` through the same hardened bind the attach
-listener uses, so the shared **group** is again the access control — and it is
-the one way to reach this door from another process today, since the filesystem
-mode is a boundary where a bearer token is not yet available.
+listener uses, so the shared **group** is again the access control — which is
+why a Unix socket needs no token even though it is not a loopback address.
 
 The role ships behind a cargo feature. The published image has it compiled in;
 a binary you built yourself without `--features grpc` rejects
@@ -1028,9 +1028,11 @@ than conditionally absent.
 `CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
 
 ```bash
-grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
+  localhost:50051 list
 grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
-grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
+  -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
 
@@ -1043,6 +1045,45 @@ surface** on this door — pausing queues, settings, dead-letter operations and
 webhook secrets stay behind the dashboard's session and role check, because an
 operator surface and a producer surface should not share a credential. And there
 is **no way to name a namespace**; see below.
+
+### The credential
+
+`FLEXIQ_GRPC_TOKEN` is the secret a caller presents, as an `authorization`
+metadata entry:
+
+```bash
+FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32) \
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_DSN=postgres://user:pass@host/db \
+flexiq-server
+```
+
+It must be at least 16 characters — the same floor `FLEXIQ_ATTACH_TOKEN` has,
+because a guessable secret is not a control — and the server removes it from its
+own environment once parsed, so a task body or a crash dump cannot read it back.
+
+**A non-loopback bind without it is refused at boot.** Loopback and Unix sockets
+still need no token: there the network stack and the filesystem mode are the
+boundary. Setting one on a loopback bind is honoured rather than optimised away.
+
+**One check covers the whole listener**, not one per RPC. A wrong token, a
+missing one, a token under the wrong scheme and a call to an RPC that does not
+exist all answer `UNAUTHENTICATED` with the reason `UNAUTHENTICATED` and the
+same message — nothing distinguishes them, because a distinguishable answer
+tells a client guessing tokens which guess was closer, and a path answered
+before authentication tells it which services the build carries.
+
+**`grpc.health.v1` is the one exception** and is answered without a credential.
+A Kubernetes `grpc:` probe cannot send metadata, so gating health would mean
+either no readiness probe or a token written literally into the Deployment spec.
+What it publishes is one bit — whether storage answers — to something that has
+already reached the port. Reflection is gated with everything else.
+
+The namespace comes from the credential, never from a request: no message in
+`flexiq.v1` has a namespace field, in any RPC. Under a shared secret that
+namespace is the server's own `FLEXIQ_NAMESPACE`, so a token is implicitly
+scoped to the one namespace this process schedules.
 
 ### Two doors for one payload, and only one of them is lossless
 
@@ -1121,17 +1162,28 @@ while the door is young:
   `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
   because a variable that looks like it encrypts the connection and does not is
   worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
-- **No caller is authenticated yet, and the door does not pretend otherwise.**
-  A non-loopback bind is refused at boot rather than allowed with a warning: an
-  unauthenticated port that accepts `Enqueue` is not a thing to leave running
-  behind a log line. Use loopback or a Unix socket until a credential lands.
+- **The credential is a shared secret, and it is one factor.** It proves the
+  peer knows a string; it does not encrypt the connection, it cannot be revoked
+  for one client, and it grants everything. A non-loopback bind without it is
+  refused at boot rather than allowed with a warning, because an unauthenticated
+  port that accepts `Enqueue` is not a thing to leave running behind a log line.
+- **Nothing on this door is an admin surface.** Pausing queues, settings,
+  dead-letter operations and webhook secrets stay behind the dashboard's session
+  and role check. A token that leaks costs you an enqueue path, not a tenant.
 
 ### With Helm
 
-`grpc.enabled` is refused at `helm template` time while the door has no
-credential, with that reason, rather than rendering a Deployment that
-CrashLoopBackOffs — a pod cannot use a loopback bind, because kubelet dials the
-pod IP for every probe type.
+`grpc.enabled` needs `grpc.token` or `grpc.existingSecret`, refused at `helm
+template` time rather than rendering a Deployment that CrashLoopBackOffs: the
+chart binds `0.0.0.0` because kubelet dials the pod IP for every probe type, and
+the server refuses that bind without a credential.
+
+```yaml
+namespace: prod
+grpc:
+  enabled: true
+  token: "" # or existingSecret, holding key `grpc-token`
+```
 
 The rest of the wiring is already in the chart and takes effect when the value
 works again: the door gets its own `ClusterIP` Service — never merged with the

@@ -571,6 +571,16 @@ If multi-namespace credentials ever land, the namespace arrives as
 `flexiq-namespace` metadata and the authenticator validates it against the
 token's allowed set. Still one place. Still not the body.
 
+**One path is public, and only one: `grpc.health.v1`.** A Kubernetes `grpc:`
+probe sends no metadata and has no way to, so gating health would cost a
+gRPC-only deployment its readiness probe — or put the token literally into a
+Deployment spec. What it discloses is one bit, whether storage answers, to
+something that has already reached the port. Everything else is authenticated,
+*including a path the router does not implement*: answering `UNIMPLEMENTED`
+without a credential tells an anonymous caller which services a build carries.
+Reflection is gated with the rest. #717 inherits this list unchanged; adding to
+it is a decision, not a detail.
+
 ### 5.2 The NULL namespace is not addressable (D11)
 
 E3 is the reason. `None` means "only the NULL rows" to a dequeue, "every

@@ -30,6 +30,7 @@ Run `flexiq-server --help` for the full list; the essentials:
 | `FLEXIQ_DASHBOARD_AUTH` | `off` (default) or `session` |
 | `FLEXIQ_MAINTENANCE` | `off` to leave retention to another replica |
 | `FLEXIQ_GRPC_LISTEN` | gRPC address, or `unix:/run/flexiq-grpc.sock` |
+| `FLEXIQ_GRPC_TOKEN` | Shared secret gRPC callers present; required off loopback |
 
 At least one of `FLEXIQ_LISTEN`, `FLEXIQ_DASHBOARD`, `FLEXIQ_WEBHOOK_LISTEN` or
 `FLEXIQ_GRPC_LISTEN` must be set.
@@ -61,16 +62,35 @@ grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"em
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
 
-Three things it refuses. **A non-loopback bind**, because nothing on this door
-asks for a credential yet and an unauthenticated port that accepts `Enqueue` is
-not a thing to leave running behind a warning — use loopback or
-`unix:/run/flexiq-grpc.sock`, where the socket's `0660` mode is the boundary.
-**A missing `FLEXIQ_NAMESPACE`**, because an unset namespace means "every
-namespace" to an id-addressed read and "only the unnamespaced rows" to a
-dequeue, and a wire that can express that is one bug away from a cross-tenant
-read. And **the variable itself** on a binary built without the `grpc` feature,
-so a misconfigured deployment fails at boot instead of serving nothing on the
-port its clients dial.
+### The credential
+
+`FLEXIQ_GRPC_TOKEN` is the secret a caller presents, as
+`authorization: Bearer <token>`. It gates everything on the listener except
+`grpc.health.v1`, which stays open because a Kubernetes `grpc:` probe has no way
+to send metadata; reflection is gated with the rest.
+
+```bash
+FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32) \
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+... flexiq-server
+
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
+  localhost:50051 list
+```
+
+It is a **shared secret**, so it cannot be revoked for one client, carries no
+scope and leaves no audit trail. Treat the listener as reachable only from a
+trusted network until scoped tokens land, and terminate TLS in front of it.
+
+Three things it refuses. **A non-loopback bind with no `FLEXIQ_GRPC_TOKEN`**,
+because a port that accepts `Enqueue` does not serve an unauthenticated network
+— set the token, use loopback, or use `unix:/run/flexiq-grpc.sock`, where the
+socket's `0660` mode is the boundary. **A missing `FLEXIQ_NAMESPACE`**, because
+an unset namespace means "every namespace" to an id-addressed read and "only the
+unnamespaced rows" to a dequeue, and a wire that can express that is one bug
+away from a cross-tenant read. And **`FLEXIQ_GRPC_LISTEN` itself** on a binary
+built without the `grpc` feature, so a misconfigured deployment fails at boot
+instead of serving nothing on the port its clients dial.
 
 Health is answered out of storage — the same question `/readiness` answers — so
 an orchestrator can take a replica that cannot reach its database out of
