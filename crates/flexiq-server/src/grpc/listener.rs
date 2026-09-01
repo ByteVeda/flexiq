@@ -49,18 +49,24 @@ impl Listener {
                 // Report what was bound, not what was asked for: port 0
                 // resolves to an ephemeral port only the listener knows.
                 let bound = listener.local_addr().unwrap_or(*addr);
-                log::info!("[flexiq] gRPC listener on tcp://{bound}");
+                // The socket is already open, so check before anything is
+                // served on it and let the drop close it.
+                //
+                // `config::grpc` refuses a non-loopback address, and it checks
+                // the *resolved* one — `listen::resolve` runs `to_socket_addrs`
+                // — so no reachable path should arrive here. That is exactly why
+                // it fails rather than warns: the value of a guard on an
+                // unreachable branch is that it stays correct when the branch
+                // stops being unreachable, and the thing on the other side of
+                // this one is an unauthenticated `Enqueue`.
                 if !bound.ip().is_loopback() {
-                    // `config::grpc` refuses a non-loopback *spec*, so reaching
-                    // here means a hostname resolved to one, or a `:0` bind did
-                    // — the address the operator wrote is not the address that
-                    // got bound. The refusal cannot see that; this can.
-                    log::warn!(
-                        "[flexiq] {LISTEN_VAR} resolved to {bound}, which is reachable beyond \
-                         loopback. This listener terminates no TLS and authenticates no \
-                         caller — put a proxy or a service mesh in front of it."
+                    anyhow::bail!(
+                        "{LISTEN_VAR} bound {bound}, which is reachable beyond loopback. \
+                         This listener authenticates no caller and terminates no TLS, so it \
+                         serves loopback and Unix sockets only."
                     );
                 }
+                log::info!("[flexiq] gRPC listener on tcp://{bound}");
                 Incoming::Tcp(listener)
             }
             #[cfg(unix)]
