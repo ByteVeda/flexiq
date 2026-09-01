@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Standalone FlexiQ scheduler, executor attach listener, and dashboard server"
+description = "Standalone FlexiQ scheduler, executor attach listener, dashboard, and gRPC server"
 publish = false
 
 [lib]
@@ -22,6 +22,10 @@ default = []
 # in config/backend.rs can open Postgres / Redis when compiled in.
 postgres = ["flexiq-core/postgres", "flexiq-workflows/postgres"]
 redis = ["flexiq-core/redis", "flexiq-workflows/redis"]
+# The gRPC role. Off by default so a build that wants the three HTTP-shaped
+# roles does not compile tonic; FLEXIQ_GRPC_LISTEN is refused outright by a
+# binary built without it, rather than silently ignored.
+grpc = ["dep:tonic", "dep:tonic-health", "dep:tonic-reflection", "dep:tokio-stream"]
 
 [dependencies]
 flexiq-core = { workspace = true }
@@ -48,6 +52,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 url = "2"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
+# The gRPC role, all optional behind `grpc`. Default features carry the router
+# and server; they also carry the channel client, which is what the role's
+# integration test dials its own listener with. tonic-prost comes in under
+# these as the codec the health and reflection generated code is built on.
+tonic = { version = "0.14", optional = true }
+tonic-health = { version = "0.14", optional = true }
+tonic-reflection = { version = "0.14", optional = true }
+# Wraps a bound UnixListener as the incoming stream tonic serves over.
+tokio-stream = { version = "0.1", features = ["net"], optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

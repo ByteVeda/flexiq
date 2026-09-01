@@ -98,6 +98,9 @@ jobs:
               - 'crates/flexiq-server/**'
               - 'dashboard/**'
               - 'docker/**'
+              # Embedded into the binary for gRPC reflection, so a regenerated
+              # descriptor changes what the image serves.
+              - 'contracts/descriptor.binpb'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci-server-image.yml'

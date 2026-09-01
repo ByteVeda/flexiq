@@ -21,7 +21,7 @@ use flexiq_core::worker::TcpTransport;
 use flexiq_core::worker::UnixTransport;
 use flexiq_core::{RemoteDispatcher, Transport};
 
-use crate::config::listen::AttachListen;
+use crate::config::listen::ListenAddress;
 use crate::runtime::scheduler::SchedulerSupervisor;
 use crate::runtime::shutdown::Shutdown;
 
@@ -63,13 +63,13 @@ impl ListenerHandle {
 
 /// Bind `address` and start accepting executor attachments.
 pub fn spawn(
-    address: AttachListen,
+    address: ListenAddress,
     dispatcher: RemoteDispatcher,
     supervisor: Arc<SchedulerSupervisor>,
     shutdown: Shutdown,
 ) -> Result<ListenerHandle> {
     match address {
-        AttachListen::Tcp(addr) => {
+        ListenAddress::Tcp(addr) => {
             let listener = TcpListener::bind(addr)
                 .with_context(|| format!("failed to bind the attach listener on {addr}"))?;
             listener.set_nonblocking(true)?;
@@ -93,7 +93,7 @@ pub fn spawn(
             })
         }
         #[cfg(unix)]
-        AttachListen::Unix(path) => {
+        ListenAddress::Unix(path) => {
             let listener = bind_unix(&path)?;
             listener.set_nonblocking(true)?;
             log::info!("[flexiq] attach listener on unix:{}", path.display());
@@ -154,8 +154,11 @@ const STAGING_DIR_MODE: u32 = 0o700;
 /// A stale file left by a crashed process is replaced; a path with a live
 /// listener behind it is left alone, because that is a misconfiguration rather
 /// than stale state.
+///
+/// Shared with the gRPC role: the hardening is a property of binding a Unix
+/// socket in this process, not of what is spoken over it.
 #[cfg(unix)]
-fn bind_unix(path: &Path) -> Result<UnixListener> {
+pub(crate) fn bind_unix(path: &Path) -> Result<UnixListener> {
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
         anyhow::bail!("another process is already listening on {}", path.display());
     }

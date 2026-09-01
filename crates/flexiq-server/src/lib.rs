@@ -1,5 +1,5 @@
-//! `flexiq-server` — the scheduler, executor attach listener, and dashboard,
-//! with no language runtime.
+//! `flexiq-server` — the scheduler, executor attach listener, dashboard and
+//! gRPC door, with no language runtime.
 //!
 //! Task execution lives in the app's own container: executors dial in over the
 //! worker frame protocol and run the task bodies, so this image stays small and
@@ -9,5 +9,7 @@
 
 pub mod config;
 pub mod dashboard;
+#[cfg(feature = "grpc")]
+pub mod grpc;
 pub mod runtime;
 pub mod webhook;

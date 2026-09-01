@@ -1,0 +1,133 @@
+//! Bind the gRPC port and serve until shutdown.
+//!
+//! Binding is separate from serving for the same reason it is in the attach
+//! listener: a `:0` bind resolves to a port only the listener knows, and a bind
+//! failure should be an error the caller gets rather than a task that quietly
+//! never accepts.
+
+#[cfg(unix)]
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use flexiq_core::StorageBackend;
+use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::net::UnixListener;
+use tokio_stream::wrappers::TcpListenerStream;
+#[cfg(unix)]
+use tokio_stream::wrappers::UnixListenerStream;
+use tonic::transport::Server;
+
+use crate::config::grpc::{GrpcConfig, LISTEN_VAR};
+use crate::config::listen::ListenAddress;
+use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
+use crate::grpc::{health, reflection};
+use crate::runtime::shutdown::Shutdown;
+
+/// A bound, not yet serving, gRPC listener.
+pub struct Listener {
+    config: GrpcConfig,
+    incoming: Incoming,
+}
+
+/// The bound socket, in whichever shape the address asked for.
+enum Incoming {
+    Tcp(TcpListener),
+    #[cfg(unix)]
+    Unix(UnixListener, PathBuf),
+}
+
+impl Listener {
+    /// Bind the address in `config`.
+    pub async fn bind(config: &GrpcConfig) -> Result<Self> {
+        let incoming = match &config.listen {
+            ListenAddress::Tcp(addr) => {
+                let listener = TcpListener::bind(addr)
+                    .await
+                    .with_context(|| format!("failed to bind the gRPC listener on {addr}"))?;
+                // Report what was bound, not what was asked for: port 0
+                // resolves to an ephemeral port only the listener knows.
+                let bound = listener.local_addr().unwrap_or(*addr);
+                log::info!("[flexiq] gRPC listener on tcp://{bound}");
+                if !bound.ip().is_loopback() {
+                    // Not a refusal, unlike the attach port: this door carries
+                    // no code and, until it carries a credential, nothing it
+                    // serves is privileged. It is still reachable off-host with
+                    // no transport security, and an operator should hear that
+                    // once at boot rather than infer it.
+                    log::warn!(
+                        "[flexiq] {LISTEN_VAR}={bound} is reachable beyond loopback. This \
+                         listener terminates no TLS and authenticates no caller — put a \
+                         proxy or a service mesh in front of it."
+                    );
+                }
+                Incoming::Tcp(listener)
+            }
+            #[cfg(unix)]
+            ListenAddress::Unix(path) => {
+                // The attach role's hardened bind: the socket is created inside
+                // a private directory, narrowed to 0660, and only then renamed
+                // into place, so it never accepts at a umask-derived mode.
+                let listener = crate::runtime::listener::bind_unix(path)?;
+                listener
+                    .set_nonblocking(true)
+                    .context("failed to make the gRPC socket non-blocking")?;
+                let listener = UnixListener::from_std(listener)
+                    .context("failed to register the gRPC socket with the runtime")?;
+                log::info!("[flexiq] gRPC listener on unix:{}", path.display());
+                Incoming::Unix(listener, path.clone())
+            }
+        };
+        Ok(Self {
+            config: config.clone(),
+            incoming,
+        })
+    }
+
+    /// Address actually bound, for a TCP listener.
+    pub fn local_addr(&self) -> Option<std::net::SocketAddr> {
+        match &self.incoming {
+            Incoming::Tcp(listener) => listener.local_addr().ok(),
+            #[cfg(unix)]
+            Incoming::Unix(..) => None,
+        }
+    }
+
+    /// Serve health and reflection until `shutdown` fires.
+    pub async fn serve(self, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
+        let health = health::serve(storage, self.config.namespace.clone(), shutdown.clone()).await;
+        let router = Server::builder()
+            .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
+            .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
+            .add_service(
+                reflection::v1alpha()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES),
+            );
+
+        let listen = self.config.listen.clone();
+        let result = match self.incoming {
+            Incoming::Tcp(listener) => {
+                let signal = shutdown.clone();
+                router
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+                        signal.wait().await
+                    })
+                    .await
+            }
+            #[cfg(unix)]
+            Incoming::Unix(listener, path) => {
+                let signal = shutdown.clone();
+                let served = router
+                    .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async move {
+                        signal.wait().await
+                    })
+                    .await;
+                // The socket file outlives the listener otherwise, and the next
+                // start would find a path with nothing behind it.
+                let _ = std::fs::remove_file(&path);
+                served
+            }
+        };
+        result.with_context(|| format!("the gRPC listener on {listen} stopped"))?;
+        Ok(())
+    }
+}

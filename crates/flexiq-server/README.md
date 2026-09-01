@@ -1,7 +1,7 @@
 # flexiq-server
 
-The FlexiQ scheduler, executor attach listener, and dashboard in one binary,
-with no language runtime.
+The FlexiQ scheduler, executor attach listener, dashboard, and gRPC door in one
+binary, with no language runtime.
 
 Task bodies stay in the app's own container: executors dial in over the worker
 frame protocol and run them there, so this image is small and identical for
@@ -29,15 +29,49 @@ Run `flexiq-server --help` for the full list; the essentials:
 | `FLEXIQ_DASHBOARD` | Dashboard address |
 | `FLEXIQ_DASHBOARD_AUTH` | `off` (default) or `session` |
 | `FLEXIQ_MAINTENANCE` | `off` to leave retention to another replica |
+| `FLEXIQ_GRPC_LISTEN` | gRPC address, or `unix:/run/flexiq-grpc.sock` |
 
-At least one of `FLEXIQ_LISTEN` or `FLEXIQ_DASHBOARD` must be set.
+At least one of `FLEXIQ_LISTEN`, `FLEXIQ_DASHBOARD`, `FLEXIQ_WEBHOOK_LISTEN` or
+`FLEXIQ_GRPC_LISTEN` must be set.
 
-Postgres and Redis are cargo features:
+Postgres, Redis and gRPC are cargo features:
 
 ```bash
 cargo build -p flexiq-server --features postgres
 cargo build -p flexiq-server --features redis
+cargo build -p flexiq-server --features grpc
 ```
+
+## The gRPC door
+
+`FLEXIQ_GRPC_LISTEN` binds a fourth listener beside the other three, serving
+`grpc.health.v1` and server reflection today — the `flexiq.v1` services land on
+it as they arrive. Reflection is seeded from `contracts/descriptor.binpb`, the
+descriptor the buf gate builds and commits, so a client needs no `.proto` on
+hand:
+
+```bash
+FLEXIQ_DSN=/var/lib/flexiq/app.db \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
+flexiq-server
+
+grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+```
+
+Two things it refuses. Without `FLEXIQ_NAMESPACE` it will not start: an unset
+namespace means "every namespace" to an id-addressed read and "only the
+unnamespaced rows" to a dequeue, and a wire that can express that is one bug
+away from a cross-tenant read. And a binary built without the `grpc` feature
+rejects the variable outright rather than ignoring it, so a misconfigured
+deployment fails at boot instead of serving nothing on the port its clients
+dial.
+
+Health is answered out of storage — the same question `/readiness` answers — so
+an orchestrator can take a replica that cannot reach its database out of
+rotation. TLS is not terminated here and no caller is authenticated yet; put a
+proxy or a service mesh in front of a listener that is reachable off-host.
 
 ## Container image
 

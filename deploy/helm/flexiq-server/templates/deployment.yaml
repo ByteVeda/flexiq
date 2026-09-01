@@ -129,6 +129,10 @@ spec:
               value: "1"
             {{- end }}
             {{- end }}
+            {{- if .Values.grpc.enabled }}
+            - name: FLEXIQ_GRPC_LISTEN
+              value: "0.0.0.0:{{ .Values.grpc.port }}"
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN
               value: "0.0.0.0:{{ .Values.webhook.port }}"
@@ -149,6 +153,10 @@ spec:
             - name: dashboard
               containerPort: {{ .Values.dashboard.port }}
             {{- end }}
+            {{- if .Values.grpc.enabled }}
+            - name: grpc
+              containerPort: {{ .Values.grpc.port }}
+            {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: webhook
               containerPort: {{ .Values.webhook.port }}
@@ -163,7 +171,10 @@ spec:
           # One probe per type is all Kubernetes takes, and one is all liveness
           # needs: every role is a listener in the *same* process, and a bind
           # that fails takes the process down rather than leaving it
-          # half-served. The attach port has no HTTP, so a TCP connect stands in.
+          # half-served. So the branches below are a fallback chain, richest
+          # signal first: the dashboard's HTTP readiness, then the webhook's,
+          # then gRPC health, and finally a bare TCP connect for the attach
+          # port, which speaks no protocol a kubelet knows.
           {{- if .Values.dashboard.enabled }}
           livenessProbe:
             httpGet: { path: /health, port: dashboard }
@@ -175,6 +186,27 @@ spec:
           {{- $probe := dict "httpGet" (dict "path" "/health" "port" "webhook" "scheme" "HTTPS") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}
           readinessProbe: {{- toYaml $probe | nindent 12 }}
+          {{- else if .Values.grpc.enabled }}
+          {{/*
+          The same split as the dashboard's, in gRPC's vocabulary: a TCP connect
+          says the process is there, and grpc.health.v1 — which this server
+          answers out of storage — says it can serve. Health must not be the
+          liveness probe: a database outage would then restart the pod instead
+          of taking it out of rotation.
+
+          The `grpc` probe field is only understood from Kubernetes 1.24, and an
+          older API server rejects it rather than ignoring it, so
+          grpc.healthProbe=false falls readiness back to the socket. That loses
+          the storage signal, which is why it is opt-out and not the default.
+          */}}
+          livenessProbe:
+            tcpSocket: { port: grpc }
+          readinessProbe:
+            {{- if .Values.grpc.healthProbe }}
+            grpc: { port: {{ .Values.grpc.port }} }
+            {{- else }}
+            tcpSocket: { port: grpc }
+            {{- end }}
           {{- else }}
           {{- $probe := dict "tcpSocket" (dict "port" "attach") }}
           livenessProbe: {{- toYaml $probe | nindent 12 }}

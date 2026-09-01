@@ -7,12 +7,12 @@ guard in crates/flexiq-server/src/config.
 */}}
 {{- define "flexiq-server.validate" -}}
 
-{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled) -}}
-{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled or webhook.enabled." -}}
+{{- if not (or .Values.attach.enabled .Values.dashboard.enabled .Values.webhook.enabled .Values.grpc.enabled) -}}
+{{- fail "flexiq-server: nothing to run. Enable at least one of attach.enabled, dashboard.enabled, webhook.enabled or grpc.enabled." -}}
 {{- end -}}
 
 {{/* Only the webhook runs without storage. */}}
-{{- if or .Values.attach.enabled .Values.dashboard.enabled -}}
+{{- if or .Values.attach.enabled .Values.dashboard.enabled .Values.grpc.enabled -}}
 {{- if not (or .Values.storage.dsn .Values.storage.existingSecret) -}}
 {{- fail "flexiq-server: storage.dsn or storage.existingSecret is required unless the release runs webhook.enabled alone." -}}
 {{- end -}}
@@ -50,6 +50,15 @@ token.
 {{- if and (eq .Values.dashboard.auth "off") (not .Values.dashboard.allowInsecure) -}}
 {{- fail "flexiq-server: dashboard.auth=off exposes every operate action to anyone who reaches the Service. Set dashboard.auth=session, or dashboard.allowInsecure=true if the network already restricts access." -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+The gRPC door serves exactly one namespace and refuses to start without one:
+an unset namespace means "every namespace" to a read and "only the unnamespaced
+rows" to a dequeue, and neither is a thing to put on a network port.
+*/}}
+{{- if and .Values.grpc.enabled (not .Values.namespace) -}}
+{{- fail "flexiq-server: grpc.enabled requires namespace. The gRPC door serves one named namespace, and the server refuses to start without FLEXIQ_NAMESPACE." -}}
 {{- end -}}
 
 {{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled (not (.Capabilities.APIVersions.Has "cert-manager.io/v1")) -}}

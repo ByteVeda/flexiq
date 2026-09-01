@@ -35,15 +35,20 @@ Configuration (environment only):
                                  injection, e.g. 0.0.0.0:9443 (default: off)
   FLEXIQ_WEBHOOK_TLS_CERT       PEM chain the webhook serves; required with it
   FLEXIQ_WEBHOOK_TLS_KEY        PEM key for that chain; required with it
+  FLEXIQ_GRPC_LISTEN            gRPC address, e.g. 0.0.0.0:50051 or
+                                 unix:/run/flexiq-grpc.sock (default: off).
+                                 Requires FLEXIQ_NAMESPACE and a build with the
+                                 `grpc` cargo feature
 
-At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD or FLEXIQ_WEBHOOK_LISTEN must
-be set. FLEXIQ_DSN is required for all but a webhook-only deployment.";
+At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
+FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a
+webhook-only deployment.";
 
 #[derive(Parser)]
 #[command(
     name = "flexiq-server",
     version,
-    about = "FlexiQ scheduler, executor attach listener, and dashboard",
+    about = "FlexiQ scheduler, executor attach listener, dashboard, and gRPC door",
     after_help = ENV_HELP
 )]
 struct Cli {}

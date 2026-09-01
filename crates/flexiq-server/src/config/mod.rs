@@ -7,6 +7,7 @@
 
 pub mod backend;
 pub mod dashboard;
+pub mod grpc;
 pub mod listen;
 pub mod webhook;
 
@@ -15,6 +16,7 @@ use std::collections::HashMap;
 use anyhow::{bail, Context, Result};
 
 use crate::config::dashboard::DashboardConfig;
+use crate::config::grpc::GrpcConfig;
 use crate::config::listen::AttachConfig;
 use crate::config::webhook::WebhookConfig;
 
@@ -46,6 +48,8 @@ pub struct Config {
     /// Where the sidecar-injecting admission webhook listens. `None` disables
     /// it.
     pub webhook: Option<WebhookConfig>,
+    /// Where the `flexiq.v1` gRPC door listens. `None` disables it.
+    pub grpc: Option<GrpcConfig>,
     /// Whether opening storage applies pending schema changes. Off for a
     /// deployment whose database credentials do not permit DDL at runtime; the
     /// schema must then be applied out of band before the server starts.
@@ -61,11 +65,13 @@ impl Config {
     /// Read and validate configuration from an explicit map.
     pub fn from_map(env: &Env) -> Result<Self> {
         let allow_insecure = flag(env, "FLEXIQ_ALLOW_INSECURE", false);
+        // Read ahead of the struct: the gRPC role is the one whose validity
+        // depends on it, and it needs the parsed value to say so.
+        let namespace = value(env, "FLEXIQ_NAMESPACE");
 
         let config = Self {
             dsn: value(env, "FLEXIQ_DSN"),
             backend: value(env, "FLEXIQ_BACKEND"),
-            namespace: value(env, "FLEXIQ_NAMESPACE"),
             queues: queues(env),
             workers: usize_value(env, "FLEXIQ_WORKERS")?,
             maintenance: flag(env, "FLEXIQ_MAINTENANCE", true),
@@ -73,18 +79,26 @@ impl Config {
             attach: listen::from_env(env)?,
             dashboard: dashboard::from_env(env, allow_insecure)?,
             webhook: webhook::from_env(env)?,
+            grpc: grpc::from_env(env, namespace.as_deref())?,
+            namespace,
         };
 
-        if config.attach.is_none() && config.dashboard.is_none() && config.webhook.is_none() {
+        if config.attach.is_none()
+            && config.dashboard.is_none()
+            && config.webhook.is_none()
+            && config.grpc.is_none()
+        {
             bail!(
                 "nothing to run: set FLEXIQ_LISTEN (executor attach), \
                  FLEXIQ_DASHBOARD (dashboard), FLEXIQ_WEBHOOK_LISTEN (sidecar \
-                 injection), or any combination"
+                 injection), FLEXIQ_GRPC_LISTEN (the gRPC door), or any combination"
             );
         }
         // The webhook is the one role that touches no storage — it rewrites pod
         // specs and never reads a job — so it alone may run without a DSN.
-        if config.dsn.is_none() && (config.attach.is_some() || config.dashboard.is_some()) {
+        if config.dsn.is_none()
+            && (config.attach.is_some() || config.dashboard.is_some() || config.grpc.is_some())
+        {
             bail!(
                 "FLEXIQ_DSN is required — the storage connection string. Only a \
                  webhook-only deployment (FLEXIQ_WEBHOOK_LISTEN alone) can omit it."
@@ -236,5 +250,30 @@ mod tests {
             .expect_err("must reject");
             assert!(error.to_string().contains("FLEXIQ_WORKERS"));
         }
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn the_grpc_door_is_a_role_on_its_own() {
+        let config = Config::from_map(&env(&[
+            ("FLEXIQ_DSN", ":memory:"),
+            ("FLEXIQ_NAMESPACE", "prod"),
+            ("FLEXIQ_GRPC_LISTEN", "127.0.0.1:50051"),
+        ]))
+        .expect("a gRPC-only deployment is a deployment");
+        assert!(config.grpc.is_some());
+        assert!(config.attach.is_none());
+        assert!(config.dashboard.is_none());
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn the_grpc_door_still_needs_a_dsn() {
+        let error = Config::from_map(&env(&[
+            ("FLEXIQ_NAMESPACE", "prod"),
+            ("FLEXIQ_GRPC_LISTEN", "127.0.0.1:50051"),
+        ]))
+        .expect_err("must reject a missing DSN");
+        assert!(error.to_string().contains("FLEXIQ_DSN"));
     }
 }
