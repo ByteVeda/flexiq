@@ -11,6 +11,11 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 guard="$repo_root/contracts/proto-guard"
 config="$repo_root/contracts/proto/buf.yaml"
+# The real buf.yaml declares a dependency, and buf refuses to build a module
+# whose declared deps are not in a lock file beside it. The fixtures import
+# nothing from it; they still need the lock, because what they stage is the
+# production config unedited.
+lock="$repo_root/contracts/proto/buf.lock"
 
 if ! command -v buf >/dev/null 2>&1; then
   echo "error: buf is not on PATH — see scripts/proto-check.sh for the install line." >&2
@@ -29,6 +34,7 @@ stage() {
   mkdir -p "$dest"
   cp -R "$src/." "$dest/"
   cp "$config" "$dest/buf.yaml"
+  cp "$lock" "$dest/buf.lock"
   printf '%s' "$dest"
 }
 
