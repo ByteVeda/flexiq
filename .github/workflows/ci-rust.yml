@@ -81,6 +81,12 @@ jobs:
       - name: Check build with mesh feature
         run: cargo check --workspace --features mesh
 
+      # The default run compiles the gRPC role out, and the lint job's
+      # --all-features clippy compiles it without running a test. This is the
+      # only place the role actually binds a port.
+      - name: Run the gRPC role's tests
+        run: cargo test -p flexiq-server --features grpc
+
       # Off in every shipped artifact, so only CI keeps the three binding
       # shells' push-dispatch wiring compiling.
       - name: Run push-dispatch tests
