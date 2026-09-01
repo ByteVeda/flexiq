@@ -169,7 +169,7 @@ is avoidable is letting it be a *string*.
 | D19 | **Explicit presence for everything whose absence differs from its zero** — `result`, `progress`, `expires_at`, `result_ttl_ms`, `started_at`, `completed_at`. | The frame protocol already draws this distinction and says so: "`result_len: null` means the task returned nothing; `0` means it returned an empty value. They are distinct." |
 | D20 | **`google.protobuf.Timestamp` and `Duration` on the wire; the Unix-ms boundary is exactly the service impl.** The dashboard API keeps milliseconds — it is a different contract and does not move. | #714's reason: Hatchet's string duration expressions. Ours: `Job` timestamps are `i64` ms everywhere inside (`job.rs:71-135`), so the conversion must live in one module or it will live in twenty. |
 | D21 | **`metadata` stays an opaque JSON string, byte-preserved.** Not `google.protobuf.Struct`. | It is `Option<String>` in the core; a Struct round-trip reorders keys and loses exactly the values `wire-vectors.json` documents as unrepresentable (E10). |
-| D22 | **The producer door caps messages at 4 MiB; the executor door raises its limit to the frame protocol's `MAX_PAYLOAD_BYTES` (64 MiB).** Both numbers are declared in one place per package. | 4 MiB is gRPC's default and #718's body cap, so the two producer doors agree about "too large". The executor door carries payloads the local frame protocol already allows; leaving tonic's default in place would make the gRPC transport reject work the TCP transport accepts. |
+| D22 | **The producer door caps messages at 4 MiB; the executor door caps them at `MAX_PAYLOAD_BYTES` + 4 MiB of envelope headroom (68 MiB).** A payload limit and a message limit are different numbers and both are declared, in one place per package. | 4 MiB is gRPC's default and #718's body cap, so the two producer doors agree about "too large". The executor door carries payloads the local frame protocol already allows (64 MiB); tonic's `max_decoding_message_size` measures the *serialized message*, so a 64 MiB `bytes` field plus its tag, length prefix and sibling fields exceeds a 64 MiB limit and the gRPC transport would reject work the TCP transport accepts. |
 | D23 | **Generated code lives in `flexiq-server` behind the `grpc` feature. A `flexiq-proto` crate is not published until the protos are stable.** | Publishing generated types creates a *second* permanent compatibility surface — a Rust API under `cargo-semver-checks` — on top of the wire one, and #704 already showed what that wall costs. |
 | D24 | **The executor package mirrors the frames additively and keeps `capabilities[]` as strings.** An unknown frame arm is ignored, not fatal. The registry fingerprint is never a wire field. | E6: turning capabilities into an enum would make adding one a proto change, undoing the mechanism. #703 replaced the fingerprint with derivation from `tasks[]`; a wire field would be a second copy of one fact, free to disagree. |
 
@@ -350,8 +350,25 @@ exactly one `google.rpc.ErrorInfo`:
 ```text
 domain   = "flexiq.byteveda.org"
 reason   = one of the closed list below            # the stable identifier
-metadata = typed key/values, per reason            # never parsed out of prose
+metadata = map<string, string>, per reason         # never parsed out of prose
 ```
+
+**`ErrorInfo.metadata` is `map<string, string>`, so every numeric value needs a
+stated encoding.** Values are **base-10 ASCII, no grouping, no unit suffix, `-`
+for negative**, and every one of them is a signed 64-bit integer parsed with the
+client's `int64` parser:
+
+| Key | Reason | Type and unit |
+|---|---|---|
+| `queue` | `QUEUE_FULL` | queue name, verbatim |
+| `pending`, `cap` | `QUEUE_FULL` | `int64`, jobs |
+| `speaks`, `required` | `CONTRACT_TOO_OLD` | `int64`, contract level |
+| `limit` | `STEP_LIMIT_EXCEEDED` | one of `step bytes`, `total bytes`, `step count` |
+| `actual`, `allowed` | `STEP_LIMIT_EXCEEDED` | `int64`, in `limit`'s unit |
+
+A key absent from a reason's row is not sent. A value that will not parse is a
+server bug, and a client treats it as absent rather than failing the response —
+the code and the reason already carry the decision.
 
 `RESOURCE_EXHAUSTED` additionally carries `google.rpc.RetryInfo`. The human
 message is for logs and may be reworded in any release; `reason` may not.
@@ -370,6 +387,7 @@ from either (listed so a future RPC does not invent a second answer).
 |---|---|---|---|---|
 | `Storage(Diesel, non-`DatabaseError`)`, `Pool`, `Redis` | `UNAVAILABLE` | `STORAGE_UNAVAILABLE` | yes, backoff | P, X |
 | `Storage(DatabaseError(any other kind))` | `UNAVAILABLE` | `STORAGE_UNAVAILABLE` | yes, backoff | P, X |
+| `Storage(diesel::result::Error::NotFound)` | `INTERNAL` | `INTERNAL` | no | P, X |
 | `Storage(DatabaseError(Unique/FK/NotNull/Check))` | `INTERNAL` | `STORAGE_CONSTRAINT` | no | P, X |
 | `Json`, `Serialization` — caused by client bytes | `INVALID_ARGUMENT` | `MALFORMED_PAYLOAD` | no | P, X |
 | `Json`, `Serialization` — produced server-side | `INTERNAL` | `INTERNAL` | no | P, X |
@@ -400,6 +418,15 @@ which is exactly what `INVALID_ARGUMENT` means and exactly what
 `ContractTooOld` and `QUEUE_FULL` land on different codes, as #711 requires: one
 is a deployment that must be upgraded, the other is a queue that will drain.
 
+**`Storage` wraps *every* Diesel error, including `NotFound`, which is why it has
+a row of its own.** A row that is genuinely absent is normalised before it
+becomes an error — `get_job` returns `Option` via `.optional()`
+(`diesel_common/jobs.rs:1422-1447`) and the id-addressed paths answer `false` —
+so a raw `NotFound` reaching the boundary is a query that forgot `.optional()`,
+not a missing row. Retrying it will fail identically, so it is `INTERNAL` and
+never `UNAVAILABLE`. A service that mapped it to `NOT_FOUND` would be worse
+still: it would answer "no such job" to a caller whose job exists.
+
 **`ClaimLost` is `FAILED_PRECONDITION`, not `ABORTED`, and the reason is §4.3.**
 `ABORTED` is the code gRPC defines for a concurrency conflict the caller should
 retry at a higher level, and §4.3 puts it in the retry-with-backoff class. A
@@ -413,19 +440,36 @@ mean "read again and retry" — both of which are absent from the v1 surface
 
 ### 4.3 What a client retries
 
-Three classes, derivable from the code alone — there is deliberately no
-`retryable` field, because a client that has to read one has an error model that
-does not work for a client written before the field existed:
+**Two questions, in order.** *Is this code retryable at all*, and *is this method
+safe to send twice*. A client that asks only the first will replay writes, and a
+retry policy configured per-code — which is the only granularity gRPC's own
+retry config has — must therefore be attached per-method, not service-wide.
 
-- **Retry with backoff:** `UNAVAILABLE`, `ABORTED`, and `RESOURCE_EXHAUSTED` only
-  after the delay in `RetryInfo`.
-- **Retry after refreshing the credential, once:** `UNAUTHENTICATED`.
-- **Never retry:** `INVALID_ARGUMENT`, `NOT_FOUND`, `FAILED_PRECONDITION`,
+**Question one: the code.** Derivable from the code alone — there is deliberately
+no `retryable` field, because a client that has to read one has an error model
+that does not work for a client written before the field existed:
+
+- **Retryable:** `UNAVAILABLE`, `ABORTED`, and `RESOURCE_EXHAUSTED` only after
+  the delay in `RetryInfo`.
+- **Retryable once, after refreshing the credential:** `UNAUTHENTICATED`.
+- **Never:** `INVALID_ARGUMENT`, `NOT_FOUND`, `FAILED_PRECONDITION`,
   `PERMISSION_DENIED`, `UNIMPLEMENTED`, `INTERNAL`, `UNKNOWN`.
-- **`DEADLINE_EXCEEDED` and `CANCELLED` are not answers about the server.** Retry
-  them only for a `NO_SIDE_EFFECTS` RPC, or for an `Enqueue` carrying a
-  `unique_key`. This is stated in §10 as a non-promise, because it is the one
-  place a well-behaved client can still double-enqueue.
+- **`DEADLINE_EXCEEDED` and `CANCELLED` say nothing about the server** — the
+  request may have been applied in full. They are retryable only under question
+  two.
+
+**Question two: the method.** A retry is safe when the method is
+`NO_SIDE_EFFECTS` or `IDEMPOTENT` (§6) — so `GetJob`, `ListJobs`, `QueueStats`,
+`GetWorkflowRun` and `CancelJob` may be retried automatically on any code from
+the first list, `DEADLINE_EXCEEDED` and `CANCELLED` included.
+
+`Enqueue`, `EnqueueBatch` and `SubmitWorkflow` are `IDEMPOTENCY_UNKNOWN` and
+**must not be retried automatically**. `UNAVAILABLE` does not promise the write
+did not land: a commit followed by a dropped connection produces it. The single
+exception is an `Enqueue` carrying a `unique_key`, which makes the resend
+converge on one job — which is what the key is for, and why §10 tells clients
+that intend to retry to always set one. `EnqueueBatch` has no equivalent unless
+every item carries a key, and `SubmitWorkflow` has none at all.
 
 ### 4.4 The two invariants a test enforces
 
@@ -454,8 +498,22 @@ does not work for a client written before the field existed:
 ### 4.5 Sanitisation (D9)
 
 `Storage`, `Pool` and `Redis` messages are logged with their cause and replaced
-on the wire by a fixed string. Everything else forwards its `Display`, which is
-already written for users.
+on the wire by a fixed string.
+
+**`Other` is sanitised too, and that is not obvious from the variant name.**
+Sanitisation is by *provenance*, not by variant: `RedisBackend::conn` stringifies
+a `redis::RedisError` into `QueueError::Other`
+(`redis_backend/mod.rs:86`), and the Redis job and step paths do the same for
+malformed replies. A boundary that switched on the variant alone would forward
+exactly the connection detail D9 exists to withhold, on the one backend whose
+errors most often name a host. So `Other` carries a fixed message and its cause
+goes to the log.
+
+The upstream fix — `RedisBackend::conn` raising `QueueError::Redis`, which the
+`#[from]` already supports — is a small core change worth making separately. The
+wire rule must not depend on it having happened.
+
+Every other variant forwards its `Display`, which is already written for users.
 
 ---
 
@@ -641,8 +699,12 @@ and one addition of its own:
   either. This is the wire form of the blob-free listings #432 already
   established in storage (`NarrowJobRow`), and without it a page of 100 jobs is
   a page of 100 payloads.
-- **`optional bytes result`** — absent and empty are different answers, per D19
-  and the frame protocol's own `result_len` rule.
+- **`optional bytes payload` and `optional bytes result`** — both need explicit
+  presence, and for two different reasons. A result that is absent and one that
+  is empty are different answers, per D19 and the frame protocol's own
+  `result_len` rule. A payload is absent when the caller did not ask for it and
+  empty when the job carries no body — and §7.1 permits `raw = ""`, so a plain
+  proto3 `bytes` would decode "not requested" and "genuinely empty" identically.
 - `status` is `JobStatus`, the enum (D18).
 - `namespace` is output-only and always the caller's. It is present so a client
   logging a job record has it, not so a client can select one.
@@ -681,13 +743,36 @@ message EnqueueResponse {
 producer can still tell the two calls apart, which is the whole reason a producer
 sets a `unique_key`.
 
-`EnqueueBatch` returns one result per input item, each either a `Job` or a
-`google.rpc.Status`, in input order. **No atomicity is promised** (D17, E11): on
-Diesel the batch is one transaction, on Redis it is an unrolled-back pipeline,
-and a wire that promised all-or-nothing would be promising something one backend
-cannot do.
-A partial success is `OK` at the RPC level with per-item failures inside it —
-never a top-level error, which would tell a client nothing about what landed.
+`EnqueueBatch` returns one result per input item, in input order:
+
+```proto
+message EnqueueBatchItemResult {
+  oneof outcome {
+    EnqueueResponse enqueued = 1;   // Job + deduplicated, exactly as Enqueue answers
+    google.rpc.Status error  = 2;
+  }
+}
+```
+
+The item arm is `EnqueueResponse`, not a bare `Job`, because a batch item can
+dedupe on its `unique_key` for the same reason a single enqueue can, and a
+producer needs that answer just as much per item as it does per call (§7.4's
+named exception to D16). Reusing the response message also means a client's
+single-enqueue handling works unchanged on a batch item.
+
+**No atomicity is promised** (D17, E11), and the failure shape follows the
+backend rather than papering over it:
+
+- **A backend whose batch is one transaction** — Diesel — fails the *RPC*. One
+  item's failure rolls back every insert, so returning earlier items as
+  `enqueued` would report jobs that do not exist. The top-level `Status` carries
+  the failing item's index in `ErrorInfo.metadata{index}`.
+- **A backend that can partially apply** — Redis, an unrolled-back pipeline —
+  answers `OK` with per-item results, and an `error` arm means that item alone
+  did not land.
+
+A client that treats an `enqueued` arm as durable is correct under both, which is
+the property the split exists to give it.
 
 ### 7.5 Reads and pagination
 
@@ -746,15 +831,25 @@ Stage two, and constrained mostly by things already decided elsewhere.
   attempt, no namespace, no cap. The scheduler resolves all of them from the
   dispatch it recorded.
 - **The lease token (#719) is present from this package's first release**, opaque
-  `bytes`, minted by the scheduler, required on `success`, `failure`, `progress`,
-  `task_log` and `step_commit`. It is not a replacement for the `(owner, attempt)`
-  fence; it is the input the scheduler resolves against its dispatch record. It
-  is here from the start because a token is a few bytes in a protocol and nearly
-  impossible to retrofit.
+  `bytes`, minted by the scheduler, required on **every executor→scheduler frame
+  that names a dispatched job**: `success`, `failure`, `cancelled`, `slept`,
+  `progress`, `task_log` and `step_commit`. `cancelled` and `slept` are attempt
+  outcomes — one ends the attempt, the other reschedules the job — so a stale
+  executor's copy writes over a live attempt exactly as a stale `success` would.
+  The rule is "does this frame settle or advance an attempt", not a list, so a
+  frame added later inherits it. `hello` and `heartbeat` are the connection's
+  own, and carry no token. The token is not a replacement for the
+  `(owner, attempt)` fence; it is the input the scheduler resolves against its
+  dispatch record. It is here from the start because a token is a few bytes in a
+  protocol and nearly impossible to retrofit.
 - **`Heartbeat` is a unary RPC, not a frame on the dispatch stream** (#720).
-- **`max_decoding_message_size` is raised to `MAX_PAYLOAD_BYTES` (64 MiB)** (D22),
-  or the gRPC transport rejects work the TCP transport accepts and the two
-  `Transport` implementations stop being interchangeable.
+- **`max_decoding_message_size` is `MAX_PAYLOAD_BYTES` + 4 MiB = 68 MiB** (D22).
+  Setting it *to* `MAX_PAYLOAD_BYTES` would still reject a maximum payload:
+  tonic's limit measures the serialized message, and a 64 MiB `bytes` field
+  carries a tag, a length prefix and its sibling fields on top. The headroom is
+  the difference between a payload limit and a message limit, and it is what
+  keeps the two `Transport` implementations interchangeable. The acceptance test
+  sends a `MAX_PAYLOAD_BYTES` payload over both transports, not one under it.
 - **No HTTP binding, ever** (D2). Not "not yet".
 
 ---
@@ -769,7 +864,7 @@ Stage two, and constrained mostly by things already decided elsewhere.
 | Enums | `_UNSPECIFIED = 0`; readers tolerate unknown values; an unknown `JobStatus` means "not terminal", never "failed". |
 | `metadata` | opaque JSON `string`, byte-preserved (D21). |
 | Payload / result | `bytes`, opaque, never re-encoded (D5, and #710's "not a fourth payload codec"). |
-| Message size | 4 MiB producer, 64 MiB executor (D22), each declared once. |
+| Message size | 4 MiB producer; executor **message** 68 MiB for a 64 MiB **payload** (D22) — the two are different numbers and the headroom is deliberate. Each declared once. |
 | Transport security | Not terminated here. Same posture as attach: the token is a bearer credential and TLS belongs to a sidecar or mesh (`config/listen.rs:23-25,61-70`). #721 carries the warning until #717 closes. |
 
 ---
@@ -806,10 +901,13 @@ belong in the `.proto` comments as well as in #721.
 9. **No permanent job ids.** Retention archives and then deletes; `get_job` reads
    live rows and then archived ones (`diesel_common/jobs.rs:1422-1447`) and then
    answers `NOT_FOUND`. A `NOT_FOUND` does not mean the job never existed.
-10. **No safe blind retry of `Enqueue`.** A `DEADLINE_EXCEEDED` on an `Enqueue`
-    without a `unique_key` may have landed; retrying may enqueue twice, and no
-    field on the wire can tell. Clients that retry set a `unique_key`. This is
-    the single most important sentence in the reference page.
+10. **No safe blind retry of a write.** `DEADLINE_EXCEEDED`, `CANCELLED` and
+    `UNAVAILABLE` on an `Enqueue` without a `unique_key` may all have landed —
+    a commit followed by a dropped connection produces the last one — and no
+    field on the wire can tell. Clients that retry set a `unique_key`;
+    `EnqueueBatch` needs one per item and `SubmitWorkflow` has no equivalent, so
+    neither is automatically retryable at all (§4.3). This is the single most
+    important sentence in the reference page.
 11. **Not a replacement for embedded mode.** Local, no daemon, straight to
     SQLite stays the default. Server mode is additive, and #721 must answer this
     above the fold.
@@ -828,13 +926,13 @@ document first.
 |---|---|---|
 | **#712** buf CI | D3, D4, §1.1, §1.2 | Lint runs below `STANDARD`; breaking runs below `WIRE_JSON`; a removed field reserves only its number; the descriptor is generated but not committed; buf's version floats. |
 | **#713** server role | D11, D22, D23, E9 | The gRPC role starts without a namespace; it reimplements listener parsing instead of using `config/listen.rs`; it is not gated by a cargo feature; it skips the "at least one role" and graceful-shutdown paths. |
-| **#714** producer service | D13, D14, D15, D16, D17, D19, D20, D21, §7 | A `namespace` field appears in a request; a `dag_data` bytes field ships; `EnqueueBatch` claims atomicity; listings carry payloads; the cursor is a tuple; services are not `*Service`. |
+| **#714** producer service | D13, D14, D15, D16, D17, D19, D20, D21, §7 | A `namespace` field appears in a request; a `dag_data` bytes field ships; `EnqueueBatch` claims atomicity, drops `deduplicated`, or reports a rolled-back item as enqueued; `payload`/`result` lack explicit presence; listings carry payloads; the cursor is a tuple; services are not `*Service`. |
 | **#715** payload | D5, §7.1, E10 | A second envelope encoder appears; `structured` rounds a `round_trip_only` vector instead of refusing it; `raw` is re-encoded on the way through. |
 | **#716** shared secret | D10, §5.1 | The namespace is read from a request body; the check is per-RPC rather than one interceptor; `Principal` lacks a namespace and scope from the first commit; a non-loopback bind with no token starts. |
 | **#717** scoped tokens | D10, D11, D13, §5.4 | The namespace is taken from the request; a token is mintable for a namespace the process does not serve; a `produce` token can open an executor stream; an unconfigured token store serves anything; the untrusted-network warning survives the PR. |
 | **#718** JSON facade | D2, D15, D22, §4.1 | A route exists for an `flexiq.executor.v1` RPC; a `GET` serves an RPC that is not `NO_SIDE_EFFECTS`; the body cap and the gRPC cap disagree; errors are rendered in a shape other than §4.1; the drift test checks a hand-written list instead of the package. |
-| **#719** lease token | E7, §8 | The token is minted or chosen by the executor; a reclaim or reap does not move the epoch; a stale completion is swallowed rather than raised; it is negotiated by a version bump instead of a capability. |
-| **#720** executor transport | D1, D22, D24, §8 | It becomes a second dispatcher rather than a fourth `Transport`; capabilities become an enum; a fingerprint rides the wire; heartbeats ride the dispatch stream; an unknown frame arm is fatal; the executor package gains an HTTP binding. |
+| **#719** lease token | E7, §8 | The token is minted or chosen by the executor; any frame that settles or advances an attempt — `cancelled` and `slept` included — goes without one; a reclaim or reap does not move the epoch; a stale completion is swallowed rather than raised; it is negotiated by a version bump instead of a capability. |
+| **#720** executor transport | D1, D22, D24, §8 | It becomes a second dispatcher rather than a fourth `Transport`; capabilities become an enum; a fingerprint rides the wire; heartbeats ride the dispatch stream; an unknown frame arm is fatal; the message limit is set to the payload limit rather than above it; the executor package gains an HTTP binding. |
 | **#721** docs | §5.2, §10 | The page reads as though embedded mode is deprecated; the NULL-namespace cost is unstated; the `raw`/`structured` precision loss is a footnote; the untrusted-network warning is missing while #717 is open. |
 
 ---

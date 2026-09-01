@@ -74,3 +74,32 @@ Four things the fact-check changed, none of them cosmetic:
 Rejected: the review read `buf lint`'s `STANDARD` category as a typo for
 `DEFAULT`. `DEFAULT` was renamed in buf v1.40.0 and #712 says so explicitly;
 §1.2 now carries the note so the next reader does not "fix" it either.
+
+### Second round (PR #768 review), 8 findings, all valid
+
+1. `ErrorInfo.metadata` is `map<string, string>`, so §4.1 now states the encoding
+   — base-10 ASCII `int64`, with a table of every key, its reason and its unit.
+2. `QueueError::Storage` wraps `diesel::result::Error::NotFound` too, which the
+   table mapped to `UNAVAILABLE`. Absence is normalised by `.optional()` before
+   it becomes an error, so a raw `NotFound` at the boundary is a missing
+   `.optional()` — `INTERNAL`, never `UNAVAILABLE` and never `NOT_FOUND`.
+3. §4.3 asked one question where it needed two. Retryability is a property of the
+   code *and* the method: `UNAVAILABLE` does not promise the write did not land,
+   so `Enqueue`/`EnqueueBatch`/`SubmitWorkflow` are not automatically retryable.
+   `CancelJob` is, being `IDEMPOTENT`, which the old text left out.
+4. D9's sanitisation was written per variant, but `RedisBackend::conn`
+   stringifies a `RedisError` into `QueueError::Other`
+   (`redis_backend/mod.rs:86`) — the one backend whose errors name a host. §4.5
+   now sanitises by provenance and `Other` carries a fixed message.
+5. `Job.payload` needed explicit presence like `result`: §7.1 permits `raw = ""`,
+   so plain `bytes` cannot separate "not requested" from "empty".
+6. `EnqueueBatch`'s per-item result was a bare `Job`, dropping `deduplicated` and
+   reporting rolled-back items as enqueued on a transactional backend. It is an
+   `EnqueueResponse`, and a transactional backend fails the whole RPC with the
+   failing index rather than lying per item.
+7. The lease token covered five frames; `cancelled` and `slept` are attempt
+   outcomes too. The rule is now "does this frame settle or advance an attempt",
+   so a later frame inherits it.
+8. `max_decoding_message_size` measures the serialized message, so setting it to
+   `MAX_PAYLOAD_BYTES` rejects a maximum payload. 64 MiB payload, 68 MiB message,
+   and the acceptance test sends the maximum rather than something under it.
