@@ -73,6 +73,11 @@ handler-binding model.
 - result `true` → `02 f5`
 - big int `2^53` → `02 1b 00 20 00 00 00 00 00 00`
 
+The full set lives in `contracts/wire-vectors.json`, which every SDK asserts.
+A shell writes the envelope with its own language's CBOR library; **Rust** uses
+`flexiq_core::wire` (`encode_call`, `encode_result`), the one implementation in
+this tree and the one the gRPC structured-arguments door encodes through.
+
 ## Dispatch call sequence
 1. Shell constructs `Storage` (SQLite default; `postgres`/`redis` features) — `storage/traits.rs`.
 2. Shell constructs `Scheduler::new(storage, queues, SchedulerConfig, namespace)` — `scheduler/mod.rs`.
