@@ -28,6 +28,31 @@ fn prepare_auth(storage: &flexiq_core::StorageBackend, config: &DashboardConfig)
     }
 }
 
+/// Wait for every serving role, returning the first failure.
+///
+/// Triggering shutdown as soon as one role stops is what lets the others wind
+/// down through their own graceful path — an in-flight admission review is
+/// answered, an in-flight RPC completes — instead of being dropped mid-request
+/// the moment a sibling returns.
+async fn drain(mut roles: tokio::task::JoinSet<Result<()>>, shutdown: &Shutdown) -> Result<()> {
+    let mut outcome = Ok(());
+    while let Some(joined) = roles.join_next().await {
+        shutdown.trigger();
+        let result = match joined {
+            Ok(result) => result,
+            Err(error) => Err(anyhow::anyhow!("a server task failed: {error}")),
+        };
+        // Keep the first error: it is the one that explains why the rest are
+        // shutting down.
+        if let Err(error) = result {
+            if outcome.is_ok() {
+                outcome = Err(error);
+            }
+        }
+    }
+    outcome
+}
+
 /// Run until SIGINT/SIGTERM, then drain and exit.
 pub fn run(config: Config) -> Result<()> {
     // A webhook-only deployment rewrites pod specs and reads no jobs, so it
@@ -134,19 +159,23 @@ pub fn run(config: Config) -> Result<()> {
             .clone()
             .map(|webhook| crate::webhook::serve(webhook, shutdown.clone()));
 
-        // Both servers run to shutdown; whichever fails first takes the other
-        // with it, because a half-started deployment should exit rather than
-        // linger with one role silently missing.
-        let result = match (dashboard, webhook) {
-            (Some(dashboard), Some(webhook)) => tokio::try_join!(dashboard, webhook).map(|_| ()),
-            (Some(dashboard), None) => dashboard.await,
-            (None, Some(webhook)) => webhook.await,
+        // Every server runs to shutdown. The first one to stop — cleanly or not
+        // — takes the rest with it, because a half-started deployment should
+        // exit rather than linger with one role silently missing.
+        let mut roles = tokio::task::JoinSet::new();
+        if let Some(dashboard) = dashboard {
+            roles.spawn(dashboard);
+        }
+        if let Some(webhook) = webhook {
+            roles.spawn(webhook);
+        }
+        let result = if roles.is_empty() {
             // Listener-only deployment: nothing to serve, just wait to be told
             // to stop.
-            (None, None) => {
-                shutdown.wait().await;
-                Ok(())
-            }
+            shutdown.wait().await;
+            Ok(())
+        } else {
+            drain(roles, &shutdown).await
         };
 
         signals.abort();
