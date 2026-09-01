@@ -58,7 +58,16 @@ pub struct WireError {
 
 impl WireError {
     /// Map a core error onto its code, reason and metadata.
+    ///
+    /// Anything whose message is withheld is logged **here**, at the one point
+    /// every wire error is built, rather than at each boundary that produces
+    /// one. A batch item's failure travels a different path from an RPC's, and
+    /// a rule that has to be remembered per path is a rule one path will miss —
+    /// leaving a storage failure sanitised on the wire and absent from the
+    /// operator's log, which is the half of the trade that makes sanitising
+    /// acceptable.
     pub fn from_queue_error(error: &QueueError) -> Self {
+        log_if_sanitised(error);
         let (code, reason) = classify(error);
         let mut wire = Self {
             code,
@@ -167,9 +176,8 @@ impl From<&QueueError> for WireError {
     }
 }
 
-/// A `QueueError` as a `tonic::Status`, logging the cause of anything sanitised.
+/// A `QueueError` as a `tonic::Status`, for a handler that has nothing to add.
 pub fn from_queue_error(error: &QueueError) -> Status {
-    log_if_sanitised(error);
     WireError::from_queue_error(error).into()
 }
 
