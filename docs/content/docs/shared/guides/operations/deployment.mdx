@@ -971,6 +971,99 @@ is the smaller change; an executor is the one that reclaims the RAM.
   capabilities rather than demanding matching versions), but it is still one more
   thing in the diagram.
 
+## The gRPC door
+
+`flexiq-server` binds one listener per role, and `FLEXIQ_GRPC_LISTEN` adds a
+fourth beside attach, the dashboard and the admission webhook. It is the
+network-side producer door: a client enqueues over gRPC instead of over a
+database connection, so the credential it holds is a token rather than a DSN.
+
+```bash
+FLEXIQ_DSN=postgres://user:pass@host/db \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+flexiq-server
+```
+
+The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
+(which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
+Unix socket lands at mode `0660` through the same hardened bind the attach
+listener uses, so the shared **group** is again the access control.
+
+The role ships behind a cargo feature. The published image has it compiled in;
+a binary you built yourself without `--features grpc` rejects
+`FLEXIQ_GRPC_LISTEN` at boot rather than ignoring it, because a deployment that
+looks configured and serves nothing on the port its clients dial is the worse
+failure.
+
+### It serves one namespace, and refuses to start without one
+
+`FLEXIQ_GRPC_LISTEN` requires `FLEXIQ_NAMESPACE`. An unset namespace is not a
+neutral default inside the storage layer — it means three different things
+depending on the call: only the unnamespaced rows to a dequeue, *every*
+namespace to a read addressed by job id, and no filter at all to a listing. A
+network port that could express it would be one bug away from a cross-tenant
+read, so the gRPC door serves exactly one named namespace and never the
+ambiguous one.
+
+The cost is worth stating plainly: **jobs written without a namespace are
+invisible over gRPC.** A deployment that wants this door sets `FLEXIQ_NAMESPACE`
+on the server and configures its producers with the same value. One line, paid
+once, in exchange for making a cross-tenant read structurally impossible rather
+than conditionally absent.
+
+### Health and reflection
+
+Two services answer today; the FlexiQ services arrive on the same listener as
+they land.
+
+```bash
+grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+```
+
+Reflection works without a `.proto` on hand because the wire contract is
+embedded in the binary — the same committed descriptor the buf gate builds, so
+it cannot drift from the schema CI checks.
+
+`grpc.health.v1` is answered out of storage, the same question `/readiness`
+answers on the dashboard: storage is checked, the worker registry is not. A
+queue with no workers is still a queue, but a door that cannot reach its
+database can only fail every call it is handed. In Kubernetes that makes the
+gRPC health check the right **readiness** probe and the wrong liveness one — a
+database outage should take a replica out of rotation, not restart it — which is
+how the Helm chart wires a gRPC-only release.
+
+### Security
+
+Same posture as the attach listener, and the same warning applies more strongly
+while the door is young:
+
+- **No TLS is terminated here.** `FLEXIQ_GRPC_TLS_CERT` and
+  `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
+  because a variable that looks like it encrypts the connection and does not is
+  worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
+- **No caller is authenticated yet.** Until token authentication lands, treat a
+  non-loopback bind as reachable by anything on that network; the server logs a
+  warning at boot saying so. Keep the port inside the cluster, the way the attach
+  port already is.
+
+### With Helm
+
+```bash
+helm upgrade --install flexiq ./deploy/helm/flexiq-server \
+  --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
+  --set attach.token="$ATTACH_TOKEN" \
+  --set namespace=prod \
+  --set grpc.enabled=true
+```
+
+The door gets its own `ClusterIP` Service — never merged with the dashboard's,
+for the same reason attach is separate — with `appProtocol: grpc` so a mesh or
+an Ingress keyed off it speaks HTTP/2 rather than downgrading and breaking every
+stream. `grpc.enabled` without `namespace` fails at `helm template` time, with
+the reason, rather than at the pod's first restart.
+
 ## WAL mode and backups
 
 flexiq uses SQLite in WAL (write-ahead logging) mode for concurrent
