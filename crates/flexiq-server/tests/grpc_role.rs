@@ -127,6 +127,12 @@ async fn reflection_lists_the_health_service_and_resolves_the_committed_contract
         names.contains(&"grpc.health.v1.Health"),
         "a reflecting client must be able to find the health service: {names:?}"
     );
+    // The producer door is discoverable the same way, which is what makes
+    // `grpcurl` against a bare image the acceptance rather than a demo.
+    assert!(
+        names.contains(&"flexiq.v1.ProducerService"),
+        "a reflecting client must be able to find the producer service: {names:?}"
+    );
 
     // And the reason the descriptor is embedded: the wire contract travels with
     // the binary, so a client needs no `.proto` on hand.

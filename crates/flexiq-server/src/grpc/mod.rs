@@ -5,20 +5,23 @@
 //! shutdown signal — so a deployment enables it the way it enables the
 //! dashboard or the webhook, and `SIGTERM` drains it alongside them.
 //!
-//! What it serves today is `grpc.health.v1` and server reflection. The
-//! `flexiq.v1` producer service and the `flexiq.executor.v1` stream land on
-//! this listener as they arrive; the contract they must keep lives in
-//! `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
+//! What it serves is `grpc.health.v1`, server reflection and the `flexiq.v1`
+//! [`ProducerService`](producer::Producer). The `flexiq.executor.v1` stream
+//! lands on this listener when it arrives; the contract all of them must keep
+//! lives in `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
 //!
 //! The one rule that shapes everything above it: **this door serves exactly one
 //! namespace**, the process's own, and refuses to start without one. See
 //! [`crate::config::grpc`].
 
+pub mod blocking;
 pub mod health;
 pub mod limits;
 pub mod listener;
 pub mod pb;
+pub mod producer;
 pub mod reflection;
+pub mod status;
 
 use anyhow::Result;
 use flexiq_core::StorageBackend;

@@ -21,6 +21,7 @@ use tonic::transport::Server;
 use crate::config::grpc::{GrpcConfig, LISTEN_VAR};
 use crate::config::listen::ListenAddress;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
+use crate::grpc::producer::Producer;
 use crate::grpc::{health, reflection};
 use crate::runtime::shutdown::Shutdown;
 
@@ -50,15 +51,14 @@ impl Listener {
                 let bound = listener.local_addr().unwrap_or(*addr);
                 log::info!("[flexiq] gRPC listener on tcp://{bound}");
                 if !bound.ip().is_loopback() {
-                    // Not a refusal, unlike the attach port: this door carries
-                    // no code and, until it carries a credential, nothing it
-                    // serves is privileged. It is still reachable off-host with
-                    // no transport security, and an operator should hear that
-                    // once at boot rather than infer it.
+                    // `config::grpc` refuses a non-loopback *spec*, so reaching
+                    // here means a hostname resolved to one, or a `:0` bind did
+                    // — the address the operator wrote is not the address that
+                    // got bound. The refusal cannot see that; this can.
                     log::warn!(
-                        "[flexiq] {LISTEN_VAR}={bound} is reachable beyond loopback. This \
-                         listener terminates no TLS and authenticates no caller — put a \
-                         proxy or a service mesh in front of it."
+                        "[flexiq] {LISTEN_VAR} resolved to {bound}, which is reachable beyond \
+                         loopback. This listener terminates no TLS and authenticates no \
+                         caller — put a proxy or a service mesh in front of it."
                     );
                 }
                 Incoming::Tcp(listener)
@@ -93,10 +93,12 @@ impl Listener {
         }
     }
 
-    /// Serve health and reflection until `shutdown` fires.
+    /// Serve the producer service, health and reflection until `shutdown` fires.
     pub async fn serve(self, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
+        let producer = Producer::new(storage.clone(), self.config.namespace.clone());
         let health = health::serve(storage, self.config.namespace.clone(), shutdown.clone()).await;
         let router = Server::builder()
+            .add_service(producer.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(
