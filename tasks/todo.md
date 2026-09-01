@@ -7,7 +7,7 @@ wants to submit a job therefore needs a CBOR library before it can send its
 first one, which makes "any language" mean "any language with a CBOR library"
 and rules out `curl` entirely.
 
-#714 left field 3 of the oneof unspent for exactly this. A new arm inside an
+Issue #714 left field 3 of the oneof unspent for exactly this. A new arm inside an
 existing oneof is additive, so nothing already shipped moves.
 
 Reviewed against §11 of `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`,
@@ -35,7 +35,8 @@ the way through.
   client cannot compute one anyway, it sets `unique_key` by hand.
 
 - **The three `decode_only` vectors are the documented refusal.** An integer
-  past 2^53 is rejected rather than truncated; byte strings and CBOR tags have
+  past `2^53 - 1` is rejected rather than truncated — 2^53 itself included,
+  since it is what 2^53 + 1 rounds to; byte strings and CBOR tags have
   no `google.protobuf.Value` arm at all, so they are structurally unreachable.
   `raw` remains the lossless door and stays the one an SDK uses.
 

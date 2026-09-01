@@ -194,16 +194,18 @@ message Debounce {
 // BINDING_CONTRACT.md verbatim and loses nothing; it is what an SDK sends. This
 // one exists so a client with no CBOR library — a shell script, `curl`, a
 // language whose ecosystem has no codec — can still submit a job. The server
-// encodes these values into the identical envelope, so storage never holds two
+// encodes these values into that same envelope, so storage never holds two
 // formats and a worker cannot tell which door a job arrived through.
 //
 // Two consequences of being JSON-shaped. Both are permanent, and neither is a
 // footnote:
 //
 //   1. **Values JSON cannot hold are refused, not rounded.** A number here is a
-//      double, so an integer whose magnitude exceeds 2^53 is rejected with
-//      INVALID_ARGUMENT rather than silently truncated, and a non-finite one is
-//      rejected outright. Byte strings and CBOR tags have no Value arm at all.
+//      double, so an integer is carried only up to a magnitude of 9007199254740991
+//      (2^53 - 1). 2^53 is refused along with everything past it, because it is
+//      also what 2^53 + 1 rounds to and no server can tell the two apart.
+//      Anything beyond the range fails with INVALID_ARGUMENT rather than being
+//      silently truncated, and a non-finite number is refused outright. Byte strings and CBOR tags have no Value arm at all.
 //      contracts/wire-vectors.json pins exactly those cases as decode-only
 //      because no JSON-shaped writer can produce them — `raw` is the door that
 //      carries them.
