@@ -1,154 +1,167 @@
-# #715 — raw envelope or structured args on the wire
+# #716 — gRPC: a shared-secret interceptor behind an Authenticator seam
 
-## Problem
-`EnqueueRequest.body` ships one arm today: `raw`, the tagged envelope from
-`BINDING_CONTRACT.md` — `0x02` followed by CBOR `[args, kwargs]`. A client that
-wants to submit a job therefore needs a CBOR library before it can send its
-first one, which makes "any language" mean "any language with a CBOR library"
-and rules out `curl` entirely.
+Epic #710, stage 1. Reviewed against design doc §5.1, D10, §11.
+**Fails if:** the namespace is read from a request body · the check is per-RPC
+rather than one interceptor · `Principal` lacks a namespace and scope from the
+first commit · a non-loopback bind with no token starts.
 
-Issue #714 left field 3 of the oneof unspent for exactly this. A new arm inside an
-existing oneof is additive, so nothing already shipped moves.
+Branch: `feat/grpc-shared-secret`. Commit as pratyush. **Do not push.**
 
-Reviewed against §11 of `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`,
-which fails #715 if a second envelope encoder appears, if `structured` rounds a
-`round_trip_only` vector instead of refusing it, or if `raw` is re-encoded on
-the way through.
+## The shape
 
-## Scope calls
+One tower `Layer` over the whole `Routes` — not `InterceptedService` per
+service, not a check per RPC. `Server::layer` takes `L: Layer<Routes>`, so the
+gate sits where `dashboard/auth/middleware.rs::gate_request` sits for the
+dashboard: a place a new RPC cannot land outside of.
 
-- **`structured` uses protobuf's dynamic value types** —
-  `repeated google.protobuf.Value args`, `map<string, Value> kwargs`. That is
-  what makes the arm worth having: proto3 JSON renders a `Value` as a plain
-  JSON value, so `curl` (and #718's JSON facade) sends
-  `{"args":[{"order_id":"ord-1"}],"kwargs":{}}` rather than tagged noise.
+`tonic::service::interceptor` is *not* enough: an `Interceptor` sees
+`Request<()>` and therefore no URI path, and the gate needs the path to keep
+`grpc.health.v1` public (kubelet's `grpc:` probe carries no metadata).
 
-- **CBOR map keys are emitted sorted, and that is documented, not hidden.**
-  A proto3 `map` is unordered by definition and prost decodes
-  `google.protobuf.Struct` into a `BTreeMap`, so a client's key order does not
-  survive the wire and no encoder can recover it. Consequence, stated plainly
-  in the proto and in the docs: eight of the nine `encode` vectors in
-  `contracts/wire-vectors.json` reproduce byte-for-byte through `structured`;
-  `single-object-arg` is the ninth, and differs only in the order of a two-key
-  map. Nothing decodes differently. The one thing that notices is the SDKs'
-  `auto:` idempotency key, a sha256 over the payload bytes — and a `structured`
-  client cannot compute one anyway, it sets `unique_key` by hand.
+The layer inserts a `Principal` into the request extensions. `Producer` reads
+its namespace from there and holds none of its own, so the swap in #717 is a
+change to what the authenticator returns and to nothing else. A `Producer`
+served *without* the layer fails every call — fail closed.
 
-- **The three `decode_only` vectors are the documented refusal.** An integer
-  past `2^53 - 1` is rejected rather than truncated — 2^53 itself included,
-  since it is what 2^53 + 1 rounds to; byte strings and CBOR tags have
-  no `google.protobuf.Value` arm at all, so they are structurally unreachable.
-  `raw` remains the lossless door and stays the one an SDK uses.
+## Tasks
 
-- **The envelope encoder lands in `flexiq-core`, not in `flexiq-server`.**
-  Rust has no envelope encoder today — the three shells each use their
-  language's CBOR library, and the published `flexiq` crate hands a Rust
-  producer nothing. `flexiq_core::wire` becomes *the* Rust implementation, so
-  D5's "one implementation of the envelope" holds as the surface grows, and
-  the vectors that pin it are asserted in the crate that owns it.
+### 1. Share the token parser
+- [ ] `config/listen.rs`: `token()` → `pub(crate) fn secret(env, var)`, message
+      names `var`. `MIN_TOKEN_LEN` stays the one number.
+- [ ] Grep `match=`/`assert` for the old message before rewording.
 
-- **Hand-written CBOR writer, no new dependency.** Encoding only, ~150 lines.
-  The contract demands definite-length containers and shortest-form integers;
-  a serde-backed codec makes both a property of how it is driven rather than of
-  the code, on a crate published to crates.io. There is no decoder because
-  nothing here decodes.
+### 2. `FLEXIQ_GRPC_TOKEN`
+- [ ] `config/grpc.rs`: `GrpcConfig.token: Option<Secret>`, `TOKEN_VAR`.
+- [ ] Non-loopback **with no token** refuses; non-loopback **with** a token is
+      allowed. Unix socket unchanged — the filesystem mode is the boundary.
+- [ ] `grpc::scrub_token()`, called from `main` beside `scrub_attach_token`.
+- [ ] `main.rs` ENV_HELP: the new variable, and the old
+      "authenticates no caller" line goes.
+- [ ] `grpc/listener.rs`: the post-bind guard takes the token into account.
 
-## Plan
+### 3. The seam
+- [ ] `grpc/auth/principal.rs` — `Scope::{Produce,Execute}` (one per proto
+      package, per D1), `ScopeSet`, `Principal { namespace, scopes }`.
+- [ ] `grpc/auth/authenticator.rs` — `Authenticator::authenticate(&MetadataMap)
+      -> Result<Principal, Status>`; `Anonymous` (loopback, no token
+      configured).
+- [ ] `grpc/auth/shared_secret.rs` — `authorization: Bearer <token>`,
+      constant-time. Wrong and missing produce the *same* status.
+- [ ] `grpc/auth/gate.rs` — path → `Public | Authenticated | Scoped(Scope)`.
+      `/grpc.health.v1.Health/` public; `/flexiq.v1.` → Produce;
+      `/flexiq.executor.v1.` → Execute; **anything else authenticated**, so an
+      unknown path is not an unauthenticated service-existence oracle.
+- [ ] `grpc/auth/layer.rs` — `AuthLayer`/`Authenticated<S>`. Splits the request
+      into parts so the `MetadataMap` is moved, not cloned; rejects with
+      `Status::into_http::<ResBody>()`.
 
-### 1. Core: the envelope encoder (its own commit)
-- [x] `crates/flexiq-core/src/wire/value.rs` — `WireValue`: `Null`, `Bool`,
-      `Integer(i64)`, `Float(f64)`, `Text`, `Bytes`, `Array`, `Map(Vec<(String,
-      WireValue)>)`. The map is a `Vec` so a caller keeps its own key order;
-      the gRPC door feeds it already sorted.
-- [x] `crates/flexiq-core/src/wire/cbor.rs` — the writer. Definite-length heads,
-      shortest-form integer arguments, major type 1 for negatives, `f64` for
-      floats.
-- [x] `crates/flexiq-core/src/wire/envelope.rs` — `TAG_CBOR`, and
-      `encode_call(args, kwargs) -> Vec<u8>` emitting `0x02 || [args, kwargs]`.
-- [x] `crates/flexiq-core/src/wire/mod.rs` — barrel + the module doc that
-      points at `BINDING_CONTRACT.md`; `pub mod wire;` in `lib.rs`.
-- [x] `crates/flexiq-core/tests/rust/wire_vector_tests.rs` — every `encode` case
-      in `contracts/wire-vectors.json` asserted against its pinned hex. The
-      JSON is read through a serde `Visitor` so object key order survives
-      (`serde_json::Value` sorts, and one of the vectors is order-sensitive).
-- [x] One line in `BINDING_CONTRACT.md` naming the Rust encoder.
+### 4. Wire it
+- [ ] `status/reason.rs`: `UNAUTHENTICATED`, `SCOPE_DENIED`.
+- [ ] `status/mod.rs`: `WireError::unauthenticated()` (one constructor, one
+      message — that is what makes wrong and missing indistinguishable),
+      `WireError::scope_denied()`.
+- [ ] `grpc/listener.rs`: build the authenticator from the config, `.layer(...)`.
 
-### 2. Protos
-- [x] `job.proto`: `StructuredArgs`, importing `google/protobuf/struct.proto`.
-      Comments carry the ceiling — what is refused, and that key order is
-      normalised — because a client reads the `.proto` and not the design doc.
-- [x] `producer_service.proto`: `StructuredArgs structured = 3;` in the `body`
-      oneof, replacing the placeholder comment.
-- [x] `scripts/proto-check.sh --fix` (buf 1.72.0 == the pin) to regenerate
-      `contracts/descriptor.binpb`. Additive, so no `proto-breaking` label.
+### 5. The namespace comes off the principal
+- [ ] `producer/mod.rs`: `Producer::new(storage)` — no namespace field.
+      `Scoped<'_> { storage, namespace }` built once per RPC in the trait impl,
+      the one place all six are joined. Missing principal → `INTERNAL`.
+- [ ] `producer/{enqueue,reads,cancel}.rs` take `&Scoped`.
 
-### 3. Server: the structured door
-- [x] `crates/flexiq-server/src/grpc/producer/structured.rs` —
-      `pb::StructuredArgs` → `WireValue` → `flexiq_core::wire::encode_call`.
-      Refusals, all `INVALID_REQUEST`: a `Value` with no `kind`; a non-finite
-      `number_value`; an integral `number_value` past ±2^53; an unknown
-      `null_value` enumerator.
-- [x] `enqueue.rs::prepare` gains the `Structured` arm. `EnqueueBatch` inherits
-      it, since it prepares each item through the same function.
-- [x] Unit tests beside the conversion: each refusal, and structured/raw
-      byte-identity.
-- [x] `crates/flexiq-server/tests/grpc_producer.rs` — the `encode` vectors
-      through the real RPC (read back with `include_payload`), the 2^53
-      rejection end to end, and one batch item sent structured.
+### 6. Tests
+- [ ] `config/grpc.rs`: short token refused · non-loopback + token accepted ·
+      non-loopback without token refused, naming `FLEXIQ_GRPC_TOKEN` · unix
+      without token accepted.
+- [ ] `auth/gate.rs`: the four classifications · a `Produce`-only principal is
+      refused an executor path.
+- [ ] `auth/shared_secret.rs`: match · mismatch · absent · wrong scheme, and
+      that the three failures are byte-identical.
+- [ ] `tests/grpc_auth.rs` (feature `grpc`): no credential → `UNAUTHENTICATED` ·
+      wrong credential → identical code/message/reason · right credential →
+      the enqueue lands · health answers `SERVING` with no credential · an
+      unimplemented path answers `UNAUTHENTICATED`, not `UNIMPLEMENTED` · with
+      no token configured the job still lands in the configured namespace.
+- [ ] `tests/grpc_role.rs`, `tests/grpc_producer.rs`: the new config field.
 
-### 4. Docs
-- [x] `deployment.mdx`: the "structured-argument door, which is not here yet"
-      paragraph becomes the section that states which door loses precision,
-      with a `grpcurl` example of each.
+### 7. Docs
+- [ ] `crates/flexiq-server/README.md` — env table + the gRPC section.
+- [ ] `docs/.../operations/deployment.mdx` — the credential, the lifted
+      non-loopback refusal, the untrusted-network warning that stands until
+      #717, `grpcurl -H 'authorization: Bearer …'`.
 
-## Verification
-- [x] `cargo test -j2 -p flexiq-core --test rust`
-- [x] `cargo test -j2 -p flexiq-server --features grpc`
-- [x] `cargo check -j2 --workspace` + `--features postgres` + `--features redis`
-- [x] `cargo fmt`, `cargo clippy -j2 --workspace --all-targets`
-- [x] `scripts/proto-check.sh` and `scripts/proto-guard.sh`
-- [x] `buf breaking` against `origin/master` — additive, no label needed.
-- [ ] `pnpm --dir docs build` is not run here; docs change is prose in one mdx.
+### 8. Chart (scope decision below)
+- [ ] `values.yaml`: `grpc.token` / `grpc.existingSecret` /
+      `grpc.existingSecretKey`.
+- [ ] `_validate.tpl`: the "not available yet" fail becomes "requires a token".
+- [ ] `secret.yaml` + `deployment.yaml`: `FLEXIQ_GRPC_TOKEN`.
+- [ ] `ci-chart.yml`: the gRPC-only probe assertions return.
+
+## Verify
+- `cargo fmt` · `cargo clippy -p flexiq-server --features grpc -j2 -- -D warnings`
+- `cargo test -p flexiq-server --features grpc -j2`
+- `cargo test -p flexiq-server -j2` (the role compiled out)
+- `cargo check --workspace -j2`
+- `helm template` a gRPC-only release, with and without a token
 
 ## Review
 
-Three commits.
+**Done.** All eight groups, on `feat/grpc-shared-secret`. Not pushed.
 
-1. **`feat: a CBOR envelope encoder in the core`** — `flexiq_core::wire`
-   (`value.rs` / `cbor.rs` / `envelope.rs`). Rust genuinely had no envelope
-   encoder: §7.1's "the same encoder the shells use" was written expecting one,
-   and each shell in fact reaches for its language's CBOR library. All nine
-   `encode` vectors reproduce byte-for-byte, read through a serde `Visitor`
-   because `serde_json::Value` sorts object keys and one vector is
-   order-sensitive. Both `round_trip_only` vectors are reachable from Rust,
-   which is the test that says *why* `raw` stays.
+### What the shape turned out to be
 
-2. **`feat: structured arguments on the enqueue wire`** — `StructuredArgs` in
-   `job.proto`, field 3 of the `body` oneof, and
-   `grpc/producer/structured.rs`. `raw` still reaches storage untouched.
+- **`Server::layer`, not an interceptor.** `tonic::service::interceptor` hands
+  the callback a `Request<()>`, which carries metadata and extensions but **no
+  URI** — so an interceptor cannot allowlist `grpc.health.v1`, and gating health
+  would cost a gRPC-only pod its readiness probe (kubelet's `grpc:` probe sends
+  no metadata). `grpc/auth/layer.rs` is therefore a hand-written
+  `tower_layer::Layer` over `Routes`; that needed `http`, `tower-layer` and
+  `tower-service` as named optional deps rather than reaching through
+  `tonic::codegen`, which is codegen's namespace and not an API.
+- **The layer moves the headers rather than cloning them** — into a
+  `MetadataMap` and back through `into_headers`, the same way tonic's own
+  `InterceptedService` takes a request apart.
+- **`Producer` lost its namespace field entirely.** It reads the principal out
+  of the request extensions in `Producer::scope`, called once per RPC in the
+  trait impl. A request with no principal is `INTERNAL`, so registering the
+  service *without* the layer serves nothing rather than serving everything
+  unauthenticated — the seam is load-bearing, not notional. Handlers take
+  `&Scoped<'_>` and became `pub(crate)`.
+- **Scope enforcement shipped too**, not just the field. `Scope::{Produce,
+  Execute}` is one per proto package (D1), the gate maps a path prefix to the
+  scope its package needs, and `SCOPE_DENIED` /`PERMISSION_DENIED` exists with
+  the `scope` metadata key. Both #716 authenticators grant `ScopeSet::ALL`, so
+  it is unreachable over the wire today and pinned by a unit test — which is
+  what makes #717 a change to the authenticator and to nothing else.
+- **The default is closed.** An unrouted path is authenticated before it is
+  routed, so an anonymous caller gets `UNAUTHENTICATED` and not the
+  `UNIMPLEMENTED` that would enumerate the build's services. That assertion is
+  the e2e proof that the check is one interceptor: a per-RPC check cannot
+  produce it.
 
-3. **`docs: state which enqueue door loses precision`** — a section, not a
-   footnote, with a `grpcurl` example of the structured arm.
+### Amendments
 
-### What the issue did not anticipate
+`tasks/specs/2026-09-01-flexiq-v1-proto-design.md` §5.1 gained the public-path
+rule — health only, reflection gated, unrouted paths gated — because #717
+inherits that list and the doc did not name it.
 
-**Object key order cannot survive a protobuf map.** `google.protobuf.Value`'s
-object arm is `google.protobuf.Struct`, a proto3 `map`; prost decodes it into a
-`BTreeMap` and the client's order is not on the wire to recover. So
-`single-object-arg` — the one pinned vector with a two-key object — cannot be
-byte-reproduced through `structured`, and is pinned in its sorted form beside
-the conversion instead. Eight of nine are byte-identical. The alternative was a
-FlexiQ-local ordered value type, which would have made proto3 JSON tagged and
-verbose and taken `curl` — the whole motive — away. Chosen deliberately, with
-the user; recorded as an amendment in the design doc §7.1 and stated in the
-proto, the docs and the test.
+### Verified
 
-**2^53 is not the safe boundary; 2^53 - 1 is.** 9007199254740993 rounds to
-9007199254740992 = 2^53 exactly, so a server that accepted 2^53 could not tell
-the two apart and would answer a request nobody made. The refusal is
-`|value| > 2^53 - 1`.
+- `cargo test -p flexiq-server --features grpc -j2` — 260 unit + 106
+  integration, all green, `grpc_auth` 9/9.
+- `cargo test -p flexiq-server -j2` (role compiled out) — 200 unit + the rest.
+- `cargo clippy -p flexiq-server --features grpc --all-targets -- -D warnings`,
+  and the pre-commit form `--all-targets --all-features`.
+- `cargo check --workspace -j2`.
+- `helm lint` on three role combinations; a gRPC-only render carrying
+  `FLEXIQ_GRPC_TOKEN` from the chart Secret and from `existingSecret`; the three
+  refusals (no token, short token, no namespace) each failing with their own
+  message; and the probe wiring the restored `ci-chart.yml` assertion checks —
+  `['tcpSocket'] ['grpc'] True`, falling back to `['tcpSocket'] ['tcpSocket']`
+  under `grpc.healthProbe=false`.
 
-**The float head byte is not a shortest-form argument.** Routing `0xfb` through
-the integer head writer emits `f8 1b` — major type 7's low bits are an
-additional-information code, not a number to shorten. Caught by the first test
-run; the major-type-7 heads are literal constants now.
+### Not done here
+
+- The docs site build was not run (content-only MDX, and the build OOMs on this
+  machine); the `<Callout>` matches the 17 already in the file.
+- #717 remains the real credential. The untrusted-network warning stays in
+  `deployment.mdx` and the chart README until it lands.
