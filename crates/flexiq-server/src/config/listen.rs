@@ -75,7 +75,7 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
     }
 
     let listen = parse("FLEXIQ_LISTEN", &spec)?;
-    let token = token(env)?;
+    let token = secret(env, "FLEXIQ_ATTACH_TOKEN")?;
     if let ListenAddress::Tcp(addr) = &listen {
         if !addr.ip().is_loopback() && token.is_none() {
             bail!(
@@ -88,16 +88,20 @@ pub fn from_env(env: &Env) -> Result<Option<AttachConfig>> {
     Ok(Some(AttachConfig { listen, token }))
 }
 
-/// Parse `FLEXIQ_ATTACH_TOKEN`, rejecting one too short to be a secret.
-fn token(env: &Env) -> Result<Option<Secret>> {
-    let Some(raw) = value(env, "FLEXIQ_ATTACH_TOKEN") else {
+/// Parse the shared secret named by `var`, rejecting one too short to be one.
+///
+/// Shared between the roles that carry a bearer credential so that the length
+/// floor is one number rather than one per listener: a second copy is free to
+/// drift, and the value of a floor is that every door has the same one.
+pub(crate) fn secret(env: &Env, var: &str) -> Result<Option<Secret>> {
+    let Some(raw) = value(env, var) else {
         return Ok(None);
     };
     let token = Secret::new(raw);
     if token.len() < MIN_TOKEN_LEN {
         bail!(
-            "FLEXIQ_ATTACH_TOKEN must be at least {MIN_TOKEN_LEN} characters — a \
-             guessable one is not a control. Generate it with `openssl rand -base64 32`."
+            "{var} must be at least {MIN_TOKEN_LEN} characters — a guessable one \
+             is not a control. Generate it with `openssl rand -base64 32`."
         );
     }
     Ok(Some(token))
