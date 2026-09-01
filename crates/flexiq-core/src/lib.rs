@@ -26,6 +26,14 @@ pub mod worker;
 // Primary public API — the types most consumers need. The crate root is the
 // blessed import path; submodules stay public for discoverability but new code
 // should prefer these re-exports.
+/// Diesel, re-exported.
+///
+/// `QueueError::Storage` wraps a `diesel::result::Error`, so a consumer that
+/// wants to tell a constraint violation from an unreachable database has to
+/// name Diesel's types. Re-exporting them means it does that through the
+/// version this crate is built against rather than a second one it picked.
+pub use diesel;
+
 pub use contract::{
     ensure_contract_supported, min_contract, set_min_contract, CONTRACT_VERSION,
     MIN_CONTRACT_VERSION,
