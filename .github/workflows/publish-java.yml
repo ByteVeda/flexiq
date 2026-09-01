@@ -141,7 +141,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           # 22+ so the jar task compiles the FFM overlay into META-INF/versions/22
