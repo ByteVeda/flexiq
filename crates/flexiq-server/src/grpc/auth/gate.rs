@@ -14,8 +14,17 @@
 
 use super::principal::Scope;
 
-/// Health, which is the one thing an unauthenticated caller must reach.
-const HEALTH: &str = "/grpc.health.v1.Health/";
+/// The health RPCs, named exactly rather than by prefix.
+///
+/// `grpc.health.v1` has had these two methods and no others since it was
+/// written, so an exact list costs nothing and keeps the public set to what an
+/// unauthenticated caller genuinely must reach. A prefix would hand
+/// `/grpc.health.v1.Health/Anything` straight to the router, which is the
+/// unauthenticated `UNIMPLEMENTED` the rule below exists to avoid.
+const HEALTH: [&str; 2] = [
+    "/grpc.health.v1.Health/Check",
+    "/grpc.health.v1.Health/Watch",
+];
 /// The producer package.
 const PRODUCER: &str = "/flexiq.v1.";
 /// The executor package (#720). Classified now so the RPCs that land in it
@@ -35,7 +44,7 @@ pub enum Requirement {
 
 /// Classify one gRPC path.
 pub fn requirement(path: &str) -> Requirement {
-    if path.starts_with(HEALTH) {
+    if HEALTH.contains(&path) {
         // A kubelet `grpc:` probe sends no metadata and has no way to, so
         // gating health would mean either no readiness probe or a token
         // written literally into the Deployment spec. What it publishes is one
@@ -57,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn health_is_the_only_public_path() {
+    fn the_two_health_rpcs_are_the_only_public_paths() {
         assert_eq!(
             requirement("/grpc.health.v1.Health/Check"),
             Requirement::Public
@@ -66,6 +75,24 @@ mod tests {
             requirement("/grpc.health.v1.Health/Watch"),
             Requirement::Public
         );
+    }
+
+    /// The health service is public; the health *prefix* is not. A method that
+    /// does not exist would otherwise reach the router with no credential and
+    /// come back `UNIMPLEMENTED`.
+    #[test]
+    fn an_unknown_health_method_is_not_public() {
+        for path in [
+            "/grpc.health.v1.Health/Anything",
+            "/grpc.health.v1.Health/",
+            "/grpc.health.v1.Health/CheckX",
+        ] {
+            assert_eq!(
+                requirement(path),
+                Requirement::Authenticated,
+                "path: {path}"
+            );
+        }
     }
 
     #[test]

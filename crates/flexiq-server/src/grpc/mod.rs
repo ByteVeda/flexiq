@@ -14,6 +14,8 @@
 //! one namespace**, the process's own, and refuses to start without one; and
 //! **every call on it is authenticated in one place**, [`auth::AuthLayer`],
 //! which wraps the whole router so a new RPC cannot land outside the check.
+//! The two `grpc.health.v1` RPCs are the one exception, because a kubelet probe
+//! carries no credential.
 //! See [`crate::config::grpc`] and [`auth`].
 
 pub mod auth;

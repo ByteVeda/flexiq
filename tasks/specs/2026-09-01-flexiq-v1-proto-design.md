@@ -571,7 +571,8 @@ If multi-namespace credentials ever land, the namespace arrives as
 `flexiq-namespace` metadata and the authenticator validates it against the
 token's allowed set. Still one place. Still not the body.
 
-**One path is public, and only one: `grpc.health.v1`.** A Kubernetes `grpc:`
+**Two paths are public, and only two: `grpc.health.v1.Health/Check` and
+`/Watch`, by name rather than by service prefix.** A Kubernetes `grpc:`
 probe sends no metadata and has no way to, so gating health would cost a
 gRPC-only deployment its readiness probe — or put the token literally into a
 Deployment spec. What it discloses is one bit, whether storage answers, to
