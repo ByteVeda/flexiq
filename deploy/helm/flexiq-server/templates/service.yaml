@@ -43,6 +43,32 @@ spec:
       port: {{ .Values.dashboard.port }}
       targetPort: dashboard
 {{- end }}
+{{- if .Values.grpc.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # Separate from the dashboard's for the same reason attach is: a door
+  # producers dial should not share an object with the one people browse.
+  name: {{ $fullname }}-grpc
+  labels:
+    {{- include "flexiq-server.labels" . | nindent 4 }}
+  {{- with .Values.grpc.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flexiq-server.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.grpc.port }}
+      targetPort: grpc
+      # Named so a mesh or an Ingress that keys off it speaks HTTP/2 rather
+      # than downgrading and breaking every stream.
+      appProtocol: grpc
+{{- end }}
 {{- if .Values.webhook.enabled }}
 ---
 apiVersion: v1

@@ -1,8 +1,8 @@
 # Default values for flexiq-server.
 #
-# The chart installs one Deployment that plays up to three roles — scheduler,
-# dashboard, and sidecar injector — because they are one binary and one image.
-# Turn off what you do not want; at least one role has to stay on.
+# The chart installs one Deployment that plays up to four roles — scheduler,
+# dashboard, sidecar injector, and gRPC door — because they are one binary and
+# one image. Turn off what you do not want; at least one role has to stay on.
 
 image:
   repository: ghcr.io/byteveda/flexiq-server
@@ -33,7 +33,9 @@ storage:
   backend: ""
 
 # Tenant namespace every scheduler and dashboard view is scoped to. Empty
-# addresses every namespace, which is what a single-tenant install wants.
+# addresses every namespace, which is what a single-tenant install wants —
+# except with grpc.enabled, which serves one named namespace and refuses to
+# start without this set.
 namespace: ""
 queues:
   - default
@@ -90,6 +92,16 @@ dashboard:
     path: /
     pathType: Prefix
     tls: []
+
+# The flexiq.v1 gRPC door: producers enqueue over the network instead of over a
+# database connection.
+grpc:
+  enabled: false
+  port: 50051
+  # Its own Service, like attach: the door clients dial and the port people
+  # browse should not be one object an annotation can widen by accident.
+  service:
+    annotations: {}
 
 # Annotation-driven executor sidecar injection.
 webhook:

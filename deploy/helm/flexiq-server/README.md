@@ -1,7 +1,7 @@
 # flexiq-server
 
-The FlexiQ scheduler, dashboard, and executor sidecar injector — one binary,
-one image, up to three roles.
+The FlexiQ scheduler, dashboard, gRPC door, and executor sidecar injector — one
+binary, one image, up to four roles.
 
 ```bash
 helm install flexiq ./deploy/helm/flexiq-server \
@@ -20,6 +20,7 @@ tasks, so the app image needs no DSN and no inbound port.
 | `attach.enabled` | `true` | The attach listener and, once an executor attaches, the scheduler |
 | `dashboard.enabled` | `true` | The dashboard SPA and its JSON API |
 | `webhook.enabled` | `false` | The mutating admission webhook that injects executor sidecars |
+| `grpc.enabled` | `false` | The `flexiq.v1` gRPC door, on its own Service |
 
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
@@ -29,10 +30,16 @@ this chart mounts no volume for it, and a second replica would not see the first
 one's jobs; the chart refuses the DSN rather than shipping a database that
 disappears with the pod.
 
+`grpc.enabled` additionally requires `namespace`. The gRPC door serves exactly
+one namespace, because an unset one means "every namespace" to a read and "only
+the unnamespaced rows" to a dequeue — neither is a thing to put on a network
+port. The cost is worth naming: jobs written without a namespace are invisible
+over gRPC, so producers must be configured with the same value.
+
 The chart refuses to render on combinations the server would reject at boot: an
 attach listener with no token, an unauthenticated dashboard without
-`dashboard.allowInsecure`, cert-manager without the CRDs. The failure names the
-value to change.
+`dashboard.allowInsecure`, a gRPC door with no namespace, cert-manager without
+the CRDs. The failure names the value to change.
 
 ## Sidecar injection
 
@@ -136,6 +143,14 @@ What that publishes to anything that can reach the port: whether storage
 answers, and how many workers are registered. Turn it off with
 `--set dashboard.publicReadiness=false` and readiness falls back to `/health`,
 which always passes while the process is alive.
+
+Kubernetes takes one probe of each type, so a release without a dashboard falls
+back through the roles it does run: the webhook's own `/health` over HTTPS,
+then — for a gRPC-only release — a TCP connect for liveness and `grpc.health.v1`
+for readiness, which this server answers out of storage exactly as `/readiness`
+does. The `grpc` probe type needs Kubernetes 1.24 or newer; on anything older,
+override readiness with a `tcpSocket`. Last of all, a bare TCP connect to the
+attach port, which speaks no protocol a kubelet knows.
 
 ## Multiple replicas
 
