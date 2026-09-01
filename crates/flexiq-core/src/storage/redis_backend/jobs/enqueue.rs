@@ -340,6 +340,19 @@ impl RedisStorage {
             .collect()
     }
 
+    /// [`enqueue_unique_batch`](Self::enqueue_unique_batch), reporting per item
+    /// whether it deduped — see
+    /// [`enqueue_unique_reporting`](Self::enqueue_unique_reporting).
+    pub fn enqueue_unique_batch_reporting(
+        &self,
+        new_jobs: Vec<NewJob>,
+    ) -> Result<Vec<(Job, bool)>> {
+        new_jobs
+            .into_iter()
+            .map(|job| self.enqueue_unique_reporting(job))
+            .collect()
+    }
+
     /// The document of the pending, unclaimed job this key may slide, or `None`
     /// when its window is closed. Prunes stale index entries as it scans.
     fn resolve_debounce_target(
@@ -535,6 +548,17 @@ impl RedisStorage {
     /// Enqueue with `unique_key` deduplication: a Lua script atomically returns
     /// the existing active job when a duplicate is found instead of inserting.
     pub fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
+        Ok(self.enqueue_unique_reporting(new_job)?.0)
+    }
+
+    /// [`enqueue_unique`](Self::enqueue_unique), also reporting whether the job
+    /// came back from the unique slot instead of being inserted.
+    ///
+    /// Only this function can answer that: the id is generated here, so a
+    /// caller comparing what it got against what it sent has nothing to
+    /// compare. The flag is what `EnqueueResponse.deduplicated` carries on the
+    /// wire.
+    pub fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
         let mut conn = self.conn()?;
 
         if let Some(uk) = new_job.unique_key.clone() {
@@ -582,7 +606,7 @@ impl RedisStorage {
 
             if let Some(job_data) = result {
                 let job: Job = serde_json::from_str(&job_data)?;
-                return Ok(job);
+                return Ok((job, true));
             }
 
             // No active duplicate — enqueue normally
@@ -736,12 +760,13 @@ impl RedisStorage {
             if let Some(existing_data) = result {
                 // Lost the race — another caller created a job first
                 let existing_job: Job = serde_json::from_str(&existing_data)?;
-                return Ok(existing_job);
+                return Ok((existing_job, true));
             }
 
-            Ok(job)
+            Ok((job, false))
         } else {
-            self.enqueue(new_job)
+            // No key, so nothing to dedupe against: an insert every time.
+            self.enqueue(new_job).map(|job| (job, false))
         }
     }
 }
