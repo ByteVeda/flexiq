@@ -97,9 +97,10 @@ named `*Service`.
       `enqueue_debounced`, else `unique_key` → `enqueue_unique_reporting`,
       else `enqueue`.
 - [ ] `EnqueueBatch`: Diesel is one transaction, so an item failure fails the
-      **RPC** with the failing item's reason plus `metadata{index}`; Redis can
-      partially apply, so it answers `OK` with per-item results. No atomicity
-      promised (D17).
+      **RPC** with the failing item's reason — plus `metadata{index}` only when
+      the failing item can be named, which storage cannot do for a rolled-back
+      batch; Redis can partially apply, so it answers `OK` with per-item
+      results. No atomicity promised (D17).
 - [ ] Every `Storage` call passes `Some(namespace)` from `GrpcConfig` and never
       `None` (D11, §5.2). One accessor, so #716 swaps it for a `Principal`.
 - [ ] Register on the listener with `PRODUCER_MAX_MESSAGE_BYTES`.

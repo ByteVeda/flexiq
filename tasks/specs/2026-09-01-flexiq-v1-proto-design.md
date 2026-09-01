@@ -800,12 +800,13 @@ backend rather than papering over it:
 - **A backend whose batch is one transaction** — Diesel — fails the *RPC*. One
   item's failure rolls back every insert, so returning earlier items as
   `enqueued` would report jobs that do not exist. The top-level `Status` keeps
-  the failing item's own reason and adds `metadata{index}` — the 0-based position
-  in the request, per §4.1's table — so a client learns what went wrong and which
-  item in one answer.
+  the failing item's own reason, and adds `metadata{index}` — the 0-based
+  position in the request, per §4.1's table — whenever the failing item can be
+  named, so a client learns what went wrong and which item in one answer.
 
   **Amended during #714: `index` is present only when the failure is
-  attributable.** `Storage::enqueue_unique_batch` takes the whole batch and
+  attributable**, which is why the sentence above says "whenever" rather than
+  "always". `Storage::enqueue_unique_batch` takes the whole batch and
   returns one error for it; nothing in `DependencyNotFound` or `QueueFull` names
   a position, so an all-or-nothing storage failure genuinely cannot be pinned to
   an item, and inventing a number would be worse than omitting one. So `index`
