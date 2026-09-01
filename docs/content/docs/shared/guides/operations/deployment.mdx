@@ -1028,8 +1028,11 @@ than conditionally absent.
 `CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
 
 ```bash
+# $FLEXIQ_GRPC_TOKEN is the value the listener was started with — see
+# "The credential" below for where it comes from.
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
   localhost:50051 list
+# Health is the exception, and needs no credential.
 grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
   -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
@@ -1052,7 +1055,10 @@ is **no way to name a namespace**; see below.
 metadata entry:
 
 ```bash
-FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32) \
+# Exported rather than prefixed onto the command: a `VAR=x cmd` assignment
+# reaches that one process, and a client on the same shell needs the value too.
+export FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32)
+
 FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
 FLEXIQ_NAMESPACE=prod \
 FLEXIQ_DSN=postgres://user:pass@host/db \
@@ -1067,14 +1073,19 @@ own environment once parsed, so a task body or a crash dump cannot read it back.
 still need no token: there the network stack and the filesystem mode are the
 boundary. Setting one on a loopback bind is honoured rather than optimised away.
 
-**One check covers the whole listener**, not one per RPC. A wrong token, a
-missing one, a token under the wrong scheme and a call to an RPC that does not
-exist all answer `UNAUTHENTICATED` with the reason `UNAUTHENTICATED` and the
-same message — nothing distinguishes them, because a distinguishable answer
-tells a client guessing tokens which guess was closer, and a path answered
-before authentication tells it which services the build carries.
+**One check covers the whole listener**, not one per RPC. With a token
+configured, a wrong one, a missing one, one under the wrong scheme and a call to
+an RPC that does not exist all answer `UNAUTHENTICATED` with the reason
+`UNAUTHENTICATED` and the same message — nothing distinguishes them, because a
+distinguishable answer tells a client guessing tokens which guess was closer,
+and a path answered before authentication tells it which services the build
+carries. On a tokenless loopback or Unix-socket listener there is nothing to
+guess: every caller is accepted, so an unknown RPC reaches the router and comes
+back `UNIMPLEMENTED` as it would on any gRPC server.
 
-**`grpc.health.v1` is the one exception** and is answered without a credential.
+**The two `grpc.health.v1` RPCs are the one exception** and are answered without
+a credential. `Check` and `Watch` by name, not the whole service prefix — an
+unknown method under it is authenticated like anything else.
 A Kubernetes `grpc:` probe cannot send metadata, so gating health would mean
 either no readiness probe or a token written literally into the Deployment spec.
 What it publishes is one bit — whether storage answers — to something that has

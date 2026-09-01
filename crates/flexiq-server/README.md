@@ -70,9 +70,11 @@ grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"em
 to send metadata; reflection is gated with the rest.
 
 ```bash
-FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32) \
-FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
-... flexiq-server
+# Exported, not prefixed: a `VAR=x cmd` assignment reaches that one command,
+# and the client below needs the same value.
+export FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32)
+
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 ... flexiq-server
 
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
   localhost:50051 list
