@@ -27,19 +27,36 @@ case "${1-}" in
     ;;
 esac
 
+install_line="  curl -sSL https://github.com/bufbuild/buf/releases/download/v$pin/buf-\$(uname -s)-\$(uname -m).tar.gz | tar -xz -C ~/.local --strip-components=1"
+
 if ! command -v buf >/dev/null 2>&1; then
   echo "error: buf is not on PATH. Install the pinned version:" >&2
-  echo "  curl -sSL https://github.com/bufbuild/buf/releases/download/v$pin/buf-\$(uname -s)-\$(uname -m).tar.gz | tar -xz -C ~/.local --strip-components=1" >&2
+  echo "$install_line" >&2
   exit 1
 fi
 
-# Not fatal: a dev with a newer buf should still be able to lint. But the
-# descriptor is only byte-stable for a fixed version, so a mismatch is the
-# first thing to suspect when the drift check fails on an untouched tree.
+# buf does not promise byte-stable FileDescriptorSet output across its own
+# versions — 1.58.0 and 1.72.0 disagree on this very module — so what a
+# mismatched buf means depends on which way the script is being run.
 local_version="$(buf --version)"
+pinned=true
 if [ "$local_version" != "$pin" ]; then
+  pinned=false
+fi
+
+if [ "$pinned" = false ] && [ "$fix" = true ]; then
+  # Regenerating here would commit a descriptor only this machine can
+  # reproduce, and CI would reject it on the pin. Refuse instead of handing
+  # back an artifact that cannot land.
+  echo "error: buf $local_version is not the pinned $pin (contracts/BUF_VERSION)." >&2
+  echo "error: refusing to rewrite contracts/descriptor.binpb — install the pin first:" >&2
+  echo "$install_line" >&2
+  exit 1
+fi
+
+if [ "$pinned" = false ]; then
   echo "warning: buf $local_version is not the pinned $pin (contracts/BUF_VERSION)." >&2
-  echo "warning: the descriptor check below may disagree with CI." >&2
+  echo "warning: format and lint still hold; the descriptor check below may not." >&2
 fi
 
 cd "$module"
@@ -68,6 +85,13 @@ if [ ! -f "$descriptor" ]; then
 fi
 
 if ! cmp -s "$regenerated" "$descriptor"; then
+  if [ "$pinned" = false ]; then
+    # Suspect the version before the protos: a mismatched buf can differ here
+    # on a tree nobody touched, and `--fix` will refuse for the same reason.
+    echo "error: contracts/descriptor.binpb does not match what buf $local_version builds." >&2
+    echo "error: this may be the version, not the protos — install the pinned $pin and re-run." >&2
+    exit 1
+  fi
   echo "error: contracts/descriptor.binpb is stale — it does not match the protos." >&2
   echo "error: regenerate it with: $0 --fix" >&2
   exit 1
