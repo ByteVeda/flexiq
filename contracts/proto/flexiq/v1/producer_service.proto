@@ -24,7 +24,9 @@ import "google/rpc/status.proto";
 //     different audiences and must not share a credential.
 //   * A way to name a namespace. One listener serves exactly one namespace, and
 //     it comes from the server's own configuration. A read for a job in another
-//     namespace is indistinguishable from a job that does not exist.
+//     namespace is indistinguishable from a job that does not exist — with one
+//     exception, documented on EnqueueOptions.unique_key, where the key is
+//     currently matched across every namespace sharing the database.
 //   * Uniqueness, debouncing and batching as verbs. They are options and
 //     shapes: one Enqueue, one EnqueueBatch.
 //
