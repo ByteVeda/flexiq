@@ -50,6 +50,7 @@ impl Harness {
         let listener = Listener::bind(&GrpcConfig {
             listen: ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
             namespace: NAMESPACE.to_string(),
+            token: None,
         })
         .await
         .expect("bind");

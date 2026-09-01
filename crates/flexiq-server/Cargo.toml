@@ -34,6 +34,9 @@ grpc = [
   "dep:prost-types",
   "dep:tonic-prost",
   "dep:tonic-types",
+  "dep:http",
+  "dep:tower-layer",
+  "dep:tower-service",
   "dep:tonic-prost-build",
 ]
 
@@ -78,6 +81,15 @@ tonic-prost = { version = "0.14", optional = true }
 # google.rpc: the Status carried by a batch item's error arm, and the
 # ErrorInfo / RetryInfo details every non-OK response attaches.
 tonic-types = { version = "0.14", optional = true }
+# The request and response types the auth layer sits between. tonic, axum and
+# hyper all speak this one `http`; naming it keeps the layer from reaching
+# through `tonic::codegen`, which is codegen's namespace and not an API.
+http = { version = "1", optional = true }
+# The two trait crates the auth layer implements. tonic already pulls both in;
+# depending on them by name is what lets `grpc/auth/layer.rs` name the traits
+# rather than reaching through `tonic::codegen`.
+tower-layer = { version = "0.3", optional = true }
+tower-service = { version = "0.3", optional = true }
 
 [build-dependencies]
 # Codegen reads contracts/descriptor.binpb — the FileDescriptorSet buf already

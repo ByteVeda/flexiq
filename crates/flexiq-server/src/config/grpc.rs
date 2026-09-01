@@ -1,5 +1,5 @@
-//! Where the `flexiq.v1` gRPC door listens, and the two things it refuses to
-//! start without.
+//! Where the `flexiq.v1` gRPC door listens, and the three things it refuses
+//! to start without.
 //!
 //! The address is parsed by the same [`crate::config::listen`] machinery the
 //! attach listener uses, so `unix:/run/flexiq-grpc.sock` and a bare `:50051`
@@ -12,29 +12,47 @@
 //! `get_job`. The gRPC role therefore serves exactly one namespace, the
 //! process's own, and refuses to start without one (design doc §5.2, D11).
 //!
+//! **A credential is mandatory off loopback.** `FLEXIQ_GRPC_TOKEN` is the
+//! shared secret a caller presents, and it is the same kind of bearer
+//! credential `FLEXIQ_ATTACH_TOKEN` is — it proves the peer knows it, it does
+//! not encrypt the connection. A bind reachable beyond loopback without one is
+//! refused, mirroring the attach listener, because the door behind it enqueues
+//! work. A Unix socket needs no token: the filesystem mode is the boundary
+//! there, as it already is for attach.
+//!
 //! **TLS is not terminated here**, same posture as attach: transport security
 //! belongs to a sidecar proxy or a service mesh, and a variable that looks like
 //! it encrypts the connection but does not is worse than no variable.
 
 use anyhow::{bail, Result};
 
-use crate::config::listen::{parse, ListenAddress};
+use flexiq_core::Secret;
+
+use crate::config::listen::{parse, secret, ListenAddress};
 use crate::config::{value, Env};
 
 /// The variable that turns the role on, named once.
 pub const LISTEN_VAR: &str = "FLEXIQ_GRPC_LISTEN";
 
+/// The variable carrying the shared secret callers present, named once.
+pub const TOKEN_VAR: &str = "FLEXIQ_GRPC_TOKEN";
+
 /// TLS variables the gRPC listener does not terminate. Accepting them would let
 /// an operator believe the connection is encrypted when it is not.
 const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_GRPC_TLS_CERT", "FLEXIQ_GRPC_TLS_KEY"];
 
-/// The gRPC listener's address and the one namespace it serves.
+/// The gRPC listener's address, the one namespace it serves, and the secret
+/// callers present.
 #[derive(Debug, Clone)]
 pub struct GrpcConfig {
     /// Address producers dial.
     pub listen: ListenAddress,
     /// Tenant namespace every call is scoped to. Non-empty by construction.
     pub namespace: String,
+    /// Secret a caller presents as `authorization: Bearer <token>`. `None`
+    /// only for a loopback or Unix-socket bind, where the boundary is the
+    /// network stack or the filesystem rather than a credential.
+    pub token: Option<Secret>,
 }
 
 /// Parse the gRPC block, or `None` when the role is disabled.
@@ -78,15 +96,14 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
     };
 
     let listen = parse(LISTEN_VAR, &spec)?;
+    let token = secret(env, TOKEN_VAR)?;
     if let ListenAddress::Tcp(addr) = &listen {
-        if !addr.ip().is_loopback() {
+        if !addr.ip().is_loopback() && token.is_none() {
             bail!(
                 "{LISTEN_VAR}={spec} binds a non-loopback address, and this door \
-                 accepts unauthenticated enqueues: nothing on it asks for a \
-                 credential yet. Bind loopback (127.0.0.1:50051) or use a Unix \
-                 socket (unix:/run/flexiq-grpc.sock), where the filesystem mode \
-                 is the boundary. This refusal is lifted by the release that \
-                 adds a gRPC credential."
+                 enqueues work. Set {TOKEN_VAR}, bind loopback (127.0.0.1:50051), \
+                 or use a Unix socket (unix:/run/flexiq-grpc.sock), where the \
+                 filesystem mode is the boundary."
             );
         }
     }
@@ -94,7 +111,17 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
     Ok(Some(GrpcConfig {
         listen,
         namespace: namespace.to_string(),
+        token,
     }))
+}
+
+/// Remove the token from the process environment once it is parsed, so a task
+/// body or a crash dump cannot read it back. The attach listener does the same
+/// with its own, and for the same reason.
+pub fn scrub_token() {
+    // Called once from `main`, before any thread that reads the environment
+    // has been spawned.
+    std::env::remove_var(TOKEN_VAR);
 }
 
 #[cfg(test)]
@@ -124,6 +151,7 @@ mod tests {
             ListenAddress::Tcp("127.0.0.1:50051".parse().unwrap())
         );
         assert_eq!(config.namespace, "prod");
+        assert!(config.token.is_none());
     }
 
     #[cfg(feature = "grpc")]
@@ -138,13 +166,17 @@ mod tests {
         );
     }
 
+    /// The token a test offers when the length floor is not what it is testing.
+    #[cfg(feature = "grpc")]
+    const TOKEN: &str = "0123456789abcdef";
+
     #[cfg(feature = "grpc")]
     #[test]
-    fn a_non_loopback_bind_refuses_while_the_door_has_no_credential() {
-        // The same shape as the attach listener's refusal, and for a stronger
-        // reason: attach at least has a token to offer, and this door does not
-        // yet. An enqueue port open to the network with no credential is not a
-        // thing to ship and warn about.
+    fn a_non_loopback_bind_with_no_token_refuses_to_start() {
+        // The same shape as the attach listener's refusal and for the same
+        // reason: the door on the other side of this bind enqueues work, and a
+        // port that does that with no credential is not a thing to ship and
+        // warn about.
         for spec in ["0.0.0.0:50051", "[::]:50051", "1.2.3.4:50051"] {
             let error = from_env(&env(&[(LISTEN_VAR, spec)]), Some("prod"))
                 .expect_err("must refuse an unauthenticated public bind");
@@ -154,17 +186,62 @@ mod tests {
                 "unexpected message: {message}"
             );
             assert!(
-                message.contains("loopback"),
+                message.contains(TOKEN_VAR) && message.contains("loopback"),
                 "the message must say what to do instead: {message}"
             );
         }
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_token_unlocks_a_non_loopback_bind() {
+        let config = from_env(
+            &env(&[(LISTEN_VAR, "0.0.0.0:50051"), (TOKEN_VAR, TOKEN)]),
+            Some("prod"),
+        )
+        .expect("a credentialled public bind is allowed")
+        .expect("configured");
+        assert!(config
+            .token
+            .expect("the token must be honoured")
+            .matches(&Secret::new(TOKEN)));
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_token_is_honoured_on_a_loopback_bind_too() {
+        // Loopback does not *require* one, but a deployment that sets it is
+        // asking for the check, not for it to be optimised away.
+        let config = from_env(
+            &env(&[(LISTEN_VAR, "127.0.0.1:50051"), (TOKEN_VAR, TOKEN)]),
+            Some("prod"),
+        )
+        .expect("valid")
+        .expect("configured");
+        assert!(config.token.is_some());
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_short_token_is_rejected() {
+        let error = from_env(
+            &env(&[(LISTEN_VAR, "0.0.0.0:50051"), (TOKEN_VAR, "s3cret")]),
+            Some("prod"),
+        )
+        .expect_err("must refuse");
+        let message = error.to_string();
+        assert!(
+            message.contains(TOKEN_VAR) && message.contains("at least"),
+            "unexpected message: {message}"
+        );
     }
 
     #[cfg(all(unix, feature = "grpc"))]
     #[test]
     fn a_unix_socket_is_not_caught_by_the_loopback_refusal() {
         // The filesystem mode is the boundary there, as it already is for
-        // attach: the socket is created 0660 inside a private directory.
+        // attach: the socket is created 0660 inside a private directory, so a
+        // Unix bind needs no token even though it is not a loopback address.
         assert!(from_env(
             &env(&[(LISTEN_VAR, "unix:/run/flexiq-grpc.sock")]),
             Some("prod")
