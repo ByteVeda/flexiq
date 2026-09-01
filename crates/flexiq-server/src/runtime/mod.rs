@@ -169,6 +169,15 @@ pub fn run(config: Config) -> Result<()> {
         if let Some(webhook) = webhook {
             roles.spawn(webhook);
         }
+        #[cfg(feature = "grpc")]
+        if let (Some(grpc), Some(backend)) = (config.grpc.clone(), &backend) {
+            roles.spawn(crate::grpc::serve(
+                grpc,
+                backend.storage.clone(),
+                shutdown.clone(),
+            ));
+        }
+
         let result = if roles.is_empty() {
             // Listener-only deployment: nothing to serve, just wait to be told
             // to stop.

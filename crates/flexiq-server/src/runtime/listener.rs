@@ -154,8 +154,11 @@ const STAGING_DIR_MODE: u32 = 0o700;
 /// A stale file left by a crashed process is replaced; a path with a live
 /// listener behind it is left alone, because that is a misconfiguration rather
 /// than stale state.
+///
+/// Shared with the gRPC role: the hardening is a property of binding a Unix
+/// socket in this process, not of what is spoken over it.
 #[cfg(unix)]
-fn bind_unix(path: &Path) -> Result<UnixListener> {
+pub(crate) fn bind_unix(path: &Path) -> Result<UnixListener> {
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
         anyhow::bail!("another process is already listening on {}", path.display());
     }
