@@ -21,6 +21,24 @@ No admin was bootstrapped, so the first visit runs the SPA's setup flow.
 {{- end }}
 {{- end }}
 
+{{- if .Values.grpc.enabled }}
+
+Producers dial the gRPC door at:
+
+    {{ include "flexiq-server.fullname" . }}-grpc.{{ .Release.Namespace }}.svc:{{ .Values.grpc.port }}
+
+Every call presents the shared secret as `authorization: Bearer <token>`, from:
+
+    kubectl -n {{ .Release.Namespace }} get secret {{ if .Values.grpc.existingSecret }}{{ .Values.grpc.existingSecret }}{{ else }}{{ include "flexiq-server.secretName" . }}{{ end }} -o jsonpath="{.data['{{ if .Values.grpc.existingSecret }}{{ .Values.grpc.existingSecretKey }}{{ else }}grpc-token{{ end }}']}" | base64 -d
+
+One secret grants the whole producer surface and cannot be revoked for a single
+client, and nothing here terminates TLS. Keep the Service reachable only from
+workloads that should be enqueueing.
+
+Jobs enqueued over this door land in namespace {{ .Values.namespace }}; jobs
+written without a namespace are invisible to it.
+{{- end }}
+
 {{- if .Values.webhook.enabled }}
 
 Sidecar injection is on. Annotate a pod template:

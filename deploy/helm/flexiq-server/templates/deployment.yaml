@@ -132,6 +132,16 @@ spec:
             {{- if .Values.grpc.enabled }}
             - name: FLEXIQ_GRPC_LISTEN
               value: "0.0.0.0:{{ .Values.grpc.port }}"
+            - name: FLEXIQ_GRPC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.grpc.existingSecret }}
+                  name: {{ .Values.grpc.existingSecret }}
+                  key: {{ .Values.grpc.existingSecretKey }}
+                  {{- else }}
+                  name: {{ include "flexiq-server.secretName" . }}
+                  key: grpc-token
+                  {{- end }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN
