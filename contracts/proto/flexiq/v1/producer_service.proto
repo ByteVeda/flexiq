@@ -1,0 +1,215 @@
+// UNSTABLE. Until the release that first ships the gRPC role, these files may
+// change under the `proto-breaking` label (§2.2 of
+// tasks/specs/2026-09-01-flexiq-v1-proto-design.md). After that release the
+// label is for reverting a mistake made in the same release train, never for
+// changing a shipped shape.
+//
+// The rules this package is held to are stated in full in job.proto, because a
+// client reads the .proto and not the design document.
+
+syntax = "proto3";
+
+package flexiq.v1;
+
+import "flexiq/v1/job.proto";
+import "google/rpc/status.proto";
+
+// The producer door: submit work, read it back, cancel it, count it.
+//
+// What this service deliberately does not offer, and will not grow:
+//
+//   * An admin surface. Pausing queues, settings, dead-letter operations,
+//     webhook secrets and circuit-breaker internals stay behind the dashboard's
+//     session and role check. An operator surface and a producer surface have
+//     different audiences and must not share a credential.
+//   * A way to name a namespace. One listener serves exactly one namespace, and
+//     it comes from the server's own configuration. A read for a job in another
+//     namespace is indistinguishable from a job that does not exist — with one
+//     exception, documented on EnqueueOptions.unique_key, where the key is
+//     currently matched across every namespace sharing the database.
+//   * Uniqueness, debouncing and batching as verbs. They are options and
+//     shapes: one Enqueue, one EnqueueBatch.
+//
+// And what it does not promise:
+//
+//   * No ordering. Priority and scheduled_at influence dispatch; nothing
+//     promises two jobs enqueued in order run in order.
+//   * No exactly-once execution. A unique_key dedupes an *enqueue*. Execution
+//     is at-least-once.
+//   * No batch atomicity. See EnqueueBatchResponse.
+//   * No task-name validation. The server holds no task registry, so enqueuing
+//     a task nobody implements succeeds and the job eventually dead-letters.
+//   * No completion notification. There is no watch and no server stream in v1;
+//     poll GetJob or use a webhook subscription.
+//   * No permanent job ids. Retention archives and then deletes, so a NOT_FOUND
+//     does not mean the job never existed.
+//   * No safe blind retry of a write. UNAVAILABLE, DEADLINE_EXCEEDED and
+//     CANCELLED on an Enqueue may all mean the write landed and the connection
+//     dropped afterwards, and no field on the wire can tell. A client that
+//     retries sets a unique_key — see EnqueueOptions.unique_key for the
+//     window that key covers.
+service ProducerService {
+  // Submit one job.
+  //
+  // Not idempotent, even with a unique_key: the level is a property of the
+  // method, and one that held only for some requests is one a proxy would apply
+  // to the others.
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+
+  // Submit many jobs, with one result per input item in input order.
+  rpc EnqueueBatch(EnqueueBatchRequest) returns (EnqueueBatchResponse);
+
+  // Read one job by id.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // Page through jobs, newest first.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // Cancel a job, and report the state that leaves it in.
+  //
+  // Idempotent because the response describes state rather than what the call
+  // did: a second call answers the same thing as the first.
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse) {
+    option idempotency_level = IDEMPOTENT;
+  }
+
+  // Per-status job counts, for one queue or for the whole namespace.
+  rpc QueueStats(QueueStatsRequest) returns (QueueStatsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message EnqueueRequest {
+  // The registered task to run. Not validated here; see the service comment.
+  string task_name = 1;
+
+  // The job's body.
+  //
+  // Setting no arm is an error: an absent body is not an empty one, and
+  // `raw = ""` is a zero-length payload.
+  //
+  // Field 3 is left free for a `structured` arm that takes arguments the server
+  // encodes into this same envelope, so a client with no CBOR library can send
+  // one. A new arm inside an existing oneof is an additive change.
+  oneof body {
+    // The tagged envelope from BINDING_CONTRACT.md — one tag byte followed by
+    // CBOR [args, kwargs]. Reaches storage untouched.
+    bytes raw = 2;
+  }
+
+  EnqueueOptions options = 4;
+}
+
+message EnqueueResponse {
+  Job job = 1;
+
+  // The unique_key matched a job that was already active, and this is that job
+  // rather than a new one.
+  //
+  // Every other response field describes resulting state rather than what the
+  // call did. This one is the exception, because it is the whole reason a
+  // producer sets a unique_key: without it the two calls are indistinguishable.
+  bool deduplicated = 2;
+}
+
+message EnqueueBatchRequest {
+  // The same shape one Enqueue takes, so a client's single-enqueue handling
+  // works unchanged per item.
+  repeated EnqueueRequest items = 1;
+}
+
+message EnqueueBatchResponse {
+  // One result per input item, in input order.
+  //
+  // **No atomicity is promised**, because not every backend can keep such a
+  // promise. Where a batch is one transaction, an item failure fails the whole
+  // RPC — returning earlier items as enqueued would report jobs that do not
+  // exist — and the error carries the failing item's `index`. Where a batch can
+  // partially apply, the RPC succeeds and an `error` arm means that item alone
+  // did not land. Treating an `enqueued` arm as durable is correct under both.
+  repeated EnqueueBatchItemResult results = 1;
+}
+
+message EnqueueBatchItemResult {
+  oneof outcome {
+    // Exactly what Enqueue answers, deduplicated included.
+    EnqueueResponse enqueued = 1;
+    // This item alone did not land.
+    google.rpc.Status error = 2;
+  }
+}
+
+message GetJobRequest {
+  string job_id = 1;
+  // Send Job.payload back. Off by default: a payload is the largest thing a job
+  // carries and most readers do not want it.
+  bool include_payload = 2;
+  // Send Job.result back.
+  bool include_result = 3;
+}
+
+message GetJobResponse {
+  Job job = 1;
+}
+
+message ListJobsRequest {
+  // Unset lists every status.
+  optional JobStatus status = 1;
+  // Unset lists every queue.
+  optional string queue = 2;
+  // Unset lists every task.
+  optional string task_name = 3;
+  // Rows per page. Zero takes the server's default; the server may return
+  // fewer, and may cap a large value.
+  int32 page_size = 4;
+  // The previous response's next_page_token. Opaque: its contents are free to
+  // change between backends and between releases, so a client passes it back
+  // and interprets nothing.
+  string page_token = 5;
+}
+
+message ListJobsResponse {
+  // Newest first. Rows never carry payload or result — a page of a hundred jobs
+  // would otherwise be a page of a hundred payloads. Read one with GetJob.
+  repeated Job jobs = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  // The job as it stands after the call, carrying neither payload nor result.
+  //
+  // A pending job is CANCELLED outright. A running one cannot be stopped from
+  // outside, so it comes back RUNNING with cancel_requested set and the task
+  // stops at its next check. A job already in a terminal state comes back
+  // unchanged, which is what makes calling this twice safe.
+  Job job = 1;
+}
+
+message QueueStatsRequest {
+  // Unset counts every queue in the namespace.
+  optional string queue = 1;
+}
+
+message QueueStatsResponse {
+  // Waiting to run.
+  int64 pending = 1;
+  // Currently executing.
+  int64 running = 2;
+  // Finished successfully.
+  int64 completed = 3;
+  // Failed terminally.
+  int64 failed = 4;
+  // Moved to the dead-letter queue.
+  int64 dead = 5;
+  // Cancelled.
+  int64 cancelled = 6;
+}

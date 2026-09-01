@@ -17,6 +17,13 @@ version: v2
 modules:
   - path: .
 
+# google.rpc.Status is the error arm of an EnqueueBatch item result (§7.4). It
+# is a googleapis type, not a well-known type, so it is a module dependency
+# rather than something buf ships. buf.lock pins the commit, which is what keeps
+# contracts/descriptor.binpb byte-stable alongside the BUF_VERSION pin.
+deps:
+  - buf.build/googleapis/googleapis
+
 lint:
   use:
     - STANDARD

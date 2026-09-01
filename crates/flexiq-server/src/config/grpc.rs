@@ -78,6 +78,19 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
     };
 
     let listen = parse(LISTEN_VAR, &spec)?;
+    if let ListenAddress::Tcp(addr) = &listen {
+        if !addr.ip().is_loopback() {
+            bail!(
+                "{LISTEN_VAR}={spec} binds a non-loopback address, and this door \
+                 accepts unauthenticated enqueues: nothing on it asks for a \
+                 credential yet. Bind loopback (127.0.0.1:50051) or use a Unix \
+                 socket (unix:/run/flexiq-grpc.sock), where the filesystem mode \
+                 is the boundary. This refusal is lifted by the release that \
+                 adds a gRPC credential."
+            );
+        }
+    }
+
     Ok(Some(GrpcConfig {
         listen,
         namespace: namespace.to_string(),
@@ -123,6 +136,40 @@ mod tests {
             config.listen,
             ListenAddress::Tcp("127.0.0.1:50051".parse().unwrap())
         );
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_non_loopback_bind_refuses_while_the_door_has_no_credential() {
+        // The same shape as the attach listener's refusal, and for a stronger
+        // reason: attach at least has a token to offer, and this door does not
+        // yet. An enqueue port open to the network with no credential is not a
+        // thing to ship and warn about.
+        for spec in ["0.0.0.0:50051", "[::]:50051", "1.2.3.4:50051"] {
+            let error = from_env(&env(&[(LISTEN_VAR, spec)]), Some("prod"))
+                .expect_err("must refuse an unauthenticated public bind");
+            let message = error.to_string();
+            assert!(
+                message.contains(LISTEN_VAR),
+                "unexpected message: {message}"
+            );
+            assert!(
+                message.contains("loopback"),
+                "the message must say what to do instead: {message}"
+            );
+        }
+    }
+
+    #[cfg(all(unix, feature = "grpc"))]
+    #[test]
+    fn a_unix_socket_is_not_caught_by_the_loopback_refusal() {
+        // The filesystem mode is the boundary there, as it already is for
+        // attach: the socket is created 0660 inside a private directory.
+        assert!(from_env(
+            &env(&[(LISTEN_VAR, "unix:/run/flexiq-grpc.sock")]),
+            Some("prod")
+        )
+        .is_ok());
     }
 
     #[cfg(all(unix, feature = "grpc"))]

@@ -93,9 +93,15 @@ dashboard:
     pathType: Prefix
     tls: []
 
-# The gRPC listener. It is where the network-side producer door will live —
-# enqueue over gRPC rather than over a database connection — and today it serves
-# grpc.health.v1 and server reflection.
+# The gRPC listener: the network-side producer door — enqueue, read and cancel
+# over gRPC rather than over a database connection — alongside grpc.health.v1
+# and server reflection.
+#
+# `enabled: true` currently fails template rendering on purpose. The door
+# authenticates no caller yet, so the server refuses to bind it anywhere but
+# loopback, and a pod cannot use a loopback bind: kubelet dials the pod IP for
+# every probe type. The values below are the ones that take effect once the
+# door has a credential; nothing here needs to change then.
 grpc:
   enabled: false
   port: 50051

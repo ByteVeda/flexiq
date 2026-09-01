@@ -974,23 +974,31 @@ is the smaller change; an executor is the one that reclaims the RAM.
 ## The gRPC door
 
 `flexiq-server` binds one listener per role, and `FLEXIQ_GRPC_LISTEN` adds a
-fourth beside attach, the dashboard and the admission webhook. It is where the
-network-side producer door will live — enqueue over gRPC rather than over a
-database connection, holding a token rather than a DSN — and **today it serves
-`grpc.health.v1` and server reflection only**. The FlexiQ services land on this
-listener as they arrive; no caller is authenticated yet.
+fourth beside attach, the dashboard and the admission webhook. It is the
+network-side producer door — enqueue, read and cancel over gRPC rather than over
+a database connection — alongside `grpc.health.v1` and server reflection.
+
+<Callout type="warn" title="Loopback only, until the door has a credential">
+No caller is authenticated yet, so the door refuses to bind beyond
+loopback. A `FLEXIQ_GRPC_LISTEN` naming a non-loopback address is rejected at
+boot, and the Helm chart refuses `grpc.enabled` at template time for the same
+reason. Until a credential lands, this door is reachable from the same host
+only — over loopback or a Unix socket — and it is not deployable to a cluster.
+</Callout>
 
 ```bash
 FLEXIQ_DSN=postgres://user:pass@host/db \
 FLEXIQ_NAMESPACE=prod \
-FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
 flexiq-server
 ```
 
 The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
 (which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
 Unix socket lands at mode `0660` through the same hardened bind the attach
-listener uses, so the shared **group** is again the access control.
+listener uses, so the shared **group** is again the access control — and it is
+the one way to reach this door from another process today, since the filesystem
+mode is a boundary where a bearer token is not yet available.
 
 The role ships behind a cargo feature. The published image has it compiled in;
 a binary you built yourself without `--features grpc` rejects
@@ -1014,15 +1022,40 @@ on the server and configures its producers with the same value. One line, paid
 once, in exchange for making a cross-tenant read structurally impossible rather
 than conditionally absent.
 
-### Health and reflection
+### What it serves
 
-Two services answer today; the FlexiQ services arrive on the same listener as
-they land.
+`flexiq.v1.ProducerService` — `Enqueue`, `EnqueueBatch`, `GetJob`, `ListJobs`,
+`CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
 
 ```bash
 grpcurl -plaintext localhost:50051 list
 grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
+  localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
+
+A job enqueued this way is an ordinary row: the same scheduler dispatches it and
+an unmodified SDK worker runs it, with nothing about the job recording which
+door it came through.
+
+Three things the surface deliberately does not offer. There is **no admin
+surface** on this door — pausing queues, settings, dead-letter operations and
+webhook secrets stay behind the dashboard's session and role check, because an
+operator surface and a producer surface should not share a credential. There is
+**no way to name a namespace**; see below. And `raw` is the tagged envelope from
+the binding contract, carried opaquely — a client that cannot build one needs
+the structured-argument door, which is not here yet.
+
+Two things it does not promise, worth stating before a client assumes
+otherwise. **`unique_key` is not an idempotency key without an expiry**: it
+dedupes against the *active* job, so once the original completes or
+dead-letters the key is released and the same request enqueues a second job. A
+client's total retry deadline therefore has to be shorter than the job's own
+life. And **no write is safely retried blind**: `UNAVAILABLE`,
+`DEADLINE_EXCEEDED` and `CANCELLED` on an `Enqueue` may all mean the write
+landed and the connection dropped afterwards, and no field on the wire can tell
+you which. Clients that retry set a `unique_key`; `EnqueueBatch` needs one per
+item, and neither is retried automatically.
 
 Reflection works without a `.proto` on hand because the wire contract is
 embedded in the binary — the same committed descriptor the buf gate builds, so
@@ -1047,26 +1080,23 @@ while the door is young:
   `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
   because a variable that looks like it encrypts the connection and does not is
   worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
-- **No caller is authenticated yet.** Until token authentication lands, treat a
-  non-loopback bind as reachable by anything on that network; the server logs a
-  warning at boot saying so. Keep the port inside the cluster, the way the attach
-  port already is.
+- **No caller is authenticated yet, and the door does not pretend otherwise.**
+  A non-loopback bind is refused at boot rather than allowed with a warning: an
+  unauthenticated port that accepts `Enqueue` is not a thing to leave running
+  behind a log line. Use loopback or a Unix socket until a credential lands.
 
 ### With Helm
 
-```bash
-helm upgrade --install flexiq ./deploy/helm/flexiq-server \
-  --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
-  --set attach.token="$ATTACH_TOKEN" \
-  --set namespace=prod \
-  --set grpc.enabled=true
-```
+`grpc.enabled` is refused at `helm template` time while the door has no
+credential, with that reason, rather than rendering a Deployment that
+CrashLoopBackOffs — a pod cannot use a loopback bind, because kubelet dials the
+pod IP for every probe type.
 
-The door gets its own `ClusterIP` Service — never merged with the dashboard's,
-for the same reason attach is separate — with `appProtocol: grpc` so a mesh or
-an Ingress keyed off it speaks HTTP/2 rather than downgrading and breaking every
-stream. `grpc.enabled` without `namespace` fails at `helm template` time, with
-the reason, rather than at the pod's first restart.
+The rest of the wiring is already in the chart and takes effect when the value
+works again: the door gets its own `ClusterIP` Service — never merged with the
+dashboard's, for the same reason attach is separate — with `appProtocol: grpc`
+so a mesh or an Ingress keyed off it speaks HTTP/2 rather than downgrading and
+breaking every stream. `grpc.enabled` also requires `namespace`.
 
 ## WAL mode and backups
 

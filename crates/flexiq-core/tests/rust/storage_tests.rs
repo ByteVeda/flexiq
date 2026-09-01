@@ -267,6 +267,50 @@ fn test_unique_key_dedup(s: &impl Storage) {
     assert_eq!(j1.id, j2.id);
 }
 
+fn test_unique_key_dedup_is_reported(s: &impl Storage) {
+    // The flag is what EnqueueResponse.deduplicated carries, and nothing above
+    // the backend can derive it: the id is generated inside the insert, so the
+    // caller has no candidate to compare the answer against.
+    let mut first = make_job("q-unique-reported", "unique_task");
+    first.unique_key = Some("dedup-reported".to_string());
+    let (j1, deduplicated) = s.enqueue_unique_reporting(first).unwrap();
+    assert!(!deduplicated, "the first enqueue inserted the job");
+
+    let mut second = make_job("q-unique-reported", "unique_task");
+    second.unique_key = Some("dedup-reported".to_string());
+    let (j2, deduplicated) = s.enqueue_unique_reporting(second).unwrap();
+    assert!(deduplicated, "the second enqueue found the active job");
+    assert_eq!(j1.id, j2.id);
+
+    // No key means nothing to dedupe against, on every backend.
+    let (_, deduplicated) = s
+        .enqueue_unique_reporting(make_job("q-unique-reported", "unique_task"))
+        .unwrap();
+    assert!(!deduplicated);
+
+    // A batch reports one flag per item, in input order.
+    let keyed = |uk: &str| {
+        let mut j = make_job("q-unique-reported-batch", "unique_task");
+        j.unique_key = Some(uk.to_string());
+        j
+    };
+    let flags: Vec<bool> = s
+        .enqueue_unique_batch_reporting(vec![keyed("batch-uk-a"), keyed("batch-uk-b")])
+        .unwrap()
+        .into_iter()
+        .map(|(_, deduplicated)| deduplicated)
+        .collect();
+    assert_eq!(flags, vec![false, false]);
+
+    let flags: Vec<bool> = s
+        .enqueue_unique_batch_reporting(vec![keyed("batch-uk-a"), keyed("batch-uk-c")])
+        .unwrap()
+        .into_iter()
+        .map(|(_, deduplicated)| deduplicated)
+        .collect();
+    assert_eq!(flags, vec![true, false]);
+}
+
 fn test_enqueue_unique_validates_deps(s: &impl Storage) {
     // enqueue_unique must reject a missing dependency on every backend, matching
     // enqueue (Redis already validated; the Diesel backends did not).
@@ -1959,6 +2003,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_stats(s);
     test_stats_by_queue_and_task(s);
     test_unique_key_dedup(s);
+    test_unique_key_dedup_is_reported(s);
     test_enqueue_unique_validates_deps(s);
     test_enqueue_batch(s);
     test_enqueue_unique_batch(s);

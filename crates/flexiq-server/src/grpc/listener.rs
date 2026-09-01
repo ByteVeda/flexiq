@@ -21,6 +21,7 @@ use tonic::transport::Server;
 use crate::config::grpc::{GrpcConfig, LISTEN_VAR};
 use crate::config::listen::ListenAddress;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
+use crate::grpc::producer::Producer;
 use crate::grpc::{health, reflection};
 use crate::runtime::shutdown::Shutdown;
 
@@ -48,19 +49,24 @@ impl Listener {
                 // Report what was bound, not what was asked for: port 0
                 // resolves to an ephemeral port only the listener knows.
                 let bound = listener.local_addr().unwrap_or(*addr);
-                log::info!("[flexiq] gRPC listener on tcp://{bound}");
+                // The socket is already open, so check before anything is
+                // served on it and let the drop close it.
+                //
+                // `config::grpc` refuses a non-loopback address, and it checks
+                // the *resolved* one — `listen::resolve` runs `to_socket_addrs`
+                // — so no reachable path should arrive here. That is exactly why
+                // it fails rather than warns: the value of a guard on an
+                // unreachable branch is that it stays correct when the branch
+                // stops being unreachable, and the thing on the other side of
+                // this one is an unauthenticated `Enqueue`.
                 if !bound.ip().is_loopback() {
-                    // Not a refusal, unlike the attach port: this door carries
-                    // no code and, until it carries a credential, nothing it
-                    // serves is privileged. It is still reachable off-host with
-                    // no transport security, and an operator should hear that
-                    // once at boot rather than infer it.
-                    log::warn!(
-                        "[flexiq] {LISTEN_VAR}={bound} is reachable beyond loopback. This \
-                         listener terminates no TLS and authenticates no caller — put a \
-                         proxy or a service mesh in front of it."
+                    anyhow::bail!(
+                        "{LISTEN_VAR} bound {bound}, which is reachable beyond loopback. \
+                         This listener authenticates no caller and terminates no TLS, so it \
+                         serves loopback and Unix sockets only."
                     );
                 }
+                log::info!("[flexiq] gRPC listener on tcp://{bound}");
                 Incoming::Tcp(listener)
             }
             #[cfg(unix)]
@@ -93,10 +99,12 @@ impl Listener {
         }
     }
 
-    /// Serve health and reflection until `shutdown` fires.
+    /// Serve the producer service, health and reflection until `shutdown` fires.
     pub async fn serve(self, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
+        let producer = Producer::new(storage.clone(), self.config.namespace.clone());
         let health = health::serve(storage, self.config.namespace.clone(), shutdown.clone()).await;
         let router = Server::builder()
+            .add_service(producer.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(

@@ -20,6 +20,9 @@ syntax = "proto3";
 
 package flexiq.v1;
 
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
 // Lifecycle state of a job.
 //
 // One-to-one with `JobStatus` in crates/flexiq-core/src/job.rs, but offset by
@@ -44,4 +47,142 @@ enum JobStatus {
   JOB_STATUS_DEAD = 5;
   // Cancelled before or during execution.
   JOB_STATUS_CANCELLED = 6;
+}
+
+// A job, as a reader sees it.
+//
+// Mirrors the read model in crates/flexiq-core/src/job.rs. Numbers 1-15 encode
+// in one byte and are spent on the fields every response carries; the optional
+// tail starts at 16.
+//
+// Times are google.protobuf.Timestamp and durations are
+// google.protobuf.Duration. Storage keeps Unix milliseconds, so sub-millisecond
+// precision is truncated on the way in.
+//
+// Fields whose absence differs from their zero carry explicit presence. A
+// message-typed field has presence inherently in proto3, so `optional` appears
+// only on the scalars that need it.
+message Job {
+  // Opaque. A UUIDv7 today; read it as a string, never as a UUID.
+  string id = 1;
+  string queue = 2;
+  string task_name = 3;
+  JobStatus status = 4;
+  // Higher runs first.
+  int32 priority = 5;
+  google.protobuf.Timestamp created_at = 6;
+  // When the job becomes eligible to run.
+  google.protobuf.Timestamp scheduled_at = 7;
+  int32 retry_count = 8;
+  int32 max_retries = 9;
+  // How long one attempt may run before the scheduler reclaims it.
+  google.protobuf.Duration timeout = 10;
+  // A cancel was requested while the job was running; the task polls for it.
+  bool cancel_requested = 11;
+  // The job waits on at least one dependency.
+  bool has_deps = 12;
+  // Output-only, and always the caller's own. It is here so a client logging a
+  // job record has it, not so a client can select one — no request carries a
+  // namespace.
+  string namespace = 13;
+  google.protobuf.Timestamp started_at = 14;
+  google.protobuf.Timestamp completed_at = 15;
+
+  // The tagged envelope from BINDING_CONTRACT.md, opaque and never re-encoded.
+  //
+  // Absent means the caller did not ask for it; present and zero-length means
+  // the job carries no body. They are different answers, which is why this is
+  // `optional bytes` and not a bare `bytes`.
+  optional bytes payload = 16;
+  // The task's return value, opaque.
+  //
+  // Absent means the job returned nothing — or that the caller did not ask for
+  // it; present and empty means it returned an empty value.
+  optional bytes result = 17;
+  // Canonical JSON `{errtype, message, traceback[]}` when whatever produced the
+  // error wrote one, and free prose otherwise. Readers fall back on non-JSON.
+  optional string error = 18;
+  // 0-100, reported by the running task.
+  optional int32 progress = 19;
+  // Opaque JSON text, byte-preserved. Not a Struct: a Struct round trip
+  // reorders keys and cannot hold every value this field already carries.
+  optional string metadata = 20;
+  optional string notes = 21;
+  optional string unique_key = 22;
+  // After this instant the job is cancelled instead of dispatched.
+  google.protobuf.Timestamp expires_at = 23;
+  // How long the result is kept after completion.
+  google.protobuf.Duration result_ttl = 24;
+  optional string debounce_key = 25;
+}
+
+// The producer-settable knobs on a job.
+//
+// Mirrors the producer-settable half of `NewJob` in
+// crates/flexiq-core/src/job.rs and invents no second vocabulary for the same
+// values. Two things proto3 cannot express and a client cannot guess:
+//
+//   * an empty `queue` means "default", substituted server-side;
+//   * a higher `priority` runs first.
+//
+// Absent, deliberately: a namespace, which is a property of the credential and
+// never of a request; and any `idempotent` flag. The `auto:` key is a sha256
+// over the serialized payload and belongs to the SDKs — a client that wants one
+// computes it and sends it as `unique_key`.
+message EnqueueOptions {
+  // Empty means "default".
+  string queue = 1;
+  // Higher runs first.
+  int32 priority = 2;
+  // Attempts after the first. Zero means the job is not retried.
+  int32 max_retries = 3;
+  // Unset means "as soon as possible".
+  google.protobuf.Timestamp scheduled_at = 4;
+  // Unset takes the server's default.
+  google.protobuf.Duration timeout = 5;
+  // Dedupes against the **active** job carrying the same key, so a terminal job
+  // releases it. It is not an idempotency key without an expiry: a retry that
+  // arrives after the original finished enqueues a second job.
+  //
+  // The key is matched across every namespace sharing the database, not within
+  // one, so on a shared database a key another tenant is already using returns
+  // that tenant's job instead of creating one. Scope keys per deployment until
+  // that is fixed; it is the one place a namespace does not bound a read.
+  // See https://github.com/ByteVeda/flexiq/issues/773.
+  optional string unique_key = 6;
+  // Opaque JSON text, byte-preserved (see Job.metadata).
+  optional string metadata = 7;
+  optional string notes = 8;
+  // Job ids this job waits on. An id in another namespace is refused exactly as
+  // a missing one is, and reports the same reason.
+  repeated string depends_on = 9;
+  // After this instant the job is cancelled instead of dispatched.
+  google.protobuf.Timestamp expires_at = 10;
+  // How long to keep the result after completion.
+  google.protobuf.Duration result_ttl = 11;
+  // Present or absent: the three-of-three validation the SDKs do by hand
+  // becomes a question about the message.
+  Debounce debounce = 12;
+}
+
+// Collapse a burst of enqueues carrying one key into a single run.
+//
+// While a job with this key is still pending and unclaimed, its scheduled time
+// slides forward instead of a second job being inserted.
+message Debounce {
+  // Non-empty. Jobs sharing it share a window.
+  string key = 1;
+  // How far ahead of now each enqueue pushes the run. Must be positive.
+  google.protobuf.Duration window = 2;
+  // Ceiling on the total delay, measured from the pending job's creation.
+  // Mandatory, and at least `window`: without it a producer that never stops
+  // enqueuing starves the job forever.
+  google.protobuf.Duration max_wait = 3;
+  // Overwrite the pending job's payload with this one. False keeps the payload
+  // the window opened with.
+  bool replace_payload = 4;
+  // The producer's own admission cap for the target queue, mirroring the SDK
+  // app config rather than any server-side policy. Absent means uncapped, and
+  // then nothing is counted. Non-negative.
+  optional int64 max_pending = 5;
 }

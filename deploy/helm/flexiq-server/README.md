@@ -20,7 +20,7 @@ tasks, so the app image needs no DSN and no inbound port.
 | `attach.enabled` | `true` | The attach listener and, once an executor attaches, the scheduler |
 | `dashboard.enabled` | `true` | The dashboard SPA and its JSON API |
 | `webhook.enabled` | `false` | The mutating admission webhook that injects executor sidecars |
-| `grpc.enabled` | `false` | The gRPC listener — `grpc.health.v1` and reflection today — on its own Service |
+| `grpc.enabled` | `false` | The gRPC producer door, on its own Service. **Refused while the door has no credential** — see below |
 
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
@@ -30,6 +30,14 @@ this chart mounts no volume for it, and a second replica would not see the first
 one's jobs; the chart refuses the DSN rather than shipping a database that
 disappears with the pod.
 
+`grpc.enabled` is **refused outright for now**. The door serves the `flexiq.v1`
+producer service — enqueue, read, cancel — and authenticates no caller, so the
+server refuses to bind it anywhere but loopback; a pod can never use a loopback
+bind, because kubelet dials the pod IP for every probe type. Failing at
+`helm template` time with that reason beats rendering a Deployment that
+CrashLoopBackOffs. The value works again in the release that gives the door a
+credential, and nothing else in the chart has to change then.
+
 `grpc.enabled` additionally requires `namespace`. The gRPC door serves exactly
 one namespace, because an unset one means "every namespace" to a read and "only
 the unnamespaced rows" to a dequeue — neither is a thing to put on a network
@@ -38,8 +46,8 @@ over gRPC, so producers must be configured with the same value.
 
 The chart refuses to render on combinations the server would reject at boot: an
 attach listener with no token, an unauthenticated dashboard without
-`dashboard.allowInsecure`, a gRPC door with no namespace, cert-manager without
-the CRDs. The failure names the value to change.
+`dashboard.allowInsecure`, a gRPC door with no namespace or no credential,
+cert-manager without the CRDs. The failure names the value to change.
 
 ## Sidecar injection
 

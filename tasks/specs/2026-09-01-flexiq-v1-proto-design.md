@@ -384,6 +384,15 @@ decision.
 `RESOURCE_EXHAUSTED` additionally carries `google.rpc.RetryInfo`. The human
 message is for logs and may be reworded in any release; `reason` may not.
 
+**Amended during #714: one reason has no `QueueError` behind it.**
+`INVALID_REQUEST` covers a request the service refuses before any storage call —
+no `body` arm set, an unreadable `page_token`, a `Debounce` with no window, a
+`debounce` block inside an `EnqueueBatch`. §4.2 enumerates `QueueError`, and
+none of these is one; D7 nevertheless requires every error to carry a reason, so
+the list needs a member for the case where the request itself is the fault. It
+is `INVALID_ARGUMENT`, never retryable, and it is the only reason on the closed
+list that §4.2's table does not produce.
+
 This is what replaces E5. `QUEUE_FULL` arrives with
 `metadata{queue, pending, cap}` as separate values, and the `Display` string
 stays exactly where it is — an FFI expedient for a boundary that can only carry a
@@ -791,9 +800,21 @@ backend rather than papering over it:
 - **A backend whose batch is one transaction** — Diesel — fails the *RPC*. One
   item's failure rolls back every insert, so returning earlier items as
   `enqueued` would report jobs that do not exist. The top-level `Status` keeps
-  the failing item's own reason and adds `metadata{index}` — the 0-based position
-  in the request, per §4.1's table — so a client learns what went wrong and which
-  item in one answer.
+  the failing item's own reason, and adds `metadata{index}` — the 0-based
+  position in the request, per §4.1's table — whenever the failing item can be
+  named, so a client learns what went wrong and which item in one answer.
+
+  **Amended during #714: `index` is present only when the failure is
+  attributable**, which is why the sentence above says "whenever" rather than
+  "always". `Storage::enqueue_unique_batch` takes the whole batch and
+  returns one error for it; nothing in `DependencyNotFound` or `QueueFull` names
+  a position, so an all-or-nothing storage failure genuinely cannot be pinned to
+  an item, and inventing a number would be worse than omitting one. So `index`
+  accompanies every failure the *service* attributes — the request-shape
+  refusals of §4.1's amendment, which are checked per item before anything is
+  written — and every per-item failure on the partially-applying path. It is
+  absent on a rolled-back batch, where the honest answer is that the whole batch
+  failed. Restoring it there is a storage change, not a wire one.
 - **A backend that can partially apply** — Redis, an unrolled-back pipeline —
   answers `OK` with per-item results, and an `error` arm means that item alone
   did not land.

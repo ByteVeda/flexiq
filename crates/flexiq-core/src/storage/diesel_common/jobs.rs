@@ -485,6 +485,17 @@ macro_rules! impl_diesel_job_ops {
             /// job on a duplicate, validates dependencies exactly like `enqueue`,
             /// and never returns a job whose insert was rolled back.
             pub fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
+                Ok(self.enqueue_unique_reporting(new_job)?.0)
+            }
+
+            /// [`enqueue_unique`](Self::enqueue_unique), also reporting whether
+            /// the job came back from the unique slot instead of being inserted.
+            ///
+            /// Only this function can answer that: the id is generated here, so
+            /// a caller comparing what it got against what it sent has nothing
+            /// to compare. The flag is what `EnqueueResponse.deduplicated`
+            /// carries on the wire.
+            pub fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
                 let depends_on = new_job.depends_on.clone();
                 let job = new_job.into_job();
 
@@ -509,7 +520,7 @@ macro_rules! impl_diesel_job_ops {
                                     .first(conn)
                                     .optional()?;
                             if let Some(row) = existing {
-                                return Ok(Job::from(row));
+                                return Ok((Job::from(row), true));
                             }
                         }
 
@@ -518,7 +529,7 @@ macro_rules! impl_diesel_job_ops {
                         Self::validate_dependencies(conn, &depends_on, job.namespace.as_deref())?;
                         Self::insert_job_with_deps(conn, &job, &depends_on)?;
 
-                        Ok(job.clone())
+                        Ok((job.clone(), false))
                     });
 
                     match result {
@@ -544,7 +555,7 @@ macro_rules! impl_diesel_job_ops {
                                     .first(&mut conn)
                                     .optional()?;
                                 if let Some(row) = existing {
-                                    return Ok(Job::from(row));
+                                    return Ok((Job::from(row), true));
                                 }
                             }
                             continue;
@@ -572,6 +583,20 @@ macro_rules! impl_diesel_job_ops {
             /// from a concurrent publish; on one, the whole batch retries
             /// (bounded) and any concurrent winner is returned in place.
             pub fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
+                Ok(self
+                    .enqueue_unique_batch_reporting(new_jobs)?
+                    .into_iter()
+                    .map(|(job, _)| job)
+                    .collect())
+            }
+
+            /// [`enqueue_unique_batch`](Self::enqueue_unique_batch), reporting
+            /// per item whether it deduped — see
+            /// [`enqueue_unique_reporting`](Self::enqueue_unique_reporting).
+            pub fn enqueue_unique_batch_reporting(
+                &self,
+                new_jobs: Vec<NewJob>,
+            ) -> Result<Vec<(Job, bool)>> {
                 const MAX_ENQUEUE_ATTEMPTS: usize = 3;
 
                 // Precompute owned jobs and dependency lists once so the
@@ -601,7 +626,7 @@ macro_rules! impl_diesel_job_ops {
                                     .first(conn)
                                     .optional()?;
                                 if let Some(row) = existing {
-                                    out.push(Job::from(row));
+                                    out.push((Job::from(row), true));
                                     continue;
                                 }
                             }
@@ -613,7 +638,7 @@ macro_rules! impl_diesel_job_ops {
                             )?;
                             Self::insert_job_with_deps(conn, job, depends_on)?;
 
-                            out.push(job.clone());
+                            out.push((job.clone(), false));
                         }
                         Ok(out)
                     });

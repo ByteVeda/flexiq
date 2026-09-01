@@ -36,6 +36,19 @@ pub trait Storage: Send + Sync + Clone {
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job>;
     /// Batch variant of [`enqueue_unique`](Self::enqueue_unique), one transaction.
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;
+    /// [`enqueue_unique`](Self::enqueue_unique), also reporting whether the job
+    /// returned was already in the unique slot (`true`) or was inserted by this
+    /// call (`false`).
+    ///
+    /// Nothing above the backend can work this out: the job's id is generated
+    /// inside the insert, so a caller has no candidate to compare the answer
+    /// against, and a `created_at` comparison is wrong whenever a concurrent
+    /// producer wins the slot inside the same millisecond.
+    fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)>;
+    /// Batch variant of
+    /// [`enqueue_unique_reporting`](Self::enqueue_unique_reporting), one
+    /// transaction, one flag per input job in input order.
+    fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>>;
     /// Enqueue under a debounce window: while a job carrying the same
     /// `debounce_key` is still pending and unclaimed, slide its `scheduled_at`
     /// forward instead of inserting a second job, so a burst of enqueues

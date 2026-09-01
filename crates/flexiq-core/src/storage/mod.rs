@@ -513,6 +513,18 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<Vec<$crate::job::Job>> {
                 self.enqueue_unique_batch(new_jobs)
             }
+            fn enqueue_unique_reporting(
+                &self,
+                new_job: $crate::job::NewJob,
+            ) -> $crate::error::Result<($crate::job::Job, bool)> {
+                self.enqueue_unique_reporting(new_job)
+            }
+            fn enqueue_unique_batch_reporting(
+                &self,
+                new_jobs: Vec<$crate::job::NewJob>,
+            ) -> $crate::error::Result<Vec<($crate::job::Job, bool)>> {
+                self.enqueue_unique_batch_reporting(new_jobs)
+            }
             fn enqueue_debounced(
                 &self,
                 new_job: $crate::job::NewJob,
@@ -1498,10 +1510,13 @@ impl Storage for StorageBackend {
         Ok(jobs)
     }
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job> {
-        let job = delegate!(self, enqueue_unique, new_job)?;
+        Ok(self.enqueue_unique_reporting(new_job)?.0)
+    }
+    fn enqueue_unique_reporting(&self, new_job: NewJob) -> Result<(Job, bool)> {
+        let (job, deduplicated) = delegate!(self, enqueue_unique_reporting, new_job)?;
         #[cfg(feature = "push-dispatch")]
         self.notify_if_ready(job.scheduled_at);
-        Ok(job)
+        Ok((job, deduplicated))
     }
     fn enqueue_debounced(&self, new_job: NewJob, options: records::DebounceOptions) -> Result<Job> {
         let job = delegate!(self, enqueue_debounced, new_job, options)?;
@@ -1510,11 +1525,18 @@ impl Storage for StorageBackend {
         Ok(job)
     }
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>> {
-        let jobs = delegate!(self, enqueue_unique_batch, new_jobs)?;
+        Ok(self
+            .enqueue_unique_batch_reporting(new_jobs)?
+            .into_iter()
+            .map(|(job, _)| job)
+            .collect())
+    }
+    fn enqueue_unique_batch_reporting(&self, new_jobs: Vec<NewJob>) -> Result<Vec<(Job, bool)>> {
+        let jobs = delegate!(self, enqueue_unique_batch_reporting, new_jobs)?;
         #[cfg(feature = "push-dispatch")]
         if jobs
             .iter()
-            .any(|j| j.scheduled_at <= crate::job::now_millis())
+            .any(|(j, _)| j.scheduled_at <= crate::job::now_millis())
         {
             self.notify_if_ready(0);
         }

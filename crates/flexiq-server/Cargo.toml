@@ -25,7 +25,17 @@ redis = ["flexiq-core/redis", "flexiq-workflows/redis"]
 # The gRPC role. Off by default so a build that wants the three HTTP-shaped
 # roles does not compile tonic; FLEXIQ_GRPC_LISTEN is refused outright by a
 # binary built without it, rather than silently ignored.
-grpc = ["dep:tonic", "dep:tonic-health", "dep:tonic-reflection", "dep:tokio-stream"]
+grpc = [
+  "dep:tonic",
+  "dep:tonic-health",
+  "dep:tonic-reflection",
+  "dep:tokio-stream",
+  "dep:prost",
+  "dep:prost-types",
+  "dep:tonic-prost",
+  "dep:tonic-types",
+  "dep:tonic-prost-build",
+]
 
 [dependencies]
 flexiq-core = { workspace = true }
@@ -54,13 +64,31 @@ axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 # The gRPC role, all optional behind `grpc`. Default features carry the router
 # and server; they also carry the channel client, which is what the role's
-# integration test dials its own listener with. tonic-prost comes in under
-# these as the codec the health and reflection generated code is built on.
+# integration test dials its own listener with.
 tonic = { version = "0.14", optional = true }
 tonic-health = { version = "0.14", optional = true }
 tonic-reflection = { version = "0.14", optional = true }
 # Wraps a bound UnixListener as the incoming stream tonic serves over.
 tokio-stream = { version = "0.1", features = ["net"], optional = true }
+# What build.rs generates against: prost for the messages, tonic-prost for the
+# codec the generated services name, prost-types for the well-known types.
+prost = { version = "0.14", optional = true }
+prost-types = { version = "0.14", optional = true }
+tonic-prost = { version = "0.14", optional = true }
+# google.rpc: the Status carried by a batch item's error arm, and the
+# ErrorInfo / RetryInfo details every non-OK response attaches.
+tonic-types = { version = "0.14", optional = true }
+
+[build-dependencies]
+# Codegen reads contracts/descriptor.binpb — the FileDescriptorSet buf already
+# builds, lints and gates — instead of running protoc over the .proto files.
+# One artifact, so the Rust types cannot describe a different contract from the
+# one CI checks and the binary serves over reflection, and no protoc on any
+# developer's PATH. Optional for the same reason the runtime half is: a build
+# without the role should not compile a code generator.
+tonic-prost-build = { version = "0.14", optional = true }
+prost = { version = "0.14", optional = true }
+prost-types = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
