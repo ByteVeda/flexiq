@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// A rename keeps the number, so binary protobuf never notices. The JSON facade
+// does — the field's `json_name` changes underneath its clients (D4).
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 prio = 3;
+}

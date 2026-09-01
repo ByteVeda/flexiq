@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// The shape every case mutates. Three numbered fields is the minimum that lets
+// a case remove one, renumber one and rename one independently.
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 priority = 3;
+}

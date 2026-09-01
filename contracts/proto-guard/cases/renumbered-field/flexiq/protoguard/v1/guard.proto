@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// `priority` moved from 3 to 4. Reported as a delete of 3 that reserved
+// neither the number nor the name; 4 is merely additive.
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+  int32 priority = 4;
+}

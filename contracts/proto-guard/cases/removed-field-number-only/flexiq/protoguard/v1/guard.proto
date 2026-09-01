@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package flexiq.protoguard.v1;
+
+// The §11 line: the number is reserved and the name is not. WIRE would accept
+// this. WIRE_JSON is why it does not.
+message GuardedMessage {
+  string id = 1;
+  string queue = 2;
+
+  reserved 3;
+}
