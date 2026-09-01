@@ -21,6 +21,7 @@ syntax = "proto3";
 package flexiq.v1;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 // Lifecycle state of a job.
@@ -185,4 +186,39 @@ message Debounce {
   // app config rather than any server-side policy. Absent means uncapped, and
   // then nothing is counted. Non-negative.
   optional int64 max_pending = 5;
+}
+
+// A call the server encodes into the payload envelope on the caller's behalf.
+//
+// The other arm of EnqueueRequest.body, `raw`, carries the envelope from
+// BINDING_CONTRACT.md verbatim and loses nothing; it is what an SDK sends. This
+// one exists so a client with no CBOR library — a shell script, `curl`, a
+// language whose ecosystem has no codec — can still submit a job. The server
+// encodes these values into the identical envelope, so storage never holds two
+// formats and a worker cannot tell which door a job arrived through.
+//
+// Two consequences of being JSON-shaped. Both are permanent, and neither is a
+// footnote:
+//
+//   1. **Values JSON cannot hold are refused, not rounded.** A number here is a
+//      double, so an integer whose magnitude exceeds 2^53 is rejected with
+//      INVALID_ARGUMENT rather than silently truncated, and a non-finite one is
+//      rejected outright. Byte strings and CBOR tags have no Value arm at all.
+//      contracts/wire-vectors.json pins exactly those cases as decode-only
+//      because no JSON-shaped writer can produce them — `raw` is the door that
+//      carries them.
+//   2. **Object key order is not preserved.** A protobuf map is unordered, so
+//      keys reach the envelope sorted. Nothing decodes differently, a CBOR map
+//      being unordered too — but the bytes differ from what an SDK would have
+//      sent for the same call, so an SDK's automatic `auto:` idempotency key,
+//      which is a hash over those bytes, will not match across the two doors. A
+//      caller that wants deduplication sets EnqueueOptions.unique_key, which is
+//      the only mechanism this door has in any case.
+message StructuredArgs {
+  // Positional arguments, in order.
+  repeated google.protobuf.Value args = 1;
+  // Keyword arguments. A language with no keyword arguments sends none; the
+  // envelope still carries the empty map, because the call body is always a
+  // two-element array.
+  map<string, google.protobuf.Value> kwargs = 2;
 }

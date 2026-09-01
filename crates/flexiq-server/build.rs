@@ -77,6 +77,13 @@ fn generate_proto_types() {
         // error model requires, so a second copy of the type here would be two
         // spellings of one message inside one process.
         .extern_path(".google.rpc", "::tonic_types::pb")
+        // The one map field in the contract. A protobuf map is unordered, but
+        // this one is encoded into a CBOR map whose key order is part of the
+        // bytes — so the ordering has to be a property of the generated type
+        // rather than of remembering to sort at the call site. A BTreeMap also
+        // matches google.protobuf.Struct, whose fields prost-types already
+        // spells that way.
+        .btree_map(".flexiq.v1.StructuredArgs.kwargs")
         .compile_fds(set)
         .expect("failed to generate the flexiq.v1 types");
 }

@@ -24,6 +24,7 @@ pub mod convert;
 pub mod cursor;
 pub mod enqueue;
 pub mod reads;
+pub mod structured;
 
 use std::sync::Arc;
 

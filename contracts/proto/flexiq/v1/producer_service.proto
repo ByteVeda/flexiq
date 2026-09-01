@@ -92,13 +92,17 @@ message EnqueueRequest {
   // Setting no arm is an error: an absent body is not an empty one, and
   // `raw = ""` is a zero-length payload.
   //
-  // Field 3 is left free for a `structured` arm that takes arguments the server
-  // encodes into this same envelope, so a client with no CBOR library can send
-  // one. A new arm inside an existing oneof is an additive change.
+  // Both arms end up as the same envelope in storage. They differ in what they
+  // can express: `raw` carries anything the format does, `structured` carries
+  // what JSON does. Pick `raw` if you have a CBOR library.
   oneof body {
     // The tagged envelope from BINDING_CONTRACT.md — one tag byte followed by
     // CBOR [args, kwargs]. Reaches storage untouched.
     bytes raw = 2;
+    // Arguments the server encodes into that same envelope. Refuses the values
+    // it cannot encode losslessly rather than rounding them, and does not
+    // preserve object key order — see StructuredArgs.
+    StructuredArgs structured = 3;
   }
 
   EnqueueOptions options = 4;

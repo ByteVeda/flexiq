@@ -12,6 +12,7 @@ use flexiq_core::StorageBackend;
 use tonic::{Response, Status};
 
 use super::convert::{self, Blobs};
+use super::structured;
 use super::Producer;
 use crate::grpc::blocking::on_storage;
 use crate::grpc::pb;
@@ -193,8 +194,13 @@ impl Prepared {
 fn prepare(request: pb::EnqueueRequest, namespace: &str) -> Result<Prepared, WireError> {
     // An absent body is not an empty one: `raw = ""` is a zero-length payload,
     // and no arm at all is a request that forgot to say what to run.
+    //
+    // `raw` reaches storage untouched — re-encoding it could only lose
+    // something — while `structured` is encoded into the identical envelope
+    // here, so nothing downstream can tell which arm a job arrived through.
     let payload = match request.body {
         Some(pb::enqueue_request::Body::Raw(bytes)) => bytes,
+        Some(pb::enqueue_request::Body::Structured(args)) => structured::encode(args)?,
         None => {
             return Err(WireError::invalid_request(
                 "no body arm is set; send raw = \"\" for a job with no payload",
