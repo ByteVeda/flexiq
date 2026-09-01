@@ -1,4 +1,4 @@
-# #713 — `FLEXIQ_GRPC_LISTEN` as a fourth server role
+# #713 — `FLEXIQ_GRPC_LISTEN` as a fourth server role (PR #770)
 
 ## Problem
 `flexiq-server` plays three roles in one process — attach, dashboard, admission
