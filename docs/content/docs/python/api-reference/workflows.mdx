@@ -80,6 +80,26 @@ wf.ancestors(node: str) -> list[str]
 wf.descendants(node: str) -> list[str]
 ```
 
+### `step_names`
+
+```python
+workflow.step_names -> list[str]
+```
+
+Every step's name, in declaration order — the order `step()` and `gate()` added
+them, not a run order. `topological_levels()` below is the run order.
+
+### Compilation
+
+Submitting compiles the Python definition into the DAG the core executes, on the
+native `PyWorkflowBuilder`. Nothing here is called directly, but the declared
+names show up in the [symbol index](/python/api-reference/symbols/workflows):
+`add_step` replays each step onto the native builder, `step_count` and
+`step_names` read it back, and `serialize()` returns the
+`(dag_bytes, step_metadata_json)` pair `submit_workflow()` sends. Conditions,
+gates and sub-workflows are resolved on the Python side first, because a
+callable predicate cannot cross into the core.
+
 ### `topological_levels()`
 
 ```python
@@ -128,6 +148,11 @@ Handle for a submitted workflow run.
 run.status() -> WorkflowStatus
 ```
 
+One read of the whole run: its `state`, plus a `nodes` map of `NodeSnapshot`
+records. Each call queries storage — the handle caches nothing, so a status read
+in a loop is a query in a loop. Declared as `get_workflow_run_status`, whose
+`node_statuses()` is the raw per-node map this converts into `NodeSnapshot`.
+
 ### `wait()`
 
 ```python
@@ -143,11 +168,19 @@ on timeout.
 run.cancel() -> None
 ```
 
+Cancel every step still pending and mark the run cancelled. Steps already
+running are not interrupted — cancellation is cooperative, so an in-flight
+handler finishes or observes the cancel itself. Declared as
+`cancel_workflow_run`.
+
 ### `node_status()`
 
 ```python
 run.node_status(node_name: str) -> NodeStatus
 ```
+
+One node's status out of the same snapshot `status()` reads, so prefer
+`status().nodes` when you want several.
 
 ### `visualize()`
 
@@ -155,7 +188,31 @@ run.node_status(node_name: str) -> NodeStatus
 run.visualize(fmt: str = "mermaid") -> str
 ```
 
-Render the DAG with live node status colors.
+Render the DAG with live node status colors. `fmt` is a `DiagramFormat` or its
+string (`"mermaid"`, `"dot"`); an unknown one raises rather than quietly falling
+back. Reads the stored definition through `get_workflow_definition_dag` and
+overlays a fresh `status()`, so it is two queries per call.
+
+### Run inspection across a deployment
+
+Listing runs is not on `Queue`. The declared surface has
+`list_workflow_runs`, its keyset twin `list_workflow_runs_after`,
+`get_workflow_run_detail` (run header plus every node) and
+`get_child_workflow_runs` (sub-workflow runs spawned by a run) — but no public
+Python method forwards them. The built-in dashboard is their consumer, and its
+HTTP API is the supported way to reach them:
+
+| Endpoint | Backed by |
+|---|---|
+| `GET /api/workflows/runs` | `list_workflow_runs`, or `list_workflow_runs_after` with `paginate=cursor` / an `after` cursor |
+| `GET /api/workflows/runs/{run_id}` | `get_workflow_run_detail` |
+| `GET /api/workflows/runs/{run_id}/children` | `get_child_workflow_runs` |
+| `GET /api/workflows/runs/{run_id}/dag` | `get_workflow_definition_dag` |
+
+For a run you submitted yourself, `WorkflowRun` covers status, per-node status,
+cancellation and visualization without any of these. Listing and child-run
+queries have no handle equivalent — the dashboard API above is the way to reach
+them.
 
 ---
 

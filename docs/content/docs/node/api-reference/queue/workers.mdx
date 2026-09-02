@@ -9,7 +9,33 @@ description: "Run workers, list registered workers, event hooks, and middleware.
 |---|---|
 | `runWorker(options?)` | Start a [worker](/node/api-reference/worker). |
 | `shutdown()` → `Promise<void>` | Stop every worker started from this queue — the programmatic SIGINT/SIGTERM. Dispatch halts at once; the promise resolves once worker-scoped resources are disposed. Like `worker.stop()`, it stops dispatch rather than awaiting handlers already mid-flight. A no-op when no worker runs, and safe alongside a direct `worker.stop()`. |
-| `listWorkers()` → `Promise<WorkerInfo[]>` | Registered workers. |
+| `listWorkers()` → `Promise<WorkerInfo[]>` | Every registered worker, read from storage — so a producer or dashboard process sees the whole fleet, not just its own. |
+
+A `WorkerInfo` carries `workerId`, `hostname`, `pid`, `status`
+(`"active"`/`"draining"`), `poolType`, `startedAt`, `lastHeartbeat`, `queues`,
+`threads`, `tags`, `resources` and `resourceHealth` (both JSON strings), `sdk` /
+`sdkVersion`, and `registryFingerprint` — a hash of the tasks that worker has
+handlers for, so the one worker in a fleet that registered a different set shows
+up at a glance. Timestamps are Unix milliseconds.
+
+These rows are written by each worker's own heartbeat (`workerHeartbeat` on the
+native queue), which carries that worker's resource-health snapshot. The same
+call doubles as the dead-worker reaper: it returns the ids it evicted, which is
+what turns a peer that stopped beating into a `worker.offline` event. So a stale
+`lastHeartbeat` means the process is gone or wedged, and `resourceHealth` is
+only ever as fresh as the last beat.
+
+## Circuit breakers
+
+| Method | Description |
+|---|---|
+| `listCircuitBreakers()` → `Promise<CircuitBreaker[]>` | Live state of every task that has a [breaker](/node/api-reference/task) configured: `taskName`, `state` (`closed` / `open` / `half_open`), `failureCount`, `lastFailureAt`, `openedAt`, and the breaker's own `threshold`, `windowMs`, `cooldownMs`. |
+
+State lives in storage, not in the process, so a breaker one worker opened is
+open for the whole fleet. An `open` breaker whose `openedAt` is older than
+`cooldownMs` is one probe away from `half_open` — that pair is what tells you
+whether a task is still being shed or is already recovering. Timestamps are Unix
+milliseconds.
 
 ## Hooks & middleware
 

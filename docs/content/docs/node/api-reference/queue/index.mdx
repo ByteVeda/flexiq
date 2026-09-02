@@ -37,6 +37,12 @@ const queue = new Queue(options);
 | `codec` | `PayloadCodec \| PayloadCodec[]` | Global codec chain wrapping the serializer — covers every payload and result. See [Serializers](/node/api-reference/serializers). |
 | `codecs` | `Record<string, PayloadCodec>` | Named codec registry for per-task `codecs` (payload only). |
 
+The constructor opens (and creates, if needed) the storage backend
+synchronously — the declared entry point is the static `JsQueue.open(options)`,
+reached through the type rather than an instance, since there is no queue to
+call it on yet. Anything that fails about the connection fails here, not at the
+first enqueue.
+
 ## Tasks & enqueue
 
 | Method | Description |

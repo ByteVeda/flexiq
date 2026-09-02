@@ -14,6 +14,26 @@ Event subscription (`on(event, handler)`) lives on
 
 ## Logs
 
+Durable, per-job structured log rows in shared storage — not process stdout, so
+a producer or dashboard reads what a worker on another host wrote. Beyond
+diagnostics they carry **streaming partial results**: a running task publishes
+at level `"result"`, and `stream()` polls those rows back.
+
 | Method | Description |
 |---|---|
-| `taskLogs(id)` | Raw task-log entries for a job. |
+| `taskLogs(id)` → `TaskLog[]` | Every row for a job, oldest first, published partials included. Synchronous — it is a single indexed read. |
+| `queryLogs({ task?, level?, sinceMs?, limit? })` → `Promise<TaskLog[]>` | Across jobs, newest first. `sinceMs` is a Unix-ms lower bound and defaults to the last hour; `limit` defaults to 100. Both defaults exist to stop an unfiltered call scanning the whole table. |
+
+A `TaskLog` is `{ id, jobId, taskName, level, message, extra, loggedAt }`, with
+`loggedAt` in Unix milliseconds and `extra` an optional string payload — the
+encoded value, for a published partial.
+
+### Declared names
+
+| Declared | Reached through |
+|---|---|
+| `getTaskLogs` | `taskLogs()` |
+| `queryTaskLogs` | `queryLogs()` |
+| `getTaskLogsAfter` | `stream()` — rows after a cursor id, so a poll returns only what is new instead of rescanning the job's whole log |
+| `writeTaskLog` | `ctx.log()` / `ctx.publish()` inside a running task, which is why it takes the `jobId` and `taskName` the context already knows |
+| `updateProgress` | `ctx.setProgress()` |

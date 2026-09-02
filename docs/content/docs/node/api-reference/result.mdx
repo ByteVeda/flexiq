@@ -26,6 +26,25 @@ The result is deserialized with the queue's
 [serializer](/node/api-reference/serializers). Any process sharing the storage
 can await a result by id — the waiter polls the store.
 
+## Reading without waiting
+
+| Method | Description |
+|---|---|
+| `getResult(id)` → `unknown` | The deserialized result of a completed job, or `undefined` if there isn't one yet. Returns immediately — no polling, no rejection. |
+| `getJob(id)` → `Job \| null` | The job's current state, or `null` for an unknown id. Its `result` is the **raw** `Buffer` the worker stored, before the serializer touches it. |
+
+`undefined` is also what a job whose **result TTL has expired** looks like, and
+what a dead or cancelled job looks like: neither produced a result. So it means
+"no value to read", never "the job succeeded with nothing" — check
+`getJob(id)?.status` when the difference matters.
+
+The raw `Buffer` is the escape hatch, not the normal path. Reach for it to
+re-encode a result under a different serializer, to forward bytes without
+decoding them, or to inspect a payload a codec chain wrapped. Everything else
+wants `getResult()`, which applies the same serializer the worker used to write
+it — a mismatch there is what turns a working task into a decode error at the
+reader.
+
 <Callout type="info">
   `result` is for awaiting one job. To scan many jobs use
   [`listJobs`](/node/operate/inspection); for aggregate outcomes use

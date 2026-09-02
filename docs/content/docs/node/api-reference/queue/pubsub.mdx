@@ -30,6 +30,20 @@ semantics, lifecycle, cross-SDK topics).
 See [Log topics](/node/guides/core/pubsub#log-topics) for the cursor,
 at-least-once, and retention semantics.
 
+## Declared names
+
+The [symbol index](/node/api-reference/symbols/queue) lists the native queue's
+spelling, which differs from the API for several pub/sub calls. The mapping:
+
+| Declared | API |
+|---|---|
+| `readTopicMessages` | `readTopic()` |
+| `ackTopicCursor` | `ackTopic()` |
+| `leaseTopicMessages` | `leaseTopic()` — the declared `visibilityMs` is milliseconds; `opts.visibility` is seconds |
+| `registerSubscription` | written by `subscriber()` via `declareSubscriptions()`, and by `runWorker()` at startup |
+| `setSubscriptionActive` | `pauseSubscription()` / `resumeSubscription()` |
+| `topicBacklogStats` | `topicStats()` |
+
 ## `TopicMessage`
 
 One message pulled from a log topic, returned by `readTopic()` and `leaseTopic()`.

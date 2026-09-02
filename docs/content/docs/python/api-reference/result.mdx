@@ -104,6 +104,15 @@ job.dependents -> list[str]
 List of job IDs that depend on this job. Returns an empty list if no other
 jobs depend on this one.
 
+Both are **direct** edges only, one hop in each direction, and both query
+storage on every read rather than caching — a property in a loop is a query in a
+loop. Declared as `get_dependencies` and `get_dependents`; for the transitive
+picture, `queue.job_dag(job_id)` walks both directions at once.
+
+Edges never cross namespaces — an enqueue that would create one is rejected — so
+the lists are scoped by the anchor job. A job in another namespace reports no
+edges, exactly like an unknown id.
+
 ## Methods
 
 ### `job.to_dict()`
@@ -114,7 +123,16 @@ job.to_dict() -> dict
 
 Return all job fields as a plain dictionary. Useful for JSON serialization
 (e.g. in the [dashboard](/python/guides/extend) or
-[FastAPI integration](/python/guides/extend)).
+[FastAPI integration](/python/guides/extend)). Refreshes from storage first, so
+the snapshot is current rather than whatever this handle last saw.
+
+It deliberately omits the stored result: that is the encoded blob the declared
+`result_bytes` carries, and JSON-serializing it would be lossy or invalid
+depending on the serializer. Use `result()`, which decodes it. `payload_bytes`
+is the same story on the way in — the encoded arguments, before the serializer
+has turned them back into Python values. Both are `PyJob` properties; reach for
+them only when you need the wire bytes, such as re-encoding a payload under a
+different serializer.
 
 ### `job.result()`
 

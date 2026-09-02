@@ -28,6 +28,19 @@ Both return `Optional.empty()` while the job is still pending or running — pai
 them with `awaitJob` (or an `EventName.SUCCESS` listener on the worker) when
 you need to block.
 
+Empty is also what a job whose **result TTL has expired** looks like, and what
+a `DEAD` or `CANCELLED` job looks like: neither produced a result. So an empty
+`Optional` is "no value to read", never "the job succeeded with nothing". When
+the difference matters, unwrap the job snapshot and read its status —
+`getJob(id).map(job -> job.status)`.
+
+The raw overload is the escape hatch, not the normal path. Reach for it to
+re-encode a result under a different serializer, to forward bytes without
+decoding them, or to inspect a payload a codec chain wrapped. Everything else
+wants the typed overload, which applies the same serializer the worker used to
+write it — a mismatch there is what turns a working task into a decode error at
+the reader.
+
 ## The `Job` snapshot
 
 `getJob(id)` returns the job's current state without waiting:

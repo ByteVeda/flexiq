@@ -62,6 +62,22 @@ queue.workflows.resolveGate(runId, "review", approved);
 queue.workflows.clearCache(); // drop all cached step results
 ```
 
+Every query reads storage on each call — nothing is cached, so polling `run()`
+in a loop is a query in a loop. All of them work from any process: a run is
+identified by its id, not by the handle that submitted it.
+
+| Query | Declared as | Notes |
+|---|---|---|
+| `list({ definitionName?, state?, limit?, offset? })` → `WorkflowRun[]` | `listWorkflowRuns` | Offset-paginated. Omitted filters mean "any". |
+| `run(runId)` → `WorkflowRun \| undefined` | `getWorkflowRun` | `undefined` for an unknown run — it does not throw. |
+| `nodes(runId)` → `WorkflowNode[]` | `getWorkflowNodes` | Per-step records, including a fan-out parent's expansion count. |
+| `dag(runId)` → `string \| undefined` | `getWorkflowDag` | The stored definition, as a JSON string of `{ nodes, edges }`. `JSON.parse` it, or let `analyze()` do that. |
+| `children(runId)` → `WorkflowRun[]` | `getWorkflowChildren` | Sub-workflow runs spawned by `runId`. Empty unless something in the deployment submits sub-workflows. |
+| `submit(builder, opts?)` → `WorkflowHandle` | `submitWorkflow` | Pre-enqueues the whole DAG in one call, so a run exists before any step does. Throws at construction if the addon was built without the `workflows` cargo feature. |
+
+`analyze()` is `dag()` plus `nodes()`, so it costs two queries and returns
+`undefined` whenever either is missing or the DAG will not parse.
+
 ## Analysis
 
 `analyze(runId)` returns a `WorkflowAnalysis` over the run's DAG + node statuses

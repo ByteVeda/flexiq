@@ -42,7 +42,10 @@ queue.pause(queue_name: str) -> None
 ```
 
 Pause a named queue. Workers continue running but skip jobs in this queue until
-it is resumed.
+it is resumed. Persisted, not in-process: one call pauses the queue for every
+worker in the deployment, and it stays paused across a restart. Jobs already
+running are unaffected — pausing gates dispatch, not execution. Declared as
+`pause_queue`.
 
 ### `queue.resume()`
 
@@ -50,7 +53,10 @@ it is resumed.
 queue.resume(queue_name: str) -> None
 ```
 
-Resume a previously paused queue.
+Resume a previously paused queue. Declared as `resume_queue`. Backlog that
+accumulated while paused dispatches immediately, subject to the queue's rate
+limit and concurrency caps — resume a long-paused queue with those set, or the
+whole backlog lands at once.
 
 ### `queue.paused_queues()`
 
@@ -58,19 +64,23 @@ Resume a previously paused queue.
 queue.paused_queues() -> list[str]
 ```
 
-Return the names of all currently paused queues.
+Return the names of all currently paused queues. Pausing is stored, not held in
+memory, so this reports the whole deployment rather than what this process
+paused. Declared as `list_paused_queues`.
 
 ### `queue.purge()`
 
 ```python
-queue.purge(
-    queue: str | None = None,
-    task_name: str | None = None,
-    status: str | None = None,
-) -> int
+queue.purge(queue_name: str) -> int
 ```
 
-Delete jobs matching the given filters. Returns the count deleted.
+Cancel every **pending** job on one queue, returning the count cancelled.
+Cancelled, not deleted: the rows stay, so the jobs remain inspectable and their
+history survives. Running jobs are untouched — this drains a backlog, it does
+not stop work in flight. Declared as `purge_queue`.
+
+For deleting rows rather than cancelling them, see `purge_completed()` and
+`purge_dead()` below.
 
 ### `queue.revoke_task()`
 
@@ -110,22 +120,34 @@ Returns stats for all queues including those with zero jobs.
 ### `queue.metrics()`
 
 ```python
-queue.metrics() -> dict
+queue.metrics(task_name: str | None = None, since: int = 3600) -> dict
 ```
 
-Returns current throughput and latency snapshot.
+Per-task aggregates over the last `since` seconds, keyed by task name: `count`,
+`success_count`, `failure_count`, `avg_ms`, `p50_ms`, `p95_ms`, `p99_ms`,
+`min_ms` and `max_ms`. One row per *execution* goes into the aggregate, so a job
+that retried three times contributes three.
 
 ### `queue.metrics_timeseries()`
 
 ```python
 queue.metrics_timeseries(
-    window: int = 3600,
+    task_name: str | None = None,
+    since: int = 3600,
     bucket: int = 60,
 ) -> list[dict]
 ```
 
-Returns historical metrics bucketed by time. `window` is the lookback period in
-seconds; `bucket` is the bucket size in seconds.
+The same rows grouped into `bucket`-second buckets instead, oldest first: each
+entry has `timestamp`, `count`, `success`, `failure`, `avg_ms`, `p50_ms`,
+`p95_ms`, `p99_ms`. An empty bucket is absent rather than zero-filled.
+
+Both read the raw per-execution rows through `get_metrics` and aggregate them
+**in this process**, so the cost tracks the number of executions in the window,
+not the number of buckets asked for. Narrow with `task_name` or a shorter
+`since` on a busy deployment rather than reaching for a wider window. The rows
+are subject to the `task_metrics` retention window, so a `since` that reaches
+past it silently returns less.
 
 ## Dead letter queue
 
@@ -137,6 +159,17 @@ queue.dead_letters(limit: int = 10, offset: int = 0) -> list[dict]
 
 List dead letter entries. Each dict contains: `id`, `original_job_id`, `queue`,
 `task_name`, `error`, `retry_count`, `failed_at`, `metadata`.
+
+### `queue.dead_letters_after()`
+
+```python
+queue.dead_letters_after(limit: int = 10, after: str | None = None) -> Page[dict]
+```
+
+The keyset-paginated twin, ordered by failed time. Pass the previous page's
+`next_cursor` back as `after`; `None` means that was the last page. Prefer it to
+`offset` when draining the whole DLQ — see
+[the note on keyset pagination](/python/api-reference/queue/jobs#queuelist_jobs_after--queuelist_jobs_filtered_after).
 
 ### `queue.retry_dead()`
 
@@ -153,6 +186,16 @@ queue.purge_dead(older_than: int = 86400) -> int
 ```
 
 Purge dead letter entries older than `older_than` seconds. Returns count deleted.
+
+### `queue.delete_dead()`
+
+```python
+queue.delete_dead(dead_id: str) -> bool
+```
+
+Discard one dead letter entry without re-enqueueing it — the counterpart to
+`retry_dead()` for a failure you have decided not to replay. `False` when no
+entry has that id. Takes the *dead letter* id, not the original job id.
 
 ### `queue.requeue_job()`
 
@@ -176,3 +219,136 @@ queue.purge_completed(older_than: int = 86400) -> int
 ```
 
 Purge completed jobs older than `older_than` seconds. Returns count deleted.
+
+## Retention
+
+Retention is the periodic sweep that deletes history — task logs, archived jobs,
+job errors, task metrics and dead letters — past a per-table window. It runs in
+the **worker** process under one elected cleaner per namespace, so a producer
+configures nothing and reads the policy back rather than owning it.
+
+Mind the units, because they differ by direction: a `Retention` you **configure**
+takes **seconds**, while every window and timestamp **reported** back is in
+milliseconds. Nothing in the reported shape is suffixed to say so — the `windows`
+map is keyed by table name, and `reported_at` and `reference_time` read like
+plain timestamps — so it is worth stating rather than inferring. An unset window
+keeps that table forever.
+
+### `queue.effective_retention()`
+
+```python
+queue.effective_retention() -> EffectiveRetention | None
+```
+
+The windows a worker is actually applying to this namespace, as the elected
+cleaner published them on its last sweep — the *worker's* configuration, not
+this process's. `None` means no worker has swept yet, which is not the same as
+retention being off: that comes back as an `EffectiveRetention` with
+`enabled=False`.
+
+| Field | Description |
+|---|---|
+| `enabled` | `False` when no table has a window, so only per-entry TTLs are swept. |
+| `defaulted` | The windows are the recommended defaults, set by no one. |
+| `namespace` | The namespace the windows cover — purges are namespace-scoped, not queue-scoped. |
+| `reported_at` | When the cleaner last published this, in Unix milliseconds. |
+| `windows` | `{table: window_ms \| None}` over `task_logs`, `archived_jobs`, `job_errors`, `task_metrics` and `dead_letter`. |
+
+### `queue.dry_run_retention()`
+
+```python
+queue.dry_run_retention(retention: Retention | None = None) -> RetentionPreview
+```
+
+Count what a purge would delete right now, deleting nothing. With no argument
+the preview uses this queue's configured (or default-recommended) windows; pass
+candidate `retention` windows to size one before committing to it — no worker
+reconfiguration, no restart. Unlike `effective_retention()` it runs in-process
+against live data, so it always answers.
+
+`RetentionPreview` carries the same `enabled`, `defaulted`, `namespace` and
+`windows`, plus `reference_time` (the `now` the snapshot was taken at, Unix
+milliseconds), `counts` — `{table: rows_that_would_be_purged}` — and `total`.
+The counts are that snapshot only: the real sweep runs later, against data that
+has moved on.
+
+## Settings
+
+A deployment-wide key/value store living in the same backend as the jobs, and
+the backing for the dashboard's configuration page. Values are opaque strings to
+storage — `json.dumps()` / `json.loads()` around anything structured. Every
+worker and dashboard pointed at the same backend reads the same values.
+
+### `queue.get_setting()`, `set_setting()`, `delete_setting()`, `list_settings()`
+
+```python
+queue.get_setting(key: str) -> str | None
+queue.set_setting(key: str, value: str) -> None
+queue.delete_setting(key: str) -> bool
+queue.list_settings() -> dict[str, str]
+```
+
+`get_setting()` answers `None` for a key that was never set, and
+`delete_setting()` answers `False` for the same case — neither raises.
+`set_setting()` is last-write-wins. `list_settings()` returns the whole store,
+runtime-owned keys included.
+
+### `queue.set_setting_if()`
+
+```python
+queue.set_setting_if(key: str, expected: str | None, value: str) -> bool
+```
+
+Compare-and-set: write `value` only while `key` still holds `expected`, where
+`expected=None` means the key must be unset. `False` means another writer got
+there first — which is the point. A caller that derived `value` from a read can
+re-read and retry instead of overwriting an edit it never saw.
+
+<Callout type="warn">
+  Some prefixes belong to the runtime: `auth:`, `contract:`,
+  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `flexiq.webhooks`. Writing under them corrupts state that dashboard sessions,
+  the contract floor, per-task middleware toggles, retention and webhook
+  delivery all read back. The dashboard's settings editor hides them; these
+  methods do not.
+</Callout>
+
+## Schema & contract floor
+
+### `queue.migrate()`
+
+```python
+queue.migrate() -> dict[str, Any]
+```
+
+Apply pending schema changes and report what ran: `applied` and
+`workflow_applied` are the version lists, in the order applied; `archived_jobs`
+counts rows the one-time backlog sweep moved into the archive; `schemaless`
+marks a backend that stores no schema and therefore never has anything to
+migrate. Empty version lists mean the database was already current.
+
+Idempotent, and the only path that applies DDL when the queue was opened with
+`auto_migrate=False` — the shape for a deployment whose runtime credentials
+cannot issue DDL. Opening that way against an already-current database is fine
+and queries work immediately; it is **fresh or otherwise unmigrated** storage
+where they fail until this has run, because the tables do not exist yet.
+
+### `queue.min_contract()` / `queue.set_min_contract()`
+
+```python
+queue.min_contract() -> int
+queue.set_min_contract(level: int) -> None
+```
+
+The contract level is the revision of the shared storage and wire contract an
+SDK build implements. The floor is the lowest level a process may speak and
+still open this storage: a build below it refuses to open rather than misreading
+rows its contract never described.
+
+<Callout type="warn">
+  Raise the floor only once every process in the deployment has been upgraded.
+  The check runs at open, so a process already holding storage keeps running and
+  the failure surfaces at its next restart — an old worker looks healthy right
+  up to the deploy that replaces it. A level this build does not itself speak is
+  rejected, since writing it would lock the caller out of its own storage.
+</Callout>

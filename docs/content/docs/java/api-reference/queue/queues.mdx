@@ -9,6 +9,47 @@ description: "Statistics, dead letters, queue control, and settings."
 |---|---|
 | `stats()` / `statsByQueue(q)` / `statsAllQueues()` | `QueueStats` counts by status. |
 | `metrics(taskName, sinceMs)` → `List<TaskMetric>` | Per-execution metrics (null task = all). |
+| `countPendingByQueue(queue)` → `long` | Jobs waiting to run on one queue. This is the primitive behind the admission cap below, so it is the same backlog number an enqueue is rejected against — and the one to alert on. |
+
+## Admission control
+
+| Method | Description |
+|---|---|
+| `maxPending(queue, cap)` → `FlexiQ` | Set an opt-in ceiling on `queue`'s pending backlog; chainable. Past `cap`, `enqueue` throws `QueueFullException` instead of growing the queue further. |
+
+The cap is enforced producer-side, as a count-then-insert rather than one atomic
+step, which has two consequences. It applies with **no worker running** — the
+producer refuses on its own. And concurrent producers can overshoot slightly,
+the same trade the rate limiter makes: `cap` is a backpressure threshold, not an
+invariant to build correctness on.
+
+## Overload controls
+
+Both are opt-in, both are **read by workers at start-up**, so a call here takes
+effect for workers started afterwards — not for ones already running.
+
+| Method | Description |
+|---|---|
+| `codel(queue, targetMs, intervalMs)` → `FlexiQ` | Enable CoDel load shedding. Under *sustained* overload — a job's wait past its eligibility staying above `targetMs` for a full `intervalMs` — a running worker sheds the stalest jobs to the dead-letter queue with a reason prefixed `codel:`, instead of running them stale. A transient spike is never shed, which is the whole point of the interval. |
+| `dispatchOrder(queue, DispatchOrder)` → `FlexiQ` | The tie-break among **same-priority** jobs. `LIFO` runs newest-first under overload — a freshness lever, at the cost of starving the oldest; `FIFO` (the default) is fair oldest-first. Priority always dominates either way. Honored on SQLite and Postgres; the Redis backend is FIFO-only. |
+| `dispatchOrder(queue, String)` | **Deprecated.** The wire form (`"fifo"` / `"lifo"`). Prefer the enum overload, which rejects a typo at compile time instead of at run time. |
+
+Shed jobs land in the DLQ rather than vanishing, so `listDead` is where an
+operator sees what CoDel dropped — and the `codel:` prefix is what separates
+them from genuine handler failures.
+
+## Middleware toggles
+
+| Method | Description |
+|---|---|
+| `disableMiddleware(taskName, middlewareName)` | Stop running one middleware for one task. |
+| `enableMiddleware(taskName, middlewareName)` | Undo it. A no-op when it was not disabled. |
+| `listDisabledMiddleware(taskName)` → `List<String>` | What is currently disabled for a task; empty when nothing is. |
+
+`middlewareName` is the middleware's **fully-qualified class name**. Unlike the
+overload controls above, these take effect on the next job: workers read the
+list per invocation, so no restart is needed — which is what makes this usable
+to switch off a misbehaving instrumentation middleware in production.
 
 ## Dead letter
 
@@ -38,11 +79,79 @@ description: "Statistics, dead letters, queue control, and settings."
 | `queue(name)` → `Queue` | A named-queue handle: `name()`, `pause()`, `resume()`, `isPaused()`. |
 | `listPausedQueues()` | Names of every paused queue. |
 
-## Settings
+## Retention
+
+Retention is the periodic sweep that deletes history — task logs, archived jobs,
+job errors, task metrics and dead letters — past a per-table window. It runs in
+the **worker** process under one elected cleaner per namespace, so a producer
+configures nothing and reads the policy back rather than owning it.
+
+Mind the units, because they differ by direction: `Retention.Builder` takes
+**seconds**, while everything **reported** back is in milliseconds. The reported
+windows carry the `Ms` suffix (`archivedJobsMs`, `deadLetterMs`, …); `reportedAt`
+and `referenceTime` do not, but they are Unix milliseconds too. An unset window
+keeps that table forever.
 
 | Method | Description |
 |---|---|
-| `getSetting` / `setSetting` / `deleteSetting` / `listSettings` | Shared key–value settings in the store. |
+| `effectiveRetention()` → `Optional<EffectiveRetention>` | The windows a worker is actually applying to this namespace, as the elected cleaner published them on its last sweep — the *worker's* configuration, not this process's. Empty means no worker has swept yet, which is **not** retention being off: that reports with `enabled = false`. |
+| `dryRunRetention()` → `RetentionPreview` | Count what a purge would delete right now, deleting nothing, following the policy the cleaner reported — recommended defaults only when none has swept yet. |
+| `dryRunRetention(Retention)` → `RetentionPreview` | The same preview under candidate windows, so one can be sized before it is set, with no worker reconfiguration. A `null` argument falls back to the reported policy. |
+
+`EffectiveRetention` carries `enabled`, `defaulted` (the windows are the
+recommended defaults, set by no one), `namespace` — purges are namespace-scoped,
+not queue-scoped — `reportedAt` (Unix milliseconds) and `windows`, whose fields
+are `archivedJobsMs`, `deadLetterMs`, `taskLogsMs`, `taskMetricsMs` and
+`jobErrorsMs`. `RetentionPreview` swaps `reportedAt` for `referenceTime` and
+adds `counts` over the same tables plus a `total`. Those counts are that
+snapshot only — the real sweep runs later, against data that has moved on.
+
+## Settings
+
+A deployment-wide key/value store in the same backend as the jobs, and the
+backing for the dashboard's configuration page. Values are opaque strings to
+storage; encode anything structured yourself. Every worker and dashboard pointed
+at the same backend reads the same values.
+
+| Method | Description |
+|---|---|
+| `getSetting(key)` → `Optional<String>` | Empty for a key that was never set. Does not throw. |
+| `setSetting(key, value)` / `deleteSetting(key)` | Insert-or-overwrite, and remove. `setSetting` is last-write-wins; `deleteSetting` reports whether a row existed. |
+| `setSettingIf(key, expected, value)` → `boolean` | Compare-and-set: write only while `key` still holds `expected`, where an empty `expected` means it must be unset. `false` means another writer got there first, so a read-modify-write caller can re-read and retry instead of overwriting an unseen edit — which is why the dashboard's whole-document feature stores go through it. |
+| `listSettings()` → `Map<String, String>` | The whole store, runtime-owned keys included. |
+
+<Callout type="warn">
+  Some prefixes belong to the runtime: `auth:`, `contract:`,
+  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `flexiq.webhooks`. Writing under them corrupts state that dashboard sessions,
+  the contract floor, per-task middleware toggles, retention and webhook
+  delivery all read back. The dashboard's settings editor hides them; these
+  methods do not.
+</Callout>
+
+## Schema & contract floor
+
+| Method | Description |
+|---|---|
+| `migrate()` → `MigrationReport` | Apply pending schema changes and report what ran: `applied` / `workflowApplied` version lists in the order applied, `archivedJobs` for rows the one-time backlog sweep moved, `schemaless` for a backend that stores no schema. Empty lists mean the database was already current. |
+| `minContract()` → `int` | The lowest contract level a process may speak and still open this storage — the revision of the shared storage and wire contract an SDK build implements. A build below the floor refuses to open rather than misreading rows its contract never described. |
+| `setMinContract(level)` | Move the floor. A level this build does not itself speak is rejected, since writing it would lock the caller out of its own storage. |
+
+`migrate()` is idempotent, and the only path that applies DDL when the client
+was built with [`autoMigrate(false)`](/java/api-reference/queue#builder) —
+the shape for a deployment whose runtime credentials cannot issue DDL. Building
+that way against an already-current database is fine and queries work
+immediately; it is **fresh or otherwise unmigrated** storage where they fail
+until this has run, because the tables do not exist yet.
+
+<Callout type="warn">
+  All three are native-only: they throw `UnsupportedOperationException` on an
+  implementation of `FlexiQ` backed by something other than the native storage,
+  such as a test fake passed to `open(QueueBackend)`. And raise the floor only
+  once every process in the deployment has been upgraded — the check runs at
+  open, so a process already holding storage keeps running and the failure
+  surfaces at its next restart.
+</Callout>
 
 ## Cleanup
 

@@ -44,3 +44,51 @@ exits right after. It never rejects: teardown failures are logged.
 
 The worker registers + heartbeats (5 s) so it appears on the dashboard Workers
 panel; `stop()` unregisters it.
+
+## `Executor`
+
+The inverse of a `Worker`. Instead of polling storage for work, an
+[executor](/node/modules/executor) dials a scheduler that already holds the
+database connection and runs whatever it is sent. Execution is identical — same
+middleware, codecs, resources and cancel signal — because only the transport
+differs.
+
+```ts
+const executor = await queue.runExecutor({ attach: ":7070", slots: 4 });
+await executor.wait();
+```
+
+### `ExecutorRunOptions`
+
+| Option | Default | Description |
+|---|---|---|
+| `attach` | `$FLEXIQ_ATTACH` | Scheduler address: `host:port`, `:port`, or `unix:/run/flexiq.sock`. |
+| `slots` | `$FLEXIQ_SLOTS`, then `1` | Jobs to run at once. |
+| `token` | `$FLEXIQ_ATTACH_TOKEN` | Shared secret, when the scheduler requires one. Prefer the env var — a token in `argv` is visible in `ps` output. |
+| `executorId` | generated per process | Identity announced to the scheduler. |
+| `connectTimeoutMs` | `10000` | How long to wait for the connection. |
+| `heartbeatIntervalMs` | `5000` | Liveness heartbeat cadence. |
+| `shutdownDrainMs` | `30000` | How long a drain waits for in-flight jobs before disconnecting. |
+| `tasks` | every registered task | Only advertise these. |
+
+### The handle
+
+| Member | Description |
+|---|---|
+| `executorId` | The identity this executor attached under. |
+| `schedulerId` | The identity the scheduler announced when it accepted the attach — the answer to "which scheduler did I actually reach". |
+| `peer` | Peer label of the scheduler connection, for logs and diagnostics. |
+| `running` | Whether the session is still open (`isRunning` on the native handle). |
+| `supportsSteps` | Whether durable steps work across this attach. `false` against a scheduler whose storage has no step store, or one built before steps existed. Not a gate — `ctx.step` refuses either way. |
+| `wait()` → `Promise<void>` | Resolves once the scheduler ends the session — a shutdown frame, or the connection dropping. Does **not** drain. |
+| `stop()` → `Promise<void>` | Drain in-flight work, disconnect, release worker-scoped resources. Idempotent and memoized, so a signal handler racing a scheduler shutdown does not tear down twice. |
+
+An executor has no settings store of its own, so anything storage-backed is
+resolved by the scheduler and attached to each dispatch: `disabledMiddleware`
+carries the per-task middleware disable list, and `reportProgress` /
+`writeTaskLog` push progress and logs back up the same channel. A scheduler that
+does not offer that channel reports `supportsSideChannel` false, and progress
+and task logs from this executor are dropped rather than silently lost — the
+attach warns at start-up. `startExecutor` is the declared entry point behind
+`runExecutor()`; attaching performs the handshake, so a bad token or an
+unreachable scheduler fails there rather than after the pool is built.

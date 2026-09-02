@@ -26,6 +26,37 @@ worker binds the scope around the handler call; outside one it throws a
 `ResourceException`. Prefer the declarative `@Resource("smtp")` parameter on a
 `@TaskHandler` method, which the generated companion resolves the same way.
 
+## `JobContext.current()`
+
+```java
+JobContext job = JobContext.current();
+```
+
+This returns the job running on **this thread**, so a handler can reach its own
+identity without threading it through every signature. It is a `static`
+accessor, reached through the type rather than an instance, because a handler
+has no `JobContext` until this call hands it one.
+
+Outside a task body it throws `IllegalStateException` rather than returning
+null — there is no job to describe, and any answer would be a guess. That also
+means it is thread-bound: work you hand to your own executor sees no context
+unless you carry the value across yourself.
+
+| Member | Description |
+|---|---|
+| `jobId()` / `taskName()` | The running job's identity. |
+| `setProgress(int)` | Record 0–100 for inspection and the dashboard. |
+| `log(message)` / `log(level, message)` / `log(level, message, extra)` | Append a structured [task-log](/java/api-reference/queue/events) row against this job. |
+| `publish(Object)` | Emit a streaming partial — a task log at level `result`. |
+| `step()` → `StepContext` | The [durable step](/java/modules/steps) recorder bound to this attempt's session. |
+
+`flexiq.supportsSteps()` answers whether the backend has a step store at all,
+which is what decides whether `step()` can commit anything. It is a capability
+probe rather than the gate — a step session refuses on its own when the store is
+missing — so it exists for an application that wants the answer before
+dispatching a job. It reports `false` for a backend without one, including any
+implementation of `FlexiQ` that predates durable steps.
+
 ## `TaskContext` (middleware)
 
 The job's identity travels through [middleware](/java/api-reference/queue)

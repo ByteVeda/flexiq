@@ -83,6 +83,20 @@ finished), `isTerminal()`, `node(name)`, and `failedStep()`.
 `flexiq.workflowStatus(runId)` and `flexiq.cancelWorkflow(runId)` work from
 any process by run id.
 
+## Run inspection
+
+The read side of a run, addressed by id rather than by the handle that
+submitted it — so a dashboard, an admin tool or a second service can inspect a
+run it never started. Each call queries storage; none of it is cached, so
+polling in a loop is a query in a loop.
+
+| Method | Description |
+|---|---|
+| `listWorkflowRuns(definitionName, state, limit, offset)` → `List<WorkflowRunInfo>` | Runs, newest first, offset-paginated. A `null` `definitionName` or `state` means "any". `state` is the **wire form** — `WorkflowState.wire()`, not the enum — so that a bare `null` stays unambiguous; an unrecognized state is rejected rather than ignored. |
+| `getWorkflowRun(runId)` → `Optional<WorkflowRunInfo>` | One run summary. Empty once the run no longer exists — retention sweeps runs like anything else. |
+| `getWorkflowChildren(runId)` → `List<WorkflowRunInfo>` | Sub-workflow runs this run spawned. Empty unless the definition submits sub-workflows. |
+| `getWorkflowDag(runId)` → `Optional<String>` | The stored definition as DAG JSON. Empty when the run or its definition is gone. Pair it with `WorkflowStatus.nodes` for a graph with live status; `WorkflowAnalysis` below works on a *definition*, not a run. |
+
 ## Analysis & visualization
 
 `WorkflowAnalysis` is static graph computation over a *definition* — use it to

@@ -198,3 +198,37 @@ directly — use `async with`, not `await`:
 async with queue.alock("my-resource"):
     ...
 ```
+
+### The lock handle
+
+`with queue.lock(...)` yields a `DistributedLock`; `async with
+queue.alock(...)` yields an `AsyncDistributedLock`. Drive either directly when
+the critical section does not fit a `with` block — a callback, or an acquire in
+one method and a release in another. **Declared** names the `PyQueue` primitive
+each member calls; that is the spelling the
+[symbol index](/python/api-reference/symbols/queue) lists.
+
+The table below is the sync handle. The async one carries `name` and `owner_id`
+plus awaitable `acquire()`, `release()` and `extend()` — the same three
+primitives — but **no `info()`**. For holder metadata on the async path, read it
+through an unacquired sync handle: `queue.lock(name).info()` inspects the row
+without taking the lock.
+
+| Member | Declared | Description |
+|---|---|---|
+| `acquire()` → `bool` | `acquire_lock` | Take the lease for this handle's `owner_id`. Returns `False` when another owner holds a live lease — it neither waits nor raises, unlike entering the context manager. |
+| `extend(ttl=None)` → `bool` | `extend_lock` | Push the expiry out by `ttl` seconds (default: the handle's own). `False` once the lease is gone, which is how the auto-extend thread learns it lost the lock and stops renewing. |
+| `release()` → `bool` | `release_lock` | Stop auto-extending and drop the lease. `False` when this handle was not the holder: releasing is owner-scoped, so a stale handle cannot free somebody else's lock. |
+| `info()` → `dict \| None` | `get_lock_info` | `{"lock_name", "owner_id", "acquired_at", "expires_at"}` for the current holder, `None` when the lock is free. Timestamps are Unix milliseconds. |
+
+`owner_id` is a bearer token — any caller holding it can extend or release the
+lock — so `info()` masks it to `"***"` unless this handle is the holder. The
+timestamps are left intact, which is what a monitoring poller actually needs.
+
+<Callout type="warn">
+  A lock is a TTL lease, not a mutex. A holder that stalls past `ttl` without
+  extending loses the lease while still inside its critical section, and another
+  owner may acquire. Auto-extend covers a slow section, not a frozen process:
+  size `ttl` against your worst case, and treat `release()` returning `False` as
+  "the section ran unprotected", not as a no-op.
+</Callout>

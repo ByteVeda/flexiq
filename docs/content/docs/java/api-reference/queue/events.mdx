@@ -17,6 +17,18 @@ carry **streaming partial results**: a running task writes partials at level
 | `getTaskLogsAfter(jobId, afterId)` → `List<TaskLog>` | Rows after a cursor id — poll this to stream new partials without rescanning. |
 | `queryTaskLogs(taskName, level, sinceMs, limit)` → `List<TaskLog>` | Cross-job query by task and level (e.g. every `"result"` line since a timestamp). |
 
+## Events
+
+| Method | Description |
+|---|---|
+| `onEvent(EventName, Consumer<FlexiQEvent>)` → `FlexiQ` | Subscribe to queue-level events — enqueues, predicate rejections, queue pause/resume, workflow submission and cancellation — **plus** every event of workers built via `worker()`: lifecycle, job outcomes, workflow progress. Chainable. |
+
+The listener runs on the **emitting thread**, so a slow one holds up whatever
+produced the event. Narrow the `FlexiQEvent` to its concrete record inside the
+listener; `EventName` is what decides which arrives. An implementation of
+`FlexiQ` with no event hub — a test fake, say — throws
+`UnsupportedOperationException` rather than silently dropping subscriptions.
+
 ## Webhooks & autoscaler
 
 `WebhookManager.attach(flexiq)` registers outcome webhooks, and
