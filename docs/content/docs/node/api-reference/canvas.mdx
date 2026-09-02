@@ -1,12 +1,12 @@
 ---
-title: Canvas
+title: Canvas API
 description: "chain, group, and chord — builder shorthands for sequential, parallel, and joined DAG shapes."
 ---
 
 Three shorthands on the [workflow builder](/node/api-reference/workflows). Each
 adds ordinary `.step()` nodes with the `after` wiring filled in for you, returns
 the same builder, and composes freely with hand-written steps. For worked
-examples, see the [Canvas guide](/node/guides/workflows/canvas).
+examples, see the [Canvas guide](/node/modules/workflows/canvas).
 
 ```ts
 const handle = queue.workflows
@@ -22,7 +22,7 @@ const handle = queue.workflows
 ## `CanvasStep`
 
 Every canvas helper takes `CanvasStep` objects — a node name, its task, and any
-[step option](/node/guides/workflows/building#step-options) except `after`,
+[step option](/node/modules/workflows/building#step-options) except `after`,
 which the helper manages:
 
 ```ts
@@ -112,7 +112,7 @@ queue.workflows
 
 <Callout type="info" title="The callback does not receive the group's results">
   `callback` runs with its own `args`, not the group members' return values. To
-  aggregate results, use [`fanOut`/`fanIn`](/node/guides/workflows/fan-out)
+  aggregate results, use [`fanOut`/`fanIn`](/node/modules/workflows/fan-out)
   instead — `fanIn`'s task receives `[childResult, …]` as its single argument.
 </Callout>
 
@@ -120,5 +120,5 @@ queue.workflows
 
 Canvas helpers build a normal DAG, so there is no canvas-specific submit path —
 finish with `.submit()` (or `.build()` to reuse the spec as a
-[sub-workflow](/node/guides/workflows/sub-workflows)) and run a worker to
+[sub-workflow](/node/modules/workflows/sub-workflows)) and run a worker to
 execute it.

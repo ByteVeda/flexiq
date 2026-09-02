@@ -49,8 +49,8 @@ Horizontal scaling is just more worker processes (or machines) pointed at
 shared Postgres or Redis storage. The core claims each job for a single worker,
 so adding workers adds throughput without duplicate execution. Within one
 process, `autoscale` handles bursts; across processes, a queue-depth scaler
-endpoint feeds KEDA — see [Autoscaling](/java/guides/operations/autoscaling). Workers can
-also join a work-stealing [mesh](/java/guides/operations/mesh) with
+endpoint feeds KEDA — see [Autoscaling](/java/modules/autoscaling). Workers can
+also join a work-stealing [mesh](/java/modules/mesh) with
 `mesh(options)`.
 
 <Callout type="info">

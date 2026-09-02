@@ -1,0 +1,14 @@
+{
+  "title": "Operate",
+  "root": true,
+  "pages": [
+    "index",
+    "backends",
+    "inspection",
+    "deployment",
+    "security",
+    "troubleshooting",
+    "migration",
+    "upgrading-0.15"
+  ]
+}

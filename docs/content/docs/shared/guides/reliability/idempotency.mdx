@@ -18,7 +18,7 @@ covers how it differs from a debounce window and from a rate limit.
   This key collapses duplicate *enqueues*. It does nothing about a task body
   that already charged a card and then crashed before committing — for that you
   need a key the downstream service dedupes on, minted per checkpoint. See
-  <SdkLink to="guides/core/steps">durable steps</SdkLink>.
+  <SdkLink to="modules/steps">durable steps</SdkLink>.
 </Callout>
 
 ## Deduping enqueues
@@ -130,7 +130,7 @@ enqueueCharge(42, 1_999); // same key — coalesced into the first job
 
 The auto-derived key hashes the task name and the *serialized* arguments —
 not the pre-serialization values — so two calls only collide when the
-<SdkLink to="guides/extensibility/serializers">serializer</SdkLink> would
+<SdkLink to="guides/extend/serializers">serializer</SdkLink> would
 emit identical bytes for both:
 
 ```

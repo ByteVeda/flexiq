@@ -75,7 +75,7 @@ queue.use({
 
 ## run.ts
 
-A [fan-out / fan-in](/node/guides/workflows/fan-out) expands the URL list into
+A [fan-out / fan-in](/node/modules/workflows/fan-out) expands the URL list into
 one `fetchPage` child per URL, then `aggregate` receives every fetched page as
 `[html, …]`. The fetches land on the `network` queue; the join runs on the default.
 

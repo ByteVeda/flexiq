@@ -1,0 +1,289 @@
+---
+title: Bare-Metal Autoscaler
+description: "Automatically scale flexiq worker processes on bare metal, Docker, or systemd — no Kubernetes required."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The bare-metal autoscaler spawns and drains `flexiq worker` subprocesses
+based on queue depth and worker utilisation. It mirrors the Kubernetes HPA
+formula so the scaling behaviour is predictable if you're already familiar
+with KEDA or the Horizontal Pod Autoscaler.
+
+Use this when you're running on bare metal, Docker, or systemd and can't
+use [KEDA + Kubernetes](/python/modules/autoscaling/keda).
+
+## Quick start
+
+```python
+from flexiq import Queue
+from flexiq.autoscale import AutoscaleConfig, serve_autoscaler
+
+queue = Queue(db_path="flexiq.db")
+
+serve_autoscaler(
+    queue,
+    AutoscaleConfig(
+        app_path="myapp:queue",
+        min_workers=1,
+        max_workers=10,
+    ),
+)
+```
+
+`serve_autoscaler` blocks until SIGTERM or SIGINT arrives, at which point it
+drains all worker processes gracefully before returning.
+
+## CLI
+
+The fastest way to run the autoscaler:
+
+```bash
+flexiq autoscale --app myapp.tasks:queue
+```
+
+All `AutoscaleConfig` parameters are available as CLI flags:
+
+```bash
+flexiq autoscale --app myapp.tasks:queue \
+  --min-workers 2 --max-workers 20 \
+  --target-queue-depth 25 --drain-timeout 60
+```
+
+**systemd unit** (using the CLI instead of a Python entry point):
+
+```ini
+[Unit]
+Description=flexiq autoscaler
+After=network.target
+
+[Service]
+ExecStart=flexiq autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## How it works
+
+Every `poll_interval_sec` seconds (default 5 s) the controller:
+
+1. Reads `pending` and `running` counts from the queue.
+2. Reaps any crashed workers and replaces them up to `min_workers`.
+3. Computes a desired worker count using two signals:
+
+```
+depth_desired = ceil(pending / target_queue_depth_per_worker)
+util_desired  = ceil(current_workers × (utilisation / target_utilisation))
+desired       = clamp(max(depth_desired, util_desired), min_workers, max_workers)
+```
+
+4. Applies stabilisation windows to smooth the decision.
+5. Spawns or terminates workers to reach the smoothed target.
+
+### Stabilisation windows
+
+Rapid oscillation ("flapping") is prevented by buffering recent
+recommendations:
+
+- **Scale-up window** — takes the *minimum* recent recommendation, so the
+  controller scales up as soon as any recent tick agreed to do so.
+  Default `scale_up_window_sec=0` means immediate scale-up to absorb bursts.
+- **Scale-down window** — takes the *maximum* recent recommendation, so a
+  brief lull doesn't immediately kill workers.
+  Default `scale_down_window_sec=300` (5 minutes) matches Kubernetes HPA.
+
+### Tolerance band
+
+If the desired count is within `tolerance` (default 10%) of the current
+count, the controller skips the scaling action. This suppresses single-tick
+noise from small queue depth fluctuations.
+
+### Overload override
+
+When `running > capacity` (where `capacity = current_workers × threads_per_worker`),
+the controller bypasses tolerance and bumps the count by +1. This handles
+the edge case where a worker has claimed jobs beyond its thread budget.
+
+## `AutoscaleConfig` reference
+
+```python
+from flexiq.autoscale import AutoscaleConfig
+
+config = AutoscaleConfig(
+    app_path="myapp:queue",           # Required. Passed as --app to workers.
+    min_workers=1,                    # Never scale below this (≥ 0).
+    max_workers=10,                   # Never scale above this (≥ 1).
+    target_queue_depth_per_worker=15, # Pending jobs per worker (depth signal).
+    target_utilisation=0.75,          # Target running/capacity ratio.
+    scale_up_window_sec=0,            # Immediate scale-up.
+    scale_down_window_sec=300,        # 5-minute scale-down stabilisation.
+    tolerance=0.1,                    # 10% tolerance band.
+    poll_interval_sec=5,              # Seconds between decision ticks.
+    drain_timeout_sec=30,             # Per-worker SIGTERM grace period.
+    threads_per_worker=4,             # Must match the workers= on Queue().
+)
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `app_path` | — | Python import path to the `Queue` instance |
+| `min_workers` | `1` | Minimum live workers. Set to `0` to allow idle scale-to-zero |
+| `max_workers` | `10` | Maximum live workers |
+| `target_queue_depth_per_worker` | `15` | Pending jobs target per worker (depth signal) |
+| `target_utilisation` | `0.75` | Target `running / capacity` ratio (HPA formula) |
+| `scale_up_window_sec` | `0` | Stabilisation window for scale-up decisions (seconds) |
+| `scale_down_window_sec` | `300` | Stabilisation window for scale-down decisions |
+| `tolerance` | `0.1` | Skip scaling when delta is within this fraction of current |
+| `poll_interval_sec` | `5` | Seconds between metric polls |
+| `drain_timeout_sec` | `30` | SIGTERM grace period before SIGKILL escalation |
+| `threads_per_worker` | `4` | Must match `workers=` on the target `Queue` |
+
+<Callout type="warn" title="threads_per_worker must match your worker config">
+  The controller can't introspect running workers — it uses `threads_per_worker`
+  to calculate capacity for the utilisation signal. Set it to the same value
+  as the `workers=` kwarg on your `Queue()` (or the equivalent CLI flag).
+</Callout>
+
+## Programmatic API
+
+### `serve_autoscaler(queue, config)`
+
+Convenience entry point. Equivalent to:
+
+```python
+AutoscaleController(queue, config).serve_forever()
+```
+
+Blocks until a signal arrives, then drains all workers in parallel.
+
+### `AutoscaleController`
+
+Lower-level class for embedding the control loop in a larger program:
+
+```python
+from flexiq.autoscale import AutoscaleConfig, AutoscaleController
+
+controller = AutoscaleController(queue, config)
+
+# Run one decision tick manually (useful for tests or custom loops):
+decision = controller.tick()
+print(decision.rationale)
+
+# Access the process manager directly:
+pids = controller.process_manager.live_pids()
+```
+
+### `ScaleDecision`
+
+The return value of `controller.tick()` — useful for logging or integration
+with external monitoring:
+
+```python
+@dataclass(frozen=True)
+class ScaleDecision:
+    pending: int          # Pending job count at decision time
+    running: int          # Running job count at decision time
+    current_workers: int  # Worker count before this tick
+    desired_workers: int  # Worker count after this tick
+    rationale: str        # Human-readable explanation ("scale-up: ...", etc.)
+```
+
+### `ProcessManager`
+
+Manages the actual OS subprocesses. Available as `controller.process_manager`:
+
+| Method | Description |
+|---|---|
+| `spawn_worker() -> int` | Spawn a new worker; returns PID |
+| `terminate_worker(pid) -> bool` | SIGTERM → wait → SIGKILL. Returns `True` if clean |
+| `reap_dead() -> list[int]` | Non-blocking poll; returns PIDs of exited workers |
+| `count_live() -> int` | Number of tracked live workers |
+| `live_pids() -> list[int]` | PIDs of all tracked workers |
+| `shutdown()` | Parallel SIGTERM all workers |
+| `kill_all()` | Hard SIGKILL all workers (emergency) |
+
+Workers are started with `start_new_session=True` so the autoscaler's own
+SIGTERM/SIGINT doesn't cascade into the worker process group.
+
+## systemd deployment
+
+Write a thin Python entry point that calls `serve_autoscaler`:
+
+```python
+# autoscale_main.py
+from flexiq import Queue
+from flexiq.autoscale import AutoscaleConfig, serve_autoscaler
+
+queue = Queue(db_path="/var/lib/flexiq/flexiq.db")
+serve_autoscaler(
+    queue,
+    AutoscaleConfig(
+        app_path="myapp:queue",
+        min_workers=2,
+        max_workers=20,
+        target_queue_depth_per_worker=10,
+        drain_timeout_sec=60,
+    ),
+)
+```
+
+Then a systemd unit that manages the worker pool:
+
+```ini
+[Unit]
+Description=FlexiQ Autoscaler
+After=network.target
+
+[Service]
+User=appuser
+WorkingDirectory=/opt/myapp
+ExecStart=/opt/myapp/.venv/bin/python autoscale_main.py
+Restart=always
+RestartSec=5
+KillMode=process
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`KillMode=process` ensures systemd's SIGTERM reaches only the autoscaler
+process — the autoscaler then handles draining its own worker pool.
+
+## Docker Compose
+
+```yaml
+services:
+  autoscaler:
+    image: my-flexiq-app:latest
+    command: python autoscale_main.py
+    volumes:
+      - flexiq_data:/data
+    environment:
+      - FLEXIQ_DB_PATH=/data/flexiq.db
+    stop_grace_period: 60s
+
+volumes:
+  flexiq_data:
+```
+
+<Callout type="info">
+  The autoscaler logs to `flexiq.autoscale` at INFO level. Each tick
+  produces one line: `pending=N running=M workers=X -> Y (rationale)`.
+  Wire it into your log aggregator to track scaling history.
+</Callout>
+
+## vs. KEDA autoscaling
+
+| | Bare-metal autoscaler | KEDA |
+|---|---|---|
+| Infrastructure | Bare metal, Docker, systemd | Kubernetes |
+| Worker type | OS processes | Kubernetes Pods |
+| Scaling signal | Queue depth + utilisation (dual HPA formula) | Queue depth (single metric) |
+| Stabilisation | Built-in, configurable | KEDA's `cooldownPeriod` |
+| Crash recovery | Auto-replaces crashed workers | Kubernetes restarts pods |
+| Setup | Zero — no external components | KEDA operator + ScaledObject |
+
+For Kubernetes deployments, use [KEDA](/python/modules/autoscaling/keda).

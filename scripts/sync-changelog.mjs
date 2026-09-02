@@ -4,7 +4,7 @@
 //
 // CHANGELOG.md (Keep a Changelog) is the single source of truth — edit it there.
 // This script wraps its body in the frontmatter the docs site needs (writing
-// docs/content/docs/resources/changelog.mdx) and emits the latest version to
+// docs/content/docs/about/changelog.mdx) and emits the latest version to
 // docs/app/lib/version.ts. Run automatically before `docs` dev/build.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 
 usage: node scripts/sync-changelog.mjs
 
-Takes no options. Writes docs/content/docs/resources/changelog.mdx and
+Takes no options. Writes docs/content/docs/about/changelog.mdx and
 docs/app/lib/version.ts; both are generated — edit CHANGELOG.md instead.
 Runs automatically before \`docs\` dev/build.`);
   process.exit(0);
@@ -23,7 +23,7 @@ Runs automatically before \`docs\` dev/build.`);
 const repoRoot = new URL("../", import.meta.url);
 const source = fileURLToPath(new URL("CHANGELOG.md", repoRoot));
 const target = fileURLToPath(
-  new URL("docs/content/docs/resources/changelog.mdx", repoRoot),
+  new URL("docs/content/docs/about/changelog.mdx", repoRoot),
 );
 const versionTarget = fileURLToPath(
   new URL("docs/app/lib/version.ts", repoRoot),

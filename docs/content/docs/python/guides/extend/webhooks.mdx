@@ -1,0 +1,234 @@
+---
+title: Webhooks
+description: "Dashboard-managed HMAC-signed HTTP delivery of lifecycle events, with SSRF guards, a persistent delivery log, and replay."
+---
+
+Webhooks deliver [lifecycle events](/python/guides/extend/events) to
+external endpoints as HTTP POSTs, HMAC-signed when the subscription sets a
+`secret`. Unlike in-process listeners,
+subscriptions are first-class **persisted** resources — they survive restarts,
+propagate across every worker pointed at the same backend, and are fully
+manageable from the dashboard.
+
+<Seq
+  heads={["Worker", "Endpoint"]}
+  rows={[
+    { self: "lifecycle event fires (e.g. JOB_DEAD)" },
+    { left: "HMAC-signed HTTP POST" },
+    { right: "2xx → logged delivered", rev: true },
+    { self: "failure → retry; persistent log + one-click replay" },
+  ]}
+/>
+
+## Configure from the dashboard
+
+The Webhooks page (sidebar → Configuration → Webhooks) lists every subscription
+with its URL, event filter, optional task filter, retry policy, and status.
+
+![Webhooks page with three subscriptions](/screenshots/dashboard/webhooks-list.png)
+
+Click **+ New webhook** to add an endpoint. The dialog walks you through URL,
+optional description, the event-type multi-select, an optional per-task filter,
+and a checkbox to auto-generate an HMAC-SHA256 signing secret.
+
+![New webhook dialog](/screenshots/dashboard/webhook-create-dialog.png)
+
+After save, the new secret is shown **once** in a copy-and-reveal card — treat
+it like an API key. The same flow applies when you rotate the secret later from
+the row-actions menu.
+
+### Per-row actions
+
+Each row has a "⋯" menu:
+
+| Action | Effect |
+|---|---|
+| **View deliveries** | Open the persistent delivery log (see below) |
+| **Send test** | POST a synthetic `test.ping` event synchronously and toast the result |
+| **Enable / Disable** | Flip the active flag without losing the configuration |
+| **Rotate secret** | Generate a new HMAC secret. Confirm dialog prevents accidents |
+| **Delete** | Type-to-confirm destructive dialog removes the subscription |
+
+## Configure from Python
+
+The same operations are available programmatically:
+
+```python
+from flexiq import Queue
+from flexiq.events import EventType
+
+queue = Queue(db_path="tasks.db")
+
+sub = queue.add_webhook(
+    url="https://hooks.example.com/ops-failures",
+    events=[EventType.JOB_FAILED, EventType.JOB_DEAD],
+    secret="whsec_my_signing_secret",
+    description="Page ops on permanent failures",
+    max_retries=5,
+    timeout=8.0,
+    task_filter=["myapp.tasks.send_email"],  # optional per-task gate
+)
+print(sub.id)  # use this to update / remove later
+
+queue.update_webhook(sub.id, enabled=False)
+queue.rotate_webhook_secret(sub.id)
+queue.remove_webhook(sub.id)
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `url` | `str` | — | http/https URL. SSRF-guarded (server-side request forgery) — see below |
+| `events` | `list[EventType] \| None` | `None` | Event types to subscribe to. `None` means all events |
+| `task_filter` | `list[str] \| None` | `None` | Restrict to specific task names. `None` means all tasks |
+| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers (e.g. `Authorization`) |
+| `secret` | `str \| None` | `None` | HMAC-SHA256 signing key |
+| `max_retries` | `int` | `3` | Total delivery attempts, initial included — `3` means one attempt plus two retries |
+| `timeout` | `float` | `10.0` | HTTP request timeout in seconds |
+| `retry_backoff` | `float` | `2.0` | Base for exponential backoff between retries |
+| `description` | `str \| None` | `None` | Free-form label shown in the dashboard |
+
+## HMAC signing
+
+When a `secret` is set, every webhook request includes
+`X-Flexiq-Signature: sha256=<hex digest>`. Verify it on the receiving end:
+
+```python
+import hashlib
+import hmac
+
+def verify_signature(body: bytes, signature: str, secret: str) -> bool:
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+The signature is computed over the raw JSON request body. **Verify before
+parsing the body** — that way a forged payload never reaches your business
+logic.
+
+<Callout type="warn" title="Secrets are persisted in plaintext today">
+  The secret column stores the value as-is in the dashboard settings table. The
+  DB is already trusted with everything else flexiq persists (job payloads,
+  error tracebacks). If you need at-rest encryption beyond filesystem-level
+  (e.g. SQLite encrypted with SQLCipher), the dashboard never returns the raw
+  secret after the initial create / rotate response — only a `has_secret`
+  indicator.
+</Callout>
+
+## SSRF guard
+
+Outbound webhook URLs are validated both when a webhook is registered and again
+**at delivery time**, so a hostname that is rebound to an internal address after
+registration (DNS rebinding) is still refused on the actual request. Redirects
+are not followed, so a `30x` response can't bounce delivery to an internal host
+either. The guard rejects:
+
+- Non-`http` / `https` schemes
+- `localhost`, `*.local`, `*.internal`, `*.intranet`, `*.lan`, `*.private`
+- Any address that resolves to a loopback, link-local, RFC1918, multicast, or
+  unspecified range (including the AWS metadata service at `169.254.169.254`)
+
+`FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1` lifts the guard, for local development only.
+Leave it unset in production so the guard stays active.
+
+## Retry behaviour
+
+Failed webhook deliveries are retried with exponential backoff, configurable per
+subscription via `max_retries`, `timeout`, and `retry_backoff`. `max_retries`
+counts **total attempts**, so the defaults (`max_retries=3`,
+`retry_backoff=2.0`) give one initial delivery and two retries:
+
+| Attempt | Delay before the next one |
+|---|---|
+| 1st (initial) | 1 second (`2.0 ** 0`) |
+| 2nd | 2 seconds (`2.0 ** 1`) |
+| 3rd | — final; the delivery is given up on |
+
+4xx responses are NOT retried — they're treated as client errors and the
+delivery is marked `failed`. 5xx responses retry until exhausted, at which point
+the delivery is marked `dead`.
+
+## Delivery log + replay
+
+Every webhook attempt — successful, failed, or dead-lettered — is recorded
+under the subscription so you can debug failures without leaving the dashboard.
+
+![Delivery log with mixed outcomes](/screenshots/dashboard/webhook-deliveries.png)
+
+Each row carries:
+
+- **When** — relative timestamp ("2 minutes ago")
+- **Event** — the event type the delivery was for (`job.completed`, `job.failed`, etc.)
+- **Status** — `delivered` (green), `failed` (yellow), `dead` (red)
+- **Code** — final HTTP status returned by the endpoint
+- **Latency** — wall time of the final attempt
+- **Attempts** — total retry count consumed
+
+Click any row to inspect the full payload, the truncated response body (first
+2 KiB), and any transport-level error. The **Replay** button re-fires the stored
+payload synchronously and records the outcome as a fresh delivery — the original
+record is preserved for the audit trail.
+
+### Retention
+
+Each subscription keeps the most recent 200 deliveries in a FIFO ring buffer per
+webhook (configurable via the `DeliveryStore(max_per_webhook=N)` constructor).
+Successful and failed deliveries are stored uniformly so the replay view always
+matches what really happened.
+
+## Examples
+
+### Forward terminal outcomes to a monitoring service
+
+```python
+queue.add_webhook(
+    url="https://monitoring.example.com/api/flexiq-events",
+    events=[EventType.JOB_COMPLETED, EventType.JOB_FAILED, EventType.JOB_DEAD],
+    secret="whsec_abc123",
+    headers={"X-Source": "flexiq-prod"},
+    description="Forward terminal job outcomes to the monitoring service",
+)
+```
+
+Payload shape received by the endpoint:
+
+```json
+{
+  "event": "job.failed",
+  "job_id": "01H5K6X...",
+  "task_name": "myapp.tasks.process",
+  "queue": "default",
+  "error": "ConnectionError: ..."
+}
+```
+
+### Flask receiver
+
+A minimal Flask app that receives and verifies flexiq webhooks:
+
+```python
+from flask import Flask, request, abort
+import hashlib, hmac
+
+app = Flask(__name__)
+WEBHOOK_SECRET = "whsec_my_signing_secret"
+
+@app.route("/hooks/flexiq", methods=["POST"])
+def receive_webhook():
+    signature = request.headers.get("X-Flexiq-Signature", "")
+    expected = hmac.new(
+        WEBHOOK_SECRET.encode(), request.data, hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(f"sha256={expected}", signature):
+        abort(401)
+
+    event = request.json
+    print(f"Received event: {event['event']} for job {event['job_id']}")
+    return "", 204
+```
+
+## Reference
+
+- [Events](/python/guides/extend/events) — the full event catalogue and payload fields
+- [Dashboard REST API for webhooks and deliveries](/python/modules/dashboard/rest-api#webhooks)
+- [Dashboard auth — how to call these endpoints from a script](/python/modules/dashboard/authentication)

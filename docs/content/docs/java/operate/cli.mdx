@@ -1,0 +1,55 @@
+---
+title: CLI usage
+description: "Operate the queue from the terminal with the bundled flexiq command."
+---
+
+The main artifact bundles a picocli-based CLI (`org.byteveda.flexiq.cli.Cli`)
+that operates any queue from the terminal. Connect with `--url <path-or-url>`,
+plus `--backend postgres|redis` for the non-SQLite backends; with no options it
+opens the default SQLite store at `.flexiq/flexiq.db`.
+
+```bash
+alias flexiq='java -cp app.jar org.byteveda.flexiq.cli.Cli'
+
+flexiq --url flexiq.db stats
+flexiq --url flexiq.db enqueue add '[2,3]'
+flexiq --url flexiq.db jobs --status failed --limit 50
+flexiq --url flexiq.db cancel <jobId>
+flexiq --url flexiq.db pause default
+flexiq --url flexiq.db resume default
+flexiq --url flexiq.db dlq list
+flexiq --url flexiq.db dlq retry <deadId>
+flexiq --url flexiq.db dlq delete <deadId>
+```
+
+Read commands print pretty JSON, so the output pipes straight into `jq`.
+`enqueue` takes the task name and an optional JSON payload; `jobs` filters with
+`--status`, `--queue`, and `--limit`.
+
+## Serving the dashboard
+
+```bash
+flexiq --url flexiq.db dashboard --port 8080 --auth
+```
+
+Serves the bundled [dashboard](/java/modules/dashboard) until
+interrupted. This example enables session authentication with `--auth`;
+omit the flag to serve openly (the default). `--token <token>` gates the
+API with a legacy shared token instead; `--static <dir>` overrides the
+SPA assets.
+
+## Other backends
+
+```bash
+flexiq --backend postgres --url "$DATABASE_URL" stats
+flexiq --backend redis --url redis://localhost dlq list
+```
+
+`--url` is required for every backend except SQLite.
+
+<Callout type="info">
+  The CLI is a class in the main jar, not a separate binary — put the jar (and
+  its dependencies) on the classpath, or ship a small launcher script like the
+  alias above. There is no worker subcommand: workers are code, built with
+  `flexiq.worker()` in your application.
+</Callout>

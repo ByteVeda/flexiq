@@ -354,7 +354,7 @@ the timestamp of its last heartbeat.
 <SdkOnly sdk="python">
 
 The heartbeat runs on a background thread every 5 seconds and carries the
-current <SdkLink to="guides/resources/dependency-injection">resource
+current <SdkLink to="modules/injection/dependency-injection">resource
 health</SdkLink> snapshot, which is how `queue.resource_status()` sees health
 from a separate dashboard process.
 
@@ -385,7 +385,7 @@ def on_offline(event_type, payload):
 <SdkOnly sdk="node">
 
 The heartbeat fires every 5 seconds and carries the current resource-health
-snapshot, so <SdkLink to="guides/resources/dependency-injection">worker
+snapshot, so <SdkLink to="modules/injection/dependency-injection">worker
 resources</SdkLink> going unhealthy shows up in `listWorkers()` too.
 
 ### Lifecycle events
@@ -518,5 +518,5 @@ worker.close(); // drains in-flight handlers, then frees the native worker
   deep dive on how each SDK actually runs jobs concurrently.
 - <SdkLink to="guides/core/scheduling">Scheduling</SdkLink> — how and when
   jobs become claimable.
-- <SdkLink to="guides/operations/mesh">Mesh scheduling</SdkLink> — gossip
+- <SdkLink to="modules/mesh">Mesh scheduling</SdkLink> — gossip
   discovery and work-stealing across a worker fleet.

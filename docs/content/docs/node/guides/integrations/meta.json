@@ -1,4 +1,0 @@
-{
-  "title": "Integrations",
-  "pages": ["index", "otel", "prometheus", "sentry", "express", "fastify", "nest"]
-}

@@ -1,0 +1,426 @@
+---
+title: Interception
+description: "Validate, redact, redirect, or reject data before it reaches the queue."
+---
+
+Interception hooks into the producer side of `enqueue` — before anything is
+serialized and written to storage. Use it to validate inputs, redact
+secrets, or reshape what actually gets enqueued, in one place instead of at
+every call site. Without it, a bad or unserializable value either raises at
+enqueue time in a way that's hard to centralize, or slips through and fails
+later on the worker.
+
+Each SDK hooks into this at a different point:
+
+<SdkOnly sdk="python">
+
+This SDK classifies **every argument** passed to `.delay()` or
+`.apply_async()` by its Python type, automatically, against a built-in and
+user-extensible registry. See
+[Classifying arguments](#classifying-arguments) below.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+This SDK runs **enqueue interceptors** — functions you register with
+`queue.intercept()` that inspect the whole call (task name + args) and
+decide its fate. See [Enqueue interceptors](#enqueue-interceptors) below.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+This SDK runs **enqueue interceptors** — functions you register with
+`flexiq.intercept()` that inspect the whole call (task name + payload) and
+decide its fate. See [The interceptor pipeline](#the-interceptor-pipeline)
+below.
+
+</SdkOnly>
+
+## Strategies
+
+Across the SDKs, an interceptor resolves to one of a handful of named
+strategies:
+
+| Strategy | Outcome |
+|---|---|
+| `PASS` | No change — the original value is used as-is. |
+| `CONVERT` | The original value is replaced with a substitute. |
+| `REDIRECT` | The original value isn't used directly — something else happens instead. |
+| `REJECT` | The enqueue is blocked and an error is raised. |
+
+<Callout type="warn" title="Same names, different operations">
+
+These strategy names are shared vocabulary, not a shared mechanism.
+
+<SdkOnly sdk="python">
+
+Here, `REDIRECT` swaps a single non-serializable **argument** for a
+dependency-injection marker — the task name and the rest of the call are
+untouched. There's also a fifth strategy, `PROXY`, that doesn't exist in the
+other SDKs. See [Classifying arguments](#classifying-arguments) below.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Here, `REDIRECT` replaces the **entire enqueue call** with a different task
+and different args. There's no argument-level classification and no
+`PROXY` strategy. See [Enqueue interceptors](#enqueue-interceptors) below.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Here, `REDIRECT` replaces the **entire enqueue call** with a different task
+and different payload. There's no argument-level classification and no
+`PROXY` strategy. See [The interceptor pipeline](#the-interceptor-pipeline)
+below.
+
+</SdkOnly>
+
+</Callout>
+
+<SdkOnly sdk="python">
+
+## Classifying arguments
+
+Enable interception on the `Queue` constructor:
+
+```python
+queue = Queue(db_path="tasks.db", interception="strict")
+```
+
+Without interception, values are passed directly to the serializer. A
+SQLAlchemy session or file handle would either raise a serialization error
+at enqueue time or produce a broken payload that fails on the worker.
+
+### Modes
+
+| Mode | Behavior |
+|---|---|
+| `"off"` | Disabled (default). All arguments pass through to the serializer unchanged. |
+| `"strict"` | Raises `InterceptionError` immediately when a rejected type is detected. |
+| `"lenient"` | Logs a warning and drops the rejected argument instead of raising. |
+
+`"strict"` is recommended for production — it surfaces problems at call
+time rather than causing silent task failures.
+
+### Classification strategies
+
+Every argument gets one of five strategies:
+
+| Strategy | What happens | Examples |
+|---|---|---|
+| `PASS` | Sent as-is to the serializer | `int`, `str`, `bool`, `bytes` |
+| `CONVERT` | Transformed to a serializable form, reconstructed on the worker | `UUID`, `datetime`, `Decimal`, `Path`, `Enum`, Pydantic models, dataclasses |
+| `REDIRECT` | Replaced with a DI marker; the worker injects the named resource | SQLAlchemy sessions, Redis clients, MongoDB clients |
+| `PROXY` | Deconstructed to a recipe; reconstructed as a live object on the worker | File handles, loggers, `requests.Session`, `httpx.Client`, boto3 clients |
+| `REJECT` | Raises `InterceptionError` in strict mode, dropped in lenient mode | Thread locks, generators, coroutines, sockets |
+
+### Built-in CONVERT types
+
+These are converted automatically when interception is enabled:
+
+| Type | Notes |
+|---|---|
+| `uuid.UUID` | Stored as `"uuid:<hex>"` |
+| `datetime.datetime` / `date` / `time` / `timedelta` | ISO format |
+| `decimal.Decimal` | Stored as string to preserve precision |
+| `pathlib.Path` / `PurePath` | Stored as POSIX string |
+| `re.Pattern` | Pattern string + flags |
+| `collections.OrderedDict` | Preserves insertion order |
+| `pydantic.BaseModel` | Via `.model_dump()` (if pydantic is installed) |
+| `enum.Enum` subclasses | Class path + value |
+| Dataclasses | Auto-detected via `dataclasses.is_dataclass()` |
+| `NamedTuple` subclasses | Auto-detected |
+
+### Built-in REDIRECT types
+
+These connectors are automatically detected and replaced with a resource
+injection marker. The worker injects the named resource instead of
+attempting to deserialize a live connection object:
+
+| Type | Default resource name |
+|---|---|
+| `sqlalchemy.orm.Session` | `"db"` |
+| `sqlalchemy.ext.asyncio.AsyncSession` | `"db"` |
+| `sqlalchemy.engine.Engine` | `"db"` |
+| `sqlalchemy.ext.asyncio.AsyncEngine` | `"db"` |
+| `redis.Redis` | `"redis"` |
+| `redis.asyncio.Redis` | `"redis"` |
+| `pymongo.MongoClient` | `"mongo"` |
+| `motor.motor_asyncio.AsyncIOMotorClient` | `"mongo"` |
+| `psycopg2.extensions.connection` | `"db"` |
+| `asyncpg.connection.Connection` | `"db"` |
+| `django.db.backends.base.base.BaseDatabaseWrapper` | `"db"` |
+| `aiohttp.ClientSession` | `"aiohttp_session"` |
+
+The resource name is the key you use in `@queue.worker_resource("name")`.
+If your resource has a different name, register a custom redirect with
+`register_type()`.
+
+REDIRECT is a type shift, not just a value swap: the caller passes a live
+`Session` (or `Redis`, `MongoClient`, ...) to `.delay()`, but the worker's
+task function receives whatever the named resource's factory returns —
+for `"db"`, that's typically a `sessionmaker` you call to get a session, a
+different type than what the caller passed in. See
+<SdkLink to="modules/injection/dependency-injection">Dependency
+Injection</SdkLink> for how the factory return value is injected.
+
+### Built-in PROXY types
+
+These objects are deconstructed to a recipe dict and rebuilt by the worker:
+
+| Type | Handler name |
+|---|---|
+| `io.TextIOWrapper`, `io.BufferedReader`, `io.BufferedWriter`, `io.FileIO` | `"file"` |
+| `logging.Logger` | `"logger"` |
+| `requests.Session` | `"requests_session"` |
+| `httpx.Client` / `httpx.AsyncClient` | `"httpx_client"` |
+| boto3 clients (via `botocore.client.BaseClient`) | `"boto3_client"` |
+| `google.cloud.storage.Client` / `Bucket` / `Blob` | `"gcs_client"` |
+
+See <SdkLink to="modules/injection/proxies">Resource Proxies</SdkLink> for
+security options and handler details.
+
+### Built-in REJECT types
+
+These are always rejected because they cannot cross process or
+serialization boundaries:
+
+- Thread synchronization primitives (`Lock`, `RLock`, `Semaphore`, `Event`)
+- `socket.socket`
+- Generator objects
+- Coroutine objects
+- `subprocess.Popen`
+- `asyncio.Task` / `asyncio.Future`
+- `contextvars.Context`
+- Multiprocessing `Lock` and `Queue`
+
+Each rejection includes a message explaining why and suggests alternatives.
+
+### Registering custom types
+
+Add custom rules for types not covered by the built-ins:
+
+```python
+from myapp import MyDBClient, MoneyAmount, APIConnection
+
+# Treat a custom DB client as a worker resource (worker must have "my_db" registered)
+queue.register_type(MyDBClient, "redirect", resource="my_db")
+
+# Convert a custom value type to something serializable
+queue.register_type(
+    MoneyAmount,
+    "convert",
+    converter=lambda m: {"__type__": "money", "value": str(m.value), "currency": m.currency},
+    type_key="money",
+)
+
+# Reject with a helpful message
+queue.register_type(
+    APIConnection,
+    "reject",
+    message="API connections are process-local. Register it as a worker resource instead.",
+)
+```
+
+`register_type()` requires interception to be enabled (`"strict"` or
+`"lenient"`). Calling it when interception is `"off"` raises `RuntimeError`.
+
+| Parameter | Description |
+|---|---|
+| `python_type` | The type to register. |
+| `strategy` | `"pass"`, `"convert"`, `"redirect"`, `"reject"`, or `"proxy"`. |
+| `resource` | Resource name for `"redirect"`. |
+| `message` | Rejection reason for `"reject"`. |
+| `converter` | Converter callable for `"convert"`. |
+| `type_key` | Dispatch key for the converter reconstructor. |
+| `proxy_handler` | Handler name for `"proxy"`. |
+
+### Constructor parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `interception` | `"off"` | Interception mode: `"strict"`, `"lenient"`, or `"off"`. |
+| `max_intercept_depth` | `10` | Maximum depth the walker recurses into nested containers. |
+
+### Analyzing arguments
+
+Inspect how interception would classify arguments without actually
+transforming them:
+
+```python
+from myapp.tasks import queue
+
+report = queue.analyze_arguments(
+    args=(user_session, "Hello"),
+    kwargs={"attachment": open("file.pdf", "rb")},
+)
+print(report)
+# Argument Analysis:
+#   args[0]            (Session)              → REDIRECT (redirect to worker resource 'db')
+#   args[1]            (str)                  → PASS
+#   kwargs.attachment  (BufferedReader)        → PROXY (handler=file)
+```
+
+`analyze_arguments()` is a development and debugging tool. It reads the
+registry but makes no changes to arguments, and returns an empty report when
+the queue was created with `interception="off"`. The per-task variant
+`my_task.analyze(...)` takes the task's own call arguments directly.
+
+### Interception metrics
+
+```python
+stats = queue.interception_stats()
+# {
+#   "total_intercepts": 1200,
+#   "total_duration_ms": 216.0,
+#   "avg_duration_ms": 0.18,
+#   "strategy_counts": {"pass": 800, "convert": 250, "redirect": 100, "proxy": 50, "reject": 0},
+#   "max_depth_reached": 3,
+# }
+```
+
+`total_intercepts` always equals the sum of `strategy_counts`.
+
+See <SdkLink to="modules/injection/observability">Observability</SdkLink> for
+Prometheus metrics and dashboard endpoints.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+## Enqueue interceptors
+
+`queue.intercept(interceptor)` registers a function that runs at the very
+start of every enqueue — before per-task defaults, middleware, and gates —
+and decides what happens to the call:
+
+```ts
+import { Interception } from "@byteveda/flexiq";
+
+queue.intercept((taskName, args) => {
+  if (taskName === "chargeCard" && (args[0] as number) < 0) {
+    return Interception.reject("charge amount must be non-negative");
+  }
+  return Interception.pass();
+});
+```
+
+An interceptor returns one of four outcomes:
+
+| Outcome | Effect |
+|---|---|
+| `Interception.pass()` | Enqueue unchanged. |
+| `Interception.convert(args)` | Replace the args; the task name stays the same. |
+| `Interception.redirect(taskName, args)` | Enqueue a different task with new args instead. |
+| `Interception.reject(reason)` | Block the enqueue — `enqueue`/`enqueueMany` throws `InterceptionError`. |
+
+Rejecting aborts the enqueue — the job is never created and the error
+propagates to the caller:
+
+```ts
+queue.enqueue("charge", [-5]); // throws — nothing is enqueued
+```
+
+Multiple interceptors chain in registration order, each seeing the previous
+one's (possibly redirected) task name and args. `redirect` is rejected for
+`enqueueMany` (a batch is stored under one task name) and for tasks
+registered with per-task <SdkLink to="api-reference/serializers">codecs</SdkLink> —
+the redirect target's codec chain can't be resolved from a bare name.
+
+### Interceptors vs. `onEnqueue`
+
+`queue.intercept()` is distinct from the `onEnqueue`
+<SdkLink to="guides/extend/middleware">middleware</SdkLink> hook:
+`intercept` runs first and can redirect to a different task or reject
+outright; `onEnqueue` runs after and mutates the (possibly redirected)
+context in place — use it to rewrite enqueue *options* (metadata, priority,
+and so on) rather than the payload. Most apps need only one.
+
+### Why no proxies?
+
+Some SDKs also ship object *proxies* — a system for shipping
+non-serializable objects (file handles, sessions) through the queue. Node
+doesn't need it: a handler closes over its own resources, or pulls them from
+<SdkLink to="modules/injection/dependency-injection">dependency
+injection</SdkLink>. Keep non-serializable state on the worker and pass
+plain data through the queue.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+## The interceptor pipeline
+
+`flexiq.intercept(interceptor)` registers an `Interceptor` — a functional
+interface that sees the task name and payload and returns one of four
+`Interception` strategies:
+
+```java
+flexiq.intercept((taskName, payload) -> {
+    if (payload instanceof String s && s.startsWith("pw:")) {
+        return Interception.convert("***"); // redact before it reaches storage
+    }
+    return Interception.pass();
+});
+```
+
+| Strategy | Effect |
+|---|---|
+| `Interception.pass()` | Enqueue the payload unchanged. |
+| `Interception.convert(payload)` | Replace the payload (e.g. with a <SdkLink to="modules/injection/proxies">proxy ref</SdkLink>). |
+| `Interception.redirect(taskName, payload)` | Enqueue a different task (and payload) instead. |
+| `Interception.reject(reason)` | Block the enqueue — `InterceptionException` is thrown and no job is created. |
+
+Interceptors run synchronously in registration order; each sees the previous
+one's result. A `Redirect` retargets the rest of the pipeline — later
+interceptors, middleware, and gates all see the new task name and payload.
+
+### Validation
+
+Rejecting from an interceptor aborts the enqueue — the job is never created
+and the error propagates to the caller:
+
+```java
+flexiq.intercept((taskName, payload) -> {
+    if (taskName.equals("charge") && ((Order) payload).total() < 0) {
+        return Interception.reject("charge amount must be non-negative");
+    }
+    return Interception.pass();
+});
+
+flexiq.enqueue(CHARGE, invalidOrder); // throws InterceptionException — nothing enqueued
+```
+
+### Rewriting options — the `onEnqueue` hook
+
+Interceptors decide the payload's fate; to rewrite enqueue *options* or
+attach metadata, use <SdkLink to="guides/extend/middleware">middleware</SdkLink>
+`onEnqueue`. It receives a mutable `EnqueueContext` after interceptors have
+run — every enqueue runs **interceptors → `onEnqueue` middleware → enqueue
+gates**, then serializes, codec-encodes, and submits. Gates see the payload
+that will actually be stored, after any rewrites.
+
+### Edge cases
+
+- **Batches** — `enqueueMany` runs each payload through the interceptors, so
+  a batch can't bypass the contract. `Convert` rewrites the item; `Reject`
+  fails the whole batch; `Redirect` is unsupported in a batch (it would move
+  an item out of the single-task batch) and throws.
+- **Redirect + payload codecs** — redirecting a task that has
+  <SdkLink to="guides/extend/serializers">payload codecs</SdkLink> throws:
+  the source task's codec chain can't be applied to the target task without
+  corrupting the payload.
+- **Null result** — an interceptor returning `null` is a bug and throws
+  `InterceptionException`.
+
+<Callout type="info">
+  Keep interceptors fast and side-effect-free — they run on the producer
+  thread inside every `enqueue` call.
+</Callout>
+
+</SdkOnly>

@@ -94,7 +94,7 @@ load = load_data.apply_async(args=(source,), depends_on=transform.id)
 ```
 
 For anything past a simple chain — branches, joins, conditions, rollback —
-reach for [workflows](/python/guides/workflows), which track the run as a whole
+reach for [workflows](/python/modules/workflows), which track the run as a whole
 rather than job by job.
 
 ## Notes and metadata
@@ -112,7 +112,7 @@ import_rows.apply_async(
 )
 ```
 
-See [Structured notes](/python/guides/observability/notes) for the full
+See [Structured notes](/python/guides/extend/notes) for the full
 contract.
 
 <Cards>

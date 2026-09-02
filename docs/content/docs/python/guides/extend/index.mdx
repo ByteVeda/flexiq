@@ -1,0 +1,121 @@
+---
+title: Extend & integrate
+description: "Hook into the task lifecycle, watch what it does, and wire flexiq into the rest of your stack."
+---
+
+Everything that attaches to flexiq from the outside: the extension points that
+run inside the task lifecycle, the signals they emit, and the frameworks and
+vendors on the other end of those signals.
+
+## Extension points
+
+<Cards>
+  <Card
+    title="Events"
+    href="/python/guides/extend/events"
+    description="The in-process event bus — every lifecycle event, its payload, and ordering"
+  />
+  <Card
+    title="Middleware"
+    href="/python/guides/extend/middleware"
+    description="Hook into task execution with before, after, on_retry, and more"
+  />
+  <Card
+    title="Webhooks"
+    href="/python/guides/extend/webhooks"
+    description="HMAC-signed HTTP delivery of events, with a persistent log and replay"
+  />
+  <Card
+    title="Serializers"
+    href="/python/guides/extend/serializers"
+    description="Custom payload serialization — msgpack, orjson, encryption"
+  />
+</Cards>
+
+## Watch it run
+
+Monitor, log, and inspect your task queue in real time. For the built-in web UI,
+see the [Dashboard](/python/modules/dashboard) module — it covers the browser
+app, password and SSO login, runtime task/queue overrides, and the underlying
+REST API.
+
+<Cards>
+  <Card
+    title="Monitoring & hooks"
+    href="/python/guides/extend/monitoring"
+    description="Queue health, worker hooks, and what to alert on"
+  />
+  <Card
+    title="Structured task logging"
+    href="/python/guides/extend/logging"
+    description="Per-task log capture, correlation, and where the lines go"
+  />
+  <Card
+    title="Structured notes"
+    href="/python/guides/extend/notes"
+    description="Attach progress and diagnostics to a running job"
+  />
+  <Card
+    title="Testing tasks"
+    href="/python/guides/extend/testing"
+    description="Run tasks inline, assert on outcomes, and keep suites fast"
+  />
+</Cards>
+
+## Integrations
+
+flexiq offers optional extras for popular frameworks and observability tools.
+Install only what you need.
+
+| Extra | Install | What you get |
+|-------|---------|--------------|
+| **Flask** | `pip install flexiq[flask]` | `FlexiQ(app)` extension, `flask flexiq worker` CLI |
+| **FastAPI** | `pip install flexiq[fastapi]` | `FlexiQRouter` for instant REST API over the queue |
+| **Django** | `pip install flexiq[django]` | Admin integration, management commands |
+| **OpenTelemetry** | `pip install flexiq[otel]` | Distributed tracing with span-per-task |
+| **Prometheus** | `pip install flexiq[prometheus]` | `PrometheusMiddleware`, queue depth gauges, `/metrics` server |
+| **Sentry** | `pip install flexiq[sentry]` | `SentryMiddleware` with auto error capture and task tags |
+| **Encryption** | `pip install flexiq[encryption]` | `EncryptedSerializer` for at-rest payload encryption |
+| **MsgPack** | `pip install flexiq[msgpack]` | `MsgPackSerializer` for compact binary serialization |
+| **Postgres** | `pip install flexiq[postgres]` | Multi-machine workers via PostgreSQL backend |
+| **Redis** | `pip install flexiq[redis]` | Redis storage backend |
+
+<Callout type="info">
+  Postgres and Redis here are **shared storage backends** — the queue itself,
+  used to run workers across multiple machines. They are not message brokers
+  (a separate server such as Redis or RabbitMQ that holds pending jobs):
+  flexiq never needs a separate broker regardless of backend.
+</Callout>
+
+<Cards>
+  <Card
+    title="OpenTelemetry"
+    href="/python/guides/extend/otel"
+    description="Spans across enqueue and execution, with context propagation"
+  />
+  <Card
+    title="Prometheus"
+    href="/python/guides/extend/prometheus"
+    description="Scrape queue, worker, and task metrics"
+  />
+  <Card
+    title="Sentry"
+    href="/python/guides/extend/sentry"
+    description="Report task failures with task-aware context"
+  />
+  <Card
+    title="Flask"
+    href="/python/guides/extend/flask"
+    description="Enqueue from views and share the app context"
+  />
+  <Card
+    title="FastAPI"
+    href="/python/guides/extend/fastapi"
+    description="Async endpoints, dependency overrides, and background work"
+  />
+  <Card
+    title="Django"
+    href="/python/guides/extend/django"
+    description="Admin views, management commands, and the ORM inside tasks"
+  />
+</Cards>

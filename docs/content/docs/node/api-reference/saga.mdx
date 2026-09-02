@@ -1,12 +1,12 @@
 ---
-title: Saga
+title: Saga API
 description: "The compensate step option, the saga run/node states, and the rollback contract."
 ---
 
 Compensation is declared per step, at build time — there is no separate saga
 type and no task-level default compensator. A workflow becomes a saga the
 moment one of its steps sets `compensate`. For the conceptual walkthrough and a
-full example, see the [Sagas guide](/node/guides/workflows/saga).
+full example, see the [Sagas guide](/node/modules/workflows/saga).
 
 ## `compensate`
 
@@ -106,7 +106,7 @@ forward run.
 
 ## Events
 
-Six [events](/node/guides/extensibility/events) cover a rollback. Run-level
+Six [events](/node/guides/extend/events) cover a rollback. Run-level
 events carry a `WorkflowEvent` (`runId`, `state`, `error?`); per-node events
 carry `{ runId, node, error? }`:
 

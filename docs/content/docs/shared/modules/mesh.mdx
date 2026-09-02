@@ -1,0 +1,1110 @@
+---
+title: Mesh Scheduling
+description: "Gossip-based worker discovery, consistent-hashing affinity, and work-stealing for distributed task dispatch."
+---
+
+Workers can form a decentralized **mesh** — SWIM gossip for peer discovery, a
+consistent-hash ring for task placement, and TCP work-stealing — so idle
+workers pull work from busy peers instead of every worker hammering
+[storage](/architecture/storage) on every poll.
+
+Storage remains the source of truth. The mesh only changes *how quickly* a
+claimed job reaches an idle worker — if gossip fails entirely, a worker just
+falls back to standard polling — so it's safe to add to any worker without
+changing dispatch guarantees.
+
+<SdkOnly sdk="python">
+
+<Callout type="warn" title="Not included in the published wheel">
+  The package published to PyPI does **not** include the `mesh` cargo
+  feature. `MeshWorker` is importable from it, but passing it to
+  `run_worker` has no effect. To use mesh scheduling you must build the
+  extension from source with the feature enabled:
+  `uv run maturin develop --features mesh,workflows`
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="warn" title="Requires the mesh cargo feature">
+  `pnpm build:native` compiles the addon with `postgres,redis,workflows,mesh`
+  enabled, and published prebuilt binaries ship with it too — so `mesh` works
+  out of the box on install. If you build the native addon yourself with a
+  narrower `--features` list, drop `mesh` and the `mesh` option on the worker
+  is silently ignored.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="info" title="Included in the published native library">
+  The `mesh` cargo feature ships in the published native library, so
+  `MeshOptions` and the worker builder's `mesh(...)` work out of the box —
+  no separate build required.
+</Callout>
+
+</SdkOnly>
+
+## Quick start
+
+First worker — no seeds needed, it becomes the initial cluster node:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue, MeshWorker
+
+queue = Queue(db_path="tasks.db")
+
+@queue.task()
+def process(item_id: int):
+    ...
+
+# First worker — no seeds needed, becomes the initial cluster node
+mesh = MeshWorker(port=7946)
+queue.run_worker(queues=["default"], mesh=mesh)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+
+queue.task("process", (itemId: number) => {
+  // ...
+});
+
+// First worker — no seeds needed, becomes the initial cluster node.
+const worker = queue.runWorker({
+  queues: ["default"],
+  mesh: { port: 7946 },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// First worker — no seeds needed, becomes the initial cluster node
+Worker worker = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .mesh(MeshOptions.builder().port(7946).build())
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+In a second process (or on another machine), join the cluster by seeding
+from the first worker:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Joins the cluster by seeding from the first worker
+mesh = MeshWorker(
+    port=7946,
+    seeds=["first-worker-host:7946"],
+)
+queue.run_worker(queues=["default"], mesh=mesh)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Joins the cluster by seeding from the first worker.
+const worker = queue.runWorker({
+  queues: ["default"],
+  mesh: { port: 7946, seeds: ["first-worker-host:7946"] },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Joins the cluster by seeding from the first worker
+Worker worker = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .mesh(MeshOptions.builder()
+                .port(7946)
+                .seed("first-worker-host:7946")
+                .build())
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+The second worker discovers the first via gossip. Add a third and it only
+needs to seed from *any* existing member — gossip propagates the full
+membership list from there.
+
+## How it works
+
+Mesh scheduling composes four primitives that work together:
+
+| Primitive | What it does |
+|---|---|
+| **SWIM gossip** | UDP protocol for peer discovery and failure detection (~1.5s vs a 30s DB heartbeat) |
+| **Consistent hashing** | Hash ring with virtual nodes maps each task name to a preferred worker (soft affinity) |
+| **Local deque** | In-memory buffer between DB polls, sorted by affinity — workers drain it before hitting [storage](/architecture/storage) again |
+| **Work-stealing** | TCP protocol lets idle workers pull jobs from busy peers' deques |
+
+<Mermaid
+  chart={`graph LR
+    A[Worker A] <--> B[Worker B]
+    B <--> C[Worker C]
+    A <--> C
+    A -. steal .-> B
+    Storage[("SQLite / Postgres / Redis")]
+    A --- Storage
+    B --- Storage
+    C --- Storage`}
+/>
+
+The database remains the source of truth — an atomic claim is what actually
+grants a worker a job. Gossip and stealing are a dispatch-locality
+optimization layered on top of that. See
+[Architecture: Mesh Scheduling](/architecture/mesh) for the shared engine's
+internals, including adaptive prefetch sizing and poll jitter.
+
+## Configuration
+
+All mesh settings live in one place, alongside the worker configuration:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+mesh = MeshWorker(
+    port=7946,              # gossip UDP port (steal port = port + 1)
+    seeds=["host:7946"],    # seed nodes for cluster join
+    steal=True,             # enable work-stealing
+    affinity_weight=0.7,    # 0.0–1.0, how strongly tasks prefer their hashed worker
+    local_buffer=64,        # local deque capacity
+    steal_batch=4,          # max jobs stolen per request
+    steal_threshold=2,      # steal when own deque ≤ this
+    virtual_nodes=150,      # consistent-hash ring virtual nodes per worker
+    bind_addr="0.0.0.0",   # network interface to bind
+    encryption_key=None,    # base64-encoded key for gossip encryption
+    steal_rate_limit=10,    # max steal requests per peer per second
+)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.runWorker({
+  mesh: {
+    port: 7946, // gossip UDP port; steal TCP port is port + 1
+    bindAddr: "0.0.0.0",
+    seeds: ["10.0.0.2:7946"],
+    steal: true,
+    affinityWeight: 0.7,
+    localBuffer: 64,
+    stealBatch: 4,
+    stealThreshold: 2,
+    virtualNodes: 150,
+    advertiseAddr: undefined,
+    encryptionKey: undefined,
+    stealRateLimit: 10,
+  },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+MeshOptions.builder()
+        .port(7946)                 // gossip UDP port; steal TCP port is port + 1
+        .seed("10.0.0.2:7946")      // repeatable; or seeds(List<String>)
+        .bindAddr("0.0.0.0")
+        .advertiseAddr(null)        // required when bindAddr is 0.0.0.0 across hosts
+        .enableStealing(true)
+        .affinityWeight(0.7)
+        .localBufferCapacity(64)
+        .maxStealBatch(4)
+        .stealThreshold(2)
+        .virtualNodes(150)
+        .stealRateLimit(10)
+        .encryptionKey(null)
+        .build();
+```
+
+  </Tab>
+</CodeTabs>
+
+### Parameter reference
+
+Each binding exposes these settings with its own names, defaults, and
+validation:
+
+<SdkOnly sdk="python">
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `port` | `int` | `7946` | Gossip UDP port. Steal TCP port is `port + 1`. Must be 1024–65535. |
+| `seeds` | `list[str]` | `[]` | Addresses of existing cluster members (`host:port`). |
+| `steal` | `bool` | `True` | Whether this worker can steal from and be stolen from. |
+| `affinity_weight` | `float` | `0.7` | Task-to-worker affinity strength. `0.0` = no affinity, `1.0` = strong preference. |
+| `local_buffer` | `int` | `64` | Max jobs buffered locally before back-pressuring prefetch. |
+| `steal_batch` | `int` | `4` | Max jobs transferred per steal request. |
+| `steal_threshold` | `int` | `2` | Trigger stealing when own buffer drops to this level. |
+| `virtual_nodes` | `int` | `150` | Hash ring virtual nodes per worker. More = more even distribution. |
+| `bind_addr` | `str` | `"0.0.0.0"` | Network interface for gossip and steal servers. |
+| `encryption_key` | `str \| None` | `None` | Base64 key for XOR gossip encryption. All nodes must share the same key. |
+| `steal_rate_limit` | `int` | `10` | Max steal requests accepted per peer per second. `0` = unlimited. |
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `port` | `number` | — (required) | Gossip UDP port. Steal TCP port is `port + 1`. Must be 1–65534 — `runWorker` throws otherwise. |
+| `bindAddr` | `string` | `"0.0.0.0"` | Bind address for both the gossip and steal listeners. |
+| `seeds` | `string[]` | `[]` | Existing members to join, as `"host:gossipPort"` strings. Empty means this node starts a new cluster. |
+| `steal` | `boolean` | `true` | Whether this worker *initiates* steals when its deque runs low. See [Work-stealing](#work-stealing) — it does not stop this worker from donating jobs to peers. |
+| `affinityWeight` | `number` | `0.7` | Accepted for forward compatibility, but the current engine doesn't read it — affinity is a fixed owned/non-owned split (see [Task affinity](#task-affinity)), not a graduated weight. Leave it at the default. |
+| `localBuffer` | `number` | `64` | Local deque capacity before it stops accepting more prefetched jobs. |
+| `stealBatch` | `number` | `4` | Max jobs requested per steal, capped by however many the peer actually has. |
+| `stealThreshold` | `number` | `2` | This worker tries to steal once its own deque length drops to or below this. |
+| `virtualNodes` | `number` | `150` | Virtual points per worker on the hash ring. Higher spreads task ownership more evenly across workers. |
+| `advertiseAddr` | `string` | unset | IP address advertised to peers when this worker is behind NAT — a bare IP, not `host:port` (the advertised ports still come from `port`/`port + 1`). Falls back to `bindAddr`. |
+| `encryptionKey` | `string` | unset | Base64 key that XOR-encrypts gossip datagrams. See [Gossip encryption](#gossip-encryption). |
+| `stealRateLimit` | `number` | `10` | Max steal requests this worker will *answer* per peer per second. `0` disables the limit. |
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+| Builder method | Type | Default | Description |
+|---|---|---|---|
+| `port(int)` | `int` | `7946` | Gossip UDP port. Steal TCP port is always `port + 1`. Must be `1..65534`. |
+| `seed(String)` / `seeds(List<String>)` | `String` / `List<String>` | none | `host:port` of an existing cluster member; call repeatedly to add more. |
+| `bindAddr(String)` | `String` | `"0.0.0.0"` | Listen address for both the gossip and steal servers. |
+| `advertiseAddr(String)` | `String` | `null` | Address advertised to peers; required behind NAT or when `bindAddr` is `0.0.0.0` and workers span hosts. |
+| `enableStealing(boolean)` | `boolean` | `true` | Whether this worker can steal from, and be stolen from by, peers. |
+| `affinityWeight(double)` | `double` | `0.7` | Hash-ring affinity strength. `0.0` ignores affinity, `1.0` is strict. |
+| `localBufferCapacity(int)` | `int` | `64` | Max jobs buffered in the local deque before back-pressuring prefetch. |
+| `maxStealBatch(int)` | `int` | `4` | Max jobs transferred to a thief per steal request. |
+| `stealThreshold(int)` | `int` | `2` | Trigger stealing once the local deque drops to this length. |
+| `virtualNodes(int)` | `int` | `150` | Hash-ring virtual nodes per worker; higher spreads placement more evenly. |
+| `stealRateLimit(int)` | `int` | `10` | Max steal requests served per peer per second; `0` disables the limit. |
+| `encryptionKey(String)` | `String` | `null` | Base64 32-byte key XOR-applied to gossip datagrams. Obfuscation, not encryption. |
+
+<Callout type="info">
+  SWIM protocol timing (500ms period, 3 indirect-probe peers, suspicion
+  multiplier 4) is fixed by the core engine and isn't exposed on
+  `MeshOptions.Builder`.
+</Callout>
+
+</SdkOnly>
+
+## Cluster topology
+
+### Single-machine (development)
+
+Run multiple workers on one host with different ports — the steal port is
+always `port + 1`, so pick gossip ports far enough apart:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# worker_a.py
+from flexiq import Queue, MeshWorker
+
+queue = Queue(db_path="tasks.db")
+
+@queue.task()
+def send_email(to: str, subject: str):
+    ...
+
+mesh = MeshWorker(port=7946)
+queue.run_worker(mesh=mesh)
+```
+
+```python
+# worker_b.py — seeds from worker A
+from myapp import queue  # same queue, different process
+
+mesh = MeshWorker(port=7948, seeds=["127.0.0.1:7946"])
+queue.run_worker(mesh=mesh)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// worker-a.ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+queue.task("sendEmail", (to: string, subject: string) => {
+  /* ... */
+});
+
+queue.runWorker({ mesh: { port: 7946 } });
+```
+
+```ts
+// worker-b.ts — same db file, second process
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+queue.task("sendEmail", (to: string, subject: string) => {
+  /* ... */
+});
+
+queue.runWorker({ mesh: { port: 7948, seeds: ["127.0.0.1:7946"] } });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Worker A — first node, no seeds
+Worker workerA = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .mesh(MeshOptions.builder().port(7946).build())
+        .start();
+
+// Worker B — same storage, seeds from A
+Worker workerB = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .mesh(MeshOptions.builder()
+                .port(7948)                       // steal port becomes 7949
+                .seed("127.0.0.1:7946")
+                .build())
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+### Multi-machine (production)
+
+Point seeds at a couple of known-stable nodes — you don't need to list every
+node, gossip propagates membership from there:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+import os
+
+SEEDS = ["scheduler-1.internal:7946", "scheduler-2.internal:7946"]
+
+mesh = MeshWorker(
+    port=7946,
+    seeds=SEEDS,
+    encryption_key=os.environ["MESH_ENCRYPTION_KEY"],
+    steal_rate_limit=20,
+)
+queue.run_worker(
+    queues=["default", "emails"],
+    mesh=mesh,
+)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const SEEDS = ["scheduler-1.internal:7946", "scheduler-2.internal:7946"];
+
+queue.runWorker({
+  queues: ["default", "emails"],
+  mesh: {
+    port: 7946,
+    seeds: SEEDS,
+    encryptionKey: process.env.MESH_ENCRYPTION_KEY,
+    stealRateLimit: 20,
+  },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+List<String> seeds = List.of(
+        "scheduler-1.internal:7946",
+        "scheduler-2.internal:7946");
+
+Worker worker = flexiq.worker()
+        .handle(process, payload -> handle(payload))
+        .queues("default", "emails")
+        .mesh(MeshOptions.builder()
+                .seeds(seeds)
+                .advertiseAddr(System.getenv("HOST_ADDR") + ":7946")
+                .encryptionKey(System.getenv("MESH_KEY"))
+                .stealRateLimit(20)
+                .build())
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="java">
+
+Set `advertiseAddr` so peers dial back the right host when `bindAddr` stays
+`0.0.0.0`.
+
+</SdkOnly>
+
+<Callout type="warn" title="Firewall rules">
+  Workers need UDP (gossip) and TCP (steal) access to each other. Open both
+  the gossip port and the steal port (gossip + 1) between all mesh workers.
+</Callout>
+
+<SdkOnly sdk="node">
+
+<Callout type="info" title="No CLI flags for mesh">
+  The `flexiq run ./app.js` CLI command has no mesh options — mesh is only
+  enabled by passing `mesh` to `runWorker()` in your own code. Read the
+  config from the environment in your entrypoint instead:
+</Callout>
+
+```ts
+// worker-entry.ts — container entrypoint, reads mesh config from env vars
+import { Queue, type MeshWorkerConfig } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+queue.task("sendEmail", (to: string, subject: string) => {
+  /* ... */
+});
+
+function meshFromEnv(): MeshWorkerConfig | undefined {
+  const port = process.env.MESH_PORT;
+  if (!port) return undefined;
+  const seeds = (process.env.MESH_SEEDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return { port: Number(port), seeds, encryptionKey: process.env.MESH_KEY };
+}
+
+queue.runWorker({ mesh: meshFromEnv() });
+```
+
+```bash
+node worker-entry.js  # not `flexiq run` — the CLI has no mesh flags
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="python">
+
+### Docker Compose example
+
+```yaml
+services:
+  worker-1:
+    build: .
+    command: flexiq worker --app myapp:queue
+    environment:
+      MESH_PORT: "7946"
+      MESH_SEEDS: ""  # first node, no seeds
+      MESH_KEY: ${MESH_ENCRYPTION_KEY}
+    ports:
+      - "7946:7946/udp"  # gossip
+      - "7947:7947/tcp"  # steal
+
+  worker-2:
+    build: .
+    command: flexiq worker --app myapp:queue
+    environment:
+      MESH_PORT: "7946"
+      MESH_SEEDS: "worker-1:7946"
+      MESH_KEY: ${MESH_ENCRYPTION_KEY}
+    ports:
+      - "7948:7946/udp"
+      - "7949:7947/tcp"
+    depends_on:
+      - worker-1
+```
+
+<Callout type="warn" title="Illustrative — the CLI can't consume MESH_* env vars">
+  This compose file is illustrative, not runnable as-is: the `flexiq worker`
+  CLI has no mesh flags and never reads `MESH_PORT`/`MESH_SEEDS`/`MESH_KEY`.
+  Mesh is only enabled by calling `queue.run_worker(mesh=...)` in your own
+  Python code. Replace `command: flexiq worker --app myapp:queue` with
+  `command: python -m myapp`, where `myapp` is a module like the one below —
+  its `__main__` block starts the worker with the env-derived mesh config.
+</Callout>
+
+```python
+# myapp.py — reads mesh config from environment
+import os
+from flexiq import Queue, MeshWorker
+
+queue = Queue(db_path="tasks.db")
+
+def get_mesh() -> MeshWorker | None:
+    port = os.environ.get("MESH_PORT")
+    if not port:
+        return None
+    seeds_raw = os.environ.get("MESH_SEEDS", "")
+    seeds = [s.strip() for s in seeds_raw.split(",") if s.strip()]
+    return MeshWorker(
+        port=int(port),
+        seeds=seeds,
+        encryption_key=os.environ.get("MESH_KEY"),
+    )
+
+if __name__ == "__main__":
+    queue.run_worker(mesh=get_mesh())
+```
+
+</SdkOnly>
+
+## Task affinity
+
+The consistent-hash ring maps each task name to a preferred worker. When a
+worker prefetches a batch of jobs, it sorts them before pushing them into
+the local deque:
+
+- **Owned tasks** (hashed to this worker) go to the back of the deque —
+  popped first
+- **Non-owned tasks** go to the front — left there for peers to steal
+
+Any worker can still run any task — affinity only biases *which worker gets
+to it first*. This improves cache locality: when a task consistently lands
+on the same worker, its open connections, warm caches, and worker-scoped
+<SdkLink to="modules/injection/dependency-injection">resources</SdkLink> stay
+hot instead of being rebuilt everywhere.
+
+<SdkOnly sdk="python">
+
+The `affinity_weight` parameter controls how aggressively the ring biases
+dispatch — `0.0` disables affinity entirely, `1.0` is a strict preference:
+
+```python
+# High affinity — tasks strongly prefer their hashed worker
+mesh = MeshWorker(affinity_weight=1.0)
+
+# No affinity — pure load-balancing, no task-to-worker preference
+mesh = MeshWorker(affinity_weight=0.0)
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="info">
+  `affinityWeight` on the mesh config is reserved but currently unused —
+  the sort above is a hard owned/non-owned split, not a tunable strength.
+  There's no option today to dial affinity up or down.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+`affinityWeight` controls the same tradeoff:
+
+```java
+// Strict — tasks strongly prefer their hashed worker
+MeshOptions.builder().affinityWeight(1.0).build();
+
+// None — pure load-balancing, no task-to-worker preference
+MeshOptions.builder().affinityWeight(0.0).build();
+```
+
+</SdkOnly>
+
+## Work-stealing
+
+When a worker's local buffer drops to its steal threshold, it looks at
+gossip-reported buffer lengths across the cluster, picks the busiest peer,
+and opens a TCP connection to that peer's steal port requesting a batch of
+jobs.
+
+The victim pops jobs from the cold end of its deque (non-owned tasks first)
+and sends them back. The thief executes them locally — no DB round-trip
+needed, since the jobs are already claimed as running in storage. Stealing
+is rate-limited per peer to prevent thundering-herd effects.
+
+<SdkOnly sdk="node">
+
+The worker only steals from peers with enough surplus (steal threshold +
+steal batch). The connect attempt times out after 500ms and the response
+after 2s, so a stuck peer doesn't stall dispatch.
+
+</SdkOnly>
+
+Work-stealing is on by default — workers automatically balance load across
+the cluster. When one worker gets a burst of jobs, idle peers steal the
+overflow within milliseconds. Disabling it stops this worker from
+participating in steals:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+mesh = MeshWorker(steal=False)
+```
+
+Workers still benefit from gossip discovery, consistent hashing, and local
+deque prefetch — but won't steal from or donate jobs to peers. Useful when
+tasks have strong per-worker state dependencies.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.runWorker({ mesh: { port: 7946, steal: false } });
+```
+
+<Callout type="info" title="steal: false is one-directional">
+  Setting `steal: false` only stops *this* worker from initiating steals —
+  the TCP steal server always runs, so this worker will still hand jobs to
+  any peer that asks (subject to `stealRateLimit`). Use it on a worker you
+  don't want draining its own queue to help others, not to shield a worker
+  from ever donating work.
+</Callout>
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+MeshOptions.builder().enableStealing(false).build();
+```
+
+Gossip discovery, consistent hashing, and local-deque prefetch keep
+running — the worker just won't steal from or donate jobs to peers. Useful
+when tasks have strong per-worker state.
+
+  </Tab>
+</CodeTabs>
+
+### Tuning work-stealing
+
+<SdkOnly sdk="python">
+
+| Scenario | Recommended settings |
+|---|---|
+| Bursty, short tasks | `steal_batch=8, steal_threshold=4` — steal more, earlier |
+| Long-running tasks | `steal_batch=1, steal_threshold=1` — steal conservatively |
+| Many workers (10+) | `steal_rate_limit=5` — prevent steal storms |
+| Few workers (2–3) | `steal_rate_limit=0` — unlimited, low contention |
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+| Scenario | Recommended settings |
+|---|---|
+| Bursty, short tasks | `stealBatch: 8, stealThreshold: 4` — steal more, earlier |
+| Long-running tasks | `stealBatch: 1, stealThreshold: 1` — steal conservatively |
+| Many workers (10+) | `stealRateLimit: 5` — prevent steal storms |
+| Few workers (2–3) | `stealRateLimit: 0` — unlimited, contention is low anyway |
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+| Scenario | Recommended settings |
+|---|---|
+| Bursty, short tasks | `maxStealBatch(8).stealThreshold(4)` — steal more, earlier |
+| Long-running tasks | `maxStealBatch(1).stealThreshold(1)` — steal conservatively |
+| Many workers (10+) | `stealRateLimit(5)` — avoid steal storms |
+| Few workers (2-3) | `stealRateLimit(0)` — unlimited, low contention |
+
+</SdkOnly>
+
+## Gossip encryption
+
+Enable gossip encryption with a shared, base64-encoded key:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+import base64
+import os
+
+# Generate a key (share this across all workers)
+key = base64.b64encode(os.urandom(32)).decode()
+print(key)  # store in environment variable or secret manager
+
+mesh = MeshWorker(encryption_key=key)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { randomBytes } from "node:crypto";
+
+const key = randomBytes(32).toString("base64"); // share across every mesh worker
+queue.runWorker({ mesh: { port: 7946, encryptionKey: key } });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+MeshOptions.builder()
+        .port(7946)
+        .seed("10.0.0.2:7946")
+        .encryptionKey(System.getenv("MESH_KEY")) // 32-byte key, base64-encoded
+        .build();
+```
+
+  </Tab>
+</CodeTabs>
+
+All nodes in the cluster must use the same key. Nodes with mismatched keys
+fail to decode each other's gossip messages and never join the cluster.
+
+<Callout type="warn" title="Encryption scope">
+  Gossip encryption XOR-obfuscates the UDP membership protocol only — it
+  deters casual sniffing, not a determined attacker. Work-stealing traffic
+  over TCP is never encrypted. For real transport security, put mesh traffic
+  on a private network (WireGuard, VPN, or a service mesh).
+</Callout>
+
+## Monitoring
+
+<SdkOnly sdk="python">
+
+Mesh activity appears in Rust log output at `debug` and `info` levels:
+
+```bash
+# See all mesh activity
+RUST_LOG=flexiq_mesh=debug flexiq worker --app myapp:queue
+
+# See only gossip membership changes
+RUST_LOG=flexiq_mesh::swim=info flexiq worker --app myapp:queue
+```
+
+Key log messages:
+
+| Level | Message | Meaning |
+|---|---|---|
+| `info` | `gossip listening on ...` | Gossip server started |
+| `info` | `discovered peer X at Y` | New cluster member joined |
+| `info` | `member X declared dead` | Failure detector confirmed crash |
+| `info` | `leave broadcast sent` | Graceful shutdown leave |
+| `debug` | `giving N jobs to thief X` | Responded to steal request |
+| `debug` | `ack from X resolved probe` | Healthy ping-ack cycle |
+
+If you use [Prometheus](/python/guides/extend/prometheus), mesh
+metrics flow through the same worker observability pipeline.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Mesh workers register and heartbeat exactly like any other worker, so they
+show up in `listWorkers()` and on the
+<SdkLink to="modules/dashboard">dashboard</SdkLink> Workers panel:
+
+```ts
+await queue.listWorkers();
+// [{ workerId, hostname, pid, queues, status, lastHeartbeat, ... }]
+```
+
+<Callout type="info">
+  There's no separate JS-facing API for mesh-only signals yet (peer count,
+  steal counters, ring membership) — those live inside the Rust engine but
+  aren't exposed through the addon. See
+  [Architecture: Mesh Scheduling](/architecture/mesh) for what the engine
+  tracks internally.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+### Inspecting the cluster
+
+`Worker.meshClusterInfo()` returns an `Optional<MeshClusterInfo>` — empty
+unless the worker was started with `.mesh(...)`:
+
+```java
+worker.meshClusterInfo().ifPresent(cluster ->
+        log.info("peers={} load={} buffered={} prefetch={}",
+                cluster.peerCount(), cluster.totalLoad(),
+                cluster.totalBuffered(), cluster.adaptivePrefetch()));
+```
+
+| `MeshClusterInfo` field | Description |
+|---|---|
+| `peerCount()` | Alive peers discovered via gossip (excludes this node). |
+| `totalCapacity()` | Summed advertised capacity across those peers. |
+| `totalLoad()` | Summed in-flight jobs across those peers. |
+| `totalBuffered()` | Summed local-deque length across those peers. |
+| `localBufferLen()` | This worker's own local-deque length. |
+| `adaptivePrefetch()` | This worker's current prefetch budget. |
+
+</SdkOnly>
+
+## Combining with other features
+
+Mesh composes with everything else a worker already does. Each mesh worker
+still manages its own resource pool and prefetch batch independently:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue, MeshWorker
+from flexiq.resources import ResourceDefinition, Scope
+
+queue = Queue(db_path="tasks.db")
+
+# Worker resources work normally — each mesh worker manages its own pool
+@queue.worker_resource(scope=Scope.WORKER)
+def db_pool():
+    return create_connection_pool()
+
+# Rate limits and concurrency are per-task, enforced in the DB layer
+@queue.task(max_concurrent=5, rate_limit="100/m")
+def process_order(order_id: int, db_pool=None):
+    ...
+
+# Batch dequeue works with mesh — prefetch fills the local deque
+queue_config = Queue(db_path="tasks.db", scheduler_batch_size=10)
+
+mesh = MeshWorker(seeds=["peer:7946"])
+queue.run_worker(mesh=mesh)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+
+// Worker resources work normally — each mesh worker builds its own pool.
+queue.resource("db", () => createConnectionPool());
+
+queue.task(
+  "processOrder",
+  async (orderId: string, deps: { db: Pool }) => {
+    await deps.db.query("...", [orderId]);
+  },
+  { inject: ["db"], maxConcurrent: 5, rateLimit: "100/m" },
+);
+
+queue.runWorker({
+  queues: ["default"],
+  batchSize: 10, // scheduler pulls more per poll; the mesh sorts the batch by affinity
+  mesh: { port: 7946, seeds: ["peer:7946"] },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+flexiq.resource("db", ResourceScope.WORKER, ctx -> openPool(), pool -> pool.close());
+
+try (Worker worker = flexiq.worker()
+        .handle(processOrder, orderId -> {
+            DataSource db = Resources.use("db");
+            return process(db, orderId);
+        })
+        .batchSize(10) // scheduler claims 10 jobs per poll; mesh drains them into the local deque
+        .mesh(MeshOptions.builder().seed("peer-a:7946").build())
+        .start()) {
+    worker.awaitShutdown();
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+See also:
+- <SdkLink to="guides/core/tasks#concurrency">Per-task concurrency</SdkLink> for `max_concurrent`
+- <SdkLink to="guides/core/tasks#rate-limiting">Rate limiting</SdkLink> for `rate_limit`
+- <SdkLink to="modules/injection/dependency-injection">Worker resources</SdkLink> for DI into tasks
+- <SdkLink to="guides/core/scheduling#batch-dequeue">Batch dequeue</SdkLink> for `scheduler_batch_size`
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+See also <SdkLink to="modules/injection/dependency-injection">dependency injection</SdkLink>,
+<SdkLink to="guides/reliability/concurrency">concurrency</SdkLink>, and
+<SdkLink to="guides/reliability/rate-limiting">rate limiting</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+See also <SdkLink to="modules/injection/dependency-injection">Resource System</SdkLink>
+for worker-scoped dependency injection and
+<SdkLink to="guides/core/batching">Batching</SdkLink> for `batchSize`.
+
+</SdkOnly>
+
+## Mixing mesh and non-mesh workers
+
+A mesh worker and a plain worker can consume the same storage at once — the
+atomic claim in storage is what guarantees a job dispatches exactly once,
+regardless of whether the worker that wins it is meshed:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Standard worker — no mesh, polls DB directly
+queue.run_worker(queues=["default"])
+
+# Mesh worker — same DB, but prefetches + steals
+mesh = MeshWorker(seeds=["other-mesh-node:7946"])
+queue.run_worker(queues=["default"], mesh=mesh)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Standard worker — polls storage directly, no gossip
+queue.runWorker({ queues: ["default"] });
+
+// Mesh worker — same storage, but prefetches into a local deque and can steal
+queue.runWorker({ queues: ["default"], mesh: { port: 7946, seeds: ["10.0.0.2:7946"] } });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Standard worker — no mesh, polls storage directly
+flexiq.worker().handle(process, this::handle).start();
+
+// Mesh worker — same storage, but prefetches + steals
+flexiq.worker().handle(process, this::handle)
+        .mesh(MeshOptions.builder().seed("other-mesh-node:7946").build())
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+Non-mesh workers are invisible to the mesh (no gossip, no stealing) but
+still process jobs normally — roll mesh out to part of a fleet gradually,
+without downtime.
+
+## Graceful shutdown
+
+When a mesh worker shuts down, it broadcasts a `Leave` message to all known
+peers. They remove it from the ring immediately — no suspicion timeout
+needed.
+
+<SdkOnly sdk="python">
+
+Triggered via `Ctrl+C`, `SIGTERM`, or
+<SdkLink to="guides/core/workers#programmatic-shutdown">programmatic
+shutdown</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+```ts
+process.on("SIGTERM", () => worker.stop());
+```
+
+`stop()` broadcasts the leave message before the gossip loop exits.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+`worker.close()` (and `stop()`) signal the mesh node before the native
+worker tears down, which broadcasts the leave message.
+
+</SdkOnly>
+
+If a worker crashes without leaving, the SWIM failure detector kicks in:
+direct ping fails → indirect ping via intermediaries → suspicion → declared
+dead after `suspicion_multiplier × ln(N+1) × protocol_period`. With default
+settings (multiplier `4`, 500ms period), a crashed worker in a 3-node
+cluster is typically detected in about `4 × ln(4) × 500ms ≈ 2.8s`. These
+SWIM timing knobs are fixed by the core engine and aren't exposed as
+configuration options.
+
+## When to use mesh
+
+<SdkOnly sdk="python">
+
+**Good fit:**
+- Multiple workers processing the same queues (2+ workers)
+- High job throughput where DB polling is a bottleneck
+- Tasks that benefit from cache locality (imports, connections, warm state)
+- Environments where sub-second failure detection matters
+- Horizontal scaling where workers come and go frequently
+
+**Not needed:**
+- Single worker setups
+- Low throughput (&lt; 100 jobs/second)
+- Workers processing completely different queues (no overlap = no stealing)
+- Already using [bare-metal autoscaler](/python/modules/autoscaling)
+  or [KEDA](/python/modules/autoscaling/keda) for process-level scaling (mesh
+  is *within-process* optimization, not a replacement for autoscaling)
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+**Good fit:**
+- Two or more workers consuming the same queue(s)
+- High throughput where DB polling latency is the bottleneck
+- Tasks that benefit from cache locality — warm connections, open clients —
+  especially paired with worker-scoped
+  <SdkLink to="modules/injection/dependency-injection">resources</SdkLink>
+- Fleets that scale workers up and down often and need sub-second peer
+  detection
+
+**Not needed:**
+- A single worker process
+- Low throughput
+- Workers consuming entirely disjoint queues — little to steal without
+  overlap
+- You're already scaling worker processes up and down at the infrastructure
+  level — mesh optimizes dispatch within a running fleet, it isn't a
+  process autoscaler
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+**Good fit:**
+- Multiple workers processing the same queues (2+ workers)
+- High job throughput where DB polling is a bottleneck
+- Tasks that benefit from cache locality (connections, warm state)
+- Environments where sub-second failure detection matters
+- Horizontal scaling where workers come and go frequently
+
+**Not needed:**
+- Single-worker setups
+- Low throughput (&lt; 100 jobs/second)
+- Workers processing entirely disjoint queues (no overlap, no stealing)
+- Already scaling replicas with
+  [autoscaling / KEDA](/java/modules/autoscaling) — mesh is a
+  *within-process* dispatch optimization, not a replacement for it
+
+</SdkOnly>

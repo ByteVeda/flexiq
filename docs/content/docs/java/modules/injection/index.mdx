@@ -1,0 +1,93 @@
+---
+title: Resource System
+description: "Inject external dependencies into tasks, intercept enqueues, and proxy non-serializable values."
+---
+
+Task payloads cross a process boundary, so they must be serializable — but most
+real dependencies (database pools, HTTP clients, cloud SDKs) are not. The Java
+SDK keeps those on the worker and passes only plain data through the queue.
+
+```java
+try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open()) {
+    queue.resource("db", ResourceScope.WORKER, ctx -> openPool(), pool -> pool.close());
+
+    try (Worker worker = queue.worker()
+            .handle(SYNC_USER, userId -> {
+                DataSource db = Resources.use("db");
+                return markSynced(db, userId);
+            })
+            .start()) {
+        queue.enqueue(SYNC_USER, "u_123");
+    }
+}
+```
+
+<Cards>
+  <Card
+    title="Dependency injection"
+    href="/java/modules/injection/dependency-injection"
+    description="FlexiQ.resource(), the five scopes, Resources.use, annotation-driven injection, teardown, metrics"
+  />
+  <Card
+    title="Configuration"
+    href="/java/modules/injection/configuration"
+    description="The resource() overloads, choosing a scope, teardown, and PoolConfig tuning"
+  />
+  <Card
+    title="Enqueue interception"
+    href="/java/modules/injection/interception"
+    description="Interceptor strategies and the onEnqueue hook — validate, rewrite, redirect, and reject jobs before serialization"
+  />
+  <Card
+    title="Resource proxies"
+    href="/java/modules/injection/proxies"
+    description="Signed ProxyRefs for non-serializable values — HMAC signing, TTL, purpose binding, sessions"
+  />
+  <Card
+    title="Observability"
+    href="/java/modules/injection/observability"
+    description="Reading resourceMetrics() — created/disposed/active counters"
+  />
+  <Card
+    title="Testing"
+    href="/java/modules/injection/testing"
+    description="Registering stub resources with InMemoryFlexiQ"
+  />
+</Cards>
+
+## The five scopes
+
+A resource's `ResourceScope` decides its lifetime on the worker:
+
+| Scope | Built | Lifetime |
+|---|---|---|
+| `WORKER` (default) | Lazily, on first use | The worker — one shared instance per worker |
+| `THREAD` | Lazily, once per worker thread | Shared by every task on that thread; disposed at worker shutdown |
+| `TASK` | Once per task invocation | That invocation — disposed (LIFO) when it ends |
+| `REQUEST` | Fresh on every `use()` | Never cached — N uses in one task yield N instances, all disposed with the task |
+| `POOLED` | Lazily, up to `poolSize` at once | Checked out per task, returned at task end |
+
+`POOLED` sits between `WORKER` and `TASK`: instances are reused across tasks
+but bound to one task at a time, with a hard cap on how many exist. A
+`PoolConfig` sizes the pool — `poolMin` instances are prewarmed at worker
+start, a checkout that cannot get an instance within `acquireTimeout` fails the
+job with `ResourceException`, and an idle instance older than `maxLifetime` is
+disposed and rebuilt instead of reused. Because pooled instances outlive any
+single task, a pooled factory may only depend on worker-scoped resources.
+
+## Proxy sessions
+
+For values that must travel *through* a payload — file handles and friends —
+[proxies](/java/modules/injection/proxies) deconstruct them into signed,
+serializable refs. A `ProxySession` wraps that per unit of work: deconstructing
+the same instance twice returns the same ref (identity dedup), every ref to the
+same resource reconstructs once (memoized by signature, with the signature,
+expiry, and purpose re-verified on every resolve), and `close()` runs each
+handler's cleanup once per instance in reverse reconstruction order (LIFO).
+Sessions are `AutoCloseable`, so try-with-resources scopes the whole lifecycle.
+
+<Callout type="info">
+  Prefer plain payloads plus worker-side injection wherever you can; reach for
+  proxies only when a non-serializable value genuinely has to be chosen by the
+  producer.
+</Callout>

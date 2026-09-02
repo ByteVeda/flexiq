@@ -1,5 +1,5 @@
 {
   "title": "Getting Started",
   "root": true,
-  "pages": ["installation", "concepts", "quickstart", "capabilities"]
+  "pages": ["installation", "quickstart", "concepts", "capabilities"]
 }

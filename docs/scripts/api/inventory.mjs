@@ -77,12 +77,15 @@ export function sourceFiles(sdk) {
 }
 
 /** Generated reference pages, in nav order. Titles are shared across SDKs. */
+// Page titles for the generated section. Each one names the *kind* of page it
+// is: these sit in the same sidebar as the Modules entries, where a second
+// "Workflows" or "Durable steps" would be a coin flip for the reader.
 export const GROUPS = {
-  queue: "Queue client",
-  execution: "Workers & executors",
-  steps: "Durable steps",
-  workflows: "Workflows",
-  types: "Records & context",
+  queue: "Queue client signatures",
+  execution: "Worker & executor signatures",
+  steps: "Durable step signatures",
+  workflows: "Workflow signatures",
+  types: "Record & context signatures",
 };
 
 /**

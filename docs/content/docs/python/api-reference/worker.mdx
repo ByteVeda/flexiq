@@ -1,5 +1,5 @@
 ---
-title: Worker
+title: Worker API
 description: "run_worker, the thread and prefork pools, graceful shutdown, and worker introspection."
 ---
 
@@ -24,7 +24,7 @@ queue.run_worker(
 ```
 
 **Blocks** until interrupted. Before dispatching it registers periodic tasks,
-initializes [worker resources](/python/guides/resources/dependency-injection),
+initializes [worker resources](/python/modules/injection/dependency-injection),
 starts the resource health checker, and installs signal handlers.
 
 | Parameter | Type | Default | Description |
@@ -33,7 +33,7 @@ starts the resource health checker, and installs signal handlers.
 | `tags` | `list[str] \| None` | `None` | Tags for worker specialization / routing. |
 | `pool` | `str` | `"thread"` | `"thread"` or `"prefork"`. |
 | `app` | `str \| None` | `None` | Import path to the `Queue` (e.g. `"myapp:queue"`). **Required** when `pool="prefork"`. |
-| `mesh` | `MeshWorker \| None` | `None` | Gossip-based discovery, affinity, and work stealing. Not in the PyPI wheel — see [Mesh](/python/guides/operations/mesh). |
+| `mesh` | `MeshWorker \| None` | `None` | Gossip-based discovery, affinity, and work stealing. Not in the PyPI wheel — see [Mesh](/python/modules/mesh). |
 
 `arun_worker()` is the async twin — it runs the same blocking loop in a thread
 executor so it does not block the event loop, and takes the same arguments.
@@ -145,7 +145,7 @@ appear stuck in `running`.
   />
   <Card
     title="Prefork pool"
-    href="/python/guides/advanced-execution/prefork"
+    href="/python/guides/core/prefork"
     description="True parallelism for CPU-bound tasks, and its constraints."
   />
   <Card

@@ -1,0 +1,75 @@
+---
+title: Resource observability
+description: "Read per-resource created / disposed / active counters with resourceMetrics()."
+---
+
+The resource runtime keeps three counters per registered name: how many
+instances were built, how many were disposed, and how many are live right
+now. Read them straight from the `FlexiQ` client — there's no separate
+collector, dashboard endpoint, or background reporter involved.
+
+## `resourceMetrics()`
+
+```java
+Map<String, ResourceStat> metrics = flexiq.resourceMetrics();
+
+ResourceStat db = metrics.get("db");
+System.out.printf("db: created=%d disposed=%d active=%d%n",
+        db.created(), db.disposed(), db.active());
+```
+
+`ResourceStat` is a record of three counters:
+
+| Field | Meaning |
+|---|---|
+| `created` | Instances built since the client opened. |
+| `disposed` | Instances disposed — including pooled instances the pool has retired. |
+| `active` | `created - disposed`: instances currently live. |
+
+Every registered name appears in the map from the moment it's registered,
+with all three counters at `0` until something first builds it — you don't
+need a task to have run for a resource to show up.
+
+## Reading the counters
+
+### Live count — `active`
+
+A `WORKER`-scoped resource's `active` is `1` while the worker holds it and
+`0` before first use or after the worker closes. A `TASK`-scoped resource's
+`active` sits at `0` between jobs — it's built and disposed within a single
+invocation — and only reads `1` if you happen to sample while a task is
+mid-flight.
+
+### Leak detection — `created` vs `disposed`
+
+Both counters only climb; they never reset while the client is open. A
+growing gap between them across many completed jobs — rather than the
+expected transient blip while a task-scoped resource is in flight — points at
+a disposer that isn't running: a missing `dispose` argument, or a task-scoped
+resource retained somewhere past its task.
+
+### Pooled resources
+
+A `POOLED` resource reports through the same three counters: `created` and
+`disposed` move only when the pool actually builds or retires an instance —
+checkout and return don't touch them — so `active` tracks how many pool
+members currently exist, not how many are checked out right now:
+
+```java
+ResourceStat ftp = flexiq.resourceMetrics().get("ftp");
+// created climbs toward poolSize as tasks force new instances to be built,
+// then stays flat once the pool is warm and checkouts start reusing them
+```
+
+## Typical uses
+
+- Periodic diagnostic logging from a monitoring thread or scheduled task.
+- Asserting `active == 0` after a worker closes in a test, to catch a
+  resource that outlived its scope.
+- Watching a pooled resource's `created` count under load to confirm
+  checkouts are reusing instances rather than rebuilding on every task.
+
+<Callout type="info">
+  `resourceMetrics()` returns a snapshot taken at call time — poll it on an
+  interval for a time series; the client itself doesn't push metrics anywhere.
+</Callout>

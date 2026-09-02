@@ -1,0 +1,166 @@
+---
+title: Building Workflows
+description: "The Step.Builder reference, the build+submit flow, and the node status lifecycle."
+---
+
+[Workflows](/java/modules/workflows) covers the narrative walkthrough. This
+page is the reference: every `Step.Builder` knob, the rules `build()`
+enforces on their combinations, and the full node status lifecycle.
+
+## Build and submit
+
+A `Workflow` is always built imperatively — there is no factory or annotation
+that registers one for you. Start with `Workflow.named(name)`, optionally bump
+`.version(int)`, then add steps:
+
+```java
+Task<Integer> extract = Task.of("extract", Integer.class);
+Task<Integer> transform = Task.of("transform", Integer.class);
+Task<Integer> load = Task.of("load", Integer.class);
+
+Workflow etl = Workflow.named("etl")
+        .version(2)
+        .step("extract", extract, 1)                            // baked-in payload
+        .stepAfter("transform", transform, "extract")           // payload supplied at submit
+        .step(Step.of("load", load, 3).after("transform").maxRetries(5).build());
+
+// A step's effective payload is payloads.get(name) when present, else the
+// payload baked into the step — so this overrides "transform"'s payload,
+// and could just as well override "extract" or "load" too.
+WorkflowRun run = queue.submitWorkflow(etl, Map.of("transform", 2));
+```
+
+`step(name, task, payload, after...)` binds a typed `Task` with a payload
+that's fixed when the workflow is built. `stepAfter(name, task, deps...)`
+declares a structural node whose payload isn't known until submit —
+`submitWorkflow(workflow, payloads)` supplies it by step name.
+`fanOut(...)`/`fanIn(...)`/`gate(...)`/`subWorkflow(...)` are shorthands over
+`Step.of(...).build()` for their respective specialised kinds (see
+[Fan-out/Fan-in](/java/modules/workflows/fan-out),
+[Gates](/java/modules/workflows/gates), and
+[Sub-workflows](/java/modules/workflows/sub-workflows)). `step(Step)` accepts a
+fully-configured builder result for anything the shorthands don't cover.
+
+## `Step.Builder` reference
+
+`Step.of(name, task, payload)` (or `(name, task)` for a payload derived at
+runtime) opens the builder; `build()` validates the combination and returns
+an immutable `Step`.
+
+| Method | Type | Meaning |
+|---|---|---|
+| `queue(...)` | `String` | Queue to enqueue this step's job into (overrides the task's own queue). |
+| `maxRetries(...)` | `int` | Retry budget override for this step's job. |
+| `timeoutMs(...)` | `long` | Per-attempt timeout override, in milliseconds. |
+| `priority(...)` | `int` | Queue priority override for this step's job. |
+| `fanOut(String)` / `fanOut(FanMode)` | `String` \| `FanMode` | Run once per item of the single predecessor's list result — wire value `"each"` / `FanMode.EACH`. |
+| `fanIn(String)` / `fanIn(FanMode)` | `String` \| `FanMode` | Collect a fan-out predecessor's child results into one list — wire value `"all"` / `FanMode.ALL`. |
+| `gate(...)` | `GateConfig` | Park this step for approval; a control node that never enqueues a task ([Gates](/java/modules/workflows/gates)). |
+| `condition(String)` / `onSuccess()` / `onFailure()` / `always()` | `String` | Wire condition gating whether the step runs once predecessors settle ([Conditions](/java/modules/workflows/conditions)). |
+| `condition(Condition)` | `Condition` | Code predicate over the run's `WorkflowContext`, evaluated by the worker tracker instead of being persisted. |
+| `subWorkflow(...)` | `Workflow` | Submit `child` as a linked child run instead of running a task; completes when the child finalizes ([Sub-workflows](/java/modules/workflows/sub-workflows)). |
+| `compensate(String)` / `compensate(Task<?>)` | `String` \| `Task<?>` | Rollback task run — with this step's result as its payload — if the run later fails ([Sagas](/java/modules/workflows/saga)). |
+| `cache(...)` | `Duration` | TTL within which an unchanged repeat run reuses this step's result as a cache hit instead of re-running it ([Incremental runs](/java/modules/workflows/caching)). |
+| `after(...)` | `String...` | Predecessor step name(s) this step waits on. |
+
+### Combination rules
+
+`build()` throws `IllegalArgumentException` on invalid combinations:
+
+- A cacheable step (`cache(...)`) must have at least one predecessor — a
+  deferred root is never promoted, so it would wedge the run in `PENDING`.
+- `fanOut` and `fanIn` cannot both be set on the same step.
+- `gate` cannot combine with `fanOut`/`fanIn`, and can only be created through
+  `Workflow.gate(...)` — setting it on a normal task step would defer the node
+  and never enqueue its task.
+- `subWorkflow` cannot combine with `gate`/`fanOut`/`fanIn`.
+- `compensate` cannot be set on a `gate`, `subWorkflow`, or `fanOut` node —
+  none of them produce a forward result for the rollback to replay.
+
+## Node status lifecycle
+
+Every step's `NodeStatus` moves through this lifecycle. Most steps only ever
+see `PENDING → READY → RUNNING → COMPLETED`/`FAILED`; gates, fan-out, cached,
+and saga-compensated steps take the other branches.
+
+<Mermaid
+  chart={`stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> READY: predecessors settle
+    PENDING --> SKIPPED: condition unmet / predecessor skipped
+    READY --> RUNNING: worker claims the job
+    READY --> WAITING_APPROVAL: gate node parks
+    READY --> CACHE_HIT: cache hit (task not re-run)
+    RUNNING --> COMPLETED: handler succeeds
+    RUNNING --> FAILED: retries exhausted
+    WAITING_APPROVAL --> COMPLETED: approveGate
+    WAITING_APPROVAL --> FAILED: rejectGate / timeout
+    COMPLETED --> COMPENSATING: run fails elsewhere (saga)
+    COMPENSATING --> COMPENSATED: rollback succeeds
+    COMPENSATING --> COMPENSATION_FAILED: rollback fails
+    COMPLETED --> [*]
+    FAILED --> [*]
+    SKIPPED --> [*]
+    CACHE_HIT --> [*]
+    COMPENSATED --> [*]
+    COMPENSATION_FAILED --> [*]`}
+/>
+
+| Status | Terminal | Meaning |
+|---|---|---|
+| `PENDING` | No | Waiting on predecessors (or, for an entry step, immediately eligible). |
+| `READY` | No | Predecessors settled; the step's job exists but no worker has claimed it yet. |
+| `RUNNING` | No | A worker claimed the job and is executing the handler. |
+| `COMPLETED` | Yes | The task succeeded. |
+| `FAILED` | Yes | The task failed after retries were exhausted, a gate was rejected, or a sub-workflow's child run failed. |
+| `SKIPPED` | Yes | The step's condition was not met, or it cascaded from a skipped/failed predecessor. |
+| `WAITING_APPROVAL` | No | A gate is parked, waiting on `approveGate`/`rejectGate` or its timeout. |
+| `CACHE_HIT` | Yes | A prior run's result was reused within the `cache` TTL; the task did not re-execute. |
+| `COMPENSATING` | No | The step's rollback task is in flight (saga rollback only). |
+| `COMPENSATED` | Yes | The step's rollback completed successfully. |
+| `COMPENSATION_FAILED` | Yes | The step's rollback itself failed — this node needs manual attention. |
+
+Read a node's status from the run's snapshot:
+
+```java
+WorkflowStatus status = run.status().orElseThrow();
+status.node("transform").orElseThrow().status; // a NodeStatus value
+```
+
+The run-level `WorkflowState` (`RUNNING`, `COMPLETED`, `FAILED`,
+`COMPENSATED`, …) is a separate enum — see
+[the Workflows API reference](/java/api-reference/workflows) for its full
+list.
+
+<Cards>
+  <Card
+    title="Fan-out / Fan-in"
+    href="/java/modules/workflows/fan-out"
+    description="Split a step's result into parallel children and collect results."
+  />
+  <Card
+    title="Conditions"
+    href="/java/modules/workflows/conditions"
+    description="Run a step only on success, on failure, always, or per a predicate."
+  />
+  <Card
+    title="Approval Gates"
+    href="/java/modules/workflows/gates"
+    description="Pause a run until a human or external system approves or rejects."
+  />
+  <Card
+    title="Sub-Workflows"
+    href="/java/modules/workflows/sub-workflows"
+    description="Compose workflow runs hierarchically — delegate a step to a child workflow."
+  />
+  <Card
+    title="Saga Compensation"
+    href="/java/modules/workflows/saga"
+    description="Automatically roll back completed steps in reverse order when a run fails."
+  />
+  <Card
+    title="Workflows API reference"
+    href="/java/api-reference/workflows"
+    description="Workflow, Step, WorkflowRun, and analysis/visualization APIs."
+  />
+</Cards>

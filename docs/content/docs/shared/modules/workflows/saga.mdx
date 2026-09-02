@@ -1,0 +1,498 @@
+---
+title: Sagas
+description: "Roll back completed workflow steps in reverse order when a run fails — declare a compensator per step and flexiq handles the rest."
+---
+
+A saga is a workflow where steps that succeed register a **compensator** —
+a task that undoes that step's side effect. If a later step fails, flexiq
+automatically rolls back every already-completed step by running its
+compensator, in reverse-dependency order, so the run ends in a consistent
+state instead of a half-applied one. There's no separate "saga" API — any
+DAG workflow becomes a saga the moment one of its steps declares a
+compensator.
+
+## Basic example
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue
+from flexiq.workflows import Workflow
+
+queue = Queue()
+
+@queue.task()
+def unreserve_inventory(forward_args, forward_kwargs, forward_result):
+    inventory_api.release(forward_result["order_id"])
+
+@queue.task(compensates=unreserve_inventory)
+def reserve_inventory(order_id: str) -> dict:
+    inventory_api.reserve(order_id)
+    return {"reserved": True, "order_id": order_id}
+
+@queue.task()
+def refund_payment(forward_args, forward_kwargs, forward_result):
+    payment_api.refund(forward_result["charge_id"])
+
+@queue.task(compensates=refund_payment)
+def charge_payment(order_id: str) -> dict:
+    return {"order_id": order_id, "charge_id": payment_api.charge(order_id)}
+
+@queue.task()
+def ship_order(order_id: str):
+    raise RuntimeError("Warehouse offline")
+# No compensator for ship — if it never succeeded, there's nothing to undo.
+
+wf = Workflow(name="checkout")
+wf.step("reserve", reserve_inventory, args=("4212",))
+wf.step("charge", charge_payment, args=("4212",), after="reserve")
+wf.step("ship", ship_order, args=("4212",), after="charge")
+
+# A worker is already running elsewhere (queue.run_worker()).
+run = queue.submit_workflow(wf)
+status = run.wait()
+# ship fails → charge rolled back (refund_payment) → reserve rolled back (unreserve_inventory)
+# status.state is WorkflowState.COMPENSATED
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("reserveInventory", (orderId: string) => ({ reserved: true, orderId }));
+queue.task("unreserveInventory", (result: { reserved: boolean; orderId: string }) => { /* undo */ });
+
+queue.task("chargePayment", (orderId: string) => ({ charged: true, orderId }));
+queue.task("refundPayment", (result: { charged: boolean; orderId: string }) => { /* undo */ });
+
+queue.task("shipOrder", (orderId: string) => { throw new Error("Warehouse offline"); });
+// No compensate for ship — if it never succeeded, there's nothing to undo.
+
+const handle = queue.workflows
+  .define("checkout")
+  .step("reserve", "reserveInventory", { compensate: "unreserveInventory" })
+  .step("charge", "chargePayment", { after: "reserve", compensate: "refundPayment" })
+  .step("ship", "shipOrder", { after: "charge" })
+  .submit();
+
+queue.runWorker();
+
+const run = await handle.wait();
+// ship fails → charge rolled back (refundPayment) → reserve rolled back (unreserveInventory)
+// run.state === "compensated"
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Integer> reserve = Task.of("reserveInventory", Integer.class);
+Task<Integer> unreserve = Task.of("unreserveInventory", Integer.class);
+Task<Integer> charge = Task.of("chargePayment", Integer.class);
+Task<Integer> refund = Task.of("refundPayment", Integer.class);
+Task<Integer> ship = Task.of("shipOrder", Integer.class);
+// No compensator for ship — if it never succeeded, there's nothing to undo.
+
+int orderId = 4212; // the workflow input every step receives
+
+Workflow checkout = Workflow.named("checkout")
+        .step(Step.of("reserve", reserve, orderId).compensate(unreserve).build())
+        .step(Step.of("charge", charge, orderId).after("reserve").compensate(refund).build())
+        .step(Step.of("ship", ship, orderId).after("charge").maxRetries(0).build());
+
+WorkflowRun run = queue.submitWorkflow(checkout);
+
+try (Worker worker = queue.worker()
+        .handle(reserve, id -> id)
+        .handle(charge, id -> id)
+        .handle(ship, id -> { throw new IllegalStateException("Warehouse offline"); })
+        .handle(refund, chargeResult -> chargeResult)      // undo charge
+        .handle(unreserve, reserveResult -> reserveResult) // undo reserve
+        .trackWorkflows()
+        .start()) {
+    WorkflowStatus status = run.await(Duration.ofSeconds(30));
+    // ship fails → charge rolled back (refund) → reserve rolled back (unreserve)
+    System.out.println(status.state); // COMPENSATED
+    System.out.println(status.node("charge").orElseThrow().status); // COMPENSATED
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<Mermaid
+  chart={`graph LR
+    reserve["reserve\n✓ compensate: unreserveInventory"]:::done
+    charge["charge\n✓ compensate: refundPayment"]:::done
+    ship["ship\n✗ fails"]:::fail
+    refund["refundPayment\n(rollback charge)"]:::comp
+    unreserve["unreserveInventory\n(rollback reserve)"]:::comp
+
+    reserve --> charge --> ship
+    ship -. "run fails" .-> refund
+    refund --> unreserve`}
+/>
+
+## How it works
+
+1. A step's forward execution fails with its retries exhausted.
+2. flexiq collects every step that **completed** and declared a
+   compensator — steps that are pending, ready, or skipped never ran, and a
+   step that itself failed has nothing to undo, so all three are left
+   alone.
+3. Those steps are grouped into **reverse-topological waves** — the most
+   downstream completed steps first, so a step is never rolled back before
+   whatever depends on it. Compensators within one wave run in parallel;
+   the next wave only starts once the current one fully drains.
+4. Each compensator is enqueued idempotently (see [Idempotency](#idempotency))
+   with the forward step's result available to it.
+5. Once a wave finishes: if every compensator in it succeeded, the next
+   wave starts. If any failed, rollback stops there — remaining steps are
+   left un-rolled-back, since further undo may depend on the failed step's
+   own undo — and the run ends `CompensationFailed` instead of
+   `Compensated`.
+
+<SdkOnly sdk="java">
+
+<Callout type="info">
+  A [cache-hit](modules/workflows/caching) step is never compensated: its
+  forward task didn't actually run in this run, so there's no local side
+  effect to undo. Only a step whose status is `NodeStatus.COMPLETED` is
+  eligible — a `CACHE_HIT` is excluded even if it has a `compensate`.
+</Callout>
+
+</SdkOnly>
+
+## Declaring compensators
+
+Each step names a rollback task; when the run fails, flexiq calls it with
+the forward step's outcome:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# The compensator receives exactly three positional args: the forward
+# task's args, kwargs, and return value.
+@queue.task()
+def refund_payment(forward_args: tuple, forward_kwargs: dict, forward_result: dict) -> None:
+    payment_api.refund(forward_result["charge_id"])
+
+@queue.task(compensates=refund_payment)
+def charge_payment(order_id: str) -> dict:
+    return {"order_id": order_id, "charge_id": payment_api.charge(order_id)}
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// The compensate task receives the forward step's return value as its
+// single positional argument.
+queue.task("chargePayment", async (orderId: string) => {
+  const charge = await stripe.charge(orderId);
+  return { chargeId: charge.id, orderId }; // compensator needs chargeId
+});
+
+queue.task("refundPayment", async (result: { chargeId: string; orderId: string }) => {
+  await stripe.refund(result.chargeId);
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// The compensation task receives the forward step's return value as its payload.
+record Charge(String chargeId, String orderId) {}
+
+Task<Charge> refund = Task.of("refundPayment", Charge.class);
+
+worker.handle(refund, result -> {
+    stripe.refund(result.chargeId());
+    return null;
+});
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+### Decorator-level default
+
+`@queue.task(compensates=…)` sets a task's default compensator wherever
+it's used; `Workflow.step(…, compensates=…)` overrides it (or disables
+compensation) for one specific step:
+
+```python
+wf.step("charge", charge_payment, compensates=refund_v2)  # override decorator default
+wf.step("charge", charge_payment)                          # inherit decorator default
+wf.step("charge", charge_payment, compensates=None)         # disable compensation
+```
+
+<Callout type="info">
+  `forward_args`, `forward_kwargs`, and `forward_result` are fully populated
+  for both static and deferred workflow nodes. Call
+  `current_compensation_context()` inside a compensator body to also access
+  the workflow run ID, node name, and forward job ID.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+> **Coming from BullMQ?** There's no built-in saga/compensation concept in
+> BullMQ — you'd hand-roll rollback logic in your own failure handler.
+> flexiq's `compensate` option and automatic reverse-order rollback are
+> flexiq-only.
+
+</SdkOnly>
+
+## Steps without compensators
+
+A step that doesn't declare a compensator is skipped during rollback, and
+so is a step that never ran because it was downstream of the step that
+failed — only a **completed** step with a compensator is rolled back:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+wf = Workflow(name="partial-saga")
+wf.step("a", task_a, args=(1,), compensates=undo_a)  # rolled back if the run fails after a completes
+wf.step("b", task_b, args=(2,), after="a")            # no compensator — left as-is
+wf.step("c", task_c, args=(3,), after="b", compensates=undo_c)
+
+# If b fails: only a is rolled back (b never completed; c never ran).
+# If c fails: c has no completed result, so only a is rolled back.
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.workflows
+  .define("partial-saga")
+  .step("a", "taskA", { compensate: "undoA" }) // rolled back if run fails after a completes
+  .step("b", "taskB", { after: "a" })           // no compensate — left as-is
+  .step("c", "taskC", { after: "b", compensate: "undoC" })
+  .submit();
+
+// If b fails: only a is rolled back (b never completed; c never ran).
+// If c fails: c has no result yet, so only a is rolled back.
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Workflow partial = Workflow.named("partial-saga")
+        .step(Step.of("a", taskA, 1).compensate(undoA).build()) // rolled back if run fails after a completes
+        .step("b", taskB, 2, "a")                               // no compensator — left as-is
+        .step(Step.of("c", taskC, 3).after("b").compensate(undoC).build());
+
+// If b fails: only a is rolled back (b never completed; c never ran).
+// If c fails: c has no completed result, so only a is rolled back.
+```
+
+  </Tab>
+</CodeTabs>
+
+## Final run states
+
+| State | Meaning |
+|---|---|
+| <SdkSwap python={<code>WorkflowState.COMPLETED</code>} node={<code>"completed"</code>} java={<code>WorkflowState.COMPLETED</code>} /> | All steps succeeded — no compensation ran |
+| <SdkSwap python={<code>WorkflowState.FAILED</code>} node={<code>"failed"</code>} java={<code>WorkflowState.FAILED</code>} /> | A step failed and no completed step had a compensator |
+| <SdkSwap python={<code>WorkflowState.COMPENSATED</code>} node={<code>"compensated"</code>} java={<code>WorkflowState.COMPENSATED</code>} /> | A step failed; every applicable compensator succeeded |
+| <SdkSwap python={<code>WorkflowState.COMPENSATION_FAILED</code>} node={<code>"compensation_failed"</code>} java={<code>WorkflowState.COMPENSATION_FAILED</code>} /> | A step failed; at least one compensator also failed |
+
+<Callout type="warn" title="Manual intervention">
+  `CompensationFailed` needs a human: inspect each step's status (
+  <SdkSwap python={<code>run.status().nodes</code>} node={<code>handle.nodes()</code>} java={<code>status.nodes</code>} />
+  ) to find which rollback failed and whether data is left partially
+  consistent.
+</Callout>
+
+<SdkOnly sdk="python">
+
+<Callout type="info">
+  These four are a subset of `WorkflowState`'s six terminal states —
+  `is_terminal()` is also `True` for `CANCELLED` (compensation never runs
+  on a cancelled run) and `COMPLETED_WITH_FAILURES`, covered next.
+</Callout>
+
+</SdkOnly>
+
+## Compensating on continue-mode workflows
+
+<SdkOnly sdk="python">
+
+By default, `on_failure="continue"` workflows never trigger compensation —
+they run every step regardless of individual failures and always reach
+`COMPLETED_WITH_FAILURES` if any step failed. Opt in with
+`compensate_on_continue=True`:
+
+```python
+wf = Workflow(
+    name="resilient_checkout",
+    on_failure="continue",
+    compensate_on_continue=True,
+)
+wf.step("charge", charge_payment, args=("4212",))
+wf.step("ship", ship_order, args=("4212",), after="charge")
+
+run = queue.submit_workflow(wf)
+```
+
+With `compensate_on_continue=True`, once the run settles, a run with at
+least one failed step transitions from `COMPLETED_WITH_FAILURES` into
+`Compensating` — compensators for every *succeeded* step then run in
+reverse-topological order, same as a `fail_fast` saga, and the run ends
+`Compensated` or `CompensationFailed`. Without it, a `continue`-mode run
+with failures just stays `COMPLETED_WITH_FAILURES` and no compensation
+runs.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="info" title="Node: no continue-mode compensation">
+  The Node builder has no run-level failure policy, so there is no
+  `compensateOnContinue` equivalent. `on_failure` here is only a per-step
+  `condition` (`"on_success"` | `"on_failure"` | `"always"`), not a
+  continue-vs-abort mode for the whole run. Saga compensation is declared
+  per step with `compensate` and runs only when the run itself fails.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="info" title="Java: no continue-mode compensation">
+  The `Workflow` builder has no run-level failure policy and no
+  `compensateOnContinue`. `onFailure()` is only a per-step `condition`
+  shorthand. Compensation is declared per step with
+  `Step.Builder.compensate(...)` and rolls back only when the run fails.
+</Callout>
+
+</SdkOnly>
+
+## Idempotency
+
+Every compensation job is enqueued with a deterministic idempotency key —
+`compensation:{run_id}:{node_name}` — so a compensation that's
+re-triggered (for example after a worker or tracker restart mid-rollback)
+hits the existing dedup and becomes a no-op instead of running the
+rollback twice.
+
+That guarantee is at the *job* level, not the function body: a worker can
+still retry a compensator on a transient failure before its own retries
+are exhausted. Write compensator bodies to be safely re-runnable, the same
+way you would any other task.
+
+## Combining with conditions
+
+Conditions and compensation compose. An `on_failure` step runs first as
+the run settles toward failure; once the run is failed, compensation then
+rolls back the completed compensable steps:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+wf = Workflow(name="safe-checkout")
+wf.step("reserve", reserve_inventory, args=("4212",), compensates=unreserve_inventory)
+wf.step("charge", charge_payment, args=("4212",), after="reserve", compensates=refund_payment)
+wf.step("ship", ship_order, args=("4212",), after="charge")
+wf.step("notify_failure", send_failure_email, args=("4212",), after="ship", condition="on_failure")
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.workflows
+  .define("safe-checkout")
+  .step("reserve", "reserveInventory", { compensate: "unreserveInventory" })
+  .step("charge", "chargePayment", { after: "reserve", compensate: "refundPayment" })
+  .step("ship", "shipOrder", { after: "charge" })
+  .step("notifyFailure", "sendFailureEmail", {
+    after: "ship",
+    condition: "on_failure",
+  })
+  .submit();
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+int orderId = 4212; // the workflow input every step receives
+
+Workflow safeCheckout = Workflow.named("safe-checkout")
+        .step(Step.of("reserve", reserve, orderId).compensate(unreserve).build())
+        .step(Step.of("charge", charge, orderId).after("reserve").compensate(refund).build())
+        .step("ship", ship, orderId, "charge")
+        .step(Step.of("notifyFailure", sendFailureEmail, orderId)
+                .onFailure()
+                .after("ship")
+                .build());
+```
+
+  </Tab>
+</CodeTabs>
+
+## Events
+
+<SdkOnly sdk="python">
+
+Saga lifecycle emits dedicated events on the queue's event bus, subscribed
+via `queue.on_event(event_type, callback)`:
+
+| Event | Fires when |
+|---|---|
+| `WORKFLOW_COMPLETED_WITH_FAILURES` | A `continue`-mode run finished with at least one failure |
+| `WORKFLOW_COMPENSATING` | The run enters the compensation phase |
+| `WORKFLOW_COMPENSATED` | Every compensator succeeded |
+| `WORKFLOW_COMPENSATION_FAILED` | At least one compensator failed |
+| `NODE_COMPENSATING` | A step's compensator was enqueued |
+| `NODE_COMPENSATED` | A step's compensator finished successfully |
+| `NODE_COMPENSATION_FAILED` | A step's compensator failed after retries |
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="info" title="Node: no saga events">
+  The Node SDK emits only the four job-lifecycle events — `job.completed`,
+  `job.retrying`, `job.dead`, `job.cancelled` — via `queue.on(...)`. There
+  are no `WORKFLOW_COMPENSATING` / `NODE_COMPENSATED`-style saga events. Track
+  compensation progress by polling the run handle: `handle.status()` and
+  `handle.nodes()`.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="info" title="Java: no saga events">
+  Java's `EventName` enum has only the four job outcomes — `SUCCESS`, `RETRY`,
+  `DEAD`, `CANCELLED`. No workflow/saga transition events are emitted. Poll
+  `WorkflowRun` / `status.nodes` for compensation progress.
+</Callout>
+
+</SdkOnly>
+
+## See also
+
+- <SdkLink to="modules/workflows/canvas">Canvas primitives</SdkLink> for
+  `chain` / `group` / `chord` shorthand pipelines
+- <SdkLink to="modules/workflows/fan-out">Fan-out / fan-in</SdkLink>
+- <SdkLink to="modules/workflows/conditions">Conditions & error handling</SdkLink>
+  for the `on_failure` step condition used above
+- <SdkLink to="modules/workflows/gates">Approval gates</SdkLink>
+- <SdkLink to="more/examples/saga-checkout">Saga Checkout example</SdkLink> —
+  a complete, runnable version of the checkout flow above

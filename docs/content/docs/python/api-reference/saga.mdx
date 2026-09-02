@@ -1,5 +1,5 @@
 ---
-title: Saga
+title: Saga API
 description: "@queue.task(compensates=…), CompensationContext, current_compensation_context()."
 ---
 
@@ -14,7 +14,7 @@ from flexiq.workflows.saga import (
 )
 ```
 
-For the conceptual overview, see [Sagas](/python/guides/workflows/saga).
+For the conceptual overview, see [Sagas](/python/modules/workflows/saga).
 
 ---
 
@@ -156,4 +156,4 @@ When a parent workflow's saga reaches a sub-workflow node whose child run carrie
 3. Child saga starts (depth = parent depth + 1).
 4. When the child saga finalises (`Compensated` or `CompensationFailed`), the parent's node is marked accordingly and the parent's wave advances.
 
-If the parent step has its own explicit `compensates=…`, that wins — no propagation happens. See [Sagas](/python/guides/workflows/saga) for a worked example.
+If the parent step has its own explicit `compensates=…`, that wins — no propagation happens. See [Sagas](/python/modules/workflows/saga) for a worked example.

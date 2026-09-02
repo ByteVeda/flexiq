@@ -1,0 +1,121 @@
+---
+title: Extend & integrate
+description: "Hook into the task lifecycle, watch what it does, and wire the Node.js SDK into the rest of your stack."
+---
+
+Everything that attaches to flexiq from the outside: the extension points that
+run inside the task lifecycle, the signals they emit, and the frameworks and
+vendors on the other end of those signals.
+
+## Extension points
+
+Lifecycle events and middleware are the extension points for pushing any of
+these signals to an external system.
+
+<Cards>
+  <Card
+    title="Events"
+    href="/node/guides/extend/events"
+    description="Subscribe to queue and worker lifecycle events"
+  />
+  <Card
+    title="Per-Task Middleware"
+    href="/node/guides/extend/middleware"
+    description="Wrap task execution with before/after/error hooks"
+  />
+  <Card
+    title="Webhooks"
+    href="/node/guides/extend/webhooks"
+    description="Push signed notifications to external services"
+  />
+  <Card
+    title="Pluggable Serializers"
+    href="/node/guides/extend/serializers"
+    description="Custom payload serialization — msgpack, encryption"
+  />
+</Cards>
+
+## Watch it run
+
+See what the queue is doing — counts, per-task latency, job progress, live
+workers — and emit structured logs, all from the `Queue` handle with no extra
+service.
+
+<Cards>
+  <Card
+    title="Monitoring & hooks"
+    href="/node/guides/extend/monitoring"
+    description="Queue health, worker hooks, and what to alert on"
+  />
+  <Card
+    title="Structured task logging"
+    href="/node/guides/extend/logging"
+    description="Per-task log capture, correlation, and where the lines go"
+  />
+  <Card
+    title="Structured notes"
+    href="/node/guides/extend/notes"
+    description="Attach progress and diagnostics to a running job"
+  />
+  <Card
+    title="Testing tasks"
+    href="/node/guides/extend/testing"
+    description="Run tasks inline, assert on outcomes, and keep suites fast"
+  />
+</Cards>
+
+## Integrations
+
+Integrations are optional helpers that ship alongside the core SDK but are **not
+exported from the main `@byteveda/flexiq` barrel**. Each lives behind its own
+`@byteveda/flexiq/contrib/*` subpath and requires you to install its peer
+dependency.
+
+```bash
+# Only install what you use.
+pnpm add @opentelemetry/api               # @byteveda/flexiq/contrib/otel
+pnpm add prom-client                      # @byteveda/flexiq/contrib/prometheus
+pnpm add @sentry/node                     # @byteveda/flexiq/contrib/sentry
+pnpm add express                          # @byteveda/flexiq/contrib/express
+pnpm add fastify                          # @byteveda/flexiq/contrib/fastify
+pnpm add @nestjs/common reflect-metadata  # @byteveda/flexiq/contrib/nest
+```
+
+<Callout type="info">
+  Integrations never auto-initialize. Nothing runs until you call the export and
+  register it with your queue or framework. If a peer dependency is missing,
+  importing its subpath fails with a standard module-not-found error.
+</Callout>
+
+<Cards>
+  <Card
+    title="OpenTelemetry"
+    href="/node/guides/extend/otel"
+    description="one span per execution attempt."
+  />
+  <Card
+    title="Prometheus"
+    href="/node/guides/extend/prometheus"
+    description="execution metrics + polled depth gauges."
+  />
+  <Card
+    title="Sentry"
+    href="/node/guides/extend/sentry"
+    description="capture the original exception on dead-letter."
+  />
+  <Card
+    title="Express"
+    href="/node/guides/extend/express"
+    description="REST router + dashboard mount."
+  />
+  <Card
+    title="Fastify"
+    href="/node/guides/extend/fastify"
+    description="REST + dashboard plugins."
+  />
+  <Card
+    title="NestJS"
+    href="/node/guides/extend/nest"
+    description="injectable FlexiQService."
+  />
+</Cards>

@@ -1,0 +1,133 @@
+---
+title: Sub-Workflows & Scheduling
+description: "Compose workflow runs hierarchically — a parent step delegates to a child workflow."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+A sub-workflow step delegates to a fully independent child workflow run. The
+parent node goes `running` while the child executes and resolves when the child
+reaches a terminal state.
+
+## Basic composition
+
+Build the child spec with `.build()` (not `.submit()`) and pass it to
+`.subWorkflow()` on the parent:
+
+```ts
+// Child workflow spec — .build() returns a WorkflowSpec, does NOT submit.
+const processChunk = queue.workflows
+  .define("process-chunk")
+  .step("validate", "validateTask")
+  .step("transform", "transformTask", { after: "validate" })
+  .step("store", "storeTask", { after: "transform" })
+  .build();
+
+// Parent workflow.
+const handle = queue.workflows
+  .define("full-pipeline")
+  .step("prepare", "prepareTask")
+  .subWorkflow("process", {
+    after: "prepare",
+    workflow: processChunk,
+  })
+  .step("finish", "finishTask", { after: "process" })
+  .submit();
+
+queue.runWorker();
+
+const run = await handle.wait();
+console.log(run.state); // "completed" | "failed"
+```
+
+<Mermaid
+  chart={`graph LR
+    prepare:::done --> process["process\n(sub-workflow)"]:::sub
+    subgraph child ["child run: process-chunk"]
+      v[validate] --> t[transform] --> s[store]
+    end
+    process -. spawns .-> child
+    process --> finish:::run`}
+/>
+
+## How it works
+
+1. When `prepare` completes, the tracker creates the `process` node with kind
+   `sub_workflow` and submits the child as a linked run — a separate entry in
+   storage with its own nodes and state.
+2. The parent `process` node status is `running` while the child is in flight.
+3. The worker tracks the child run's outcome events.
+4. When the child run finalises:
+   - **Child completed** → parent node transitions to `completed`; `finish` is
+     enqueued normally.
+   - **Child failed** → parent node transitions to `failed`; `finish` and any
+     other downstream nodes are `skipped`; the parent run ends `failed`.
+
+The child is a first-class run. It appears in dashboard queries, can be
+inspected independently, and is visible via `queue.workflows.children()`.
+
+## Listing child runs
+
+```ts
+const children = queue.workflows.children(handle.runId);
+// WorkflowRun[] — each with id, state, parentRunId, parentNodeName, ...
+```
+
+## Nesting
+
+Child workflows may themselves contain sub-workflow steps. There is no enforced
+depth limit, but deeply nested hierarchies make observability harder — prefer
+fan-out for homogeneous parallel work and sub-workflows for distinct named
+pipelines.
+
+A workflow's entry step must be a plain `.step` (a deferred kind — sub-workflow,
+gate, fan-out, or conditioned step — only runs once a predecessor settles), so
+give each sub-workflow an `after`:
+
+```ts
+const inner = queue.workflows
+  .define("inner")
+  .step("a", "taskA")
+  .build();
+
+const middle = queue.workflows
+  .define("middle")
+  .step("x", "taskX")
+  .subWorkflow("inner", { after: "x", workflow: inner })
+  .build();
+
+queue.workflows
+  .define("outer")
+  .step("init", "initTask")
+  .subWorkflow("middle", { after: "init", workflow: middle })
+  .submit();
+```
+
+## Sub-workflow options
+
+| Option | Type | Description |
+|---|---|---|
+| `after` | `string \| string[]` | Predecessor node name(s) |
+| `workflow` | `WorkflowSpec` | Child workflow built with `.build()` |
+
+<Callout type="warning">
+  Pass the result of `.build()`, not `.submit()`. Calling `.submit()` would
+  immediately enqueue the child as a standalone run unlinked from the parent.
+</Callout>
+
+## Failure propagation
+
+If the child run fails, the parent node is marked `failed` and the parent run
+ends `failed`. The child's own node statuses are preserved and visible through
+`queue.workflows.children()`. This mirrors how a failed step propagates through
+the DAG — downstream steps are skipped.
+
+To handle child failures without failing the parent, wrap the sub-workflow node
+in a conditional branch: place an `on_failure` step after it and an `on_success`
+step for the happy path. See [Conditions](/node/modules/workflows/conditions).
+
+> **Coming from BullMQ?** `FlowProducer`'s nested `children` arrays are the
+> closest BullMQ concept, but they're structural, not a linked *run*: flexiq's
+> child is a fully independent workflow run with its own id, state, and
+> `queue.workflows.children()` listing — closer to calling `.submit()` from
+> inside a step than to a static tree.

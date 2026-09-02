@@ -1,17 +1,18 @@
 {
   "title": "Reliability",
   "pages": [
+    "index",
+    "retries",
     "error-handling",
     "guarantees",
-    "retries",
-    "circuit-breakers",
     "timeouts",
+    "dead-letter",
     "idempotency",
     "debouncing",
     "flow-control",
     "rate-limiting",
     "concurrency",
-    "dead-letter",
+    "circuit-breakers",
     "locks"
   ]
 }

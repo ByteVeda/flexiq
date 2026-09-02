@@ -158,7 +158,7 @@ register the task. Each SDK exposes them with its own names and shape:
 | `queue` | `str` | `"default"` | Named queue to submit to. |
 | `circuit_breaker` | `dict \| None` | `None` | Circuit breaker config: `{"threshold": 5, "window": 60, "cooldown": 120}`. |
 | `middleware` | `list[TaskMiddleware] \| None` | `None` | Per-task middleware, applied in addition to queue-level middleware. |
-| `inject` | `list[str] \| None` | `None` | Worker resource names to inject as keyword arguments. See <SdkLink to="guides/resources/dependency-injection">Resource System</SdkLink>. |
+| `inject` | `list[str] \| None` | `None` | Worker resource names to inject as keyword arguments. See <SdkLink to="modules/injection/dependency-injection">Resource System</SdkLink>. |
 | `serializer` | `Serializer \| None` | `None` | Per-task serializer override. Falls back to the queue-level serializer. |
 | `max_concurrent` | `int \| None` | `None` | Max concurrent running instances of this task. `None` means no limit. |
 
@@ -261,7 +261,7 @@ Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class)
   <SdkLink to="guides/reliability/rate-limiting">rate limiting</SdkLink>.
   Worker resources aren't a `Task` option either — pull them inside the
   handler via `Resources.use("name")` or an `@Resource`-annotated parameter.
-  See <SdkLink to="guides/resources/dependency-injection">dependency
+  See <SdkLink to="modules/injection/dependency-injection">dependency
   injection</SdkLink>.
 </Callout>
 
@@ -583,7 +583,7 @@ def api_event(payload: dict) -> dict:
 
 Useful when a task needs a different format (e.g., human-readable JSON for
 audit tasks) or when the payload isn't picklable. See
-<SdkLink to="guides/extensibility/serializers">Serializers</SdkLink>.
+<SdkLink to="guides/extend/serializers">Serializers</SdkLink>.
 
 </SdkOnly>
 
@@ -598,7 +598,7 @@ const queue = new Queue({ dbPath: "myapp.db", codecs: { gzip: new GzipCodec() } 
 queue.task("audit_event", handleAudit, { codecs: ["gzip"] }); // transform, not a format swap
 ```
 
-See <SdkLink to="guides/extensibility/serializers">Serializers</SdkLink>.
+See <SdkLink to="guides/extend/serializers">Serializers</SdkLink>.
 
 </SdkOnly>
 
@@ -613,7 +613,7 @@ it can't be swapped per task. For per-task payload handling, use
 Task<AuditEvent> audit = Task.of("audit_event", AuditEvent.class).codecs("gzip");
 ```
 
-See <SdkLink to="guides/extensibility/serializers">Serializers</SdkLink>.
+See <SdkLink to="guides/extend/serializers">Serializers</SdkLink>.
 
 </SdkOnly>
 
@@ -863,7 +863,7 @@ List<String> ids = flexiq.enqueueMany(sendEmail, List.of(emailA, emailB));
 <SdkOnly sdk="python">
 
 Each item can carry its own overrides. See
-<SdkLink to="guides/advanced-execution/batch-enqueue">Batch enqueue</SdkLink>
+<SdkLink to="guides/core/batch-enqueue">Batch enqueue</SdkLink>
 for `enqueue_many()`, per-item overrides, and per-item result tracking.
 
 </SdkOnly>

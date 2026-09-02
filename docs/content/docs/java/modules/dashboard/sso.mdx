@@ -1,0 +1,280 @@
+---
+title: SSO (OAuth & OIDC)
+description: "Sign in to the dashboard with Google, GitHub, or any OIDC provider. Domain/org allowlists, OAuth-only mode."
+---
+
+The dashboard's [session auth](/java/modules/dashboard#session-auth-opt-in)
+supports native sign-in for **Google**, **GitHub**, and any
+**OIDC-compliant** provider (Okta, Auth0, Keycloak, Microsoft Entra, Dex, …).
+Multiple OIDC providers can run side by side, each its own button on the
+login screen. OAuth requires session auth to be enabled
+(`authEnabled=true` / `--auth`; the dashboard serves openly by default) and
+is itself off by default — setting any provider's env vars turns it on,
+alongside password login unless you opt out.
+
+<Callout title="Optional dependency for Google and OIDC" type="info">
+  ID-token validation for Google and generic OIDC needs
+  [`com.nimbusds:nimbus-jose-jwt`](https://connect2id.com/products/nimbus-jose-jwt)
+  on the classpath (see the coordinate below). If it's absent, the dashboard
+  logs a warning and degrades to password-only auth instead of failing to
+  start. **GitHub login needs no extra dependency** — GitHub is plain OAuth2
+  (no id-token to verify), so it works with only the main artifact.
+</Callout>
+
+<Tabs items={["Gradle", "Maven"]}>
+  <Tab value="Gradle">
+
+```kotlin
+implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
+```
+
+  </Tab>
+  <Tab value="Maven">
+
+```xml
+<dependency>
+  <groupId>com.nimbusds</groupId>
+  <artifactId>nimbus-jose-jwt</artifactId>
+  <version>10.9.1</version>
+</dependency>
+```
+
+  </Tab>
+</Tabs>
+
+## How it works
+
+<Mermaid
+  chart={`sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant D as Dashboard
+    participant P as Provider
+
+    B->>D: GET /api/auth/providers
+    D-->>B: { password_enabled, providers: [...] }
+
+    Note over B: user clicks "Continue with Google"
+    B->>D: GET /api/auth/oauth/start/google?next=/jobs
+    Note over D: mint state + nonce + PKCE verifier<br/>persist state row (5-min TTL, single-use)
+    D-->>B: 302 to provider authorize URL
+
+    B->>P: GET /authorize?...
+    Note over P: user consents
+    P-->>B: 302 to /api/auth/oauth/callback/google?code=...&state=...
+
+    B->>D: GET /api/auth/oauth/callback/google
+    Note over D: consume state (deleted before parsing)<br/>exchange code for tokens
+    D->>P: POST token endpoint (code + code_verifier)
+    P-->>D: { id_token, access_token }
+    Note over D: verify JWKS signature / iss / aud / exp / nonce<br/>enforce allowlist<br/>get-or-create user, create session
+    D-->>B: 302 to next<br/>Set-Cookie: flexiq_session, flexiq_csrf`}
+/>
+
+State is single-use — `OAuthStateStore.consume` deletes the row before
+parsing it, so a replayed callback finds nothing — and time-bounded (5-minute
+TTL). PKCE with `S256`, the OIDC nonce, and the ID-token signature (against
+the provider's JWKS) are all enforced server-side.
+
+## Quick start: Google login
+
+1. **Create an OAuth client** in the
+   [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials)
+   (type *Web application*) and register the callback URL:
+
+   ```
+   https://flexiq.your-company.com/api/auth/oauth/callback/google
+   ```
+
+   For local development, `http://localhost:8080/api/auth/oauth/callback/google`
+   works without HTTPS.
+
+2. **Set env vars** before starting the dashboard:
+
+   ```bash
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+   # Restrict logins to your Google Workspace domain:
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=your-company.com
+   ```
+
+3. **Start the dashboard.** The login screen now shows a "Continue with
+   Google" button above the password form.
+
+## GitHub login
+
+GitHub has no OIDC id-token, so identity comes from `GET /user` and
+`GET /user/emails`; org membership is verified via
+`GET /orgs/{org}/members/{login}`.
+
+1. Create a [GitHub OAuth App](https://github.com/settings/developers). Set
+   the *Authorization callback URL* to
+   `https://flexiq.your-company.com/api/auth/oauth/callback/github`.
+
+2. Env vars:
+
+   ```bash
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+   # Restrict logins to members of these GitHub orgs:
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=your-org,partner-org
+   ```
+
+When `_ALLOWED_ORGS` is set, the requested scope automatically grows to
+include `read:org` so the membership check returns reliable results for
+private orgs.
+
+<Callout type="warning" title="Verified primary email only">
+  A GitHub account with no `primary && verified` email (from
+  `GET /user/emails`) always lands in the `viewer` role, even if listed in
+  `FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` — an unverified email can't be
+  trusted to grant admin.
+</Callout>
+
+## Generic OIDC (Okta, Auth0, Keycloak, Microsoft, …)
+
+Generic OIDC providers are **named slots** — each gets its own callback URL,
+its own namespaced users, and its own button on the login screen.
+
+```bash
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
+
+# List the slots first.
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+
+# Then per-slot config (slot name uppercased; '-' becomes '_').
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL="Acme SSO"
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=your-company.com
+
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_LABEL="Microsoft 365"
+```
+
+The callback URL for each slot is
+`{REDIRECT_BASE_URL}/api/auth/oauth/callback/{slot}` — register that exact
+URL with the identity provider.
+
+Slot names must match `^[a-z][a-z0-9_-]{0,31}$` and can't collide with
+`google` / `github` (the built-ins). A user signing in through an OIDC slot is
+namespaced as `{slot}:{subject}`, so two providers issuing overlapping
+subject values never collide.
+
+## Role assignment for OAuth users
+
+The first time someone signs in via any provider, the dashboard decides their
+role with this precedence:
+
+1. **`FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` match** — case-insensitive match
+   against a verified email → `admin`.
+2. **Everyone else** → `viewer`. There is no first-user fallback: admin
+   access comes only from the allowlist, the setup flow, or the env
+   bootstrap.
+
+```bash
+export FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@your-company.com,bob@your-company.com
+```
+
+A user's role is **not** re-evaluated on later logins — change it from the
+dashboard once created. Their email and display name refresh from each
+login's claims.
+
+## OAuth-only mode
+
+Disable password login entirely:
+
+```bash
+export FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false
+```
+
+Startup **fails** if you disable password auth without configuring at least
+one provider — that would leave no way to log in. With password auth off and
+at least one provider configured, the login page hides the username/password
+form and renders only the provider buttons.
+
+## Security model
+
+| Control | Implementation |
+|---|---|
+| **PKCE** | `S256` challenge derived from a 32-byte random verifier (RFC 7636). |
+| **State** | 32-byte URL-safe random, stored server-side under `auth:oauth_state:<state>` with a 5-minute TTL. Deleted on first read — a replayed callback always fails. |
+| **Nonce** | 16-byte random, sent in the OIDC authorize request, checked against the ID-token's `nonce` claim. |
+| **ID-token signature** | Verified against the provider's JWKS, algorithm pinned to `RS256`/`ES256` — an `alg:none` or HMAC token has no matching key and is rejected. |
+| **iss / aud / exp** | All checked; 60-second clock-skew tolerance on `exp`; a multi-audience token must additionally carry `azp == client_id`. |
+| **Open redirect** | The `next` query param must be a bare rooted path (`UrlSafety.isSafeRedirect`) — no scheme, no host, no `//` or `/\` prefix. Falls back to `/`. |
+| **HTTPS required** | The redirect base URL must be `https://` unless the host is `localhost` / `127.0.0.1` / `::1`. A misconfiguration is rejected at config-parse time. |
+| **Provider tokens** | Never persisted — only the verified identity produces a FlexiQ session. |
+| **Cross-provider identity** | A given `(slot, subject)` always maps to one user; the same email at two different providers creates two distinct users. |
+
+## API surface
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/api/auth/providers` | Public. `{password_enabled, providers: [{slot, label, type}]}` for the login UI. |
+| `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
+| `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges the code, enforces the allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
+
+The callback sets the same `flexiq_session` + `flexiq_csrf` cookies as
+password login — every other dashboard route works identically once you're
+signed in.
+
+## Troubleshooting
+
+Callback failures redirect to `/login?error=<code>` rather than rendering
+JSON:
+
+- **`oauth_state_invalid`** — the state row expired (5-minute window) or was
+  already consumed. Usually the user pressed back/refresh after the provider
+  redirected; have them restart the flow.
+- **`oauth_denied`** — the identity was fetched successfully but rejected by
+  an allowlist (`ALLOWED_DOMAINS` / `ALLOWED_ORGS`). Widen the allowlist or
+  remove it.
+- **`oauth_failed`** — token exchange, signature verification, or a claim
+  check failed. Check server logs for the underlying message (issuer
+  mismatch, expired token, missing claim, provider error).
+- **`oauth_not_configured`** (404, on `start`/`callback`) — the slot isn't
+  registered. Either the env vars weren't set, or config parsing failed at
+  startup (check for a startup warning) and OAuth degraded to disabled.
+
+**Provider button missing** — `GET /api/auth/providers` returns the list the
+login screen renders. If a provider you configured isn't there, check the
+server log at startup: a partial or invalid config (for example a Google
+client id with no matching secret) throws at parse time, which
+`DashboardServer` catches and logs as a warning, disabling OAuth entirely
+rather than failing to start.
+
+## Env var reference
+
+```bash
+# Required when any provider is configured.
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.company.com
+
+# Google.
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=company.com,partner.com   # optional
+
+# GitHub.
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=org1,org2                     # optional
+
+# Generic OIDC — list slots, then configure each one.
+FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL=Acme SSO                          # optional
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=company.com             # optional
+
+# Role bootstrap.
+FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@company.com,bob@company.com    # optional
+
+# Disable password login (OAuth-only mode). Defaults to true.
+FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false                             # optional
+```

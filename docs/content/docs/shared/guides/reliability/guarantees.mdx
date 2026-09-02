@@ -77,7 +77,7 @@ deliver at least once, design tasks to handle duplicates.
   above); pair at-least-once delivery with idempotent handlers instead.
 - **Strict ordering** — within a queue, jobs dequeue by priority then age,
   but concurrent workers run them in parallel; don't rely on one finishing
-  before another. Use a <SdkLink to="guides/workflows">workflow</SdkLink>
+  before another. Use a <SdkLink to="modules/workflows">workflow</SdkLink>
   when order matters.
 
 ## Writing idempotent tasks
@@ -223,7 +223,7 @@ that completed, was dead-lettered, or was cancelled no longer blocks reuse.
 
 <SdkOnly sdk="python">
 
-See <SdkLink to="guides/advanced-execution/unique-tasks">Unique Tasks</SdkLink>
+See <SdkLink to="guides/core/unique-tasks">Unique Tasks</SdkLink>
 for the full `unique_key` reference.
 
 </SdkOnly>
@@ -282,7 +282,7 @@ See <SdkLink to="api-reference/queue/jobs">`queue.get_job()`</SdkLink> and
 > `queue.on(event, handler)` fires inside the **worker process** handling the
 > job — it isn't a cross-process subscription. For visibility from another
 > process, poll `queue.getJob(id)` / `queue.stats()`, or use the
-> <SdkLink to="guides/operations/dashboard">dashboard</SdkLink> / REST API.
+> <SdkLink to="modules/dashboard">dashboard</SdkLink> / REST API.
 
 </SdkOnly>
 

@@ -1,0 +1,96 @@
+---
+title: Security
+description: "Trust model, payload exposure, webhook signing, and dashboard access."
+---
+
+## Trust model: storage is code execution
+
+A worker runs whatever task name a job names, with whatever payload it carries.
+So **anyone who can write to the storage can run code on your workers.** Treat
+the database / Redis credentials as code-execution credentials:
+
+- Don't expose the storage to untrusted clients — enqueue through your own
+  authenticated service, not directly from a browser.
+- Use least-privilege storage credentials and a private network.
+
+## Payloads are not encrypted
+
+Task arguments and results are serialized with [JSON or
+MessagePack](/java/guides/extend/serializers) and stored as plain bytes
+— by default **not encrypted.** Anyone who can read the storage can read them.
+
+- Don't put secrets (tokens, PII) directly in task payloads. Pass an id and
+  fetch the secret inside the handler — for example via a
+  [resource](/java/modules/injection).
+- To detect tampering, sign payloads — `HmacCodec` in a codec chain, or
+  `SignedSerializer` around the serializer. Workers reject anything altered or
+  forged (integrity, not confidentiality).
+- To hide payloads at rest, encrypt them — `AesGcmCodec` or
+  `EncryptedSerializer` (AES-GCM: confidentiality **and** integrity). Share
+  the key across producers and workers.
+
+## Webhooks
+
+Webhook deliveries are **HMAC-SHA256 signed** when the subscription has a
+secret; the signature rides in `X-Flexiq-Signature: sha256=<hex>`. Verify it
+on the receiver — HMAC the raw body with the shared secret and compare in
+constant time — before trusting the body.
+
+Dashboard-submitted webhook URLs are checked by an SSRF guard (loopback,
+link-local, RFC1918, multicast, CGNAT, and IPv6 unique-local addresses are
+rejected by default), and every delivery re-validates the URL again right
+before sending, closing the DNS-rebinding gap. `WebhookManager.create(...)`
+called directly from your own code is trusted input and isn't pre-validated
+at creation — only at delivery time. Set `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` to
+disable the guard for local development. See
+[Webhooks: SSRF guard](/java/guides/extend/webhooks#ssrf-guard).
+
+## Proxies
+
+Proxy references are HMAC-signed with the key you pass to
+`new Proxies(hmacKey)` and verified on every resolve, so a forged or altered
+reference is rejected. `FileProxyHandler` takes an allowlist of root
+directories and refuses paths that resolve outside them — an **empty allowlist
+permits any path**, so always set roots in production.
+
+## Dashboard
+
+The [dashboard](/java/modules/dashboard) serves **openly by
+default** — anyone who reaches the port has full control. Production
+deployments should enable session auth (`authEnabled=true` / `--auth`): on a
+fresh database every route except a small public set then returns
+`503 setup_required` until an admin exists, and every non-public route after
+that needs a valid session (admin/viewer RBAC, CSRF on writes) or, if configured,
+[OAuth/OIDC](/java/modules/dashboard/sso). Passing a `token` instead switches
+to legacy shared-token mode — no users, no sessions, no RBAC — kept for
+back-compat; anyone with the token has full control. Whatever the mode, bind
+the port to a trusted network or front it with a reverse proxy for
+defense in depth.
+
+## Mesh gossip
+
+The mesh `encryptionKey` XOR-obfuscates gossip datagrams — it deters casual
+sniffing only and is **not cryptographic protection.** Run the mesh on a
+trusted private network.
+
+## Native library loading
+
+The bundled native library is extracted to a per-user, owner-only
+(`rwx------`) directory and verified by SHA-256 before every load — a swapped
+or symlinked file in a shared temp directory is rejected. Point
+`-Dflexiq.native.workdir` at a private, exec-permitted directory on hardened
+hosts with a `noexec` `/tmp`.
+
+## Hardening checklist
+
+- [ ] Storage reachable only from trusted services, on a private network.
+- [ ] Enqueue behind your own authn/authz — never expose storage to clients.
+- [ ] No secrets in task payloads; fetch them inside the handler.
+- [ ] Payloads signed or encrypted where the storage host isn't fully trusted.
+- [ ] Webhook receivers verify the HMAC signature; webhook URLs are trusted.
+- [ ] `FileProxyHandler` configured with allowlisted roots.
+- [ ] Dashboard auth enabled (`authEnabled=true` / `--auth`) with an admin
+      created (or env-bootstrapped) on first deploy; bound to a trusted
+      network regardless of auth mode.
+- [ ] Logs don't echo sensitive payloads (redact in `onEnqueue`
+      [middleware](/java/guides/extend/middleware)).

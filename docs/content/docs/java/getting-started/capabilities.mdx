@@ -35,33 +35,33 @@ core — pick a backend, describe tasks, run workers.
 
 | Feature | Guide |
 |---|---|
-| DAG workflows: fan-out/in, conditions, gates, sub-workflows, sagas, visualization | [Workflows](/java/guides/workflows) |
-| Decentralized work-stealing mesh | [Mesh](/java/guides/operations/mesh) |
+| DAG workflows: fan-out/in, conditions, gates, sub-workflows, sagas, visualization | [Workflows](/java/modules/workflows) |
+| Decentralized work-stealing mesh | [Mesh](/java/modules/mesh) |
 
 ## Extensibility
 
 | Feature | Guide |
 |---|---|
-| Lifecycle events & middleware | [Events](/java/guides/extensibility/events) · [Middleware](/java/guides/extensibility/middleware) |
-| Signed webhook delivery | [Webhooks](/java/guides/extensibility/webhooks) |
-| Resource injection, enqueue predicates & interception | [Resources](/java/guides/resources) · [Predicates](/java/guides/core/predicates) |
-| Signed cross-process references (proxies) | [Resources](/java/guides/resources) |
-| Pluggable serializers (JSON / MessagePack / signed / encrypted) & payload codecs | [Serializers](/java/guides/extensibility/serializers) |
+| Lifecycle events & middleware | [Events](/java/guides/extend/events) · [Middleware](/java/guides/extend/middleware) |
+| Signed webhook delivery | [Webhooks](/java/guides/extend/webhooks) |
+| Resource injection, enqueue predicates & interception | [Resources](/java/modules/injection) · [Predicates](/java/guides/core/predicates) |
+| Signed cross-process references (proxies) | [Resources](/java/modules/injection) |
+| Pluggable serializers (JSON / MessagePack / signed / encrypted) & payload codecs | [Serializers](/java/guides/extend/serializers) |
 | Producer-side batching (`Batcher`) | [Batching](/java/guides/core/batching) |
 
 ## Observability & ops
 
 | Feature | Guide |
 |---|---|
-| Stats, metrics, progress, worker heartbeats | [Monitoring](/java/guides/observability/monitoring) |
-| Micrometer Observation / Sentry middleware | [Integrations](/java/guides/integrations) |
-| React dashboard + REST API | [Dashboard](/java/guides/operations/dashboard) |
-| In-process autoscaling + KEDA scaler endpoint | [Autoscaling](/java/guides/operations/autoscaling) |
-| Standalone CLI | [CLI](/java/guides/operations/cli) |
+| Stats, metrics, progress, worker heartbeats | [Monitoring](/java/guides/extend/monitoring) |
+| Micrometer Observation / Sentry middleware | [Integrations](/java/guides/extend) |
+| React dashboard + REST API | [Dashboard](/java/modules/dashboard) |
+| In-process autoscaling + KEDA scaler endpoint | [Autoscaling](/java/modules/autoscaling) |
+| Standalone CLI | [CLI](/java/operate/cli) |
 
 ## Framework integrations
 
-[Spring Boot 3 starter](/java/guides/integrations/spring) — auto-configures a
+[Spring Boot 3 starter](/java/guides/extend/spring) — auto-configures a
 `FlexiQ` bean from `flexiq.url` / `flexiq.pool-size` / `flexiq.namespace`.
 
 <Callout type="info">

@@ -1,0 +1,53 @@
+---
+title: GraalVM Native Image
+description: "Compile flexiq applications to a native binary with GraalVM."
+---
+
+The SDK is built to stay native-image friendly, and CI proves it: every change
+compiles a smoke application into a GraalVM (ahead-of-time compiler to a
+native binary) native image (with `--no-fallback`, so missing metadata fails
+the build) and runs the full enqueue → execute → result path in the compiled
+binary.
+
+Three design choices do the heavy lifting:
+
+- **No runtime reflection for handlers** — the `flexiq-processor` annotation
+  processor generates task bindings at compile time, so `@TaskHandler` wiring
+  needs no reflection metadata at all.
+- **A narrow native seam** — the Rust engine is reached through a small, fixed
+  JNI surface, and the model classes are plain Jackson DTOs.
+- **Shipped reachability metadata** — the `flexiq` jar carries its own
+  metadata under `META-INF/native-image/org.byteveda/flexiq/`, which
+  `native-image` discovers automatically. FlexiQ's JNI up-calls, DTO
+  reflection, and native-library resources need no tracing on your side.
+
+## Building your app
+
+Use the standard GraalVM Gradle plugin:
+
+```kotlin
+graalvmNative {
+    binaries.named("main") {
+        buildArgs.add("--no-fallback") // fail on missing metadata, don't emit a fallback image
+    }
+}
+```
+
+```bash
+./gradlew nativeCompile        # build the native binary
+```
+
+If your *own* code uses reflection (or Jackson on your own types outside the
+generated task bindings), record that with the
+[tracing agent](https://www.graalvm.org/latest/reference-manual/native-image/metadata/AutomaticMetadataCollection/)
+as usual — flexiq paths are already covered by the shipped metadata. The
+per-platform native library still extracts and loads at runtime exactly as on
+the JVM, so the [deployment](/java/operate/deployment) properties
+(`flexiq.native.workdir`, `flexiq.native.lib`) apply to native binaries too.
+
+<Callout type="info">
+  The repository's `graalvm-smoke` module is a minimal, working reference:
+  a task, a worker, an event listener, a `@TaskHandler` the worker picks up
+  through `discover()`, periodic registration, and dead-letter listing,
+  compiled and executed as a native image in CI.
+</Callout>

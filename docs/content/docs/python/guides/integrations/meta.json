@@ -1,4 +1,0 @@
-{
-  "title": "Integrations",
-  "pages": ["flask", "fastapi", "django", "otel", "prometheus", "sentry"]
-}

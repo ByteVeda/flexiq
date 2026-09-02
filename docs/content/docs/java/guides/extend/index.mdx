@@ -1,0 +1,110 @@
+---
+title: Extend & integrate
+description: "Hook into the task lifecycle, watch what it does, and wire the Java SDK into the rest of your stack."
+---
+
+Everything that attaches to flexiq from the outside: the extension points that
+run inside the task lifecycle, the signals they emit, and the frameworks and
+vendors on the other end of those signals.
+
+## Extension points
+
+Lifecycle events and middleware are the extension points for pushing any of
+these signals to an external system.
+
+<Cards>
+  <Card
+    title="Events"
+    href="/java/guides/extend/events"
+    description="Subscribe to job outcome events on the worker"
+  />
+  <Card
+    title="Middleware"
+    href="/java/guides/extend/middleware"
+    description="Wrap task execution with before/after/error and outcome hooks"
+  />
+  <Card
+    title="Webhooks"
+    href="/java/guides/extend/webhooks"
+    description="Push signed notifications to external services"
+  />
+  <Card
+    title="Pluggable Serializers"
+    href="/java/guides/extend/serializers"
+    description="Custom payload serialization — MessagePack, codecs, encryption"
+  />
+</Cards>
+
+## Watch it run
+
+See what the queue is doing — counts, per-execution metrics, live workers,
+per-job logs — and emit structured logs, all from the `FlexiQ` handle with no
+extra service.
+
+<Cards>
+  <Card
+    title="Monitoring & hooks"
+    href="/java/guides/extend/monitoring"
+    description="Queue health, worker hooks, and what to alert on"
+  />
+  <Card
+    title="Structured task logging"
+    href="/java/guides/extend/logging"
+    description="Per-task log capture, correlation, and where the lines go"
+  />
+  <Card
+    title="Structured notes"
+    href="/java/guides/extend/notes"
+    description="Attach progress and diagnostics to a running job"
+  />
+  <Card
+    title="Testing tasks"
+    href="/java/guides/extend/testing"
+    description="Run tasks inline, assert on outcomes, and keep suites fast"
+  />
+</Cards>
+
+## Integrations
+
+The Java SDK ships a Spring Boot 3 starter as a separate artifact, and two
+observability helpers in the `org.byteveda.flexiq.contrib` package of the main
+artifact. The contrib classes compile against their third-party APIs as
+`compileOnly` dependencies — nothing is pulled onto your classpath until you
+add the matching runtime dependency yourself.
+
+```kotlin
+// Only add what you use.
+implementation("org.byteveda:flexiq-spring:1.0.0")        // Spring Boot 3 starter
+implementation("io.micrometer:micrometer-observation:1.13.6") // contrib.FlexiQObservation
+implementation("io.sentry:sentry:7.14.0")                     // contrib.SentryMiddleware
+```
+
+<Callout type="info">
+  Integrations never auto-initialize. Nothing runs until you construct the
+  class and register it with `flexiq.use(...)` (or, for Spring, until the
+  starter is on the classpath). If the runtime dependency is missing, using the
+  contrib class fails with a standard `NoClassDefFoundError`.
+</Callout>
+
+<Cards>
+  <Card
+    title="Micrometer"
+    href="/java/guides/extend/micrometer"
+    description="one Observation per execution: a timer plus a trace span."
+  />
+  <Card
+    title="Prometheus"
+    href="/java/guides/extend/prometheus"
+    description="Scrape queue, worker, and task metrics"
+  />
+  <Card
+    title="Sentry"
+    href="/java/guides/extend/sentry"
+    description="capture handler exceptions and dead-letters."
+  />
+  <Card
+    title="Spring Boot"
+    href="/java/guides/extend/spring"
+    description="auto-configured FlexiQ bean from flexiq.* properties."
+  />
+</Cards>

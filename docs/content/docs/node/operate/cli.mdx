@@ -1,0 +1,65 @@
+---
+title: CLI usage
+description: "Operate the queue from the terminal with the standalone flexiq command."
+---
+
+A standalone `flexiq` command (no Python) operates the queue from the terminal.
+Connect with `--db <path>`, or `--backend`/`--dsn` for Postgres/Redis.
+
+```bash
+flexiq --db flexiq.db enqueue add '[2,3]'
+flexiq --db flexiq.db stats
+flexiq --db flexiq.db jobs --status failed
+flexiq --db flexiq.db dlq list
+flexiq --db flexiq.db dlq retry <deadId>
+flexiq --db flexiq.db pause default
+flexiq --db flexiq.db resume default
+flexiq --db flexiq.db paused
+flexiq --db flexiq.db cancel <jobId>
+```
+
+Add `--json` to any read command for machine-readable output.
+
+## Running a worker
+
+`run` loads a module that exports a configured `Queue` and runs its worker:
+
+```bash
+flexiq run ./app.js --queues default,emails
+```
+
+The module registers its tasks on the exported queue; `run` starts a worker
+over them. Use it as your container entrypoint for worker processes.
+
+## Serving the dashboard
+
+```bash
+flexiq --db flexiq.db dashboard --port 8787
+```
+
+Serves openly by default. `--auth` enables session authentication
+(login/setup, CSRF, roles); `--token <token>` uses the legacy shared-token
+gate instead — see [Dashboard](/node/modules/dashboard).
+
+## KEDA scaler
+
+```bash
+flexiq --backend postgres --dsn "$DATABASE_URL" scaler --port 9091
+```
+
+Serves the queue-depth metric for [KEDA](/node/modules/autoscaling/keda).
+
+## Autoscaling worker processes
+
+```bash
+flexiq --db flexiq.db autoscale ./app.js --min-workers 2 --max-workers 20
+```
+
+Spawns and drains `run`-style workers to track queue depth, for hosts without
+Kubernetes — see [Autoscaling](/node/modules/autoscaling).
+
+<Callout type="info">
+  The CLI ships in the package `bin`. Commands operate over `--db`/`--backend`/
+  `--dsn`, except `run` and `dashboard`, which load your app module and serve
+  the [dashboard](/node/modules/dashboard) respectively.
+</Callout>

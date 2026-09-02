@@ -32,7 +32,7 @@ except FlexiQError as exc:
 | `MaxRetriesExceededError` | `FlexiQError` | A task exhausts all retry attempts. Same failure details as `TaskFailedError`. |
 | `SerializationError` | `FlexiQError` | Serialization / deserialization or payload-integrity failure (e.g. a bad `SignedSerializer` signature). |
 | `CryptoError` | `SerializationError` | A [payload codec](/python/api-reference/serializers) (`HmacCodec`, `AesGcmCodec`) fails to decrypt or verify. |
-| `InterceptionError` | `SerializationError` | An [argument interceptor](/python/guides/resources/proxies) rejects or misbehaves. |
+| `InterceptionError` | `SerializationError` | An [argument interceptor](/python/modules/injection/proxies) rejects or misbehaves. |
 | `CircuitBreakerOpenError` | `FlexiQError` | A task's circuit breaker is open. |
 | `RateLimitExceededError` | `FlexiQError` | A task's rate limit is exceeded. |
 | `JobNotFoundError` | `FlexiQError`, `KeyError` | A job ID isn't found in storage. |

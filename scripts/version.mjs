@@ -95,10 +95,10 @@ const SNIPPETS = [
   "sdks/java/README.md",
   "docs/content/docs/java/getting-started/installation.mdx",
   "docs/content/docs/java/api-reference/testing.mdx",
-  "docs/content/docs/java/guides/integrations/index.mdx",
-  "docs/content/docs/java/guides/integrations/spring.mdx",
-  "docs/content/docs/java/guides/resources/testing.mdx",
-  "docs/content/docs/shared/guides/operations/testing.mdx",
+  "docs/content/docs/java/guides/extend/index.mdx",
+  "docs/content/docs/java/guides/extend/spring.mdx",
+  "docs/content/docs/java/modules/injection/testing.mdx",
+  "docs/content/docs/shared/guides/extend/testing.mdx",
   // The polyglot example pins every SDK so a reader reproduces one known-good
   // combination. Listing the manifests here is what keeps those pins from
   // silently aging past the release they claim to demonstrate.

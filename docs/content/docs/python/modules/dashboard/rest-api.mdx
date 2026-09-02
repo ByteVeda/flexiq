@@ -1,0 +1,702 @@
+---
+title: REST API
+description: "JSON endpoints for stats, jobs, dead letters, metrics, logs, infrastructure, observability, webhooks, and runtime overrides."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+The dashboard exposes a JSON API you can use independently of the UI.
+All endpoints return `application/json` and live under the same origin
+as the dashboard itself.
+
+<Callout type="warn" title="Auth-gated only when authentication is enabled">
+  Authentication is opt-in (`serve_dashboard(auth_enabled=True)` /
+  `flexiq dashboard --auth`) — by default every route serves openly.
+  With auth enabled, every route requires a valid session cookie obtained
+  from `POST /api/auth/login` **except** this public set:
+  `/api/auth/status`, `/api/auth/login`, `/api/auth/setup`,
+  `/api/auth/providers`, `/api/auth/oauth/start/{slot}`,
+  `/api/auth/oauth/callback/{slot}`, `/health`, `/readiness`, and
+  `/metrics`. State-changing requests (POST/PUT/DELETE) additionally
+  require a CSRF header. See
+  [Dashboard Authentication](/python/modules/dashboard/authentication) for
+  the login flow and headless usage examples.
+</Callout>
+
+## Auth
+
+When authentication is disabled (the default), every auth endpoint below
+**except** `GET /api/auth/status` responds `404 {"error": "auth_disabled"}`.
+
+### `GET /api/auth/status`
+
+Public. Reports whether authentication applies and whether the dashboard
+needs first-run setup.
+
+```json
+{ "auth_enabled": true, "setup_required": false }
+```
+
+With auth disabled it returns
+`{"auth_enabled": false, "setup_required": false}`.
+
+### `POST /api/auth/setup`
+
+Public, but locks itself after the first user is created. Body:
+`{"username": "...", "password": "..."}`. Returns the new user.
+
+### `POST /api/auth/login`
+
+Body: `{"username": "...", "password": "..."}`. Sets the
+`flexiq_session` (HttpOnly) and `flexiq_csrf` cookies on success.
+Returns `400 invalid_credentials` on failure.
+
+### `POST /api/auth/logout`
+
+Invalidates the current session and clears cookies.
+
+### `GET /api/auth/whoami`
+
+Returns the current user, CSRF token, and expiry. `401` when no session.
+
+### `POST /api/auth/change-password`
+
+Body: `{"old_password": "...", "new_password": "..."}`.
+
+OAuth/OIDC discovery and callback routes (`GET /api/auth/providers`,
+`GET /api/auth/oauth/start/{slot}`, `GET /api/auth/oauth/callback/{slot}`)
+are also public — see [SSO](/python/modules/dashboard/sso#api-surface) for
+the full flow.
+
+## Stats
+
+### `GET /api/stats`
+
+Queue statistics snapshot.
+
+```json
+{
+  "pending": 12,
+  "running": 3,
+  "completed": 450,
+  "failed": 2,
+  "dead": 1,
+  "cancelled": 0
+}
+```
+
+### `GET /api/stats/queues`
+
+Per-queue statistics. Pass `?queue=name` for a single queue, or omit
+for all queues.
+
+## Jobs
+
+### `GET /api/jobs`
+
+Paginated list of jobs with filtering.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `status` | `string` | all | Filter by status |
+| `queue` | `string` | all | Filter by queue name |
+| `task` | `string` | all | Filter by task name |
+| `metadata` | `string` | — | Search metadata (LIKE) |
+| `error` | `string` | — | Search error text (LIKE) |
+| `created_after` | `int` | — | Unix ms timestamp |
+| `created_before` | `int` | — | Unix ms timestamp |
+| `limit` | `int` | `20` | Page size |
+| `offset` | `int` | `0` | Pagination offset |
+
+### `GET /api/jobs/{id}`
+
+Full detail for a single job.
+
+### `GET /api/jobs/{id}/errors`
+
+Error history for a job (one entry per failed attempt).
+
+### `GET /api/jobs/{id}/logs`
+
+Task execution logs for a specific job.
+
+### `GET /api/jobs/{id}/replay-history`
+
+Replay history for a job that has been replayed.
+
+### `GET /api/jobs/{id}/dag`
+
+Dependency graph for a job (nodes and edges).
+
+### `POST /api/jobs/{id}/cancel`
+
+Cancel a pending job.
+
+### `POST /api/jobs/{id}/replay`
+
+Replay a completed or failed job with the same payload.
+
+## Dead letters
+
+### `GET /api/dead-letters`
+
+Paginated list of dead letter entries. Supports `limit` and `offset`.
+
+### `POST /api/dead-letters/{id}/retry`
+
+Re-enqueue a dead letter job.
+
+### `POST /api/dead-letters/purge`
+
+Purge all dead letters.
+
+## Webhooks
+
+Full guide: [Webhooks](/python/guides/extend/webhooks).
+
+### `GET /api/webhooks`
+
+List all subscriptions. The `secret` field is **never** returned — only
+a `has_secret` boolean. The secret is only included on the response to
+`POST /api/webhooks` (create) and `POST /api/webhooks/{id}/rotate-secret`,
+exactly once.
+
+```json
+[
+  {
+    "id": "f00563cbbb1a4200bb461f83d1db47bf",
+    "url": "https://hooks.example.com/ops-failures",
+    "events": ["job.failed", "job.dead"],
+    "task_filter": null,
+    "headers": {},
+    "has_secret": true,
+    "max_retries": 5,
+    "timeout_seconds": 8.0,
+    "retry_backoff": 2.0,
+    "enabled": true,
+    "description": "Page ops on permanent failures",
+    "created_at": 1716000000,
+    "updated_at": 1716000000
+  }
+]
+```
+
+### `POST /api/webhooks`
+
+Create a subscription.
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | `string` | Required. http/https URL, SSRF-vetted |
+| `events` | `string[]` | Event types (`job.failed`, etc.). Empty/missing → all |
+| `task_filter` | `string[] \| null` | Restrict to specific task names. `null` → all tasks |
+| `headers` | `object` | Extra HTTP headers |
+| `secret` | `string \| null` | Explicit signing key |
+| `generate_secret` | `bool` | If true, server generates a fresh secret |
+| `max_retries` | `int` | Default 3 |
+| `timeout_seconds` | `float` | Default 10.0 |
+| `retry_backoff` | `float` | Default 2.0 |
+| `description` | `string \| null` | Free-form label |
+
+Response includes the secret **once** if one was set or generated.
+
+### `GET /api/webhooks/{id}`
+
+Single subscription (secret redacted).
+
+### `PUT /api/webhooks/{id}`
+
+Partial update. Only fields you include are touched. Same field set as
+create.
+
+### `DELETE /api/webhooks/{id}`
+
+Delete the subscription.
+
+### `POST /api/webhooks/{id}/test`
+
+Synchronously POST a synthetic `test.ping` event and return the
+result inline.
+
+```json
+{ "status": 200, "delivered": true }
+```
+
+### `POST /api/webhooks/{id}/rotate-secret`
+
+Generate a fresh HMAC secret. Returns `{id, secret}` — the only time
+the new value is visible.
+
+### `GET /api/event-types`
+
+Sorted list of every valid event type value. Used by the dashboard's
+event multi-select.
+
+```json
+["job.cancelled", "job.completed", "job.dead", ...]
+```
+
+## Webhook deliveries
+
+### `GET /api/webhooks/{id}/deliveries`
+
+Persistent log of attempts for the subscription. Supports filters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `status` | `delivered \| failed \| dead \| pending` | all | Filter by outcome |
+| `event` | `string` | all | Filter by event type |
+| `limit` | `int` | `50` | Page size (max 200) |
+| `offset` | `int` | `0` | Pagination offset |
+
+```json
+{
+  "items": [
+    {
+      "id": "01H...",
+      "subscription_id": "f00563cb...",
+      "event": "job.failed",
+      "payload": { "job_id": "...", "task_name": "...", "error": "..." },
+      "task_name": "myapp.tasks.process_image",
+      "job_id": "01H...",
+      "status": "dead",
+      "attempts": 3,
+      "response_code": 500,
+      "response_body": "Internal Server Error",
+      "latency_ms": 30000,
+      "error": null,
+      "created_at": 1716000000000,
+      "completed_at": 1716000030000
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### `GET /api/webhooks/{id}/deliveries/{delivery_id}`
+
+Single delivery record.
+
+### `POST /api/webhooks/{id}/deliveries/{delivery_id}/replay`
+
+Re-fire the stored payload synchronously. Records the outcome as a
+fresh delivery on top of the original (audit trail preserved).
+
+```json
+{ "replayed_of": "01H...", "status": 200, "delivered": true }
+```
+
+## Tasks and overrides
+
+Full guide: [Task & Queue Overrides](/python/modules/dashboard/task-overrides).
+
+### `GET /api/tasks`
+
+List every registered task with decorator defaults, override, and
+effective values.
+
+```json
+[
+  {
+    "name": "myapp.tasks.send_email",
+    "queue": "default",
+    "defaults": {
+      "max_retries": 3,
+      "retry_backoff": 1.0,
+      "timeout": 300,
+      "priority": 0,
+      "rate_limit": null,
+      "max_concurrent": null
+    },
+    "override": { "rate_limit": "200/m", "max_retries": 10 },
+    "effective": {
+      "max_retries": 10,
+      "retry_backoff": 1.0,
+      "timeout": 300,
+      "priority": 0,
+      "rate_limit": "200/m",
+      "max_concurrent": null
+    },
+    "paused": false
+  }
+]
+```
+
+### `GET /api/tasks/{name}/override`
+
+Single task's override row. `404` if none set.
+
+### `PUT /api/tasks/{name}/override`
+
+Upsert the override. Body keys must be in the allow-list:
+`rate_limit`, `max_concurrent`, `max_retries`, `retry_backoff`,
+`timeout`, `priority`, `paused`. Passing `null` for a field removes
+just that field. Unknown fields → `400`.
+
+### `DELETE /api/tasks/{name}/override`
+
+Remove the override entirely. Returns `{cleared: bool}`.
+
+### `GET /api/queues`
+
+List every queue mentioned by a task config with defaults, override,
+effective, and paused state.
+
+### `GET /api/queues/{name}/override` / `PUT` / `DELETE`
+
+Same shape as tasks. Allow-list for queue overrides:
+`rate_limit`, `max_concurrent`, `paused`. The `paused` flag also flips
+the live `paused_queues` table so it takes effect on running workers
+immediately.
+
+## Middleware
+
+### `GET /api/middleware`
+
+List every registered middleware (global + per-task) with its scopes.
+
+```json
+[
+  { "name": "sentry", "class_path": "myapp.middleware.SentryMiddleware", "scopes": [{"kind": "global"}] }
+]
+```
+
+### `GET /api/tasks/{name}/middleware`
+
+The middleware chain that fires for a task, with each entry's
+`disabled` and `effective` flags.
+
+```json
+{
+  "task": "myapp.tasks.send_email",
+  "middleware": [
+    { "name": "demo.logging", "class_path": "...", "disabled": false, "effective": true },
+    { "name": "demo.metrics", "class_path": "...", "disabled": true,  "effective": false }
+  ]
+}
+```
+
+### `PUT /api/tasks/{name}/middleware/{mw_name}`
+
+Body: `{"enabled": bool}`. Returns `{task, disabled: [...]}` reflecting
+the new disable list. `404` if the middleware name isn't registered on
+the task — typos can't write no-op disables.
+
+### `DELETE /api/tasks/{name}/middleware`
+
+Clear all middleware disables for a task — every middleware fires
+again.
+
+## Metrics
+
+### `GET /api/metrics`
+
+Per-task execution metrics.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `task` | `string` | all | Filter by task name |
+| `since` | `int` | `3600` | Lookback window in seconds |
+
+### `GET /api/metrics/timeseries`
+
+Time-bucketed metrics for charts.
+
+## Logs
+
+### `GET /api/logs`
+
+Query task execution logs across all jobs.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `task` | `string` | all | Filter by task name |
+| `level` | `string` | all | Filter by log level |
+| `since` | `int` | `3600` | Lookback window in seconds |
+| `limit` | `int` | `100` | Max entries |
+
+## Infrastructure
+
+### `GET /api/workers`
+
+List registered workers with heartbeat status.
+
+### `GET /api/circuit-breakers`
+
+Current state of all circuit breakers.
+
+### `GET /api/resources`
+
+Worker resource health and pool status.
+
+### `GET /api/queues/paused`
+
+List paused queue names.
+
+### `POST /api/queues/{name}/pause` / `POST /api/queues/{name}/resume`
+
+Pause or resume a queue. Takes effect immediately.
+
+## Observability
+
+### `GET /api/proxy-stats`
+
+Per-handler proxy reconstruction metrics.
+
+### `GET /api/interception-stats`
+
+Interception strategy performance metrics.
+
+### `GET /api/scaler`
+
+KEDA-compatible autoscaler payload. Pass `?queue=name` for a specific queue.
+
+### `GET /health`
+
+Public liveness check. Always returns `{"status": "ok"}`.
+
+### `GET /readiness`
+
+Public readiness check. `ready` (HTTP `200`) when storage answered, the worker
+registry could be read, and no advertised worker resource is unhealthy;
+`degraded` (HTTP `503`, with the same body) when any of those checks failed, so
+an orchestrator drains the instance.
+
+The worker count is reported but never folded into the status: with no worker
+running, `checks.workers` is `{"count": 0, "status": "none"}` and the response
+is still `ready`. Readiness answers whether this process can serve the queue
+API, and workers are a separate deployment that may legitimately scale to zero —
+so a green `/readiness` does not mean jobs are being consumed. Alert on the
+fleet size as its own signal (`queue.workers()`, or the dashboard Workers
+panel).
+
+### `GET /metrics`
+
+Public Prometheus metrics endpoint (requires `prometheus-client` package).
+
+## Workflows
+
+These endpoints expose workflow run data for dashboards and external tooling.
+All timestamps are Unix milliseconds.
+
+### `GET /api/workflows/runs`
+
+Paginated list of workflow runs.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `definition_name` | `string` | all | Filter by workflow name |
+| `state` | `string` | all | Filter by run state (e.g. `running`, `completed`, `failed`) |
+| `limit` | `int` | `50` | Page size |
+| `offset` | `int` | `0` | Pagination offset |
+
+```json
+{
+  "runs": [
+    {
+      "id": "01H...",
+      "definition_id": "checkout-v1",
+      "state": "completed",
+      "params": null,
+      "started_at": 1716000000000,
+      "completed_at": 1716000030000,
+      "error": null,
+      "parent_run_id": null,
+      "parent_node_name": null,
+      "created_at": 1716000000000
+    }
+  ],
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### `GET /api/workflows/runs/{run_id}`
+
+Full detail for a single run: the run header plus per-node status.
+
+```json
+{
+  "run": {
+    "id": "01H...",
+    "definition_id": "checkout-v1",
+    "state": "compensated",
+    "params": null,
+    "started_at": 1716000000000,
+    "completed_at": 1716000060000,
+    "error": null,
+    "parent_run_id": null,
+    "parent_node_name": null,
+    "created_at": 1716000000000
+  },
+  "nodes": [
+    {
+      "node_name": "charge",
+      "status": "completed",
+      "job_id": "01H...",
+      "result_hash": "abc123",
+      "fan_out_count": null,
+      "started_at": 1716000001000,
+      "completed_at": 1716000005000,
+      "error": null,
+      "compensation_job_id": "01H...",
+      "compensation_started_at": 1716000050000,
+      "compensation_completed_at": 1716000055000,
+      "compensation_error": null
+    }
+  ]
+}
+```
+
+Returns `404` when the run ID doesn't exist.
+
+### `GET /api/workflows/runs/{run_id}/dag`
+
+DAG definition for the workflow that produced this run, as a JSON string.
+
+```json
+{
+  "dag": "{\"nodes\": [{\"name\": \"charge\", ...}], \"edges\": [...]}"
+}
+```
+
+Returns `404` when the run ID doesn't exist.
+
+### `GET /api/workflows/runs/{run_id}/children`
+
+Child sub-workflow runs spawned by this run. Returns an empty list for
+top-level runs.
+
+```json
+{
+  "children": [
+    {
+      "id": "01H...",
+      "definition_id": "notify-v1",
+      "state": "completed",
+      ...
+    }
+  ]
+}
+```
+
+## Settings
+
+### `GET /api/settings`
+
+Dump of every dashboard setting key/value.
+
+### `GET /api/settings/{key}` / `PUT` / `DELETE`
+
+Read, set, or delete a single dashboard setting. Used by the dashboard
+itself for branding, external links, and integration URLs — but you
+can write your own keys here too. Note that this is the same store
+where authentication, webhook subscriptions, delivery logs, and
+runtime overrides live, all under namespaced prefixes (`auth:*`,
+`webhooks:*`, `overrides:*`, etc.). The reserved prefixes (`auth:`,
+`webhooks:`, `retention:`) read as absent here and cannot be written.
+
+## Retention
+
+### `GET /api/retention`
+
+The retention windows a worker is applying to this queue's namespace — what
+the Settings page echoes to explain why rows leave the listings.
+
+```json
+{
+  "reported": true,
+  "enabled": true,
+  "defaulted": true,
+  "namespace": "default",
+  "reported_at": 1753200000000,
+  "windows": {
+    "task_logs_ttl_ms": 259200000,
+    "archived_jobs_ttl_ms": 604800000,
+    "job_errors_ttl_ms": 604800000,
+    "task_metrics_ttl_ms": 604800000,
+    "dead_letter_ttl_ms": 2592000000
+  }
+}
+```
+
+Retention runs in the worker process, so this is not computed from the
+dashboard's own config: the worker elected to run cleanup publishes its
+windows on each sweep. `reported: false` means no worker has swept yet —
+the policy is unknown, which is not the same as retention being off
+(`enabled: false`). A `null` window keeps that table forever.
+
+Read-only. The published document lives under the reserved `retention:`
+settings prefix, so it is neither listed nor writable through
+`/api/settings`.
+
+### `GET /api/retention/dry-run`
+
+How many rows a purge would delete right now, without deleting — the Settings
+page's purge preview. Unlike `/api/retention`, this is computed in-process
+against live storage, so it always answers.
+
+```json
+{
+  "enabled": true,
+  "defaulted": true,
+  "namespace": "default",
+  "reference_time": 1753200000000,
+  "windows": {
+    "task_logs_ttl_ms": 259200000,
+    "archived_jobs_ttl_ms": 604800000,
+    "job_errors_ttl_ms": 604800000,
+    "task_metrics_ttl_ms": 604800000,
+    "dead_letter_ttl_ms": 2592000000
+  },
+  "counts": {
+    "task_logs": 340,
+    "archived_jobs": 12,
+    "job_errors": 7,
+    "task_metrics": 5,
+    "dead_letter": 0
+  },
+  "total": 364
+}
+```
+
+`counts` mirror each table's purge exactly; `reference_time` is the Unix-ms
+instant the snapshot was taken. Read-only — nothing is deleted. The preview
+uses this queue's configured windows (falling back to the recommended
+defaults), which may differ from a worker configured differently elsewhere —
+compare against `/api/retention` to see what a worker reported.
+
+## Using the API programmatically
+
+The login/CSRF steps below apply to an auth-enabled dashboard; with auth
+disabled (the default) plain requests work directly.
+
+```python
+import requests
+
+s = requests.Session()
+s.post(
+    "http://localhost:8080/api/auth/login",
+    json={"username": "admin", "password": "..."},
+)
+csrf = s.cookies.get("flexiq_csrf")
+s.headers["X-CSRF-Token"] = csrf
+
+# Health check script.
+stats = s.get("http://localhost:8080/api/stats").json()
+if stats["dead"] > 0:
+    print(f"WARNING: {stats['dead']} dead letter(s)")
+
+# Tune a task's rate limit during an incident.
+s.put(
+    "http://localhost:8080/api/tasks/myapp.tasks.send_email/override",
+    json={"rate_limit": "30/m"},
+)
+
+# Pause a queue during deployment.
+s.post("http://localhost:8080/api/queues/default/pause")
+# ... deploy ...
+s.post("http://localhost:8080/api/queues/default/resume")
+```

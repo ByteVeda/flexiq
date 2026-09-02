@@ -23,7 +23,7 @@ replaces the function and options.
 | `maxConcurrent` | `number` | Max simultaneous running jobs of this task. |
 | `rateLimit` | `` `"100/m"` `` | Rate limit as `count/unit`, unit `s` \| `m` \| `h`. |
 | `circuitBreaker` | `{ threshold, windowMs, cooldownMs }` | Trip after repeated failures. |
-| `inject` | `string[]` | Resource names injected as a trailing `deps` argument. See [Dependency injection](/node/guides/resources/dependency-injection). |
+| `inject` | `string[]` | Resource names injected as a trailing `deps` argument. See [Dependency injection](/node/modules/injection/dependency-injection). |
 | `codecs` | `string[]` | Names of registered [payload codecs](/node/api-reference/serializers) applied to this task's payload only. |
 
 ```ts

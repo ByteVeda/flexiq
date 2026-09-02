@@ -4,7 +4,7 @@ description: "Inspect, retry, and purge jobs that exhausted their retries."
 ---
 
 When a job exhausts its retries it moves to the **dead-letter queue** (DLQ) and
-the `job.dead` [event](/node/guides/extensibility/events) fires. The DLQ keeps
+the `job.dead` [event](/node/guides/extend/events) fires. The DLQ keeps
 the payload and error history so you can investigate and replay.
 
 ```ts

@@ -1,0 +1,14 @@
+{
+  "title": "Operate",
+  "root": true,
+  "pages": [
+    "index",
+    "backends",
+    "inspection",
+    "cli",
+    "deployment",
+    "security",
+    "troubleshooting",
+    "graalvm"
+  ]
+}

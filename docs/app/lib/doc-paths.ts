@@ -28,7 +28,7 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-/** Every doc URL (e.g. `/getting-started/installation`, `/node/workflows/saga`). */
+/** Every doc URL (e.g. `/architecture/scheduler`, `/node/modules/workflows/saga`). */
 export function allDocPaths(): string[] {
   const files: string[] = [];
   walk(CONTENT_DIR, files);

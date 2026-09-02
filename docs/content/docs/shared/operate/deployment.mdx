@@ -1,0 +1,2140 @@
+---
+title: Deployment
+description: "Process model, storage location, systemd/Docker, backups, monitoring, and sizing in production."
+---
+
+This guide covers running flexiq in production.
+
+<Callout type="info" title="No broker to operate">
+  Unlike Celery (which needs Redis or RabbitMQ as a message broker), flexiq's
+  scheduler lives inside the worker process and reads directly from SQLite,
+  Postgres, or Redis. There's no separate broker process to run, monitor, or
+  fail over — one less moving part in production.
+</Callout>
+
+## Process model
+
+Producers and workers are separate processes that share storage. A typical
+deploy has a web/API process that enqueues jobs, and one or more worker
+processes that claim and run them:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# myapp.py
+from flexiq import Queue
+
+queue = Queue(db_path="/var/lib/myapp/flexiq.db")
+
+@queue.task()
+def send_email(to: str, subject: str):
+    ...
+```
+
+```bash
+flexiq worker --app myapp:queue --queues default,emails
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// app.ts — the module `flexiq run` loads
+import { Queue } from "@byteveda/flexiq";
+
+export const queue = new Queue({ dbPath: "/var/lib/myapp/flexiq.db" });
+
+queue.task("sendEmail", (to: string, subject: string) => {
+  // ...
+});
+```
+
+```bash
+flexiq run ./app.js --queues default,emails
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("/var/lib/myapp/flexiq.db").open();
+        Worker worker = flexiq.worker()
+                .handle(sendEmail, handlers::sendEmail)
+                .queues("default", "emails")
+                .concurrency(8) // fixed pool; 0 (default) = cached pool
+                .start()) {
+    Runtime.getRuntime().addShutdownHook(new Thread(worker::close));
+    worker.awaitShutdown();
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+With SQLite, every producer and worker must share the same file (same host or
+volume). With Postgres or Redis, they can run on separate machines.
+
+<SdkOnly sdk="python">
+
+See [Postgres deployment](#postgres-deployment) below.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+See <SdkLink to="operate/backends">Backends</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+See <SdkLink to="operate/backends">Backends</SdkLink>.
+
+</SdkOnly>
+
+## SQLite file location
+
+Choose a persistent, backed-up location for the database:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+queue = Queue(db_path="/var/lib/myapp/flexiq.db")
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const queue = new Queue({ dbPath: "/var/lib/myapp/flexiq.db" });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+FlexiQ flexiq = FlexiQ.builder().sqlite("/var/lib/myapp/flexiq.db").open();
+```
+
+  </Tab>
+</CodeTabs>
+
+SQLite runs in **WAL** (write-ahead logging) mode by default — see
+[WAL mode and backups](#wal-mode-and-backups) below — which appends writes to
+a separate log file instead of the main database file, letting many readers
+proceed concurrently with the one writer.
+
+**Best practices:**
+
+- Use an absolute path — relative paths depend on the working directory
+- Place the database on local storage (not NFS or network mounts) — SQLite file locking doesn't work reliably over network filesystems
+- Ensure the directory exists and the worker process has read/write permissions
+- The database file, WAL file (`flexiq.db-wal`), and shared memory file (`flexiq.db-shm`) must all be on the same filesystem
+
+## Running the worker as a service
+
+<SdkOnly sdk="python">
+
+Create `/etc/systemd/system/flexiq-worker.service`:
+
+```ini
+[Unit]
+Description=flexiq worker
+After=network.target
+
+[Service]
+Type=simple
+User=myapp
+Group=myapp
+WorkingDirectory=/opt/myapp
+ExecStart=/opt/myapp/.venv/bin/flexiq worker --app myapp:queue
+Restart=always
+RestartSec=5
+
+# Graceful shutdown — flexiq handles SIGINT
+KillSignal=SIGINT
+TimeoutStopSec=35
+
+# Environment
+Environment=PYTHONPATH=/opt/myapp
+
+[Install]
+WantedBy=multi-user.target
+```
+
+<Callout type="info">
+  Set `TimeoutStopSec` to slightly longer than your longest task timeout
+  (`flexiq worker --drain-timeout` defaults to 30s). This gives in-flight
+  tasks time to complete before systemd force-kills the process.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Create `/etc/systemd/system/flexiq-worker.service`:
+
+```ini
+[Unit]
+Description=flexiq worker
+After=network.target
+
+[Service]
+Type=simple
+User=myapp
+Group=myapp
+WorkingDirectory=/opt/myapp
+ExecStart=/opt/myapp/node_modules/.bin/flexiq run ./app.js --queues default,emails
+Restart=always
+RestartSec=5
+
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`flexiq run` installs its own `SIGINT`/`SIGTERM` handlers, so systemd's
+default `KillSignal=SIGTERM` works without overriding it.
+
+<Callout type="warning" title="The run command's shutdown grace is short and fixed">
+  On a stop signal, `flexiq run` calls `worker.stop()`, waits a **fixed
+  200ms**, then force-exits the process — it doesn't wait for long-running
+  handlers to actually finish. That's enough for typical short tasks, but if
+  your handlers can run for seconds, write your own entrypoint that calls
+  `queue.runWorker()` / `worker.stop()` directly and waits as long as you need
+  (e.g. until your own in-flight counter hits zero) before exiting.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There's no worker CLI subcommand — workers are code. Wire the shutdown hook
+shown in [Process model](#process-model) above, then run the jar as a
+systemd service:
+
+```ini
+[Unit]
+Description=flexiq worker
+After=network.target
+
+[Service]
+Type=simple
+User=myapp
+Group=myapp
+WorkingDirectory=/opt/myapp
+ExecStart=/usr/bin/java --enable-native-access=ALL-UNNAMED -jar /opt/myapp/app.jar
+Restart=always
+RestartSec=5
+TimeoutStopSec=65
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`worker.close()` (wired to the shutdown hook) drains in-flight handlers for up
+to 30 seconds, then interrupts and waits 30 more — set `TimeoutStopSec` a
+little past that so systemd doesn't force-kill first.
+
+</SdkOnly>
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable flexiq-worker
+sudo systemctl start flexiq-worker
+
+# Check logs
+journalctl -u flexiq-worker -f
+```
+
+## Docker
+
+### Dockerfile
+
+<SdkOnly sdk="python">
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Store the database in a volume
+VOLUME /data
+
+CMD ["flexiq", "worker", "--app", "myapp:queue"]
+```
+
+<Callout type="warn" title="FLEXIQ_DB_PATH is not read automatically">
+  The `flexiq` CLI and the `Queue` constructor do not read a `FLEXIQ_DB_PATH`
+  environment variable — that env var name is only recognized by the Flask and
+  Django integrations. If your `myapp:queue` module builds the `Queue`
+  directly, read the path yourself (and keep the `ENV FLEXIQ_DB_PATH=...`
+  line in the Dockerfile above), as shown below.
+</Callout>
+
+```python
+# myapp.py
+import os
+from flexiq import Queue
+
+queue = Queue(db_path=os.environ.get("FLEXIQ_DB_PATH", "/data/flexiq.db"))
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+```dockerfile
+FROM node:20-slim
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile --prod
+
+COPY . .
+
+# Store the database in a volume
+VOLUME /data
+
+CMD ["node_modules/.bin/flexiq", "run", "./app.js"]
+```
+
+<Callout type="info">
+  A prebuilt native addon ships for both glibc and musl Linux, so `node:20-slim`
+  and `node:20-alpine` both work with no extra build step — no Python or Rust
+  toolchain required in the image.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Illustrative — `shadowJar` assumes the Gradle Shadow plugin builds a fat jar
+with your app's `main` class as the entry point; swap in whatever packaging
+task your build actually uses:
+
+```dockerfile
+FROM gradle:8-jdk21 AS build
+WORKDIR /src
+COPY . .
+RUN ./gradlew --no-daemon shadowJar
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /src/build/libs/app.jar app.jar
+
+VOLUME /data
+ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-jar", "app.jar"]
+```
+
+<Callout type="info" title="Native library extraction">
+  The jar extracts the native engine to a per-user directory on first use.
+  Standard glibc-based images (`eclipse-temurin`, `debian`, `ubuntu`) work out
+  of the box. On a host where `/tmp` is `noexec`, set
+  `-Dflexiq.native.workdir=/path` to redirect extraction; set
+  `-Dflexiq.native.lib=/path/to/library` to skip extraction and load an
+  explicit binary (e.g. one built for musl).
+</Callout>
+
+On JDK 22+, the hot byte operations automatically use a Java FFM (Panama) fast
+path packaged as a multi-release-jar overlay; older JDKs transparently fall
+back to JNI — same API either way. FFM calls are "restricted native access":
+`--enable-native-access=ALL-UNNAMED` (in the `ENTRYPOINT` above) grants access
+and silences the warning.
+
+</SdkOnly>
+
+### docker-compose.yml
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+services:
+  worker:
+    build: .
+    volumes:
+      - flexiq-data:/data
+    stop_signal: SIGINT
+    stop_grace_period: 35s
+
+  dashboard:
+    build: .
+    command: flexiq dashboard --app myapp:queue --host 0.0.0.0
+    volumes:
+      - flexiq-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  flexiq-data:
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+services:
+  worker:
+    build: .
+    volumes:
+      - flexiq-data:/data
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+
+  dashboard:
+    build: .
+    command: node_modules/.bin/flexiq --db /data/flexiq.db dashboard --host 0.0.0.0
+    volumes:
+      - flexiq-data:/data
+    ports:
+      - "8787:8787"
+
+volumes:
+  flexiq-data:
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+services:
+  worker:
+    build: .
+    volumes:
+      - flexiq-data:/data
+    stop_signal: SIGTERM
+    stop_grace_period: 65s
+
+  dashboard:
+    build: .
+    command: java -cp app.jar org.byteveda.flexiq.cli.Cli --url /data/flexiq.db dashboard --port 8080
+    volumes:
+      - flexiq-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  flexiq-data:
+```
+
+  </Tab>
+</CodeTabs>
+
+<Callout type="warn" title="Shared volumes">
+  The worker and dashboard must access the **same SQLite file**. In Docker,
+  use a named volume shared between containers. Do not use bind mounts on
+  network storage.
+</Callout>
+
+### Graceful shutdown in containers
+
+<SdkOnly sdk="python">
+
+flexiq handles `SIGINT` for graceful shutdown. Configure your container
+orchestrator to send `SIGINT` (not `SIGTERM`):
+
+- **Docker Compose**: `stop_signal: SIGINT`
+- **Kubernetes**: use a `preStop` hook or configure `STOPSIGNAL` in the Dockerfile:
+
+```dockerfile
+STOPSIGNAL SIGINT
+```
+
+For Kubernetes, set `terminationGracePeriodSeconds` to match your longest
+task timeout:
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 60
+  containers:
+    - name: worker
+      ...
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`flexiq run` already listens for both `SIGINT` and `SIGTERM`, so the default
+signal Docker and Kubernetes send (`SIGTERM`) works without changing
+`stop_signal`/`STOPSIGNAL`. Remember the fixed ~200ms grace window called out
+above — a short `stop_grace_period` / `terminationGracePeriodSeconds` (10s is
+plenty) is fine for the CLI, but a custom entrypoint with its own drain logic
+needs a longer one to match:
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+    - name: worker
+      ...
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+The shutdown hook calls `worker.close()` on `SIGTERM`, Docker's and
+Kubernetes' default signal — no `STOPSIGNAL` override needed. `close()` drains
+for up to 30 seconds, then interrupts and waits 30 more, so give the
+orchestrator enough room:
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 65
+  containers:
+    - name: worker
+      ...
+```
+
+</SdkOnly>
+
+## Attached executors
+
+Every deployment above runs the scheduler *inside* the worker, so the worker
+process both imports your app and holds the database credentials. An **attached
+executor** splits those apart: `flexiq-server` owns storage, claiming, retries,
+the dead-letter queue and retention; your app container runs `flexiq executor`,
+which dials the scheduler and runs whatever it is sent. The app image needs no
+database credentials and no inbound port.
+
+See <SdkLink to="modules/executor">Attached executors</SdkLink> for the
+model, the handshake and what a task can do on one. This section is the
+deployment shape.
+
+### When the split is worth it
+
+Not for disk. Two containers built from the same image share layers, so the
+Docker deployments above already pull a large app image once per node. What
+layer sharing does **not** fix:
+
+- **Resident RAM.** A worker built from the app image is a second interpreter or
+  JVM, a second copy of every import, and a second copy of whatever the process
+  loads at startup — model weights, caches, embeddings. That cost is per
+  replica, not per node, and layer sharing never touches it.
+- **Cold start.** Autoscaling on queue depth (see
+  <SdkLink to="modules/autoscaling/keda">KEDA</SdkLink>) starts worker pods on
+  demand, and a node that has not seen the image pays the whole pull before the
+  first job runs.
+
+An executor removes both: the process is already running and already warm, and
+the only new image is the scheduler's — a static binary on distroless, identical
+for every deployment.
+
+If your app image is small, keep the in-process worker. The split buys nothing
+and costs you a second moving part.
+
+### Compose
+
+The scheduler is the only new service. It is SDK-independent — the same image
+schedules for any app:
+
+```yaml
+services:
+  scheduler:
+    image: ghcr.io/byteveda/flexiq-server:0.21.0
+    environment:
+      FLEXIQ_DSN: postgresql://flexiq:secret@postgres:5432/myapp
+      FLEXIQ_LISTEN: 0.0.0.0:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?generate with openssl rand -base64 32}
+      FLEXIQ_DASHBOARD: 0.0.0.0:8080
+      FLEXIQ_DASHBOARD_AUTH: session
+    ports:
+      - "8080:8080" # dashboard only — 7777 stays on the compose network
+    depends_on:
+      - postgres # the service from Postgres deployment below
+```
+
+The executor service is your existing app image with a different command — no
+new build, no new registry pull:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: flexiq executor --app myapp:queue
+    environment:
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: node_modules/.bin/flexiq executor ./app.js
+    environment:
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: java --enable-native-access=ALL-UNNAMED -cp app.jar org.byteveda.flexiq.cli.Cli executor
+    environment:
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+  </Tab>
+</CodeTabs>
+
+`FLEXIQ_SLOTS` is how many jobs the executor runs at once. There is no
+`FLEXIQ_DSN` here — that is the point.
+
+<Callout type="info" title="restart is what reconnects">
+  An executor dials once and exits when the session ends, so a scheduler restart
+  takes its executors down with it. `restart: unless-stopped` brings them back.
+  `depends_on` only orders container *starts* — it doesn't wait for the listener
+  to bind, so the first attach may fail and be retried by the same restart loop.
+</Callout>
+
+### Kubernetes
+
+Run the executor as a sidecar **in the app pod, from the app image**. The image
+is already on the node for the app container, so the sidecar adds a process, not
+a pull.
+
+#### Same pod, over a Unix socket
+
+The scheduler runs as a native sidecar next to the app and the executor attaches
+over a socket on a shared `emptyDir` — no port, no Service, no token, and no
+network hop:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    spec:
+      # The scheduler chmods the socket to 0660, and connect(2) needs write
+      # permission on it — so the two containers have to share a *group*, not a
+      # uid. fsGroup gives them one and makes the emptyDir setgid, so the socket
+      # inherits it. This is the whole access boundary for a Unix-socket attach:
+      # nothing outside the group can connect, and nothing else is checked.
+      securityContext:
+        fsGroup: 65532
+      volumes:
+        - name: attach
+          emptyDir: {}
+      initContainers:
+        # A native sidecar (Kubernetes 1.29+): starts before the app containers,
+        # keeps running beside them, and restarts on its own.
+        - name: scheduler
+          image: ghcr.io/byteveda/flexiq-server:0.21.0
+          restartPolicy: Always
+          env:
+            - name: FLEXIQ_DSN
+              valueFrom:
+                secretKeyRef: { name: flexiq, key: dsn }
+            - name: FLEXIQ_LISTEN
+              value: unix:/run/flexiq/attach.sock
+          volumeMounts:
+            - name: attach
+              mountPath: /run/flexiq
+      containers:
+        - name: app
+          image: myapp:1.4.2 # unchanged
+        - name: executor
+          image: myapp:1.4.2 # the same image — already pulled for `app`
+          # command: required — see below. Leave it out and this container runs
+          # the app image's default entrypoint, a second app that never attaches.
+          env:
+            - name: FLEXIQ_ATTACH
+              value: unix:/run/flexiq/attach.sock
+            - name: FLEXIQ_SLOTS
+              value: "4"
+          volumeMounts:
+            - name: attach
+              mountPath: /run/flexiq
+```
+
+The executor's command:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+command: ["flexiq", "executor", "--app", "myapp:queue"]
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+command: ["node_modules/.bin/flexiq", "executor", "./app.js"]
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+command:
+  [
+    "java",
+    "--enable-native-access=ALL-UNNAMED",
+    "-cp",
+    "app.jar",
+    "org.byteveda.flexiq.cli.Cli",
+    "executor",
+  ]
+```
+
+Handlers come from `META-INF/services`, so no application `main` runs to
+register them.
+
+  </Tab>
+</CodeTabs>
+
+This puts one scheduler in every replica, each holding its own database
+connection. They coordinate through storage, so duplicate execution isn't a
+risk: a job is claimed by exactly one, retention sweeps under a lease only one
+holds at a time, and a dead worker's in-flight jobs are rescued by exactly one
+survivor. The connection count is what to watch — set `FLEXIQ_MAINTENANCE=off`
+on the sidecars and keep retention on a single separate replica if the sweeps
+are the part you'd rather not multiply. On Kubernetes older than 1.29, drop
+`initContainers` and run the scheduler as an ordinary container: startup
+ordering is then unenforced, and the executor's restart loop settles it.
+
+The sidecar above serves no HTTP, so there is nothing to probe — see the note
+after the next example for what that costs and how to get probes back.
+
+#### One scheduler, over TCP
+
+When you'd rather hold one database connection and scale executors
+independently, give the scheduler its own Deployment and Service:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flexiq-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flexiq-scheduler
+  template:
+    metadata:
+      labels:
+        app: flexiq-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: ghcr.io/byteveda/flexiq-server:0.21.0
+          env:
+            - name: FLEXIQ_DSN
+              valueFrom:
+                secretKeyRef: { name: flexiq, key: dsn }
+            - name: FLEXIQ_LISTEN
+              value: 0.0.0.0:7777
+            - name: FLEXIQ_ATTACH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: flexiq, key: attach-token }
+            - name: FLEXIQ_DASHBOARD
+              value: 0.0.0.0:8080
+            - name: FLEXIQ_DASHBOARD_AUTH
+              value: session
+            - name: FLEXIQ_DASHBOARD_PUBLIC_READINESS
+              value: "1"
+          ports:
+            - { name: attach, containerPort: 7777 }
+            - { name: dashboard, containerPort: 8080 }
+          livenessProbe:
+            httpGet: { path: /health, port: dashboard }
+          readinessProbe:
+            # Needs FLEXIQ_DASHBOARD_PUBLIC_READINESS above; without it this
+            # route 401s at a credential-less probe and the pod never goes Ready.
+            httpGet: { path: /readiness, port: dashboard }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flexiq-scheduler
+spec:
+  selector:
+    app: flexiq-scheduler
+  ports:
+    - { name: attach, port: 7777, targetPort: attach }
+```
+
+Executors then set `FLEXIQ_ATTACH: flexiq-scheduler:7777` and read
+`FLEXIQ_ATTACH_TOKEN` from the same Secret. Everything else about the sidecar
+is unchanged. The Service publishes `attach` and nothing else — give the
+dashboard its own Service or Ingress when you want it reachable, so the port
+that dispatches code and the port people browse are never the same object.
+
+<Callout type="warn" title="/readiness is gated unless you say otherwise">
+  `/health` is never gated, and reports only that the process is up — which
+  makes it a liveness probe and nothing more. `/readiness` is the one that
+  checks storage, and it is gated alongside `/metrics`: with
+  `FLEXIQ_DASHBOARD_AUTH=session`, or with `FLEXIQ_DASHBOARD_METRICS_TOKEN`
+  set, a bare probe gets `401` and the pod never goes Ready.
+
+  A kubelet probe carries no credential and cannot be given one — a probe header
+  is a literal string in the manifest, so authenticating it would mean copying
+  the token out of its Secret into the Deployment spec.
+  `FLEXIQ_DASHBOARD_PUBLIC_READINESS=1` answers that one route without a
+  credential instead; `/metrics` stays gated. What it publishes to anything that
+  can reach the port is whether storage answers and how many workers are
+  registered. Leave it off and probe `/health` for both if that is too much.
+
+  `/readiness` answers `ready` whenever storage answers and the worker registry
+  can be read — a check that failed is what degrades it. The count itself is
+  reported but never folded into the status, so an instance whose fleet has
+  scaled to zero — or a producer-only one — still goes Ready; probe it for "can
+  this process serve the queue API", and alert on the worker count separately
+  for "is anything draining the queue". On an attach deployment `/readiness`
+  reports `workers: none` for the same reason — executors are not workers — and
+  still answers 200. Both routes are dashboard routes, so any probing needs
+  `FLEXIQ_DASHBOARD` set; a listener-only server has no HTTP port, and a
+  `tcpSocket` probe on the attach port is the fallback.
+</Callout>
+
+#### With Helm
+
+Both shapes above are what the chart renders, so on Kubernetes you can skip the
+manifests:
+
+```bash
+helm install flexiq ./deploy/helm/flexiq-server \
+  --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
+  --set attach.token="$(openssl rand -base64 32)"
+```
+
+The chart refuses to render the mistakes this page warns about — an attach
+listener with no token, a guessable one, an unauthenticated dashboard — and the
+error names the value to change rather than leaving you a `CrashLoopBackOff` to
+diagnose. See the chart's README for every value.
+
+#### Injecting the sidecar automatically
+
+Adding an executor to a workload is two edits: a container and its environment.
+The chart's admission webhook turns both into annotations, so a workload opts in
+without a manifest change beyond its own metadata:
+
+```bash
+helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values \
+  --set webhook.enabled=true
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    metadata:
+      annotations:
+        flexiq.dev/inject: "true"
+        flexiq.dev/attach: "flexiq-flexiq-server-attach.default.svc:7777"
+        flexiq.dev/slots: "4"
+        flexiq.dev/token-secret: "flexiq-flexiq-server-config"
+        flexiq.dev/token-key: "attach-token"
+        # The one thing the injector cannot infer: what runs an executor inside
+        # your image.
+        flexiq.dev/command: <see below>
+    spec:
+      containers:
+        - name: app
+          image: myapp:1.4.2 # untouched
+```
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+flexiq.dev/command: "flexiq executor --app myapp:queue"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+flexiq.dev/command: "node_modules/.bin/flexiq executor ./app.js"
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+# A JSON array, because one of these arguments would otherwise split on its
+# spaces. The bare form is fine when none of them contain any.
+flexiq.dev/command: '["java","--enable-native-access=ALL-UNNAMED","-cp","app.jar","org.byteveda.flexiq.cli.Cli","executor"]'
+```
+
+  </Tab>
+</CodeTabs>
+
+The injected container reuses **the pod's own image reference**, so the image is
+already on the node and nothing new is pulled — the same reason the sidecar in
+the manifests above repeats `myapp:1.4.2`, now without you writing it twice. It
+also inherits the app container's `env` and `envFrom`, so a handler that reads
+the same configuration the app does keeps working; `flexiq.dev/inherit-env:
+"false"` turns that off.
+
+Worth knowing before you rely on it:
+
+- **A pod that opts in and gets an annotation wrong is rejected**, with the
+  annotation named in the `kubectl` error. Admitting it would produce a
+  deployment that looks healthy and never runs a job.
+- **Injection is idempotent.** A pod that already carries a `flexiq-executor`
+  container is admitted untouched — a second sidecar would silently double its
+  slots.
+- **`failurePolicy` defaults to `Ignore`**, so an injector that is down or wedged
+  cannot stop pod creation across the cluster. Move it to `Fail` once a workload
+  genuinely depends on being injected, and accept that trade.
+- **A `unix:` address needs `flexiq.dev/socket-volume`** naming the volume that
+  carries the socket; the sidecar cannot reach a path it has not mounted, and the
+  webhook rejects the pod rather than letting it crash-loop on `ENOENT`.
+
+### Security requirements
+
+The attach port dispatches code. These are requirements, not options:
+
+- **A routable bind needs a token.** `FLEXIQ_LISTEN` on anything but loopback
+  refuses to start without `FLEXIQ_ATTACH_TOKEN`, and a token under 16
+  characters is rejected. Generate it with `openssl rand -base64 32`.
+- **The token comes from the environment, never `argv`.** No SDK offers a flag
+  for it — a secret in `argv` shows up in `ps` output and shell history. Mount it
+  from a Secret or a compose `.env`, not a `command:` line.
+- **Off loopback, terminate mTLS in front of the listener.** The token is a
+  bearer credential, not transport security. `flexiq-server` does not terminate
+  TLS itself, and setting `FLEXIQ_LISTEN_TLS_CERT`/`FLEXIQ_LISTEN_TLS_KEY`
+  fails at startup rather than being quietly ignored — a deployment can't come up
+  believing it is encrypted when it isn't.
+- **Never publish the attach port.** Keep it on the pod or compose network. The
+  compose example maps `8080` and not `7777`; the Service exposes `attach` inside
+  the cluster and nothing to a LoadBalancer.
+- **For a Unix socket, the filesystem is the boundary.** The scheduler chmods it
+  to `0660`, so the shared **group** is the access control — set `fsGroup`
+  explicitly rather than inheriting one image's default and hoping it matches.
+
+### Staying with a worker
+
+If the split isn't worth it for you but cold start is, the complementary fix is
+lazy image pulling — [SOCI](https://github.com/awslabs/soci-snapshotter) or
+[eStargz](https://github.com/containerd/stargz-snapshotter), depending on your
+runtime. Both let a container start before the image is fully pulled, so a
+scale-up doesn't block on the last layer. Note the scope: it fixes the pull, not
+the second resident interpreter or JVM. Combining it with a conventional worker
+is the smaller change; an executor is the one that reclaims the RAM.
+
+### What it costs
+
+- **CPU-heavy tasks compete with request latency.** The executor shares a
+  container with your app, so a task that saturates a core is a task that
+  saturates a core your request handler wanted. Cap `FLEXIQ_SLOTS`, or run a
+  second replica set from the same image with the HTTP server off — you still
+  pay one image, and the two sets scale independently.
+- **A network hop per job.** Every dispatch and every result crosses a socket. A
+  job that runs for a second doesn't notice; a job that runs for a millisecond
+  spends most of its life in the transport. A Unix socket shrinks the hop but
+  doesn't remove the framing — attach is the wrong tool for microsecond-scale
+  tasks, and an in-process worker is the right one.
+- **A second moving part.** The scheduler is a process to deploy, upgrade and
+  watch. It upgrades independently of its executors (the handshake negotiates
+  capabilities rather than demanding matching versions), but it is still one more
+  thing in the diagram.
+
+## The gRPC door
+
+`flexiq-server` binds one listener per role, and `FLEXIQ_GRPC_LISTEN` adds a
+fourth beside attach, the dashboard and the admission webhook. It is the
+network-side producer door — enqueue, read and cancel over gRPC rather than over
+a database connection — alongside `grpc.health.v1` and server reflection.
+
+<Callout type="info" title="A token proves who is calling, not that the line is private">
+Callers present a scoped API token, and the door refuses every call that does
+not. What a bearer token does not do is encrypt the connection — the listener
+terminates no TLS, the same posture the attach listener takes. Put TLS in a
+sidecar proxy or a service mesh in front of it.
+</Callout>
+
+```bash
+FLEXIQ_DSN=postgres://user:pass@host/db \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
+flexiq-server
+```
+
+That listener refuses every call until a token exists, loopback included — see
+[The credential](#the-credential).
+
+The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
+(which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
+Unix socket lands at mode `0660` through the same hardened bind the attach
+listener uses, so the shared **group** is a boundary in front of the credential
+— not a replacement for it. A Unix bind presents a token like any other.
+
+The role ships behind a cargo feature. The published image has it compiled in;
+a binary you built yourself without `--features grpc` rejects
+`FLEXIQ_GRPC_LISTEN` at boot rather than ignoring it, because a deployment that
+looks configured and serves nothing on the port its clients dial is the worse
+failure.
+
+### It serves one namespace, and refuses to start without one
+
+`FLEXIQ_GRPC_LISTEN` requires `FLEXIQ_NAMESPACE`. An unset namespace is not a
+neutral default inside the storage layer — it means three different things
+depending on the call: only the unnamespaced rows to a dequeue, *every*
+namespace to a read addressed by job id, and no filter at all to a listing. A
+network port that could express it would be one bug away from a cross-tenant
+read, so the gRPC door serves exactly one named namespace and never the
+ambiguous one.
+
+The cost is worth stating plainly: **jobs written without a namespace are
+invisible over gRPC.** A deployment that wants this door sets `FLEXIQ_NAMESPACE`
+on the server and configures its producers with the same value. One line, paid
+once, in exchange for making a cross-tenant read structurally impossible rather
+than conditionally absent.
+
+### What it serves
+
+`flexiq.v1.ProducerService` — `Enqueue`, `EnqueueBatch`, `GetJob`, `ListJobs`,
+`CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
+
+```bash
+# $FLEXIQ_TOKEN is a token you minted — see "The credential" below. Exported
+# rather than prefixed onto the command: a `VAR=x cmd` assignment reaches that
+# one process, and every call in this block needs the value.
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 list
+# Health is the exception, and needs no credential.
+grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
+  localhost:50051 flexiq.v1.ProducerService/Enqueue
+```
+
+A job enqueued this way is an ordinary row: the same scheduler dispatches it and
+an unmodified SDK worker runs it, with nothing about the job recording which
+door it came through.
+
+Two things the surface deliberately does not offer. There is **no admin
+surface** on this door — pausing queues, settings, dead-letter operations and
+webhook secrets stay behind the dashboard's session and role check, because an
+operator surface and a producer surface should not share a credential. And there
+is **no way to name a namespace**; see below.
+
+### The credential
+
+A caller presents a **scoped API token** as an `authorization` metadata entry.
+Tokens live in the database rather than in the environment, which is what makes
+each of the next three sentences true: one can be revoked without touching any
+other, one can be granted less than the whole surface, and one carries a record
+of when it was last used.
+
+Mint the first one wherever the server can reach its database — no listener has
+to be running:
+
+```bash
+export FLEXIQ_DSN=postgres://user:pass@host/db
+export FLEXIQ_NAMESPACE=prod
+
+flexiq-server token create --name my-producer --scope produce
+```
+
+It prints the token to stdout, once:
+
+```text
+fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
+```
+
+That is the only time it is shown. What the server stores is a SHA-256 digest of
+the secret half, so the token is not recoverable from the row, from a database
+dump, or from anyone with admin access. If it is lost, revoke it and issue
+another.
+
+The token is the *only* thing on stdout — the confirmation goes to stderr — so a
+command substitution captures the credential and nothing else:
+
+```bash
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
+```
+
+Then run the door and present it:
+
+```bash
+FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_DSN=postgres://user:pass@host/db \
+flexiq-server
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -d '{"task_name": "send_email", "options": {"queue": "emails"}}' \
+  localhost:50051 flexiq.v1.ProducerService/Enqueue
+```
+
+The dashboard does the same three things under **Configuration → gRPC tokens**,
+behind its existing admin role — minting is an operator action, and a producer
+credential must never be able to mint itself a wider one.
+
+<Callout type="warn" title="There is no fallback credential">
+An unprovisioned door serves **nothing**. Loopback and Unix-socket binds are not
+exempt: a listener with no token minted refuses every call, because a door with
+no credential configured is a misconfiguration rather than a permission grant.
+Earlier releases accepted a `FLEXIQ_GRPC_TOKEN` shared secret and let a loopback
+bind through anonymously; both are gone, and the variable is no longer read.
+</Callout>
+
+#### Scopes
+
+A token grants one scope per proto package, and the two are deliberately not a
+hierarchy:
+
+| Scope | Package | What it opens |
+| --- | --- | --- |
+| `produce` | `flexiq.v1` | Submit, read and cancel work |
+| `execute` | `flexiq.executor.v1` | Claim work and report on it |
+
+A producer and an executor need opposite permissions, so **a token that can poll
+for work cannot enqueue it**, and a `produce` token asked for an executor RPC is
+refused with `PERMISSION_DENIED` and the reason `SCOPE_DENIED`, carrying the
+scope it lacked in the error metadata. Repeat `--scope` to grant both, and grant
+both only to something that genuinely does both.
+
+#### Expiry
+
+Every token expires. The default is 90 days and the maximum is 365 — a
+credential with no end date is a permanent one with extra steps — and a request
+for longer is refused rather than quietly clamped. Once a token is inside 30, 20
+and 10 days of expiry, the server logs a warning the first time it is *used* at
+each threshold, so the credentials that get a reminder are the ones actually
+carrying traffic.
+
+#### Revocation
+
+```bash
+flexiq-server token list
+flexiq-server token revoke 9f2c1ab74e05d366
+```
+
+**A revoked token fails on its next call, with no restart.** The door reads the
+row per call rather than caching a verdict, so a revocation from the dashboard,
+from another pod, or from a shell takes effect immediately everywhere. The row
+survives revocation — it is the record that the credential existed, who minted
+it and when it was last used.
+
+The id (`9f2c1ab74e05d366` above, and the part of the token before the dot) is
+public: it is what a listing shows and what `revoke` takes, and it is safe in a
+log.
+
+#### One check, one answer
+
+**One check covers the whole listener**, not one per RPC. A missing token, a
+wrong one, a well-formed token for an id that was never minted, one under the
+wrong scheme, an expired one, a revoked one, one minted for another namespace,
+and a call to an RPC that does not exist all answer `UNAUTHENTICATED` with the
+reason `UNAUTHENTICATED` and the same message. Nothing distinguishes them: a
+distinguishable answer tells a client guessing tokens which guess was closer,
+and a path answered before authentication tells it which services the build
+carries.
+
+**The two `grpc.health.v1` RPCs are the one exception** and are answered without
+a credential. `Check` and `Watch` by name, not the whole service prefix — an
+unknown method under it is authenticated like anything else.
+A Kubernetes `grpc:` probe cannot send metadata, so gating health would mean
+either no readiness probe or a token written literally into the Deployment spec.
+What it publishes is one bit — whether storage answers — to something that has
+already reached the port. Reflection is gated with everything else.
+
+The namespace comes from the credential, never from a request: no message in
+`flexiq.v1` has a namespace field, in any RPC. A token is bound to one namespace
+at mint time, and to the namespace the minting process itself serves — a
+credential for a namespace this deployment does not schedule would accept
+enqueues that nothing ever dequeues, which is a success response and no work. A
+token presented to a listener serving a different namespace is refused.
+
+### Two doors for one payload, and only one of them is lossless
+
+`Job.payload` is the tagged envelope from the binding contract: one tag byte,
+then CBOR `[args, kwargs]`. `EnqueueRequest` gives you two ways to supply it,
+and choosing between them is a precision decision rather than a matter of taste.
+
+`raw` carries the envelope you built, byte for byte, all the way to storage. It
+loses nothing, and it needs a CBOR library — it is what an SDK sends.
+
+`structured` takes the arguments as ordinary JSON values and lets the server
+build that same envelope, so a shell script or a `curl` one-liner can enqueue
+work with no codec at all. Nothing downstream can tell the two apart: the row is
+an ordinary row, and for a call with no multi-key object the bytes are the ones
+an SDK would have produced. Object key order is the one exception, below.
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" -d '{
+  "task_name": "charge",
+  "structured": {"args": [{"order_id": "ord-0001", "amount_cents": 1000}]},
+  "options": {"queue": "payments"}
+}' localhost:50051 flexiq.v1.ProducerService/Enqueue
+```
+
+What `structured` cannot carry, it refuses — it never rounds:
+
+- **Integers beyond ±9007199254740991** (`2^53 - 1`). A JSON number is a
+  double, so 9007199254740993 would arrive as 9007199254740992. The request is
+  rejected with `INVALID_ARGUMENT` instead of being quietly rewritten.
+- **Non-finite numbers.** `NaN` and the infinities have no JSON form.
+- **Byte strings, CBOR tags, and anything else JSON has no syntax for.** There
+  is no way to express them here at all, which is a refusal by construction.
+
+And one thing it normalises rather than refuses: **object key order is not
+preserved.** Keys arrive in a protobuf map, which is unordered by definition, so
+they are encoded sorted. Nothing decodes differently — a CBOR map is unordered
+too — but the bytes differ from what an SDK would have produced for the same
+call, so the SDKs' automatic `auto:` idempotency key, which is a hash over those
+bytes, will not match across the two doors. Set `unique_key` yourself if you
+need deduplication; it is the only mechanism this door offers in any case.
+
+Send `raw` when any of that matters. That both arms exist is the reason none of
+it has to be guessed at.
+
+Two things it does not promise, worth stating before a client assumes
+otherwise. **`unique_key` is not an idempotency key without an expiry**: it
+dedupes against the *active* job, so once the original completes or
+dead-letters the key is released and the same request enqueues a second job. A
+client's total retry deadline therefore has to be shorter than the job's own
+life. And **no write is safely retried blind**: `UNAVAILABLE`,
+`DEADLINE_EXCEEDED` and `CANCELLED` on an `Enqueue` may all mean the write
+landed and the connection dropped afterwards, and no field on the wire can tell
+you which. Clients that retry set a `unique_key`; `EnqueueBatch` needs one per
+item, and neither is retried automatically.
+
+Reflection works without a `.proto` on hand because the wire contract is
+embedded in the binary — the same committed descriptor the buf gate builds, so
+it cannot drift from the schema CI checks.
+
+`grpc.health.v1` is answered out of storage, the same question `/readiness`
+answers on the dashboard: storage is checked, the worker registry is not. A
+queue with no workers is still a queue, but a door that cannot reach its
+database can only fail every call it is handed. In Kubernetes that makes the
+gRPC health check the right **readiness** probe and the wrong liveness one — a
+database outage should take a replica out of rotation, not restart it — which is
+how the Helm chart wires a gRPC-only release. The `grpc` probe field needs
+Kubernetes 1.24; on an older cluster set `grpc.healthProbe=false` and readiness
+falls back to a socket connect.
+
+### Security
+
+Same posture as the attach listener:
+
+- **No TLS is terminated here.** `FLEXIQ_GRPC_TLS_CERT` and
+  `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
+  because a variable that looks like it encrypts the connection and does not is
+  worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
+- **The credential is a bearer token, and it is one factor.** It proves the peer
+  holds a string; it does not encrypt the connection. What it is *not* is a
+  shared secret: each token is named, scoped, expiring and revocable on its own,
+  so a leak costs you one client's access rather than a rotation across every
+  client at once. Only its SHA-256 digest is stored, so the database does not
+  hold anything that can be replayed.
+- **There is no anonymous path and no fallback credential.** A door with no token
+  minted refuses every call, loopback included, because a listener with no
+  credential provisioned is a misconfiguration rather than a permission grant.
+- **Nothing on this door is an admin surface.** Pausing queues, settings,
+  dead-letter operations and webhook secrets stay behind the dashboard's session
+  and role check. A token that leaks costs you an enqueue path, not a tenant.
+
+### With Helm
+
+`grpc.enabled` needs `namespace` and nothing else — the credential is not a
+chart value, because tokens live in the database. A release that still sets
+`grpc.token` or `grpc.existingSecret` is refused at `helm template` time rather
+than starting a door credentialled by a value nothing reads.
+
+```yaml
+namespace: prod
+grpc:
+  enabled: true
+```
+
+Mint the first token against the running release:
+
+```bash
+kubectl exec deploy/flexiq-flexiq-server -- \
+  flexiq-server token create --name my-producer --scope produce
+```
+
+That is also why rotating this credential needs no rollout, unlike the others
+the chart carries: a `secretKeyRef` is resolved into the container's environment
+once at pod start, while a token is read from the database per call.
+
+The door gets its own `ClusterIP` Service — never merged with the
+dashboard's, for the same reason attach is separate — with `appProtocol: grpc`
+so a mesh or an Ingress keyed off it speaks HTTP/2 rather than downgrading and
+breaking every stream. `grpc.enabled` also requires `namespace`.
+
+## WAL mode and backups
+
+flexiq uses SQLite in WAL (write-ahead logging) mode for concurrent
+read/write access. This affects how you back up the database.
+
+**Do NOT** simply copy the `.db` file while the worker is running — you may
+get a corrupted backup if the WAL hasn't been checkpointed.
+
+**Safe backup methods**, both safe while the worker is running:
+
+```bash
+# Option 1: sqlite3 .backup command (safe, online)
+sqlite3 /var/lib/myapp/flexiq.db ".backup /backups/flexiq-$(date +%Y%m%d).db"
+
+# Option 2: SQLite VACUUM INTO command
+sqlite3 /var/lib/myapp/flexiq.db "VACUUM INTO '/backups/flexiq-$(date +%Y%m%d).db';"
+```
+
+## Postgres deployment
+
+<SdkOnly sdk="python">
+
+If you're using the [Postgres backend](/python/operate/backends),
+deployment is simpler in several ways:
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Switching to <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+removes SQLite's shared-file constraint:
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Switching to <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+removes SQLite's shared-file constraint:
+
+</SdkOnly>
+
+- **No shared-file constraints** — workers connect over the network, no need for shared volumes or local storage
+- **Multi-machine workers** — run workers on separate hosts against the same database
+- **Standard backups** — use `pg_dump` instead of `sqlite3 .backup`
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: flexiq
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  worker:
+    build: .
+    environment:
+      FLEXIQ_BACKEND: postgres
+      FLEXIQ_DB_URL: postgresql://flexiq:secret@postgres:5432/myapp
+    depends_on:
+      - postgres
+    stop_signal: SIGINT
+    stop_grace_period: 35s
+
+volumes:
+  pgdata:
+```
+
+<Callout type="info">
+  `FLEXIQ_BACKEND`/`FLEXIQ_DB_URL` above are only read automatically by the
+  Flask and Django integrations — if `myapp:queue` builds the `Queue` directly,
+  read them yourself, the same way the [Dockerfile](#dockerfile) section above
+  does for `FLEXIQ_DB_PATH`.
+</Callout>
+
+  </Tab>
+  <Tab sdk="node">
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: flexiq
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  worker:
+    build: .
+    environment:
+      FLEXIQ_PG_URL: postgresql://flexiq:secret@postgres:5432/myapp
+    depends_on:
+      - postgres
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+
+volumes:
+  pgdata:
+```
+
+<Callout type="info">
+  `FLEXIQ_PG_URL` above is illustrative — read it in your own entrypoint
+  (`new Queue({ backend: "postgres", dsn: process.env.FLEXIQ_PG_URL })`); the
+  `flexiq` CLI and `runWorker()` don't read it automatically.
+</Callout>
+
+  </Tab>
+  <Tab sdk="java">
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: flexiq
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  worker:
+    build: .
+    environment:
+      FLEXIQ_PG_URL: postgresql://flexiq:secret@postgres:5432/myapp
+    depends_on:
+      - postgres
+    stop_signal: SIGTERM
+    stop_grace_period: 65s
+
+volumes:
+  pgdata:
+```
+
+<Callout type="info">
+  `FLEXIQ_PG_URL` above is illustrative — read it yourself (e.g.
+  `FlexiQ.builder().postgres(System.getenv("FLEXIQ_PG_URL")).open()`); the
+  builder has no automatic env-var lookup.
+</Callout>
+
+  </Tab>
+</CodeTabs>
+
+### Backups
+
+```bash
+# Dump the flexiq schema
+pg_dump -h localhost -U flexiq -d myapp -n flexiq > backup.sql
+
+# Restore
+psql -h localhost -U flexiq -d myapp < backup.sql
+```
+
+<SdkOnly sdk="python">
+
+See the [Postgres Backend guide](/python/operate/backends) for full
+configuration details.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+See <SdkLink to="operate/backends">Backends</SdkLink> for Redis, and
+for when to reach for Postgres over SQLite.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+See <SdkLink to="operate/backends">Backends</SdkLink> for Redis, and
+for when to reach for Postgres over SQLite.
+
+</SdkOnly>
+
+## Database maintenance
+
+### Auto-cleanup
+
+<SdkOnly sdk="python">
+
+Set `result_ttl` to automatically purge old completed jobs:
+
+```python
+queue = Queue(
+    db_path="/var/lib/myapp/flexiq.db",
+    result_ttl=86400,  # Purge completed/dead jobs older than 24 hours
+)
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+There's no built-in TTL option — run [manual cleanup](#manual-cleanup) on a
+schedule instead (a cron job, or a periodic task on the queue itself).
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There's no built-in TTL option — run [manual cleanup](#manual-cleanup) on a
+schedule instead (a cron job, or a periodic task on the queue itself).
+
+</SdkOnly>
+
+### Manual cleanup
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Purge completed jobs older than 7 days (older_than is in seconds)
+queue.purge_completed(older_than=604800)
+
+# Purge dead letters older than 30 days
+queue.purge_dead(older_than=2592000)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Purge completed jobs older than 7 days (olderThanMs is in milliseconds)
+await queue.purgeCompleted(7 * 24 * 60 * 60 * 1000);
+
+// Purge dead letters older than 30 days
+await queue.purgeDead(30 * 24 * 60 * 60 * 1000);
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Purge completed jobs older than 7 days (olderThanMs is in milliseconds)
+flexiq.purgeCompleted(Duration.ofDays(7).toMillis());
+
+// Purge dead letters older than 30 days
+flexiq.purgeDead(Duration.ofDays(30).toMillis());
+```
+
+  </Tab>
+</CodeTabs>
+
+### Database size
+
+The database grows as jobs accumulate — roughly 1 KB per job for metadata and
+small payloads, more for large arguments or results. Without cleanup, expect
+steady growth; with regular purging (above) the database stays compact. You
+can also periodically run `VACUUM` to reclaim space:
+
+```bash
+sqlite3 /var/lib/myapp/flexiq.db "VACUUM;"
+```
+
+<Callout type="info">
+  `VACUUM` rewrites the entire database and requires exclusive access. Run
+  it during low-traffic periods or during a maintenance window.
+</Callout>
+
+## Monitoring in production
+
+### Dashboard
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+flexiq dashboard --app myapp:queue --host 0.0.0.0 --port 8080
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```bash
+flexiq --db flexiq.db dashboard --host 0.0.0.0 --port 8787
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```bash
+flexiq --url flexiq.db dashboard --port 8080
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+The dashboard serves **openly by default** — enable session authentication
+for production with `--auth` (or `serve_dashboard(auth_enabled=True)`).
+With auth enabled, bootstrap the first admin with
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or
+create one through the SPA's first-run setup. Serve it over TLS — see
+[Security: Dashboard](/python/operate/security#dashboard) for the
+full auth, cookie, and role model.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Auth runs **open** by default — anyone who can reach the port has full
+access. Enable session authentication for production with `--auth` (or
+`authEnabled: true` to `serveDashboard`), pass a legacy bearer token
+(`--token`, or `auth: { token }`) for a quick gate, or mount the dashboard
+behind your own auth via the
+<SdkLink to="guides/extend/express">Express</SdkLink> or
+[Fastify](/node/guides/extend/fastify) helpers. Either way, put it
+behind TLS in production.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+The dashboard serves **openly by default** — enable session authentication
+(with OAuth/SSO support) for production with `--auth` (or
+`DashboardServer.start(queue, port, true)`); pass a `token` to
+`start(...)`/`dashboard(...)` for the legacy single-credential mode
+instead. With auth enabled, bootstrap the first admin with
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or
+through the SPA's first-run setup. See
+[Dashboard: Auth](/java/modules/dashboard#auth) for the full model.
+
+</SdkOnly>
+
+Every SDK's dashboard also exposes liveness/readiness probes outside the auth
+gate, for load balancer and orchestrator health checks:
+
+```bash
+curl http://localhost:8080/health      # always public — liveness
+curl http://localhost:8080/readiness   # storage/worker/resource readiness
+```
+
+### Programmatic stats
+
+Poll queue stats and export them to your monitoring system:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+import time
+
+def export_metrics():
+    while True:
+        stats = queue.stats()
+        # Export to Prometheus, Datadog, StatsD, etc.
+        gauge("flexiq.pending", stats["pending"])
+        gauge("flexiq.running", stats["running"])
+        gauge("flexiq.dead", stats["dead"])
+        time.sleep(15)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+async function exportMetrics() {
+  for (;;) {
+    const stats = await queue.stats();
+    // Export to Prometheus, Datadog, StatsD, etc.
+    gauge("flexiq.pending", stats.pending);
+    gauge("flexiq.running", stats.running);
+    gauge("flexiq.dead", stats.dead);
+    await new Promise((r) => setTimeout(r, 15_000));
+  }
+}
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+void exportMetrics() throws InterruptedException {
+    while (true) {
+        QueueStats stats = flexiq.stats();
+        // Export to Prometheus, Datadog, StatsD, etc.
+        gauge("flexiq.pending", stats.pending);
+        gauge("flexiq.running", stats.running);
+        gauge("flexiq.dead", stats.dead);
+        Thread.sleep(15_000);
+    }
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+For a ready-made exporter instead of polling by hand, see
+[Prometheus](/python/guides/extend/prometheus).
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+For a ready-made exporter instead of polling by hand, see
+[Prometheus](/node/guides/extend/prometheus).
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+For a ready-made exporter instead of polling by hand, see
+[Micrometer](/java/guides/extend/micrometer).
+
+</SdkOnly>
+
+### Alerting on failure
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.on_failure
+def alert_on_failure(task_name, args, kwargs, error):
+    # Fires on every raised exception, including ones that still have
+    # retries left. Send to PagerDuty, Slack, email, etc.
+    notify(f"Task {task_name} failed: {error}")
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Fires once a job exhausts its retries and dead-letters.
+queue.on("job.dead", (event) => {
+  notify(`Task ${event.taskName} dead-lettered: ${event.error}`);
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Fires once a job exhausts its retries and dead-letters.
+flexiq.worker()
+        .handle(sendEmail, handlers::sendEmail)
+        .on(EventName.DEAD, event -> notify("Task dead-lettered: " + event.error))
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+`on_failure` fires on every attempt that raises, whether or not a retry
+follows. To alert only once a job is permanently dead-lettered, use
+`queue.on_event(EventType.JOB_DEAD, ...)` instead — see
+[Events](/python/guides/extend/events).
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+See [Events](/node/guides/extend/events) for the full set
+(`job.completed`, `job.retrying`, `job.dead`, `job.cancelled`) and
+[Webhooks](/node/guides/extend/webhooks) to deliver them to an
+external HTTP endpoint instead of in-process.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+See [Events](/java/guides/extend/events) for the full set (`SUCCESS`,
+`RETRY`, `DEAD`, `CANCELLED`) and
+[Webhooks](/java/guides/extend/webhooks) to deliver them to an
+external HTTP endpoint instead of in-process.
+
+</SdkOnly>
+
+### Health check endpoint
+
+<SdkOnly sdk="python">
+
+```python
+from fastapi import FastAPI
+from flexiq.contrib.fastapi import FlexiQRouter
+
+app = FastAPI()
+app.include_router(FlexiQRouter(queue), prefix="/tasks")
+
+# GET /tasks/stats returns queue health
+# Use this as a health check endpoint in your load balancer
+```
+
+`FlexiQRouter` has no auth of its own — mount it behind your app's existing
+auth, or stick to the dashboard's public `/health`/`/readiness` probes above.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+```ts
+import express from "express";
+import { flexiqRouter } from "@byteveda/flexiq/contrib/express";
+
+const app = express();
+app.use("/tasks", flexiqRouter(queue));
+
+// GET /tasks/stats returns queue health
+// GET /tasks/health, GET /tasks/readiness are the probes
+```
+
+`flexiqRouter` has no auth of its own — mount it behind your app's existing
+auth, or stick to the dashboard's public `/health`/`/readiness` probes above.
+
+Without any router, `checkHealth()` and `checkReadiness(queue)` give you the
+same probe payloads to serve from your own routes:
+
+```ts
+import { checkHealth, checkReadiness } from "@byteveda/flexiq";
+
+app.get("/healthz", (_req, res) => res.json(checkHealth()));
+app.get("/readyz", async (_req, res) => {
+  const report = await checkReadiness(queue);
+  res.status(report.status === "ready" ? 200 : 503).json(report);
+});
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There's no lightweight REST-framework helper — use the dashboard's `/health`
+and `/readiness` probes above (public by default; gate them with
+`FLEXIQ_DASHBOARD_METRICS_TOKEN`), or add a route in your own web framework
+that calls `flexiq.stats()`.
+
+</SdkOnly>
+
+## Multiple workers
+
+<SdkOnly sdk="python">
+
+flexiq is designed as a **single-process** task queue when using SQLite.
+Running multiple worker processes against the same SQLite file is possible
+(WAL mode allows concurrent access), but:
+
+- Only one process can write at a time — this limits throughput
+- SQLite lock contention increases with more writers
+- There is no distributed coordination between workers
+
+For most single-machine workloads, one worker process with multiple threads
+(the default) is sufficient:
+
+```python
+queue = Queue(
+    db_path="myapp.db",
+    workers=8,  # 8 OS threads in the worker pool
+)
+```
+
+If you need distributed workers across multiple machines, use the
+[Postgres backend](/python/operate/backends) which removes the
+single-writer constraint and supports multi-machine deployments.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+There's no thread-pool size to tune — a Node worker dispatches jobs as
+ordinary event-loop async invocations, bounded by `channelCapacity` and
+per-task/per-queue <SdkLink to="guides/reliability/concurrency">concurrency
+caps</SdkLink>, not an OS thread count. Scaling out means running more worker
+**processes** (or hosts) against the same storage — the core claims each job
+for exactly one of them, so adding workers adds throughput without duplicate
+execution. See [Execution model](/node/guides/core/execution-model).
+
+Multiple processes against one SQLite file work (WAL mode allows concurrent
+access), but only one can write at a time — heavy concurrent writers surface
+as `SQLite database is locked` errors. Move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink> once that
+happens.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Size the handler thread pool with `concurrency(n)`, or let
+[autoscale](/java/modules/autoscaling) resize it between a min and
+max as queue depth changes:
+
+```java
+flexiq.worker()
+        .handle(sendEmail, handlers::sendEmail)
+        .concurrency(8) // fixed pool; near the core count for CPU-bound work
+        .start();
+```
+
+Scaling out means running more worker **processes** (or hosts) against shared
+storage. Multiple processes against one SQLite file work (WAL mode allows
+concurrent access), but only one can write at a time — move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink> for
+heavy concurrent writers or true multi-machine deployment.
+
+</SdkOnly>
+
+## SQLite scaling limits
+
+flexiq uses SQLite as its default storage backend. Understanding its
+limitations helps you plan for production.
+
+**Single-writer constraint.** SQLite allows only one write transaction at a
+time. WAL mode lets reads proceed concurrently with writes, but all writes
+are serialized — this is the primary throughput ceiling, regardless of SDK.
+
+<SdkOnly sdk="python">
+
+**Expected throughput.** On modern hardware with an SSD, expect:
+
+- **1,000–5,000 jobs/second** for enqueue + dequeue cycles (small payloads)
+- Throughput decreases with larger payloads, complex queries, or spinning disks
+- The connection pool size is fixed at 8 for the SQLite backend — it is not
+  configurable from the Python `Queue` constructor. The `pool_size` argument
+  only takes effect on the
+  [Postgres backend](/python/operate/backends#connection-pooling)
+
+**When to upgrade to Postgres:**
+
+- You need multi-machine distributed workers
+- You consistently exceed ~5,000 jobs/second sustained throughput
+- Multiple processes contend heavily for writes (high lock wait times)
+- You need sub-millisecond dequeue latency under high load
+
+flexiq's [Postgres backend](/python/operate/backends) addresses all
+of these limitations while keeping the same API.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Unlike the Python SDK, the SQLite connection pool size is configurable here
+too (default 8) — `new Queue({ poolSize: 16 })` — though the single-writer
+constraint above still caps write throughput regardless of pool size. When
+lock contention or the need for multi-machine workers shows up, move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink>; exact
+throughput numbers depend heavily on payload size and handler duration, so
+benchmark your own workload rather than relying on a generic figure.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Unlike the Python SDK, the SQLite connection pool size is configurable here
+too (default 8) — `.poolSize(16)` on the builder — though the single-writer
+constraint above still caps write throughput regardless of pool size. When
+lock contention or the need for multi-machine workers shows up, move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink>; exact
+throughput numbers depend heavily on payload size and handler duration, so
+benchmark your own workload rather than relying on a generic figure.
+
+</SdkOnly>
+
+## Sizing your deployment
+
+<SdkOnly sdk="python">
+
+| Throughput | Backend | Workers | Pool | Notes |
+|-----------|---------|---------|------|-------|
+| < 100 jobs/s | SQLite | 4 | thread | Default config works fine |
+| 100–1K jobs/s | SQLite | 8–16 | thread or prefork | Increase `workers`, monitor WAL size |
+| 1K–5K jobs/s | SQLite | 16 | prefork | Prefork for CPU-bound; SQLite handles this well with WAL |
+| 5K–20K jobs/s | Postgres | 16–32 | prefork | Switch to Postgres for concurrent writers |
+| 20K–50K jobs/s | Postgres | 32+ | prefork | Multiple worker processes, tune `pool_size` |
+| > 50K jobs/s | — | — | — | Consider Celery + RabbitMQ for this scale |
+
+`Pool` is the worker execution pool: `thread` (default, one process with
+multiple OS threads) or `prefork` (multiple worker subprocesses, true CPU
+parallelism). See [Prefork Workers](/python/guides/core/prefork)
+for when and how to switch.
+
+<Callout type="info">
+  These are rough guidelines for noop tasks. Real throughput depends on task
+  duration, payload size, and I/O patterns.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+There's no published throughput table for the Node SDK — the event-loop
+execution model (no thread-pool sizing to tune) makes it a poor fit for the
+kind of `workers`/`pool` matrix the Python SDK publishes. As a starting
+point:
+
+- CPU-bound handlers: offload to `worker_threads` and keep the event loop free
+- I/O-bound handlers: raise `channelCapacity`/`batchSize` and add worker processes
+- Once SQLite write contention shows up, move to
+  <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+
+See [Execution model](/node/guides/core/execution-model) and
+[Concurrency](/node/guides/reliability/concurrency). Benchmark your own
+handlers rather than assuming generic numbers transfer.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+There's no published throughput table for the Java SDK — real-thread
+execution and `concurrency`/`autoscale` sizing don't map onto the Python
+SDK's `workers`/`pool` matrix. As a starting point:
+
+- CPU-bound handlers: size `concurrency(n)` near the core count
+- I/O-bound handlers: let the cached pool (default) or
+  [autoscale](/java/modules/autoscaling) breathe with queue depth
+- Once SQLite write contention shows up, move to
+  <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+
+See [Execution model](/java/guides/core/execution-model). Benchmark your own
+handlers rather than assuming generic numbers transfer.
+
+</SdkOnly>
+
+## Namespaces as a tenancy boundary
+
+A namespace scopes everything a deployment can see and act on. Set it once, on
+the queue, and every worker, dashboard and admin call inherits it:
+
+<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} />
+
+The boundary holds in both directions:
+
+- **Listings and totals** — jobs, dead letters, logs, metrics, the archive and
+  every aggregate report only that namespace's rows.
+- **Ids** — a job id from another namespace reads as missing and mutating it has
+  no effect, so a caller learns nothing about ids outside its own.
+- **Recovery** — timeouts, dead-worker reaps and per-task concurrency counts stay
+  inside the namespace, so one tenant's backlog never consumes another's budget
+  or gets retried by the wrong scheduler.
+- **Workflows** — a run belongs to the namespace whose queue started it, and its
+  nodes inherit that. A run id from another namespace reads as missing.
+- **Dependencies** — a job may only depend on one in its own namespace; an
+  attempt to cross reports the dependency as not found.
+
+Leaving the namespace unset (the default) addresses **every** namespace. That is
+what a single-tenant deployment wants, and what an operator console pointed at
+the whole cluster wants — but it means an unscoped process is not confined by
+this boundary. Scope the ones that should be.
+
+<Callout type="warn" title="Not an authorization boundary">
+  A namespace confines a correctly-configured process; it does not authenticate
+  one. Anything holding the database credentials can open an unscoped queue and
+  read every namespace. Isolation between untrusted tenants needs separate
+  databases or separate credentials, not just separate namespaces.
+</Callout>
+
+Runs created before the namespace column existed carry none, so a scoped process
+does not see them — the same trade every other pre-namespace row makes. An
+unscoped console still does.
+
+## Gating schema changes
+
+By default, opening a queue applies any pending schema changes — zero-config, and
+the right behavior for most deployments. Where the application's database
+credentials do not permit DDL, or a DBA owns every migration, turn it off and
+apply the schema explicitly:
+
+<SdkSwap python={<code>Queue(auto_migrate=False)</code>} node={<code>new Queue(&#123; autoMigrate: false &#125;)</code>} java={<code>FlexiQ.builder().autoMigrate(false)</code>} />
+
+Nothing then applies DDL until you run the migrate command, which is idempotent
+and safe to run on every deploy:
+
+```bash
+flexiq migrate
+```
+
+It reports the versions it applied — core and workflow tables both — plus any
+terminal jobs the one-time backlog sweep moved into the archive. On an
+already-current database it applies nothing and says so. On Redis there is no
+schema to apply and it reports that instead of failing.
+
+<Callout type="warn" title="Migrate before you serve">
+  A gated queue has no tables until the command runs, so every query fails until
+  then. `flexiq-server` honors the same switch through `FLEXIQ_AUTO_MIGRATE`
+  and refuses to start when the **core** schema is absent, naming the variable
+  rather than leaking a bare "no such table". Workflow tables are not part of
+  that check — a deployment that never runs workflows does not need them — so
+  run the command, which applies both.
+</Callout>
+
+## Version skew and the contract floor
+
+A deployment outlives individual releases: during any rolling upgrade one
+database is read by processes at different versions, and in a polyglot setup by
+different SDKs too. Two things keep that safe.
+
+**Schema changes are expand-only.** A new column is nullable or defaulted, an
+existing one keeps its meaning forever, and a reader treats a field a peer never
+wrote as absent rather than failing. That is why a worker registered by an older
+release reports no SDK version instead of a wrong one.
+
+**The storage carries a floor.** Every build speaks one *contract level* — the
+revision of the shared storage and wire contract it implements. The floor is the
+lowest level a process may speak and still open the storage; a build below it
+refuses to start, naming both levels, rather than joining and misreading rows its
+contract never described.
+
+<SdkSwap python={<code>queue.min_contract()</code>} node={<code>queue.minContract()</code>} java={<code>flexiq.minContract()</code>} />
+
+The floor starts permissive and is an operator's dial, not an automatic one —
+one that rose on its own would lock out the peers still mid-rollout. Raise it
+only once every process is upgraded:
+
+<SdkSwap python={<code>queue.set_min_contract(2)</code>} node={<code>queue.setMinContract(2)</code>} java={<code>flexiq.setMinContract(2)</code>} />
+
+A level the calling build cannot itself speak is rejected, since that write would
+lock the operator out of their own storage. An attached executor has no storage
+of its own, so it has no floor to check — the scheduler it attaches to was
+already held to one.
+
+## Checklist
+
+- [ ] Use an absolute path for the SQLite file
+- [ ] Place SQLite on local (not network) storage
+- [ ] Purge old completed/dead jobs on a schedule
+      (<SdkSwap python={<><code>result_ttl</code> automates this</>} node={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} java={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} />)
+- [ ] Set a timeout on tasks to recover from worker crashes
+      (<SdkSwap python={<code>timeout=</code>} node={<code>timeoutMs</code>} java={<code>.timeout(Duration...)</code>} />)
+- [ ] Configure the process manager's stop signal correctly
+      (<SdkSwap python={<code>SIGINT</code>} node={<><code>SIGINT</code>/<code>SIGTERM</code>, mind the fixed 200ms CLI grace</>} java={<><code>SIGTERM</code> via a shutdown hook</>} />)
+- [ ] Set up failure hooks or monitoring for alerting
+- [ ] Back up the database using `sqlite3 .backup` (not file copy), or `pg_dump` for Postgres
+- [ ] Set a namespace on every process that should be confined to one tenant —
+      an unset namespace addresses all of them
+- [ ] Put the dashboard behind TLS and enable auth — it serves openly by default
+      (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" />)
+- [ ] Running [attached executors](#attached-executors)? Keep the attach port off
+      the host network, set `FLEXIQ_ATTACH_TOKEN` for any bind but loopback, and
+      terminate mTLS in front of it

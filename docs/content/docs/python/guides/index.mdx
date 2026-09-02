@@ -1,33 +1,26 @@
 ---
 title: Guides
-description: Topical guides covering flexiq's surface area.
+description: Task-shaped how-tos covering flexiq's day-to-day surface.
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
-import {
-  Boxes,
-  ShieldCheck,
-  Cpu,
-  Wrench,
-  Activity,
-  Layers,
-  Workflow,
-  Plug,
-  Puzzle,
-  LayoutDashboard,
-} from "lucide-react";
+import { Boxes, ShieldCheck, Puzzle } from "lucide-react";
 
 Pick the topic you're working through. Each guide is self-contained, with code
-samples, gotchas, and links to the relevant API reference. For a one-page
-overview of everything flexiq does, see
+samples, gotchas, and links to the relevant API reference. Subsystems with their
+own surface — workflows, durable steps, the dashboard, dependency injection,
+mesh, the attached executor, autoscaling — live under
+[**Modules**](/python/modules/workflows); running flexiq in production lives
+under [**Operate**](/python/operate/backends). For a one-page overview of
+everything flexiq does, see
 [**Capabilities at a glance**](/python/getting-started/capabilities).
 
 <Cards>
   <Card
     icon={<Boxes />}
-    title="Core"
+    title="Tasks & execution"
     href="/python/guides/core"
-    description="Define tasks, route to queues, run workers, schedule periodics."
+    description="Define tasks, route to queues, run workers, schedule, stream, batch."
   />
   <Card
     icon={<ShieldCheck />}
@@ -36,51 +29,9 @@ overview of everything flexiq does, see
     description="Retries, dead letters, circuit breakers, idempotency, error handling."
   />
   <Card
-    icon={<Cpu />}
-    title="Advanced execution"
-    href="/python/guides/advanced-execution"
-    description="Prefork pools, native async, streaming, cancellation, soft timeouts."
-  />
-  <Card
-    icon={<Wrench />}
-    title="Operations"
-    href="/python/guides/operations"
-    description="Deployment, scaling, namespaces, migration from Celery."
-  />
-  <Card
-    icon={<Activity />}
-    title="Observability"
-    href="/python/guides/observability"
-    description="Metrics, logs, dashboard, OpenTelemetry, Sentry, Prometheus."
-  />
-  <Card
-    icon={<LayoutDashboard />}
-    title="Dashboard"
-    href="/python/guides/dashboard"
-    description="Built-in web UI — browse jobs, configure webhooks, tune per-task limits, manage the queue."
-  />
-  <Card
-    icon={<Layers />}
-    title="Resources"
-    href="/python/guides/resources"
-    description="Inject DB clients, HTTP sessions, and cloud SDKs by name with hot reload."
-  />
-  <Card
-    icon={<Workflow />}
-    title="Workflows"
-    href="/python/guides/workflows"
-    description="DAGs, fan-out, fan-in, conditions, gates, sub-workflows, incremental re-runs."
-  />
-  <Card
-    icon={<Plug />}
-    title="Integrations"
-    href="/python/guides/integrations"
-    description="Django, FastAPI, Flask — admin views, REST routers, management commands."
-  />
-  <Card
     icon={<Puzzle />}
-    title="Extensibility"
-    href="/python/guides/extensibility"
-    description="Custom serializers, middleware, events, webhooks, proxies."
+    title="Extend & integrate"
+    href="/python/guides/extend"
+    description="Events, middleware, webhooks, serializers, logging, testing, framework and vendor integrations."
   />
 </Cards>

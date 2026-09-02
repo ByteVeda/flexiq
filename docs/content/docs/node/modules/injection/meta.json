@@ -1,0 +1,12 @@
+{
+  "title": "Dependency Injection",
+  "pages": [
+    "index",
+    "dependency-injection",
+    "proxies",
+    "interception",
+    "configuration",
+    "observability",
+    "testing"
+  ]
+}

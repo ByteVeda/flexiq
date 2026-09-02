@@ -1,0 +1,130 @@
+---
+title: Monitoring & Hooks
+description: "Queue stats, per-execution metrics, and worker heartbeats from the FlexiQ handle."
+---
+
+Read live queue health straight from the `FlexiQ` handle — no extra service.
+The same data powers the [dashboard](/java/modules/dashboard) and the
+[CLI](/java/operate/cli) read commands.
+
+## Stats
+
+Counts by status, globally or per queue:
+
+```java
+QueueStats stats = flexiq.stats(); // pending, running, completed, failed, dead, cancelled
+flexiq.statsByQueue("default");
+flexiq.statsAllQueues();           // Map<String, QueueStats>
+```
+
+## Metrics
+
+`metrics(taskName, sinceMs)` returns the raw per-execution records within a
+trailing window — wall time, memory, and success flag for each finished
+attempt. Pass `null` as the task name for all tasks:
+
+```java
+List<TaskMetric> lastHour = flexiq.metrics(null, 3_600_000L);
+for (TaskMetric m : flexiq.metrics("add", 3_600_000L)) {
+    System.out.println(m.taskName + " " + m.wallTimeNs / 1_000_000 + "ms ok=" + m.succeeded);
+}
+```
+
+Each `TaskMetric` carries `taskName`, `jobId`, `wallTimeNs` (nanoseconds),
+`memoryBytes`, `succeeded`, and `recordedAt`. Aggregation (percentiles, rates)
+is up to you — or plug in [Micrometer](/java/guides/extend/micrometer)
+for a ready-made timer per task.
+
+## Error history
+
+Per-attempt failures for one job:
+
+```java
+List<JobError> errors = flexiq.jobErrors(jobId); // attempt, error, failedAt
+```
+
+## Workers
+
+Each running worker registers and heartbeats; list the live fleet:
+
+```java
+for (WorkerInfo w : flexiq.listWorkers()) {
+    System.out.println(w.workerId + " " + w.hostname + " " + w.status
+            + " threads=" + w.threads + " beat=" + w.lastHeartbeat);
+}
+```
+
+A worker appears while it heartbeats (`lastHeartbeat` is Unix milliseconds);
+`stop()` unregisters it. See [Deployment](/java/operate/deployment)
+for the worker lifecycle.
+
+## Health & readiness
+
+`Health.check()` and `Health.readiness(flexiq)` are standalone — no dashboard,
+no HTTP server. Wire them into whatever already serves your probes, or call
+them from a script:
+
+```java
+import org.byteveda.flexiq.health.Health;
+import org.byteveda.flexiq.health.ReadinessReport;
+
+Health.check();                                  // HealthReport[status=ok] — liveness, never touches storage
+
+ReadinessReport report = Health.readiness(flexiq);
+report.ready();                                  // true when storage answered and no resource is unhealthy
+report.toMap();
+// {
+//   "status": "ready",
+//   "checks": {
+//     "storage": "ok",
+//     "workers": { "count": 2, "status": "ok" },
+//     "resources": { "count": 1, "unhealthy": [], "status": "ok" }
+//   }
+// }
+```
+
+`Health.readiness` never throws: a dependency that fails is reported as
+`"error: <message>"` in `checks` and degrades the overall status, so a probe
+endpoint can always answer. The `resources` check is omitted when no worker
+advertises a [worker resource](/java/api-reference/resources); when one does,
+it is built from `Health.resourceStatus(flexiq)`, which aggregates
+per-resource health across every live worker's heartbeat.
+
+<Callout type="warn" title="`ready` does not mean workers are running">
+  An empty fleet is not a failure. `workers` reports
+  `{"count": 0, "status": "none"}` and the overall status stays `ready` —
+  readiness answers whether *this* process can serve the queue API, and workers
+  are a separate deployment that may legitimately scale to zero, so degrading on
+  an empty fleet would leave every producer-only instance permanently unready.
+  Only a worker lookup that *threw* degrades the status, the way unreachable
+  storage or an unhealthy resource does.
+
+  A green `/readiness` therefore does not mean jobs are being consumed. Alert on
+  the fleet size as its own signal — `flexiq.listWorkers()`, or the
+  `flexiq_workers` gauge the dashboard exports on `/metrics`.
+</Callout>
+
+Serve them behind your own routes — return `503` on `degraded` so orchestrators
+drain the instance:
+
+```java
+ReadinessReport report = Health.readiness(flexiq);
+int status = report.ready() ? 200 : 503;
+```
+
+The [dashboard](/java/modules/dashboard) serves these same helpers on
+`/health` and `/readiness`, answering `503` on `degraded` for you.
+
+## Metrics scraping & tracing
+
+For meters and distributed traces, the contrib integrations wrap the
+middleware layer:
+
+- [Micrometer](/java/guides/extend/micrometer) — one `Observation` per execution: a timer plus a trace span, exported by whatever backend your registry is wired to.
+- [Sentry](/java/guides/extend/sentry) — error capture.
+
+<Callout type="info">
+  Lifecycle [events](/java/guides/extend/events) and
+  [middleware](/java/guides/extend/middleware) hooks let you push the
+  same signals to any backend.
+</Callout>

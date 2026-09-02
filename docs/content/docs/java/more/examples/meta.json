@@ -1,6 +1,7 @@
 {
   "title": "Examples",
   "pages": [
+    "index",
     "spring-service",
     "notifications",
     "web-scraper",

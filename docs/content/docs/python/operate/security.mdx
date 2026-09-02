@@ -1,0 +1,167 @@
+---
+title: Security
+description: "Trust model, payload authentication, dashboard auth, webhook SSRF, resource limits, and the production hardening checklist."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+flexiq is a library you embed in your own services, so most of its security
+posture is a function of how you deploy it. This page describes the trust
+model and the controls available to harden a deployment.
+
+## Trust model
+
+The single most important assumption to understand:
+
+<Callout type="warn" title="Storage write access ≈ code execution">
+  flexiq trusts its backing store. The default serializer can execute code
+  on load (cloudpickle handles lambdas and arbitrary objects), so anyone who
+  can write to the SQLite file, the Postgres tables, or the Redis keyspace
+  can craft a job payload that runs arbitrary code on every worker that
+  dequeues it. Treat database/Redis write access as equivalent to shell
+  access on your workers.
+</Callout>
+
+Mitigations, in order of strength:
+
+1. **Lock down the store.** Network-isolate Postgres/Redis, use least-privilege
+   credentials, and never expose the SQLite file to untrusted writers.
+2. **Authenticate payloads** with `SignedSerializer` (below) so a forged
+   payload is rejected before it is ever deserialized.
+3. **Avoid cloudpickle** entirely by using `JsonSerializer` or
+   `MsgPackSerializer` when your task arguments are plain data.
+
+## Payload authentication
+
+`SignedSerializer` prepends an HMAC-SHA256 tag to every payload and verifies
+it (constant-time) before deserializing. A worker refuses any bytes not
+produced with the shared key.
+
+```python
+import os
+from flexiq import Queue
+from flexiq.serializers import SignedSerializer, SmartSerializer
+
+key = os.urandom(32)  # 32+ bytes, identical on producers and workers
+queue = Queue(serializer=SignedSerializer(SmartSerializer(), key))
+```
+
+For confidentiality as well, wrap `EncryptedSerializer` (AES-GCM, so it
+authenticates the payload too — no need to also wrap `SignedSerializer`):
+
+```python
+from flexiq.serializers import EncryptedSerializer, SmartSerializer
+
+enc_key = os.urandom(32)  # 16, 24, or 32 bytes for AES-128/192/256
+queue = Queue(serializer=EncryptedSerializer(SmartSerializer(), enc_key))
+```
+
+See [Pluggable Serializers](/python/guides/extend/serializers) for the full
+matrix.
+
+### Payloads at rest
+
+By default, payloads are stored **unencrypted** (msgpack/cloudpickle bytes).
+Anyone with read access to the database can recover task arguments. Use
+`EncryptedSerializer` when tasks carry secrets or PII.
+
+### Payload size limit
+
+Every serialized payload is capped at `max_payload_bytes` (default **1 MiB**)
+and rejected at enqueue time, so a single producer can't exhaust storage or
+spike worker memory. Adjust or disable it per queue:
+
+```python
+queue.max_payload_bytes = 4 * 1024 * 1024  # 4 MiB
+queue.max_payload_bytes = 0                 # disable the cap
+```
+
+## Dashboard
+
+The dashboard serves **openly by default** — authentication is opt-in via
+`serve_dashboard(auth_enabled=True)` or `flexiq dashboard --auth`. Production
+deployments should enable it (or keep the dashboard on a private network
+behind their own auth). With auth enabled, the dashboard enforces sessions
+once at least one user exists; until then every API route returns
+`503 setup_required`. Bootstrap the first admin with
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`
+(the password is removed from the environment after first use).
+
+- **Roles.** Mutating routes (cancel/replay jobs, purge dead-letters, pause
+  queues, manage webhooks/settings/overrides) require the `admin` role.
+  `viewer` sessions keep read access and their own logout/change-password.
+- **Cookies.** Session and CSRF cookies carry `HttpOnly` (session),
+  `SameSite=Strict`, and `Secure`. Behind a TLS-terminating proxy that speaks
+  plain HTTP to the backend you may need `serve_dashboard(secure_cookies=False)`
+  or `flexiq dashboard --insecure-cookies` — only on a trusted network.
+- **Metrics.** With auth enabled, `/metrics` and `/readiness` require a valid
+  session or the `FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer (give scrapers the
+  token). Without auth they stay public unless that token is set; `/health`
+  is always open for liveness probes.
+- **Settings.** The settings API never exposes or accepts keys under the
+  internal `auth:` namespace (password hashes, sessions, CSRF secret).
+- **Security headers.** Every dashboard response carries a
+  `Content-Security-Policy` locked to the dashboard's own origin,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+  `Referrer-Policy: same-origin`. Configured external links and integration
+  URLs are also scheme-filtered client-side — only `http(s)` and same-origin
+  paths ever become clickable.
+
+<Callout type="warn" title="Contrib routers are not auth-gated by default">
+  The FastAPI/Flask routers in `flexiq.contrib` expose job-control endpoints
+  with **no authentication** unless you attach your own. Always mount them
+  behind your application's auth (e.g. FastAPI `dependencies=[Depends(...)]`).
+</Callout>
+
+## Webhooks
+
+Outbound webhook URLs are validated against private/loopback/link-local and
+cloud-metadata addresses **at delivery time** (not just registration), which
+closes the DNS-rebinding SSRF (server-side request forgery) window, and redirects are not followed. For
+local development against `http://localhost`, set
+`FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1`.
+
+Webhook payloads are signed with HMAC-SHA256 in the `X-Flexiq-Signature`
+header (`sha256=<hex>`). Receivers must verify it with a constant-time
+comparison (`hmac.compare_digest`), never `==`.
+
+## Proxies and interception
+
+These features reconstruct objects from the (untrusted) payload, so they have
+their own guards:
+
+- **Recipe signing.** Set `recipe_signing_key=` (or `FLEXIQ_RECIPE_SECRET`)
+  whenever proxy handlers are registered. Without a key, recipes are
+  reconstructed unverified and a one-time warning is logged.
+- **File proxy allowlist.** `file_path_allowlist` is enforced by path-component
+  containment (no `/var/data` → `/var/data_exfil` bypass) against the resolved
+  path.
+- **Type reconstruction.** Interception only reconstructs known-safe kinds
+  (enums, dataclasses, pydantic models, named tuples); arbitrary
+  import-and-call targets like `os.system` are rejected.
+
+## Distributed locks
+
+`DistributedLock.info()` masks the `owner_id` of locks held by other owners,
+so a peer can't read another holder's token and forge a release. Redis locks
+set a native key TTL, so a crashed holder's lock is reclaimed even if the
+maintenance reaper is down.
+
+## Scaler bind address
+
+`flexiq scaler` and `serve_scaler()` bind to `127.0.0.1` by default. The
+scaler endpoints are unauthenticated — only bind to `0.0.0.0` behind a trusted
+network boundary (e.g. a KEDA sidecar on a private network).
+
+## Production hardening checklist
+
+- [ ] Network-isolate Postgres/Redis; least-privilege credentials.
+- [ ] Use `SignedSerializer` (and/or `EncryptedSerializer`) for the queue.
+- [ ] Set `recipe_signing_key` if any proxy handler is registered.
+- [ ] Enable dashboard auth (`--auth` / `auth_enabled=True`) and create an
+      admin; serve the dashboard over TLS.
+- [ ] Set `FLEXIQ_DASHBOARD_METRICS_TOKEN` if metrics are network-reachable.
+- [ ] Auth-gate any mounted FastAPI/Flask contrib routers.
+- [ ] Leave `max_payload_bytes` enabled (default 1 MiB) unless you need larger.
+- [ ] Keep the scaler bound to loopback (or behind a network policy).
+- [ ] Do **not** set `FLEXIQ_WEBHOOKS_ALLOW_PRIVATE` in production.

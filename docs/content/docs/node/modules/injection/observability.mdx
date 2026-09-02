@@ -1,0 +1,134 @@
+---
+title: Resource observability
+description: "Resource lifecycle metrics, cluster-wide health aggregation, readiness probes, and proxy stats."
+---
+
+The resource system reports through three surfaces: in-process counters on the
+`Queue`, cluster-wide health aggregated from worker heartbeats, and the
+readiness probe that folds both into one answer.
+
+## Lifecycle metrics
+
+`queue.resourceMetrics()` returns per-resource counters for **this process** —
+how many instances were built, disposed, and are currently live:
+
+```ts
+queue.resourceMetrics();
+// {
+//   db:      { created: 1,  disposed: 0,  active: 1 },
+//   session: { created: 87, disposed: 87, active: 0 },
+// }
+```
+
+Read the shape against the scope:
+
+| Scope | Expected pattern |
+|---|---|
+| `worker` | `active: 1` while the worker runs, `0` after `worker.stop()`. |
+| `task` / `request` | `created` and `disposed` climb per job; `active` hovers near zero. |
+| `pooled` | `created` stops at `poolSize`; `active` tracks concurrent checkouts. |
+
+A `pooled` resource whose `created` keeps climbing past `poolSize` is being
+evicted and rebuilt — usually a `maxLifetimeMs` set too low, or a health
+problem in the underlying connection.
+
+## Cluster-wide health
+
+`resourceStatus(queue)` aggregates what every live worker reports in its
+heartbeat, so it answers for the whole deployment rather than the local
+process:
+
+```ts
+import { resourceStatus } from "@byteveda/flexiq";
+
+const status = await resourceStatus(queue);
+// [
+//   { name: "db",     scope: "worker", health: "healthy",   … },
+//   { name: "cache",  scope: "worker", health: "degraded",  … },
+// ]
+```
+
+| `health` | Meaning |
+|---|---|
+| `healthy` | Every worker reporting this resource reports it healthy. |
+| `degraded` | Some workers report it healthy, others do not. |
+| `unhealthy` | Every worker reporting it says unhealthy. |
+| `not_initialized` | A worker advertises the resource but has not reported on it yet. |
+
+`degraded` is the interesting one: it usually means a subset of hosts lost a
+dependency — one pod that can't reach the database, not a global outage.
+
+<Callout type="info">
+  Health only moves for resources with a
+  [`healthCheck`](/node/modules/injection/configuration#health-checks-and-recreation).
+  Without one there is nothing to report, so the resource stays
+  `not_initialized` in this view.
+</Callout>
+
+## Readiness probes
+
+`checkHealth()` and `checkReadiness(queue)` are standalone probes — wire them
+into any HTTP framework, a CLI check, or a container probe:
+
+```ts
+import { checkHealth, checkReadiness } from "@byteveda/flexiq";
+
+app.get("/healthz", (_req, res) => res.json(checkHealth()));       // { status: "ok" }
+app.get("/readyz", async (_req, res) => {
+  const report = await checkReadiness(queue);
+  res.status(report.status === "ready" ? 200 : 503).json(report);
+});
+```
+
+`checkHealth()` is pure liveness — it asserts only that the process answered.
+`checkReadiness()` probes storage, workers, and resources:
+
+```ts
+{
+  status: "degraded",
+  checks: {
+    storage: "ok",
+    workers: { count: 3, status: "ok" },
+    resources: { count: 4, unhealthy: ["cache"], status: "degraded" },
+  },
+}
+```
+
+`resources` is omitted entirely when no worker advertises any. `checkReadiness`
+never throws — a dependency that fails is reported as `"error: <message>"` in
+its slot and degrades the overall status, so the endpoint can always answer.
+
+## Proxy metrics
+
+If you use [resource proxies](/node/modules/injection/proxies),
+`queue.proxyStats()` reports reconstruction on the worker side, per handler:
+
+```ts
+queue.proxyStats();
+// [{ handler: "file", total_reconstructions: 412, total_errors: 0,
+//    total_cleanup_errors: 0, total_checksum_failures: 0,
+//    avg_duration_ms: 1.8, p95_duration_ms: 4.1, max_duration_ms: 22.7 }]
+```
+
+`total_checksum_failures` is the one to alert on — a non-zero value means a
+`ProxyRef` arrived with a signature that did not verify, which is a key
+mismatch between producer and worker at best and tampering at worst.
+
+## Dashboard
+
+The [dashboard](/node/modules/dashboard) surfaces worker resources
+and their health alongside queue stats, so the same signals are available
+without wiring your own endpoint.
+
+<Cards>
+  <Card
+    title="Configuration"
+    href="/node/modules/injection/configuration"
+    description="Health checks, recreation limits, pool tuning, hot reload."
+  />
+  <Card
+    title="Monitoring"
+    href="/node/guides/extend/monitoring"
+    description="Queue-level stats, per-task metrics, worker heartbeats."
+  />
+</Cards>

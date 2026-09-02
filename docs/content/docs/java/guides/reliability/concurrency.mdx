@@ -44,7 +44,7 @@ Worker videoWorker = queue.worker()
         .start();
 ```
 
-Pair a bounded pool with [pooled resources](/java/guides/resources/dependency-injection)
+Pair a bounded pool with [pooled resources](/java/modules/injection/dependency-injection)
 when handlers share an expensive client — the resource pool bounds the client
 instances while the thread pool bounds the executions.
 

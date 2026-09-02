@@ -1,18 +1,23 @@
 {
-  "title": "Core",
+  "title": "Tasks & execution",
   "pages": [
+    "index",
     "tasks",
     "discovery",
     "queues",
     "workers",
     "execution-model",
-    "steps",
     "enqueue-options",
     "scheduling",
     "cancellation",
     "predicates",
     "batching",
-    "pubsub",
-    "workflows"
+    "batch-enqueue",
+    "unique-tasks",
+    "dependencies",
+    "streaming",
+    "async-tasks",
+    "prefork",
+    "pubsub"
   ]
 }

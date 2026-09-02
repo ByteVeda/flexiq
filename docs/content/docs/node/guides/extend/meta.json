@@ -1,0 +1,20 @@
+{
+  "title": "Extend & integrate",
+  "pages": [
+    "index",
+    "events",
+    "middleware",
+    "webhooks",
+    "serializers",
+    "monitoring",
+    "logging",
+    "notes",
+    "testing",
+    "otel",
+    "prometheus",
+    "sentry",
+    "express",
+    "fastify",
+    "nest"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "title": "Extend & integrate",
+  "pages": [
+    "index",
+    "events",
+    "middleware",
+    "webhooks",
+    "serializers",
+    "monitoring",
+    "logging",
+    "notes",
+    "testing",
+    "micrometer",
+    "prometheus",
+    "sentry",
+    "spring"
+  ]
+}
