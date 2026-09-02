@@ -1090,7 +1090,7 @@ flexiq-server
 ```
 
 ```bash
-grpcurl -H "authorization: Bearer $FLEXIQ_TOKEN" \
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   -d '{"task_name": "send_email", "options": {"queue": "emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
@@ -1191,7 +1191,7 @@ an ordinary row, and for a call with no multi-key object the bytes are the ones
 an SDK would have produced. Object key order is the one exception, below.
 
 ```bash
-grpcurl -plaintext -d '{
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" -d '{
   "task_name": "charge",
   "structured": {"args": [{"order_id": "ord-0001", "amount_cents": 1000}]},
   "options": {"queue": "payments"}
