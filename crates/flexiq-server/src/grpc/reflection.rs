@@ -19,9 +19,7 @@ use tonic_reflection::server::v1alpha::{
 };
 use tonic_reflection::server::Builder;
 
-/// The committed `FileDescriptorSet` for `flexiq.v1`, built by
-/// `scripts/proto-check.sh` and verified byte-for-byte in CI.
-const FLEXIQ_DESCRIPTOR: &[u8] = include_bytes!("../../../../contracts/descriptor.binpb");
+use crate::grpc::pb::FILE_DESCRIPTOR_SET as FLEXIQ_DESCRIPTOR;
 
 /// Every descriptor set this server reflects over.
 fn configured() -> Builder<'static> {
