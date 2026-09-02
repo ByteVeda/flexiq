@@ -113,8 +113,16 @@ and `app` kwargs as the sync variant (`app` is required when `pool="prefork"`).
 queue.circuit_breakers() -> list[dict]
 ```
 
-Return current state of all circuit breakers: task name, state
-(`closed`/`open`/`half-open`), failure count, last failure time.
+Live state of every task that has a [circuit breaker](/python/api-reference/task)
+configured: `task_name`, `state` (`closed` / `open` / `half_open`),
+`failure_count`, `last_failure_at`, `opened_at`, and the breaker's own
+`threshold`, `window_ms` and `cooldown_ms`. Read from storage, so the state is
+the cluster's rather than this process's — a breaker one worker opened is open
+for all of them. Declared as `list_circuit_breakers`.
+
+An `open` breaker with an `opened_at` older than `cooldown_ms` is one probe away
+from `half_open`; that pair is what tells you whether a task is still being shed
+or is already recovering.
 
 ## Hooks
 

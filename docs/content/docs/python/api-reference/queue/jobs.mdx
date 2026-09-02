@@ -182,8 +182,11 @@ twins: `alist_archived()` and `alist_archived_after()`.
 queue.replay(job_id: str) -> JobResult
 ```
 
-Re-enqueue a completed or failed job with its original arguments. Returns the
-new job handle.
+Re-enqueue a completed or failed job with its original arguments, and record the
+replay. A **new job**, not a resumed one: it gets a fresh id and a fresh retry
+budget, and the original row is left exactly as it was. Declared as
+`replay_job`, which returns that new id — the Python method fetches it back as a
+`JobResult` for you.
 
 ### `queue.replay_history()`
 
@@ -191,5 +194,8 @@ new job handle.
 queue.replay_history(job_id: str) -> list[dict]
 ```
 
-Return the replay log for a job — every time it has been replayed and the
-resulting new job IDs.
+Every replay of a job, newest first — each dict carries `id`,
+`original_job_id`, `replay_job_id`, `replayed_at` (Unix ms), `original_error`
+and `replay_error`. It is the audit trail for "we retried this by hand", which
+is otherwise invisible: a replay creates an unrelated-looking job. Declared as
+`get_replay_history`.

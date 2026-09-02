@@ -106,6 +106,47 @@ List<JobError> jobErrors(String jobId)
 
 Per-attempt error history, oldest attempt first.
 
+## Replay & the job graph
+
+### `flexiq.replayJob()`
+
+{/* api:FlexiQ.replayJob */}
+```java
+String replayJob(String jobId)
+```
+{/* /api */}
+
+Re-enqueue a copy of a job with its original payload, and record the replay.
+A **new job**, not a resumed one: fresh id, fresh retry budget, and the original
+row untouched. Returns the new id.
+
+### `flexiq.getReplayHistory()`
+
+{/* api:FlexiQ.getReplayHistory */}
+```java
+List<ReplayEntry> getReplayHistory(String jobId)
+```
+{/* /api */}
+
+Every replay of a job, newest first. The audit trail for "we retried this by
+hand", which is otherwise invisible — a replay looks like an unrelated job.
+
+### `flexiq.jobDag()`
+
+{/* api:FlexiQ.jobDag */}
+```java
+JobDag jobDag(String jobId)
+```
+{/* /api */}
+
+The dependency graph reachable from a job: nodes plus edges pointing dependency
+→ dependent. Transitive in both directions, so it answers "what is this waiting
+on, and what is waiting on it" in one call.
+
+Dependency edges never cross namespaces — an enqueue that would create one is
+rejected — so the graph is scoped by its anchor job. A job in another namespace
+comes back with no edges, exactly like an unknown id.
+
 ## Archive
 
 Terminal jobs are moved out of the hot `jobs` table into the archive, so

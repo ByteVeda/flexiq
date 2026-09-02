@@ -25,6 +25,18 @@ what turns a peer that stopped beating into a `worker.offline` event. So a stale
 `lastHeartbeat` means the process is gone or wedged, and `resourceHealth` is
 only ever as fresh as the last beat.
 
+## Circuit breakers
+
+| Method | Description |
+|---|---|
+| `listCircuitBreakers()` → `Promise<CircuitBreaker[]>` | Live state of every task that has a [breaker](/node/api-reference/task) configured: `taskName`, `state` (`closed` / `open` / `half_open`), `failureCount`, `lastFailureAt`, `openedAt`, and the breaker's own `threshold`, `windowMs`, `cooldownMs`. |
+
+State lives in storage, not in the process, so a breaker one worker opened is
+open for the whole fleet. An `open` breaker whose `openedAt` is older than
+`cooldownMs` is one probe away from `half_open` — that pair is what tells you
+whether a task is still being shed or is already recovering. Timestamps are Unix
+milliseconds.
+
 ## Hooks & middleware
 
 | Member | Description |
