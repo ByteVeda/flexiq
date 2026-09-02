@@ -33,7 +33,6 @@ const SECTION_LANDINGS = SDKS.flatMap((sdk): [string, string][] => {
   return [
     [`/${sdk}`, first],
     [`/${sdk}/getting-started`, first],
-    [`/${sdk}/modules`, `/${sdk}/modules/workflows`],
   ];
 });
 

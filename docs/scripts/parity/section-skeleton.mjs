@@ -105,6 +105,7 @@ export const SECTION_SKELETON = [
     // `server` (gRPC server mode) lands here with #721 — add it between
     // `executor` and `autoscaling` along with the pages, not before them.
     pages: [
+      "index",
       "workflows",
       "steps",
       "dashboard",

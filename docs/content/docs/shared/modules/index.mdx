@@ -1,0 +1,92 @@
+---
+title: Modules
+description: "The optional subsystems that sit on top of the core queue — workflows, durable steps, the dashboard, injection, mesh, executors, autoscaling."
+---
+
+import {
+  Workflow,
+  Footprints,
+  LayoutDashboard,
+  Syringe,
+  Network,
+  PlugZap,
+  Gauge,
+} from "lucide-react";
+
+Everything here is optional. The core queue — tasks, jobs, workers, results — is
+complete without a single one of them, and you can adopt any module on its own
+without adopting the rest. Each has its own surface and its own section; this
+page is the map.
+
+If you are still working through the basics, none of this is required reading
+yet. Finish the <SdkLink to="getting-started/quickstart">quickstart</SdkLink>
+first and come back when you hit the problem a module solves.
+
+## Orchestration
+
+<Cards>
+  <Card
+    icon={<Workflow />}
+    title="Workflows"
+    to="modules/workflows"
+    description="Multi-step pipelines as a DAG: fan out, fan in, conditions, gates, sub-workflows, sagas."
+  />
+  <Card
+    icon={<Footprints />}
+    title="Durable steps"
+    to="modules/steps"
+    description="Checkpoints inside one job, so a retry replays the finished parts instead of re-running them."
+  />
+</Cards>
+
+## Operating surface
+
+<Cards>
+  <Card
+    icon={<LayoutDashboard />}
+    title="Dashboard"
+    to="modules/dashboard"
+    description="A built-in web UI and REST API for browsing jobs, replaying dead letters, and tuning per-task limits."
+  />
+  <Card
+    icon={<Gauge />}
+    title="Autoscaling"
+    to="modules/autoscaling"
+    description="Scale worker processes from queue depth — on bare metal, or through KEDA on Kubernetes."
+  />
+</Cards>
+
+## Distribution
+
+<Cards>
+  <Card
+    icon={<Network />}
+    title="Mesh Scheduling"
+    to="modules/mesh"
+    description="Gossip-based peer discovery, hash-ring affinity, and work-stealing between workers."
+  />
+  <Card
+    icon={<PlugZap />}
+    title="Attached Executors"
+    to="modules/executor"
+    description="Run task bodies in your app container while a separate scheduler holds the database credentials."
+  />
+</Cards>
+
+## Wiring
+
+<Cards>
+  <Card
+    icon={<Syringe />}
+    title="Dependency Injection"
+    to="modules/injection"
+    description="Give tasks database handles, clients and config without serializing them into the payload."
+  />
+</Cards>
+
+## Where the rest lives
+
+Day-to-day queue behaviour is in
+<SdkLink to="guides">Guides</SdkLink>; running flexiq in production is in
+<SdkLink to="operate">Operate</SdkLink>; the engine underneath every module is
+described in [Architecture](/architecture/overview).
