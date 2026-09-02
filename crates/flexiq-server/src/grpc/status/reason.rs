@@ -43,6 +43,15 @@ pub const MALFORMED_PAYLOAD: &str = "MALFORMED_PAYLOAD";
 /// storage call, so there is no variant to map. It exists because every error
 /// carries a reason, and a request-validation failure is still an error.
 pub const INVALID_REQUEST: &str = "INVALID_REQUEST";
+/// The path names no RPC this server implements.
+///
+/// Added for the JSON facade (#718). A gRPC caller reaching a method that does
+/// not exist is answered `UNIMPLEMENTED` by the router itself, with no details
+/// attached; a JSON caller gets a body, and a body must carry a reason. It is
+/// its own reason rather than `INVALID_REQUEST` because the two are different
+/// things to a client: one says fix the request, the other says the URL is not
+/// a door. Never retryable, and never an indication of what *does* exist.
+pub const NO_SUCH_METHOD: &str = "NO_SUCH_METHOD";
 /// No such job — or a job in another namespace, which is indistinguishable by
 /// design.
 pub const JOB_NOT_FOUND: &str = "JOB_NOT_FOUND";

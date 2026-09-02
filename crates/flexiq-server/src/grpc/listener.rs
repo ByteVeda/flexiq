@@ -18,6 +18,7 @@ use tokio::net::UnixListener;
 use tokio_stream::wrappers::TcpListenerStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
+use tonic::service::Routes;
 use tonic::transport::Server;
 
 use crate::config::grpc::GrpcConfig;
@@ -25,7 +26,7 @@ use crate::config::listen::ListenAddress;
 use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::producer::Producer;
-use crate::grpc::{health, reflection};
+use crate::grpc::{facade, health, reflection};
 use crate::runtime::shutdown::Shutdown;
 
 /// A bound, not yet serving, gRPC listener.
@@ -85,7 +86,8 @@ impl Listener {
         }
     }
 
-    /// Serve the producer service, health and reflection until `shutdown` fires.
+    /// Serve the producer service, the JSON facade, health and reflection until
+    /// `shutdown` fires.
     pub async fn serve(self, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
         let producer = Producer::new(storage.clone());
         let health = health::serve(
@@ -94,22 +96,35 @@ impl Listener {
             shutdown.clone(),
         )
         .await;
-        // One layer over the whole router, not one per service: `Server::layer`
-        // takes `Layer<Routes>`, so every service registered below — and every
-        // service registered below in future — is gated by this line and by
-        // nothing else. It is also what supplies the namespace: the producer
-        // holds none of its own and reads it off the request's principal.
-        let router = Server::builder()
-            .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
-                storage.clone(),
-                self.config.namespace.as_str(),
-            ))))
+
+        // The facade's routes are the router the gRPC services are then added
+        // to, rather than a second listener or a service behind a proxy: an
+        // HTTP request reaches the same `Producer` through the same layer, in
+        // this process, with no loopback hop. It also owns the fallback, so an
+        // unrouted path is answered in the shape the caller asked in.
+        let routes = Routes::from(facade::router(producer.clone()))
             .add_service(producer.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(
                 reflection::v1alpha()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES),
             );
+
+        // One layer over the whole router, not one per service: `Server::layer`
+        // takes `Layer<Routes>`, so every service registered above — and every
+        // route added in future — is gated by this line and by nothing else. It
+        // is also what supplies the namespace: the producer holds none of its
+        // own and reads it off the request's principal.
+        let mut server = Server::builder()
+            // `curl` speaks HTTP/1.1, and a facade only reachable over h2c
+            // prior knowledge would not be a facade. HTTP/2 is still detected
+            // by its preface, so a gRPC client notices nothing.
+            .accept_http1(true)
+            .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
+                storage.clone(),
+                self.config.namespace.as_str(),
+            ))));
+        let router = server.add_routes(routes);
 
         let listen = self.config.listen.clone();
         let result = match self.incoming {

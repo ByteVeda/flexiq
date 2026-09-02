@@ -21,6 +21,13 @@
 //! so a service registered *without* this layer serves nothing rather than
 //! serving everything unauthenticated.
 //!
+//! The response body is tonic's own rather than a generic one, because a
+//! refusal has to be *rendered*: a gRPC caller needs `grpc-status` trailers and
+//! a JSON caller needs a body with an HTTP status, and only a body type that
+//! can hold bytes can carry the second. Which of the two a request gets is
+//! [`facade::refusal`]'s decision, made from the content type, so this layer
+//! keeps one refusal path for both doors.
+//!
 //! The check is `async` because the credential is a stored row (#717), so the
 //! inner service has to be owned by the future rather than borrowed from
 //! `&mut self`. That is what the clone-and-replace in [`Authenticated::call`]
@@ -41,6 +48,7 @@ use tower_service::Service;
 use super::authenticator::Authenticator;
 use super::gate::{self, Requirement};
 use super::principal::Principal;
+use crate::grpc::facade;
 use crate::grpc::status::WireError;
 
 /// Wraps a service so that every request is authenticated before it is routed.
@@ -81,15 +89,17 @@ pub struct Authenticated<S> {
     authenticator: Arc<dyn Authenticator>,
 }
 
-impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for Authenticated<S>
+impl<S, ReqBody> Service<http::Request<ReqBody>> for Authenticated<S>
 where
-    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
+    S: Service<http::Request<ReqBody>, Response = http::Response<tonic::body::Body>>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
     S::Error: Send + 'static,
     ReqBody: Send + 'static,
-    ResBody: Default + Send + 'static,
 {
-    type Response = http::Response<ResBody>;
+    type Response = http::Response<tonic::body::Body>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -123,7 +133,9 @@ where
                 // A public path: routed with no principal, because nothing
                 // behind one needs a namespace.
                 Ok(None) => {}
-                Err(status) => return Ok(status.into_http()),
+                // One refusal, rendered for whichever door asked: trailers for
+                // a gRPC caller, a JSON body and an HTTP status for the facade.
+                Err(status) => return Ok(facade::refusal(&parts.headers, &status)),
             }
 
             inner.call(http::Request::from_parts(parts, body)).await

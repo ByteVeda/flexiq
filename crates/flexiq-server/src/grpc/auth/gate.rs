@@ -30,6 +30,13 @@ const PRODUCER: &str = "/flexiq.v1.";
 /// The executor package (#720). Classified now so the RPCs that land in it
 /// arrive already gated, rather than relying on that PR to remember.
 const EXECUTOR: &str = "/flexiq.executor.v1.";
+/// The JSON facade (#718), which transcodes the producer package and only it.
+///
+/// It is a prefix here for the same reason a package is: a route added to the
+/// facade inherits the producer scope without anyone editing this file, and it
+/// **must** inherit it — a door that transcodes an RPC must not be a way to
+/// call it with a credential the RPC itself would refuse.
+const FACADE: &str = "/v1/";
 
 /// What a path asks of its caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +58,7 @@ pub fn requirement(path: &str) -> Requirement {
         // bit — whether storage answers — to something that already reached
         // the port.
         Requirement::Public
-    } else if path.starts_with(PRODUCER) {
+    } else if path.starts_with(PRODUCER) || path.starts_with(FACADE) {
         Requirement::Scoped(Scope::Produce)
     } else if path.starts_with(EXECUTOR) {
         Requirement::Scoped(Scope::Execute)
@@ -111,6 +118,27 @@ mod tests {
             requirement("/flexiq.executor.v1.ExecutorService/Dispatch"),
             Requirement::Scoped(Scope::Execute)
         );
+    }
+
+    /// The facade is the producer package by another spelling, so it asks for
+    /// the same scope — including on a path no binding serves, which is
+    /// refused for want of a credential before it is refused for want of a
+    /// route.
+    #[test]
+    fn the_json_facade_carries_the_producer_scope() {
+        for path in [
+            "/v1/jobs",
+            "/v1/jobs/01924f",
+            "/v1/queues/emails/stats",
+            "/v1/stats",
+            "/v1/whatever-lands-here-next",
+        ] {
+            assert_eq!(
+                requirement(path),
+                Requirement::Scoped(Scope::Produce),
+                "path: {path}"
+            );
+        }
     }
 
     #[test]

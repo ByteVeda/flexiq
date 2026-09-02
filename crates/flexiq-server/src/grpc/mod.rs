@@ -5,10 +5,12 @@
 //! shutdown signal — so a deployment enables it the way it enables the
 //! dashboard or the webhook, and `SIGTERM` drains it alongside them.
 //!
-//! What it serves is `grpc.health.v1`, server reflection and the `flexiq.v1`
-//! [`ProducerService`](producer::Producer). The `flexiq.executor.v1` stream
-//! lands on this listener when it arrives; the contract all of them must keep
-//! lives in `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
+//! What it serves is `grpc.health.v1`, server reflection, the `flexiq.v1`
+//! [`ProducerService`](producer::Producer) and — over ordinary HTTP, on the
+//! same port — that same service's [JSON facade](facade). The
+//! `flexiq.executor.v1` stream lands on this listener when it arrives; the
+//! contract all of them must keep lives in
+//! `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`.
 //!
 //! The two rules that shape everything above it: **this door serves exactly
 //! one namespace**, the process's own, and refuses to start without one; and
@@ -20,6 +22,7 @@
 
 pub mod auth;
 pub mod blocking;
+pub mod facade;
 pub mod health;
 pub mod limits;
 pub mod listener;
