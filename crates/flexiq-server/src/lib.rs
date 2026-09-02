@@ -12,4 +12,5 @@ pub mod dashboard;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 pub mod runtime;
+pub mod tokens;
 pub mod webhook;
