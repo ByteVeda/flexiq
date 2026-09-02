@@ -28,8 +28,8 @@ in this page is more complicated than that.
 ## 1. The tasks
 
 One file holds the queue and both tasks. Note the `emails` and `media` labels:
-they are **named queues** — routing lanes inside the same store — so a slow
-render can never hold up a welcome email.
+they are **named queues** — routing lanes inside the same store, so each kind of
+work can be addressed on its own.
 
 <CodeTabs>
   <Tab sdk="python">
@@ -105,9 +105,11 @@ public final class Tasks {
 </CodeTabs>
 
 <Callout type="info" title="Why two queues and not two workers">
-  Queues are labels; workers choose which labels they serve. Splitting the work
-  now costs one word and buys you the option later of giving `media` its own
-  machine without touching a line of this file.
+  Queues are labels; workers choose which labels they serve. A label does not
+  reserve capacity — the single worker below drains both, so a slow render can
+  still delay a welcome email. What splitting them now buys is the *option*: run
+  a second worker over `media` alone, or move it to its own machine, without
+  touching a line of this file.
 </Callout>
 
 ## 2. Enqueue from the request handler
@@ -115,6 +117,15 @@ public final class Tasks {
 The handler's job is to be boring: create the account, enqueue, return. Neither
 `delay`/`enqueue` call runs anything — each writes a row and comes straight back
 with a job id.
+
+Enqueue *after* the account is committed, not before: a job that starts before
+the row it needs exists will fail on a user it cannot find. The two writes are
+still separate operations, so a crash between them leaves an account whose
+welcome mail was never queued — see
+<SdkLink to="guides/reliability/idempotency">idempotency</SdkLink> for unique
+keys that make re-running the handler safe, and
+<SdkLink to="guides/reliability/guarantees">guarantees</SdkLink> for what the
+queue does and does not promise across that boundary.
 
 <CodeTabs>
   <Tab sdk="python">
@@ -174,9 +185,12 @@ ResponseEntity<Map<String, Long>> signup(@RequestBody SignupRequest body) {
   </Tab>
 </CodeTabs>
 
-The handler never imports a mailer or an image library. That is the point: the
-web process only needs to know the *names* of the work, and stays deployable
-without the dependencies that do it.
+The handler names the work; it never calls the mailer or the image library
+itself. That decoupling is the point, and it becomes a deployment property once
+the registrations live somewhere the web process does not import — a separate
+`worker` module, or java's split between the `Task` descriptors and the
+`.handle(...)` calls below. Keep the two files apart from the start and the web
+process never grows a dependency on what the worker needs.
 
 ## 3. Run the worker
 
