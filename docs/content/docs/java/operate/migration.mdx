@@ -1,0 +1,90 @@
+---
+title: Migrating from JVM job scheduling
+description: "Concept mapping from Spring @Async, Quartz, and JMS/AMQP listeners to the FlexiQ Java SDK."
+---
+
+Background work on the JVM usually arrives as one of three things: Spring's
+`@Async` and `@Scheduled`, a Quartz scheduler, or a JMS/AMQP listener in front
+of a broker. FlexiQ replaces all three with one client and one store.
+
+The three shifts worth understanding before you start:
+
+- **Durability comes from the store, not the broker.** `@Async` work lives in an
+  in-process executor and is gone on restart; FlexiQ jobs are rows and survive
+  it. There is no broker, exchange or DLX to declare.
+- **Tasks are named descriptors.** A producer holds a `Task<T>` — a name plus a
+  payload type — and never needs the handler. That is what lets the web tier
+  enqueue without the dependencies that do the work.
+- **Scheduling is not a separate service.** Cron and delayed jobs fire from the
+  same running worker that executes tasks, so there is no Quartz scheduler to
+  cluster or a `QuartzJobStore` to configure.
+
+## Concept map
+
+| What you have | FlexiQ |
+|---|---|
+| `@Async void send(...)` | `Task<T>` + `flexiq.enqueue(task, payload)` — durable, retried, survives restart |
+| `ThreadPoolTaskExecutor` bean | `flexiq.worker()...start()`, sized on the worker |
+| `@Scheduled(cron = "...")` / Quartz `Trigger` | `flexiq.registerPeriodic(PeriodicTask.builder(...).build())` |
+| Quartz `JobDataMap` | the task's typed payload |
+| `QuartzJobStore` (clustered) | the queue store itself — SQLite, Postgres, or Redis |
+| `@JmsListener` / `@RabbitListener` | `.handle(task, handler)` on the worker |
+| `ConnectionFactory`, broker URLs | `FlexiQ.builder().sqlite(path)` — or `.postgres(dsn)` |
+| Broker DLQ / DLX bindings | the built-in dead-letter store (`listDead`, `retryDead`) |
+| Redelivery policy | `maxRetries` + `RetryPolicy` on the descriptor |
+| `CompletableFuture<T>` from `@Async` | `flexiq.awaitJob(id, timeout)` + `flexiq.getResult(id, type)` |
+| Broker management console | the built-in [dashboard](/java/modules/dashboard) |
+| Chained listeners / orchestration by hand | [Workflows](/java/modules/workflows) |
+
+## Side by side
+
+```java
+// Spring @Async — in-process, lost on restart, no retry
+@Async
+public void sendWelcome(long userId) { mailer.send(userId); }
+
+// FlexiQ — a durable job with a retry budget and a timeout
+Task<Long> SEND_WELCOME = Task.of("send_welcome", Long.class)
+        .queue("emails")
+        .maxRetries(3)
+        .timeout(Duration.ofSeconds(30));
+
+flexiq.enqueue(SEND_WELCOME, userId);            // producer, returns a job id
+
+flexiq.worker()                                   // consumer, its own process
+        .queues("emails")
+        .handle(SEND_WELCOME, mailer::send)
+        .start();
+```
+
+## What changes
+
+- **One store, chosen by how many machines you have.** SQLite for a single host,
+  Postgres when producers and workers are on different ones. See
+  [backends](/java/operate/backends).
+- **The producer stops needing the handler.** Split the descriptors into a class
+  the web tier can depend on; keep `.handle(...)` with the worker.
+- **Retries are declared, not coded.** A redelivery policy on a listener becomes
+  `maxRetries` plus a `RetryPolicy` on the descriptor, enforced by the Rust
+  scheduler — so a worker that dies mid-backoff does not lose the schedule. See
+  [retries](/java/guides/reliability/retries).
+- **Exhausted jobs land somewhere you can see.** No DLX to bind: the dead-letter
+  store keeps the payload and the per-attempt error history —
+  [dead-letter queue](/java/guides/reliability/dead-letter).
+- **Cron needs a running worker.** `registerPeriodic` fires from the worker poll
+  loop. If no worker is running, nothing fires — there is no independent
+  scheduler process, which is the point, but it is a different failure mode from
+  Quartz. See [scheduling](/java/guides/core/scheduling).
+
+<Callout type="info" title="Spring Boot">
+  The starter auto-configures a `FlexiQ` bean from `flexiq.url`,
+  `flexiq.pool-size` and `flexiq.namespace`, so a migration can start by
+  swapping one `@Async` method at a time —
+  [Spring Boot](/java/guides/extend/spring).
+</Callout>
+
+<Callout type="info" title="Migrating incrementally">
+  Move one task family at a time. The old listener and the FlexiQ worker can run
+  side by side against different stores until you cut over; nothing in FlexiQ
+  needs the broker to be gone first.
+</Callout>
