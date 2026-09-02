@@ -102,8 +102,15 @@ pub fn list(storage: &impl Storage, namespace: Option<&str>) -> Result<Vec<ApiTo
 /// Revoking an already-revoked token writes nothing and still answers `true`:
 /// the answer describes the token's state, so a retry says the same thing as
 /// the call it is retrying.
-pub fn revoke(storage: &impl Storage, id: &str) -> Result<bool> {
-    update(storage, id, |token| {
+///
+/// `namespace` scopes the lookup the same way [`list`] does, and for the same
+/// reason: the settings KV is one global keyspace, so a caller that can only
+/// *see* its own namespace's tokens must not be able to revoke another's. A row
+/// in a different namespace answers `false` — identical to a row that does not
+/// exist, because telling them apart is an existence oracle for another
+/// tenant's ids (design doc §5.3).
+pub fn revoke(storage: &impl Storage, id: &str, namespace: Option<&str>) -> Result<bool> {
+    update(storage, id, namespace, |token| {
         if token.revoked_at.is_none() {
             token.revoked_at = Some(now_millis());
         }
@@ -115,8 +122,12 @@ pub fn revoke(storage: &impl Storage, id: &str) -> Result<bool> {
 /// Best-effort: a token that was revoked between the authentication and this
 /// write is simply not there any more, and a failed touch must never fail the
 /// call that succeeded.
+///
+/// Unscoped, unlike [`revoke`]: the only caller is the authenticator, which has
+/// already compared the row's namespace against the listener's and would not be
+/// here otherwise. A second check would be a second place to keep in step.
 pub fn touch(storage: &impl Storage, id: &str, now: i64) -> Result<bool> {
-    update(storage, id, |token| token.last_used_at = Some(now))
+    update(storage, id, None, |token| token.last_used_at = Some(now))
 }
 
 /// Read, mutate and conditionally write one row, retrying a lost race.
@@ -125,7 +136,12 @@ pub fn touch(storage: &impl Storage, id: &str, now: i64) -> Result<bool> {
 /// each other by design: a touch happens on the hot path and a revoke happens
 /// while it does. A read-then-write would let the touch resurrect a credential
 /// an operator had just revoked.
-fn update(storage: &impl Storage, id: &str, mut mutate: impl FnMut(&mut ApiToken)) -> Result<bool> {
+fn update(
+    storage: &impl Storage,
+    id: &str,
+    namespace: Option<&str>,
+    mut mutate: impl FnMut(&mut ApiToken),
+) -> Result<bool> {
     if !secret::is_token_id(id) {
         return Ok(false);
     }
@@ -137,6 +153,11 @@ fn update(storage: &impl Storage, id: &str, mut mutate: impl FnMut(&mut ApiToken
         let Some(mut token) = parse(id, &stored) else {
             return Ok(false);
         };
+        // Answered as "no such token", never as a refusal: a caller must not be
+        // able to tell another namespace's id from one that was never minted.
+        if namespace.is_some_and(|name| token.namespace != name) {
+            return Ok(false);
+        }
         mutate(&mut token);
         let encoded = serde_json::to_string(&token)?;
         // A mutation that changed nothing needs no write — which is what makes
@@ -246,21 +267,46 @@ mod tests {
             .expect("present")
             .is_usable(now_millis()));
 
-        assert!(revoke(&storage, &row.id).expect("revoke"));
+        assert!(revoke(&storage, &row.id, Some("prod")).expect("revoke"));
         let revoked = get(&storage, &row.id).expect("read").expect("present");
         assert_eq!(revoked.status(now_millis()), TokenStatus::Revoked);
         assert!(!revoked.is_usable(now_millis()));
 
         // A second revoke describes the same state rather than failing.
-        assert!(revoke(&storage, &row.id).expect("revoke again"));
+        assert!(revoke(&storage, &row.id, Some("prod")).expect("revoke again"));
         let again = get(&storage, &row.id).expect("read").expect("present");
         assert_eq!(again.revoked_at, revoked.revoked_at, "the instant is kept");
+    }
+
+    /// §5.3: another namespace's token is indistinguishable from one that does
+    /// not exist. Without this, a dashboard scoped to one namespace could both
+    /// revoke another tenant's credential and probe which of its ids are real.
+    #[test]
+    fn a_token_in_another_namespace_cannot_be_revoked_and_reads_as_absent() {
+        let storage = storage();
+        let (row, _) = create(&storage, request("elsewhere", "staging")).expect("create");
+
+        assert!(
+            !revoke(&storage, &row.id, Some("prod")).expect("revoke"),
+            "the answer must be the same one an unknown id gets"
+        );
+        assert!(
+            get(&storage, &row.id)
+                .expect("read")
+                .expect("present")
+                .revoked_at
+                .is_none(),
+            "and nothing may have been written"
+        );
+
+        // Its own namespace still revokes it, and so does an unscoped caller.
+        assert!(revoke(&storage, &row.id, Some("staging")).expect("revoke"));
     }
 
     #[test]
     fn revoking_or_touching_an_unknown_id_says_so_rather_than_creating_one() {
         let storage = storage();
-        assert!(!revoke(&storage, "0123456789abcdef").expect("revoke"));
+        assert!(!revoke(&storage, "0123456789abcdef", None).expect("revoke"));
         assert!(!touch(&storage, "0123456789abcdef", now_millis()).expect("touch"));
         assert_eq!(
             storage.get_setting(&key("0123456789abcdef")).expect("read"),
@@ -276,7 +322,7 @@ mod tests {
         let storage = storage();
         storage.set_setting("auth:users", "{}").expect("write");
         assert!(get(&storage, "../users").expect("read").is_none());
-        assert!(!revoke(&storage, "users").expect("revoke"));
+        assert!(!revoke(&storage, "users", None).expect("revoke"));
         assert_eq!(
             storage.get_setting("auth:users").expect("read").as_deref(),
             Some("{}"),
@@ -304,7 +350,7 @@ mod tests {
     fn a_touch_cannot_resurrect_a_revoked_token() {
         let storage = storage();
         let (row, _) = create(&storage, request("ci", "prod")).expect("create");
-        assert!(revoke(&storage, &row.id).expect("revoke"));
+        assert!(revoke(&storage, &row.id, Some("prod")).expect("revoke"));
         assert!(touch(&storage, &row.id, now_millis()).expect("touch"));
         assert!(get(&storage, &row.id)
             .expect("read")

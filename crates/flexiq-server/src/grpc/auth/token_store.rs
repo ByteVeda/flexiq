@@ -253,7 +253,7 @@ mod tests {
             .await
             .is_ok());
 
-        assert!(store::revoke(&storage, &id).expect("revoke"));
+        assert!(store::revoke(&storage, &id, Some("prod")).expect("revoke"));
 
         let status = authenticator
             .authenticate(&with_bearer(&plaintext))

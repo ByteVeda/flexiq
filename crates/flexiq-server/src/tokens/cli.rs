@@ -97,7 +97,7 @@ pub fn run(command: TokenCommand) -> Result<()> {
         Action::List { all_namespaces } => {
             list(&storage, namespace.as_deref().filter(|_| !all_namespaces))
         }
-        Action::Revoke { id } => revoke(&storage, &id),
+        Action::Revoke { id } => revoke(&storage, &id, namespace.as_deref()),
     }
 }
 
@@ -201,8 +201,11 @@ fn list(storage: &StorageBackend, namespace: Option<&str>) -> Result<()> {
 }
 
 /// Revoke one, or say there was nothing to revoke.
-fn revoke(storage: &StorageBackend, id: &str) -> Result<()> {
-    if !store::revoke(storage, id)? {
+///
+/// Scoped to the namespace this process serves, like the listing: a token
+/// belonging to another namespace reads as absent rather than as a refusal.
+fn revoke(storage: &StorageBackend, id: &str, namespace: Option<&str>) -> Result<()> {
+    if !store::revoke(storage, id, namespace)? {
         bail!("no token with id '{id}' — `flexiq-server token list` shows the ids");
     }
     eprintln!("Revoked '{id}'. It stops working on the next call; no restart is needed.");

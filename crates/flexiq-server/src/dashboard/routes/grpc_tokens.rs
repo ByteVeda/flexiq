@@ -92,12 +92,21 @@ pub async fn create(
 ///
 /// It stops working on the next RPC, with no restart: the door reads the row
 /// per call rather than caching a verdict.
+///
+/// Scoped to this process's namespace exactly as the listing is. Without that a
+/// dashboard could revoke another tenant's credential, and could tell an id
+/// that exists elsewhere from one that does not exist at all — the existence
+/// oracle §5.3 refuses.
 pub async fn revoke(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let key = id.clone();
-    let revoked = on_storage(&state, move |storage| store::revoke(storage, &key)).await?;
+    let namespace = state.namespace.clone();
+    let revoked = on_storage(&state, move |storage| {
+        store::revoke(storage, &key, namespace.as_deref())
+    })
+    .await?;
     if !revoked {
         return Err(ApiError::NotFound(format!("no gRPC token with id '{id}'")));
     }

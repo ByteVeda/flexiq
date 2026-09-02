@@ -295,7 +295,7 @@ async fn a_revoked_token_fails_on_the_next_rpc_with_no_restart() {
         "the token works before it is revoked"
     );
 
-    assert!(store::revoke(&*harness.storage, &id).expect("revoke"));
+    assert!(store::revoke(&*harness.storage, &id, Some(NAMESPACE)).expect("revoke"));
 
     let status = harness
         .producer()
