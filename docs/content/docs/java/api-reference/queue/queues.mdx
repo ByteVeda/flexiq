@@ -38,6 +38,28 @@ description: "Statistics, dead letters, queue control, and settings."
 | `queue(name)` → `Queue` | A named-queue handle: `name()`, `pause()`, `resume()`, `isPaused()`. |
 | `listPausedQueues()` | Names of every paused queue. |
 
+## Retention
+
+Retention is the periodic sweep that deletes history — task logs, archived jobs,
+job errors, task metrics and dead letters — past a per-table window. It runs in
+the **worker** process under one elected cleaner per namespace, so a producer
+configures nothing and reads the policy back rather than owning it. Windows are
+milliseconds, and a `null` window keeps a table forever.
+
+| Method | Description |
+|---|---|
+| `effectiveRetention()` → `Optional<EffectiveRetention>` | The windows a worker is actually applying to this namespace, as the elected cleaner published them on its last sweep — the *worker's* configuration, not this process's. Empty means no worker has swept yet, which is **not** retention being off: that reports with `enabled = false`. |
+| `dryRunRetention()` → `RetentionPreview` | Count what a purge would delete right now, deleting nothing, following the policy the cleaner reported — recommended defaults only when none has swept yet. |
+| `dryRunRetention(Retention)` → `RetentionPreview` | The same preview under candidate windows, so one can be sized before it is set, with no worker reconfiguration. A `null` argument falls back to the reported policy. |
+
+`EffectiveRetention` carries `enabled`, `defaulted` (the windows are the
+recommended defaults, set by no one), `namespace` — purges are namespace-scoped,
+not queue-scoped — `reportedAt` (Unix milliseconds) and `windows`, whose fields
+are `archivedJobsMs`, `deadLetterMs`, `taskLogsMs`, `taskMetricsMs` and
+`jobErrorsMs`. `RetentionPreview` swaps `reportedAt` for `referenceTime` and
+adds `counts` over the same tables plus a `total`. Those counts are that
+snapshot only — the real sweep runs later, against data that has moved on.
+
 ## Settings
 
 A deployment-wide key/value store in the same backend as the jobs, and the

@@ -24,3 +24,20 @@ background thread pool.
 |---|---|
 | `listJobs(filter)` → `Promise<Job[]>` | List jobs. |
 | `getJobErrors(id)` → `Promise<JobError[]>` | Per-attempt error history. |
+
+## Archival
+
+Terminal jobs are moved out of the hot `jobs` table into the archive, so
+listings and dispatch scans stay fast without losing the history. The queue does
+not archive on demand: the sweep belongs to the worker, and the archive has its
+own [retention window](/node/api-reference/queue/queues#retention). These two
+read it back.
+
+| Method | Description |
+|---|---|
+| `listArchived(limit?, offset?)` → `Promise<Job[]>` | The archive, newest first, offset-paginated. Fine for one page. |
+| `listArchivedAfter(limit?, after?)` → `Promise<Page<Job>>` | The keyset twin, ordered by completed time. Pass a page's `nextCursor` back as `after`; `null` means that was the last page. |
+
+Prefer the keyset form for a full walk: an offset re-scans everything it skips,
+and a job archived mid-walk shifts every later offset by one, so rows get seen
+twice or not at all. Cursors are opaque — do not build or parse one.

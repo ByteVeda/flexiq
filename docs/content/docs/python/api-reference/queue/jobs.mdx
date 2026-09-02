@@ -97,25 +97,37 @@ Useful for visualizing workflow chains.
 
 ## Archival
 
+Archiving moves terminal jobs out of the hot `jobs` table into `archived_jobs`,
+so listings and dispatch scans stay fast without losing the history. The archive
+has its own retention window — see
+[Retention](/python/api-reference/queue/queues#retention).
+
 ### `queue.archive()`
 
 ```python
-queue.archive(job_id: str) -> None
+queue.archive(older_than: int = 86400) -> int
 ```
 
-Move a completed or failed job to the archive for long-term retention.
+Archive every completed, dead or cancelled job older than `older_than` seconds,
+returning how many moved. Age-based and bulk: there is no per-job form. Declared
+as `archive_old_jobs`.
 
-### `queue.list_archived()`
+### `queue.list_archived()` / `queue.list_archived_after()`
 
 ```python
-queue.list_archived(
-    task_name: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[dict]
+queue.list_archived(limit: int = 50, offset: int = 0) -> list[JobResult]
+queue.list_archived_after(limit: int = 50, after: str | None = None) -> Page[JobResult]
 ```
 
-List archived jobs with optional task name filter.
+Read the archive back, newest first. `list_archived()` is offset-paginated and
+fine for one page; `list_archived_after()` is the keyset twin — pass the
+previous page's `next_cursor` back as `after`, and a `next_cursor` of `None`
+means that was the last page.
+
+Prefer the keyset form for a full walk. An offset re-scans everything it skips,
+and a job archived mid-walk shifts every later offset by one, so rows get seen
+twice or not at all. Cursors are opaque — do not build or parse one. Async
+twins: `alist_archived()` and `alist_archived_after()`.
 
 ## Replay
 

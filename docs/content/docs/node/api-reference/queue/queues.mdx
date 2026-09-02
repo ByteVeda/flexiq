@@ -18,6 +18,7 @@ background thread pool.
 | Method | Description |
 |---|---|
 | `deadLetters()` → `Promise<DeadJob[]>` / `retryDead(id)` / `deleteDead(id)` / `purgeDead(ms)` → `Promise<number>` | DLQ (dead-letter queue) ops. |
+| `purgeDeadByTask(taskName)` → `Promise<number>` | Drop every dead-letter entry for one task → count removed. The targeted counterpart to `purgeDead(ms)`: use it after fixing a handler whose whole backlog is known-bad, instead of waiting out an age window that would also take unrelated failures. |
 
 ## Recovery
 
@@ -43,6 +44,27 @@ background thread pool.
 | Method | Description |
 |---|---|
 | `purgeCompleted(ms)` → `Promise<number>` | Drop old completed jobs. |
+
+## Retention
+
+Retention is the periodic sweep that deletes history — task logs, archived jobs,
+job errors, task metrics and dead letters — past a per-table window. It runs in
+the **worker** process under one elected cleaner per namespace, so a producer
+configures nothing and reads the policy back rather than owning it. Windows are
+milliseconds, and `null` keeps a table forever.
+
+| Method | Description |
+|---|---|
+| `effectiveRetention()` → `EffectiveRetention \| null` | The windows a worker is actually applying to this namespace, as the elected cleaner published them on its last sweep — the *worker's* configuration, not this process's. `null` means no worker has swept yet, which is **not** retention being off: that reports as an object with `enabled: false`. |
+| `dryRunRetention(retention?)` → `Promise<RetentionPreview>` | Count what a purge would delete right now, deleting nothing. No argument previews this queue's configured (or default-recommended) windows; passing candidate windows sizes one before you commit to it, with no worker reconfiguration and no restart. Runs in-process against live data, so unlike `effectiveRetention()` it always answers. |
+
+`EffectiveRetention` carries `enabled`, `defaulted` (the windows are the
+recommended defaults, set by no one), `namespace` — purges are namespace-scoped,
+not queue-scoped — `reportedAt` (Unix ms) and `windows`, keyed
+`archivedJobs`, `deadLetter`, `taskLogs`, `taskMetrics`, `jobErrors`.
+`RetentionPreview` swaps `reportedAt` for `referenceTime` and adds `counts`
+over the same table keys, plus `total`. Those counts are that snapshot only —
+the real sweep runs later, against data that has moved on.
 
 ## Settings
 

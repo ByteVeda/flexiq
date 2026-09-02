@@ -105,3 +105,26 @@ List<JobError> jobErrors(String jobId)
 {/* /api */}
 
 Per-attempt error history, oldest attempt first.
+
+## Archive
+
+Terminal jobs are moved out of the hot `jobs` table into the archive, so
+listings and dispatch scans stay fast without losing the history. The sweep
+belongs to the worker; the archive keeps its own
+[retention window](/java/api-reference/queue/queues#retention).
+
+### `flexiq.listArchivedAfter()`
+
+{/* api:FlexiQ.listArchivedAfter */}
+```java
+Page<Job> listArchivedAfter(long limit, String after)
+```
+{/* /api */}
+
+The archive, keyset-paginated and ordered by completed time. Pass the previous
+page's cursor back as `after`, or `null` for the first page; the cursor on the
+returned `Page` is `null` once there is nothing left.
+
+Prefer this to an offset walk. An offset re-scans everything it skips, and a job
+archived mid-walk shifts every later offset by one, so rows get seen twice or
+not at all. Treat the cursor as opaque — do not build or parse one.
