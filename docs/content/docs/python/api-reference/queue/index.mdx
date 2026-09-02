@@ -192,8 +192,11 @@ Register a periodic (cron-scheduled) task. Uses 6-field cron expressions with se
 
 ### Periodic catalog
 
-Schedules reach storage when `run_worker()` starts; these act on what is there,
-so they outlive the decorator that declared them.
+Schedules reach storage when `run_worker()` starts — that is where the decorator
+turns into a `register_periodic` write, so a producer that never runs a worker
+schedules nothing. These act on what is in storage, so they outlive the
+decorator that declared them: deleting a schedule the decorator still declares
+means it comes back on the next worker start.
 
 | Method | Returns | Description |
 |---|---|---|
@@ -263,6 +266,13 @@ queue.enqueue_many(
 
 Enqueue multiple jobs in a single transaction for high throughput. Supports both
 uniform parameters (applied to all jobs) and per-job lists.
+
+One transaction, so it is all-or-nothing: a rejected entry fails the whole call
+rather than leaving part of the batch enqueued. Declared as `enqueue_batch`,
+which takes parallel lists — the shell fans one task name and one args list out
+into them. Interceptors and enqueue gates run per entry, before the batch is
+sent, and a queue's `max_pending` cap is checked against the batch size so a
+batch is rejected whole rather than overshooting by its own length.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|

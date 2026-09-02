@@ -23,6 +23,34 @@ producer refuses on its own. And concurrent producers can overshoot slightly,
 the same trade the rate limiter makes: `cap` is a backpressure threshold, not an
 invariant to build correctness on.
 
+## Overload controls
+
+Both are opt-in, both are **read by workers at start-up**, so a call here takes
+effect for workers started afterwards — not for ones already running.
+
+| Method | Description |
+|---|---|
+| `codel(queue, targetMs, intervalMs)` → `FlexiQ` | Enable CoDel load shedding. Under *sustained* overload — a job's wait past its eligibility staying above `targetMs` for a full `intervalMs` — a running worker sheds the stalest jobs to the dead-letter queue with a reason prefixed `codel:`, instead of running them stale. A transient spike is never shed, which is the whole point of the interval. |
+| `dispatchOrder(queue, DispatchOrder)` → `FlexiQ` | The tie-break among **same-priority** jobs. `LIFO` runs newest-first under overload — a freshness lever, at the cost of starving the oldest; `FIFO` (the default) is fair oldest-first. Priority always dominates either way. Honored on SQLite and Postgres; the Redis backend is FIFO-only. |
+| `dispatchOrder(queue, String)` | **Deprecated.** The wire form (`"fifo"` / `"lifo"`). Prefer the enum overload, which rejects a typo at compile time instead of at run time. |
+
+Shed jobs land in the DLQ rather than vanishing, so `listDead` is where an
+operator sees what CoDel dropped — and the `codel:` prefix is what separates
+them from genuine handler failures.
+
+## Middleware toggles
+
+| Method | Description |
+|---|---|
+| `disableMiddleware(taskName, middlewareName)` | Stop running one middleware for one task. |
+| `enableMiddleware(taskName, middlewareName)` | Undo it. A no-op when it was not disabled. |
+| `listDisabledMiddleware(taskName)` → `List<String>` | What is currently disabled for a task; empty when nothing is. |
+
+`middlewareName` is the middleware's **fully-qualified class name**. Unlike the
+overload controls above, these take effect on the next job: workers read the
+list per invocation, so no restart is needed — which is what makes this usable
+to switch off a misbehaving instrumentation middleware in production.
+
 ## Dead letter
 
 | Method | Description |

@@ -50,6 +50,17 @@ releases at block exit. Acquisition is never implicit — a handle you never
 
 ## Periodic
 
+Schedules live in storage, not in the process, so they outlive the code that
+registered them: a schedule deleted while the registering code still runs comes
+back on the next `registerPeriodic` call.
+
 | Member | Description |
 |---|---|
-| `registerPeriodic(name, task, cron, opts?)` | [Periodic tasks](/node/guides/core/scheduling). |
+| `registerPeriodic(name, task, cron, opts?)` → `number` | Register or replace a [cron schedule](/node/guides/core/scheduling) → the next fire time (Unix ms). `opts`: `args`, `queue`, `timezone`, `enabled`. Throws on an invalid cron expression rather than registering a schedule that never fires. |
+| `listPeriodic()` → `PeriodicTask[]` | Every registered schedule, paused ones included: `name`, `taskName`, `cronExpr`, `queue`, `enabled`, `lastRun` (`null` until the first fire), `nextRun`, `timezone` (`null` for UTC). Timestamps are Unix milliseconds. |
+| `pausePeriodic(name)` / `resumePeriodic(name)` → `boolean` | Stop a schedule firing, or start it again, keeping the registration. Both are `setPeriodicEnabled` on the native queue. `false` when no schedule had that name. |
+| `deletePeriodic(name)` → `boolean` | Unschedule for good. `false` when no schedule had that name. |
+
+A paused schedule accumulates no backlog. Its `nextRun` stays where it was, so
+resuming past that instant fires **once, immediately**, and the schedule then
+advances from now — the occurrences missed while paused are not replayed.

@@ -80,6 +80,26 @@ wf.ancestors(node: str) -> list[str]
 wf.descendants(node: str) -> list[str]
 ```
 
+### `step_names`
+
+```python
+workflow.step_names -> list[str]
+```
+
+Every step's name, in declaration order — the order `step()` and `gate()` added
+them, not a run order. `topological_levels()` below is the run order.
+
+### Compilation
+
+Submitting compiles the Python definition into the DAG the core executes, on the
+native `PyWorkflowBuilder`. Nothing here is called directly, but the declared
+names show up in the [symbol index](/python/api-reference/symbols/workflows):
+`add_step` replays each step onto the native builder, `step_count` and
+`step_names` read it back, and `serialize()` returns the
+`(dag_bytes, step_metadata_json)` pair `submit_workflow()` sends. Conditions,
+gates and sub-workflows are resolved on the Python side first, because a
+callable predicate cannot cross into the core.
+
 ### `topological_levels()`
 
 ```python

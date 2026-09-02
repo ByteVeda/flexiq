@@ -42,7 +42,10 @@ queue.pause(queue_name: str) -> None
 ```
 
 Pause a named queue. Workers continue running but skip jobs in this queue until
-it is resumed.
+it is resumed. Persisted, not in-process: one call pauses the queue for every
+worker in the deployment, and it stays paused across a restart. Jobs already
+running are unaffected — pausing gates dispatch, not execution. Declared as
+`pause_queue`.
 
 ### `queue.resume()`
 
@@ -50,7 +53,10 @@ it is resumed.
 queue.resume(queue_name: str) -> None
 ```
 
-Resume a previously paused queue.
+Resume a previously paused queue. Declared as `resume_queue`. Backlog that
+accumulated while paused dispatches immediately, subject to the queue's rate
+limit and concurrency caps — resume a long-paused queue with those set, or the
+whole backlog lands at once.
 
 ### `queue.paused_queues()`
 
@@ -65,14 +71,16 @@ paused. Declared as `list_paused_queues`.
 ### `queue.purge()`
 
 ```python
-queue.purge(
-    queue: str | None = None,
-    task_name: str | None = None,
-    status: str | None = None,
-) -> int
+queue.purge(queue_name: str) -> int
 ```
 
-Delete jobs matching the given filters. Returns the count deleted.
+Cancel every **pending** job on one queue, returning the count cancelled.
+Cancelled, not deleted: the rows stay, so the jobs remain inspectable and their
+history survives. Running jobs are untouched — this drains a backlog, it does
+not stop work in flight. Declared as `purge_queue`.
+
+For deleting rows rather than cancelling them, see `purge_completed()` and
+`purge_dead()` below.
 
 ### `queue.revoke_task()`
 
@@ -112,22 +120,34 @@ Returns stats for all queues including those with zero jobs.
 ### `queue.metrics()`
 
 ```python
-queue.metrics() -> dict
+queue.metrics(task_name: str | None = None, since: int = 3600) -> dict
 ```
 
-Returns current throughput and latency snapshot.
+Per-task aggregates over the last `since` seconds, keyed by task name: `count`,
+`success_count`, `failure_count`, `avg_ms`, `p50_ms`, `p95_ms`, `p99_ms`,
+`min_ms` and `max_ms`. One row per *execution* goes into the aggregate, so a job
+that retried three times contributes three.
 
 ### `queue.metrics_timeseries()`
 
 ```python
 queue.metrics_timeseries(
-    window: int = 3600,
+    task_name: str | None = None,
+    since: int = 3600,
     bucket: int = 60,
 ) -> list[dict]
 ```
 
-Returns historical metrics bucketed by time. `window` is the lookback period in
-seconds; `bucket` is the bucket size in seconds.
+The same rows grouped into `bucket`-second buckets instead, oldest first: each
+entry has `timestamp`, `count`, `success`, `failure`, `avg_ms`, `p50_ms`,
+`p95_ms`, `p99_ms`. An empty bucket is absent rather than zero-filled.
+
+Both read the raw per-execution rows through `get_metrics` and aggregate them
+**in this process**, so the cost tracks the number of executions in the window,
+not the number of buckets asked for. Narrow with `task_name` or a shorter
+`since` on a busy deployment rather than reaching for a wider window. The rows
+are subject to the `task_metrics` retention window, so a `since` that reaches
+past it silently returns less.
 
 ## Dead letter queue
 
