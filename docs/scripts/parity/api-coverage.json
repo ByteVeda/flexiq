@@ -36,8 +36,12 @@
       "StepSession.finish": "step-session plumbing"
     },
     "node": {
+      "JsQueue.cascadeSkipPending": "workflow engine internals",
       "JsQueue.checkFanOutCompletion": "workflow engine internals — the shell's workflow runtime calls these while advancing a run",
+      "JsQueue.compensationNodeForJob": "saga engine internals — the compensation leg is driven for the shell, not by it",
       "JsQueue.createDeferredJob": "workflow engine internals",
+      "JsQueue.enqueueCompensation": "saga engine internals",
+      "JsQueue.getWorkflowRunPlan": "workflow engine internals — the run plan is the scheduler's view of a run, not a shell query",
       "JsQueue.expandFanOut": "workflow engine internals",
       "JsQueue.finalizeRunIfTerminal": "workflow engine internals",
       "JsQueue.markWorkflowNodeResult": "workflow engine internals",
@@ -45,6 +49,7 @@
       "JsQueue.setWorkflowNode*": "workflow engine internals",
       "JsQueue.setWorkflowRun*": "workflow engine internals",
       "JsQueue.skipWorkflowNode": "workflow engine internals",
+      "JsQueue.workflowNodeForJob": "workflow engine internals — maps a job back to its node while advancing a run",
       "JsStepSession.beginRun": "step-session plumbing driven by the `step.run` wrapper, not called directly",
       "JsStepSession.commitRun": "step-session plumbing",
       "JsStepSession.finish": "step-session plumbing"
@@ -52,8 +57,8 @@
     "java": {}
   },
   "documented": {
-    "python": 58,
-    "node": 63,
-    "java": 148
+    "python": 66,
+    "node": 69,
+    "java": 152
   }
 }

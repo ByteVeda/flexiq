@@ -128,6 +128,11 @@ Handle for a submitted workflow run.
 run.status() -> WorkflowStatus
 ```
 
+One read of the whole run: its `state`, plus a `nodes` map of `NodeSnapshot`
+records. Each call queries storage — the handle caches nothing, so a status read
+in a loop is a query in a loop. Declared as `get_workflow_run_status`, whose
+`node_statuses()` is the raw per-node map this converts into `NodeSnapshot`.
+
 ### `wait()`
 
 ```python
@@ -143,11 +148,19 @@ on timeout.
 run.cancel() -> None
 ```
 
+Cancel every step still pending and mark the run cancelled. Steps already
+running are not interrupted — cancellation is cooperative, so an in-flight
+handler finishes or observes the cancel itself. Declared as
+`cancel_workflow_run`.
+
 ### `node_status()`
 
 ```python
 run.node_status(node_name: str) -> NodeStatus
 ```
+
+One node's status out of the same snapshot `status()` reads, so prefer
+`status().nodes` when you want several.
 
 ### `visualize()`
 
@@ -155,7 +168,29 @@ run.node_status(node_name: str) -> NodeStatus
 run.visualize(fmt: str = "mermaid") -> str
 ```
 
-Render the DAG with live node status colors.
+Render the DAG with live node status colors. `fmt` is a `DiagramFormat` or its
+string (`"mermaid"`, `"dot"`); an unknown one raises rather than quietly falling
+back. Reads the stored definition through `get_workflow_definition_dag` and
+overlays a fresh `status()`, so it is two queries per call.
+
+### Run inspection across a deployment
+
+Listing runs is not on `Queue`. The declared surface has
+`list_workflow_runs`, its keyset twin `list_workflow_runs_after`,
+`get_workflow_run_detail` (run header plus every node) and
+`get_child_workflow_runs` (sub-workflow runs spawned by a run) — but no public
+Python method forwards them. The built-in dashboard is their consumer, and its
+HTTP API is the supported way to reach them:
+
+| Endpoint | Backed by |
+|---|---|
+| `GET /api/workflows/runs` | `list_workflow_runs`, or `list_workflow_runs_after` with `paginate=cursor` / an `after` cursor |
+| `GET /api/workflows/runs/{run_id}` | `get_workflow_run_detail` |
+| `GET /api/workflows/runs/{run_id}/children` | `get_child_workflow_runs` |
+| `GET /api/workflows/runs/{run_id}/dag` | `get_workflow_definition_dag` |
+
+For a run you submitted yourself, the `WorkflowRun` handle above already answers
+without any of these.
 
 ---
 
