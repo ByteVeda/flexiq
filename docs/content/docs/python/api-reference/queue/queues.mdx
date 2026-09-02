@@ -58,7 +58,9 @@ Resume a previously paused queue.
 queue.paused_queues() -> list[str]
 ```
 
-Return the names of all currently paused queues.
+Return the names of all currently paused queues. Pausing is stored, not held in
+memory, so this reports the whole deployment rather than what this process
+paused. Declared as `list_paused_queues`.
 
 ### `queue.purge()`
 
@@ -137,6 +139,17 @@ queue.dead_letters(limit: int = 10, offset: int = 0) -> list[dict]
 
 List dead letter entries. Each dict contains: `id`, `original_job_id`, `queue`,
 `task_name`, `error`, `retry_count`, `failed_at`, `metadata`.
+
+### `queue.dead_letters_after()`
+
+```python
+queue.dead_letters_after(limit: int = 10, after: str | None = None) -> Page[dict]
+```
+
+The keyset-paginated twin, ordered by failed time. Pass the previous page's
+`next_cursor` back as `after`; `None` means that was the last page. Prefer it to
+`offset` when draining the whole DLQ — see
+[the note on keyset pagination](/python/api-reference/queue/jobs#queuelist_jobs_after--queuelist_jobs_filtered_after).
 
 ### `queue.retry_dead()`
 

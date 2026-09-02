@@ -58,6 +58,31 @@ Extended filtering with metadata and error pattern matching and time range
 constraints. Defaults to the queue's namespace — pass `namespace=None` to see
 all namespaces.
 
+### `queue.list_jobs_after()` / `queue.list_jobs_filtered_after()`
+
+```python
+queue.list_jobs_after(..., limit: int = 50, after: str | None = None) -> Page[JobResult]
+queue.list_jobs_filtered_after(..., limit: int = 50, after: str | None = None) -> Page[JobResult]
+```
+
+The keyset-paginated twins of the two listings above: same filters, `offset`
+swapped for `after`. Each returns a `Page` — iterate it directly for the rows,
+and pass its `next_cursor` back as `after` for the following page. A
+`next_cursor` of `None` means that was the last page. Treat the cursor as
+opaque; do not build or parse one.
+
+Use these to walk a listing rather than page it. An offset re-scans every row it
+skips, so a deep page costs more than a shallow one, and a job enqueued mid-walk
+shifts every later offset by one — rows get seen twice or missed entirely. A
+keyset page is O(page) at any depth and stable under concurrent inserts.
+
+<Callout type="info">
+  On SQLite and Postgres the cursor becomes an index seek. Redis status indexes
+  are not seekable, so the keyset is applied in memory: still correct and still
+  stable, but the cost tracks the number of *matching* rows rather than the page
+  size. Filter narrowly there.
+</Callout>
+
 ## Job operations
 
 ### `queue.cancel_job()`
@@ -83,8 +108,11 @@ Update progress for a running job (0–100).
 queue.job_errors(job_id: str) -> list[dict]
 ```
 
-Get error history for a job. Returns a list of dicts with `id`, `job_id`,
-`attempt`, `error`, `failed_at`.
+Every failed attempt for a job, oldest first — a list of dicts with `id`,
+`job_id`, `attempt`, `error`, `failed_at`. Retries append rather than replace,
+so this is the record of *why* a job reached the dead-letter queue, not just
+what the last attempt said. Empty for a job that has never failed. Declared as
+`get_job_errors`.
 
 ### `queue.job_dag()`
 

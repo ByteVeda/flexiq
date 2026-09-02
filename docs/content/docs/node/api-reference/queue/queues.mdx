@@ -12,12 +12,15 @@ background thread pool.
 |---|---|
 | `stats()` → `Promise<Stats>` / `statsByQueue(q)` → `Promise<Stats>` / `statsAllQueues()` → `Promise<Record<string, Stats>>` | Counts by status. |
 | `getMetrics(sinceMs, task?)` → `Promise<Metric[]>` | Raw per-execution metric rows recorded at or after the Unix-ms `sinceMs`. |
+| `countPendingByQueue(q)` → `number` | Pending jobs waiting on one queue. Synchronous and index-backed, because the `maxPending` admission cap calls it on the enqueue path — it is the backlog number that cap is compared against, so it is also the one to alert on. |
 
 ## Dead letter
 
 | Method | Description |
 |---|---|
 | `deadLetters()` → `Promise<DeadJob[]>` / `retryDead(id)` / `deleteDead(id)` / `purgeDead(ms)` → `Promise<number>` | DLQ (dead-letter queue) ops. |
+| `deadLettersByTask(taskName, limit?, offset?)` → `Promise<DeadJob[]>` | The DLQ narrowed to one task — the triage view when a single handler is responsible for the backlog. |
+| `deadLettersAfter(limit?, after?)` → `Promise<Page<DeadJob>>` | Keyset-paginated `deadLetters()`, ordered by failed time. Pass a page's `nextCursor` back as `after`; prefer it to `offset` when draining the whole DLQ, for [the same reasons](/node/api-reference/queue/jobs#job-listing--errors) as the job listings. |
 | `purgeDeadByTask(taskName)` → `Promise<number>` | Drop every dead-letter entry for one task → count removed. The targeted counterpart to `purgeDead(ms)`: use it after fixing a handler whose whole backlog is known-bad, instead of waiting out an age window that would also take unrelated failures. |
 
 ## Recovery

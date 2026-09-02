@@ -22,8 +22,28 @@ background thread pool.
 
 | Method | Description |
 |---|---|
-| `listJobs(filter)` → `Promise<Job[]>` | List jobs. |
-| `getJobErrors(id)` → `Promise<JobError[]>` | Per-attempt error history. |
+| `listJobs(filter)` → `Promise<Job[]>` | List jobs by status, queue or task, newest first. |
+| `listJobsFiltered(filter)` → `Promise<Job[]>` | The wider filter: everything `listJobs` matches on, plus metadata/error substrings and a created-at range. |
+| `listJobsAfter(filter?, after?)` → `Promise<Page<Job>>` | Keyset-paginated `listJobs`, ordered by created time. The filter's `offset` is ignored — the cursor replaces it. |
+| `listJobsFilteredAfter(filter?, after?)` → `Promise<Page<Job>>` | Keyset-paginated `listJobsFiltered`, same cursor contract. |
+| `getJobErrors(id)` → `Promise<JobError[]>` | Every failed attempt, oldest first. Retries append rather than replace, so this is the record of *why* a job reached the dead-letter queue, not just what the last attempt said. |
+
+A `Page` carries `items` and `nextCursor`; pass the cursor back as `after` for
+the following page, and `null` means that was the last one. Treat it as opaque —
+do not build or parse one.
+
+Use the keyset forms to walk a listing rather than page it. An offset re-scans
+every row it skips, so a deep page costs more than a shallow one, and a job
+enqueued mid-walk shifts every later offset by one — rows get seen twice or
+missed entirely. A keyset page is O(page) at any depth and stable under
+concurrent inserts.
+
+<Callout type="info">
+  On SQLite and Postgres the cursor becomes an index seek. Redis status indexes
+  are not seekable, so the keyset is applied in memory: still correct and still
+  stable, but the cost tracks the number of *matching* rows rather than the page
+  size. Filter narrowly there.
+</Callout>
 
 ## Archival
 

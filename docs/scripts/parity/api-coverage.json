@@ -23,6 +23,8 @@
       "PyQueue.get_base_run_node_data": "workflow engine internals",
       "PyQueue.is_migrated": "Queue.__init__ reads it to decide whether state deferred at construction can preload; no public accessor forwards it, and migrate() is the user-facing half",
       "PyQueue.mark_workflow_node_result": "workflow engine internals",
+      "PyQueue.count_pending_by_queue": "read on the enqueue path by the max_pending admission cap; no public accessor forwards it",
+      "PyQueue.dead_letters_by_task": "declared on the native queue but nothing in the shell forwards it — the Python API lists dead letters unfiltered, via Queue.dead_letters",
       "PyQueue.purge_dead_by_task": "declared on the native queue but nothing in the shell forwards it — the Python API purges dead letters by age only, via Queue.purge_dead; naming the gap here beats documenting a call no user can make",
       "PyQueue.resolve_workflow_gate": "workflow engine internals",
       "PyQueue.set_workflow_node_*": "workflow engine internals",
@@ -50,8 +52,8 @@
     "java": {}
   },
   "documented": {
-    "python": 53,
-    "node": 57,
-    "java": 146
+    "python": 58,
+    "node": 63,
+    "java": 148
   }
 }

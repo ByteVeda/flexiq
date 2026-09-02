@@ -9,6 +9,19 @@ description: "Statistics, dead letters, queue control, and settings."
 |---|---|
 | `stats()` / `statsByQueue(q)` / `statsAllQueues()` | `QueueStats` counts by status. |
 | `metrics(taskName, sinceMs)` → `List<TaskMetric>` | Per-execution metrics (null task = all). |
+| `countPendingByQueue(queue)` → `long` | Jobs waiting to run on one queue. This is the primitive behind the admission cap below, so it is the same backlog number an enqueue is rejected against — and the one to alert on. |
+
+## Admission control
+
+| Method | Description |
+|---|---|
+| `maxPending(queue, cap)` → `FlexiQ` | Set an opt-in ceiling on `queue`'s pending backlog; chainable. Past `cap`, `enqueue` throws `QueueFullException` instead of growing the queue further. |
+
+The cap is enforced producer-side, as a count-then-insert rather than one atomic
+step, which has two consequences. It applies with **no worker running** — the
+producer refuses on its own. And concurrent producers can overshoot slightly,
+the same trade the rate limiter makes: `cap` is a backpressure threshold, not an
+invariant to build correctness on.
 
 ## Dead letter
 
