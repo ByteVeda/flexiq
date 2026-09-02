@@ -1,11 +1,12 @@
 //! Command-line shell: read the environment, then run the server.
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use flexiq_server::config::{
     dashboard::scrub_bootstrap_password, listen::scrub_attach_token, Config,
 };
 use flexiq_server::runtime;
+use flexiq_server::tokens::cli::TokenCommand;
 
 /// Environment variables the server reads, shown in `--help` because there are
 /// no flags to document instead.
@@ -38,8 +39,9 @@ Configuration (environment only):
   FLEXIQ_GRPC_LISTEN            gRPC producer door, e.g. 127.0.0.1:50051 or
                                  unix:/run/flexiq-grpc.sock (default: off).
                                  Requires FLEXIQ_NAMESPACE and a build with the
-                                 `grpc` cargo feature. Callers present a stored
-                                 API token
+                                 `grpc` cargo feature. Callers present an API
+                                 token; mint one with `flexiq-server token
+                                 create`, and see `token --help`
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
 FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a
@@ -52,13 +54,30 @@ webhook-only deployment.";
     about = "FlexiQ scheduler, executor attach listener, dashboard, and gRPC door",
     after_help = ENV_HELP
 )]
-struct Cli {}
+struct Cli {
+    /// An administrative action to take instead of running the server.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// What the binary does when it is not being a server.
+#[derive(Subcommand)]
+enum Command {
+    /// Mint, list and revoke the API tokens the gRPC door accepts.
+    #[command(subcommand_help_heading = "Tokens")]
+    Token(TokenCommand),
+}
 
 fn main() -> Result<()> {
     // Default to info so a deployment logs its bind addresses and attachments
     // without anyone having to set RUST_LOG first.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    Cli::parse();
+
+    // An administrative action configures itself from the environment but runs
+    // no role, so it never reaches `Config::from_env`, which requires one.
+    if let Some(Command::Token(command)) = Cli::parse().command {
+        return flexiq_server::tokens::cli::run(command);
+    }
 
     let config = Config::from_env()?;
     scrub_bootstrap_password();

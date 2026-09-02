@@ -19,6 +19,7 @@
 //! provisioning a credential and the door checking it need not be the same
 //! process.
 
+pub mod cli;
 pub mod model;
 pub mod scope;
 pub mod secret;
