@@ -15,8 +15,8 @@ import {
 
 Everything here is optional. The core queue — tasks, jobs, workers, results — is
 complete without a single one of them, and you can adopt any module on its own
-without adopting the rest. Each has its own surface and its own section; this
-page is the map.
+without adopting the rest. Each one has its own section; this page is the map,
+and the last section on it is the bar a new module has to clear.
 
 If you are still working through the basics, none of this is required reading
 yet. Finish the <SdkLink to="getting-started/quickstart">quickstart</SdkLink>
@@ -84,9 +84,25 @@ first and come back when you hit the problem a module solves.
   />
 </Cards>
 
-## Where the rest lives
+## What earns a section here
 
-Day-to-day queue behaviour is in
-<SdkLink to="guides">Guides</SdkLink>; running flexiq in production is in
-<SdkLink to="operate">Operate</SdkLink>; the engine underneath every module is
-described in [Architecture](/architecture/overview).
+This list is meant to stay short. A subsystem gets a section of its own — and a
+card above — only when the first two of these hold. The third holds for every
+module listed here, so a proposal that fails it owes an argument, not an
+exemption:
+
+- **Its own surface.** API you go and reach for: a builder, a web UI, a separate
+  process, a set of CLI verbs. One more option on the call that enqueues a job
+  is not a module.
+- **Its own operational story.** Adopting it changes what you deploy, watch and
+  debug — another process, another table, another panel, another way for the
+  system to fail.
+- **Its own opt-in.** A queue that never mentions it behaves exactly as if the
+  module did not exist.
+
+Most of flexiq fails that test, on purpose. Retries are one option on a task, so
+they sit with the rest of day-to-day queue behaviour in
+<SdkLink to="guides">Guides</SdkLink>. You always pick a storage backend, so
+backends sit with the rest of running flexiq in production under
+<SdkLink to="operate">Operate</SdkLink>. The engine underneath all of it,
+modules included, is described in [Architecture](/architecture/overview).
