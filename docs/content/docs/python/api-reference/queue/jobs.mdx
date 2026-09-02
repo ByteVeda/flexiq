@@ -94,6 +94,23 @@ queue.cancel_job(job_id: str) -> bool
 Cancel a pending job. Returns `True` if cancelled, `False` if not pending.
 Cascade-cancels dependents.
 
+### `queue.cancel_running_job()`
+
+```python
+queue.cancel_running_job(job_id: str) -> bool
+```
+
+Set the cancel flag on a job that has already started, since `cancel_job()`
+only works before dispatch. `True` means the request was recorded, **not** that
+anything stopped: cancellation is cooperative. The handler observes it by
+calling `current_job.check_cancelled()`, which raises `TaskCancelledError`; a
+task that never checks runs to completion.
+
+Declared as `request_cancel`, and `check_cancelled()` reads the flag back
+through `is_cancel_requested`. Under the prefork pool the child installs a
+local cancel check first, so an out-of-band cancel is observed without a
+storage round-trip.
+
 ### `queue.update_progress()`
 
 ```python

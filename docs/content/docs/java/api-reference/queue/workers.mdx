@@ -9,7 +9,20 @@ description: "Worker builder, middleware, and workflow control."
 |---|---|
 | `worker()` → `Worker.Builder` | Begin building a [worker](/java/api-reference/worker). |
 | `shutdown()` | Close every worker started from this client — the programmatic SIGINT/SIGTERM. Each stops dispatching, drains its in-flight handlers, and disposes its worker-scoped resources, exactly as `Worker.close()` does. A no-op when no worker runs, and safe alongside a direct `close()`. The client itself stays usable. |
-| `listWorkers()` → `List<WorkerInfo>` | Registered workers (heartbeat + identity). |
+| `listWorkers()` → `List<WorkerInfo>` | Every registered worker, read from storage — so a producer or dashboard process sees the whole fleet, not just its own. |
+
+A `WorkerInfo` carries `workerId`, `queues`, `status` (`"active"` /
+`"draining"`), `lastHeartbeat`, `startedAt`, `hostname`, `pid`, `poolType`,
+`threads`, `tags`, `resources` and `resourceHealth` (both JSON strings), `sdk` /
+`sdkVersion`, and `registryFingerprint` — a hash of the tasks that worker has
+handlers for, so the one worker in a fleet that registered a different set shows
+up at a glance. Timestamps are Unix milliseconds, and the boxed fields
+(`startedAt`, `pid`) are null for a worker that reported neither.
+
+The rows are written by each worker's own heartbeat, which carries its
+resource-health snapshot and doubles as the dead-worker reaper. So a stale
+`lastHeartbeat` means the process is gone or wedged, and `resourceHealth` is
+only ever as fresh as the last beat.
 
 ## Middleware
 

@@ -37,7 +37,13 @@ queue.shutdown() -> None
 Request graceful worker shutdown — the programmatic equivalent of
 SIGINT/SIGTERM. The scheduler stops dispatching and `run_worker()` returns
 once running tasks finish (bounded by `drain_timeout`). Non-blocking, safe
-from any thread; a no-op when no worker is running.
+from any thread; a no-op when no worker is running. Declared as
+`request_shutdown`.
+
+A signal does one thing more than this method: the handler first flips the
+worker's registry row to `"draining"` (declared as `set_worker_status`), so
+`workers()` shows the drain from another process. `shutdown()` skips that
+step — the worker still drains, it just doesn't announce it.
 
 ### `queue.workers()`
 
@@ -45,7 +51,18 @@ from any thread; a no-op when no worker is running.
 queue.workers() -> list[dict]
 ```
 
-Return live state of all registered workers. Each dict contains:
+Return live state of all registered workers, read from storage — so a producer
+or dashboard process sees the whole fleet, not just its own worker. Declared as
+`list_workers`.
+
+The rows are written by each worker's own heartbeat (declared as
+`worker_heartbeat`), which beats every 5 seconds carrying that worker's
+resource-health snapshot. The same call doubles as the dead-worker reaper: it
+returns the ids it evicted, which is what turns a worker that stopped beating
+into a `WORKER_OFFLINE` event. So a stale `last_heartbeat` means the process is
+gone or wedged, and `resource_health` is only as fresh as the last beat.
+
+Each dict contains:
 
 | Key | Type | Description |
 |-----|------|-------------|
