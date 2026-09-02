@@ -55,6 +55,20 @@ for (const symbol of SYMBOLS) {
   }
 }
 
+// (a2) The generated symbol index is in the corpus. `purge_queue` is declared by
+// every SDK and named by no hand-written page, so it is only findable because
+// `pnpm sync:api` writes MDX that this index then reads. Expanding the generated
+// blocks at MDX-compile time instead would build fine and silently lose them.
+const GENERATED_ONLY = "purge_queue";
+const generatedHits = search(GENERATED_ONLY);
+if (!generatedHits.some((slug) => slug.includes("/api-reference/symbols/"))) {
+  errors.push(
+    `"${GENERATED_ONLY}" does not reach the generated symbol index (got ${generatedHits.join(", ") || "nothing"}) — run \`pnpm sync:api\``,
+  );
+} else {
+  report.push(`  ${GENERATED_ONLY} → ${generatedHits[0]} (generated)`);
+}
+
 // (b) The tokenizer still splits on `_` and `.`, which is what lets a query of
 // `apply_async` reach `queue.apply_async` in a code sample.
 const DOTTED = [
