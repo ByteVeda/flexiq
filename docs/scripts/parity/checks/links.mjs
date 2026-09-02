@@ -37,9 +37,9 @@ const MIN_APP_SEGMENTS = 2;
 
 const MD_LINK = /\]\((\/[^)\s]*)\)/g;
 const HREF = /href="(\/[^"]*)"/g;
-// <SdkLink to="..."> prefixes the active SDK whether or not the value is
-// absolute, so both forms resolve once per SDK.
-const SDK_LINK = /<SdkLink\b[^>]*\sto="([^"]*)"/g;
+// <SdkLink to="..."> and <Card to="..."> both prefix the active SDK whether or
+// not the value is absolute, so both forms resolve once per SDK.
+const SDK_LINK = /<(?:SdkLink|Card)\b[^>]*\sto="([^"]*)"/g;
 
 // …unless the link sits inside a block that only one SDK ever sees. A shared
 // page routinely says "under <SdkOnly sdk='java'>GraalVM native image</SdkOnly>"
