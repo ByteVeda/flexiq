@@ -156,6 +156,7 @@ import express from "express";
 import { queue } from "./tasks.js";
 
 const app = express();
+app.use(express.json()); // req.body is undefined without it
 
 app.post("/signup", async (req, res) => {
   const user = await createUser(req.body.email); // your own code
