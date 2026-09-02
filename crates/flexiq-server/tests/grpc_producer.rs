@@ -30,14 +30,14 @@ use tonic::transport::Channel;
 use tonic::Code;
 use tonic_types::StatusExt;
 
-use support::{temp_storage, TempStorage};
+use support::{mint_token, temp_storage, Bearer, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-producer-tests";
 
 /// A running listener and a client pointed at it.
 struct Harness {
-    client: ProducerServiceClient<Channel>,
+    client: ProducerServiceClient<tonic::service::interceptor::InterceptedService<Channel, Bearer>>,
     storage: TempStorage,
     shutdown: Shutdown,
     served: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -46,11 +46,14 @@ struct Harness {
 impl Harness {
     async fn start(label: &str) -> Self {
         let storage = temp_storage(label);
+        // Every call the door serves is credentialled, so the suite that is
+        // about the producer surface mints one token up front and presents it
+        // on every request. What the credential *checks* is `grpc_auth.rs`.
+        let token = mint_token(&storage, NAMESPACE, flexiq_server::tokens::ScopeSet::ALL);
         let shutdown = Shutdown::default();
         let listener = Listener::bind(&GrpcConfig {
             listen: ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
             namespace: NAMESPACE.to_string(),
-            token: None,
         })
         .await
         .expect("bind");
@@ -66,7 +69,7 @@ impl Harness {
             .expect("the listener must accept a connection");
 
         Self {
-            client: ProducerServiceClient::new(channel),
+            client: ProducerServiceClient::with_interceptor(channel, Bearer::new(&token)),
             storage,
             shutdown,
             served,

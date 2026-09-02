@@ -1,18 +1,23 @@
 //! End-to-end: the gRPC door's credential, over a real socket.
 //!
-//! What these pin is the property the design doc asks #716 for — the check is
-//! *one interceptor*, not a check per RPC. So the assertions are deliberately
-//! not "the six producer RPCs each refuse an anonymous caller": they are that a
-//! path the router does not implement is refused too, that reflection is
-//! refused, and that health is not. A per-RPC check cannot produce those
-//! answers, so a regression to one fails here rather than at the first RPC
-//! somebody adds.
+//! Two things are pinned here that a unit test cannot pin.
+//!
+//! The first is that the check is *one interceptor*, not a check per RPC. So
+//! the assertions are deliberately not "the six producer RPCs each refuse an
+//! anonymous caller": they are that a path the router does not implement is
+//! refused too, that reflection is refused, and that health is not. A per-RPC
+//! check cannot produce those answers, so a regression to one fails here rather
+//! than at the first RPC somebody adds.
+//!
+//! The second is #717's three acceptance criteria, which are about a credential
+//! changing underneath a *running* server: a revoked token stops working with no
+//! restart, a `produce` token cannot reach the executor package, and a token
+//! bound to one namespace is not believed by a listener serving another.
 #![cfg(feature = "grpc")]
 
 mod support;
 
 use flexiq_core::storage::Storage;
-use flexiq_core::Secret;
 use flexiq_server::config::grpc::GrpcConfig;
 use flexiq_server::config::listen::ListenAddress;
 use flexiq_server::grpc::pb::producer_service_client::ProducerServiceClient;
@@ -20,6 +25,7 @@ use flexiq_server::grpc::pb::{enqueue_request, EnqueueOptions, EnqueueRequest};
 use flexiq_server::grpc::status::reason;
 use flexiq_server::grpc::Listener;
 use flexiq_server::runtime::shutdown::Shutdown;
+use flexiq_server::tokens::{store, Scope, ScopeSet};
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
@@ -35,9 +41,6 @@ use support::{temp_storage, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-auth-tests";
-/// The configured secret. Sixteen characters is the floor `config::grpc`
-/// enforces, so a shorter one would never reach a listener.
-const TOKEN: &str = "0123456789abcdef";
 
 /// A running listener and the channel to reach it.
 struct Harness {
@@ -48,28 +51,29 @@ struct Harness {
 }
 
 impl Harness {
-    /// Start a door with `token` as its credential — `None` for the loopback
-    /// door that asks for none.
-    async fn start(label: &str, token: Option<&str>) -> Self {
+    /// Start a door on loopback with an empty token store.
+    async fn start(label: &str) -> Self {
+        Self::start_on(label, "127.0.0.1:0").await
+    }
+
+    /// Start a door bound to `spec`.
+    async fn start_on(label: &str, spec: &str) -> Self {
         let storage = temp_storage(label);
         let shutdown = Shutdown::default();
         let listener = Listener::bind(&GrpcConfig {
-            listen: ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+            listen: ListenAddress::Tcp(spec.parse().expect("valid address")),
             namespace: NAMESPACE.to_string(),
-            token: token.map(Secret::new),
         })
         .await
         .expect("bind");
-        let url = format!(
-            "http://{}",
-            listener
-                .local_addr()
-                .expect("a TCP listener knows what it bound")
-        );
+        let addr = listener
+            .local_addr()
+            .expect("a TCP listener knows what it bound");
 
         let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
 
-        let channel = Channel::from_shared(url)
+        // Dial loopback even for a wildcard bind: the port is what matters.
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{}", addr.port()))
             .expect("a valid endpoint")
             .connect()
             .await
@@ -81,6 +85,19 @@ impl Harness {
             shutdown,
             served,
         }
+    }
+
+    /// Mint a token into the store this door reads, returning `(id, token)`.
+    fn mint(&self, namespace: &str, scopes: ScopeSet) -> (String, String) {
+        let request = flexiq_server::tokens::NewToken::new("client", scopes, namespace, None, None)
+            .expect("a valid mint request");
+        let (row, plaintext) = store::create(&*self.storage, request).expect("mint");
+        (row.id, plaintext)
+    }
+
+    /// A token good for everything this door serves.
+    fn mint_default(&self) -> String {
+        self.mint(NAMESPACE, ScopeSet::ALL).1
     }
 
     fn producer(&self) -> ProducerServiceClient<Channel> {
@@ -125,9 +142,25 @@ fn refusal_reason(status: &Status) -> String {
         .clone()
 }
 
+/// Call a path the router does not implement, so the answer is the gate's and
+/// not a handler's.
+async fn call_path(harness: &Harness, path: &'static str, credential: Option<&str>) -> Status {
+    let mut client = tonic::client::Grpc::new(harness.channel.clone());
+    client.ready().await.expect("the channel must be ready");
+    client
+        .unary::<EnqueueRequest, EnqueueRequest, _>(
+            enqueue(credential),
+            http::uri::PathAndQuery::from_static(path),
+            tonic_prost::ProstCodec::default(),
+        )
+        .await
+        .expect_err("no such method exists; the interesting part is which refusal")
+}
+
 #[tokio::test]
 async fn a_call_with_no_credential_is_refused() {
-    let harness = Harness::start("grpc-auth-missing", Some(TOKEN)).await;
+    let harness = Harness::start("grpc-auth-missing").await;
+    harness.mint_default();
 
     let status = harness
         .producer()
@@ -150,47 +183,75 @@ async fn a_call_with_no_credential_is_refused() {
     harness.stop().await;
 }
 
-/// The acceptance criterion: a wrong token and a missing one are one answer.
+/// A door with nothing minted serves nobody — it does not fall back to letting
+/// callers through. #716 could not assert this, because it had an anonymous
+/// authenticator behind the missing secret.
 #[tokio::test]
-async fn a_wrong_credential_is_indistinguishable_from_none() {
-    let harness = Harness::start("grpc-auth-wrong", Some(TOKEN)).await;
+async fn a_door_with_no_tokens_authenticates_nobody() {
+    let harness = Harness::start("grpc-auth-empty").await;
+
+    for credential in [None, Some("fqt_0123456789abcdef.anything")] {
+        let status = harness
+            .producer()
+            .enqueue(enqueue(credential))
+            .await
+            .expect_err("an unprovisioned door serves nothing");
+        assert_eq!(status.code(), Code::Unauthenticated);
+    }
+
+    harness.stop().await;
+}
+
+/// A wrong token, a well-formed token for an id that does not exist, and no
+/// token at all are one answer. Each distinction is a step in guessing.
+#[tokio::test]
+async fn every_wrong_credential_is_indistinguishable_from_none() {
+    let harness = Harness::start("grpc-auth-wrong").await;
+    let (id, token) = harness.mint(NAMESPACE, ScopeSet::ALL);
+    let secret = token.split_once('.').expect("separated").1;
 
     let missing = harness
         .producer()
         .enqueue(enqueue(None))
         .await
         .expect_err("refused");
-    let wrong = harness
-        .producer()
-        .enqueue(enqueue(Some("0000000000000000")))
-        .await
-        .expect_err("refused");
-    // A prefix of the real token, which a short-circuiting compare would leak
-    // the length of through timing and a sloppy one might accept outright.
-    let prefix = harness
-        .producer()
-        .enqueue(enqueue(Some("0123456789abcde")))
-        .await
-        .expect_err("refused");
 
-    for status in [&wrong, &prefix] {
-        assert_eq!(status.code(), missing.code());
-        assert_eq!(status.message(), missing.message());
-        assert_eq!(refusal_reason(status), refusal_reason(&missing));
+    for wrong in [
+        // A well-formed token for an id that was never minted.
+        "fqt_ffffffffffffffff.whatever".to_string(),
+        // The right id, the wrong secret.
+        format!("fqt_{id}.wrong"),
+        // A prefix of the real secret, which a short-circuiting compare would
+        // leak the length of through timing and a sloppy one might accept.
+        format!("fqt_{id}.{}", &secret[..secret.len() - 1]),
+        // The right secret under an id that is not its own.
+        format!("fqt_ffffffffffffffff.{secret}"),
+        // Not one of our tokens at all.
+        "some-other-credential".to_string(),
+    ] {
+        let status = harness
+            .producer()
+            .enqueue(enqueue(Some(&wrong)))
+            .await
+            .expect_err("refused");
+        assert_eq!(status.code(), missing.code(), "credential: {wrong}");
+        assert_eq!(status.message(), missing.message(), "credential: {wrong}");
+        assert_eq!(refusal_reason(&status), refusal_reason(&missing));
     }
 
     harness.stop().await;
 }
 
 #[tokio::test]
-async fn the_configured_credential_is_accepted_and_scopes_the_write() {
-    let harness = Harness::start("grpc-auth-accepted", Some(TOKEN)).await;
+async fn a_stored_token_is_accepted_and_scopes_the_write() {
+    let harness = Harness::start("grpc-auth-accepted").await;
+    let token = harness.mint_default();
 
     let job = harness
         .producer()
-        .enqueue(enqueue(Some(TOKEN)))
+        .enqueue(enqueue(Some(&token)))
         .await
-        .expect("the right credential must be accepted")
+        .expect("a minted credential must be accepted")
         .into_inner()
         .job
         .expect("a response carries its job");
@@ -206,11 +267,128 @@ async fn the_configured_credential_is_accepted_and_scopes_the_write() {
     harness.stop().await;
 }
 
+/// #717's first acceptance criterion, and the reason there is no cache: the
+/// revocation is a write by another process, and the *same* channel to the
+/// *same* running server must honour it on the next call.
+#[tokio::test]
+async fn a_revoked_token_fails_on_the_next_rpc_with_no_restart() {
+    let harness = Harness::start("grpc-auth-revoked").await;
+    let (id, token) = harness.mint(NAMESPACE, ScopeSet::ALL);
+
+    assert!(
+        harness
+            .producer()
+            .enqueue(enqueue(Some(&token)))
+            .await
+            .is_ok(),
+        "the token works before it is revoked"
+    );
+
+    assert!(store::revoke(&*harness.storage, &id).expect("revoke"));
+
+    let status = harness
+        .producer()
+        .enqueue(enqueue(Some(&token)))
+        .await
+        .expect_err("the next call on the same channel must be refused");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert_eq!(refusal_reason(&status), reason::UNAUTHENTICATED);
+
+    // Exactly one job was written: the call before the revoke.
+    assert_eq!(
+        harness
+            .storage
+            .stats(Some(NAMESPACE))
+            .expect("stats")
+            .pending,
+        1
+    );
+
+    harness.stop().await;
+}
+
+/// #717's second acceptance criterion. `ExecutorService` is #720's, so the call
+/// goes to a literal path — which is the honest test anyway: the scope is
+/// checked before the router is consulted, so it holds for every RPC that
+/// package will ever carry, including the ones not written yet.
+#[tokio::test]
+async fn a_produce_token_cannot_open_an_executor_stream() {
+    let harness = Harness::start("grpc-auth-scope").await;
+    let produce_only = harness.mint(NAMESPACE, ScopeSet::of(&[Scope::Produce])).1;
+
+    let status = call_path(
+        &harness,
+        "/flexiq.executor.v1.ExecutorService/Dispatch",
+        Some(&produce_only),
+    )
+    .await;
+    assert_eq!(status.code(), Code::PermissionDenied);
+    assert_eq!(refusal_reason(&status), reason::SCOPE_DENIED);
+    let all = status.get_error_details();
+    let details = all.error_info().expect("a refusal carries an ErrorInfo");
+    assert_eq!(
+        details.metadata.get(reason::KEY_SCOPE).map(String::as_str),
+        Some("execute"),
+        "the refusal must say which scope was missing"
+    );
+
+    // The same token reaches the producer package it *was* minted for.
+    assert!(harness
+        .producer()
+        .enqueue(enqueue(Some(&produce_only)))
+        .await
+        .is_ok());
+
+    // And a token that carries the scope gets past the gate — the refusal above
+    // was the scope, not the package being unimplemented.
+    let both = harness.mint_default();
+    let status = call_path(
+        &harness,
+        "/flexiq.executor.v1.ExecutorService/Dispatch",
+        Some(&both),
+    )
+    .await;
+    assert_eq!(status.code(), Code::Unimplemented);
+
+    harness.stop().await;
+}
+
+/// #717's third acceptance criterion. One database can carry two listeners, and
+/// the token store is a single keyspace, so the namespace on the credential is
+/// checked against the one this listener serves.
+#[tokio::test]
+async fn a_token_for_another_namespace_cannot_read_this_one() {
+    let harness = Harness::start("grpc-auth-namespace").await;
+    let elsewhere = harness.mint("some-other-tenant", ScopeSet::ALL).1;
+
+    let status = harness
+        .producer()
+        .enqueue(enqueue(Some(&elsewhere)))
+        .await
+        .expect_err("a credential for another namespace must not be believed");
+    assert_eq!(
+        status.code(),
+        Code::Unauthenticated,
+        "not PermissionDenied, which would confirm the token exists"
+    );
+    assert_eq!(refusal_reason(&status), reason::UNAUTHENTICATED);
+    assert_eq!(
+        harness
+            .storage
+            .stats(Some(NAMESPACE))
+            .expect("stats")
+            .pending,
+        0
+    );
+
+    harness.stop().await;
+}
+
 /// Health is the one public path, because a kubelet `grpc:` probe cannot carry
 /// a credential and gating it would cost the chart its readiness probe.
 #[tokio::test]
 async fn health_answers_without_a_credential() {
-    let harness = Harness::start("grpc-auth-health", Some(TOKEN)).await;
+    let harness = Harness::start("grpc-auth-health").await;
 
     let status = HealthClient::new(harness.channel.clone())
         .check(HealthCheckRequest {
@@ -230,7 +408,8 @@ async fn health_answers_without_a_credential() {
 /// nothing must reach reflection.
 #[tokio::test]
 async fn reflection_is_behind_the_credential() {
-    let harness = Harness::start("grpc-auth-reflection", Some(TOKEN)).await;
+    let harness = Harness::start("grpc-auth-reflection").await;
+    harness.mint_default();
 
     let outbound = tokio_stream::iter(vec![ServerReflectionRequest {
         host: String::new(),
@@ -261,119 +440,76 @@ async fn reflection_is_behind_the_credential() {
 /// services this build carries.
 #[tokio::test]
 async fn an_unrouted_path_is_refused_rather_than_reported_missing() {
-    let harness = Harness::start("grpc-auth-unrouted", Some(TOKEN)).await;
+    let harness = Harness::start("grpc-auth-unrouted").await;
+    let token = harness.mint_default();
 
-    let mut client = tonic::client::Grpc::new(harness.channel.clone());
-    client.ready().await.expect("the channel must be ready");
-    let status = client
-        .unary::<EnqueueRequest, EnqueueRequest, _>(
-            enqueue(None),
-            http::uri::PathAndQuery::from_static("/flexiq.v1.NoSuchService/NoSuchMethod"),
-            tonic_prost::ProstCodec::default(),
-        )
-        .await
-        .expect_err("an anonymous call must be refused whatever it names");
+    let status = call_path(&harness, "/flexiq.v1.NoSuchService/NoSuchMethod", None).await;
     assert_eq!(status.code(), Code::Unauthenticated);
     assert_eq!(refusal_reason(&status), reason::UNAUTHENTICATED);
 
     // With the credential the same path reaches the router and is answered for
     // what it actually is — so the refusal above was the gate, not the route.
-    let mut client = tonic::client::Grpc::new(harness.channel.clone());
-    client.ready().await.expect("the channel must be ready");
-    let status = client
-        .unary::<EnqueueRequest, EnqueueRequest, _>(
-            enqueue(Some(TOKEN)),
-            http::uri::PathAndQuery::from_static("/flexiq.v1.NoSuchService/NoSuchMethod"),
-            tonic_prost::ProstCodec::default(),
-        )
-        .await
-        .expect_err("there is no such method");
+    let status = call_path(
+        &harness,
+        "/flexiq.v1.NoSuchService/NoSuchMethod",
+        Some(&token),
+    )
+    .await;
     assert_eq!(status.code(), Code::Unimplemented);
 
     harness.stop().await;
 }
 
-/// The loopback door with no `FLEXIQ_GRPC_TOKEN`: still one principal, still
-/// one namespace, still every storage call scoped. The boundary is the network
-/// stack rather than a credential, and nothing above the authenticator knows
-/// the difference.
+/// #716 refused a non-loopback bind without `FLEXIQ_GRPC_TOKEN`. There is no
+/// such variable now, and no bind that skips the credential — so the wildcard
+/// bind starts, and it is the token store rather than the address that keeps an
+/// anonymous caller out.
 #[tokio::test]
-async fn an_unconfigured_door_still_scopes_every_call() {
-    let harness = Harness::start("grpc-auth-anonymous", None).await;
+async fn a_wildcard_bind_starts_and_still_refuses_an_anonymous_caller() {
+    let harness = Harness::start_on("grpc-auth-public-bind", "0.0.0.0:0").await;
+    let token = harness.mint_default();
 
-    let job = harness
-        .producer()
-        .enqueue(enqueue(None))
-        .await
-        .expect("a door with no credential configured accepts an anonymous call")
-        .into_inner()
-        .job
-        .expect("a response carries its job");
-    assert_eq!(job.namespace, NAMESPACE);
-
-    // A credential nobody asked for is ignored rather than refused: there is
-    // nothing to compare it against.
+    assert_eq!(
+        harness
+            .producer()
+            .enqueue(enqueue(None))
+            .await
+            .expect_err("still refused, on a public bind as on loopback")
+            .code(),
+        Code::Unauthenticated
+    );
     assert!(harness
         .producer()
-        .enqueue(enqueue(Some("whatever")))
+        .enqueue(enqueue(Some(&token)))
         .await
         .is_ok());
 
     harness.stop().await;
 }
 
-/// The listener's own guard, not the config's: a bind that got past
-/// `config::grpc` with no token must still not serve a reachable address.
+/// A token records when it was last used, which is the audit trail a shared
+/// secret could not have.
 #[tokio::test]
-async fn a_non_loopback_bind_with_no_token_refuses_to_serve() {
-    let refused = Listener::bind(&GrpcConfig {
-        listen: ListenAddress::Tcp("0.0.0.0:0".parse().expect("valid address")),
-        namespace: NAMESPACE.to_string(),
-        token: None,
-    })
-    .await;
-    // `Listener` is not `Debug` — a bound socket has nothing worth printing —
-    // so the error comes out by hand rather than through `expect_err`.
-    let Err(error) = refused else {
-        panic!("an unauthenticated public bind must be refused");
-    };
-    let message = error.to_string();
-    assert!(
-        message.contains("FLEXIQ_GRPC_TOKEN"),
-        "the message must name the variable that fixes it: {message}"
-    );
-}
+async fn using_a_token_records_that_it_was_used() {
+    let harness = Harness::start("grpc-auth-last-used").await;
+    let (id, token) = harness.mint(NAMESPACE, ScopeSet::ALL);
+    assert!(store::get(&*harness.storage, &id)
+        .expect("read")
+        .expect("present")
+        .last_used_at
+        .is_none());
 
-/// And the other half: with a token, the same bind is allowed.
-#[tokio::test]
-async fn a_non_loopback_bind_with_a_token_is_allowed() {
-    let storage = temp_storage("grpc-auth-public-bind");
-    let shutdown = Shutdown::default();
-    let listener = Listener::bind(&GrpcConfig {
-        listen: ListenAddress::Tcp("0.0.0.0:0".parse().expect("valid address")),
-        namespace: NAMESPACE.to_string(),
-        token: Some(Secret::new(TOKEN)),
-    })
-    .await
-    .expect("a credentialled public bind is allowed");
-    let addr = listener
-        .local_addr()
-        .expect("a TCP listener knows what it bound");
-    let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
+    harness
+        .producer()
+        .enqueue(enqueue(Some(&token)))
+        .await
+        .expect("accepted");
 
-    let channel = Channel::from_shared(format!("http://127.0.0.1:{}", addr.port()))
-        .expect("a valid endpoint")
-        .connect()
-        .await
-        .expect("the listener must accept a connection");
-    assert!(ProducerServiceClient::new(channel)
-        .enqueue(enqueue(Some(TOKEN)))
-        .await
-        .is_ok());
+    assert!(store::get(&*harness.storage, &id)
+        .expect("read")
+        .expect("present")
+        .last_used_at
+        .is_some());
 
-    shutdown.trigger();
-    served
-        .await
-        .expect("the serve task must not panic")
-        .expect("a shutdown is not an error");
+    harness.stop().await;
 }

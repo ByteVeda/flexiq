@@ -75,12 +75,81 @@ pub fn temp_storage(label: &str) -> TempStorage {
     }
 }
 
+/// Attaches a bearer credential to every gRPC request.
+///
+/// A named type rather than a closure so the client it wraps has a nameable
+/// type — `ProducerServiceClient<InterceptedService<Channel, Bearer>>` — and a
+/// harness can hold one in a field.
+#[cfg(feature = "grpc")]
+#[derive(Clone)]
+pub struct Bearer(tonic::metadata::MetadataValue<tonic::metadata::Ascii>);
+
+#[cfg(feature = "grpc")]
+impl Bearer {
+    /// Present `token` on every call.
+    pub fn new(token: &str) -> Self {
+        Self(
+            format!("Bearer {token}")
+                .parse()
+                .expect("an ASCII header value"),
+        )
+    }
+}
+
+#[cfg(feature = "grpc")]
+impl tonic::service::Interceptor for Bearer {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
+        request
+            .metadata_mut()
+            .insert("authorization", self.0.clone());
+        Ok(request)
+    }
+}
+
+/// Mint a gRPC API token into `storage` and return the string a caller
+/// presents.
+///
+/// Tests that only need *a* credential take the default: every scope, the
+/// namespace the door serves. The ones that are about scoping pass their own.
+pub fn mint_token(
+    storage: &StorageBackend,
+    namespace: &str,
+    scopes: flexiq_server::tokens::ScopeSet,
+) -> String {
+    let request =
+        flexiq_server::tokens::NewToken::new("integration-test", scopes, namespace, None, None)
+            .expect("a valid mint request");
+    flexiq_server::tokens::store::create(storage, request)
+        .expect("mint")
+        .1
+}
+
 /// Build dashboard state over `storage`, in the given auth mode.
 ///
 /// Cookies are marked insecure so a test client does not have to speak TLS,
 /// and no SPA bundle is attached — the API surface is what these tests drive.
 pub fn dashboard_state(storage: &StorageBackend, auth: AuthMode) -> SharedState {
     dashboard_state_with_assets(storage, auth, StaticAssets::new(None))
+}
+
+/// [`dashboard_state`] for a process that serves one namespace.
+///
+/// Minting a gRPC token needs one — a credential for a namespace this process
+/// does not schedule would accept enqueues nothing ever dequeues — so the
+/// token routes are the surface that cares.
+pub fn dashboard_state_in_namespace(
+    storage: &StorageBackend,
+    auth: AuthMode,
+    namespace: &str,
+) -> SharedState {
+    let mut state = dashboard_state(storage, auth);
+    Arc::get_mut(&mut state)
+        .expect("the state is not shared yet")
+        .namespace = Some(namespace.to_string());
+    state
 }
 
 /// [`dashboard_state`] with an explicit SPA source, so asset tests do not

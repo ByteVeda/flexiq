@@ -3,8 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use flexiq_server::config::{
-    dashboard::scrub_bootstrap_password, grpc::scrub_token as scrub_grpc_token,
-    listen::scrub_attach_token, Config,
+    dashboard::scrub_bootstrap_password, listen::scrub_attach_token, Config,
 };
 use flexiq_server::runtime;
 
@@ -39,10 +38,8 @@ Configuration (environment only):
   FLEXIQ_GRPC_LISTEN            gRPC producer door, e.g. 127.0.0.1:50051 or
                                  unix:/run/flexiq-grpc.sock (default: off).
                                  Requires FLEXIQ_NAMESPACE and a build with the
-                                 `grpc` cargo feature
-  FLEXIQ_GRPC_TOKEN             shared secret callers present as
-                                 `authorization: Bearer <token>`; required for a
-                                 non-loopback FLEXIQ_GRPC_LISTEN
+                                 `grpc` cargo feature. Callers present a stored
+                                 API token
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
 FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a
@@ -66,6 +63,5 @@ fn main() -> Result<()> {
     let config = Config::from_env()?;
     scrub_bootstrap_password();
     scrub_attach_token();
-    scrub_grpc_token();
     runtime::run(config)
 }

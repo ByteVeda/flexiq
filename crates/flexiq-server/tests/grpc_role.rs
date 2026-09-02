@@ -23,7 +23,7 @@ use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
 use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
 use tonic_reflection::pb::v1::ServerReflectionRequest;
 
-use support::temp_storage;
+use support::{mint_token, temp_storage, Bearer};
 
 /// The role serves exactly one namespace, and refuses to start without one.
 const NAMESPACE: &str = "grpc-tests";
@@ -32,10 +32,6 @@ fn config(listen: ListenAddress) -> GrpcConfig {
     GrpcConfig {
         listen,
         namespace: NAMESPACE.to_string(),
-        // Loopback with no credential: the shape a developer runs, and the one
-        // `config::grpc` allows without a token. Authentication has its own
-        // suite in `grpc_auth.rs`.
-        token: None,
     }
 }
 
@@ -56,8 +52,11 @@ async fn dial(url: &str) -> Channel {
 }
 
 /// One reflection round trip, opened and closed per request.
-async fn reflect(url: &str, request: MessageRequest) -> MessageResponse {
-    let mut client = ServerReflectionClient::new(dial(url).await);
+///
+/// It carries a credential because reflection describes the door and is gated
+/// with everything else — only the two health RPCs are public.
+async fn reflect(url: &str, token: &str, request: MessageRequest) -> MessageResponse {
+    let mut client = ServerReflectionClient::with_interceptor(dial(url).await, Bearer::new(token));
     let outbound = tokio_stream::iter(vec![ServerReflectionRequest {
         host: String::new(),
         message_request: Some(request),
@@ -107,6 +106,7 @@ async fn health_reports_serving_once_storage_has_answered() {
 #[tokio::test]
 async fn reflection_lists_the_health_service_and_resolves_the_committed_contract() {
     let storage = temp_storage("grpc-reflection");
+    let token = mint_token(&storage, NAMESPACE, flexiq_server::tokens::ScopeSet::ALL);
     let shutdown = Shutdown::default();
     let listener = Listener::bind(&config(loopback())).await.expect("bind");
     let url = format!(
@@ -118,7 +118,7 @@ async fn reflection_lists_the_health_service_and_resolves_the_committed_contract
     let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
 
     // What `grpcurl list` asks for.
-    let listed = reflect(&url, MessageRequest::ListServices(String::new())).await;
+    let listed = reflect(&url, &token, MessageRequest::ListServices(String::new())).await;
     let MessageResponse::ListServicesResponse(services) = listed else {
         panic!("ListServices must answer with a service list, got {listed:?}");
     };
@@ -142,6 +142,7 @@ async fn reflection_lists_the_health_service_and_resolves_the_committed_contract
     // the binary, so a client needs no `.proto` on hand.
     let symbol = reflect(
         &url,
+        &token,
         MessageRequest::FileContainingSymbol("flexiq.v1.JobStatus".to_string()),
     )
     .await;
