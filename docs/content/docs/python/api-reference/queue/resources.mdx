@@ -201,11 +201,18 @@ async with queue.alock("my-resource"):
 
 ### The lock handle
 
-Both context managers yield a `DistributedLock`. Drive it directly when the
-critical section does not fit a `with` block — a callback, or an acquire in one
-method and a release in another. **Declared** names the `PyQueue` primitive each
-member calls; that is the spelling the
+`with queue.lock(...)` yields a `DistributedLock`; `async with
+queue.alock(...)` yields an `AsyncDistributedLock`. Drive either directly when
+the critical section does not fit a `with` block — a callback, or an acquire in
+one method and a release in another. **Declared** names the `PyQueue` primitive
+each member calls; that is the spelling the
 [symbol index](/python/api-reference/symbols/queue) lists.
+
+The table below is the sync handle. The async one carries `name` and `owner_id`
+plus awaitable `acquire()`, `release()` and `extend()` — the same three
+primitives — but **no `info()`**. For holder metadata on the async path, read it
+through an unacquired sync handle: `queue.lock(name).info()` inspects the row
+without taking the lock.
 
 | Member | Declared | Description |
 |---|---|---|
