@@ -229,8 +229,10 @@ configures nothing and reads the policy back rather than owning it.
 
 Mind the units, because they differ by direction: a `Retention` you **configure**
 takes **seconds**, while every window and timestamp **reported** back is in
-milliseconds — the `_ms` suffix marks them. An unset window keeps that table
-forever.
+milliseconds. Nothing in the reported shape is suffixed to say so — the `windows`
+map is keyed by table name, and `reported_at` and `reference_time` read like
+plain timestamps — so it is worth stating rather than inferring. An unset window
+keeps that table forever.
 
 ### `queue.effective_retention()`
 

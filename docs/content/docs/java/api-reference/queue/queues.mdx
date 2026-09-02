@@ -87,9 +87,10 @@ the **worker** process under one elected cleaner per namespace, so a producer
 configures nothing and reads the policy back rather than owning it.
 
 Mind the units, because they differ by direction: `Retention.Builder` takes
-**seconds**, while every window and timestamp **reported** back is in
-milliseconds — the `Ms` suffix marks them. An unset window keeps that table
-forever.
+**seconds**, while everything **reported** back is in milliseconds. The reported
+windows carry the `Ms` suffix (`archivedJobsMs`, `deadLetterMs`, …); `reportedAt`
+and `referenceTime` do not, but they are Unix milliseconds too. An unset window
+keeps that table forever.
 
 | Method | Description |
 |---|---|

@@ -57,8 +57,10 @@ configures nothing and reads the policy back rather than owning it.
 
 Mind the units, because they differ by direction: the `RetentionOptions` you
 **configure** take **seconds**, while every window and timestamp **reported**
-back is in milliseconds — the `Ms` suffix marks them. An unset window keeps that
-table forever.
+back is in milliseconds. Nothing in the reported shape is suffixed to say so —
+`windows.archivedJobs`, `reportedAt` and `referenceTime` all read like the
+options they mirror — so it is worth stating rather than inferring. An unset
+window keeps that table forever.
 
 | Method | Description |
 |---|---|
