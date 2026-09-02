@@ -216,26 +216,37 @@ async fn every_wrong_credential_is_indistinguishable_from_none() {
         .await
         .expect_err("refused");
 
-    for wrong in [
-        // A well-formed token for an id that was never minted.
-        "fqt_ffffffffffffffff.whatever".to_string(),
-        // The right id, the wrong secret.
-        format!("fqt_{id}.wrong"),
-        // A prefix of the real secret, which a short-circuiting compare would
-        // leak the length of through timing and a sloppy one might accept.
-        format!("fqt_{id}.{}", &secret[..secret.len() - 1]),
-        // The right secret under an id that is not its own.
-        format!("fqt_ffffffffffffffff.{secret}"),
-        // Not one of our tokens at all.
-        "some-other-credential".to_string(),
+    // Labelled rather than interpolated: two of these are built from the live
+    // secret, and an assert message ends up in a CI log.
+    for (label, wrong) in [
+        (
+            "a well-formed token for an id that was never minted",
+            "fqt_ffffffffffffffff.whatever".to_string(),
+        ),
+        ("the right id, the wrong secret", format!("fqt_{id}.wrong")),
+        (
+            // A prefix of the real secret, which a short-circuiting compare
+            // would leak the length of through timing and a sloppy one might
+            // accept.
+            "a prefix of the real secret",
+            format!("fqt_{id}.{}", &secret[..secret.len() - 1]),
+        ),
+        (
+            "the right secret under an id that is not its own",
+            format!("fqt_ffffffffffffffff.{secret}"),
+        ),
+        (
+            "not one of our tokens at all",
+            "some-other-credential".to_string(),
+        ),
     ] {
         let status = harness
             .producer()
             .enqueue(enqueue(Some(&wrong)))
             .await
             .expect_err("refused");
-        assert_eq!(status.code(), missing.code(), "credential: {wrong}");
-        assert_eq!(status.message(), missing.message(), "credential: {wrong}");
+        assert_eq!(status.code(), missing.code(), "{label}");
+        assert_eq!(status.message(), missing.message(), "{label}");
         assert_eq!(refusal_reason(&status), refusal_reason(&missing));
     }
 
