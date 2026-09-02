@@ -74,9 +74,10 @@ TimeoutStopSec=60
 Two things matter more than the unit file:
 
 - **Give shutdown a grace period.** `SIGTERM` starts a drain — in-flight jobs
-  finish, no new ones are claimed. Killing before the drain completes is safe
-  (the claims expire and another worker takes the jobs) but it turns a clean
-  deploy into a round of duplicate execution.
+  finish, no new ones are claimed. Killing before the drain completes never
+  loses a job (the claim expires and another worker takes it) but the task body
+  runs again from the top, so a hard kill is only harmless for tasks that are
+  safe to repeat. Every rushed deploy is a round of duplicate execution.
 - **Scale by adding processes, not threads.** Workers coordinate through the
   store. Two more workers on a second machine need no configuration beyond the
   same DSN.
@@ -133,7 +134,9 @@ Three that are easy to miss on the first deploy:
   Put it behind authentication before it is reachable —
   <SdkLink to="modules/dashboard">Dashboard</SdkLink>.
 - **Payloads are data at rest.** Anything in a job's arguments is stored in the
-  database until retention removes it. Sign or encrypt what needs it —
+  database until retention removes it, readable by anything holding the
+  credentials. **Encrypt** what must stay confidential; signing is a separate
+  control that detects tampering but hides nothing —
   <SdkLink to="operate/security">Security</SdkLink>.
 - **Jobs accumulate.** Completed jobs and dead letters are rows, and rows are
   disk. Set a retention policy rather than discovering it —
