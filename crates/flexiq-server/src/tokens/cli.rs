@@ -10,6 +10,8 @@
 //! [`Config`](crate::config::Config), which requires at least one *role* to be
 //! enabled. Provisioning a credential is not a role.
 
+use std::io::Write;
+
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 
@@ -138,14 +140,30 @@ fn create(
 
     let (row, plaintext) = store::create(storage, request)?;
 
-    // stdout, not the log: this is the command's output, and an operator pipes
-    // it into a secret manager.
-    println!("{plaintext}");
+    // The summary goes first, and it carries the id. If the write below fails —
+    // a closed pipe, a full disk — the token is already stored, and the id is
+    // the only thing that lets the operator revoke a credential they never got
+    // to read.
     eprintln!(
         "Minted '{}' (id {}) for namespace '{}', scopes {}, expiring in {expires_in_days} days.\n\
          This is the only time the token is shown. Store it now; only its hash is kept.",
         row.name, row.id, row.namespace, row.scopes,
     );
+
+    // The command's *output*, not a log line: an operator pipes this into a
+    // secret manager. Written to the stdout handle rather than through
+    // `println!`, which would make it a logging sink and would panic on a
+    // closed pipe instead of letting the failure be reported with the id.
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{plaintext}")
+        .and_then(|()| out.flush())
+        .with_context(|| {
+            format!(
+                "the token was minted but could not be written to stdout. Revoke it \
+                 with `flexiq-server token revoke {}` and mint another.",
+                row.id
+            )
+        })?;
     Ok(())
 }
 
