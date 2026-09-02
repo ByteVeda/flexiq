@@ -16,8 +16,8 @@ queue.enqueue("scrape", [url], { timeoutMs: 10_000 }); // per-job override
 A timeout counts as a failure: it consumes a retry and, if retries remain, the
 job is re-enqueued. When the budget is exhausted the job dead-letters with
 `timedOut: true` on the outcome — passed to the `onRetry` / `onDeadLetter`
-[middleware](/node/guides/extensibility/middleware) hooks and the `job.retrying`
-/ `job.dead` [events](/node/guides/extensibility/events), so handlers can tell
+[middleware](/node/guides/extend/middleware) hooks and the `job.retrying`
+/ `job.dead` [events](/node/guides/extend/events), so handlers can tell
 a timeout apart from any other error.
 
 <Callout type="warning">

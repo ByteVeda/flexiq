@@ -63,7 +63,7 @@ an active job resolves to the existing job's id instead of failing the batch.
 
 `dependsOn(jobId...)` makes a job wait for other jobs before it becomes eligible
 to run — a lightweight per-job DAG, distinct from the
-[workflow builder](/java/guides/workflows). The job stays pending until every
+[workflow builder](/java/modules/workflows). The job stays pending until every
 listed job completes successfully.
 
 ```java

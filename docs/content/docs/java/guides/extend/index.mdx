@@ -1,0 +1,83 @@
+---
+title: Extend & integrate
+description: "Hook into the task lifecycle, watch what it does, and wire the Java SDK into the rest of your stack."
+---
+
+Everything that attaches to flexiq from the outside: the extension points that
+run inside the task lifecycle, the signals they emit, and the frameworks and
+vendors on the other end of those signals.
+
+## Extension points
+
+<Cards>
+  <Card
+    title="Events"
+    href="/java/guides/extend/events"
+    description="Subscribe to job outcome events on the worker"
+  />
+  <Card
+    title="Middleware"
+    href="/java/guides/extend/middleware"
+    description="Wrap task execution with before/after/error and outcome hooks"
+  />
+  <Card
+    title="Webhooks"
+    href="/java/guides/extend/webhooks"
+    description="Push signed notifications to external services"
+  />
+  <Card
+    title="Pluggable Serializers"
+    href="/java/guides/extend/serializers"
+    description="Custom payload serialization — MessagePack, codecs, encryption"
+  />
+</Cards>
+
+## Watch it run
+
+<Cards>
+  <Card
+    title="Monitoring & hooks"
+    href="/java/guides/extend/monitoring"
+    description="Queue health, worker hooks, and what to alert on"
+  />
+  <Card
+    title="Structured task logging"
+    href="/java/guides/extend/logging"
+    description="Per-task log capture, correlation, and where the lines go"
+  />
+  <Card
+    title="Structured notes"
+    href="/java/guides/extend/notes"
+    description="Attach progress and diagnostics to a running job"
+  />
+  <Card
+    title="Testing tasks"
+    href="/java/guides/extend/testing"
+    description="Run tasks inline, assert on outcomes, and keep suites fast"
+  />
+</Cards>
+
+## Integrations
+
+<Cards>
+  <Card
+    title="Micrometer"
+    href="/java/guides/extend/micrometer"
+    description="Observation API instrumentation for enqueue and execution"
+  />
+  <Card
+    title="Prometheus"
+    href="/java/guides/extend/prometheus"
+    description="Scrape queue, worker, and task metrics"
+  />
+  <Card
+    title="Sentry"
+    href="/java/guides/extend/sentry"
+    description="Report task failures with task-aware context"
+  />
+  <Card
+    title="Spring Boot"
+    href="/java/guides/extend/spring"
+    description="The starter, auto-configuration, and injecting the queue"
+  />
+</Cards>

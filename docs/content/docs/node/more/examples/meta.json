@@ -1,6 +1,7 @@
 {
   "title": "Examples",
   "pages": [
+    "index",
     "express-service",
     "notifications",
     "web-scraper",

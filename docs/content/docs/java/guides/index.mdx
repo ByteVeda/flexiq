@@ -1,29 +1,23 @@
 ---
 title: Guides
-description: Topical guides covering the Java SDK's surface area.
+description: Task-shaped how-tos covering the Java SDK's day-to-day surface.
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
-import {
-  Boxes,
-  ShieldCheck,
-  Wrench,
-  Activity,
-  Layers,
-  Workflow,
-  Plug,
-  Puzzle,
-} from "lucide-react";
+import { Boxes, ShieldCheck, Puzzle } from "lucide-react";
 
 Pick the topic you're working through. Each guide is self-contained, with code
-samples and gotchas.
+samples and gotchas. Subsystems with their own surface — workflows, durable
+steps, the dashboard, dependency injection, mesh, the attached executor,
+autoscaling — live under [**Modules**](/java/modules/workflows); running flexiq
+in production lives under [**Operate**](/java/operate/backends).
 
 <Cards>
   <Card
     icon={<Boxes />}
-    title="Core"
+    title="Tasks & execution"
     href="/java/guides/core"
-    description="Describe tasks, route to queues, run workers, schedule periodics."
+    description="Describe tasks, route to queues, run workers, schedule, stream, batch."
   />
   <Card
     icon={<ShieldCheck />}
@@ -32,39 +26,9 @@ samples and gotchas.
     description="Retries, dead letters, idempotency, locks, error handling."
   />
   <Card
-    icon={<Workflow />}
-    title="Workflows"
-    href="/java/guides/workflows"
-    description="DAGs, fan-out, fan-in, conditions, gates, sub-workflows, saga compensation."
-  />
-  <Card
     icon={<Puzzle />}
-    title="Extensibility"
-    href="/java/guides/extensibility"
-    description="Custom serializers, payload codecs, middleware, events, webhooks."
-  />
-  <Card
-    icon={<Layers />}
-    title="Resources"
-    href="/java/guides/resources"
-    description="Inject pools, clients, and sessions by name; intercept enqueues; signed proxies."
-  />
-  <Card
-    icon={<Plug />}
-    title="Integrations"
-    href="/java/guides/integrations"
-    description="Micrometer, Sentry, and the Spring Boot 3 starter."
-  />
-  <Card
-    icon={<Wrench />}
-    title="Operations"
-    href="/java/guides/operations"
-    description="Deployment, scaling, mesh, KEDA, the CLI."
-  />
-  <Card
-    icon={<Activity />}
-    title="Observability"
-    href="/java/guides/observability"
-    description="Monitor queue health, the dashboard, and structured logs."
+    title="Extend & integrate"
+    href="/java/guides/extend"
+    description="Events, middleware, webhooks, serializers, logging, testing, Micrometer, Sentry, Spring Boot."
   />
 </Cards>

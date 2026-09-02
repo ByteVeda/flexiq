@@ -80,7 +80,7 @@ def reindex(total: int) -> None:
         current_job.update_progress(int((i + 1) / total * 100))
 ```
 
-Progress surfaces on the [dashboard](/python/guides/dashboard) and through
+Progress surfaces on the [dashboard](/python/modules/dashboard) and through
 inspection. `queue.update_progress(job_id, progress)` does the same from
 outside a task.
 

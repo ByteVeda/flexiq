@@ -10,7 +10,7 @@ job that survives a worker restart mid-backoff still retries on schedule.
 
 A retry re-runs the task body from the top, so anything it already did happens
 again. To keep the parts that succeeded, checkpoint them with
-<SdkLink to="guides/core/steps">durable steps</SdkLink>.
+<SdkLink to="modules/steps">durable steps</SdkLink>.
 
 ## Retry policy
 
@@ -447,7 +447,7 @@ queue.on(EventType.JOB_DEAD, lambda e: alert_ops(e))
 
 <SdkOnly sdk="node">
 
-The `job.retrying` <SdkLink to="guides/extensibility/events">event</SdkLink>
+The `job.retrying` <SdkLink to="guides/extend/events">event</SdkLink>
 fires on each retry; once the budget is exhausted the job moves to the
 <SdkLink to="guides/reliability/dead-letter">dead-letter queue</SdkLink> and
 `job.dead` fires:

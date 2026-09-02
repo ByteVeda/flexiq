@@ -24,11 +24,11 @@ These are the capabilities most often assumed absent. They aren't.
 
 | You might assume… | Reality |
 | --- | --- |
-| No canvas / workflows — no chain, group, or chord | [`chain` / `group` / `chord`](/python/guides/workflows/canvas) are exported from the top-level package, backed by a full workflow DSL. |
-| No Flower-like dashboard | [`flexiq dashboard --app myapp:queue`](/python/guides/dashboard) serves a built-in monitoring UI. |
+| No canvas / workflows — no chain, group, or chord | [`chain` / `group` / `chord`](/python/modules/workflows/canvas) are exported from the top-level package, backed by a full workflow DSL. |
+| No Flower-like dashboard | [`flexiq dashboard --app myapp:queue`](/python/modules/dashboard) serves a built-in monitoring UI. |
 | No retry backoff or per-exception retries | [`max_retries`, `retry_backoff`, `retry_on`, `dont_retry_on`](/python/guides/reliability/retries) are arguments on every task. |
 | No soft timeouts | [`current_job.check_timeout()`](/python/guides/reliability/error-handling) gives cooperative soft timeouts. |
-| GIL bottleneck with no escape hatch | [`--pool prefork`](/python/guides/advanced-execution/prefork) runs child processes with independent GILs for true CPU parallelism. |
+| GIL bottleneck with no escape hatch | [`--pool prefork`](/python/guides/core/prefork) runs child processes with independent GILs for true CPU parallelism. |
 
 ## By capability
 
@@ -42,13 +42,13 @@ These are the capabilities most often assumed absent. They aren't.
   <Card
     icon={<Workflow />}
     title="Workflows"
-    href="/python/guides/workflows/canvas"
+    href="/python/modules/workflows/canvas"
     description="Compose with chain, fan out with group, fan in with chord — plus dependency graphs with cascade cancel."
   />
   <Card
     icon={<Cpu />}
     title="Concurrency"
-    href="/python/guides/advanced-execution/prefork"
+    href="/python/guides/core/prefork"
     description="A thread pool for I/O-bound work and a prefork pool for true CPU parallelism, with a native async API."
   />
   <Card
@@ -60,13 +60,13 @@ These are the capabilities most often assumed absent. They aren't.
   <Card
     icon={<Activity />}
     title="Observability"
-    href="/python/guides/dashboard"
+    href="/python/modules/dashboard"
     description="A built-in dashboard, events, HMAC-signed webhooks, Prometheus, OpenTelemetry, and structured logging."
   />
   <Card
     icon={<Plug />}
     title="Extensibility"
-    href="/python/guides/extensibility"
+    href="/python/guides/extend"
     description="Pluggable serializers, per-task middleware, enqueue predicates, argument interception, a fully async API, and Postgres or Redis backends."
   />
   <Card

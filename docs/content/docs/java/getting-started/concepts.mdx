@@ -82,7 +82,7 @@ back. `close()` stops dispatch and drains in-flight jobs.
 
 `flexiq.getResult(id, type)` returns the handler's return value once the job
 finishes, deserialized with the queue's
-[serializer](/java/guides/extensibility/serializers). Results live in storage,
+[serializer](/java/guides/extend/serializers). Results live in storage,
 so any process sharing the store can read them; `awaitJob(id, timeout)` blocks
 until the job is terminal.
 

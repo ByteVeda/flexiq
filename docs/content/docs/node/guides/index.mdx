@@ -1,29 +1,24 @@
 ---
 title: Guides
-description: Topical guides covering the Node.js SDK's surface area.
+description: Task-shaped how-tos covering the Node.js SDK's day-to-day surface.
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
-import {
-  Boxes,
-  ShieldCheck,
-  Wrench,
-  Activity,
-  Layers,
-  Workflow,
-  Plug,
-  Puzzle,
-} from "lucide-react";
+import { Boxes, ShieldCheck, Puzzle } from "lucide-react";
 
 Pick the topic you're working through. Each guide is self-contained, with code
-samples, gotchas, and links to the relevant API reference.
+samples, gotchas, and links to the relevant API reference. Subsystems with their
+own surface — workflows, durable steps, the dashboard, dependency injection,
+mesh, the attached executor, autoscaling — live under
+[**Modules**](/node/modules/workflows); running flexiq in production lives under
+[**Operate**](/node/operate/backends).
 
 <Cards>
   <Card
     icon={<Boxes />}
-    title="Core"
+    title="Tasks & execution"
     href="/node/guides/core"
-    description="Define tasks, route to queues, run workers, schedule periodics."
+    description="Define tasks, route to queues, run workers, schedule, stream, batch."
   />
   <Card
     icon={<ShieldCheck />}
@@ -32,39 +27,9 @@ samples, gotchas, and links to the relevant API reference.
     description="Retries, dead letters, circuit breakers, idempotency, error handling."
   />
   <Card
-    icon={<Workflow />}
-    title="Workflows"
-    href="/node/guides/workflows"
-    description="DAGs, fan-out, fan-in, conditions, gates, sub-workflows, saga compensation."
-  />
-  <Card
     icon={<Puzzle />}
-    title="Extensibility"
-    href="/node/guides/extensibility"
-    description="Custom serializers, middleware, events, webhooks."
-  />
-  <Card
-    icon={<Layers />}
-    title="Resources"
-    href="/node/guides/resources"
-    description="Inject DB clients, HTTP sessions, and cloud SDKs by name; intercept enqueues."
-  />
-  <Card
-    icon={<Plug />}
-    title="Integrations"
-    href="/node/guides/integrations"
-    description="Observability and web-framework helpers for the Node.js SDK."
-  />
-  <Card
-    icon={<Wrench />}
-    title="Operations"
-    href="/node/guides/operations"
-    description="Deployment, scaling, mesh, KEDA, migration from BullMQ."
-  />
-  <Card
-    icon={<Activity />}
-    title="Observability"
-    href="/node/guides/observability"
-    description="Monitor queue health, the dashboard, and structured logs."
+    title="Extend & integrate"
+    href="/node/guides/extend"
+    description="Events, middleware, webhooks, serializers, logging, testing, framework and vendor integrations."
   />
 </Cards>

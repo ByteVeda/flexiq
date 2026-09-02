@@ -1,0 +1,13 @@
+{
+  "title": "Operate",
+  "root": true,
+  "pages": [
+    "backends",
+    "inspection",
+    "cli",
+    "deployment",
+    "security",
+    "troubleshooting",
+    "migration"
+  ]
+}

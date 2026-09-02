@@ -1,0 +1,118 @@
+---
+title: Configuration
+description: "The resource() overloads, choosing a scope, teardown, and PoolConfig tuning."
+---
+
+Every resource is registered programmatically through `FlexiQ.resource(...)`
+— there is no external config file to load and nothing to reload at runtime.
+Registration happens once per client, before you start a worker over it, and
+the same call shape applies whether the resource lives for the whole worker
+or for a single task.
+
+## Choosing a scope
+
+Pass a `ResourceScope` as the second argument (or omit it for the `WORKER`
+default):
+
+| Scope | Lifetime |
+|---|---|
+| `WORKER` (default) | One shared instance per worker |
+| `THREAD` | One instance per worker thread |
+| `TASK` | One instance per task invocation |
+| `REQUEST` | Fresh instance on every `use()` |
+| `POOLED` | Bounded pool, checked out per task |
+
+See [dependency injection](/java/modules/injection/dependency-injection) for
+what each scope is good for. This page walks through registering one of each:
+
+```java
+// WORKER — built once, shared by every task
+flexiq.resource("db", ResourceScope.WORKER, ctx -> openPool(url), pool -> pool.close());
+
+// THREAD — built once per worker thread, not thread-safe so not shared further
+flexiq.resource("formatter", ResourceScope.THREAD,
+        ctx -> new SimpleDateFormat("yyyy-MM-dd"));
+
+// TASK — built per invocation, torn down when it ends
+flexiq.resource("tx", ResourceScope.TASK,
+        ctx -> beginTransaction(),
+        tx -> tx.rollbackIfOpen());
+
+// REQUEST — fresh every time a handler calls use(), never cached
+flexiq.resource("requestId", ResourceScope.REQUEST,
+        ctx -> UUID.randomUUID().toString());
+
+// POOLED — bounded pool, sized by a PoolConfig
+flexiq.resource("ftp",
+        PoolConfig.of(4).withPoolMin(1).withAcquireTimeout(Duration.ofSeconds(10)),
+        ctx -> connectFtp(),
+        conn -> conn.close());
+```
+
+## The `resource()` overloads
+
+| Overload | Effective scope | Disposer |
+|---|---|---|
+| `resource(name, factory)` | `WORKER` | none |
+| `resource(name, scope, factory)` | the given scope | none |
+| `resource(name, scope, factory, dispose)` | the given scope | runs when the scope ends |
+| `resource(name, pool, factory, dispose)` | `POOLED` (implied by the `PoolConfig`) | runs when the pool retires an instance |
+
+Every overload returns the `FlexiQ` client, so registrations chain:
+
+```java
+FlexiQ flexiq = FlexiQ.builder().sqlite("tasks.db").open()
+        .resource("config", ctx -> loadConfig())
+        .resource("db", ctx -> {
+            Config config = ctx.use("config");
+            return openPool(config.databaseUrl());
+        });
+```
+
+## Teardown
+
+The `dispose` argument releases whatever the factory built. It runs when the
+resource's scope ends — worker and thread resources when the worker stops,
+task and request resources when the task finishes, pooled instances when the
+pool retires them (worker shutdown or `maxLifetime` expiry) — in reverse
+order of construction (LIFO), so a resource is always torn down before
+anything it depended on. A disposer that throws is logged, never propagated —
+it can't fail an already-settled job.
+
+## Pool tuning — `PoolConfig`
+
+| Field | Default | Tuning effect |
+|---|---|---|
+| `poolSize` | required | Hard cap on concurrent checkouts. Too low serializes tasks behind `acquireTimeout` waits; too high defeats the point of bounding an expensive resource. |
+| `poolMin` | `0` | Instances built eagerly at worker start. Raise it to avoid cold-start latency on the first burst of tasks; leave it at `0` for a pool that's rarely used. |
+| `acquireTimeout` | 10s | How long a checkout waits before failing the task with `ResourceException`. Shorter turns exhaustion into a fast, visible failure instead of a slow task. |
+| `maxLifetime` | unlimited | An idle instance older than this is disposed and rebuilt instead of reused — bounds how long a single instance can go without refreshing (e.g. a rotating credential). |
+
+`PoolConfig.of(poolSize)` gives the defaults; derive variations with
+`withPoolMin`, `withAcquireTimeout`, and `withMaxLifetime` — each returns a
+new, immutable `PoolConfig`.
+
+## Validation
+
+Registration fails immediately, before any factory ever runs, when the shape
+is inconsistent:
+
+- **Duplicate name** — registering the same name twice throws
+  `ResourceException`.
+- **`POOLED` without a `PoolConfig`**, or a `PoolConfig` on any other scope —
+  both throw `IllegalArgumentException` out of the registration call itself.
+
+One rule only surfaces once a factory runs, since it depends on what the
+factory does:
+
+- **Scope dependency guard** — inside a factory, `ctx.use(...)` may only
+  resolve same-or-longer-lived resources: `WORKER` and `POOLED` factories may
+  resolve only `WORKER` resources, a `THREAD` factory may resolve `WORKER` or
+  `THREAD`, and `TASK`/`REQUEST` factories may resolve any scope. Reaching for
+  a shorter-lived resource, or a cycle between factories, throws
+  `ResourceException` the first time the factory builds.
+
+<Callout type="info">
+  Register every resource before starting a worker over the client — a
+  worker leases the client's resource definitions once, at `worker().start()`.
+</Callout>

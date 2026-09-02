@@ -1,0 +1,93 @@
+---
+title: Extend & integrate
+description: "Hook into the task lifecycle, watch what it does, and wire the Node.js SDK into the rest of your stack."
+---
+
+Everything that attaches to flexiq from the outside: the extension points that
+run inside the task lifecycle, the signals they emit, and the frameworks and
+vendors on the other end of those signals.
+
+## Extension points
+
+<Cards>
+  <Card
+    title="Events"
+    href="/node/guides/extend/events"
+    description="Subscribe to queue and worker lifecycle events"
+  />
+  <Card
+    title="Per-Task Middleware"
+    href="/node/guides/extend/middleware"
+    description="Wrap task execution with before/after/error hooks"
+  />
+  <Card
+    title="Webhooks"
+    href="/node/guides/extend/webhooks"
+    description="Push signed notifications to external services"
+  />
+  <Card
+    title="Pluggable Serializers"
+    href="/node/guides/extend/serializers"
+    description="Custom payload serialization — msgpack, encryption"
+  />
+</Cards>
+
+## Watch it run
+
+<Cards>
+  <Card
+    title="Monitoring & hooks"
+    href="/node/guides/extend/monitoring"
+    description="Queue health, worker hooks, and what to alert on"
+  />
+  <Card
+    title="Structured task logging"
+    href="/node/guides/extend/logging"
+    description="Per-task log capture, correlation, and where the lines go"
+  />
+  <Card
+    title="Structured notes"
+    href="/node/guides/extend/notes"
+    description="Attach progress and diagnostics to a running job"
+  />
+  <Card
+    title="Testing tasks"
+    href="/node/guides/extend/testing"
+    description="Run tasks inline, assert on outcomes, and keep suites fast"
+  />
+</Cards>
+
+## Integrations
+
+<Cards>
+  <Card
+    title="OpenTelemetry"
+    href="/node/guides/extend/otel"
+    description="Spans across enqueue and execution, with context propagation"
+  />
+  <Card
+    title="Prometheus"
+    href="/node/guides/extend/prometheus"
+    description="Scrape queue, worker, and task metrics"
+  />
+  <Card
+    title="Sentry"
+    href="/node/guides/extend/sentry"
+    description="Report task failures with task-aware context"
+  />
+  <Card
+    title="Express"
+    href="/node/guides/extend/express"
+    description="Enqueue from route handlers and share app state"
+  />
+  <Card
+    title="Fastify"
+    href="/node/guides/extend/fastify"
+    description="Plugin wiring, decorators, and enqueue from handlers"
+  />
+  <Card
+    title="NestJS"
+    href="/node/guides/extend/nest"
+    description="Providers, modules, and injecting the queue"
+  />
+</Cards>

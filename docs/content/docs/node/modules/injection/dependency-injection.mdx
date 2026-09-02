@@ -1,0 +1,207 @@
+---
+title: Injecting resources
+description: "Register external dependencies once and inject them into tasks by scope."
+---
+
+Tasks often need a database pool, an HTTP client, or a cloud SDK. Rather than
+constructing those inside every handler, register them once as **resources** and
+let the worker build, share, and tear them down with the right lifetime.
+
+```ts
+import { Queue, useResource } from "@byteveda/flexiq";
+import { Pool } from "pg";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+
+queue.resource("db", () => new Pool({ connectionString: process.env.DATABASE_URL }), {
+  dispose: (pool) => pool.end(),
+});
+
+queue.task("sync-user", async (userId: string) => {
+  const db = await useResource<Pool>("db");
+  await db.query("UPDATE users SET synced = now() WHERE id = $1", [userId]);
+});
+```
+
+The pool is created once when the worker first needs it, shared across every
+job, and closed when the worker stops. No connection is ever serialized into the
+queue.
+
+## Scopes
+
+A resource's scope decides its lifetime:
+
+| Scope | Built | Lifetime | Use for |
+|---|---|---|---|
+| `worker` (default) | Lazily, on first use | The worker — a shared singleton | Connection pools, HTTP clients, SDK clients |
+| `task` | Once per job invocation | That job — disposed when it finishes | Per-job transactions, request-scoped clients |
+| `pooled` | Lazily, up to `poolSize` at once | Checked out per job, returned when it finishes | Expensive clients that must stay bounded but be reused |
+| `request` | On **every** resolve | That job — every instance disposed when it finishes | Short-lived handles a job needs several distinct copies of |
+
+Scope names and their meanings are shared across SDKs. There is no `thread`
+scope here: a worker runs its tasks on one event loop, so there is no per-thread
+identity to key an instance on.
+
+```ts
+queue.resource("tx", async () => db.begin(), {
+  scope: "task",
+  dispose: (tx) => tx.rollback(), // no-op if already committed
+});
+```
+
+Worker-scoped resources are built once even under concurrency — concurrent
+initialization is de-duplicated. A factory that throws is **not** cached, so the
+next job retries it.
+
+## Pooled resources
+
+A `pooled` resource sits between the other two scopes: instances are reused like
+worker resources but bound to a single job at a time like task resources, with a
+hard cap on how many exist at once. Each job checks out one instance — reusing
+an idle one, building a new one only when none is free — and returns it to the
+pool when the job finishes. A job that cannot get an instance within
+`acquireTimeoutMs` fails with `ResourceUnavailableError`:
+
+```ts
+queue.resource("ftp", () => connectFtp(), {
+  scope: "pooled",
+  dispose: (conn) => conn.close(),
+  pool: { poolSize: 4, poolMin: 1, acquireTimeoutMs: 10_000, maxLifetimeMs: 300_000 },
+});
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `poolSize` | `4` | Max instances checked out concurrently. Jobs wait when exhausted. |
+| `poolMin` | `0` | Instances pre-built when the worker starts. `0` means lazy. |
+| `acquireTimeoutMs` | `10000` | How long a checkout waits before failing the job. |
+| `maxLifetimeMs` | unlimited | Idle instances older than this are disposed and rebuilt. |
+
+Pooled instances outlive any single job, so a pooled factory may only depend on
+worker-scoped resources. `dispose` runs when an instance is evicted or when the
+worker stops — not when a job returns it to the pool.
+
+## Injecting resources
+
+Two equivalent ways to reach a resource from a handler.
+
+### Accessor — `useResource`
+
+Call `useResource(name)` anywhere inside a running task. It resolves against the
+current job's scope and is typed through its generic:
+
+```ts
+queue.task("report", async () => {
+  const db = await useResource<Pool>("db");
+  const cache = await useResource<Redis>("cache");
+  // ...
+});
+```
+
+Calling `useResource` outside a task throws — it is only available while a
+handler runs.
+
+### Declarative — `inject`
+
+List resources on the task and receive them as a trailing `deps` object. The
+`deps` argument is stripped from the typed `enqueue` signature, so producers
+still call the task with its real arguments only:
+
+```ts
+queue.task(
+  "sync-user",
+  async (userId: string, deps: { db: Pool }) => {
+    await deps.db.query("UPDATE users SET synced = now() WHERE id = $1", [userId]);
+  },
+  { inject: ["db"] },
+);
+
+queue.enqueue("sync-user", ["u_123"]); // db is injected, not passed
+```
+
+<Callout type="info">
+  Annotate the `deps` parameter with the resource types you injected — that
+  annotation is what types `deps.db`. The names in `inject` must match the keys
+  you read off `deps`.
+</Callout>
+
+## Resources that depend on resources
+
+A factory receives a context whose `use` resolves another resource, so you can
+compose them:
+
+```ts
+queue.resource("config", async () => loadConfig());
+queue.resource("db", async (ctx) => {
+  const config = await ctx.use<Config>("config");
+  return new Pool({ connectionString: config.databaseUrl });
+});
+```
+
+Worker-scoped and pooled factories may only depend on worker-scoped resources;
+reaching for anything shorter-lived throws (it has no job to bind to).
+Task- and request-scoped factories may depend on any scope.
+
+## Request scope
+
+`task` caches its instance for the rest of the job, so every `useResource("x")`
+inside one job returns the same object. `request` does not — each resolve builds
+a fresh one, and all of them are disposed when the job ends:
+
+```ts
+queue.resource("cursor", () => db.cursor(), {
+  scope: "request",
+  dispose: (cursor) => cursor.close(),
+});
+
+queue.task("scan", async () => {
+  const a = await useResource<Cursor>("cursor");
+  const b = await useResource<Cursor>("cursor"); // a !== b
+});
+```
+
+## Teardown
+
+Pass `dispose` to release a resource when its scope ends — worker resources on
+`worker.stop()`, task resources when the job finishes. Disposal runs in
+**reverse order** of construction (LIFO), so a resource is always torn down
+before anything it depended on:
+
+```ts
+queue.resource("db", () => openPool(), { dispose: (p) => p.end() });
+```
+
+Disposal errors are logged, never thrown — they cannot fail an already-settled
+job. `worker.stop()` returns a promise that resolves once worker-scoped
+disposal has finished, so `await worker.stop()` when the next step depends on
+released resources (closed pools, flushed clients).
+
+## Metrics
+
+`queue.resourceMetrics()` returns per-resource lifecycle counters — how many
+instances were built, disposed, and are currently live:
+
+```ts
+queue.resourceMetrics();
+// { db: { created: 1, disposed: 0, active: 1 }, tx: { created: 12, disposed: 12, active: 0 } }
+```
+
+A worker-scoped resource shows `active: 1` while the worker runs and `0` after
+`stop()`; a task-scoped resource's `created`/`disposed` climb per job with
+`active` near zero.
+
+## Testing
+
+Register a stub factory to swap a real dependency in tests. `mockResource(value)`
+wraps a value as a factory and records how often it was built:
+
+```ts
+import { mockResource } from "@byteveda/flexiq";
+
+const db = mockResource({ query: async () => fakeRows });
+queue.resource("db", db.factory);
+// ... run the task ...
+expect(db.resolutions).toBe(1);
+```
+
+See [testing](/node/guides/extend/testing) for the full worker test setup.

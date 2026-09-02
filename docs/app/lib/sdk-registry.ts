@@ -20,7 +20,7 @@ export interface SdkProfile {
   language: string;
   /** FFI boundary into the Rust core, e.g. "PyO3", "N-API". */
   binding: string;
-  /** Section dirs under `content/docs`, in nav order (architecture/resources shared). */
+  /** Section dirs under `content/docs`, in nav order (architecture/about shared). */
   navSections: string[];
 }
 
@@ -33,10 +33,12 @@ export const SDK_PROFILES: Record<Sdk, SdkProfile> = {
     navSections: [
       "python/getting-started",
       "python/guides",
-      "architecture",
+      "python/modules",
+      "python/operate",
       "python/api-reference",
+      "architecture",
       "python/more/examples",
-      "resources",
+      "about",
     ],
   },
   node: {
@@ -47,10 +49,12 @@ export const SDK_PROFILES: Record<Sdk, SdkProfile> = {
     navSections: [
       "node/getting-started",
       "node/guides",
-      "architecture",
+      "node/modules",
+      "node/operate",
       "node/api-reference",
+      "architecture",
       "node/more/examples",
-      "resources",
+      "about",
     ],
   },
   java: {
@@ -61,10 +65,12 @@ export const SDK_PROFILES: Record<Sdk, SdkProfile> = {
     navSections: [
       "java/getting-started",
       "java/guides",
-      "architecture",
+      "java/modules",
+      "java/operate",
       "java/api-reference",
+      "architecture",
       "java/more/examples",
-      "resources",
+      "about",
     ],
   },
 };

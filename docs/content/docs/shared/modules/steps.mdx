@@ -1,0 +1,569 @@
+---
+title: Durable steps
+description: "Checkpoint work inside one job so a retry replays it instead of running it twice."
+---
+
+A durable step is a checkpoint inside a single task body. `step.run` executes a
+piece of work once, commits its result next to the job, and every later attempt
+of that job returns the committed value instead of running it again. `step.sleep`
+ends the attempt entirely and brings the job back later, having replayed
+everything that already ran.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue, current_job
+
+queue = Queue(db_path="tasks.db")
+
+@queue.task(max_retries=3)
+def checkout(order_id: str) -> str:
+    step = current_job.step
+    charge = step.run(
+        "charge",
+        lambda: stripe.charge(order_id, idempotency_key=step.idempotency_key),
+    )
+    step.sleep("1h")                                   # attempt ends here
+    step.run("receipt", lambda: send_receipt(charge))  # runs an hour later
+    return charge["id"]
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { currentJob } from "@byteveda/flexiq";
+
+queue.task(
+  "checkout",
+  async (orderId: string) => {
+    const { step } = currentJob()!;
+    const charge = await step.run("charge", () =>
+      stripe.charge(orderId, { idempotencyKey: step.idempotencyKey }),
+    );
+    await step.sleep("1h"); // attempt ends here
+    await step.run("receipt", () => sendReceipt(charge)); // runs an hour later
+    return charge.id;
+  },
+  { maxRetries: 3 },
+);
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+@TaskHandler("checkout")
+public String checkout(String orderId) throws Exception {
+    StepContext step = JobContext.current().step();
+    Charge charge = step.run("charge", Charge.class,
+            () -> stripe.charge(orderId, step.idempotencyKey()));
+    step.sleep(Duration.ofHours(1));            // attempt ends here
+    step.run("receipt", () -> sendReceipt(charge));  // runs an hour later
+    return charge.id();
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+Retry that job after the receipt fails and the card is **not** charged a second
+time: `charge` is a memo hit, and only `receipt` runs.
+
+## Steps or a workflow?
+
+Both are durable multi-step execution, and they are not redundant. The
+difference is where the structure lives.
+
+|  | Durable steps | <SdkLink to="modules/workflows">Workflows</SdkLink> |
+|---|---|---|
+| Where the shape is declared | In the code, as it runs — `if`, `for`, `try` | Up front, as a DAG |
+| Unit of execution | **One** job, one worker, one process | One job **per node**, anywhere in the fleet |
+| Parallelism | Sequential. Steps run one at a time | Independent nodes run concurrently |
+| Visible before it runs | No. The sequence is discovered | Yes. The graph is stored and can be drawn |
+| Resumes on | The same worker replaying from the top | Any worker, from the node that failed |
+| Compensation | Yours to write | <SdkLink to="modules/workflows/saga">Saga</SdkLink> rollback |
+| Costs | One row per step | One job, one node row, one dispatch per step |
+
+**The rule:** if the sequence is a property of the *data* and you want to look at
+it — as a graph, in the dashboard, resumed on another machine, with steps running
+in parallel — it is a workflow. If the sequence is a property of the *code* and
+you would have written it as an ordinary function anyway, it is a durable step.
+
+A long ETL fan-out over 500 shards is a workflow. "Charge, wait an hour, email"
+is three lines with two `step.run` calls, and forcing it into a DAG buys nothing
+but three extra dispatches.
+
+<Callout type="info">
+  They compose. A workflow node is a job, so a node's task body can use durable
+  steps for the checkpoints inside it. The step rows belong to that node's job.
+</Callout>
+
+## A step runs once per job, not once per attempt
+
+Only a body that **returns** is memoized. One that throws commits nothing and
+runs again on the next attempt, and so does one whose process died before the
+commit.
+
+A memo hit returns the value decoded from its stored bytes, which went through
+the queue's <SdkLink to="guides/extend/serializers">serializer</SdkLink>
+— codec chain included, so an encrypting codec reaches the step store with no
+extra plumbing. Anything the serializer does not round-trip exactly comes back in
+its decoded shape. Return something the serializer preserves, or a handle to it.
+
+Steps run **one at a time**. A step's position in the sequence is what identifies
+it, so a second step started while the first is uncommitted has no position to
+take: <SdkSwap python={<><code>asyncio.gather</code> over two <code>arun</code> calls</>} node={<><code>Promise.all</code> over two <code>step.run</code> calls</>} java={<>two steps issued from different threads</>} /> fails the attempt rather than
+interleaving. Issue them in order.
+
+<SdkOnly sdk="python">
+
+`step.run` and `step.sleep` have `await` twins — `step.arun`, `step.asleep`,
+`step.asleep_until` — for `async def` tasks. The rules are identical.
+
+</SdkOnly>
+
+## Memoization is not exactly-once
+
+This is the part that decides whether the page's opening example is actually
+correct.
+
+Between "the payment API returned 200" and "the step row committed" there is an
+instant where the process can die. The replay has no record that the call
+happened, so it makes it again:
+
+<Seq
+  heads={["worker", "payments API"]}
+  rows={[
+    { left: "charge(order)" },
+    { right: "200 OK · charged $40", rev: true },
+    { self: "process dies before the step row commits" },
+    { self: "retry: no memo for charge#0, so the body runs" },
+    { left: "charge(order)" },
+    { right: "200 OK · charged $40 again", rev: true },
+  ]}
+/>
+
+Nothing on this side of the network closes that window. The only thing that does
+is a key the *other* service dedupes on, and the only key that works is one this
+job mints the same way every time it runs. That is
+<SdkSwap python={<><code>step.idempotency_key</code></>} node={<><code>step.idempotencyKey</code></>} java={<><code>step.idempotencyKey()</code></>} />:
+
+```text
+018f…c2:charge#0
+└ run key ┘└ step ┘
+```
+
+Derived from the run's identity and the step's position, and from nothing else —
+no clock, no payload, no serializer, no codec. That is the contrast with the
+<SdkLink to="guides/reliability/idempotency">auto-derived dedup key</SdkLink>,
+which hashes the *serialized* payload and therefore moves if a codec does.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+charge = current_job.step.run(
+    "charge",
+    lambda: stripe.Charge.create(
+        amount=order.total,
+        idempotency_key=current_job.step.idempotency_key,  # 018f…c2:charge#0
+    ),
+)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const { step } = currentJob()!;
+const charge = await step.run("charge", () =>
+  stripe.charges.create(
+    { amount: order.total },
+    { idempotencyKey: step.idempotencyKey }, // 018f…c2:charge#0
+  ),
+);
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+StepContext step = JobContext.current().step();
+Charge charge = step.run("charge", Charge.class, () ->
+        stripe.charges().create(order.total(), step.idempotencyKey()));  // 018f…c2:charge#0
+```
+
+  </Tab>
+</CodeTabs>
+
+The key names the step that is running, so it is only readable **inside** a step
+body — outside one there is no step for it to name, and reading it there raises.
+
+It is stable across an ordinary retry, across a `step.sleep` wake and across an
+operator's dead-letter retry from the dashboard. That last one mints a new job
+id, so the run key is carried on the new job rather than re-derived: retrying a
+dead-lettered charge three days later does not charge the customer twice.
+
+<Callout type="warn" title="A step without an idempotency key is at-least-once">
+  Memoization removes the *replay* re-run, not the *crash-window* re-run. For a
+  step whose effect is money, mail, or anything a second copy of is a bug, hand
+  the key downstream. For a step that is a pure read, don't bother.
+</Callout>
+
+## Step identity
+
+By default a step is identified by its name and how many times that name has
+already been used in this attempt: `charge#0`, `fetch#0`, `fetch#1`. The name is
+required and positional — never inferred from the callable, because an inferred
+name changes the moment a lambda is renamed or inlined.
+
+`name#occurrence` is stable only while the surrounding code asks for the same
+names in the same order. That holds for a list. It does not hold for a set, an
+unordered query, or anything whose iteration order can move — reorder the items
+and `fetch#1` now answers a different question, with a key sequence that looks
+identical. So pin identity to the data instead:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+for order_id in order_ids:                 # iteration order is arbitrary
+    current_job.step.run("fetch", lambda i=order_id: load_order(i), key=order_id)   # → fetch:1234
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+for (const orderId of orderIds) {
+  // iteration order is arbitrary
+  await step.run("fetch", () => loadOrder(orderId), { key: orderId }); // → fetch:1234
+}
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+for (String orderId : orderIds) {           // iteration order is arbitrary
+    step.run("fetch", Order.class, () -> loadOrder(orderId), StepOptions.key(orderId));  // → fetch:1234
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+A keyed step is matched by its key wherever it sits in the recorded sequence; an
+unkeyed one is matched at its position. The two forms count **independently** — a
+keyed call does not advance the name's occurrence counter:
+
+| Call, in order | Identity |
+|---|---|
+| `fetch`, keyed `a` | `fetch:a` |
+| `fetch`, unkeyed | `fetch#0` — not `fetch#1` |
+| `fetch`, keyed `b` | `fetch:b` |
+| `fetch`, unkeyed | `fetch#1` |
+
+The alternative would make *adding* a keyed call shift the key of every later
+unkeyed call of the same name — a divergence caused by an edit that changed
+nothing about the unkeyed steps.
+
+Names are capped at 128 bytes and explicit keys at 256. Two steps deriving the
+same key in one attempt are refused, not silently merged.
+
+## Divergence: changing code while jobs are in flight
+
+The recorded step sequence is compared against the running one at every
+`step.run` and `step.sleep`, in memory, against a snapshot loaded once at attempt
+start. Reach a position whose recorded key is not the key the code just asked
+for and the attempt fails:
+
+```text
+step sequence changed for job 018f…c2 at position 2
+  recorded: charge#0, notify#0, receipt#0
+  running:  charge#0, notify#0, audit#0
+  step 2 was 'receipt#0', now 'audit#0'
+A memoized result would answer a different question than the step asking for it.
+Drain or dead-letter this task's in-flight jobs before deploying a change to its
+step sequence.
+```
+
+This failure is **not retried**. It goes straight to the
+<SdkLink to="guides/reliability/dead-letter">dead-letter queue</SdkLink>, because
+the code will not change between attempts and a retry would only burn the budget
+reproducing it. Handing back a wrong memoized result is worse than either.
+
+Two changes are not divergences:
+
+- **Steps added at the end.** The snapshot runs out, the new steps run and
+  commit. That is just an attempt getting further than the last one.
+- **Steps removed from the end.** The attempt finishes having consumed fewer
+  steps than were committed. Logged as a warning naming both sequences, never a
+  failure — the orphaned rows' side effects already happened, and the new code
+  has no use for their values. The rows are dropped with the job.
+
+<Callout type="warn" title="Changing what a step does is a new step name">
+  A step whose key is unchanged but whose *body* changed — a renamed helper, a
+  new API version behind the same call — replays the old value with no signal.
+  The closure is not observable, so nothing can detect it. If a step's meaning
+  changes, give it a new name and let the divergence check do its job.
+</Callout>
+
+Deploying a change to a task's step sequence is therefore a drain, not a rolling
+restart: let the in-flight jobs of that task finish (or dead-letter them) before
+the new code starts picking them up.
+
+## `step.sleep` ends the attempt
+
+A sleep is not a `sleep()` call. The job's deadline is committed as a step row,
+the execution claim is released, and the job goes back to `Pending` at that
+instant. The worker moves on to other jobs immediately.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task()
+def onboarding(user_id: str) -> None:
+    step = current_job.step
+    step.run("welcome", lambda: send_welcome(user_id))
+    step.sleep("3d", name="cool_off")            # attempt ends
+    step.run("nudge", lambda: send_nudge(user_id))
+    step.sleep_until(next_billing_date(user_id), name="until_billing")
+    step.run("invoice", lambda: invoice(user_id))
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("onboarding", async (userId: string) => {
+  const { step } = currentJob()!;
+  await step.run("welcome", () => sendWelcome(userId));
+  await step.sleep("3d", { name: "coolOff" }); // attempt ends
+  await step.run("nudge", () => sendNudge(userId));
+  await step.sleepUntil(nextBillingDate(userId), { name: "untilBilling" });
+  await step.run("invoice", () => invoice(userId));
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+@TaskHandler("onboarding")
+public void onboarding(String userId) throws Exception {
+    StepContext step = JobContext.current().step();
+    step.run("welcome", () -> sendWelcome(userId));
+    step.sleep(Duration.ofDays(3), StepOptions.named("cool_off"));   // attempt ends
+    step.run("nudge", () -> sendNudge(userId));
+    step.sleepUntil(nextBillingDate(userId), StepOptions.named("until_billing"));
+    step.run("invoice", () -> invoice(userId));
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+On wake the job replays from the top of the task body. `welcome` is a memo hit,
+the sleep is a memo hit and returns immediately, and execution carries on at
+`nudge`.
+
+| A sleeping job | |
+|---|---|
+| Worker slot | Released. A three-day sleep occupies nothing |
+| <SdkLink to="guides/reliability/timeouts">Timeout</SdkLink> | Not running, so not timed out. The stale-job reaper skips it |
+| Retry count | Untouched. A sleep is not a failure |
+| Retry budget, circuit breaker, task metrics | Untouched |
+| <SdkLink to="guides/extend/middleware">Middleware</SdkLink> | Gets <SdkSwap python={<><code>on_sleep(ctx, wake_at)</code></>} node={<><code>onSleep(ctx, wakeAt)</code></>} java={<><code>onSleep(ctx, wakeAt)</code></>} /> instead of `after` |
+| Events | Emits `job.sleeping`, carrying the sleep's step key and wake time, not `job.completed` |
+
+The deadline is fixed by the **first** commit. Replaying a `"1h"` sleep wakes at
+the original instant rather than an hour later each time, which is what stops a
+crash loop from producing a sleep that outlives the job. Reach for
+<SdkSwap python={<><code>sleep_until</code></>} node={<><code>sleepUntil</code></>} java={<><code>sleepUntil</code></>} /> when the deadline means something outside the job — a billing date, a market
+open — because an absolute instant does not care how many times the attempt
+replayed.
+
+<SdkSwap python={<>Durations use the same grammar as <code>debounce</code>: <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>, a <code>timedelta</code>, or a bare number of <strong>seconds</strong>. <code>sleep_until</code> takes a <code>datetime</code> or a Unix timestamp in seconds.</>} node={<>Durations are a number of <strong>milliseconds</strong> or a suffixed string — <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>. <code>sleepUntil</code> takes a <code>Date</code> or Unix milliseconds.</>} java={<>Durations are a <code>java.time.Duration</code> and <code>sleepUntil</code> takes a <code>java.time.Instant</code>; the millisecond conversion happens at the JNI boundary.</>} />
+
+Name your sleeps. An unnamed one is numbered `sleep#0`, `sleep#1`, `sleep#2`, and
+a divergence report reading `step 2 was 'sleep#1'` tells nobody which one moved.
+
+## Size caps
+
+Step results live in the database and the whole set is loaded at attempt start,
+so they are capped. All three are enforced on the **encoded** bytes —
+post-serializer, post-codec — because that is what is stored, and a value that
+fits before encryption may not fit after.
+
+| Cap | Limit | Why |
+|---|---|---|
+| Per step | 256 KiB | A checkpoint, not a data payload |
+| Per job, all steps | 4 MiB | The snapshot is read whole; the per-step cap alone bounds nothing across a 10 000-iteration loop |
+| Steps per job | 1 000 | A loop of cheap steps returning nothing would slip past a byte cap |
+
+Going over refuses the commit rather than spilling — there is nowhere to spill
+to, and the same database under a different key is not a spill, just the same
+bytes with less visibility:
+
+```text
+step 'render#0' exceeds the step bytes limit: 1468006 > 262144
+```
+
+The answer is not a bigger cap. Write the value where it belongs — object
+storage, a table of your own — and memoize the **handle**:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Wrong: the rendered PDF is not a checkpoint.
+pdf = current_job.step.run("render", lambda: render_report(report_id))
+
+# Right: the step's result is the pointer.
+key = current_job.step.run("render", lambda: upload(render_report(report_id)))
+current_job.step.run("email", lambda: send_link(key))
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Wrong: the rendered PDF is not a checkpoint.
+const pdf = await step.run("render", () => renderReport(reportId));
+
+// Right: the step's result is the pointer.
+const key = await step.run("render", async () => upload(await renderReport(reportId)));
+await step.run("email", () => sendLink(key));
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Wrong: the rendered PDF is not a checkpoint.
+byte[] pdf = step.run("render", byte[].class, () -> renderReport(reportId));
+
+// Right: the step's result is the pointer.
+String key = step.run("render", String.class, () -> upload(renderReport(reportId)));
+step.run("email", () -> sendLink(key));
+```
+
+  </Tab>
+</CodeTabs>
+
+## Where the claim is not this process's
+
+Every step write is fenced on the job's execution claim, so a step is only as
+durable as the thing holding it. Two situations where that is not the process
+running the task body:
+
+- **<SdkLink to="modules/executor">Attached executors</SdkLink>.** An
+  executor holds no claim of its own, so the claim a step is fenced on is the
+  scheduler's. It commits through the connection instead — the same rules, one
+  round trip per step. A scheduler that offers no step store refuses rather than
+  running the step un-memoized, retryably, because a fleet mid-rollout may place
+  the next attempt somewhere that can commit.
+- **A lost claim.** If a reaper or another worker takes the job over while a step
+  is in flight, the commit is refused and the attempt reports a failure — which
+  the scheduler then drops, because it fences on `(owner, attempt)` before
+  mutating anything. The run proceeding elsewhere is untouched.
+
+<SdkOnly sdk="python">
+
+Inside <SdkLink to="guides/extend/testing">`queue.test_mode()`</SdkLink>
+there is no job row to commit against, so steps run **inline**: every `step.run`
+calls its body, and every `step.sleep` returns immediately instead of ending the
+attempt. That keeps a task body testable without a worker, but it means a test
+asserting on memoization needs a real worker. Starting a second step while one is
+still uncommitted is refused there too, so a test cannot pass for code that
+dead-letters in production.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+## Testing a task that uses steps
+
+`InMemoryFlexiQ` runs steps as a real sequence, not as a bypass: committed steps
+are recorded per job, a replay is answered from that record, a changed sequence
+diverges with the same permanent verdict, and `step.sleep` ends the attempt and
+reschedules the job. A task that passes in memory is a task a worker runs the
+same way.
+
+```java
+Task<String> checkout = Task.of("checkout", String.class);
+
+try (FlexiQ queue = InMemoryFlexiQ.open()) {
+    AtomicInteger charges = new AtomicInteger();
+    String id = queue.enqueue(checkout, "go");
+
+    try (Worker worker = queue.worker()
+            .handle(checkout, payload -> {
+                JobContext ctx = JobContext.current();
+                ctx.step().run("charge", Integer.class, charges::incrementAndGet);
+                return "ok";
+            })
+            .start()) {
+        queue.awaitJob(id, Duration.ofSeconds(5));
+    }
+
+    assertEquals(1, charges.get()); // once per job, across every attempt
+}
+```
+
+The rules behind that — how a step is named, when an occurrence is spent, what
+counts as a divergence, the size caps — live in the core, and the in-memory
+backend cannot ask it: being free of the native library is what makes it fast. It
+restates them, and a parity suite runs one task body over it and over a real
+worker to keep the restatement honest.
+
+What it does not give you is a database. It is one process, so the
+`(owner, attempt)` fence is a field check rather than a row condition; a job's
+steps are dropped when the job finishes rather than retained; and the caps are
+the core's defaults rather than a queue's configuration. For anything that turns
+on real storage — retention, a reaper reclaiming a dead worker's job, two
+processes racing — point the test at a file-backed queue instead, which is a
+two-line change and always exact:
+
+```java
+FlexiQ queue = FlexiQ.builder().sqlite(tempDir + "/steps.db").open();
+```
+
+</SdkOnly>
+
+## Signals you cannot catch away
+
+A step sleep and a step failure both unwind the task body, and neither may be
+swallowed by user code: a swallowed sleep runs the rest of the task with no
+claim, and a swallowed divergence returns a memoized answer to a different
+question.
+
+So they are not ordinary errors.
+<SdkSwap python={<>Every one descends from <code>BaseException</code>, the way <code>KeyboardInterrupt</code> does, so a bare <code>except Exception</code> in a task body misses them.</>} node={<>JavaScript has no uncatchable tier — a <code>catch</code> sees everything — so the class hierarchy is documentation and the latch below is the enforcement.</>} java={<>Every one extends <code>java.lang.Error</code>, so an ordinary <code>catch (Exception e)</code> does not see them — only <code>catch (Throwable t)</code> does.</>} />
+And because that alone cannot stop a determined catch-everything handler, the
+worker also latches: a body that swallowed a signal and returned anyway fails the
+attempt regardless, naming what it swallowed.
+
+| Raised when | Retried? |
+|---|---|
+| `StepSleepSignal` — a sleep committed; the attempt is over | Not a failure. The job is already pending at its deadline |
+| `StepDivergedError` — the sequence changed | No. Dead-letters |
+| `StepLimitExceededError` — over a cap | No. A bigger blob will not fit next time either |
+| `StepError` — a step name, sleep duration or wake deadline the API rejects | No. The same call is written in the code, so it is rejected identically next attempt |
+| `StepUnavailableError` — no worker able to commit | Yes. The next attempt may land somewhere that can |
+| `StepSupersededError` — the claim was lost | Reported, then dropped by the scheduler's fence |
+| `StepSwallowedError` — the body caught a signal and returned | No. The attempt ran unclaimed and cannot be trusted |
+
+Whether a step failure retries is decided by the core's classification, not by a
+task's <SdkLink to="guides/reliability/retries">retry filters</SdkLink> — every
+worker path reads it before consulting them.
+
+<Callout type="info">
+  Steps checkpoint work *inside* one job. To collapse duplicate enqueues of the
+  job itself, see <SdkLink to="guides/reliability/idempotency">idempotency</SdkLink>;
+  to model work that spans machines, see <SdkLink to="modules/workflows">workflows</SdkLink>.
+</Callout>

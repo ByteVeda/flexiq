@@ -1,0 +1,131 @@
+---
+title: Conditions & Error Handling
+description: "Run a step only when its predecessors succeeded, failed, or either — or per a predicate."
+---
+
+Every step runs by default only when all of its predecessors completed
+successfully. Set a condition on the `Step` builder to change that:
+
+```java
+Workflow pipeline = Workflow.named("resilient-pipeline")
+        .step(Step.of("risky", riskyTask, 1).maxRetries(0).build())
+        .step(Step.of("celebrate", celebrateTask, "yay")
+                .onSuccess() // default — only runs if risky completed
+                .after("risky")
+                .build())
+        .step(Step.of("recover", recoverTask, "fix")
+                .onFailure() // only runs if risky dead-lettered
+                .after("risky")
+                .build());
+
+WorkflowRun run = queue.submitWorkflow(pipeline);
+// worker: .trackWorkflows(pipeline) — conditional steps are deferred nodes,
+// so the tracker must hold their payloads.
+WorkflowStatus status = run.await(Duration.ofSeconds(30));
+status.state; // FAILED — even if recover ran (see below)
+```
+
+<Callout type="warning">
+  `run.await(...)` only returns once a worker is running and tracking this
+  workflow — e.g. `queue.worker().handle(riskyTask, ...).handle(celebrateTask,
+  ...).handle(recoverTask, ...).trackWorkflows(pipeline).start()`. Without a
+  tracking worker, the run stays `PENDING` forever.
+</Callout>
+
+## Condition values
+
+| Builder method | Wire value | When the step runs |
+|---|---|---|
+| `.onSuccess()` | `"on_success"` | All predecessors completed successfully (default) |
+| `.onFailure()` | `"on_failure"` | At least one predecessor failed |
+| `.always()` | `"always"` | Once predecessors settle, regardless of outcome |
+| `.condition(Condition)` | callable | The predicate returned `true` (see below) |
+
+`.condition(String)` accepts the three wire values directly and rejects
+anything else. A step whose condition is not met transitions to `SKIPPED`.
+Skipped steps propagate: all of their descendants are skipped too, unless
+those descendants have a separate predecessor that did complete.
+
+## How it works
+
+The `WorkflowTracker` evaluates conditions when a predecessor node settles. It
+reads the run plan from storage, checks each dependent node's condition against
+the settled outcome, and either creates the deferred job or marks the node
+`SKIPPED`. Because the tracker reconstructs run state from storage on every
+event, submit and execute may be different processes.
+
+<Mermaid
+  chart={`graph LR
+    risky --> celebrate["celebrate\n(on_success)"]
+    risky --> recover["recover\n(on_failure)"]`}
+/>
+
+When `risky` fails: `celebrate` → `SKIPPED`, `recover` → enqueued and runs.
+When `risky` succeeds: `recover` → `SKIPPED`, `celebrate` → enqueued and runs.
+
+## Callable conditions
+
+`.condition(Condition)` takes a predicate over the run's settled state — a
+`WorkflowContext` with completed nodes' results, every settled node's status,
+and success/failure counts:
+
+```java
+Workflow gate = Workflow.named("threshold")
+        .step("producer", producer, 10)
+        .step(Step.of("check", check, 0)
+                .condition(ctx -> ((Number) ctx.result("producer").orElse(0)).intValue() > 5)
+                .after("producer")
+                .build());
+```
+
+A callable condition is code, so it cannot be persisted to storage. The
+workflow must be registered on the running worker with
+`trackWorkflows(workflow)` — and a child workflow passed to `subWorkflow` may
+not use one at all (rejected at submit), because there is no registry across
+the submit boundary.
+
+`WorkflowContext` exposes `runId()`, `result(nodeName)`,
+`status(nodeName)`, `results()`, `statuses()`, `successCount()`, and
+`failureCount()`.
+
+## A failed run stays failed
+
+When `risky` fails and `recover` runs, the workflow run still ends in state
+`FAILED`. The `on_failure` handler executes but does not "recover" the run —
+it is an error-handling side effect, not a circuit-breaker. To treat a failure
+as a non-fatal branch, model it differently (for example, wrap the risky logic
+in a task that catches internally and returns a status sentinel).
+
+<Callout type="info">
+  To roll back already-completed steps when a run fails, use
+  [Saga compensation](/java/modules/workflows/saga) instead of `on_failure` conditions.
+</Callout>
+
+## `always` steps
+
+Use `.always()` for teardown or notification steps that should run regardless
+of the upstream outcome:
+
+```java
+Workflow withCleanup = Workflow.named("with-cleanup")
+        .step("provision", provisionTask, spec)
+        .step("work", workTask, input, "provision")
+        .step(Step.of("cleanup", cleanupTask, spec)
+                .always()
+                .after("work")
+                .build());
+```
+
+`cleanup` runs whether `work` succeeded or failed.
+
+## Step options
+
+| Builder method | Type | Description |
+|---|---|---|
+| `after(...)` | `String...` | Predecessor step name(s) |
+| `onSuccess()` / `onFailure()` / `always()` | — | String condition shorthand (default `on_success`) |
+| `condition(...)` | `String` or `Condition` | Wire value or runtime predicate |
+| `maxRetries(...)` | `int` | Retry limit |
+| `timeoutMs(...)` | `long` | Per-attempt timeout |
+| `priority(...)` | `int` | Queue priority |
+| `queue(...)` | `String` | Queue name |

@@ -11,7 +11,7 @@ with zero Python — pick a backend, register tasks, run workers.
 | Feature | Guide |
 |---|---|
 | Typed task registry, enqueue, await results | [Tasks](/node/guides/core/tasks) · [Result](/node/api-reference/result) |
-| SQLite / Postgres / Redis backends | [Backends](/node/guides/operations/backends) |
+| SQLite / Postgres / Redis backends | [Backends](/node/operate/backends) |
 | Named queues, priority, pause/resume | [Queues](/node/guides/core/queues) |
 | Cron-scheduled & delayed jobs | [Scheduling](/node/guides/core/scheduling) |
 | Cooperative cancellation (`AbortSignal`) | [Cancellation](/node/guides/core/cancellation) |
@@ -35,33 +35,33 @@ with zero Python — pick a backend, register tasks, run workers.
 
 | Feature | Guide |
 |---|---|
-| DAG workflows: fan-out/in, conditions, gates, sub-workflows, saga | [Workflows](/node/guides/workflows) |
-| Decentralized work-stealing mesh | [Mesh](/node/guides/operations/mesh) |
+| DAG workflows: fan-out/in, conditions, gates, sub-workflows, saga | [Workflows](/node/modules/workflows) |
+| Decentralized work-stealing mesh | [Mesh](/node/modules/mesh) |
 
 ## Extensibility
 
 | Feature | Guide |
 |---|---|
-| Lifecycle events & middleware | [Events](/node/guides/extensibility/events) · [Middleware](/node/guides/extensibility/middleware) |
-| Signed webhook delivery | [Webhooks](/node/guides/extensibility/webhooks) |
-| Resource injection & enqueue interception | [Resources](/node/guides/resources) |
-| Pluggable serializers (JSON / msgpack / signed / encrypted) | [Serializers](/node/guides/extensibility/serializers) |
+| Lifecycle events & middleware | [Events](/node/guides/extend/events) · [Middleware](/node/guides/extend/middleware) |
+| Signed webhook delivery | [Webhooks](/node/guides/extend/webhooks) |
+| Resource injection & enqueue interception | [Resources](/node/modules/injection) |
+| Pluggable serializers (JSON / msgpack / signed / encrypted) | [Serializers](/node/guides/extend/serializers) |
 
 ## Observability & ops
 
 | Feature | Guide |
 |---|---|
-| Stats, metrics, progress, worker heartbeats | [Monitoring](/node/guides/observability/monitoring) |
-| Leveled logger | [Logging](/node/guides/observability/logging) |
-| OpenTelemetry / Prometheus / Sentry | [Integrations](/node/guides/integrations) |
-| React dashboard + REST API | [Dashboard](/node/guides/operations/dashboard) · [REST API](/node/guides/operations/dashboard-api) |
-| KEDA autoscaling (queue-depth scaler) | [KEDA](/node/guides/operations/keda) |
-| Bare-metal autoscaler (worker processes) | [Autoscaling](/node/guides/operations/autoscaling) |
-| Standalone CLI | [CLI](/node/guides/operations/cli) |
+| Stats, metrics, progress, worker heartbeats | [Monitoring](/node/guides/extend/monitoring) |
+| Leveled logger | [Logging](/node/guides/extend/logging) |
+| OpenTelemetry / Prometheus / Sentry | [Integrations](/node/guides/extend) |
+| React dashboard + REST API | [Dashboard](/node/modules/dashboard) · [REST API](/node/modules/dashboard/rest-api) |
+| KEDA autoscaling (queue-depth scaler) | [KEDA](/node/modules/autoscaling/keda) |
+| Bare-metal autoscaler (worker processes) | [Autoscaling](/node/modules/autoscaling) |
+| Standalone CLI | [CLI](/node/operate/cli) |
 
 ## Framework integrations
 
-[Express](/node/guides/integrations/express) · [Fastify](/node/guides/integrations/fastify) · [NestJS](/node/guides/integrations/nest)
+[Express](/node/guides/extend/express) · [Fastify](/node/guides/extend/fastify) · [NestJS](/node/guides/extend/nest)
 
 <Callout type="info">
   Some features need the native addon built with optional cargo features —

@@ -7,7 +7,7 @@ When a task does small per-call work — sending an email, writing a row, callin
 
 <Callout type="info" title="Not the same as batch enqueue">
   Task batching coalesces many `.delay()` calls into **one** job.
-  [Batch enqueue](/python/guides/advanced-execution/batch-enqueue)
+  [Batch enqueue](/python/guides/core/batch-enqueue)
   (`task.map()` / `enqueue_many()`) does the reverse — it writes **many** jobs in
   one transaction. Reach for task batching to cut per-call overhead; reach for
   batch enqueue for bulk-insert throughput.
@@ -98,4 +98,4 @@ When not to use it:
 - Tasks where per-item retry matters.
 - Heterogeneous work that doesn't share the same downstream code path.
 
-See also the [`canvas.chunks()`](/python/guides/workflows/canvas) primitive — it's a producer-side equivalent that creates `N` separate jobs each holding a sub-list, with full per-chunk retry semantics.
+See also the [`canvas.chunks()`](/python/modules/workflows/canvas) primitive — it's a producer-side equivalent that creates `N` separate jobs each holding a sub-list, with full per-chunk retry semantics.

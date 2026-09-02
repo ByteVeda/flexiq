@@ -1,0 +1,145 @@
+---
+title: Testing resources
+description: "Swap real dependencies for stubs with mockResource, and assert on resource lifecycle in tests."
+---
+
+Resources are the seam where a task meets the outside world, so they are also
+the seam you replace in tests. Registration is last-write-wins: re-registering
+a name in a test overrides whatever the application module registered, without
+any patching machinery.
+
+## `mockResource`
+
+`mockResource(value)` wraps a fixed value as a factory and counts how many times
+it was built:
+
+```ts
+import { mockResource, Queue } from "@byteveda/flexiq";
+
+const db = mockResource({ query: async () => [{ id: 1 }] });
+queue.resource("db", db.factory);
+
+// ... run the task ...
+
+expect(db.resolutions).toBe(1);
+expect(db.value.query).toBeDefined();
+```
+
+| Member | Meaning |
+|---|---|
+| `value` | The value the factory returns — mutate it between tests to change the stub. |
+| `factory` | Pass to `queue.resource(name, mock.factory)`. |
+| `resolutions` | How many times the factory ran, i.e. how many instances were built. |
+
+`resolutions` is the assertion that catches scope mistakes: a `worker`-scoped
+resource should report `1` no matter how many jobs ran, while a `task`-scoped
+one climbs with each job.
+
+## A worker test
+
+Give each test its own queue and database file, register the stubs, run a real
+worker, then stop it:
+
+```ts
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { mockResource, Queue, useResource, type Worker } from "@byteveda/flexiq";
+
+let worker: Worker | undefined;
+afterEach(async () => {
+  await worker?.stop();
+  worker = undefined;
+});
+
+it("uses the injected client", async () => {
+  const queue = new Queue({ dbPath: join(mkdtempSync(join(tmpdir(), "t-")), "q.db") });
+  const api = mockResource({ send: async () => "sent" });
+  queue.resource("api", api.factory);
+
+  queue.task("notify", async () => {
+    const client = await useResource<{ send: () => Promise<string> }>("api");
+    return client.send();
+  });
+
+  const id = queue.enqueue("notify");
+  worker = queue.runWorker();
+
+  expect(await queue.result(id)).toBe("sent");
+  expect(api.resolutions).toBe(1);
+});
+```
+
+A fresh temp database per test keeps tests independent — no shared jobs, no
+leftover state, no ordering dependencies.
+
+<Callout type="info">
+  `await worker.stop()` resolves once worker-scoped disposal has finished. Await
+  it whenever an assertion depends on teardown having run — a closed pool, a
+  flushed client, a `dispose` spy.
+</Callout>
+
+## Asserting on teardown
+
+`dispose` is where connections are released, so it is worth asserting on
+directly:
+
+```ts
+const closed: string[] = [];
+queue.resource("db", () => ({ name: "db" }), {
+  dispose: (value) => void closed.push(value.name),
+});
+
+worker = queue.runWorker();
+await worker.stop();
+
+expect(closed).toEqual(["db"]);
+```
+
+Disposal runs LIFO, so `closed` also documents the order: a resource is always
+torn down before anything it depended on. Disposal errors are logged rather
+than thrown, so a failing `dispose` will not fail the test — assert on the
+effect, not on the absence of a throw.
+
+## Lifecycle counters
+
+`queue.resourceMetrics()` gives the same picture without touching the stubs,
+which is handy for pooled resources where `resolutions` alone is ambiguous:
+
+```ts
+queue.resourceMetrics();
+// { db: { created: 1, disposed: 0, active: 1 } }
+```
+
+See [Observability](/node/modules/injection/observability#lifecycle-metrics) for
+how to read those counters per scope.
+
+## Testing pooled resources
+
+Pin the pool small and turn off pre-warming so behaviour is deterministic, then
+assert on contention explicitly:
+
+```ts
+queue.resource("conn", () => makeConn(), {
+  scope: "pooled",
+  pool: { poolSize: 1, acquireTimeoutMs: 50 },
+});
+```
+
+A checkout that cannot get a slot within `acquireTimeoutMs` rejects with
+`ResourceUnavailableError`, which fails the job — so a test for exhaustion
+asserts on the job's failure, not on a thrown promise at enqueue time.
+
+<Cards>
+  <Card
+    title="Configuration"
+    href="/node/modules/injection/configuration"
+    description="Scopes, pool tuning, health checks, hot reload."
+  />
+  <Card
+    title="Testing guide"
+    href="/node/guides/extend/testing"
+    description="The full worker test setup — fixtures, workers, awaiting results."
+  />
+</Cards>

@@ -1,0 +1,229 @@
+---
+title: Task & Queue Overrides
+description: "Tune retry policy, concurrency, rate limits, and middleware per task from the dashboard — without redeploying."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+The decorator-declared values on `@queue.task(...)` are *defaults*. The
+dashboard lets operators override them at runtime — adjust a rate
+limit, pause a misbehaving task, lower the retry budget after an
+incident — without redeploying.
+
+Two surfaces:
+
+- **Task overrides** — per-task knobs: rate limit, concurrency,
+  retries, retry backoff, timeout, priority, paused.
+- **Queue overrides** — per-queue knobs: rate limit, concurrency,
+  paused.
+
+Plus a separate but related toggle for
+[**middleware**](/python/guides/extend/middleware) on a per-task
+basis (see [§ Middleware toggles](#middleware-toggles) below).
+
+## Tasks page
+
+The **Tasks** page lists every task registered on the live Queue with
+its decorator defaults, any active override, and the *effective* value
+(default merged with override). Overridden values render in accent so
+"which knobs are pinned" is visible at a glance.
+
+![Tasks page with one override active](/screenshots/dashboard/tasks-list.png)
+
+Click **Edit** on any row to open the side sheet. The form mirrors
+the decorator kwargs:
+
+![Override side sheet on the send_email task](/screenshots/dashboard/task-edit-overrides.png)
+
+- **Empty input** → inherit the decorator default
+- **Value entered** → override the default
+- **Clear override** → remove the row entirely; task falls back to
+  every decorator value
+
+| Field | Decorator equivalent |
+|---|---|
+| Rate limit | `rate_limit="100/m"` |
+| Max concurrent | `max_concurrent=10` |
+| Max retries | `max_retries=5` |
+| Timeout | `timeout=300` (seconds) |
+| Priority | `priority=2` |
+| Paused | n/a — runtime-only |
+
+## When changes take effect
+
+This is the most important thing to internalize:
+
+| Change | Takes effect |
+|---|---|
+| Pausing a queue — via `queue.pause(name)`, the dashboard's Queues page, or the REST API's queue-override endpoint | **Immediately** on every running worker — the scheduler checks the live pause state on every poll cycle, no restart needed |
+| Setting `paused=True` on a **queue override** through the Python API (`queue.set_queue_override(...)`) directly, without also calling `queue.pause()` | Recorded, but only applied the next time a worker starts. Call `queue.pause(name)` (or use the dashboard/REST API, which does this for you) for an immediate effect |
+| Setting `paused=True` on a **task override** (`queue.set_task_override(...)`) | Recorded and shown in the dashboard/API as paused, but **not currently enforced by the scheduler** — the task keeps being dequeued and run normally. Treat it as an operator-visible annotation today, not a functional kill switch; pause the task's queue if you need it to actually stop |
+| Rate limit / max concurrent / retries / timeout / priority on a task | **Next worker restart** — these values are read once when a worker starts and used for the rest of that worker's lifetime |
+| Rate limit / max concurrent on a queue | **Next worker restart** — same mechanism |
+| Middleware on/off per task | **Next job** — the middleware lookup runs on every task invocation |
+
+This split is intentional. Queue-level pause is a fast-path safety
+valve wired directly into the scheduler's poll loop; retry/rate-limit
+changes need scheduler buy-in and are deliberately "restart to apply"
+so operators have a clear mental model of when the new values take
+over.
+
+<Callout type="info" title="Per-task pause and hot-reload are planned follow-ups">
+  Two gaps are tracked for a future release: wiring the per-task
+  `paused` override into the scheduler (today it's metadata only), and
+  pulling rate-limit / retries / timeout into the scheduler's per-poll
+  lookup so those changes hot-reload instead of requiring a restart.
+  Until then, restart the worker to apply changes to those knobs, and
+  use a queue-level pause if you need a task to actually stop running.
+</Callout>
+
+## Programmatic API
+
+The dashboard CRUD is a thin shell over the `Queue` API — you can
+script overrides the same way:
+
+```python
+from flexiq import Queue
+
+queue = Queue(db_path="tasks.db")
+
+# Tasks
+queue.set_task_override(
+    "myapp.tasks.send_email",
+    rate_limit="200/m",
+    max_retries=10,
+)
+queue.set_task_override("myapp.tasks.send_email", paused=True)  # recorded only — not enforced by the scheduler yet
+queue.clear_task_override("myapp.tasks.send_email")
+
+# Queues
+queue.set_queue_override("email", max_concurrent=5)
+queue.set_queue_override("email", paused=True)  # recorded — applies on next worker start
+queue.pause("email")  # this is what actually stops dequeuing immediately
+queue.clear_queue_override("email")
+
+# Discovery — what's registered + what's overridden
+for entry in queue.registered_tasks():
+    print(entry["name"], entry["effective"])
+
+for entry in queue.registered_queues():
+    print(entry["name"], entry["effective"])
+```
+
+Allowed task override fields: `rate_limit`, `max_concurrent`,
+`max_retries`, `retry_backoff`, `timeout`, `priority`, `paused`.
+
+Allowed queue override fields: `rate_limit`, `max_concurrent`,
+`paused`.
+
+The store validates types and ranges before persisting — a typo (or a
+typed-in `-1`) raises `ValueError` rather than writing garbage. The
+dashboard handler surfaces the same errors as `400 Bad Request`.
+
+## Storage
+
+Overrides live as JSON entries under
+`overrides:task:<task_name>` and `overrides:queue:<queue_name>` keys
+in the `dashboard_settings` table. SQLite, PostgreSQL, and Redis
+backends all support them uniformly — no new schema. The encoded
+JSON only includes fields the operator actually set, so removing a
+field by passing `None` shrinks the row rather than leaving stale
+data.
+
+## Middleware toggles
+
+Middleware are normally global (via `Queue(middleware=[...])`) or
+per-task (via `@queue.task(middleware=[...])`). The dashboard adds a
+third axis: **temporarily disable a middleware for one task** without
+touching code. Useful when:
+
+- A logging middleware is generating noise for one chatty task
+- A retry-policy middleware is interfering with a specific debug job
+- You want to A/B compare runs with and without a middleware
+
+### Toggle from the dashboard
+
+Open the same side sheet as for overrides and switch to the
+**Middleware** tab. Each registered middleware shows up as a pill
+button — green for enabled, grey for disabled.
+
+![Middleware tab with one toggle disabled](/screenshots/dashboard/task-edit-middleware.png)
+
+Changes take effect on the **next job** — no worker restart required.
+The middleware lookup runs at every task invocation, so the next time
+the task is dequeued the new chain applies.
+
+### Naming middleware
+
+Every `TaskMiddleware` carries a stable `name` attribute that the
+disable list keys on. By default the name is the fully-qualified class
+path (e.g. `myapp.middleware.LoggingMiddleware`) so it survives
+restarts. Override it to pin a shorter, user-facing name:
+
+```python
+from flexiq.middleware import TaskMiddleware
+
+class SentryMiddleware(TaskMiddleware):
+    name = "sentry"  # shows up as "sentry" in the dashboard
+
+    def before(self, ctx):
+        ...
+```
+
+The dashboard rejects toggles for unknown middleware names (`404`), so
+typos can't silently write no-op disables.
+
+### Programmatic API
+
+```python
+queue.list_middleware()  # [{name, class_path, scopes}, ...]
+queue.disable_middleware_for_task("myapp.tasks.send_email", "demo.metrics")
+queue.enable_middleware_for_task("myapp.tasks.send_email", "demo.metrics")
+queue.clear_middleware_disables("myapp.tasks.send_email")
+queue.get_disabled_middleware_for("myapp.tasks.send_email")  # ["demo.metrics"]
+```
+
+## Examples
+
+### Pause one task without redeploying
+
+A flaky third-party API is rate-limiting your `send_email` task and
+you want to stop new sends while you investigate. Marking the task
+itself as paused only records the state for operators to see — it
+doesn't stop the scheduler today. To actually stop new sends, pause
+the queue that task runs on:
+
+```python
+queue.pause("email")
+# ... or from the dashboard: Infrastructure → Queues → email → Pause
+```
+
+Existing in-flight jobs finish normally; nothing new dequeues from
+that queue until you call `queue.resume("email")`.
+
+### Lower a rate limit during an incident
+
+Cut `send_email` from 200/m to 30/m while a downstream is recovering:
+
+```python
+queue.set_task_override("myapp.tasks.send_email", rate_limit="30/m")
+# Restart the workers for the change to take effect on the scheduler.
+```
+
+### Disable a heavyweight middleware for one task
+
+A debug middleware is dumping payloads for every invocation, and you
+want to keep it on for everything except your high-volume
+`process_image` task:
+
+```python
+queue.disable_middleware_for_task("myapp.tasks.process_image", "debug.payload")
+# Takes effect on the next process_image job, no restart needed.
+```
+
+## Reference
+
+- [Dashboard REST API: Tasks & overrides](/python/modules/dashboard/rest-api#tasks-and-overrides)
+- [Dashboard REST API: Middleware](/python/modules/dashboard/rest-api#middleware)
+- [Tasks decorator reference](/python/api-reference/task)

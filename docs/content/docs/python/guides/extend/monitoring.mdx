@@ -1,0 +1,269 @@
+---
+title: Monitoring & Hooks
+description: "Queue stats, progress tracking, worker heartbeat, hooks, and Prometheus/Grafana setup."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+## Queue statistics
+
+Get a snapshot of job counts by status:
+
+```python
+stats = queue.stats()
+# {'pending': 12, 'running': 3, 'completed': 450, 'failed': 2, 'dead': 1, 'cancelled': 0}
+```
+
+Async variant:
+
+```python
+stats = await queue.astats()
+```
+
+## CLI monitoring
+
+### One-shot stats
+
+```bash
+flexiq info --app myapp:queue
+```
+
+```
+flexiq queue statistics
+------------------------------
+  pending      12
+  running      3
+  completed    450
+  failed       2
+  dead         1
+  cancelled    0
+------------------------------
+  total        468
+```
+
+### Live CLI stats
+
+```bash
+flexiq info --app myapp:queue --watch
+```
+
+Refreshes every 2 seconds with throughput calculation (completed jobs per second).
+
+## Progress tracking
+
+Report progress from inside tasks using `current_job`:
+
+```python
+from flexiq import current_job
+
+@queue.task()
+def process_batch(items):
+    total = len(items)
+    for i, item in enumerate(items):
+        process(item)
+        current_job.update_progress(int((i + 1) / total * 100))
+    return f"Processed {total} items"
+```
+
+Read progress from outside:
+
+```python
+job = process_batch.delay(items)
+
+# Poll progress
+fetched = queue.get_job(job.id)
+print(fetched.progress)  # 0-100 or None
+```
+
+### Job context
+
+Inside a running task, `current_job` provides:
+
+| Property | Type | Description |
+|---|---|---|
+| `current_job.id` | `str` | The current job ID |
+| `current_job.task_name` | `str` | The registered task name |
+| `current_job.retry_count` | `int` | Current retry attempt (0 = first run) |
+| `current_job.queue_name` | `str` | The queue this job is running on |
+
+```python
+from flexiq import current_job
+
+@queue.task()
+def my_task():
+    print(f"Running job {current_job.id}")
+    print(f"Task: {current_job.task_name}")
+    print(f"Attempt: {current_job.retry_count}")
+    print(f"Queue: {current_job.queue_name}")
+```
+
+<Callout type="warn">
+  `current_job` properties raise `RuntimeError` when accessed outside of a
+  running task.
+</Callout>
+
+## Worker heartbeat
+
+Monitor active workers and their health:
+
+```python
+workers = queue.workers()
+for w in workers:
+    print(f"Worker {w['worker_id']}: {w['status']} (last seen: {w['last_heartbeat']})")
+```
+
+Async variant:
+
+```python
+workers = await queue.aworkers()
+```
+
+The worker heartbeat is also available via the dashboard REST API at
+`GET /api/workers`. See the
+[Dashboard](/python/modules/dashboard) guide for details.
+
+## Events system
+
+flexiq includes an in-process event bus for reacting to job lifecycle
+events (`JOB_ENQUEUED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_RETRYING`,
+`JOB_DEAD`, `JOB_CANCELLED`). Events can also be delivered as signed HTTP
+webhooks to external systems.
+
+[Events guide →](/python/guides/extend/events)
+
+## Prometheus metrics
+
+For production monitoring, the optional Prometheus integration provides
+counters, histograms, and gauges for task execution:
+
+```bash
+pip install flexiq[prometheus]
+```
+
+[Prometheus integration →](/python/guides/extend/prometheus)
+
+## Hooks
+
+Run code before/after every task, or on success/failure. For a
+comparison against `TaskMiddleware` — which covers retry, dead-letter,
+timeout, and enqueue hooks these decorators don't — see
+[Middleware vs hooks](/python/guides/extend/middleware#middleware-vs-hooks).
+
+### `@queue.before_task`
+
+Called before each task executes:
+
+```python
+@queue.before_task
+def log_start(task_name, args, kwargs):
+    print(f"[START] {task_name}")
+```
+
+### `@queue.after_task`
+
+Called after each task, regardless of success or failure:
+
+```python
+@queue.after_task
+def log_end(task_name, args, kwargs, result, error):
+    status = "OK" if error is None else f"FAILED: {error}"
+    print(f"[END] {task_name} - {status}")
+```
+
+### `@queue.on_success`
+
+Called only when a task succeeds:
+
+```python
+@queue.on_success
+def track_metrics(task_name, args, kwargs, result):
+    metrics.increment(f"task.{task_name}.success")
+```
+
+### `@queue.on_failure`
+
+Called only when a task raises an exception:
+
+```python
+@queue.on_failure
+def alert_on_error(task_name, args, kwargs, error):
+    sentry_sdk.capture_exception(error)
+```
+
+### Hook signatures
+
+| Hook | Signature |
+|---|---|
+| `before_task` | `fn(task_name, args, kwargs)` |
+| `after_task` | `fn(task_name, args, kwargs, result, error)` |
+| `on_success` | `fn(task_name, args, kwargs, result)` |
+| `on_failure` | `fn(task_name, args, kwargs, error)` |
+
+<Callout type="info" title="Multiple hooks">
+  You can register multiple hooks of the same type. They execute in
+  registration order.
+</Callout>
+
+## Grafana setup
+
+A minimal Prometheus + Grafana stack for monitoring flexiq:
+
+```yaml
+# docker-compose.monitoring.yml
+services:
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: flexiq
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+    metrics_path: /metrics
+```
+
+### Essential Grafana panels
+
+**Queue depth** (gauge):
+
+```text
+flexiq_queue_depth{queue="default"}
+```
+
+**Job processing rate** (rate):
+
+```text
+rate(flexiq_jobs_total{status="completed"}[5m])
+```
+
+**Job duration p99** (histogram):
+
+```text
+histogram_quantile(0.99, rate(flexiq_job_duration_seconds_bucket[5m]))
+```
+
+### Alert rules
+
+```yaml
+# Alert if queue depth stays above 1000 for 5 minutes
+- alert: FlexiQQueueBacklog
+  expr: flexiq_queue_depth > 1000
+  for: 5m
+
+# Alert if p99 latency exceeds 5 seconds
+- alert: FlexiQHighLatency
+  expr: histogram_quantile(0.99, rate(flexiq_job_duration_seconds_bucket[5m])) > 5
+```

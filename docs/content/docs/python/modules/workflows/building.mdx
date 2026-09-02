@@ -1,0 +1,145 @@
+---
+title: Building Workflows
+description: "Workflow.step(), @queue.workflow() decorator, step configuration, DAG structure, node statuses."
+---
+
+A workflow is a DAG (directed acyclic graph — steps wired by dependencies with no cycles) of steps. Each step wraps a registered task. The engine
+creates jobs in topological order with `depends_on` chains so the existing
+scheduler handles execution.
+
+## Defining steps
+
+```python
+from flexiq.workflows import Workflow
+
+wf = Workflow(name="etl", version=1)
+wf.step("extract", extract_task)
+wf.step("transform", transform_task, after="extract")
+wf.step("load", load_task, after="transform")
+```
+
+Steps are added in order. The `after` parameter declares predecessors — a
+step won't run until all its predecessors complete.
+
+### Multiple predecessors
+
+```python
+wf.step("merge", merge_task, after=["branch_a", "branch_b"])
+```
+
+### Step arguments
+
+```python
+wf.step("fetch", fetch_task, args=("https://api.example.com",))
+wf.step("process", process_task, after="fetch", kwargs={"mode": "strict"})
+```
+
+Arguments are serialized at submission time using the queue's serializer. A step
+runs with **only** the args and kwargs you declare here — it does *not*
+automatically receive its predecessor's return value. To pass data downstream,
+use [fan-out / fan-in](/python/modules/workflows/fan-out), or read upstream
+results from `WorkflowContext.results` in a condition or gate.
+
+## Step configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | required | Unique step name within the workflow |
+| `task` | `TaskWrapper` | required | Registered `@queue.task()` function |
+| `after` | `str \| list[str]` | `None` | Predecessor step(s) |
+| `args` | `tuple` | `()` | Positional arguments |
+| `kwargs` | `dict` | `None` | Keyword arguments |
+| `queue` | `str` | `None` | Override queue name |
+| `max_retries` | `int` | `None` | Override retry count |
+| `timeout_ms` | `int` | `None` | Override timeout (milliseconds) |
+| `priority` | `int` | `None` | Override priority |
+
+## Workflow decorator
+
+Register reusable workflow factories with `@queue.workflow()`:
+
+```python
+@queue.workflow("nightly_etl")
+def etl_pipeline():
+    wf = Workflow()
+    wf.step("extract", extract)
+    wf.step("load", load, after="extract")
+    return wf
+
+# Build and submit
+run = etl_pipeline.submit()
+run.wait()
+
+# Or build without submitting
+wf = etl_pipeline.build()
+print(wf.step_names)  # ["extract", "load"]
+```
+
+## Submitting
+
+```python
+run = queue.submit_workflow(wf)
+```
+
+This creates a `WorkflowRun` handle. Under the hood:
+
+1. A `WorkflowDefinition` is stored (or reused by name + version)
+2. A `WorkflowRun` record is created
+3. For each step in topological order, a job is enqueued with `depends_on` chains
+4. The run transitions to `RUNNING`
+
+A worker must be consuming the queue for those step jobs to execute — `run.wait()`
+blocks until they finish. Start one first: `flexiq worker --app tasks:queue`, or
+`queue.run_worker()` in a background thread.
+
+<Mermaid
+  chart={`sequenceDiagram
+    participant P as Python
+    participant R as Rust Engine
+    participant S as Scheduler
+
+    P->>R: submit_workflow(dag, payloads)
+    R->>R: Store definition + run
+    loop Each step in topo order
+        R->>S: enqueue(job, depends_on=[pred_ids])
+    end
+    R-->>P: WorkflowRun handle
+    S->>S: Dequeue jobs as deps satisfied`}
+/>
+
+## Workflow parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `str` | `"workflow"` | Workflow name |
+| `version` | `int` | `1` | Version number |
+| `on_failure` | `str` | `"fail_fast"` | Error strategy: `"fail_fast"` or `"continue"` |
+| `cache_ttl` | `float` | `None` | Cache TTL in seconds for [incremental runs](/python/modules/workflows/caching) |
+
+## Node statuses
+
+Each step transitions through these states:
+
+<Mermaid
+  chart={`flowchart TD
+    Start(( )) --> Pending([Pending])
+    Pending -- job picked up --> Running([Running])
+    Pending -- gate reached --> WaitingApproval([WaitingApproval])
+    Pending -- cascade / condition --> Skipped([Skipped])
+    Pending -- incremental reuse --> CacheHit([CacheHit])
+    Running -- success --> Completed([Completed])
+    Running -- retries exhausted --> Failed([Failed])
+    WaitingApproval -- approved --> Completed
+    WaitingApproval -- rejected --> Failed
+    class Completed,Failed,Skipped,CacheHit terminal`}
+/>
+
+| Status | Terminal | Meaning |
+|--------|----------|---------|
+| `PENDING` | No | Waiting for predecessors or job creation |
+| `RUNNING` | No | Job is executing |
+| `COMPLETED` | Yes | Step succeeded |
+| `FAILED` | Yes | Step failed after retries exhausted |
+| `SKIPPED` | Yes | Skipped due to failure cascade or unmet condition |
+| `WAITING_APPROVAL` | No | Gate awaiting approve/reject |
+| `CACHE_HIT` | Yes | Reused result from a prior run |

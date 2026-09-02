@@ -155,9 +155,11 @@ function SdkSelect() {
 const LINKS: { label: string; href: string; sdk?: boolean }[] = [
   { label: "Getting Started", href: "getting-started/installation", sdk: true },
   { label: "Guides", href: "guides", sdk: true },
+  // `modules` has no landing page of its own — link its first entry.
+  { label: "Modules", href: "modules/workflows", sdk: true },
   { label: "Architecture", href: "/architecture" },
   { label: "API", href: "api-reference", sdk: true },
-  { label: "Changelog", href: "/resources/changelog" },
+  { label: "Changelog", href: "/about/changelog" },
 ];
 
 /** Sticky top navigation, shared by the landing and docs shells. `onMenu` is

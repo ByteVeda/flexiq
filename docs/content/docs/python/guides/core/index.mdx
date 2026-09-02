@@ -1,5 +1,5 @@
 ---
-title: Core
+title: Tasks & execution
 description: "The building blocks of every flexiq application."
 ---
 
@@ -55,13 +55,38 @@ description: "The building blocks of every flexiq application."
     description="Collect many small calls into a single job"
   />
   <Card
+    title="Batch Enqueue"
+    href="/python/guides/core/batch-enqueue"
+    description="Submit many jobs in one round trip"
+  />
+  <Card
+    title="Unique Tasks"
+    href="/python/guides/core/unique-tasks"
+    description="Collapse duplicate submissions onto one job"
+  />
+  <Card
+    title="Task Dependencies"
+    href="/python/guides/core/dependencies"
+    description="Hold a job until the jobs it depends on finish"
+  />
+  <Card
+    title="Result Streaming"
+    href="/python/guides/core/streaming"
+    description="Emit partial results while a task is still running"
+  />
+  <Card
+    title="Native Async Tasks"
+    href="/python/guides/core/async-tasks"
+    description="Run coroutine tasks on an asyncio worker pool"
+  />
+  <Card
+    title="Prefork Worker Pool"
+    href="/python/guides/core/prefork"
+    description="Fork worker processes to sidestep the GIL"
+  />
+  <Card
     title="Pub/Sub"
     href="/python/guides/core/pubsub"
     description="Fan a published message out to independent subscribers, each its own job"
-  />
-  <Card
-    title="Workflows"
-    href="/python/guides/core/workflows"
-    description="Chains, groups, and chords for multi-step pipelines"
   />
 </Cards>

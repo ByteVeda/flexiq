@@ -1,0 +1,296 @@
+---
+title: SSO (OAuth & OIDC)
+description: "Sign in with Google, GitHub, or any OIDC provider. Per-domain / per-org allowlists, OAuth-only mode."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+The dashboard ships native sign-in for **Google**, **GitHub**, and any
+**OIDC-compliant** provider (Okta, Auth0, Keycloak, Microsoft Entra, Dex,
+…). Multiple OIDC providers can run side-by-side, each rendered as its
+own button on the login screen.
+
+OAuth requires
+[dashboard authentication](/python/modules/dashboard/authentication) to be
+enabled (`serve_dashboard(auth_enabled=True)` / `flexiq dashboard --auth`)
+and is itself **off by default**. Setting any provider's env vars turns it
+on; password login remains enabled unless you opt out explicitly.
+
+Quick glossary for the acronyms used on this page:
+
+- **OIDC** — OpenID Connect
+- **IdP** — identity provider
+- **PKCE** — Proof Key for Code Exchange
+- **JWKS** — the provider's JSON Web Key Set
+- **nonce** — a one-time value that ties a login response to your request
+- **aud** / **iss** — the audience and issuer claims in the ID token
+
+<Callout title="Optional dependency" type="info">
+  OAuth requires the `authlib` extra:
+
+  ```bash
+  pip install 'flexiq[oauth]'
+  # or with uv:
+  uv pip install 'flexiq[oauth]'
+  ```
+
+  Skip this if you only use password login.
+</Callout>
+
+## How it works
+
+<Mermaid
+  chart={`sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant D as Dashboard
+    participant P as Provider
+
+    B->>D: GET /login
+    B->>D: GET /api/auth/providers
+    D-->>B: { providers, password_enabled }
+
+    Note over B: user clicks "Continue with Google"
+    B->>D: GET /api/auth/oauth/start/google
+    Note over D: mint state + nonce + PKCE<br/>persist state row (5-min TTL)
+    D-->>B: 302 to provider authorize URL
+
+    B->>P: GET /authorize?...
+    Note over P: user consents
+    P-->>B: 302 to /api/auth/oauth/callback/google?code=...&state=...
+
+    B->>D: GET /api/auth/oauth/callback/google
+    Note over D: validate + consume state (single-use)
+    D->>P: POST /token (code + code_verifier)
+    P-->>D: { id_token, access_token }
+    Note over D: verify JWKS / nonce / aud / iss<br/>enforce allowlist<br/>get_or_create User<br/>create Session
+    D-->>B: 302 to /<br/>Set-Cookie: flexiq_session, flexiq_csrf`}
+/>
+
+State is **single-use** and **time-bounded** (5-min default TTL). PKCE
+S256, OIDC nonce, ID-token signature (via the provider's JWKS),
+`iss` / `aud` / `exp` are all enforced server-side.
+
+## Quick start: Google login
+
+1. **Create an OAuth client.** Visit the
+   [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials),
+   create an OAuth 2.0 Client ID of type *Web application*, and register
+   the callback URL:
+
+   ```
+   https://flexiq.your-company.com/api/auth/oauth/callback/google
+   ```
+
+   (For local development, `http://localhost:8080/api/auth/oauth/callback/google`
+   works without HTTPS.)
+
+2. **Set env vars** before starting the dashboard:
+
+   ```bash
+   export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+   # Restrict logins to your Google Workspace domain:
+   export FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=your-company.com
+   ```
+
+3. **Start the dashboard.** The login screen now shows a "Continue with
+   Google" button above the password form.
+
+## GitHub login
+
+GitHub is OAuth2-only (no OIDC), so the dashboard hits `/user` and
+`/user/emails` to derive an identity. Org membership is verified via
+`/orgs/{org}/members/{login}`.
+
+1. Create a [GitHub OAuth App](https://github.com/settings/developers).
+   Set the *Authorization callback URL* to
+   `https://flexiq.your-company.com/api/auth/oauth/callback/github`.
+
+2. Env vars:
+
+   ```bash
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+   # Restrict logins to members of these GitHub orgs:
+   export FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=your-org,partner-org
+   ```
+
+When `ALLOWED_ORGS` is set the OAuth scope automatically expands to
+include `read:org` so the membership endpoint returns reliable results
+for private orgs. Users who consent without the additional scope are
+rejected at the allowlist gate.
+
+<Callout type="warn" title="Verified primary email only">
+  GitHub accounts that have no `verified=true` primary email
+  (returned by `GET /user/emails`) are always assigned the `viewer`
+  role, even if listed in `FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS`. This
+  prevents privilege escalation via spoofed email claims.
+</Callout>
+
+## Generic OIDC (Okta, Auth0, Keycloak, Microsoft, …)
+
+Generic OIDC providers are configured as **named slots**. Each slot has
+its own callback URL, own user namespace, and own button on the login
+screen.
+
+```bash
+export FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.your-company.com
+
+# List the slots first.
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+
+# Then per-slot config (slot name uppercase, separators normalised to _).
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL="Acme SSO"
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=your-company.com
+
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_ID=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_CLIENT_SECRET=...
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration
+export FLEXIQ_DASHBOARD_OAUTH_OIDC_MICROSOFT_LABEL="Microsoft 365"
+```
+
+The callback URL for each slot is
+`{REDIRECT_BASE_URL}/api/auth/oauth/callback/{slot}` — register that
+exact URL with your IdP.
+
+Slot names must match `^[a-z][a-z0-9_-]{0,31}$` and must not collide
+with `google` / `github` (the built-ins). The FlexiQ user generated
+for an OIDC login is namespaced as `{slot}:{sub}`, so two different
+Okta tenants stay distinct users even when subjects overlap.
+
+## Role assignment for OAuth users
+
+The first time someone signs in via OAuth, the dashboard decides their
+role using this rule:
+
+1. **`FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS` match** — case-insensitive
+   match against a verified email → role `admin`.
+2. **Everyone else** → role `viewer`. There is no first-user fallback:
+   admin access comes only from the allowlist, the password setup flow,
+   or the env bootstrap.
+
+```bash
+export FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@your-company.com,bob@your-company.com
+```
+
+Once a user is created, their role is **not** re-evaluated on subsequent
+logins (you can change it from the dashboard or via the API). Their
+`email` and `display_name` are refreshed from each new login's claims.
+
+## OAuth-only mode
+
+To disable password login entirely:
+
+```bash
+export FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false
+```
+
+The dashboard refuses to start in OAuth-only mode if no provider is
+configured (you'd have no way to log in). The login page hides the
+username/password form and renders only provider buttons.
+
+## Allowlist semantics
+
+| Provider | Allowlist scope | Where it's checked |
+|---|---|---|
+| Google | `ALLOWED_DOMAINS` — the email domain (lowercased) must be in this list. Required: `email_verified=true`. | Server-side after JWKS verification of the ID token. |
+| GitHub | `ALLOWED_ORGS` — user must be a member of at least one listed org. | `GET /orgs/{org}/members/{login}` returning 204. |
+| Generic OIDC | `ALLOWED_DOMAINS` — same as Google. | Server-side after ID-token JWKS verification. |
+
+An **empty** allowlist means "any account from this provider is welcome"
+— useful for personal projects but never appropriate for a production
+deployment. Configure at least the admin-email list, and ideally a
+domain/org allowlist too.
+
+<Callout type="warn" title="Allowlists are env-only">
+  Allowlists are not editable from the dashboard UI. Changes require
+  restarting the server with new env values. This keeps the security
+  surface in one place (your deployment config) and avoids drift across
+  the operator's GitOps and the database.
+</Callout>
+
+## Security model
+
+| Control | Implementation |
+|---|---|
+| **PKCE** | S256 challenge derived from a 32-byte random verifier, per RFC 7636. Required by OAuth 2.1 and most providers in 2026. |
+| **State** | 32-byte URL-safe random, stored server-side in `auth:oauth_state:<state>` with a 5-min TTL. **Single-use** — deleted on first read. |
+| **Nonce** | 16-byte random, embedded in the OIDC authorize request, verified against the ID-token `nonce` claim. Replay protection. |
+| **ID-token signature** | Verified against the provider's JWKS (fetched from the discovery doc and cached per-provider). |
+| **iss / aud / exp** | All validated; 60-second clock skew tolerance for `exp`. |
+| **Open redirect** | The `next` query param is validated against `is_safe_redirect` — relative paths only, no scheme, no `//`. Falls back to `/`. |
+| **HTTPS required** | `redirect_base_url` must be `https://` unless the host is `localhost` / `127.0.0.1`. Misconfiguration aborts startup. |
+| **Provider tokens** | Never persisted. Only the verified identity flows into the FlexiQ session. |
+| **Cross-provider linking** | Disabled by design. A given `(slot, subject)` always maps to one user. Two different providers with the same email = two different users. |
+
+## API surface
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/api/auth/providers` | Public. Returns `{password_enabled, providers: [{slot, label, type}]}` for the login UI. |
+| `GET` | `/api/auth/oauth/start/{slot}` | Public. Mints state, 302s to the provider's authorize URL. Accepts `?next=/path` (validated). |
+| `GET` | `/api/auth/oauth/callback/{slot}` | Public. Validates state, exchanges code, enforces allowlist, creates/refreshes the user, sets cookies, 302s to `next`. |
+
+The callback uses the same `flexiq_session` + `flexiq_csrf` cookies
+as password login — every other dashboard route works identically once
+you're signed in.
+
+## Troubleshooting
+
+**"oauth_state_invalid"** — the state row expired (5-min window) or
+already consumed. The user pressed back / refresh after the provider
+redirect; have them start over.
+
+**"oauth_identity_failed: id_token issuer mismatch"** — the
+`FLEXIQ_DASHBOARD_OAUTH_OIDC_<SLOT>_DISCOVERY_URL` points to a
+different issuer than what the IdP signed. Check the `issuer` field in
+the discovery doc.
+
+**"oauth_allowlist_denied"** — the user authenticated successfully but
+isn't in your allowlist. Either widen the allowlist or remove it.
+
+**Provider button doesn't appear** — `GET /api/auth/providers` returns
+the list the UI renders. If the button is missing, check the server
+logs for an env-var parse error at startup. The dashboard falls back to
+password-only auth (logged at WARN) when env parsing fails.
+
+**"redirect_uri_mismatch" from the provider** — the callback URL you
+registered with the provider doesn't match `{REDIRECT_BASE_URL}/api/auth/oauth/callback/{slot}`.
+The trailing slash and the slot value must match exactly.
+
+## Env var reference
+
+```bash
+# Required when any provider is configured.
+FLEXIQ_DASHBOARD_OAUTH_REDIRECT_BASE_URL=https://flexiq.company.com
+
+# Google.
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GOOGLE_ALLOWED_DOMAINS=company.com,partner.com   # optional
+
+# GitHub.
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxx
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_GITHUB_ALLOWED_ORGS=org1,org2                     # optional
+
+# Generic OIDC — list slots, then config each one.
+FLEXIQ_DASHBOARD_OAUTH_OIDC_PROVIDERS=okta,microsoft
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_ID=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_CLIENT_SECRET=...
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_DISCOVERY_URL=https://acme.okta.com/.well-known/openid-configuration
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_LABEL=Acme SSO                          # optional
+FLEXIQ_DASHBOARD_OAUTH_OIDC_OKTA_ALLOWED_DOMAINS=company.com             # optional
+
+# Role bootstrap.
+FLEXIQ_DASHBOARD_OAUTH_ADMIN_EMAILS=alice@company.com,bob@company.com    # optional
+
+# Disable password login (OAuth-only mode). Defaults to true.
+FLEXIQ_DASHBOARD_PASSWORD_AUTH_ENABLED=false                             # optional
+```

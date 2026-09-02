@@ -42,7 +42,7 @@ Because handlers share the event loop, a long synchronous computation blocks
 ## Scaling out
 
 Horizontal scaling is just more worker processes (or machines) pointed at shared
-[Postgres or Redis](/node/guides/operations/backends) storage. The core claims
+[Postgres or Redis](/node/operate/backends) storage. The core claims
 each job for a single worker, so adding workers adds throughput without
 duplicate execution — see [guarantees](/node/guides/reliability/guarantees).
 

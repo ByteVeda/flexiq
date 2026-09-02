@@ -1,0 +1,226 @@
+---
+title: Dashboard
+description: "Serve the bundled web dashboard and its REST API — open by default, with opt-in session auth, OAuth/SSO, and legacy token mode."
+---
+
+The jar bundles the web dashboard SPA; `DashboardServer` serves it plus a JSON
+REST API over the queue — no separate service, no asset build step.
+
+## Starting the dashboard
+
+<Tabs items={["Programmatic", "FlexiQ.dashboard()", "CLI"]}>
+  <Tab value="Programmatic">
+
+```java
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
+        DashboardServer server = DashboardServer.start(flexiq, 8080)) {
+    System.out.println("dashboard on http://localhost:" + server.port());
+    // ...
+}
+```
+
+`DashboardServer.start(queue, port)` serves openly — no authentication.
+`start(queue, port, true)` enables [session auth](#session-auth-opt-in);
+`start(queue, port, token)` switches to
+[legacy shared-token mode](#legacy-shared-token-mode). The full variant is
+`start(queue, port, token, staticDir, secureCookies, authEnabled)`.
+
+  </Tab>
+  <Tab value="FlexiQ.dashboard()">
+
+```java
+try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
+        DashboardServer server = flexiq.dashboard(8080)) {
+    // ...
+}
+
+// Session auth (login/setup, CSRF, roles):
+flexiq.dashboard(8080, true);
+
+// Legacy shared-token mode, gating /api/* as a fixed admin identity:
+flexiq.dashboard(8080, System.getenv("DASH_TOKEN"));
+```
+
+`FlexiQ.dashboard(port)` / `dashboard(port, authEnabled)` /
+`dashboard(port, token)` are convenience defaults over
+`DashboardServer.start(...)` for the common case — one fewer import.
+
+  </Tab>
+  <Tab value="CLI">
+
+```bash
+flexiq --url flexiq.db dashboard --port 8080
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port` | `8080` | Bind port (`0` for ephemeral) |
+| `--auth` | off | Enable session authentication (login/setup, CSRF, roles) |
+| `--token` | none | Legacy shared token gating `/api/*` — disables session auth and OAuth |
+| `--static` | bundled SPA | Directory of a prebuilt SPA, overriding the jar's extracted copy |
+| `--insecure-cookies` | off | Drop the `Secure` cookie attribute — for local HTTP development |
+
+  </Tab>
+</Tabs>
+
+Pass `0` as the port for an ephemeral one (`server.port()` reports what was
+bound). The SPA is extracted from the jar to a per-user, content-addressed
+directory on first use; `-Dflexiq.dashboard.dir=/path` (or the `staticDir`
+argument / `--static`) overrides it with an unpacked build. Without bundled
+assets only `/api/*` responds.
+
+<Callout type="info">
+  Running Spring Boot? `flexiq-spring` can auto-start a `DashboardServer` bean
+  from `flexiq.dashboard.*` properties — see
+  [Spring Boot: Dashboard auto-configuration](/java/guides/extend/spring#dashboard-auto-configuration).
+</Callout>
+
+## Auth
+
+Three modes: **open** (the default — no authentication), **session auth**
+(opt-in via `authEnabled` / `--auth`), and **legacy shared-token** (a
+non-null `token`, which overrides `authEnabled`).
+
+### Open mode (default)
+
+With neither `authEnabled` nor a `token`, the dashboard serves openly —
+no setup screen, no login, no CSRF or roles. The auth endpoints respond
+`404 {"error": "auth_disabled"}`, except `GET /api/auth/status`, which
+returns `{"auth_enabled": false, "setup_required": false}` so the SPA
+skips the login flow. Suits local development; production deployments
+should enable session auth or keep the port on a private network.
+
+### Session auth (opt-in)
+
+With `authEnabled=true` (or `--auth`), the dashboard runs password sign-in
+(and optionally [OAuth/OIDC](/java/modules/dashboard/sso)) with server-side
+sessions. Users and sessions live in the queue's settings key/value store —
+no dedicated tables — so the model is identical across SQLite, PostgreSQL,
+and Redis.
+
+- **First-run setup.** On a fresh database every route except the public set
+  (`/api/auth/status`, `/api/auth/login`, `/api/auth/setup`,
+  `/api/auth/providers`, `/health`) returns
+  `503 setup_required` until an admin exists. `POST /api/auth/setup` creates
+  it (and signs it in); the route locks itself after the first user.
+  `GET /api/auth/status` reports
+  `{"auth_enabled": true, "setup_required": bool}` so the SPA knows which
+  screen to show.
+- **Env-admin bootstrap.** Set both `FLEXIQ_DASHBOARD_ADMIN_USER` and
+  `FLEXIQ_DASHBOARD_ADMIN_PASSWORD` before starting the process to seed the
+  first admin without visiting a browser — useful for containers. It's
+  idempotent: once a user with that name exists, later restarts skip
+  creation.
+
+  ```bash
+  export FLEXIQ_DASHBOARD_ADMIN_USER=admin
+  export FLEXIQ_DASHBOARD_ADMIN_PASSWORD='change-me-on-first-login'
+  flexiq --url flexiq.db dashboard --port 8080 --auth
+  ```
+
+  The env vars are only read when session auth is enabled.
+
+  <Callout type="warning">
+    Unlike a scripting-language runtime, the JVM cannot scrub a variable out
+    of its own process environment once it has been read — the password
+    stays visible to anything that can inspect the process (`/proc`, a
+    debugger, a core dump) for the process's lifetime. Prefer first-run setup
+    through the SPA where that matters; treat the env var as a one-time
+    recovery path and rotate the password after logging in.
+  </Callout>
+
+- **Passwords** are hashed with PBKDF2-HMAC-SHA256 — 600,000 iterations, a
+  16-byte random salt — no third-party crypto dependency.
+- **Sessions** are opaque tokens with a 24-hour TTL, carried in an `HttpOnly`,
+  `SameSite=Strict` `flexiq_session` cookie (plus `Secure` unless disabled —
+  see below).
+- **CSRF** uses the double-submit pattern: a non-HttpOnly `flexiq_csrf`
+  cookie must match both the token bound to the session and the
+  `X-CSRF-Token` header on every state-changing request
+  (`POST`/`PUT`/`DELETE`/`PATCH`). `/api/auth/login` and `/api/auth/setup` are
+  exempt — there is no session yet to bind to.
+- **`--insecure-cookies`** (or `secureCookies=false` on `DashboardServer.start`,
+  or `flexiq.dashboard.secure-cookies=false` in Spring) drops the `Secure`
+  cookie attribute for local HTTP development. Keep it on — the default — for
+  anything served over HTTPS.
+
+### Roles
+
+RBAC is enforced server-side and is deliberately simple: every state-changing
+route is admin-only except two self-service routes; all reads are open to any
+authenticated user.
+
+| Role | Access |
+|---|---|
+| `admin` | Full access — cancel/replay jobs, purge dead letters, pause/resume queues, manage webhooks, edit settings, edit task/queue overrides. |
+| `viewer` | Read-only, plus their own `POST /api/auth/logout` and `POST /api/auth/change-password`. Any other mutating route returns `403 forbidden`. |
+
+The first user — created via setup or env bootstrap — is always `admin`.
+
+### Legacy shared-token mode
+
+Pass a `token` to gate `/api/*` behind a single fixed credential — no users,
+no sessions, no RBAC. Kept for back-compat with the pre-auth dashboard.
+
+```java
+DashboardServer.start(flexiq, 8080, System.getenv("DASH_TOKEN"));
+```
+
+API requests authenticate via `Authorization: Bearer <token>`, an
+`X-Flexiq-Token` header, or the `flexiq_token` cookie (compared in constant
+time). Opening `/?token=<token>` once sets the httpOnly cookie and redirects
+with the token stripped from the URL, keeping the secret out of subsequent
+browser history and `Referer` propagation — a `?token=` query is never
+accepted on `/api/*` calls. The bootstrap request itself still reaches server
+and proxy access logs, so redact query strings there. OAuth has
+no login UI in this mode, so it's disabled automatically —
+`start(queue, port, token, ...)` never builds an OAuth flow when `token` is
+non-null.
+
+## Metrics and health probes
+
+Three routes sit outside `/api/*`:
+
+| Route | Access | What it does |
+|---|---|---|
+| `GET /health` | Always public | Liveness — always `{"status": "ok"}` |
+| `GET /readiness` | Gated when auth is on (see below) | Storage and worker-resource readiness; `503` when degraded — the [worker count never degrades it](/java/guides/extend/monitoring#health--readiness) |
+| `GET /metrics` | Gated when auth is on (see below) | Prometheus text exposition |
+
+With session or token auth enabled, `/readiness` and `/metrics` require either
+that mode's own credential (a valid session, or the shared token) or a
+`FLEXIQ_DASHBOARD_METRICS_TOKEN` bearer header (checked in constant time) —
+point scrapers at the bearer token. In open mode they stay public unless that
+env token is set. `/health` always stays open for liveness probes.
+
+Every response — JSON, SPA assets, and probes alike — carries defense-in-depth
+headers: a `Content-Security-Policy` locked to the dashboard's own origin,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+`Referrer-Policy: same-origin`.
+
+## REST API
+
+Everything is JSON, fields in snake_case, timestamps in Unix milliseconds —
+the same contract the bundled SPA consumes. All paths below are relative to
+`/api/`.
+
+| Group | Routes |
+|---|---|
+| Auth | `auth/status`, `auth/setup`, `auth/login`, `auth/logout`, `auth/whoami`, `auth/change-password`, `auth/providers`, `auth/oauth/start/{slot}`, `auth/oauth/callback/{slot}` — see [SSO](/java/modules/dashboard/sso) |
+| Stats & jobs | `stats`, `stats/queues`, `queues/paused`, `jobs` (+ `/{id}`, `/{id}/logs`, `/{id}/replay-history`, `/{id}/dag`, `/{id}/cancel`, `/{id}/replay`) |
+| Dead letters | `dead-letters` (+ `/{id}/retry`) |
+| Metrics & logs | `metrics`, `metrics/timeseries`, `logs` |
+| Infrastructure | `workers`, `circuit-breakers`, `resources`, `scaler`, `event-types` |
+| Queue control | `queues/{name}/pause`, `queues/{name}/resume` |
+| Task/queue overrides | `tasks`, `tasks/{name}/override`, `queues`, `queues/{name}/override` — runtime rate limit, concurrency, retries, timeout, priority, and pause, without redeploying |
+| Webhooks | `webhooks` (+ `/{id}`, `/{id}/test`, `/{id}/rotate-secret`, `/{id}/deliveries`, `/{id}/deliveries/{deliveryId}`, `/{id}/deliveries/{deliveryId}/replay`) — see [Webhooks: Dashboard management](/java/guides/extend/webhooks#dashboard-management) |
+| Workflows | `workflows/runs` (+ `/{id}`, `/{id}/dag`, `/{id}/children`) |
+| Settings | `settings`, `settings/{key}` |
+| Retention | `retention` — the windows the worker running cleanup reported, read-only |
+
+<Callout type="warning">
+  Gating depends on the [auth mode](#auth): open mode (the default) serves
+  every route without credentials; session mode requires a valid session
+  (plus CSRF on writes) except the public auth routes; legacy mode requires
+  the matching token.
+</Callout>

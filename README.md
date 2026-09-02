@@ -76,7 +76,7 @@ truth; the GIL/event loop is held only during task execution. `WorkerDispatcher`
 ## Documentation
 
 **[Read the docs →](https://docs.byteveda.org/flexiq)** — guides, API reference, and architecture.
-Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/flexiq/python/guides/operations/migration)**.
+Coming from Celery? See the **[Migration Guide](https://docs.byteveda.org/flexiq/python/operate/migration)**.
 
 ## Contributing
 

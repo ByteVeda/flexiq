@@ -1,0 +1,101 @@
+---
+title: REST API
+description: "The /api/* endpoints the Node dashboard serves over the queue."
+---
+
+[`serveDashboard`](/node/modules/dashboard) mounts a JSON REST API at
+`/api/*` over the queue. The bundled React SPA consumes it; you can call it
+directly too. All timestamps are Unix milliseconds.
+
+## Read
+
+| Method · Path | Returns |
+|---|---|
+| `GET /api/stats` | Counts by status across all queues. |
+| `GET /api/stats/queues` | Counts per queue. |
+| `GET /api/queues/paused` | Names of paused queues. |
+| `GET /api/jobs` | Job list (filtered via query params). |
+| `GET /api/jobs/:id` | A single job. |
+| `GET /api/dead-letters` | Dead-letter entries. |
+| `GET /api/metrics` | Aggregated per-task metrics. |
+| `GET /api/metrics/timeseries` | Metrics bucketed over time. |
+| `GET /api/workers` | Registered workers + heartbeats. |
+| `GET /api/event-types` | Known job event names. |
+| `GET /api/workflows/runs` · `/:id` | Workflow runs, and one run. |
+| `GET /api/workflows/runs/:id/dag` · `/children` | A run's DAG graph and child runs. |
+| `GET /api/retention` | Retention windows the worker running cleanup reported. |
+| `GET /api/webhooks` · `/:id` | Webhook config. |
+| `GET /api/webhooks/:id/deliveries` | Paged delivery log — see below. |
+
+### Webhook deliveries
+
+`GET /api/webhooks/:id/deliveries` supports `?status=&event=&limit=&offset=` and
+returns a page, fields in snake_case:
+
+```json
+{
+  "items": [
+    {
+      "id": "d_1",
+      "subscription_id": "wh_1",
+      "event": "job.dead",
+      "payload": { "jobId": "j_1", "taskName": "sendEmail" },
+      "task_name": "sendEmail",
+      "job_id": "j_1",
+      "status": "delivered",
+      "attempts": 1,
+      "response_code": 200,
+      "response_body": "ok",
+      "latency_ms": 42,
+      "error": null,
+      "created_at": 1732550400000,
+      "completed_at": 1732550400042
+    }
+  ],
+  "total": 128,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`status` is `"delivered"` or `"dead"`. `response_body` is truncated to 2 KiB.
+
+## Write
+
+| Method · Path | Effect |
+|---|---|
+| `POST /api/jobs/:id/cancel` | Cancel a job. |
+| `POST /api/dead-letters/:id/retry` | Re-enqueue a dead-letter entry. |
+| `POST /api/queues/:id/pause` · `/resume` | Pause / resume a queue. |
+| `POST /api/webhooks` · `PUT /:id` · `DELETE /:id` | Manage webhook subscriptions. |
+| `POST /api/webhooks/:id/test` | Send a test delivery. |
+
+## Auth
+
+By default the dashboard runs in **open mode**: every route serves without
+credentials, `GET /api/auth/status` reports
+`{ auth_enabled: false, setup_required: false }`, and the other auth
+endpoints respond `404 { "error": "auth_disabled" }`.
+
+Pass `authEnabled: true` to
+[`serveDashboard`](/node/modules/dashboard) for **session mode**:
+first-run setup, password login with server-side sessions, CSRF on writes,
+and admin/viewer roles. `GET /api/auth/status` then reports
+`{ auth_enabled: true, setup_required: <bool> }`, and every route outside
+the public set requires a valid session.
+
+Pass `auth: { token }` instead for the **legacy token mode**: every `/api/*`
+request except `GET /api/auth/status` must present the token via
+`Authorization: Bearer <token>`, an `X-Flexiq-Token` header, or the
+`flexiq_token` cookie; otherwise it returns `401`. A `?token=` query is only
+honoured once on a page load, where it sets the cookie and redirects with the
+token stripped. This is a single shared token — no per-user login or roles —
+and it overrides `authEnabled`.
+
+<Callout type="warning">
+  Open mode means anyone who can reach the port has full control. Don't expose it
+  on an untrusted network — enable session auth, bind to localhost, or mount it
+  behind your own auth with the
+  [Express](/node/guides/extend/express#dashboard) /
+  [Fastify](/node/guides/extend/fastify) helpers.
+</Callout>

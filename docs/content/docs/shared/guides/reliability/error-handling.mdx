@@ -156,7 +156,7 @@ no limit.
 
 For CPU-bound synchronous work that might hang, honoring `AbortSignal` isn't
 enough on its own — see
-<SdkLink to="guides/operations/troubleshooting">Troubleshooting: worker is
+<SdkLink to="operate/troubleshooting">Troubleshooting: worker is
 unresponsive</SdkLink> for offloading it.
 
 </SdkOnly>
@@ -479,23 +479,23 @@ Worker worker = queue.worker()
 
 <SdkOnly sdk="python">
 
-See <SdkLink to="guides/extensibility/middleware">Middleware</SdkLink> for
+See <SdkLink to="guides/extend/middleware">Middleware</SdkLink> for
 the full hook lifecycle and execution order.
 
 </SdkOnly>
 
 <SdkOnly sdk="node">
 
-See <SdkLink to="guides/extensibility/middleware">Middleware</SdkLink> and
-<SdkLink to="guides/extensibility/events">Events</SdkLink> for the full hook
+See <SdkLink to="guides/extend/middleware">Middleware</SdkLink> and
+<SdkLink to="guides/extend/events">Events</SdkLink> for the full hook
 and event lists.
 
 </SdkOnly>
 
 <SdkOnly sdk="java">
 
-See <SdkLink to="guides/extensibility/middleware">Middleware</SdkLink> and
-<SdkLink to="guides/extensibility/events">Events</SdkLink> for the full hook
+See <SdkLink to="guides/extend/middleware">Middleware</SdkLink> and
+<SdkLink to="guides/extend/events">Events</SdkLink> for the full hook
 and event lists.
 
 </SdkOnly>
@@ -613,7 +613,7 @@ Filtering</SdkLink> for details.
 ### Test mode for isolation
 
 Run tasks synchronously and inspect errors without a worker using
-<SdkLink to="guides/operations/testing">test mode</SdkLink>:
+<SdkLink to="guides/extend/testing">test mode</SdkLink>:
 
 ```python
 with queue.test_mode() as results:
@@ -680,7 +680,7 @@ broad handling:
 | `SerializationError` | A payload or result failed to (de)serialize. |
 | `CryptoError` | A codec failed to decrypt or verify a payload. Subtype of `SerializationError`. |
 | `NotesValidationError` | A `notes` object violates the structured-notes contract. |
-| `ResourceError` | Base class for <SdkLink to="guides/resources/dependency-injection">resource</SdkLink> errors. |
+| `ResourceError` | Base class for <SdkLink to="modules/injection/dependency-injection">resource</SdkLink> errors. |
 | `ResourceNotFoundError` | Resolving a resource name that was never registered. Subtype of `ResourceError`. |
 | `ResourceScopeError` | A resource is resolved from a scope that outlives it. Subtype of `ResourceError`. |
 | `ResourceUnavailableError` | A pooled resource couldn't be checked out before its acquire timeout. Subtype of `ResourceError`. |
@@ -717,8 +717,8 @@ narrows it so callers can catch exactly what they care about:
 | `PredicateRejectedException` | An enqueue gate returned `Reject`; no job was created. |
 | `EnqueueSkippedException` | A gate returned `Skip` on `enqueue` — use `tryEnqueue` to get an empty `Optional` instead. |
 | `LockException` | A <SdkLink to="guides/reliability/locks">distributed lock</SdkLink> operation failed or was interrupted. |
-| `ResourceException` | A <SdkLink to="guides/resources/dependency-injection">worker resource</SdkLink> could not be resolved — unknown name, scope violation, exhausted pool. |
-| `ProxyException` | A <SdkLink to="guides/resources/proxies">proxy ref</SdkLink> failed to verify or reconstruct. |
+| `ResourceException` | A <SdkLink to="modules/injection/dependency-injection">worker resource</SdkLink> could not be resolved — unknown name, scope violation, exhausted pool. |
+| `ProxyException` | A <SdkLink to="modules/injection/proxies">proxy ref</SdkLink> failed to verify or reconstruct. |
 | `WorkflowException` | A workflow could not be driven to completion — run not found, missing payload or condition. |
 | `WebhookException` | A webhook could not be stored, loaded, signed, or its payload encoded. |
 
@@ -734,7 +734,7 @@ try {
 
 ## See also
 
-<SdkLink to="guides/operations/troubleshooting">Troubleshooting</SdkLink>
+<SdkLink to="operate/troubleshooting">Troubleshooting</SdkLink>
 covers symptom-based debugging — a task not registered on the worker,
 SQLite lock contention, jobs stuck in `running`, high latency, and growing
 databases.

@@ -1,0 +1,162 @@
+---
+title: Resource proxies
+description: "Send a non-serializable resource through the queue as a signed reference, and rebuild it on the worker."
+---
+
+Task arguments are serialized, so a live handle — an open file, a connection, a
+client bound to local state — cannot ride along in the payload. A **proxy**
+sends a small signed *reference* instead, and the worker rebuilds the real thing
+from it.
+
+This is the producer-side counterpart to
+[dependency injection](/node/modules/injection/dependency-injection): DI keeps
+dependencies on the worker and never sends them; proxies send an identifier
+when the *producer* is the one that knows which resource to use.
+
+```ts
+import { FileProxyHandler, FileReference, Proxies, type ProxyRef } from "@byteveda/flexiq";
+
+const proxies = new Proxies(Buffer.from(process.env.FLEXIQ_PROXY_KEY!, "utf8"))
+  .register(new FileProxyHandler(["/srv/uploads"]));
+
+// Producer — reduce the resource to a signed ref and enqueue that.
+const ref = proxies.deconstruct(new FileReference("/srv/uploads/report.csv"));
+queue.enqueue("ingest", [ref]);
+
+// Worker — verify the signature and rebuild.
+queue.task("ingest", (ref: ProxyRef) => {
+  const file = proxies.resolve<FileReference>(ref);
+  return parse(readFileSync(file.path));
+});
+```
+
+## The registry
+
+`new Proxies(hmacKey)` builds the registry. The key is shared by producer and
+worker; an empty key throws. Signature layout is a cross-SDK contract, so refs
+produced by the Python or Java SDK verify here as long as the key matches.
+
+| Method | Purpose |
+|---|---|
+| `register(handler)` | Add a handler under its `id`. A duplicate id throws — silently overwriting would let producer and worker disagree about what an id means. |
+| `deconstruct(value, opts?)` | Reduce `value` to a signed `ProxyRef`. Handlers are tried in registration order, first match wins. |
+| `reconstruct(ref, purpose?)` | Verify the ref and rebuild the value. |
+| `resolve<T>(ref, purpose?)` | `reconstruct` with the return typed as `T`. |
+| `session()` | Open a [`ProxySession`](#sessions) for deduped, cleanup-tracked work. |
+
+`deconstruct` accepts two bindings:
+
+```ts
+proxies.deconstruct(value, { ttlMs: 900_000, purpose: "ingest" });
+```
+
+- **`ttlMs`** stamps an expiry. A ref used after it lapses throws `ProxyError`.
+- **`purpose`** binds the ref to an intent. The worker passes the expected
+  purpose to `resolve`, and a mismatch throws — so a ref minted for `"ingest"`
+  cannot be replayed into `"delete"`.
+
+Verification always checks the signature first, in constant time, then expiry,
+then purpose. Every failure is a `ProxyError`.
+
+## `ProxyRef`
+
+The wire shape — plain JSON, safe to put in a task payload:
+
+```ts
+interface ProxyRef {
+  handler: string;                  // which handler produced (and resolves) it
+  reference: Record<string, unknown>; // e.g. { path: "/srv/uploads/report.csv" }
+  signature: string;                // base64 HMAC-SHA256 over the canonical form
+  expiresAtMs?: number | null;
+  purpose?: string | null;
+}
+```
+
+Reference values must stay inside the canonical signing form: strings,
+booleans, safe integers, nulls, and nested objects/arrays of those.
+Non-integer numbers are rejected at signing time because their textual form is
+not stable across SDKs — encode decimals as strings.
+
+## Writing a handler
+
+A handler is four members — an id, a type test, and the two directions:
+
+```ts
+class BucketObjectHandler implements ProxyHandler<BucketObject> {
+  readonly id = "bucket";
+
+  handles(value: unknown) {
+    return value instanceof BucketObject;
+  }
+
+  deconstruct(value: BucketObject) {
+    return { bucket: value.bucket, key: value.key };
+  }
+
+  reconstruct(reference: Record<string, unknown>) {
+    return new BucketObject(String(reference.bucket), String(reference.key));
+  }
+
+  cleanup(value: BucketObject) {
+    value.close();   // optional — run when a session closes
+  }
+}
+```
+
+`reconstruct` runs on untrusted-shaped input even though the signature
+verified: validate the fields you read, and reject anything outside the range
+your handler is allowed to touch.
+
+## `FileProxyHandler`
+
+The one built-in handler, for `FileReference` values. Pass an allowlist of root
+directories and it enforces containment on `reconstruct`:
+
+```ts
+new FileProxyHandler(["/srv/uploads", "/var/data"]);
+```
+
+Roots and candidate paths are compared by their **real** (symlink-resolved)
+locations, so a symlink out of an allowed root does not escape it. A path
+outside every root throws `ProxyError`. An empty allowlist permits any path —
+only appropriate when producer and worker are the same trust domain.
+
+## Sessions
+
+A `ProxySession` scopes a batch of proxy work — one producer batch, or one task
+invocation:
+
+```ts
+const session = proxies.session();
+try {
+  const refs = files.map((file) => session.deconstruct(file, { purpose: "ingest" }));
+  queue.enqueueMany("ingest", refs.map((ref) => ({ args: [ref] })));
+} finally {
+  session.close();
+}
+```
+
+A session adds two things over the bare registry:
+
+- **Dedup** — deconstructing the same instance for the same purpose twice
+  returns the identical ref. (A later call with a different `ttlMs` is ignored;
+  open a new session to refresh expiry.)
+- **Cleanup** — each reconstructed value's `cleanup` runs once on `close()`, in
+  reverse order. `close()` is idempotent, never throws, and continues past a
+  failing cleanup. It also implements `Symbol.dispose`, so `using session =
+  proxies.session()` works where explicit resource management is available.
+
+Do not share one session across concurrent work — it models a single batch.
+
+## Metrics
+
+`queue.proxyStats()` reports per-handler reconstruction counts, error and
+checksum-failure totals, and duration percentiles. See
+[Observability](/node/modules/injection/observability#proxy-metrics) —
+`total_checksum_failures` is the field worth alerting on.
+
+<Callout type="warning" title="The key is a shared secret">
+  Anyone holding the HMAC key can mint refs your workers will accept. Keep it in
+  the same place as your other service credentials, scope handler allowlists as
+  tightly as the work allows, and rotate producer and worker together.
+</Callout>

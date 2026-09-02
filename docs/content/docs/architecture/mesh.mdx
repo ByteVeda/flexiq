@@ -1,5 +1,5 @@
 ---
-title: Mesh Scheduling
+title: Mesh internals
 description: "SWIM gossip, consistent hashing, work-stealing deques, and adaptive load balancing internals."
 ---
 
@@ -10,7 +10,7 @@ The mesh layer sits between the [scheduler](/architecture/scheduler) and the
 network that reduces DB contention and enables sub-millisecond load awareness.
 
 For usage and configuration, see the
-<SdkLink to="guides/operations/mesh">Mesh Scheduling guide</SdkLink>.
+<SdkLink to="modules/mesh">Mesh Scheduling guide</SdkLink>.
 
 <div className="archstack">
   <div className="layer py"><span className="ltag t-py">Dispatch</span><div className="lbody"><div className="lt">Enhanced poller</div><div className="ld">Local deque · affinity routing · work-stealing.</div></div></div>
@@ -108,7 +108,7 @@ failure detection from cascading across the cluster.
 Optional XOR symmetric encryption with a shared key (base64-encoded).
 Applied to every UDP datagram before send, reversed on receive. All
 cluster nodes must share the same key. See
-<SdkLink to="guides/operations/mesh#gossip-encryption">Gossip encryption</SdkLink> for setup.
+<SdkLink to="modules/mesh#gossip-encryption">Gossip encryption</SdkLink> for setup.
 
 <Callout type="info">
   XOR encryption provides obfuscation, not cryptographic security. It
@@ -305,7 +305,7 @@ to be idempotent — see the [failure model](/architecture/failure-model).
 
 ## See also
 
-- <SdkLink to="guides/operations/mesh">Mesh Scheduling guide</SdkLink> — configuration, cluster topology, Docker Compose example
+- <SdkLink to="modules/mesh">Mesh Scheduling guide</SdkLink> — configuration, cluster topology, Docker Compose example
 - [Scheduler](/architecture/scheduler) — the poll loop that feeds jobs into the mesh bridge
 - [Worker Pool](/architecture/worker-pool) — the dispatcher that receives jobs from the mesh bridge
 - [Storage](/architecture/storage) — atomic claim mechanism that guarantees exactly-once dispatch

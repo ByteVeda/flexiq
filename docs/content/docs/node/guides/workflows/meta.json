@@ -1,4 +1,0 @@
-{
-  "title": "Workflows",
-  "pages": ["index", "building", "fan-out", "conditions", "gates", "sub-workflows", "saga", "canvas", "caching", "analysis"]
-}

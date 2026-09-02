@@ -1,0 +1,100 @@
+---
+title: Workflows
+description: "Orchestrate multi-step DAGs in Node.js with the FlexiQ workflow builder."
+---
+
+Orchestrate multi-step DAGs (directed acyclic graphs — steps with dependencies
+and no cycles) where each step is a registered task and `after` declares its
+dependencies. The Rust core schedules steps in topological order; a worker
+advances the run as each step settles.
+
+```ts
+const handle = queue.workflows
+  .define("etl")
+  .step("extract", "extractTask", { args: ["s3://bucket/in"] })
+  .step("transform", "transformTask", { after: "extract" })
+  .step("load", "loadTask", { after: "transform", maxRetries: 5 })
+  .submit();
+
+queue.runWorker();
+
+const run = await handle.wait();  // resolves when terminal
+console.log(run.state);           // "completed" | "failed" | ...
+handle.nodes();                   // per-step status snapshot
+```
+
+Requires the addon built with the `workflows` cargo feature (enabled by
+`pnpm build:native`).
+
+<Callout type="info" title="A DAG, or ordinary control flow?">
+  A workflow is a graph declared up front, one job per node, distributable and
+  inspectable. When the sequence is just the shape of one function — charge,
+  wait, email — reach for
+  [durable steps](/node/modules/steps) instead: same replay-safety,
+  written with ordinary control flow, inside a single job.
+</Callout>
+
+<Callout type="warning" title="Workflows need a running worker">
+  `.submit()` enqueues the step jobs; they only execute while a worker (a
+  process that claims and executes queued jobs) is consuming the queue. Start
+  one first — `queue.runWorker()`, as above — otherwise `handle.wait()` blocks
+  until it times out.
+</Callout>
+
+<Callout type="info" title="Coming from BullMQ?">
+  BullMQ's closest equivalent is `FlowProducer` — `.add({ name, queueName,
+  data, children: [...] })` builds a parent/child job **tree**: one parent,
+  many children, no joins. flexiq's workflow builder is a general **DAG**: a
+  step's `after` can list multiple predecessors, so two branches can merge
+  back into one step (a join `FlowProducer` can't express). Conditions, gates,
+  sagas, and caching are also flexiq-only — there's no BullMQ equivalent for
+  those.
+</Callout>
+
+<Cards>
+  <Card
+    title="Building Workflows"
+    href="/node/modules/workflows/building"
+    description="Every step option, the rules build() enforces, and the node status lifecycle."
+  />
+  <Card
+    title="Fan-out / Fan-in"
+    href="/node/modules/workflows/fan-out"
+    description="Split a step's result into parallel children and collect results."
+  />
+  <Card
+    title="Conditions"
+    href="/node/modules/workflows/conditions"
+    description="Run a step only on success, on failure, or always."
+  />
+  <Card
+    title="Approval Gates"
+    href="/node/modules/workflows/gates"
+    description="Pause a run until a human or external system approves or rejects."
+  />
+  <Card
+    title="Sub-Workflows"
+    href="/node/modules/workflows/sub-workflows"
+    description="Compose workflow runs hierarchically — delegate a step to a child workflow."
+  />
+  <Card
+    title="Saga Compensation"
+    href="/node/modules/workflows/saga"
+    description="Automatically roll back completed steps in reverse order when a run fails."
+  />
+  <Card
+    title="Canvas Primitives"
+    href="/node/modules/workflows/canvas"
+    description="chain / group / chord shorthands for common DAG shapes."
+  />
+  <Card
+    title="Incremental Runs"
+    href="/node/modules/workflows/caching"
+    description="Cache a step's result and reuse it across runs with a dirty set."
+  />
+  <Card
+    title="Analysis & Visualization"
+    href="/node/modules/workflows/analysis"
+    description="Introspect a run's DAG — dependencies, levels, critical path, stats."
+  />
+</Cards>

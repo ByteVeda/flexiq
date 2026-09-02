@@ -1,1 +1,5 @@
-{ "title": "Getting Started", "root": true, "pages": ["installation", "quickstart", "concepts", "capabilities"] }
+{
+  "title": "Getting Started",
+  "root": true,
+  "pages": ["installation", "quickstart", "concepts", "capabilities"]
+}

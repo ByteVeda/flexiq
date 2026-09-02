@@ -424,7 +424,7 @@ export function CTA() {
           <Link className="btn pri" to={`/${sdk}/getting-started/quickstart`}>
             Start the quickstart →
           </Link>
-          <Link className="btn sec" to="/resources/comparison">
+          <Link className="btn sec" to="/about/comparison">
             See the full comparison
           </Link>
         </div>

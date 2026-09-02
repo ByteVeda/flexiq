@@ -1,0 +1,90 @@
+---
+title: Webhooks
+description: "Deliver job events to HTTP endpoints — signed, retried, persisted."
+---
+
+Deliver job, worker, queue, workflow, and predicate events to HTTP endpoints.
+Deliveries are HMAC-SHA256 signed, retried with backoff, and persisted across
+restarts.
+
+<Seq
+  heads={["Worker", "Endpoint"]}
+  rows={[
+    { self: "an event fires (e.g. job.dead)" },
+    { left: "POST + X-Flexiq-Signature: sha256=…" },
+    { right: "2xx → delivered", rev: true },
+    { self: "non-2xx → retry with backoff (persisted)" },
+  ]}
+/>
+
+```ts
+const hook = queue.webhooks.create({
+  url: "https://hooks.example.com/jobs",
+  events: ["job.dead", "job.completed", "worker.offline"], // any of the 29 wire names — omit for all
+  secret: process.env.WEBHOOK_SECRET,     // signs X-Flexiq-Signature: sha256=...
+  taskFilter: ["send_email"],             // optional — only screens task-bearing events
+});
+
+queue.webhooks.list();
+queue.webhooks.delete(hook.id);
+```
+
+| Field | Description |
+|---|---|
+| `url` | Endpoint to POST events to. |
+| `events` | Event names to deliver — any of the 29 dotted wire names (see [Events](/node/guides/extend/events) for the full list). Omit for all. |
+| `secret` | Signs each delivery as `X-Flexiq-Signature: sha256=...`. |
+| `taskFilter` | Only deliver for these task names. |
+| `maxRetries` | Extra attempts after the first (default `3`). |
+| `timeoutMs` | Per-attempt timeout (default `10000`). |
+| `retryBackoff` | Backoff base in seconds — the Nth wait is `retryBackoff ** N`, counted from zero (default `2`, so 1s, 2s, 4s). |
+
+Deliveries for non-job events — worker, queue, workflow, and predicate — carry
+no job identity; their `payload` matches the shapes documented on the
+[Events](/node/guides/extend/events) page instead of `OutcomeEvent`. A
+subscription's `taskFilter` only screens events that carry a task name
+(`job.*` and `predicate.*`) — worker, queue, and workflow events always
+deliver regardless of `taskFilter`.
+
+Deliveries fire from the **worker process** (where events originate). Verify the
+signature on your endpoint by HMAC-ing the raw body with the shared secret.
+
+Destinations are screened by an [SSRF
+guard](/node/operate/security#webhooks): loopback, private,
+link-local, and cloud-metadata targets are rejected at registration and
+re-checked before every attempt, and redirects are not followed. Set
+`FLEXIQ_WEBHOOKS_ALLOW_PRIVATE=1` when developing against a local endpoint.
+
+## Delivery log
+
+`queue.webhooks.deliveries(id)` returns the most recent attempt-chains for a
+webhook (bounded, newest last):
+
+```ts
+for (const delivery of queue.webhooks.deliveries(hook.id)) {
+  console.log(delivery.status, delivery.responseCode, delivery.attempts);
+}
+```
+
+| Field | Description |
+|---|---|
+| `id` / `webhookId` / `event` | Identifiers for the delivery and its subscription. |
+| `status` | `"delivered"` (2xx), `"failed"` (refused — blocked URL or redirect), or `"dead"` (retries exhausted). |
+| `ok` | `true` when `status` is `"delivered"`. |
+| `attempts` | Number of HTTP attempts made. |
+| `payload` | The JSON body that was POSTed. |
+| `taskName` / `jobId` | The originating task and job. Both absent for worker, queue, and workflow events; `predicate.*` carries `taskName` but no `jobId`, since this SDK's gates run at enqueue, before any job exists. |
+| `responseCode` | Last HTTP status, or `null` on a network error. |
+| `responseBody` | Last response body, truncated to 2 KiB, or `null`. |
+| `latencyMs` | Time from first attempt to the final outcome. |
+| `error` | The last error message, if `status` is `"dead"`. |
+| `createdAt` / `completedAt` | Unix milliseconds. |
+
+<Callout type="info">
+  The [dashboard](/node/modules/dashboard) exposes `/api/webhooks` for
+  managing hooks, and the same delivery log — paged and in snake_case — at
+  [`/api/webhooks/:id/deliveries`](/node/modules/dashboard/rest-api).
+  Webhook subscriptions are persisted in storage and survive restarts. They use
+  the cross-SDK layout (a JSON list under the `webhooks:subscriptions` setting),
+  so hooks registered against a queue by any SDK are visible to all of them.
+</Callout>

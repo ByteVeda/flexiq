@@ -1,0 +1,116 @@
+---
+title: Workflows
+description: "Build multi-step pipelines as directed acyclic graphs."
+---
+
+Build multi-step pipelines as directed acyclic graphs. Define steps, wire
+dependencies, and let flexiq handle execution order, parallelism, failure
+propagation, and state tracking — all backed by a Rust engine with
+dagron-core for graph algorithms.
+
+<Mermaid
+  chart={`flowchart TD
+    WB["Workflow Builder\\nstep() · gate() · fan_out"]
+    WB -->|"_compile()"| TE["Topology Engine\\ndagron-core DAG"]
+    TE --> WS["Workflow Storage\\nSQLite — definitions, runs, nodes"]
+    WS -->|"enqueue jobs"| SC["Scheduler\\ndepends_on chains"]
+    SC -->|"JOB_COMPLETED event"| WT["Workflow Tracker\\nevent-driven orchestration"]
+    WT -->|"evaluate successors"| WS
+    WT --> WR["WorkflowRun\\nstatus() · wait() · cancel()"]`}
+/>
+
+## Quick start
+
+```python
+from flexiq import Queue
+from flexiq.workflows import Workflow
+
+queue = Queue(db_path="tasks.db")
+
+@queue.task()
+def extract():        # fetch source data and write it to a store (DB, S3, …)
+    ...
+
+@queue.task()
+def transform():      # read what extract wrote, clean it, write the result back
+    ...
+
+@queue.task()
+def load():           # read the cleaned data, write it to the warehouse
+    ...
+
+wf = Workflow(name="etl_pipeline")
+wf.step("extract", extract)
+wf.step("transform", transform, after="extract")
+wf.step("load", load, after="transform")
+
+run = queue.submit_workflow(wf)
+result = run.wait(timeout=60)
+print(result.state)  # WorkflowState.COMPLETED
+```
+
+`after` sets execution **order**, not data flow: a step is *not* automatically
+called with its predecessor's return value — each runs with the args you give it
+in `wf.step(...)`. To pass a value between steps, use fan-out / fan-in or read
+`WorkflowContext.results`. See [Building workflows](/python/modules/workflows/building).
+
+<Callout type="info" title="A DAG, or ordinary control flow?">
+  A workflow is a graph declared up front, one job per node, distributable and
+  inspectable. When the sequence is just the shape of one function — charge,
+  wait, email — reach for
+  [durable steps](/python/modules/steps) instead: same replay-safety,
+  written with `if` and `for`, inside a single job.
+</Callout>
+
+<Callout type="warn" title="Workflows need a running worker">
+  `submit_workflow()` enqueues the step jobs; they execute only while a worker is
+  consuming the queue. Start one first — `flexiq worker --app tasks:queue`, or
+  `queue.run_worker()` in a background thread — otherwise `run.wait()` blocks
+  until it times out. Workflows ship in the standard `pip install flexiq` wheel;
+  no extra install is needed.
+</Callout>
+
+## Section overview
+
+<Cards>
+  <Card
+    title="Building Workflows"
+    href="/python/modules/workflows/building"
+    description="Workflow.step(), decorator pattern, step configuration, DAG structure"
+  />
+  <Card
+    title="Fan-Out & Fan-In"
+    href="/python/modules/workflows/fan-out"
+    description="Splitting results into parallel jobs, collecting with aggregation"
+  />
+  <Card
+    title="Conditions & Error Handling"
+    href="/python/modules/workflows/conditions"
+    description="on_success, on_failure, always, callable conditions, on_failure modes"
+  />
+  <Card
+    title="Approval Gates"
+    href="/python/modules/workflows/gates"
+    description="Human-in-the-loop pause/resume, timeout, approve/reject API"
+  />
+  <Card
+    title="Sub-Workflows & Scheduling"
+    href="/python/modules/workflows/sub-workflows"
+    description="Nesting workflows, cron-scheduled runs"
+  />
+  <Card
+    title="Incremental Runs"
+    href="/python/modules/workflows/caching"
+    description="Result hashing, CACHE_HIT, dirty-set propagation, TTL"
+  />
+  <Card
+    title="Analysis & Visualization"
+    href="/python/modules/workflows/analysis"
+    description="Critical path, bottleneck analysis, Mermaid/DOT rendering"
+  />
+  <Card
+    title="Canvas Primitives"
+    href="/python/modules/workflows/canvas"
+    description="Chain, group, chord — simple composition without DAGs"
+  />
+</Cards>

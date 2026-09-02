@@ -1,1 +1,11 @@
-{ "title": "Node.js", "pages": ["getting-started", "guides", "api-reference", "more"] }
+{
+  "title": "Node.js",
+  "pages": [
+    "getting-started",
+    "guides",
+    "modules",
+    "operate",
+    "api-reference",
+    "more"
+  ]
+}

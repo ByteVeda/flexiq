@@ -79,7 +79,7 @@ tasks run on an OS-thread pool; `async` tasks run on a native async pool. Call
 
 `await queue.result(id)` resolves with the task's return value once the job
 finishes (or rejects if it dead-letters). Results are serialized with the
-queue's [serializer](/node/guides/extensibility/serializers) and stored, so any
+queue's [serializer](/node/guides/extend/serializers) and stored, so any
 process sharing the storage can await them.
 
 <Callout type="info">

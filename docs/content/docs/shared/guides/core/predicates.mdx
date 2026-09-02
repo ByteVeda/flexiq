@@ -58,7 +58,7 @@ flexiq.enqueue(charge, -1);  // throws PredicateRejectedException
 <SdkOnly sdk="node">
 
 The predicate receives the task name, the (already
-<SdkLink to="guides/resources/interception">onEnqueue</SdkLink>-rewritten)
+<SdkLink to="modules/injection/interception">onEnqueue</SdkLink>-rewritten)
 `args` typed to the task's signature, and `now` — the wall clock read once for
 this evaluation, so a time-based gate can be unit-tested against a pinned
 instant instead of the real clock.
@@ -68,7 +68,7 @@ instant instead of the real clock.
 <SdkOnly sdk="java">
 
 The `PredicateContext` carries the task name and the payload — after
-`onEnqueue` <SdkLink to="guides/extensibility/middleware">middleware</SdkLink>
+`onEnqueue` <SdkLink to="guides/extend/middleware">middleware</SdkLink>
 has run, so gates see the rewritten payload.
 
 </SdkOnly>
@@ -261,8 +261,8 @@ bug rather than a denial: the error propagates to the caller (and increments
 `errors` on [`predicateStats()`](#metrics--events)).
 
 Gates are evaluated only at enqueue time. To react once a job is already
-running, use <SdkLink to="guides/extensibility/middleware">middleware</SdkLink>
-or <SdkLink to="guides/workflows/conditions">conditions</SdkLink> inside a
+running, use <SdkLink to="guides/extend/middleware">middleware</SdkLink>
+or <SdkLink to="modules/workflows/conditions">conditions</SdkLink> inside a
 workflow.
 
 </SdkOnly>
@@ -614,8 +614,8 @@ skip semantics.
 <Callout type="info">
   Gates run on the **producer** side, so they decide whether work is
   created at all. To react once a job is already running, use
-  <SdkLink to="guides/extensibility/middleware">middleware</SdkLink> or
-  <SdkLink to="guides/workflows/conditions">conditions</SdkLink> inside
+  <SdkLink to="guides/extend/middleware">middleware</SdkLink> or
+  <SdkLink to="modules/workflows/conditions">conditions</SdkLink> inside
   a workflow.
 </Callout>
 
@@ -723,7 +723,7 @@ for (const event of ["predicate.rejected", "predicate.skipped", "predicate.defer
 }
 ```
 
-They're also <SdkLink to="guides/observability/webhooks">webhook</SdkLink>-subscribable.
+They're also <SdkLink to="guides/extend/webhooks">webhook</SdkLink>-subscribable.
 
 </SdkOnly>
 

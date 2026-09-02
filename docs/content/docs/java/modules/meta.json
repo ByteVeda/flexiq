@@ -1,0 +1,13 @@
+{
+  "title": "Modules",
+  "root": true,
+  "pages": [
+    "workflows",
+    "steps",
+    "dashboard",
+    "injection",
+    "mesh",
+    "executor",
+    "autoscaling"
+  ]
+}

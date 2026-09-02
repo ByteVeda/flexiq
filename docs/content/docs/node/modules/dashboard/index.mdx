@@ -1,0 +1,75 @@
+---
+title: Dashboard
+description: "Serve the React dashboard over a Node queue — no Python."
+---
+
+The Node SDK serves the **same React dashboard** the Python SDK serves, over the
+queue — no Python required. Build the SPA assets once, then serve.
+
+```bash
+pnpm build:dashboard          # builds the SPA into static/dashboard (one-time)
+flexiq --db flexiq.db dashboard --port 8787
+```
+
+Or programmatically:
+
+```ts
+import { Queue, serveDashboard } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "flexiq.db" });
+const server = serveDashboard(queue, { port: 8787 });
+// ... server.close() to stop
+```
+
+It serves the SPA plus the `/api/*` REST contract over the queue:
+
+- stats, per-queue stats, paused queues
+- jobs + job detail, dead-letters (retry / delete)
+- metrics and time-series, workers
+- webhooks, workflow runs
+
+See the [REST API reference](/node/modules/dashboard/rest-api) for the full
+endpoint list.
+
+Auth runs **open** by default — no setup screen, no login, no CSRF or
+roles. The auth endpoints respond `404 {"error": "auth_disabled"}`, except
+`GET /api/auth/status`, which reports
+`{ auth_enabled: false, setup_required: false }` so the SPA skips the login
+flow. Production deployments should enable session authentication (or keep
+the dashboard on a private network behind their own auth):
+
+```ts
+serveDashboard(queue, { port: 8787, authEnabled: true });
+```
+
+(or `flexiq dashboard --auth` from the CLI). With `authEnabled: true` the
+full session flow runs: a one-time setup screen creates the first admin —
+or bootstrap it headlessly with `FLEXIQ_DASHBOARD_ADMIN_USER` /
+`FLEXIQ_DASHBOARD_ADMIN_PASSWORD` — then password login with server-side
+sessions, CSRF protection on writes, and admin/viewer roles. OAuth/SSO
+providers configured via `FLEXIQ_DASHBOARD_OAUTH_*` env vars apply only in
+this mode.
+
+The legacy shared-token gate is unchanged: pass `auth: { token }` to require
+a bearer token on every `/api/*` request (except `/api/auth/status`). It
+overrides `authEnabled`.
+
+```ts
+serveDashboard(queue, { port: 8787, auth: { token: process.env.DASH_TOKEN! } });
+```
+
+API requests authenticate via `Authorization: Bearer <token>`, an
+`X-Flexiq-Token` header, or the `flexiq_token` cookie — a `?token=` query is
+never accepted on `/api/*` calls. Opening `/?token=<token>` once sets the
+httpOnly cookie and redirects with the token stripped from the URL, keeping
+the secret out of subsequent browser history and `Referer` propagation; the
+bootstrap request itself still reaches server and proxy access logs, so redact
+query strings there. The token is compared in constant time. You can also mount the dashboard inside an existing app behind
+your own auth via the
+[Express](/node/guides/extend/express#dashboard) or
+[Fastify](/node/guides/extend/fastify) helpers.
+
+<Callout type="warning">
+  `serveDashboard` needs the built SPA in `static/dashboard`
+  (`pnpm build:dashboard`). Pass `staticDir` to point at assets elsewhere.
+</Callout>

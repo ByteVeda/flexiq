@@ -91,7 +91,7 @@ queue.delete_dead(dead_id)               # drop one
 ```
 
 `purge_dead` returns how many entries it removed. For a standing policy, prefer
-[retention](/python/guides/operations/job-management) over an ad-hoc call — it
+[retention](/python/operate/inspection) over an ad-hoc call — it
 applies the window continuously instead of whenever someone remembers.
 
 ## Watching the DLQ
@@ -124,7 +124,7 @@ normal, a rising line is a dependency failing faster than it recovers.
   />
   <Card
     title="Job management"
-    href="/python/guides/operations/job-management"
+    href="/python/operate/inspection"
     description="Inspection, replay, retention, and bulk cleanup."
   />
 </Cards>

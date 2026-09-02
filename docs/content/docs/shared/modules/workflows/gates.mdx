@@ -1,0 +1,517 @@
+---
+title: Approval Gates
+description: "Pause a workflow run until a human or external system approves or rejects it."
+---
+
+An approval gate pauses a workflow run until something external — a human
+reviewer or another system — resolves it. No task runs at the gate: the run
+stops there until it's approved, rejected, or a timeout fires, and only then
+do its successors run or get skipped.
+
+<Mermaid
+  chart={`graph LR
+    build:::done --> gate["approve-deploy\n(waiting_approval)"]:::waiting
+    gate -- approved --> deploy:::run
+    gate -- rejected --> deploy_skip["deploy\n(skipped)"]:::skip`}
+/>
+
+## Adding a gate
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue
+from flexiq.workflows import Workflow
+
+queue = Queue(db_path="tasks.db")
+
+@queue.task()
+def build_task() -> str: ...
+
+@queue.task()
+def deploy_task() -> None: ...
+
+wf = Workflow(name="release_pipeline")
+wf.step("build", build_task)
+wf.gate(
+    "approve_deploy",
+    after="build",
+    message="Review build artifacts before deploying to production.",
+    timeout=86400,       # 24 hours
+    on_timeout="reject",
+)
+wf.step("deploy", deploy_task, after="approve_deploy")
+
+run = queue.submit_workflow(wf)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "tasks.db" });
+
+const handle = queue.workflows
+  .define("release-pipeline")
+  .step("build", "buildTask")
+  .gate("approve-deploy", {
+    after: "build",
+    message: "Review build artifacts before deploying to production.",
+    timeoutMs: 24 * 60 * 60 * 1000, // 24 h
+    onTimeout: "reject",
+  })
+  .step("deploy", "deployTask", { after: "approve-deploy" })
+  .submit();
+
+queue.runWorker();
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Workflow release = Workflow.named("release-pipeline")
+        .step("build", buildTask, artifact)
+        .gate("approve-deploy",
+                GateConfig.timeout(
+                        Duration.ofHours(24),
+                        GateAction.REJECT,
+                        "Review build artifacts before deploying to production."),
+                "build")
+        .step("deploy", deployTask, artifact, "approve-deploy");
+
+WorkflowRun run = queue.submitWorkflow(release);
+
+try (Worker worker = queue.worker()
+        .handle(buildTask, p -> p)
+        .handle(deployTask, p -> p)
+        .trackWorkflows(release) // the tracker holds deploy's payload
+        .start()) {
+    // ...
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="java">
+
+<Callout type="warning">
+  A gated workflow must be registered on the tracking worker with
+  `trackWorkflows(workflow)`. The gate's downstream steps are deferred nodes —
+  their jobs are only created when the gate resolves, and the tracker supplies
+  their payloads from the registered definition.
+</Callout>
+
+</SdkOnly>
+
+## Gate node status
+
+While a gate is pending, its node status is waiting-for-approval; the run
+itself keeps running. Downstream steps don't start until the gate resolves.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+run.node_status("approve_deploy")  # NodeStatus.WAITING_APPROVAL
+run.status().state                 # WorkflowState.RUNNING — the run keeps going
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const nodes = handle.nodes();
+const gate = nodes.find(n => n.nodeName === "approve-deploy");
+console.log(gate?.status); // "waiting_approval"
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+WorkflowStatus status = run.status().orElseThrow();
+status.node("approve-deploy").orElseThrow().status; // WAITING_APPROVAL
+```
+
+  </Tab>
+</CodeTabs>
+
+## Resolving a gate
+
+Resolve a gate with the run ID and the gate's node name — approve to let its
+successors proceed, or reject (optionally with a reason) to fail the gate and
+skip them.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+# Call this on the same `queue` instance that is running the worker for
+# this run — see the note below.
+queue.approve_gate(run.id, "approve_deploy")
+
+# Reject, with an optional reason recorded as the gate's error.
+queue.reject_gate(run.id, "approve_deploy", error="Artifacts failed QA review.")
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+// Approve — downstream steps are enqueued.
+queue.workflows.approveGate(runId, "approve-deploy");
+
+// Reject — downstream steps are skipped, run transitions to "failed".
+queue.workflows.rejectGate(runId, "approve-deploy");
+
+// Reject with a reason recorded in storage.
+queue.workflows.rejectGate(runId, "approve-deploy", "Artifacts failed QA review.");
+
+// Unified helper — pass a boolean.
+queue.workflows.resolveGate(runId, "approve-deploy", true);   // approve
+queue.workflows.resolveGate(runId, "approve-deploy", false, "Reason."); // reject
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Approve — the gate completes and downstream steps are enqueued.
+worker.approveGate(run.runId(), "approve-deploy");
+
+// Reject with a reason — downstream steps are skipped, run transitions to FAILED.
+worker.rejectGate(run.runId(), "approve-deploy", "Artifacts failed QA review.");
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+<Callout type="warn" title="Resolve from the process running the worker">
+  `approve_gate`/`reject_gate` only advance the run when called on the same
+  `Queue` instance that is running the worker for it — the tracker keeps each
+  run's plan and deferred-node payloads in memory, not in storage. Calling
+  either method on an unrelated `Queue()` still flips the gate's stored
+  status, but its successors won't be created until a call reaches the
+  tracker that owns the run. If you need to resolve gates from application
+  code (e.g. a request handler), run the worker in a background thread in
+  that same process — see
+  <SdkLink to="modules/workflows/building">Building Workflows</SdkLink>.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+Resolution works from any process that opens the same storage — the resolver
+does not need to be the worker process.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+Resolution goes through the `Worker` that is tracking workflows — calling
+either method on a worker built without `trackWorkflows()` throws a
+`WorkflowException`.
+
+</SdkOnly>
+
+## Timeout behaviour
+
+A gate with no timeout waits forever:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+wf.gate("approve_deploy", after="build")  # timeout=None (default) — waits forever
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+.gate("approve-deploy", { after: "build" }) // no timeoutMs — waits forever
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+GateConfig.manual();                                          // waits forever
+GateConfig.timeout(Duration.ofHours(24), GateAction.REJECT);  // auto-reject after 24 h
+GateConfig.timeout(Duration.ofHours(24), GateAction.APPROVE, "Auto-ships unless stopped.");
+```
+
+  </Tab>
+</CodeTabs>
+
+Once the timeout elapses, the gate auto-resolves:
+
+<SdkOnly sdk="python">
+
+| `on_timeout` | Effect |
+|---|---|
+| `"reject"` (default) | Same as calling `reject_gate` — downstream skipped, run `FAILED` |
+| `"approve"` | Same as calling `approve_gate` — downstream proceeds |
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+| `onTimeout` | Effect |
+|---|---|
+| `"reject"` (default) | Same as calling `rejectGate` — downstream skipped, run `"failed"` |
+| `"approve"` | Same as calling `approveGate` — downstream proceeds |
+
+Setting `timeoutMs` without `onTimeout` defaults to `"reject"`.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+| `GateAction` | Effect |
+|---|---|
+| `REJECT` (default) | Same as `rejectGate` — downstream skipped, run `FAILED` |
+| `APPROVE` | Same as `approveGate` — downstream proceeds |
+
+The timeout must be positive; the timer is driven by the tracking worker and
+is cancelled if the gate is resolved manually first.
+
+</SdkOnly>
+
+## Gate options
+
+<SdkOnly sdk="python">
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `after` | `str \| list[str]` | `None` | Predecessor step name(s) |
+| `timeout` | `float \| None` | `None` | Seconds until auto-resolve; `None` waits forever |
+| `on_timeout` | `str` | `"reject"` | Resolution on timeout: `"approve"` or `"reject"` |
+| `message` | `str \| None` | `None` | Human-readable message included in the `WORKFLOW_GATE_REACHED` event payload |
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `after` | `string \| string[]` | — | Predecessor step name(s) |
+| `message` | `string` | — | Human-readable description shown in the dashboard |
+| `timeoutMs` | `number` | — | Auto-resolve after this many milliseconds |
+| `onTimeout` | `"approve" \| "reject"` | `"reject"` | Resolution on timeout |
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+| `GateConfig` component | Type | Default | Description |
+|---|---|---|---|
+| `timeout` | `Duration` | `null` (wait forever) | Auto-resolve after this long |
+| `onTimeout` | `GateAction` | `REJECT` | Resolution taken when the timeout elapses |
+| `message` | `String` | `null` | Human-readable description shown to the approver |
+
+</SdkOnly>
+
+## Gate conditions
+
+<SdkOnly sdk="python">
+
+Gates respect the same `condition` DSL as regular steps, evaluated against
+the gate's predecessors *before* it's entered:
+
+```python
+wf.step("test", run_tests)
+wf.gate("approve", after="test", condition="on_success")
+wf.step("deploy", deploy_task, after="approve")
+```
+
+If `test` fails, the gate is skipped (its condition isn't met) — and
+`deploy`, the gate's successor, is skipped too.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="info" title="Node: gate conditions are Python-only">
+  A Node gate node has no entry condition — `.gate()` options cover only the
+  predecessor(s), `timeoutMs`, `onTimeout`, and `message`. To make a gate
+  conditional, put the `condition` on the step(s) around it instead.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="info" title="Java: gate conditions are Python-only">
+  A Java gate node has no entry condition — `GateConfig` covers only `timeout`,
+  `onTimeout`, and `message`. To make a gate conditional, put the condition on
+  the step(s) around it instead.
+</Callout>
+
+</SdkOnly>
+
+## Rejection behaviour
+
+Rejecting a gate marks the gate node failed and skips its default
+(on-success) successors; the run ends in a failed state. Any on-failure or
+always successors still run — use those (see
+<SdkLink to="modules/workflows/conditions">conditions</SdkLink>) for a
+rejection branch.
+
+<SdkOnly sdk="node">
+
+<Callout type="warning">
+  Calling `approveGate` or `rejectGate` on a gate that has already been
+  resolved (approved, rejected, or timed out) is a no-op — the tracker ignores
+  stale resolutions.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="warning">
+  Calling `approveGate` or `rejectGate` on a gate that has already been
+  resolved (approved, rejected, or timed out) is a no-op — the tracker ignores
+  stale resolutions.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="python">
+
+<Callout type="info">
+  Python has no equivalent guard: calling `approve_gate`/`reject_gate` again
+  on an already-resolved gate re-runs the resolution instead of no-op'ing.
+</Callout>
+
+</SdkOnly>
+
+## Events
+
+<SdkOnly sdk="python">
+
+When a gate enters `WAITING_APPROVAL`, a `WORKFLOW_GATE_REACHED` event fires
+in the process that reached it — the same process whose tracker owns the run
+(see the note under "Resolving a gate"). Subscribe with `queue.on_event()`
+(see the <SdkLink to="api-reference/queue/events">events reference</SdkLink>
+for the full list of event types):
+
+```python
+from flexiq.events import EventType
+
+def notify_team(event_type, payload):
+    send_slack(f"Workflow {payload['run_id']} needs approval at {payload['node_name']}")
+
+queue.on_event(EventType.WORKFLOW_GATE_REACHED, notify_team)
+```
+
+The payload carries `run_id`, `node_name`, and `message` (the gate's
+`message`, or `None` if it wasn't set).
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+<Callout type="info" title="Node: no gate events">
+  There is no gate/workflow event in Node — `queue.on(...)` delivers only
+  job-outcome events (`job.completed`, `job.retrying`, `job.dead`,
+  `job.cancelled`). To react to a gate being reached, notify from the resolver
+  side (the endpoint that calls `approveGate` / `rejectGate`), or poll node
+  status for `waiting_approval` (see "Resolving a gate").
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+<Callout type="info" title="Java: no gate events">
+  There is no gate/workflow event in Java — the worker's event listeners
+  deliver only job outcomes (`SUCCESS`, `RETRY`, `DEAD`, `CANCELLED`). To react
+  to a gate being reached, notify from the resolver side, or poll node status
+  for `WAITING_APPROVAL` (see "Resolving a gate").
+</Callout>
+
+</SdkOnly>
+
+## Webhooks and external triggers
+
+A common pattern is an HTTP endpoint that receives a webhook and resolves the
+gate — any external system can drive a gate this way:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@app.post("/hooks/deploy-approval")
+def deploy_approval():
+    # Fail closed — resolving a gate is a privileged state transition.
+    verify_webhook_signature(request)      # abort(401) on a bad signature
+    body = request.get_json()
+    authorize_run(request, body["run_id"])  # abort(403) unless the caller may resolve this run
+    if body["approved"]:
+        queue.approve_gate(body["run_id"], "approve_deploy")
+    else:
+        queue.reject_gate(body["run_id"], "approve_deploy", error=body.get("reason"))
+    return "", 204
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+app.post("/hooks/deploy-approval", async (req, res) => {
+  // Fail closed — resolving a gate is a privileged state transition.
+  verifyWebhookSignature(req);       // throw 401 on a bad signature
+  const { runId, approved, reason } = req.body;
+  await authorizeRun(req, runId);    // throw 403 unless the caller may resolve this run
+  queue.workflows.resolveGate(runId, "approve-deploy", approved, reason);
+  res.sendStatus(204);
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// Fail closed — resolving a gate is a privileged state transition.
+void onDeployApproval(HttpRequest request) {
+    verifyWebhookSignature(request);        // 401 on a bad signature
+    ApprovalPayload payload = parse(request);
+    authorizeRun(request, payload.runId()); // 403 unless the caller may resolve this run
+    if (payload.approved()) {
+        worker.approveGate(payload.runId(), "approve-deploy");
+    } else {
+        worker.rejectGate(payload.runId(), "approve-deploy", payload.reason());
+    }
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<SdkOnly sdk="python">
+
+This endpoint must run in the same process as the worker for the constraint
+described under "Resolving a gate" — `queue` here is the same `Queue`
+instance passed to `run_worker()`.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+> **Coming from BullMQ?** `FlowProducer` has no pause/resume primitive — a
+> human-in-the-loop approval step is something you'd build yourself (e.g. a
+> job that polls a database flag). flexiq's `.gate()` is a first-class step
+> kind: the run genuinely pauses, and `approveGate`/`rejectGate` resolve it
+> from any process.
+
+</SdkOnly>

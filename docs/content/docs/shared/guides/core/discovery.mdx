@@ -220,7 +220,7 @@ at all, and no import order needs a rule. The registry is never emptied, which
 is also why a second `Queue` in the same process receives the same tasks.
 
 The CLI point matters most to an
-<SdkLink to="guides/operations/executor">attached executor</SdkLink>, which
+<SdkLink to="modules/executor">attached executor</SdkLink>, which
 advertises the registry it reads: a name missing there is routed to nobody.
 
 </SdkOnly>
@@ -275,7 +275,7 @@ points:
 | `new Queue(...)` | Task modules imported before the queue was built — under ESM, the common case. |
 | `discover(...)` | The explicit walk. |
 | `runWorker(...)` | A worker entrypoint that imported its task modules directly. |
-| `runExecutor(...)` | The same, for an <SdkLink to="guides/operations/executor">attached executor</SdkLink>. |
+| `runExecutor(...)` | The same, for an <SdkLink to="modules/executor">attached executor</SdkLink>. |
 
 So a worker whose entrypoint does `import "./tasks/index.js"` needs no
 `discover` at all, and no import order needs a rule. The registry is never
@@ -299,7 +299,7 @@ Worker worker = queue.worker()
 `discover()` uses the thread context class loader; `discover(ClassLoader)`
 points it at a specific one, which is what a container or a test wants. The same
 pair exists on `Executor.Builder`, so an
-<SdkLink to="guides/operations/executor">attached executor</SdkLink> gets its
+<SdkLink to="modules/executor">attached executor</SdkLink> gets its
 handlers the same way:
 
 ```java
@@ -322,7 +322,7 @@ caller never asked for.
 
 Nothing here scans packages or reflects over arbitrary classes. The set of
 handlers was fixed at compile time, which is what keeps discovery working under
-<SdkLink to="guides/operations/graalvm">GraalVM native-image</SdkLink>, where
+<SdkLink to="operate/graalvm">GraalVM native-image</SdkLink>, where
 classpath scanning does not survive the closed-world build.
 
 A provider that cannot be loaded, or that throws while building its handlers,
@@ -660,7 +660,7 @@ needs the fingerprint.
   carries, and what each one does.
 - <SdkLink to="guides/core/workers">Workers</SdkLink> — how a worker's registry
   is populated and what it serves.
-- <SdkLink to="guides/operations/executor">Attached executors</SdkLink> — the
+- <SdkLink to="modules/executor">Attached executors</SdkLink> — the
   topology the divergence check runs in.
-- <SdkLink to="guides/operations/troubleshooting#task-not-registered-on-the-worker">Troubleshooting</SdkLink>
+- <SdkLink to="operate/troubleshooting#task-not-registered-on-the-worker">Troubleshooting</SdkLink>
   — diagnosing a task name the worker does not know.

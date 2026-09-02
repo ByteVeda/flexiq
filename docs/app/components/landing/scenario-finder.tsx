@@ -7,7 +7,7 @@ import { DemoModal, type DemoTarget } from "./demo-modal";
 // Scenario guides are authored as Python paths; most map to another SDK by
 // swapping the SDK segment, but a few pages live under a different slug there.
 const GUIDE_OVERRIDES: Record<string, Record<string, string>> = {
-  "/python/guides/advanced-execution/streaming": {
+  "/python/guides/core/streaming": {
     node: "/node/guides/core/streaming",
     java: "/java/guides/core/streaming",
   },
@@ -90,7 +90,7 @@ const SCENARIOS: Scenario[] = [
       label: "Watch the progress stream",
     },
     guide: {
-      to: "/python/guides/advanced-execution/streaming",
+      to: "/python/guides/core/streaming",
       label: "Read the guide",
     },
   },
@@ -242,7 +242,7 @@ workflow.<span class="def">delay</span>()`,
       title: "Workflow execution — DAG",
       label: "Watch the DAG execute",
     },
-    guide: { to: "/python/guides/workflows", label: "Read the guide" },
+    guide: { to: "/python/modules/workflows", label: "Read the guide" },
   },
   {
     id: "mesh",
@@ -286,7 +286,7 @@ workflow.<span class="def">delay</span>()`,
       title: "Mesh scheduling — route jobs across the worker mesh",
       label: "Watch the mesh route",
     },
-    guide: { to: "/python/guides/operations/mesh", label: "Read the guide" },
+    guide: { to: "/python/modules/mesh", label: "Read the guide" },
   },
   {
     id: "saga",
@@ -326,7 +326,7 @@ saga.<span class="def">delay</span>()   <span class="cmt"># any failure → comp
       title: "Saga — compensation & rollback",
       label: "Watch the saga roll back",
     },
-    guide: { to: "/python/guides/workflows/saga", label: "Read the guide" },
+    guide: { to: "/python/modules/workflows/saga", label: "Read the guide" },
   },
   {
     id: "worksteal",
@@ -359,7 +359,7 @@ queue.<span class="def">mesh</span>(peers=[<span class="str">"us-west-2"</span>,
       title: "Work-stealing — balance load across regions",
       label: "Watch regions steal work",
     },
-    guide: { to: "/python/guides/operations/mesh", label: "Read the guide" },
+    guide: { to: "/python/modules/mesh", label: "Read the guide" },
   },
 ];
 

@@ -1,17 +1,5 @@
 {
   "title": "Guides",
   "root": true,
-  "pages": [
-    "index",
-    "core",
-    "reliability",
-    "advanced-execution",
-    "operations",
-    "observability",
-    "dashboard",
-    "resources",
-    "workflows",
-    "integrations",
-    "extensibility"
-  ]
+  "pages": ["index", "core", "reliability", "extend"]
 }

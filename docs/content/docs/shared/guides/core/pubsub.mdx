@@ -382,7 +382,7 @@ deliveries.
 
 <Callout type="info" title="Cross-SDK payload contract">
   When a topic's publisher and its subscribers aren't all the same language,
-  configure the <SdkLink to="guides/extensibility/serializers">`CborSerializer`</SdkLink>
+  configure the <SdkLink to="guides/extend/serializers">`CborSerializer`</SdkLink>
   on every process that touches the topic — it's the wire format the
   cross-SDK contract is built on, and it round-trips the types JSON can't
   (big integers, `datetime`/`Date`, bytes, decimals) losslessly. A single
@@ -707,5 +707,5 @@ its entire backlog; nothing is dropped just because it's old.
   the at-least-once contract every delivery inherits.
 - <SdkLink to="guides/reliability/idempotency">Idempotency</SdkLink> — how
   dedup keys are derived and prioritized for a single enqueue.
-- <SdkLink to="guides/extensibility/serializers">Serializers</SdkLink> — the
+- <SdkLink to="guides/extend/serializers">Serializers</SdkLink> — the
   `CborSerializer` cross-SDK wire format used for cross-language topics.
