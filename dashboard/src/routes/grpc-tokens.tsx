@@ -28,7 +28,9 @@ function GrpcTokensPage() {
         eyebrow="Configuration"
         title="gRPC tokens"
         description="Credentials the gRPC door accepts. Each is scoped to what a client actually needs, bound to this server's namespace, and revocable on its own — a revoked token stops working on its next call, with no restart."
-        actions={<CreateGrpcTokenDialog />}
+        // `null` is a server with no gRPC door, `undefined` is still loading.
+        // Neither should offer an action whose route would 404.
+        actions={data ? <CreateGrpcTokenDialog /> : undefined}
       />
 
       <div className="grid gap-[var(--gap)] grid-cols-[repeat(auto-fit,minmax(186px,1fr))]">
