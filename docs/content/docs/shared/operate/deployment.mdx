@@ -1236,6 +1236,82 @@ landed and the connection dropped afterwards, and no field on the wire can tell
 you which. Clients that retry set a `unique_key`; `EnqueueBatch` needs one per
 item, and neither is retried automatically.
 
+### The same door, without gRPC
+
+`structured` arguments only help a client with no CBOR library if such a client
+has a door to knock on, and gRPC from a shell script is not one. So the producer
+RPCs are also served over ordinary HTTP with JSON bodies, **on the same
+listener** — same port, same credential, same handlers, no proxy and no second
+process.
+
+| Method | Path | RPC |
+| --- | --- | --- |
+| `POST` | `/v1/jobs` | `Enqueue` |
+| `POST` | `/v1/jobs:batchEnqueue` | `EnqueueBatch` |
+| `GET` | `/v1/jobs` | `ListJobs` |
+| `GET` | `/v1/jobs/{job_id}` | `GetJob` |
+| `POST` | `/v1/jobs/{job_id}:cancel` | `CancelJob` |
+| `GET` | `/v1/queues/{queue}/stats` | `QueueStats` for one queue |
+| `GET` | `/v1/stats` | `QueueStats` for the namespace |
+
+```bash
+curl -X POST http://localhost:50051/v1/jobs \
+  -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "taskName": "charge",
+    "structured": {"args": [{"orderId": "ord-0001", "amountCents": 1000}]},
+    "options": {"queue": "payments"}
+  }'
+```
+
+`GET` is served for exactly the read-only RPCs and nothing else, so the method
+is never a judgement call. Everything else is a `POST`, `Enqueue` included: a
+`unique_key` makes one request idempotent, not the method, and a level that
+holds for only some requests is one a proxy will apply to the others.
+
+Bodies and query strings are proto3 JSON. Field names are the lowerCamelCase
+ones, and the `.proto`'s own `snake_case` names are accepted too; a name that is
+neither is **refused** rather than ignored, because a silently dropped typo
+enqueues a job you did not describe. Timestamps are RFC 3339, durations are
+seconds with an `s` (`"30s"`, `"1.500s"`), `bytes` fields are base64, and
+64-bit integers — every counter in `QueueStats` — are **strings**, since a JSON
+number is a double.
+
+Failures carry the same error model gRPC does, in the standard JSON shape. The
+`reason` is what to branch on; the message is for humans and may be reworded in
+any release:
+
+```json
+{"error": {
+  "code": 429,
+  "status": "RESOURCE_EXHAUSTED",
+  "message": "queue `payments` is full",
+  "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+               "reason": "QUEUE_FULL", "domain": "flexiq.byteveda.org",
+               "metadata": {"queue": "payments", "pending": "1001", "cap": "1000"}}]
+}}
+```
+
+The HTTP status is derived from `status` by one fixed mapping, which has one
+consequence worth knowing in advance: a request body over the 4 MiB cap — the
+same cap the gRPC door applies, so the two cannot disagree about what is too
+large — comes back **400** with `"status": "OUT_OF_RANGE"`, not 413.
+
+Three things this door does not do. It carries **no admin surface**: it is the
+producer service and only the producer service, and pausing queues, settings and
+dead-letter operations stay behind the dashboard's session and role check. It
+**does not expose the executor API** — a worker surface has different
+credentials and different failure modes, and no reason to be reachable from a
+browser. And it **transcodes no streams**, because there are none: `v1` has no
+server stream and no completion watch. Poll `GetJob` or use a webhook
+subscription.
+
+Everything else on this page still applies unchanged. The token is the same
+scoped API token, presented the same way, and a request without one comes back
+`401` with `"reason": "UNAUTHENTICATED"` rather than a gRPC trailer. TLS is not
+terminated here either.
+
 Reflection works without a `.proto` on hand because the wire contract is
 embedded in the binary — the same committed descriptor the buf gate builds, so
 it cannot drift from the schema CI checks.
