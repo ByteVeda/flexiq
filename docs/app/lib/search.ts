@@ -1,16 +1,29 @@
-import MiniSearch from "minisearch";
-import { DOC_METAS } from "./manifest";
+import type MiniSearch from "minisearch";
+import { DOC_METAS, docMeta } from "./manifest";
 import { forcedSdkForPath } from "./nav";
+import { DEFAULT_SDK } from "./sdk-registry";
 import type { Sdk } from "./sdk-store";
+import {
+  type IndexedDoc,
+  SEARCH_INDEX_OPTIONS,
+  SEARCH_QUERY_OPTIONS,
+} from "./search-schema";
 
-export interface SearchDoc {
-  id: string; // slug
+// Two paths, deliberately different in cost.
+//
+// Browsing (the palette's empty-query list) reads the eagerly-loaded manifest,
+// so opening ⌘K fetches nothing. Searching needs the full-text index, which is
+// ~250 kB gzipped — far too large for the chunk every page loads — so it is
+// built at build time, code-split behind a dynamic import, and fetched once on
+// first use. `prefetchSearchIndex` starts that fetch when the palette opens, so
+// it is usually in flight before the first keystroke lands.
+
+export interface SearchHit {
+  /** URL to navigate to: the mount under the active SDK. */
+  id: string;
   title: string;
   section: string;
   description: string;
-  text: string;
-  /** Default-SDK URL when this entry is an SDK mount of a shared page. */
-  canonical?: string;
 }
 
 function sectionOf(slug: string): string {
@@ -18,55 +31,6 @@ function sectionOf(slug: string): string {
   return top
     ? top.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
     : "Home";
-}
-
-function humanizeSlug(slug: string): string {
-  return slug.split("/").filter(Boolean).join(" ").replace(/-/g, " ");
-}
-
-// Index built from the build-time manifest (title + description + slug words).
-// No compiled MDX pulled in — keeps the search chunk tiny.
-export const SEARCH_DOCS: SearchDoc[] = DOC_METAS.map((d) => ({
-  id: d.slug,
-  title: d.title,
-  section: sectionOf(d.slug),
-  description: d.description,
-  text: `${d.description} ${humanizeSlug(d.slug)}`.trim(),
-  canonical: d.canonical,
-}));
-
-let index: MiniSearch<SearchDoc> | null = null;
-
-function getIndex(): MiniSearch<SearchDoc> {
-  if (!index) {
-    index = new MiniSearch<SearchDoc>({
-      fields: ["title", "text", "section"],
-      storeFields: ["title", "section", "description"],
-      searchOptions: {
-        boost: { title: 3, section: 1.5 },
-        prefix: true,
-        fuzzy: 0.2,
-      },
-    });
-    index.addAll(SEARCH_DOCS);
-  }
-  return index;
-}
-
-export interface SearchHit {
-  id: string;
-  title: string;
-  section: string;
-  description: string;
-}
-
-function toHit(d: SearchDoc): SearchHit {
-  return {
-    id: d.id,
-    title: d.title,
-    section: d.section,
-    description: d.description,
-  };
 }
 
 // Browse-mode section order (mirrors the sidebar); unknown sections sort last.
@@ -92,23 +56,100 @@ function inSdk(slug: string, sdk?: Sdk): boolean {
   return pageSdk === null || pageSdk === sdk;
 }
 
-/** Empty query → the full index (browse mode); otherwise ranked matches. When
- *  `sdk` is given, results are scoped to that SDK's pages plus shared pages. */
-export function searchDocs(query: string, sdk?: Sdk): SearchHit[] {
+/** The index stores one entry per content file, at its canonical URL, so a
+ *  shared page is indexed once instead of once per SDK. That entry stands for
+ *  every SDK's copy: swap the prefix to reach the active SDK's mount. */
+function mountFor(canonical: string, sdk?: Sdk): string {
+  const meta = docMeta(canonical);
+  if (!meta?.canonical || !sdk) {
+    return canonical;
+  }
+  return `/${sdk}${canonical.slice(`/${DEFAULT_SDK}`.length)}`;
+}
+
+/** A shared page always has a mount under the active SDK; anything else is in
+ *  scope only if it isn't another SDK's page. */
+function hitInScope(canonical: string, sdk?: Sdk): boolean {
+  return docMeta(canonical)?.canonical ? true : inSdk(canonical, sdk);
+}
+
+function toHit(canonical: string, sdk?: Sdk): SearchHit | null {
+  const meta = docMeta(canonical);
+  if (!meta) {
+    return null;
+  }
+  const id = mountFor(canonical, sdk);
+  return {
+    id,
+    title: meta.title,
+    section: sectionOf(id),
+    description: meta.description,
+  };
+}
+
+/** The full page list for the active SDK, sidebar-ordered. No index needed. */
+export function browseDocs(sdk?: Sdk): SearchHit[] {
+  return DOC_METAS.filter((d) => inSdk(d.slug, sdk))
+    .map((d) => ({
+      id: d.slug,
+      title: d.title,
+      section: sectionOf(d.slug),
+      description: d.description,
+    }))
+    .sort((a, b) => sectionRank(a.section) - sectionRank(b.section));
+}
+
+let indexPromise: Promise<MiniSearch<IndexedDoc>> | null = null;
+
+async function loadIndex(): Promise<MiniSearch<IndexedDoc>> {
+  const [{ default: MiniSearchCtor }, { SEARCH_INDEX }] = await Promise.all([
+    import("minisearch"),
+    import("virtual:docs-search-index"),
+  ]);
+  // loadJSON must be handed the options that built the index — same fields,
+  // same tokenizer — or the stored terms and the query's don't line up.
+  return MiniSearchCtor.loadJSON<IndexedDoc>(
+    SEARCH_INDEX,
+    SEARCH_INDEX_OPTIONS,
+  );
+}
+
+function index(): Promise<MiniSearch<IndexedDoc>> {
+  indexPromise ??= loadIndex().catch((err) => {
+    indexPromise = null; // a dropped chunk shouldn't kill search for the session
+    throw err;
+  });
+  return indexPromise;
+}
+
+/** Start fetching the index without waiting for it — call when the palette opens. */
+export function prefetchSearchIndex(): void {
+  index().catch(() => {});
+}
+
+/** Ranked matches for a non-empty query, scoped to the active SDK. */
+export async function searchDocs(
+  query: string,
+  sdk?: Sdk,
+): Promise<SearchHit[]> {
   const q = query.trim();
   if (!q) {
-    return SEARCH_DOCS.filter((d) => inSdk(d.id, sdk))
-      .map(toHit)
-      .sort((a, b) => sectionRank(a.section) - sectionRank(b.section));
+    return browseDocs(sdk);
   }
-  return getIndex()
-    .search(q)
-    .filter((r) => inSdk(r.id as string, sdk))
-    .slice(0, 20)
-    .map((r) => ({
-      id: r.id as string,
-      title: r.title,
-      section: r.section,
-      description: r.description,
-    }));
+  const results = (await index()).search(q, SEARCH_QUERY_OPTIONS);
+  const hits: SearchHit[] = [];
+  for (const result of results) {
+    const canonical = String(result.id);
+    if (!hitInScope(canonical, sdk)) {
+      continue;
+    }
+    const hit = toHit(canonical, sdk);
+    if (hit) {
+      hits.push(hit);
+    }
+    if (hits.length === 20) {
+      break;
+    }
+  }
+  return hits;
 }
