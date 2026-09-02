@@ -30,8 +30,9 @@ you need to block.
 
 Empty is also what a job whose **result TTL has expired** looks like, and what
 a `DEAD` or `CANCELLED` job looks like: neither produced a result. So an empty
-`Optional` is "no value to read", never "the job succeeded with nothing" — check
-`getJob(id).status` when the difference matters.
+`Optional` is "no value to read", never "the job succeeded with nothing". When
+the difference matters, unwrap the job snapshot and read its status —
+`getJob(id).map(job -> job.status)`.
 
 The raw overload is the escape hatch, not the normal path. Reach for it to
 re-encode a result under a different serializer, to forward bytes without
