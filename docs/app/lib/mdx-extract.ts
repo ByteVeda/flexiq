@@ -55,6 +55,16 @@ function squash(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/** Code keeps its newlines and indentation. Tokenizing ignores whitespace, so
+ *  this costs the index nothing — but `/llms-full.txt` republishes this field as
+ *  a fenced block, and a Python sample flattened onto one line is not a sample. */
+function joinCode(fences: string[], inline: string[]): string {
+  const blocks = fences.map((fence) => fence.replace(/\s+$/, ""));
+  // Inline spans are single symbols; one trailing line keeps them out of the way.
+  const symbols = inline.join(" ").trim();
+  return [...blocks, symbols].filter(Boolean).join("\n\n");
+}
+
 /** Split an MDX source into the fields the search index weights separately. */
 export function extractDocText(raw: string): DocText {
   const body = raw.replace(FRONTMATTER, "");
@@ -87,7 +97,7 @@ export function extractDocText(raw: string): DocText {
 
   return {
     text: squash(text),
-    code: squash([...fences, ...inline].join("\n")),
+    code: joinCode(fences, inline),
     headings: squash(headings.join(" ")),
   };
 }
