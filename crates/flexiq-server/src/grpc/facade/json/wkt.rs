@@ -57,15 +57,26 @@ pub fn timestamp_to_json(value: &Timestamp) -> Option<String> {
 }
 
 /// An RFC 3339 instant, at any offset, as a `Timestamp`.
+///
+/// A leap second is refused rather than folded into the second before it: this
+/// module is permissive only where the specification says to be, and quietly
+/// answering `:60` with `:59.999999999` schedules a job at an instant the
+/// caller did not write.
 pub fn timestamp_from_json(text: &str) -> Result<Timestamp, String> {
     let moment = DateTime::parse_from_rfc3339(text).map_err(|error| {
         format!("`{text}` is not an RFC 3339 instant, which is how a timestamp is written: {error}")
     })?;
     // A leap second lands in the 1_000_000_000..2_000_000_000 range chrono
     // reserves for one, which is not a value a Timestamp may carry.
-    let nanos = moment.timestamp_subsec_nanos().min(NANOS_PER_SECOND - 1);
+    let nanos = moment.timestamp_subsec_nanos();
+    if nanos >= NANOS_PER_SECOND {
+        return Err(format!(
+            "`{text}` is a leap second, which a timestamp cannot carry"
+        ));
+    }
     Ok(Timestamp {
         seconds: moment.timestamp(),
+        // The guard above puts this below `NANOS_PER_SECOND`, so it fits.
         nanos: i32::try_from(nanos).unwrap_or_default(),
     })
 }
@@ -315,6 +326,16 @@ mod tests {
             timestamp_to_json(&value).as_deref(),
             Some("2025-09-03T12:30:00Z")
         );
+    }
+
+    /// chrono reads `:60` and reports it as a nanosecond past the second it
+    /// follows. Clamping that into range would hand back a different instant
+    /// than the one asked for, so the string is refused instead.
+    #[test]
+    fn a_leap_second_is_refused_rather_than_moved() {
+        let complaint =
+            timestamp_from_json("2016-12-31T23:59:60Z").expect_err("a leap second is not a moment");
+        assert!(complaint.contains("leap second"), "{complaint}");
     }
 
     /// A malformed `Timestamp` is a server bug, and the answer is to say
