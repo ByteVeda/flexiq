@@ -1,5 +1,5 @@
 ---
-title: CLI Reference
+title: CLI reference
 description: "The flexiq command-line interface — worker, dashboard, info, pause, resume, scaler, autoscale, resources, reload."
 ---
 
@@ -73,7 +73,7 @@ flexiq dashboard --app <module:attribute> [--host <addr>] [--port <port>] [--aut
 flexiq dashboard --app myapp.tasks:queue --port 8080
 ```
 
-See the [Dashboard guide](/python/guides/dashboard) for authentication and deployment.
+See the [Dashboard guide](/python/modules/dashboard) for authentication and deployment.
 
 ### `flexiq pause` / `flexiq resume`
 
@@ -213,7 +213,7 @@ The server exposes three routes:
 flexiq scaler --app myapp:queue --port 9091 --target-queue-depth 5
 ```
 
-See the [KEDA Integration guide](/python/guides/operations) for Kubernetes deploy
+See the [KEDA Integration guide](/python/modules/autoscaling/keda) for Kubernetes deploy
 templates.
 
 ### `flexiq autoscale`
@@ -245,7 +245,7 @@ flexiq autoscale --app <module:attribute> [options]
 flexiq autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
 ```
 
-See the [Autoscaler guide](/python/guides/operations/autoscaling) for deployment
+See the [Autoscaler guide](/python/modules/autoscaling) for deployment
 patterns and tuning advice.
 
 ### `flexiq resources`
@@ -261,7 +261,7 @@ flexiq resources --app <module:attribute>
 |---|---|---|
 | `--app` | Yes | Python path to the `Queue` instance |
 
-See the [Resource System](/python/guides/resources) guide for background.
+See the [Resource System](/python/modules/injection) guide for background.
 
 ### `flexiq reload`
 

@@ -1,5 +1,5 @@
 ---
-title: Testing
+title: Testing API
 description: "mockResource — swap a real dependency for a stub in tests."
 ---
 
@@ -10,7 +10,7 @@ import type { MockResource } from "@byteveda/flexiq";
 
 The Node SDK's testing model is: run a real in-process worker against a
 throwaway queue (a temp SQLite file), enqueue, and await the result — the same
-API you run in production. See the [testing guide](/node/guides/operations/testing)
+API you run in production. See the [testing guide](/node/guides/extend/testing)
 for the full worker-in-a-test harness. This page covers the one dedicated test
 utility: `mockResource`, for swapping an injected [resource](/node/api-reference/queue/resources)
 for a stub.

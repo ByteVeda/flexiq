@@ -76,7 +76,7 @@ falls back to the decorator's default.
 | `timeout` | `int \| None` | `None` | Override timeout in seconds |
 | `unique_key` | `str \| None` | `None` | Deduplicate active jobs with same key |
 | `metadata` | `str \| None` | `None` | Arbitrary JSON metadata to attach |
-| `depends_on` | `str \| list[str] \| None` | `None` | Job ID(s) this job depends on. See [Dependencies](/python/guides/advanced-execution). |
+| `depends_on` | `str \| list[str] \| None` | `None` | Job ID(s) this job depends on. See [Dependencies](/python/guides/core). |
 
 ```python
 job = send_email.apply_async(

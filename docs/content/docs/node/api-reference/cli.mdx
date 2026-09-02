@@ -1,5 +1,5 @@
 ---
-title: CLI
+title: CLI reference
 description: "The standalone flexiq command."
 ---
 
@@ -22,9 +22,9 @@ on read commands prints machine-readable output.
 | `paused` | List paused queues. |
 | `dlq list` / `dlq retry <id>` / `dlq delete <id>` / `dlq purge [--older-than-ms <n>]` | Dead-letter (DLQ) ops. |
 | `run <module> [--queues a,b]` | Load a module exporting a `Queue` and run its worker. |
-| `dashboard [--port <n>]` | Serve the [dashboard](/node/guides/operations/dashboard). |
-| `scaler [--port <n>] [--target-queue-depth <n>]` | Serve the [KEDA](/node/guides/operations/keda) scaler metric endpoint. |
-| `autoscale <module> [--min-workers <n>] [--max-workers <n>]` | Scale worker processes to queue depth — see [Autoscaling](/node/guides/operations/autoscaling). |
+| `dashboard [--port <n>]` | Serve the [dashboard](/node/modules/dashboard). |
+| `scaler [--port <n>] [--target-queue-depth <n>]` | Serve the [KEDA](/node/modules/autoscaling/keda) scaler metric endpoint. |
+| `autoscale <module> [--min-workers <n>] [--max-workers <n>]` | Scale worker processes to queue depth — see [Autoscaling](/node/modules/autoscaling). |
 
 ```bash
 flexiq --db flexiq.db enqueue add '[2,3]'
@@ -32,5 +32,5 @@ flexiq --db flexiq.db jobs --status failed --json
 flexiq run ./app.js --queues default,emails
 ```
 
-The CLI ships in the package `bin`; see the [CLI guide](/node/guides/operations/cli)
+The CLI ships in the package `bin`; see the [CLI guide](/node/operate/cli)
 for the worker and dashboard entrypoints.

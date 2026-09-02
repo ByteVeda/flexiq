@@ -38,8 +38,8 @@ try {
 | `NotesValidationError` | `FlexiQError` | A `notes` object breaks the contract (>15 fields or >4 KiB). |
 | `WorkflowError` | `FlexiQError` | Workflow definition, submission, or query error. |
 | `PredicateRejectedError` | `FlexiQError` | An enqueue-time [gate](/node/guides/core/predicates) rejected the submission. |
-| `InterceptionError` | `FlexiQError` | An [enqueue interceptor](/node/guides/resources/interception) rejects, misbehaves, or redirects illegally. |
-| `ProxyError` | `FlexiQError` | A [proxy handler](/node/guides/resources/interception) signature, expiry, purpose, or allowlist failure. |
+| `InterceptionError` | `FlexiQError` | An [enqueue interceptor](/node/modules/injection/interception) rejects, misbehaves, or redirects illegally. |
+| `ProxyError` | `FlexiQError` | A [proxy handler](/node/modules/injection/interception) signature, expiry, purpose, or allowlist failure. |
 | `ResourceError` | `FlexiQError` | Base for resource dependency-injection errors. |
 | `ResourceNotFoundError` | `ResourceError` | Resolving a resource name that was never registered. |
 | `ResourceScopeError` | `ResourceError` | Resolving a task-scoped resource at worker scope. |

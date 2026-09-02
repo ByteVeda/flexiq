@@ -1,4 +1,4 @@
 {
-  "title": "FlexiQ",
-  "pages": ["jobs", "queues", "workers", "resources", "events", "pubsub"]
+  "title": "Queue",
+  "pages": ["index", "jobs", "queues", "workers", "resources", "events", "pubsub"]
 }

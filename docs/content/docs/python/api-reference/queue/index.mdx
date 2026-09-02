@@ -52,10 +52,10 @@ Queue(
 | `default_timeout` | `int` | `300` | Default task timeout in seconds |
 | `default_priority` | `int` | `0` | Default task priority (higher = more urgent) |
 | `result_ttl` | `int \| None` | `None` | Legacy uniform auto-cleanup window in seconds, applied to every retention table. Superseded by `retention`. |
-| `retention` | `Retention \| None` | `None` | Per-table retention windows. Retention is **on by default** — leaving both `result_ttl` and `retention` unset applies the recommended windows (`archived_jobs`/`task_metrics`/`job_errors` 7d, `task_logs` 3d, `dead_letter` 30d). Pass an empty `Retention()` to disable the table-wide windows (per-entry `result_ttl` is still honored). See [Retention & auto-cleanup](/python/guides/operations/job-management#retention--auto-cleanup). |
+| `retention` | `Retention \| None` | `None` | Per-table retention windows. Retention is **on by default** — leaving both `result_ttl` and `retention` unset applies the recommended windows (`archived_jobs`/`task_metrics`/`job_errors` 7d, `task_logs` 3d, `dead_letter` 30d). Pass an empty `Retention()` to disable the table-wide windows (per-entry `result_ttl` is still honored). See [Retention & auto-cleanup](/python/operate/inspection#retention--auto-cleanup). |
 | `middleware` | `list[TaskMiddleware] \| None` | `None` | Queue-level middleware applied to all tasks. |
 | `drain_timeout` | `int` | `30` | Seconds to wait for in-flight tasks during graceful shutdown. |
-| `interception` | `str` | `"off"` | Argument interception mode: `"strict"`, `"lenient"`, or `"off"`. See [Resource System](/python/guides/resources). |
+| `interception` | `str` | `"off"` | Argument interception mode: `"strict"`, `"lenient"`, or `"off"`. See [Resource System](/python/modules/injection). |
 | `max_intercept_depth` | `int` | `10` | Max recursion depth for argument walking. |
 | `recipe_signing_key` | `str \| None` | `None` | HMAC-SHA256 key for proxy recipe integrity. Falls back to `FLEXIQ_RECIPE_SECRET` env var. |
 | `max_reconstruction_timeout` | `int` | `10` | Max seconds allowed for proxy reconstruction. |
@@ -117,13 +117,13 @@ Register a function as a background task. Returns a [`TaskWrapper`](/python/api-
 | `queue` | `str` | `"default"` | Named queue to submit to. |
 | `circuit_breaker` | `dict \| None` | `None` | Circuit breaker config: `{"threshold": 5, "window": 60, "cooldown": 120}`. |
 | `middleware` | `list[TaskMiddleware] \| None` | `None` | Per-task middleware, applied in addition to queue-level middleware. |
-| `inject` | `list[str] \| None` | `None` | Resource names to inject as keyword arguments. See [Resource System](/python/guides/resources). |
+| `inject` | `list[str] \| None` | `None` | Resource names to inject as keyword arguments. See [Resource System](/python/modules/injection). |
 | `serializer` | `Serializer \| None` | `None` | Per-task serializer override. Falls back to queue-level serializer. |
 | `max_concurrent` | `int \| None` | `None` | Max concurrent running instances, across the cluster. `None` = no limit. |
 | `max_in_flight_per_task` | `int \| None` | `None` | Cap on this task's share of a *single worker's* dispatch slots, so one slow task can't occupy the whole pool and starve the others. In-process and free, unlike `max_concurrent`, which is cluster-wide and costs a database read. `None` = the task may use the whole pool. |
 | `retry_budget` | `str \| None` | `None` | Cap on how fast this task may **retry**, across all of its jobs — same syntax as `rate_limit`, e.g. `"100/m"`. Once spent, further failures dead-letter instead of retrying (DLQ `metadata` is set to `retry_budget_exhausted`). Distinct from `max_retries`, which bounds one job rather than the rate, and from `circuit_breaker`, which trips on hard failure rather than aggregate retry rate. `None` = no cap. |
 | `idempotent` | `bool` | `False` | Auto-derive a dedup key from `sha256(task_name\|payload)` so duplicate `.delay()`/`.apply_async()` calls while a job is pending or running return the same job ID. |
-| `compensates` | `TaskWrapper \| str \| None` | `None` | Saga compensator for this task, enqueued in reverse order if a later workflow step fails. See [Sagas](/python/guides/workflows/saga). |
+| `compensates` | `TaskWrapper \| str \| None` | `None` | Saga compensator for this task, enqueued in reverse order if a later workflow step fails. See [Sagas](/python/modules/workflows/saga). |
 | `batch` | `bool \| dict \| None` | `None` | Enable producer-side batching (`True` for defaults, or a dict with `max_size`/`max_wait_ms`). See [Batching](/python/guides/core/batching). |
 | `predicate` | `Predicate \| Callable \| None` | `None` | Gate execution on a runtime condition, checked at enqueue time and worker-dispatch time. See [Predicates](/python/guides/core/predicates). |
 | `on_false` | `str` | `"defer"` | What to do when `predicate` returns `False` — `"defer"` (re-schedule) or `"cancel"` (terminally skip). |
@@ -233,8 +233,8 @@ Enqueue a task for execution. Returns a [`JobResult`](/python/api-reference/resu
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `metadata` | `str \| None` | `None` | Free-form JSON string blob. No size or shape constraint. |
-| `notes` | `dict \| None` | `None` | Structured annotations, max **15** top-level keys. See [Structured notes](/python/guides/observability/notes). |
-| `depends_on` | `str \| list[str] \| None` | `None` | Job ID(s) this job depends on. See [Dependencies](/python/guides/advanced-execution). |
+| `notes` | `dict \| None` | `None` | Structured annotations, max **15** top-level keys. See [Structured notes](/python/guides/extend/notes). |
+| `depends_on` | `str \| list[str] \| None` | `None` | Job ID(s) this job depends on. See [Dependencies](/python/guides/core). |
 
 ### `queue.enqueue_many()`
 
@@ -271,7 +271,7 @@ uniform parameters (applied to all jobs) and per-job lists.
 | `unique_keys` | `list[str \| None] \| None` | `None` | Per-job deduplication keys |
 | `metadata` | `str \| None` | `None` | Uniform metadata JSON for all jobs |
 | `metadata_list` | `list[str \| None] \| None` | `None` | Per-job metadata JSON |
-| `notes` | `dict \| None` | `None` | Uniform [structured notes](/python/guides/observability/notes) for all jobs (≤ 15 keys) |
+| `notes` | `dict \| None` | `None` | Uniform [structured notes](/python/guides/extend/notes) for all jobs (≤ 15 keys) |
 | `notes_list` | `list[dict \| None] \| None` | `None` | Per-job structured notes (takes precedence over `notes`) |
 | `expires` | `float \| None` | `None` | Uniform expiry in seconds for all jobs |
 | `expires_list` | `list[float \| None] \| None` | `None` | Per-job expiry in seconds |

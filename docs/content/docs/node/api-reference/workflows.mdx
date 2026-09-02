@@ -1,5 +1,5 @@
 ---
-title: Workflows
+title: Workflow API
 description: "The workflow builder, run handle, and queries."
 ---
 
@@ -17,7 +17,7 @@ queue.workflows
 | `step(name, task, opts?)` | A task node. `opts`: `after`, `args`, `queue`, `maxRetries`, `timeoutMs`, `priority`, `condition`, `compensate`, `cache`. |
 | `fanOut(name, { after, task, itemsFrom })` | Expand into one child per item. |
 | `fanIn(name, { after, task })` | Collect children's results into an array. |
-| `gate(name, { after, timeoutMs?, onTimeout?, message? })` | Pause for [approval](/node/guides/workflows/gates). |
+| `gate(name, { after, timeoutMs?, onTimeout?, message? })` | Pause for [approval](/node/modules/workflows/gates). |
 | `subWorkflow(name, { after, workflow })` | Run a child workflow as a node. |
 | `chain(steps[], { after? })` | Canvas: wire `steps` sequentially. |
 | `group(steps[], { after? })` | Canvas: run `steps` in parallel. |
@@ -80,6 +80,6 @@ a?.criticalPath(); // longest dependency chain (root → leaf)
 a?.stats(); // { total, byStatus, completed, failed, running, pending }
 ```
 
-See the [Workflows guides](/node/guides/workflows) for fan-out, conditions,
+See the [Workflows guides](/node/modules/workflows) for fan-out, conditions,
 gates, sub-workflows, and saga compensation. Requires the addon built with the
 `workflows` cargo feature.

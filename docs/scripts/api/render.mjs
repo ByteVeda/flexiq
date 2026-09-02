@@ -164,7 +164,7 @@ export function renderGroupPage(sdk, group, symbols) {
   return [
     "---",
     `title: ${GROUPS[group]}`,
-    `description: "Every ${GROUPS[group].toLowerCase()} symbol the ${SDK_PROFILES[sdk].label} SDK declares, with its exact signature."`,
+    `description: "The ${GROUPS[group].toLowerCase()} the ${SDK_PROFILES[sdk].label} SDK declares, straight from its own declarations."`,
     "---",
     "",
     BANNER,

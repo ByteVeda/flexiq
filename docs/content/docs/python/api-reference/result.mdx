@@ -93,7 +93,7 @@ job.dependencies -> list[str]
 ```
 
 List of job IDs this job depends on. Returns an empty list if the job has no
-dependencies. See [Dependencies](/python/guides/advanced-execution).
+dependencies. See [Dependencies](/python/guides/core).
 
 ### `job.dependents`
 
@@ -113,8 +113,8 @@ job.to_dict() -> dict
 ```
 
 Return all job fields as a plain dictionary. Useful for JSON serialization
-(e.g. in the [dashboard](/python/guides/observability) or
-[FastAPI integration](/python/guides/integrations)).
+(e.g. in the [dashboard](/python/guides/extend) or
+[FastAPI integration](/python/guides/extend)).
 
 ### `job.result()`
 

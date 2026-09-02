@@ -1,5 +1,5 @@
 ---
-title: Testing
+title: Testing API
 description: "InMemoryFlexiQ and InMemoryQueueBackend — a pure-Java backend for fast unit tests."
 ---
 
@@ -11,7 +11,7 @@ Ships in the `org.byteveda:flexiq-test` artifact (the `:test-support`
 subproject). The testing model is: swap in an in-memory backend, run a real
 in-process worker against it, and synchronize on results the same way you
 would against a native backend. For a walkthrough with assertions, see the
-[Testing guide](/java/guides/operations/testing).
+[Testing guide](/java/guides/extend/testing).
 
 ```kotlin
 testImplementation("org.byteveda:flexiq-test:1.0.0")
