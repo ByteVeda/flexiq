@@ -140,6 +140,48 @@ for partial in job.stream(timeout=120):
     print(f"Processed: {partial}")
 ```
 
+### `current_job.step`
+
+```python
+current_job.step -> StepContext
+```
+
+The [durable step](/python/modules/steps) recorder for this attempt. Built
+lazily and cached on the context, so a task that never takes a step pays
+nothing.
+
+| Member | Description |
+|---|---|
+| `run(name, fn, *, key=None)` | Run `fn` once per run and memoize its result. A replay after a crash, a retry or a sleep returns the recorded value without calling `fn` again. `arun()` is the await twin; it commits off the event loop so a slow write does not stall every other coroutine on the worker. |
+| `sleep(duration, *, name=None, key=None)` | Sleep, **ending the attempt** if the deadline is ahead: the claim is released and the job returns to `pending` until then, so a sleeping job holds no worker slot and cannot be timed out while it waits. Costs no retry — the retry count, retry budget, circuit breaker and metrics are all untouched. `asleep()` is the await twin. |
+| `sleep_until(when, *, name=None, key=None)` | The absolute-instant form; reach for it when the deadline means something outside the job (a billing date, a market open), because it is unaffected by how many times the attempt replayed. `asleep_until()` is the await twin. |
+| `idempotency_key` | The key to hand a downstream service for the step running now. Stable across a retry, a sleep/wake and an operator's DLQ retry, and no serializer or codec touches it. Readable **only inside a step body** — outside one there is no step for it to name. |
+| `run_key` | The id this durable run began under: the job's own id, except across a DLQ retry, which mints a new job for the same run and keeps the original key so a charge is not made twice. |
+
+The sleep deadline is fixed by the **first** commit. Replaying a `"1h"` sleep
+wakes at the original instant rather than an hour later each time, which is what
+stops a crash loop from producing a sleep that outlives the job. Name your
+sleeps: a sequence reading `sleep#0, sleep#1, sleep#2` tells nobody which one
+diverged.
+
+Steps need a worker or an attached executor to commit through. A task running
+outside both raises `StepUnavailableError` as a control signal the body cannot
+catch away, rather than running the step un-memoized. `queue.test_mode()` is the
+exception: the step runs and is not memoized, but the idempotency key is still
+derived, so a test can assert on what the step would have sent.
+
+#### Declared names
+
+| Declared | What it is |
+|---|---|
+| `supports_steps` | Whether the backend has a step store at all — a capability probe, not the gate; a session refuses on its own when the store is missing. |
+| `open_step_session` | Opens the attempt's session, on `WorkerSteps` (a worker) or `AttachedSteps` (an executor). The handle rides with the dispatch, so the fence names *this* run — `WorkerSteps.owner` is the worker that won the claim, never the `Queue` handle, because one process may run several workers off one queue. |
+| `inherited_worker_steps` | How a prefork child picks up the parent's step handle after the fork. |
+| `run_key` | Read back by `step.run_key`. |
+| `sleep_for` / `sleep_until` | Behind `step.sleep()` / `step.sleep_until()`; `sleep_for` takes `duration_ms`, while the API accepts a duration string. |
+| `StepDecision.step_key` / `.memoized` | One `run()`'s verdict: the step's identity, and the recorded bytes when it is a memo hit (`None` on a first run). |
+| `StepSleepOutcome.step_key` / `.wake_at` / `.elapsed` | One sleep's verdict: its identity, the fixed wake instant (Unix ms), and whether the deadline had already passed — `elapsed=True` is what lets a replayed sleep return immediately instead of ending the attempt again. |
+
 ## How it works
 
 **Sync tasks (thread pool):**

@@ -137,6 +137,30 @@ Each entry describes a registered worker:
 stale has died without unregistering — that is the signal to look for when jobs
 appear stuck in `running`.
 
+## Attached executor
+
+An [attached executor](/python/modules/executor) runs tasks without opening
+storage: it connects to a scheduler that already has it, and the scheduler
+dispatches over that channel. `flexiq executor --app myapp:queue --attach …`
+builds one; the `Executor` object it drives is the same one the declarations
+list.
+
+Constructing an `Executor` performs the handshake, so a bad token or an
+unreachable scheduler raises there rather than after the pool has been built.
+Jobs then run on the prefork pool, one child per slot.
+
+| Member | Description |
+|---|---|
+| `executor_id` | The identity this executor attached under. Either the one you asked for or a generated one. |
+| `scheduler_id` | The identity the scheduler announced when it accepted the attach — the answer to "which scheduler did I actually reach". |
+| `peer` | Peer label of the scheduler connection, for logs and diagnostics. |
+| `is_running()` | Whether the session is still open. `False` after the scheduler drops it, which is how a supervisor notices without polling the socket. |
+| `wait(timeout_ms)` | Block up to `timeout_ms`, returning whether the session has ended. Loop on this rather than blocking indefinitely — each return hands the GIL back, and that is the only moment a pending Python signal handler can run. |
+| `stop()` / `shutdown()` | Stop accepting work and finish what is in flight (returns at once), versus drain, disconnect and join (idempotent). |
+
+The attach token comes from `FLEXIQ_ATTACH_TOKEN`, never a flag: a token in
+`argv` is visible in `ps` output and lands in shell history.
+
 <Cards>
   <Card
     title="Concurrency"

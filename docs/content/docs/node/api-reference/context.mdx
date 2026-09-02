@@ -33,6 +33,35 @@ queue.task("download", async (url: string) => {
 See [Cancellation](/node/guides/core/cancellation) for the cooperative
 cancellation flow.
 
+## `ctx.step`
+
+The [durable step](/node/modules/steps) recorder for this attempt, reached as
+`currentJob()?.step`. Every member is async.
+
+| Member | Description |
+|---|---|
+| `run(name, fn, opts?)` → `Promise<T>` | Run `fn` once per run and memoize its result. A replay after a crash, a retry or a sleep returns the recorded value without calling `fn` again. A missing or empty `name` is refused before the core is asked, and refused as *permanent* — a replay is handed the same value, so the retry budget must not be spent on it. |
+| `sleep(duration, opts?)` → `Promise<void>` | Sleep, **ending the attempt** if the deadline is ahead: the claim is released and the job returns to pending until then, so a sleeping job holds no worker slot and cannot be timed out while it waits. Costs no retry — the retry count, retry budget, circuit breaker and metrics are all untouched. |
+| `sleepUntil(when, opts?)` → `Promise<void>` | The absolute-instant form. Reach for it when the deadline means something outside the job (a billing date, a market open), because it is unaffected by how many times the attempt replayed. |
+| `idempotencyKey` | The key to hand a downstream service for the step running now. Stable across a retry, a sleep/wake and an operator's dead-letter retry, and no serializer or codec touches it. Readable **only inside a step body** — outside one there is no step for it to name. |
+| `runKey()` → `Promise<string>` | The id this durable run began under: the job's own id, except across a dead-letter retry, which mints a new job for the same run and keeps the original key so a charge is not made twice. |
+
+`opts` is `{ key? }` for `run` and `{ name?, key? }` for the sleeps. The sleep
+deadline is fixed by the **first** commit, so replaying a `"1h"` sleep wakes at
+the original instant rather than an hour later each time — that is what stops a
+crash loop from producing a sleep that outlives the job. Name your sleeps: a
+sequence reading `sleep#0, sleep#1, sleep#2` tells nobody which one diverged.
+
+### Declared names
+
+| Declared | What it is |
+|---|---|
+| `supportsSteps` | Whether the backend has a step store at all — on `JsQueue` for a worker, on `JsExecutor` for an attach. A capability probe, not the gate: `ctx.step` refuses on its own when the store is missing, read or not. |
+| `openStepSession` | Opens the attempt's session — on `JsWorker` for a worker, `JsExecutor` for an attach. The **worker's** handle, never the queue's: one process may run several workers off one queue, so a queue-level owner would name whichever started last. |
+| `runKey` | Read back by `step.runKey()`. |
+| `sleepFor` / `sleepUntil` | Behind `step.sleep()` / `step.sleepUntil()`. `sleepFor` takes milliseconds; the API accepts a duration. |
+| `beginRun` / `commitRun` | The two halves of `step.run()`: `beginRun` returns a decision carrying `stepKey`, `idempotencyKey` and `memoized` (the recorded bytes on a memo hit, `null` on a first run); `commitRun` records the encoded result. |
+
 ## `useResource`
 
 ```ts
