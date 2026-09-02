@@ -474,10 +474,10 @@ queue.nackMessage(
 ): Promise<boolean>
 ```
 
-### `queue.open()`
+### `JsQueue.open()`
 
 ```typescript
-queue.open(options: OpenOptions): JsQueue
+JsQueue.open(options: OpenOptions): JsQueue
 ```
 
 ### `queue.pauseQueue()`
@@ -625,7 +625,9 @@ queue.retryDead(deadId: string): string
 
 ```typescript
 queue.runWorker(
-    callback: ((arg: JsTaskInvocation) => Promise<JsTaskOutcome>), outcomeCallback: ((arg: JsOutcome) => unknown), options?: WorkerOptions | undefined | null
+    callback: ((arg: JsTaskInvocation) => Promise<JsTaskOutcome>),
+    outcomeCallback: ((arg: JsOutcome) => unknown),
+    options?: WorkerOptions | undefined | null
 ): JsWorker
 ```
 

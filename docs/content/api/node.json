@@ -20,7 +20,12 @@
       "params": [
         {
           "name": "callback",
-          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>), options: ExecutorOptions",
+          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>)",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "ExecutorOptions",
           "default": null
         }
       ],
@@ -1631,8 +1636,18 @@
       "params": [
         {
           "name": "callback",
-          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>), outcomeCallback: ((arg: JsOutcome) => unknown), options?: WorkerOptions | undefined | null",
+          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>)",
           "default": null
+        },
+        {
+          "name": "outcomeCallback",
+          "type": "((arg: JsOutcome) => unknown)",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "WorkerOptions | undefined | null",
+          "default": "optional"
         }
       ],
       "returns": "JsWorker"

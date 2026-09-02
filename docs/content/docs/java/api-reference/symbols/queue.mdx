@@ -37,10 +37,10 @@ InterceptionAnalysis analyzeArguments(String taskName, Object payload)
 Optional<Job> awaitJob(String jobId, Duration timeout)
 ```
 
-### `flexiq.builder()`
+### `FlexiQ.builder()`
 
 ```java
-Builder builder()
+static Builder builder()
 ```
 
 ### `flexiq.cancel()`
@@ -116,7 +116,7 @@ void disableMiddleware(String taskName, String middlewareName)
 
 ```java
 FlexiQ dispatchOrder(String queue, DispatchOrder order)
-FlexiQ dispatchOrder(String queue, String order)
+@Deprecated FlexiQ dispatchOrder(String queue, String order)
 ```
 
 ### `flexiq.dryRunRetention()`
@@ -714,14 +714,14 @@ Optional<WorkflowStatus> workflowStatus(String runId)
 ### `flexiq.writeTaskLog()`
 
 ```java
-void writeTaskLog(
+@Deprecated void writeTaskLog(
     String jobId,
     String taskName,
     String level,
     String message,
     @Nullable String extra
 )
-void writeTaskLog(
+@Deprecated void writeTaskLog(
     String jobId,
     String taskName,
     String level,

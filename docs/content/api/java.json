@@ -354,7 +354,8 @@
           "default": null
         }
       ],
-      "returns": "FlexiQ"
+      "returns": "FlexiQ",
+      "deprecated": true
     },
     {
       "owner": "FlexiQ",
@@ -427,7 +428,8 @@
           "default": null
         }
       ],
-      "returns": "<T> String"
+      "returns": "String",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -446,7 +448,8 @@
           "default": null
         }
       ],
-      "returns": "<T> String"
+      "returns": "String",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -484,7 +487,8 @@
           "default": null
         }
       ],
-      "returns": "<T> List<String>"
+      "returns": "List<String>",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -508,7 +512,8 @@
           "default": null
         }
       ],
-      "returns": "<T> List<String>"
+      "returns": "List<String>",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -527,7 +532,8 @@
           "default": null
         }
       ],
-      "returns": "<T> List<String>"
+      "returns": "List<String>",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -607,7 +613,8 @@
           "default": null
         }
       ],
-      "returns": "<R> Optional<R>"
+      "returns": "Optional<R>",
+      "typeParams": "<R>"
     },
     {
       "owner": "FlexiQ",
@@ -1097,7 +1104,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1126,7 +1134,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1551,7 +1560,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1580,7 +1590,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1609,7 +1620,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1633,7 +1645,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1868,7 +1881,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1887,7 +1901,8 @@
           "default": null
         }
       ],
-      "returns": "<T> FlexiQ"
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1968,7 +1983,8 @@
           "default": null
         }
       ],
-      "returns": "<T> Optional<String>"
+      "returns": "Optional<String>",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -1987,7 +2003,8 @@
           "default": null
         }
       ],
-      "returns": "<T> Optional<String>"
+      "returns": "Optional<String>",
+      "typeParams": "<T>"
     },
     {
       "owner": "FlexiQ",
@@ -2119,7 +2136,8 @@
           "default": null
         }
       ],
-      "returns": "void"
+      "returns": "void",
+      "deprecated": true
     },
     {
       "owner": "FlexiQ",
@@ -2148,7 +2166,8 @@
           "default": null
         }
       ],
-      "returns": "void"
+      "returns": "void",
+      "deprecated": true
     },
     {
       "owner": "FlexiQ",
@@ -2465,28 +2484,6 @@
       "signature": "JobContext current()",
       "params": [],
       "returns": "JobContext"
-    },
-    {
-      "owner": "JobContext",
-      "name": "enter",
-      "kind": "static",
-      "signature": "void enter(JobContext context)",
-      "params": [
-        {
-          "name": "context",
-          "type": "JobContext",
-          "default": null
-        }
-      ],
-      "returns": "void"
-    },
-    {
-      "owner": "JobContext",
-      "name": "exit",
-      "kind": "static",
-      "signature": "void exit()",
-      "params": [],
-      "returns": "void"
     },
     {
       "owner": "JobContext",
