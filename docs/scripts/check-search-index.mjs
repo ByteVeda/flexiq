@@ -71,7 +71,9 @@ for (const [whole, part] of DOTTED) {
 }
 
 // (c) Code is weighted above prose: a page whose examples call the symbol must
-// beat one that only names it in a sentence.
+// beat one that only names it in a sentence. `headings` is its own field with a
+// weight above `code`, so a heading match is a symbol match too — classifying it
+// as prose would fail a page that is ranked exactly as intended.
 function fieldOf(slug, symbol) {
   const doc = bySlug.get(slug);
   if (!doc) {
@@ -83,27 +85,30 @@ function fieldOf(slug, symbol) {
   if (has(doc.title)) {
     return "title";
   }
+  if (has(doc.headings)) {
+    return "headings";
+  }
   return has(doc.code) ? "code" : "text";
 }
 for (const symbol of SYMBOLS) {
-  const hits = search(symbol).slice(0, 5);
-  if (hits.length < 2) {
-    continue;
-  }
-  const top = fieldOf(hits[0], symbol);
-  if (top === "text") {
-    const better = hits.find((slug) => fieldOf(slug, symbol) !== "text");
-    if (better) {
-      errors.push(
-        `"${symbol}": prose-only page ${hits[0]} outranks ${better} which has it in ${fieldOf(better, symbol)}`,
-      );
-    }
+  // Over the whole result set, not a truncated head: a prose-only page that
+  // outranks a code page at position six is the same defect, and capping the
+  // scan at five would let it through.
+  const hits = search(symbol);
+  const firstProse = hits.findIndex((slug) => fieldOf(slug, symbol) === "text");
+  const firstSymbol = hits.findIndex(
+    (slug) => fieldOf(slug, symbol) !== "text",
+  );
+  if (firstProse !== -1 && firstSymbol !== -1 && firstProse < firstSymbol) {
+    errors.push(
+      `"${symbol}": prose-only page ${hits[firstProse]} (#${firstProse + 1}) outranks ${hits[firstSymbol]} (#${firstSymbol + 1}), which has it in ${fieldOf(hits[firstSymbol], symbol)}`,
+    );
   }
 }
 
 // (d) Every page contributed something. A file extracting to nothing means the
 // stripper ate it.
-const empty = corpus.filter((doc) => !doc.text && !doc.code);
+const empty = corpus.filter((doc) => !doc.text && !doc.code && !doc.headings);
 if (empty.length > 0) {
   errors.push(
     `${empty.length} page(s) extracted to empty text: ${empty
