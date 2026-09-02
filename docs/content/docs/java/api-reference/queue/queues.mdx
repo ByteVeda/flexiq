@@ -40,9 +40,48 @@ description: "Statistics, dead letters, queue control, and settings."
 
 ## Settings
 
+A deployment-wide key/value store in the same backend as the jobs, and the
+backing for the dashboard's configuration page. Values are opaque strings to
+storage; encode anything structured yourself. Every worker and dashboard pointed
+at the same backend reads the same values.
+
 | Method | Description |
 |---|---|
-| `getSetting` / `setSetting` / `deleteSetting` / `listSettings` | Shared key–value settings in the store. |
+| `getSetting(key)` → `Optional<String>` | Empty for a key that was never set. Does not throw. |
+| `setSetting(key, value)` / `deleteSetting(key)` | Insert-or-overwrite, and remove. `setSetting` is last-write-wins; `deleteSetting` reports whether a row existed. |
+| `setSettingIf(key, expected, value)` → `boolean` | Compare-and-set: write only while `key` still holds `expected`, where an empty `expected` means it must be unset. `false` means another writer got there first, so a read-modify-write caller can re-read and retry instead of overwriting an unseen edit — which is why the dashboard's whole-document feature stores go through it. |
+| `listSettings()` → `Map<String, String>` | The whole store, runtime-owned keys included. |
+
+<Callout type="warn">
+  Some prefixes belong to the runtime: `auth:`, `contract:`,
+  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `flexiq.webhooks`. Writing under them corrupts state that dashboard sessions,
+  the contract floor, per-task middleware toggles, retention and webhook
+  delivery all read back. The dashboard's settings editor hides them; these
+  methods do not.
+</Callout>
+
+## Schema & contract floor
+
+| Method | Description |
+|---|---|
+| `migrate()` → `MigrationReport` | Apply pending schema changes and report what ran: `applied` / `workflowApplied` version lists in the order applied, `archivedJobs` for rows the one-time backlog sweep moved, `schemaless` for a backend that stores no schema. Empty lists mean the database was already current. |
+| `minContract()` → `int` | The lowest contract level a process may speak and still open this storage — the revision of the shared storage and wire contract an SDK build implements. A build below the floor refuses to open rather than misreading rows its contract never described. |
+| `setMinContract(level)` | Move the floor. A level this build does not itself speak is rejected, since writing it would lock the caller out of its own storage. |
+
+`migrate()` is idempotent, and the only path that applies DDL when the client
+was built with [`autoMigrate(false)`](/java/api-reference/queue#builder) —
+the shape for a deployment whose runtime credentials cannot issue DDL. Until it
+has run there, queries fail, because the tables do not exist yet.
+
+<Callout type="warn">
+  All three are native-only: they throw `UnsupportedOperationException` on an
+  implementation of `FlexiQ` backed by something other than the native storage,
+  such as a test fake passed to `open(QueueBackend)`. And raise the floor only
+  once every process in the deployment has been upgraded — the check runs at
+  open, so a process already holding storage keeps running and the failure
+  surfaces at its next restart.
+</Callout>
 
 ## Cleanup
 

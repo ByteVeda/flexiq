@@ -176,3 +176,83 @@ queue.purge_completed(older_than: int = 86400) -> int
 ```
 
 Purge completed jobs older than `older_than` seconds. Returns count deleted.
+
+## Settings
+
+A deployment-wide key/value store living in the same backend as the jobs, and
+the backing for the dashboard's configuration page. Values are opaque strings to
+storage — `json.dumps()` / `json.loads()` around anything structured. Every
+worker and dashboard pointed at the same backend reads the same values.
+
+### `queue.get_setting()`, `set_setting()`, `delete_setting()`, `list_settings()`
+
+```python
+queue.get_setting(key: str) -> str | None
+queue.set_setting(key: str, value: str) -> None
+queue.delete_setting(key: str) -> bool
+queue.list_settings() -> dict[str, str]
+```
+
+`get_setting()` answers `None` for a key that was never set, and
+`delete_setting()` answers `False` for the same case — neither raises.
+`set_setting()` is last-write-wins. `list_settings()` returns the whole store,
+runtime-owned keys included.
+
+### `queue.set_setting_if()`
+
+```python
+queue.set_setting_if(key: str, expected: str | None, value: str) -> bool
+```
+
+Compare-and-set: write `value` only while `key` still holds `expected`, where
+`expected=None` means the key must be unset. `False` means another writer got
+there first — which is the point. A caller that derived `value` from a read can
+re-read and retry instead of overwriting an edit it never saw.
+
+<Callout type="warn">
+  Some prefixes belong to the runtime: `auth:`, `contract:`,
+  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `flexiq.webhooks`. Writing under them corrupts state that dashboard sessions,
+  the contract floor, per-task middleware toggles, retention and webhook
+  delivery all read back. The dashboard's settings editor hides them; these
+  methods do not.
+</Callout>
+
+## Schema & contract floor
+
+### `queue.migrate()`
+
+```python
+queue.migrate() -> dict[str, Any]
+```
+
+Apply pending schema changes and report what ran: `applied` and
+`workflow_applied` are the version lists, in the order applied; `archived_jobs`
+counts rows the one-time backlog sweep moved into the archive; `schemaless`
+marks a backend that stores no schema and therefore never has anything to
+migrate. Empty version lists mean the database was already current.
+
+Idempotent, and the only path that applies DDL when the queue was opened with
+`auto_migrate=False` — the shape for a deployment whose runtime credentials
+cannot issue DDL. Until it has run there, queries fail, because the tables do
+not exist yet.
+
+### `queue.min_contract()` / `queue.set_min_contract()`
+
+```python
+queue.min_contract() -> int
+queue.set_min_contract(level: int) -> None
+```
+
+The contract level is the revision of the shared storage and wire contract an
+SDK build implements. The floor is the lowest level a process may speak and
+still open this storage: a build below it refuses to open rather than misreading
+rows its contract never described.
+
+<Callout type="warn">
+  Raise the floor only once every process in the deployment has been upgraded.
+  The check runs at open, so a process already holding storage keeps running and
+  the failure surfaces at its next restart — an old worker looks healthy right
+  up to the deploy that replaces it. A level this build does not itself speak is
+  rejected, since writing it would lock the caller out of its own storage.
+</Callout>

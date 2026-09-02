@@ -43,3 +43,48 @@ background thread pool.
 | Method | Description |
 |---|---|
 | `purgeCompleted(ms)` → `Promise<number>` | Drop old completed jobs. |
+
+## Settings
+
+A deployment-wide key/value store in the same backend as the jobs, and the
+backing for the dashboard's configuration page. Values are opaque strings to
+storage — `JSON.stringify` / `JSON.parse` around anything structured. Every
+worker and dashboard pointed at the same backend reads the same values.
+
+| Method | Description |
+|---|---|
+| `getSetting(key)` → `string \| null` | `null` for a key that was never set. Does not throw. |
+| `setSetting(key, value)` | Insert or overwrite. Last-write-wins — use `setSettingIf` when the new value depends on the old one. |
+| `setSettingIf(key, expected, value)` → `boolean` | Compare-and-set: write only while `key` still holds `expected`, with `null` meaning it must be unset. `false` means another writer got there first, so a caller that derived `value` from a read can re-read and retry instead of overwriting an edit it never saw. |
+| `deleteSetting(key)` → `boolean` | `false` when the key did not exist. |
+| `listSettings()` → `Record<string, string>` | The whole store, runtime-owned keys included. |
+
+<Callout type="warn">
+  Some prefixes belong to the runtime: `auth:`, `contract:`,
+  `middleware:disabled:`, `retention:`, `webhook:`, `webhooks:` and
+  `flexiq.webhooks` — the list the native `reservedSettingPrefixes()` returns,
+  and the one the dashboard's settings handler hides behind. Writing under them
+  corrupts state that dashboard sessions, the contract floor, per-task
+  middleware toggles, retention and webhook delivery all read back. The methods
+  above do no such filtering.
+</Callout>
+
+## Schema & contract floor
+
+| Method | Description |
+|---|---|
+| `migrate()` → `Promise<MigrationSummary>` | Apply pending schema changes and report what ran: `applied` / `workflowApplied` version lists in the order applied, `archivedJobs` for rows the one-time backlog sweep moved, `schemaless` for a backend that stores no schema. Empty lists mean the database was already current. Async because a fresh database means the whole schema plus that sweep, which must not block the event loop. |
+| `minContract()` → `number` | The lowest contract level a process may speak and still open this storage — the revision of the shared storage and wire contract an SDK build implements. A build below the floor refuses to open rather than misreading rows its contract never described. |
+| `setMinContract(level)` | Move the floor. A level this build does not itself speak is rejected, since writing it would lock the caller out of its own storage. |
+
+`migrate()` is idempotent, and the only path that applies DDL when the queue was
+opened with `autoMigrate: false` — the shape for a deployment whose runtime
+credentials cannot issue DDL. Until it has run there, queries fail, because the
+tables do not exist yet.
+
+<Callout type="warn">
+  Raise the floor only once every process in the deployment has been upgraded.
+  The check runs at open, so a process already holding storage keeps running and
+  the failure surfaces at its next restart — an old worker looks healthy right up
+  to the deploy that replaces it.
+</Callout>

@@ -40,6 +40,7 @@ try (FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open()) {
 | `serializer(Serializer)` | Payload/result serializer (default `JsonSerializer`). |
 | `codec(PayloadCodec...)` | Global [codec chain](/java/api-reference/serializers) around the serializer. |
 | `codec(String, PayloadCodec)` | Register a named codec for per-task selection (`Task.codecs`). |
+| `autoMigrate(boolean)` | Whether opening applies pending schema changes. `true` (the default) keeps the existing behaviour; `false` gates every schema change behind [`migrate()`](/java/api-reference/queue/queues#schema--contract-floor), for a deployment whose database credentials do not permit DDL at runtime. Until migrate has run, queries fail — the tables do not exist yet. |
 | `open()` | Open the native backend → `FlexiQ`. |
 | `open(QueueBackend)` | Open over an explicit backend (e.g. a test fake). |
 
