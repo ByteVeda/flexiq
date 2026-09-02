@@ -3,13 +3,15 @@ import { checkApiCoverage } from "./checks/api-coverage.mjs";
 import { checkCodeTabs } from "./checks/code-tabs.mjs";
 import { checkCollisions } from "./checks/collisions.mjs";
 import { checkDrift } from "./checks/drift.mjs";
+import { checkLinks } from "./checks/links.mjs";
 import { checkRedirectShadowing } from "./checks/redirect-shadowing.mjs";
+import { checkSectionShape } from "./checks/section-shape.mjs";
 import { loadContentFiles } from "./content.mjs";
 
 // Content-parity gate for the docs site (run: pnpm check:parity).
 // Blocking: CodeTabs SDK coverage on shared pages, slug collisions, redirect
-// shadowing, API reference coverage. Informational: per-SDK drift report (the
-// migration queue).
+// shadowing, section shape, internal links, API reference coverage.
+// Informational: per-SDK drift report (the migration queue).
 
 const files = loadContentFiles();
 const collisions = checkCollisions(files);
@@ -17,6 +19,8 @@ const results = [
   checkCodeTabs(files),
   collisions,
   checkRedirectShadowing(collisions.slugs),
+  checkSectionShape(files),
+  checkLinks(files),
   checkApiCoverage(files),
   checkDrift(files),
 ];

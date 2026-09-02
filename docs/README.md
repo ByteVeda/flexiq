@@ -48,10 +48,17 @@ Adding a page: drop an `.mdx` file under `content/docs/`, add it to the director
 `meta.json`. It is picked up, prerendered, indexed for search, and slotted into the
 sidebar automatically.
 
+The nav shape itself is committed in `scripts/parity/section-skeleton.mjs` and gated
+by `pnpm check:parity`: the three SDK trees carry the same sections with the same
+titles, and a `meta.json` may only list pages the skeleton names, in the skeleton's
+order. An SDK that lacks a topic omits the page — it never invents a group for it.
+Moving a page means adding its old URL to `app/lib/redirects.ts` and repointing
+every link, both of which the same gate checks.
+
 ## Shared content (one file, one URL per SDK)
 
 A file under `content/docs/shared/` mounts at the same path in **every** SDK tree:
-`shared/guides/operations/mesh.mdx` serves `/python/guides/operations/mesh`,
+`shared/modules/mesh.mdx` serves `/python/modules/mesh`,
 `/node/...`, and `/java/...` from one source. Slug + fan-out logic lives in
 `app/lib/doc-slugs.ts` — the runtime loader, prerender walk, manifest plugin, and
 parity checks all resolve through it. Non-default-SDK mounts carry a

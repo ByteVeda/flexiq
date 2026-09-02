@@ -8,20 +8,16 @@ import { wordCount } from "../content.mjs";
 
 const DRIFT_RATIO = 2;
 
-// Known filename mismatches for the same topic across SDK trees.
-const NAME_EQUIVALENTS = new Map([
-  ["guides/reliability/locking", "guides/reliability/locks"],
-  ["guides/workflows/sagas", "guides/workflows/saga"],
-  ["guides/operations/autoscaler", "guides/operations/autoscaling"],
-]);
-
+// No name-equivalence table: #780 normalized the last of the per-SDK spellings
+// (python's `postgres`/`job-management` became `backends`/`inspection`), and
+// `section-shape.mjs` now fails the build on a new one, so the same topic is the
+// same path in all three trees.
 function topicOf(rel) {
   const [head, ...rest] = rel.split("/");
   if (!isSdk(head) || rest.length === 0) {
     return null;
   }
-  const topic = rest.join("/").replace(/\.mdx$/, "");
-  return { sdk: head, topic: NAME_EQUIVALENTS.get(topic) ?? topic };
+  return { sdk: head, topic: rest.join("/").replace(/\.mdx$/, "") };
 }
 
 export function checkDrift(files) {
