@@ -128,8 +128,8 @@ Enqueuing a task does **not** run it. It writes a **job**: one row holding the
 task name, the arguments, a priority, a status, and eventually a result. You get
 back an id immediately.
 
-A task is the recipe; a job is one attempt to cook it. One task produces
-thousands of jobs.
+A task is the recipe; a job is one request to cook it — one that may take
+several attempts. One task produces thousands of jobs.
 
 Jobs move through a small state machine. The engine claims each one atomically,
 so the same job never runs twice at the same time:
@@ -250,7 +250,7 @@ running more than one logical system out of one database.
 Two properties explain most of flexiq's behaviour, and both follow from jobs
 being rows.
 
-**Delivery is at-least-once.** A job is claimed with a lease. If the worker
+**Execution is at-least-once.** A job is claimed with a lease. If the worker
 holding it dies, the lease expires and the job becomes claimable again — which
 is what makes crashes survivable, and also means a job body can run more than
 once. Anything with an external effect (charging a card, sending mail) should be
