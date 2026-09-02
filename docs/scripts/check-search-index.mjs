@@ -10,6 +10,8 @@ import {
   SEARCH_INDEX_OPTIONS,
   SEARCH_QUERY_OPTIONS,
 } from "../app/lib/search-schema.ts";
+import { computeCoverage } from "./api/coverage.mjs";
+import { collectInventories } from "./api/inventory.mjs";
 
 // Search-index gate (run: pnpm check:search).
 //
@@ -26,7 +28,8 @@ import {
  *  large by nature and a regression here is a real cost to every first search. */
 const MAX_INDEX_GZIP_KB = 320;
 
-const corpus = toCorpus(readDocFiles());
+const docFiles = readDocFiles();
+const corpus = toCorpus(docFiles);
 const json = buildSearchIndex(corpus);
 const index = MiniSearch.loadJSON(json, SEARCH_INDEX_OPTIONS);
 const bySlug = new Map(corpus.map((doc) => [doc.slug, doc]));
@@ -52,6 +55,37 @@ for (const symbol of SYMBOLS) {
     errors.push(`"${symbol}" returns no pages — body text is not indexed`);
   } else {
     report.push(`  ${symbol} → ${hits.length} page(s), top: ${hits[0]}`);
+  }
+}
+
+// (a2) Every SDK's generated symbol index is in the corpus. Asserted per SDK
+// rather than "some page matched": the three trees are generated and indexed
+// independently, so one of them dropping out is exactly the failure a single
+// combined assertion would hide.
+//
+// The probe is a symbol that SDK declares and no hand-written page names, taken
+// from the coverage gate's own backlog — so it stays true as pages are written,
+// and it is only findable because `pnpm sync:api` writes MDX that this index
+// then reads. Expanding the blocks at MDX-compile time would build fine and
+// silently lose them.
+const inventories = new Map(
+  [...collectInventories()].map(([sdk, reading]) => [sdk, reading.current]),
+);
+for (const [sdk, coverage] of computeCoverage(docFiles, inventories)) {
+  const probe = coverage.undocumented.find(
+    (symbol) => symbol.name.length >= 6 && /^[a-z]\w+$/i.test(symbol.name),
+  );
+  if (!probe) {
+    report.push(`  ${sdk}: fully documented — no generated-only probe left`);
+    continue;
+  }
+  const hits = search(probe.name);
+  if (!hits.some((slug) => slug.startsWith(`/${sdk}/api-reference/symbols/`))) {
+    errors.push(
+      `${sdk}: "${probe.name}" does not reach that SDK's generated symbol index (got ${hits.join(", ") || "nothing"}) — run \`pnpm sync:api\``,
+    );
+  } else {
+    report.push(`  ${sdk}: ${probe.name} → generated symbol index`);
   }
 }
 

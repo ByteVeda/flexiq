@@ -1,0 +1,2683 @@
+{
+  "sdk": "java",
+  "source": [
+    "sdks/java/src/main/java/org/byteveda/flexiq/*.java"
+  ],
+  "symbols": [
+    {
+      "owner": "FlexiQ",
+      "name": "ackMessage",
+      "kind": "method",
+      "signature": "boolean ackMessage(String topic, String name, String messageId)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "messageId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "ackTopic",
+      "kind": "method",
+      "signature": "boolean ackTopic(String topic, String name, String cursor)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "cursor",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "analyzeArguments",
+      "kind": "method",
+      "signature": "InterceptionAnalysis analyzeArguments(String taskName, Object payload)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Object",
+          "default": null
+        }
+      ],
+      "returns": "InterceptionAnalysis"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "awaitJob",
+      "kind": "method",
+      "signature": "Optional<Job> awaitJob(String jobId, Duration timeout)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "timeout",
+          "type": "Duration",
+          "default": null
+        }
+      ],
+      "returns": "Optional<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "builder",
+      "kind": "static",
+      "signature": "Builder builder()",
+      "params": [],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "cancel",
+      "kind": "method",
+      "signature": "boolean cancel(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "cancelWorkflow",
+      "kind": "method",
+      "signature": "void cancelWorkflow(String runId)",
+      "params": [
+        {
+          "name": "runId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "close",
+      "kind": "method",
+      "signature": "void close()",
+      "params": [],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "codel",
+      "kind": "method",
+      "signature": "FlexiQ codel(String queue, long targetMs, long intervalMs)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "targetMs",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "intervalMs",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "countPendingByQueue",
+      "kind": "method",
+      "signature": "long countPendingByQueue(String queue)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "long"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dashboard",
+      "kind": "method",
+      "signature": "DashboardServer dashboard(int port, boolean authEnabled)",
+      "params": [
+        {
+          "name": "port",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "authEnabled",
+          "type": "boolean",
+          "default": null
+        }
+      ],
+      "returns": "DashboardServer"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dashboard",
+      "kind": "method",
+      "signature": "DashboardServer dashboard(int port, String token)",
+      "params": [
+        {
+          "name": "port",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "token",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "DashboardServer"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dashboard",
+      "kind": "method",
+      "signature": "DashboardServer dashboard(int port)",
+      "params": [
+        {
+          "name": "port",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "DashboardServer"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "declareTopic",
+      "kind": "method",
+      "signature": "FlexiQ declareTopic(String name, @Nullable Duration retention)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retention",
+          "type": "@Nullable Duration",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "declareTopic",
+      "kind": "method",
+      "signature": "FlexiQ declareTopic(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "deleteDead",
+      "kind": "method",
+      "signature": "boolean deleteDead(String deadId)",
+      "params": [
+        {
+          "name": "deadId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "deletePeriodic",
+      "kind": "method",
+      "signature": "boolean deletePeriodic(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "deleteSetting",
+      "kind": "method",
+      "signature": "boolean deleteSetting(String key)",
+      "params": [
+        {
+          "name": "key",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "disableMiddleware",
+      "kind": "method",
+      "signature": "void disableMiddleware(String taskName, String middlewareName)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "middlewareName",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dispatchOrder",
+      "kind": "method",
+      "signature": "FlexiQ dispatchOrder(String queue, DispatchOrder order)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "order",
+          "type": "DispatchOrder",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dispatchOrder",
+      "kind": "method",
+      "signature": "FlexiQ dispatchOrder(String queue, String order)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "order",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "deprecated": true
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dryRunRetention",
+      "kind": "method",
+      "signature": "RetentionPreview dryRunRetention()",
+      "params": [],
+      "returns": "RetentionPreview"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "dryRunRetention",
+      "kind": "method",
+      "signature": "RetentionPreview dryRunRetention(@Nullable Retention retention)",
+      "params": [
+        {
+          "name": "retention",
+          "type": "@Nullable Retention",
+          "default": null
+        }
+      ],
+      "returns": "RetentionPreview"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "effectiveRetention",
+      "kind": "method",
+      "signature": "Optional<EffectiveRetention> effectiveRetention()",
+      "params": [],
+      "returns": "Optional<EffectiveRetention>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enableMiddleware",
+      "kind": "method",
+      "signature": "void enableMiddleware(String taskName, String middlewareName)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "middlewareName",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "<T> String enqueue(Task<T> task, T payload, EnqueueOptions options)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "T",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "EnqueueOptions",
+          "default": null
+        }
+      ],
+      "returns": "String",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "<T> String enqueue(Task<T> task, T payload)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "T",
+          "default": null
+        }
+      ],
+      "returns": "String",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "String enqueue(String taskName, @Nullable Object payload)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "@Nullable Object",
+          "default": null
+        }
+      ],
+      "returns": "String"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueueAll",
+      "kind": "method",
+      "signature": "<T> List<String> enqueueAll(Task<T> task, List<T> payloads)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "List<T>",
+          "default": null
+        }
+      ],
+      "returns": "List<String>",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueueMany",
+      "kind": "method",
+      "signature": "<T> List<String> enqueueMany(Task<T> task, List<T> payloads, EnqueueOptions options)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "List<T>",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "EnqueueOptions",
+          "default": null
+        }
+      ],
+      "returns": "List<String>",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueueMany",
+      "kind": "method",
+      "signature": "<T> List<String> enqueueMany(Task<T> task, List<T> payloads)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "List<T>",
+          "default": null
+        }
+      ],
+      "returns": "List<String>",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "gate",
+      "kind": "method",
+      "signature": "FlexiQ gate(String taskName, EnqueueGate gate)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "gate",
+          "type": "EnqueueGate",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getJob",
+      "kind": "method",
+      "signature": "Optional<Job> getJob(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getLockInfo",
+      "kind": "method",
+      "signature": "Optional<LockInfo> getLockInfo(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<LockInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getReplayHistory",
+      "kind": "method",
+      "signature": "List<ReplayEntry> getReplayHistory(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<ReplayEntry>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getResult",
+      "kind": "method",
+      "signature": "<R> Optional<R> getResult(String jobId, Class<R> type)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "type",
+          "type": "Class<R>",
+          "default": null
+        }
+      ],
+      "returns": "Optional<R>",
+      "typeParams": "<R>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getResult",
+      "kind": "method",
+      "signature": "Optional<byte[]> getResult(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<byte[]>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getTaskLogs",
+      "kind": "method",
+      "signature": "List<TaskLog> getTaskLogs(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<TaskLog>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getTaskLogsAfter",
+      "kind": "method",
+      "signature": "List<TaskLog> getTaskLogsAfter(String jobId, String afterId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "afterId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<TaskLog>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getWorkflowChildren",
+      "kind": "method",
+      "signature": "List<WorkflowRunInfo> getWorkflowChildren(String runId)",
+      "params": [
+        {
+          "name": "runId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<WorkflowRunInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getWorkflowDag",
+      "kind": "method",
+      "signature": "Optional<String> getWorkflowDag(String runId)",
+      "params": [
+        {
+          "name": "runId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "getWorkflowRun",
+      "kind": "method",
+      "signature": "Optional<WorkflowRunInfo> getWorkflowRun(String runId)",
+      "params": [
+        {
+          "name": "runId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<WorkflowRunInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "intercept",
+      "kind": "method",
+      "signature": "FlexiQ intercept(Interceptor interceptor)",
+      "params": [
+        {
+          "name": "interceptor",
+          "type": "Interceptor",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "isCancelRequested",
+      "kind": "method",
+      "signature": "boolean isCancelRequested(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "jobDag",
+      "kind": "method",
+      "signature": "JobDag jobDag(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "JobDag"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "jobErrors",
+      "kind": "method",
+      "signature": "List<JobError> jobErrors(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<JobError>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "leaseTopic",
+      "kind": "method",
+      "signature": "List<TopicMessage> leaseTopic(String topic, String name, int limit, Duration visibility)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "visibility",
+          "type": "Duration",
+          "default": null
+        }
+      ],
+      "returns": "List<TopicMessage>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "leaseTopic",
+      "kind": "method",
+      "signature": "List<TopicMessage> leaseTopic(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<TopicMessage>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listArchivedAfter",
+      "kind": "method",
+      "signature": "Page<Job> listArchivedAfter(long limit, String after)",
+      "params": [
+        {
+          "name": "limit",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "after",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Page<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listCircuitBreakers",
+      "kind": "method",
+      "signature": "List<CircuitBreakerState> listCircuitBreakers()",
+      "params": [],
+      "returns": "List<CircuitBreakerState>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listDead",
+      "kind": "method",
+      "signature": "List<DeadJob> listDead(long limit, long offset)",
+      "params": [
+        {
+          "name": "limit",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "offset",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "List<DeadJob>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listDeadByTask",
+      "kind": "method",
+      "signature": "List<DeadJob> listDeadByTask(String taskName, long limit, long offset)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "offset",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "List<DeadJob>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listDeclaredTopics",
+      "kind": "method",
+      "signature": "List<Topic> listDeclaredTopics()",
+      "params": [],
+      "returns": "List<Topic>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listDisabledMiddleware",
+      "kind": "method",
+      "signature": "List<String> listDisabledMiddleware(String taskName)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listJobs",
+      "kind": "method",
+      "signature": "List<Job> listJobs(JobFilter filter)",
+      "params": [
+        {
+          "name": "filter",
+          "type": "JobFilter",
+          "default": null
+        }
+      ],
+      "returns": "List<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listJobsAfter",
+      "kind": "method",
+      "signature": "Page<Job> listJobsAfter(JobFilter filter, String after)",
+      "params": [
+        {
+          "name": "filter",
+          "type": "JobFilter",
+          "default": null
+        },
+        {
+          "name": "after",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Page<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listPausedQueues",
+      "kind": "method",
+      "signature": "List<String> listPausedQueues()",
+      "params": [],
+      "returns": "List<String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listPeriodic",
+      "kind": "method",
+      "signature": "List<PeriodicInfo> listPeriodic()",
+      "params": [],
+      "returns": "List<PeriodicInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listSettings",
+      "kind": "method",
+      "signature": "Map<String, String> listSettings()",
+      "params": [],
+      "returns": "Map<String, String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listSubscriptions",
+      "kind": "method",
+      "signature": "List<Subscription> listSubscriptions()",
+      "params": [],
+      "returns": "List<Subscription>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listSubscriptions",
+      "kind": "method",
+      "signature": "List<Subscription> listSubscriptions(String topic)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<Subscription>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listTopics",
+      "kind": "method",
+      "signature": "List<String> listTopics()",
+      "params": [],
+      "returns": "List<String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listWorkers",
+      "kind": "method",
+      "signature": "List<WorkerInfo> listWorkers()",
+      "params": [],
+      "returns": "List<WorkerInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "listWorkflowRuns",
+      "kind": "method",
+      "signature": "List<WorkflowRunInfo> listWorkflowRuns(@Nullable String definitionName, @Nullable String state, long limit, long offset)",
+      "params": [
+        {
+          "name": "definitionName",
+          "type": "@Nullable String",
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "@Nullable String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "offset",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "List<WorkflowRunInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "lock",
+      "kind": "method",
+      "signature": "Lock lock(String name, long ttlMs)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "ttlMs",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "Lock"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "lock",
+      "kind": "method",
+      "signature": "Lock lock(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Lock"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "lockInfo",
+      "kind": "method",
+      "signature": "Optional<LockInfo> lockInfo(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<LockInfo>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "logConsumer",
+      "kind": "method",
+      "signature": "<T> FlexiQ logConsumer(String topic, String name, Class<T> payloadType, Consumer<T> handler, LogConsumerOptions options)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payloadType",
+          "type": "Class<T>",
+          "default": null
+        },
+        {
+          "name": "handler",
+          "type": "Consumer<T>",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "LogConsumerOptions",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "logConsumer",
+      "kind": "method",
+      "signature": "<T> FlexiQ logConsumer(String topic, String name, Class<T> payloadType, Consumer<T> handler)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payloadType",
+          "type": "Class<T>",
+          "default": null
+        },
+        {
+          "name": "handler",
+          "type": "Consumer<T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "maxPending",
+      "kind": "method",
+      "signature": "FlexiQ maxPending(String queue, int cap)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "cap",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "metrics",
+      "kind": "method",
+      "signature": "List<TaskMetric> metrics(@Nullable String taskName, long sinceMs)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "@Nullable String",
+          "default": null
+        },
+        {
+          "name": "sinceMs",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "List<TaskMetric>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "migrate",
+      "kind": "method",
+      "signature": "MigrationReport migrate()",
+      "params": [],
+      "returns": "MigrationReport"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "minContract",
+      "kind": "method",
+      "signature": "int minContract()",
+      "params": [],
+      "returns": "int"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "nackMessage",
+      "kind": "method",
+      "signature": "boolean nackMessage(String topic, String name, String messageId)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "messageId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "onEvent",
+      "kind": "method",
+      "signature": "FlexiQ onEvent(EventName name, Consumer<FlexiQEvent> listener)",
+      "params": [
+        {
+          "name": "name",
+          "type": "EventName",
+          "default": null
+        },
+        {
+          "name": "listener",
+          "type": "Consumer<FlexiQEvent>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "pausePeriodic",
+      "kind": "method",
+      "signature": "boolean pausePeriodic(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "pauseSubscription",
+      "kind": "method",
+      "signature": "boolean pauseSubscription(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "predicate",
+      "kind": "method",
+      "signature": "FlexiQ predicate(String taskName, Predicate predicate)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "predicate",
+          "type": "Predicate",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "predicateStats",
+      "kind": "method",
+      "signature": "PredicateStats predicateStats()",
+      "params": [],
+      "returns": "PredicateStats"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "publish",
+      "kind": "method",
+      "signature": "List<Job> publish(String topic, Object payload, PublishOptions options)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Object",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "PublishOptions",
+          "default": null
+        }
+      ],
+      "returns": "List<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "publish",
+      "kind": "method",
+      "signature": "List<Job> publish(String topic, Object payload)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Object",
+          "default": null
+        }
+      ],
+      "returns": "List<Job>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "purgeCompleted",
+      "kind": "method",
+      "signature": "long purgeCompleted(long olderThanMs)",
+      "params": [
+        {
+          "name": "olderThanMs",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "long"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "purgeDead",
+      "kind": "method",
+      "signature": "long purgeDead(long olderThanMs)",
+      "params": [
+        {
+          "name": "olderThanMs",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "long"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "purgeDeadByTask",
+      "kind": "method",
+      "signature": "long purgeDeadByTask(String taskName)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "long"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "queryTaskLogs",
+      "kind": "method",
+      "signature": "List<TaskLog> queryTaskLogs(@Nullable String taskName, @Nullable String level, long sinceMs, long limit)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "@Nullable String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "@Nullable String",
+          "default": null
+        },
+        {
+          "name": "sinceMs",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "long",
+          "default": null
+        }
+      ],
+      "returns": "List<TaskLog>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "queue",
+      "kind": "method",
+      "signature": "Queue queue(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Queue"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "readTopic",
+      "kind": "method",
+      "signature": "List<TopicMessage> readTopic(String topic, String name, int limit)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "List<TopicMessage>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "readTopic",
+      "kind": "method",
+      "signature": "List<TopicMessage> readTopic(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<TopicMessage>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "registerPeriodic",
+      "kind": "method",
+      "signature": "long registerPeriodic(PeriodicTask task)",
+      "params": [
+        {
+          "name": "task",
+          "type": "PeriodicTask",
+          "default": null
+        }
+      ],
+      "returns": "long"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "reloadResources",
+      "kind": "method",
+      "signature": "Map<String, Boolean> reloadResources()",
+      "params": [],
+      "returns": "Map<String, Boolean>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "reloadResources",
+      "kind": "method",
+      "signature": "Map<String, Boolean> reloadResources(Collection<String> names)",
+      "params": [
+        {
+          "name": "names",
+          "type": "Collection<String>",
+          "default": null
+        }
+      ],
+      "returns": "Map<String, Boolean>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "replayJob",
+      "kind": "method",
+      "signature": "String replayJob(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "String"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "requestCancel",
+      "kind": "method",
+      "signature": "boolean requestCancel(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "requeueJob",
+      "kind": "method",
+      "signature": "boolean requeueJob(String jobId)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resource",
+      "kind": "method",
+      "signature": "<T> FlexiQ resource(String name, Function<ResourceContext, T> factory)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "factory",
+          "type": "Function<ResourceContext, T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resource",
+      "kind": "method",
+      "signature": "<T> FlexiQ resource(String name, PoolConfig pool, Function<ResourceContext, T> factory, Consumer<T> dispose)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "pool",
+          "type": "PoolConfig",
+          "default": null
+        },
+        {
+          "name": "factory",
+          "type": "Function<ResourceContext, T>",
+          "default": null
+        },
+        {
+          "name": "dispose",
+          "type": "Consumer<T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resource",
+      "kind": "method",
+      "signature": "<T> FlexiQ resource(String name, ResourceScope scope, Function<ResourceContext, T> factory, Consumer<T> dispose)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "scope",
+          "type": "ResourceScope",
+          "default": null
+        },
+        {
+          "name": "factory",
+          "type": "Function<ResourceContext, T>",
+          "default": null
+        },
+        {
+          "name": "dispose",
+          "type": "Consumer<T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resource",
+      "kind": "method",
+      "signature": "<T> FlexiQ resource(String name, ResourceScope scope, Function<ResourceContext, T> factory)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "scope",
+          "type": "ResourceScope",
+          "default": null
+        },
+        {
+          "name": "factory",
+          "type": "Function<ResourceContext, T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resource",
+      "kind": "method",
+      "signature": "FlexiQ resource(String name, ResourceDefinition definition)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "definition",
+          "type": "ResourceDefinition",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resourceMetrics",
+      "kind": "method",
+      "signature": "Map<String, ResourceStat> resourceMetrics()",
+      "params": [],
+      "returns": "Map<String, ResourceStat>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resumePeriodic",
+      "kind": "method",
+      "signature": "boolean resumePeriodic(String name)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resumeSubscription",
+      "kind": "method",
+      "signature": "boolean resumeSubscription(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "retry",
+      "kind": "method",
+      "signature": "String retry(String deadId)",
+      "params": [
+        {
+          "name": "deadId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "String"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "retryDead",
+      "kind": "method",
+      "signature": "String retryDead(String deadId)",
+      "params": [
+        {
+          "name": "deadId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "String"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "setMinContract",
+      "kind": "method",
+      "signature": "void setMinContract(int level)",
+      "params": [
+        {
+          "name": "level",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "setProgress",
+      "kind": "method",
+      "signature": "void setProgress(String jobId, int progress)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "progress",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "setSetting",
+      "kind": "method",
+      "signature": "void setSetting(String key, String value)",
+      "params": [
+        {
+          "name": "key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "value",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "shutdown",
+      "kind": "method",
+      "signature": "void shutdown()",
+      "params": [],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "stats",
+      "kind": "method",
+      "signature": "QueueStats stats()",
+      "params": [],
+      "returns": "QueueStats"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "statsAllQueues",
+      "kind": "method",
+      "signature": "Map<String, QueueStats> statsAllQueues()",
+      "params": [],
+      "returns": "Map<String, QueueStats>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "statsByQueue",
+      "kind": "method",
+      "signature": "QueueStats statsByQueue(String queue)",
+      "params": [
+        {
+          "name": "queue",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "QueueStats"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "submitWorkflow",
+      "kind": "method",
+      "signature": "WorkflowRun submitWorkflow(Workflow workflow, Map<String, Object> payloads)",
+      "params": [
+        {
+          "name": "workflow",
+          "type": "Workflow",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "Map<String, Object>",
+          "default": null
+        }
+      ],
+      "returns": "WorkflowRun"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "submitWorkflow",
+      "kind": "method",
+      "signature": "WorkflowRun submitWorkflow(Workflow workflow)",
+      "params": [
+        {
+          "name": "workflow",
+          "type": "Workflow",
+          "default": null
+        }
+      ],
+      "returns": "WorkflowRun"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "subscribe",
+      "kind": "method",
+      "signature": "<T> FlexiQ subscribe(String topic, Task<T> task, SubscriptionOptions options)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "SubscriptionOptions",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "subscribe",
+      "kind": "method",
+      "signature": "<T> FlexiQ subscribe(String topic, Task<T> task)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "subscribeLog",
+      "kind": "method",
+      "signature": "void subscribeLog(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "supportsSteps",
+      "kind": "method",
+      "signature": "boolean supportsSteps()",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "topicLogStats",
+      "kind": "method",
+      "signature": "List<TopicLogStat> topicLogStats()",
+      "params": [],
+      "returns": "List<TopicLogStat>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "topicStats",
+      "kind": "method",
+      "signature": "List<TopicStat> topicStats()",
+      "params": [],
+      "returns": "List<TopicStat>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "topicStats",
+      "kind": "method",
+      "signature": "List<TopicStat> topicStats(String topic)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "List<TopicStat>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "tryEnqueue",
+      "kind": "method",
+      "signature": "<T> Optional<String> tryEnqueue(Task<T> task, T payload, EnqueueOptions options)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "T",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "EnqueueOptions",
+          "default": null
+        }
+      ],
+      "returns": "Optional<String>",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "tryEnqueue",
+      "kind": "method",
+      "signature": "<T> Optional<String> tryEnqueue(Task<T> task, T payload)",
+      "params": [
+        {
+          "name": "task",
+          "type": "Task<T>",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "T",
+          "default": null
+        }
+      ],
+      "returns": "Optional<String>",
+      "typeParams": "<T>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "tryEnqueue",
+      "kind": "method",
+      "signature": "Optional<String> tryEnqueue(String taskName, Object payload)",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Object",
+          "default": null
+        }
+      ],
+      "returns": "Optional<String>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "unsubscribe",
+      "kind": "method",
+      "signature": "boolean unsubscribe(String topic, String name)",
+      "params": [
+        {
+          "name": "topic",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "use",
+      "kind": "method",
+      "signature": "FlexiQ use(Middleware middleware)",
+      "params": [
+        {
+          "name": "middleware",
+          "type": "Middleware",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "withLock",
+      "kind": "method",
+      "signature": "boolean withLock(String name, long ttlMs, Runnable body)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "ttlMs",
+          "type": "long",
+          "default": null
+        },
+        {
+          "name": "body",
+          "type": "Runnable",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "worker",
+      "kind": "method",
+      "signature": "Worker.Builder worker()",
+      "params": [],
+      "returns": "Worker.Builder"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "workflowStatus",
+      "kind": "method",
+      "signature": "Optional<WorkflowStatus> workflowStatus(String runId)",
+      "params": [
+        {
+          "name": "runId",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Optional<WorkflowStatus>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "@Nullable String",
+          "default": null
+        }
+      ],
+      "returns": "void",
+      "deprecated": true
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "void writeTaskLog(String jobId, String taskName, String level, String message)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void",
+      "deprecated": true
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message, @Nullable String extra)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "TaskLogLevel",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "@Nullable String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "void writeTaskLog(String jobId, String taskName, TaskLogLevel level, String message)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "TaskLogLevel",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "autoMigrate",
+      "kind": "method",
+      "signature": "Builder autoMigrate(boolean autoMigrate)",
+      "params": [
+        {
+          "name": "autoMigrate",
+          "type": "boolean",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "backend",
+      "kind": "method",
+      "signature": "Builder backend(StorageBackend backend)",
+      "params": [
+        {
+          "name": "backend",
+          "type": "StorageBackend",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "backend",
+      "kind": "method",
+      "signature": "Builder backend(String backend)",
+      "params": [
+        {
+          "name": "backend",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "codec",
+      "kind": "method",
+      "signature": "Builder codec(PayloadCodec... codecs)",
+      "params": [
+        {
+          "name": "codecs",
+          "type": "PayloadCodec...",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "codec",
+      "kind": "method",
+      "signature": "Builder codec(String name, PayloadCodec codec)",
+      "params": [
+        {
+          "name": "name",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "codec",
+          "type": "PayloadCodec",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "middlewareTimeout",
+      "kind": "method",
+      "signature": "Builder middlewareTimeout(Duration timeout)",
+      "params": [
+        {
+          "name": "timeout",
+          "type": "Duration",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "namespace",
+      "kind": "method",
+      "signature": "Builder namespace(String namespace)",
+      "params": [
+        {
+          "name": "namespace",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "open",
+      "kind": "method",
+      "signature": "FlexiQ open()",
+      "params": [],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "open",
+      "kind": "method",
+      "signature": "FlexiQ open(QueueBackend backend)",
+      "params": [
+        {
+          "name": "backend",
+          "type": "QueueBackend",
+          "default": null
+        }
+      ],
+      "returns": "FlexiQ"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "poolSize",
+      "kind": "method",
+      "signature": "Builder poolSize(int poolSize)",
+      "params": [
+        {
+          "name": "poolSize",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "postgres",
+      "kind": "method",
+      "signature": "Builder postgres(String url)",
+      "params": [
+        {
+          "name": "url",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "prefix",
+      "kind": "method",
+      "signature": "Builder prefix(String prefix)",
+      "params": [
+        {
+          "name": "prefix",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "redis",
+      "kind": "method",
+      "signature": "Builder redis(String url)",
+      "params": [
+        {
+          "name": "url",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "schema",
+      "kind": "method",
+      "signature": "Builder schema(String schema)",
+      "params": [
+        {
+          "name": "schema",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "serializer",
+      "kind": "method",
+      "signature": "Builder serializer(Serializer serializer)",
+      "params": [
+        {
+          "name": "serializer",
+          "type": "Serializer",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "sqlite",
+      "kind": "method",
+      "signature": "Builder sqlite()",
+      "params": [],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "sqlite",
+      "kind": "method",
+      "signature": "Builder sqlite(String path)",
+      "params": [
+        {
+          "name": "path",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "FlexiQ.Builder",
+      "name": "url",
+      "kind": "method",
+      "signature": "Builder url(String dsn)",
+      "params": [
+        {
+          "name": "dsn",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "Builder"
+    },
+    {
+      "owner": "JobContext",
+      "name": "current",
+      "kind": "static",
+      "signature": "JobContext current()",
+      "params": [],
+      "returns": "JobContext"
+    },
+    {
+      "owner": "JobContext",
+      "name": "jobId",
+      "kind": "method",
+      "signature": "String jobId()",
+      "params": [],
+      "returns": "String"
+    },
+    {
+      "owner": "JobContext",
+      "name": "log",
+      "kind": "method",
+      "signature": "void log(String message)",
+      "params": [
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext",
+      "name": "log",
+      "kind": "method",
+      "signature": "void log(TaskLogLevel level, String message, @Nullable String extra)",
+      "params": [
+        {
+          "name": "level",
+          "type": "TaskLogLevel",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "@Nullable String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext",
+      "name": "log",
+      "kind": "method",
+      "signature": "void log(TaskLogLevel level, String message)",
+      "params": [
+        {
+          "name": "level",
+          "type": "TaskLogLevel",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext",
+      "name": "publish",
+      "kind": "method",
+      "signature": "void publish(Object value)",
+      "params": [
+        {
+          "name": "value",
+          "type": "Object",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext",
+      "name": "setProgress",
+      "kind": "method",
+      "signature": "void setProgress(int progress)",
+      "params": [
+        {
+          "name": "progress",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext",
+      "name": "step",
+      "kind": "method",
+      "signature": "StepContext step()",
+      "params": [],
+      "returns": "StepContext"
+    },
+    {
+      "owner": "JobContext",
+      "name": "taskName",
+      "kind": "method",
+      "signature": "String taskName()",
+      "params": [],
+      "returns": "String"
+    },
+    {
+      "owner": "JobContext.Sink",
+      "name": "setProgress",
+      "kind": "method",
+      "signature": "void setProgress(String jobId, int progress)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "progress",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JobContext.Sink",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "void writeTaskLog(String jobId, String taskName, String level, String message, @Nullable String extra)",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "@Nullable String",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "Queue",
+      "name": "isPaused",
+      "kind": "method",
+      "signature": "boolean isPaused()",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "Queue",
+      "name": "name",
+      "kind": "method",
+      "signature": "String name()",
+      "params": [],
+      "returns": "String"
+    },
+    {
+      "owner": "Queue",
+      "name": "pause",
+      "kind": "method",
+      "signature": "void pause()",
+      "params": [],
+      "returns": "void"
+    },
+    {
+      "owner": "Queue",
+      "name": "resume",
+      "kind": "method",
+      "signature": "void resume()",
+      "params": [],
+      "returns": "void"
+    }
+  ]
+}

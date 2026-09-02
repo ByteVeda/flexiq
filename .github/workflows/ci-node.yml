@@ -47,6 +47,23 @@ jobs:
         working-directory: sdks/node
         run: pnpm lint
 
+      # `native/index.d.ts` is a build artifact, so the docs job — which has no
+      # Rust toolchain — gates the Node API reference against a committed
+      # snapshot instead. This is the one job where the real file exists, so it
+      # is the only place that snapshot can be proven current.
+      #
+      # Its own Node: the docs scripts import `.ts` modules directly and lean on
+      # type stripping, which is only on by default from Node 23. Nothing above
+      # depends on the version this leaves on PATH, and no install is needed —
+      # the extractor is dependency-free.
+      - name: Set up Node for the docs scripts
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Docs API snapshot matches the addon
+        run: node docs/scripts/api/sync.mjs --check --sdk node
+
       # The .node binary, its loader stubs, and the dashboard SPA are all
       # platform-/version-independent on Linux, so the test legs reuse them.
       - name: Upload prebuilt addon + dashboard

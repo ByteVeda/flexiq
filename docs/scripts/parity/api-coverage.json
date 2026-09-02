@@ -1,0 +1,55 @@
+{
+  "$comment": [
+    "The API reference coverage gate (scripts/parity/checks/api-coverage.mjs).",
+    "",
+    "allowlist: symbols the reference is deliberately not expected to document,",
+    "as qualified names with an optional `*`. Every entry carries its reason and",
+    "must still match a real symbol — a stale exemption fails the build, so this",
+    "cannot become a place gaps go to hide.",
+    "",
+    "documented: the ratchet. It is the exact count the gate expects, so coverage",
+    "can only be corrected upward: writing a page fails the build until the",
+    "number is raised, and deleting one fails it outright. Run",
+    "`pnpm sync:api --backlog` for the worklist."
+  ],
+  "allowlist": {
+    "python": {
+      "*.__init__": "constructors are documented as the class the shell exports (flexiq.Queue, flexiq.TaskConfig), never under the native name",
+      "PyQueue.check_fan_out_completion": "workflow engine internals — flexiq/workflows/ calls these while advancing a run; no user does",
+      "PyQueue.create_deferred_job": "workflow engine internals",
+      "PyQueue.expand_fan_out": "workflow engine internals",
+      "PyQueue.fail_workflow_node": "workflow engine internals",
+      "PyQueue.finalize_run_if_terminal": "workflow engine internals",
+      "PyQueue.get_base_run_node_data": "workflow engine internals",
+      "PyQueue.mark_workflow_node_result": "workflow engine internals",
+      "PyQueue.resolve_workflow_gate": "workflow engine internals",
+      "PyQueue.set_workflow_node_*": "workflow engine internals",
+      "PyQueue.set_workflow_run_*": "workflow engine internals",
+      "PyQueue.skip_workflow_node": "workflow engine internals",
+      "PyResultSender.*": "the worker→scheduler result channel; the shell owns every call",
+      "StepSession.begin_run": "step-session plumbing driven by the `step.run` wrapper, not called directly",
+      "StepSession.commit_run": "step-session plumbing",
+      "StepSession.finish": "step-session plumbing"
+    },
+    "node": {
+      "JsQueue.checkFanOutCompletion": "workflow engine internals — the shell's workflow runtime calls these while advancing a run",
+      "JsQueue.createDeferredJob": "workflow engine internals",
+      "JsQueue.expandFanOut": "workflow engine internals",
+      "JsQueue.finalizeRunIfTerminal": "workflow engine internals",
+      "JsQueue.markWorkflowNodeResult": "workflow engine internals",
+      "JsQueue.resolveWorkflowGate": "workflow engine internals",
+      "JsQueue.setWorkflowNode*": "workflow engine internals",
+      "JsQueue.setWorkflowRun*": "workflow engine internals",
+      "JsQueue.skipWorkflowNode": "workflow engine internals",
+      "JsStepSession.beginRun": "step-session plumbing driven by the `step.run` wrapper, not called directly",
+      "JsStepSession.commitRun": "step-session plumbing",
+      "JsStepSession.finish": "step-session plumbing"
+    },
+    "java": {}
+  },
+  "documented": {
+    "python": 36,
+    "node": 39,
+    "java": 138
+  }
+}

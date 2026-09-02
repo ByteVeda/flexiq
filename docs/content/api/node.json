@@ -1,0 +1,2245 @@
+{
+  "sdk": "node",
+  "source": [
+    "sdks/node/native/index.d.ts"
+  ],
+  "symbols": [
+    {
+      "owner": null,
+      "name": "reservedSettingPrefixes",
+      "kind": "function",
+      "signature": "reservedSettingPrefixes(): Array<string>",
+      "params": [],
+      "returns": "Array<string>"
+    },
+    {
+      "owner": null,
+      "name": "startExecutor",
+      "kind": "function",
+      "signature": "startExecutor(callback: ((arg: JsTaskInvocation) => Promise<JsTaskOutcome>), options: ExecutorOptions): Promise<JsExecutor>",
+      "params": [
+        {
+          "name": "callback",
+          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>)",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "ExecutorOptions",
+          "default": null
+        }
+      ],
+      "returns": "Promise<JsExecutor>"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "disabledMiddleware",
+      "kind": "method",
+      "signature": "disabledMiddleware(jobId: string): Array<string>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Array<string>"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "executorId",
+      "kind": "property",
+      "signature": "executorId(): string",
+      "params": [],
+      "returns": "string"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "isCancelRequested",
+      "kind": "method",
+      "signature": "isCancelRequested(jobId: string): boolean",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "isRunning",
+      "kind": "method",
+      "signature": "isRunning(): boolean",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "openStepSession",
+      "kind": "method",
+      "signature": "openStepSession(jobId: string, attempt: number): Promise<JsStepSession>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "attempt",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<JsStepSession>"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "peer",
+      "kind": "property",
+      "signature": "peer(): string",
+      "params": [],
+      "returns": "string"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "reportProgress",
+      "kind": "method",
+      "signature": "reportProgress(jobId: string, progress: number): void",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "progress",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "schedulerId",
+      "kind": "property",
+      "signature": "schedulerId(): string",
+      "params": [],
+      "returns": "string"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "shutdown",
+      "kind": "method",
+      "signature": "shutdown(): Promise<void>",
+      "params": [],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "stop",
+      "kind": "method",
+      "signature": "stop(): void",
+      "params": [],
+      "returns": "void"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "supportsSideChannel",
+      "kind": "method",
+      "signature": "supportsSideChannel(): boolean",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "supportsSteps",
+      "kind": "method",
+      "signature": "supportsSteps(): boolean",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "wait",
+      "kind": "method",
+      "signature": "wait(): Promise<void>",
+      "params": [],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsExecutor",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "writeTaskLog(jobId: string, taskName: string, level: string, message: string, extra?: string | undefined | null): void",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "ackMessage",
+      "kind": "method",
+      "signature": "ackMessage(topic: string, subscriptionName: string, messageId: string): Promise<boolean>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "messageId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<boolean>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "ackTopicCursor",
+      "kind": "method",
+      "signature": "ackTopicCursor(topic: string, subscriptionName: string, cursor: string): Promise<boolean>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<boolean>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "acquireLock",
+      "kind": "method",
+      "signature": "acquireLock(name: string, ownerId: string, ttlMs: number): boolean",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "ownerId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "ttlMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "cancelJob",
+      "kind": "method",
+      "signature": "cancelJob(id: string): boolean",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "cascadeSkipPending",
+      "kind": "method",
+      "signature": "cascadeSkipPending(runId: string): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "checkFanOutCompletion",
+      "kind": "method",
+      "signature": "checkFanOutCompletion(runId: string, parentNodeName: string): JsFanOutCompletion | null",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "parentNodeName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsFanOutCompletion | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "compensationNodeForJob",
+      "kind": "method",
+      "signature": "compensationNodeForJob(jobId: string): JsWorkflowNodeRef | null",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsWorkflowNodeRef | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "countPendingByQueue",
+      "kind": "method",
+      "signature": "countPendingByQueue(queue: string): number",
+      "params": [
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "number"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "createDeferredJob",
+      "kind": "method",
+      "signature": "createDeferredJob(runId: string, nodeName: string, payload: Buffer, taskName: string, queue: string, maxRetries: number, timeoutMs: number, priority: number): string",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Buffer",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "maxRetries",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "timeoutMs",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deadLetters",
+      "kind": "method",
+      "signature": "deadLetters(limit?: number | undefined | null, offset?: number | undefined | null): Promise<Array<JsDeadJob>>",
+      "params": [
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "offset",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsDeadJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deadLettersAfter",
+      "kind": "method",
+      "signature": "deadLettersAfter(limit?: number | undefined | null, after?: string | undefined | null): Promise<JsDeadJobPage>",
+      "params": [
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "after",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsDeadJobPage>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deadLettersByTask",
+      "kind": "method",
+      "signature": "deadLettersByTask(taskName: string, limit?: number | undefined | null, offset?: number | undefined | null): Promise<Array<JsDeadJob>>",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "offset",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsDeadJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "declareTopic",
+      "kind": "method",
+      "signature": "declareTopic(name: string, mode: string, retentionMs?: number | undefined | null): Promise<void>",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "retentionMs",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deleteDead",
+      "kind": "method",
+      "signature": "deleteDead(deadId: string): boolean",
+      "params": [
+        {
+          "name": "deadId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deletePeriodic",
+      "kind": "method",
+      "signature": "deletePeriodic(name: string): boolean",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "deleteSetting",
+      "kind": "method",
+      "signature": "deleteSetting(key: string): boolean",
+      "params": [
+        {
+          "name": "key",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "dryRunRetention",
+      "kind": "method",
+      "signature": "dryRunRetention(retention?: RetentionInput | undefined | null): Promise<string>",
+      "params": [
+        {
+          "name": "retention",
+          "type": "RetentionInput | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "effectiveRetention",
+      "kind": "method",
+      "signature": "effectiveRetention(): string | null",
+      "params": [],
+      "returns": "string | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "enqueue(taskName: string, payload: Buffer, options?: EnqueueOptions | undefined | null): string",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Buffer",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "EnqueueOptions | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "enqueueCompensation",
+      "kind": "method",
+      "signature": "enqueueCompensation(runId: string, nodeName: string, payload: Buffer, taskName: string, queue: string, maxRetries: number, timeoutMs: number, priority: number): string",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Buffer",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "maxRetries",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "timeoutMs",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "enqueueMany",
+      "kind": "method",
+      "signature": "enqueueMany(taskName: string, jobs: Array<EnqueueJob>): Array<string>",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "jobs",
+          "type": "Array<EnqueueJob>",
+          "default": null
+        }
+      ],
+      "returns": "Array<string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "expandFanOut",
+      "kind": "method",
+      "signature": "expandFanOut(runId: string, parentNodeName: string, childNames: Array<string>, childPayloads: Array<Buffer>, taskName: string, queue: string, maxRetries: number, timeoutMs: number, priority: number): Array<string>",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "parentNodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "childNames",
+          "type": "Array<string>",
+          "default": null
+        },
+        {
+          "name": "childPayloads",
+          "type": "Array<Buffer>",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "maxRetries",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "timeoutMs",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Array<string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "extendLock",
+      "kind": "method",
+      "signature": "extendLock(name: string, ownerId: string, ttlMs: number): boolean",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "ownerId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "ttlMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "finalizeRunIfTerminal",
+      "kind": "method",
+      "signature": "finalizeRunIfTerminal(runId: string): string | null",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "string | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getJob",
+      "kind": "method",
+      "signature": "getJob(id: string): JsJob | null",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsJob | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getJobErrors",
+      "kind": "method",
+      "signature": "getJobErrors(jobId: string): Promise<Array<JsJobError>>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsJobError>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getLockInfo",
+      "kind": "method",
+      "signature": "getLockInfo(name: string): JsLockInfo | null",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsLockInfo | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getMetrics",
+      "kind": "method",
+      "signature": "getMetrics(task: string | undefined | null, sinceMs: number): Promise<Array<JsMetric>>",
+      "params": [
+        {
+          "name": "task",
+          "type": "string | undefined | null",
+          "default": null
+        },
+        {
+          "name": "sinceMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsMetric>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getReplayHistory",
+      "kind": "method",
+      "signature": "getReplayHistory(jobId: string): Promise<Array<JsReplayEntry>>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsReplayEntry>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getSetting",
+      "kind": "method",
+      "signature": "getSetting(key: string): string | null",
+      "params": [
+        {
+          "name": "key",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "string | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getTaskLogs",
+      "kind": "method",
+      "signature": "getTaskLogs(jobId: string): Array<JsTaskLog>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Array<JsTaskLog>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getTaskLogsAfter",
+      "kind": "method",
+      "signature": "getTaskLogsAfter(jobId: string, afterId?: string | undefined | null): Array<JsTaskLog>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "afterId",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Array<JsTaskLog>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getWorkflowChildren",
+      "kind": "method",
+      "signature": "getWorkflowChildren(runId: string): Array<JsWorkflowRun>",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Array<JsWorkflowRun>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getWorkflowDag",
+      "kind": "method",
+      "signature": "getWorkflowDag(runId: string): string | null",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "string | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getWorkflowNodes",
+      "kind": "method",
+      "signature": "getWorkflowNodes(runId: string): Array<JsWorkflowNode>",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Array<JsWorkflowNode>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getWorkflowRun",
+      "kind": "method",
+      "signature": "getWorkflowRun(runId: string): JsWorkflowRun | null",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsWorkflowRun | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "getWorkflowRunPlan",
+      "kind": "method",
+      "signature": "getWorkflowRunPlan(runId: string): JsWorkflowRunPlan | null",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsWorkflowRunPlan | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "isCancelRequested",
+      "kind": "method",
+      "signature": "isCancelRequested(id: string): boolean",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "jobDag",
+      "kind": "method",
+      "signature": "jobDag(jobId: string): Promise<JsJobDag>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<JsJobDag>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "leaseTopicMessages",
+      "kind": "method",
+      "signature": "leaseTopicMessages(topic: string, subscriptionName: string, limit: number, visibilityMs: number): Promise<Array<JsTopicMessage>>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "visibilityMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsTopicMessage>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listArchived",
+      "kind": "method",
+      "signature": "listArchived(limit?: number | undefined | null, offset?: number | undefined | null): Promise<Array<JsJob>>",
+      "params": [
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "offset",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listArchivedAfter",
+      "kind": "method",
+      "signature": "listArchivedAfter(limit?: number | undefined | null, after?: string | undefined | null): Promise<JsJobPage>",
+      "params": [
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "after",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsJobPage>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listCircuitBreakers",
+      "kind": "method",
+      "signature": "listCircuitBreakers(): Promise<Array<JsCircuitBreaker>>",
+      "params": [],
+      "returns": "Promise<Array<JsCircuitBreaker>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listDeclaredTopics",
+      "kind": "method",
+      "signature": "listDeclaredTopics(): Promise<Array<JsTopic>>",
+      "params": [],
+      "returns": "Promise<Array<JsTopic>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listJobs",
+      "kind": "method",
+      "signature": "listJobs(filter?: JobFilter | undefined | null): Promise<Array<JsJob>>",
+      "params": [
+        {
+          "name": "filter",
+          "type": "JobFilter | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listJobsAfter",
+      "kind": "method",
+      "signature": "listJobsAfter(filter?: JobFilter | undefined | null, after?: string | undefined | null): Promise<JsJobPage>",
+      "params": [
+        {
+          "name": "filter",
+          "type": "JobFilter | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "after",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsJobPage>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listJobsFiltered",
+      "kind": "method",
+      "signature": "listJobsFiltered(filter?: DetailedJobFilter | undefined | null): Promise<Array<JsJob>>",
+      "params": [
+        {
+          "name": "filter",
+          "type": "DetailedJobFilter | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listJobsFilteredAfter",
+      "kind": "method",
+      "signature": "listJobsFilteredAfter(filter?: DetailedJobFilter | undefined | null, after?: string | undefined | null): Promise<JsJobPage>",
+      "params": [
+        {
+          "name": "filter",
+          "type": "DetailedJobFilter | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "after",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsJobPage>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listPausedQueues",
+      "kind": "method",
+      "signature": "listPausedQueues(): Array<string>",
+      "params": [],
+      "returns": "Array<string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listPeriodic",
+      "kind": "method",
+      "signature": "listPeriodic(): Array<JsPeriodicTask>",
+      "params": [],
+      "returns": "Array<JsPeriodicTask>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listSettings",
+      "kind": "method",
+      "signature": "listSettings(): Record<string, string>",
+      "params": [],
+      "returns": "Record<string, string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listSubscriptions",
+      "kind": "method",
+      "signature": "listSubscriptions(topic?: string | undefined | null): Promise<Array<JsSubscription>>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsSubscription>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listWorkers",
+      "kind": "method",
+      "signature": "listWorkers(): Promise<Array<JsWorkerRow>>",
+      "params": [],
+      "returns": "Promise<Array<JsWorkerRow>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "listWorkflowRuns",
+      "kind": "method",
+      "signature": "listWorkflowRuns(definitionName?: string | undefined | null, state?: string | undefined | null, limit?: number | undefined | null, offset?: number | undefined | null): Array<JsWorkflowRun>",
+      "params": [
+        {
+          "name": "definitionName",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "state",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "limit",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "offset",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Array<JsWorkflowRun>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "markWorkflowNodeResult",
+      "kind": "method",
+      "signature": "markWorkflowNodeResult(jobId: string, succeeded: boolean, error?: string | undefined | null, skipCascade?: boolean | undefined | null): JsWorkflowAdvance | null",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "succeeded",
+          "type": "boolean",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "skipCascade",
+          "type": "boolean | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "JsWorkflowAdvance | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "migrate",
+      "kind": "method",
+      "signature": "migrate(): Promise<MigrationSummary>",
+      "params": [],
+      "returns": "Promise<MigrationSummary>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "minContract",
+      "kind": "method",
+      "signature": "minContract(): number",
+      "params": [],
+      "returns": "number"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "nackMessage",
+      "kind": "method",
+      "signature": "nackMessage(topic: string, subscriptionName: string, messageId: string): Promise<boolean>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "messageId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<boolean>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "open",
+      "kind": "static",
+      "signature": "open(options: OpenOptions): JsQueue",
+      "params": [
+        {
+          "name": "options",
+          "type": "OpenOptions",
+          "default": null
+        }
+      ],
+      "returns": "JsQueue"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "pauseQueue",
+      "kind": "method",
+      "signature": "pauseQueue(queue: string): void",
+      "params": [
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "publish",
+      "kind": "method",
+      "signature": "publish(topic: string, payload: Buffer, options?: PublishOptions | undefined | null): Promise<Array<JsJob>>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "Buffer",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "PublishOptions | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<JsJob>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "purgeCompleted",
+      "kind": "method",
+      "signature": "purgeCompleted(olderThanMs: number): Promise<number>",
+      "params": [
+        {
+          "name": "olderThanMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<number>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "purgeDead",
+      "kind": "method",
+      "signature": "purgeDead(olderThanMs: number): Promise<number>",
+      "params": [
+        {
+          "name": "olderThanMs",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<number>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "purgeDeadByTask",
+      "kind": "method",
+      "signature": "purgeDeadByTask(taskName: string): Promise<number>",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<number>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "queryTaskLogs",
+      "kind": "method",
+      "signature": "queryTaskLogs(taskName: string | undefined | null, level: string | undefined | null, sinceMs: number, limit: number): Promise<Array<JsTaskLog>>",
+      "params": [
+        {
+          "name": "taskName",
+          "type": "string | undefined | null",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "string | undefined | null",
+          "default": null
+        },
+        {
+          "name": "sinceMs",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsTaskLog>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "readTopicMessages",
+      "kind": "method",
+      "signature": "readTopicMessages(topic: string, subscriptionName: string, limit: number): Promise<Array<JsTopicMessage>>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<Array<JsTopicMessage>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "reapEphemeralSubscriptions",
+      "kind": "method",
+      "signature": "reapEphemeralSubscriptions(workerId?: string | undefined | null): Promise<number>",
+      "params": [
+        {
+          "name": "workerId",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<number>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "registerPeriodic",
+      "kind": "method",
+      "signature": "registerPeriodic(name: string, taskName: string, cronExpr: string, args?: Buffer | undefined | null, queue?: string | undefined | null, timezone?: string | undefined | null, enabled?: boolean | undefined | null): number",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "cronExpr",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "args",
+          "type": "Buffer | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "queue",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "timezone",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "number"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "registerSubscription",
+      "kind": "method",
+      "signature": "registerSubscription(topic: string, subscriptionName: string, taskName: string, queue: string, durable: boolean, ownerWorkerId?: string | undefined | null, priority?: number | undefined | null, maxRetries?: number | undefined | null, timeoutMs?: number | undefined | null, mode?: string | undefined | null): Promise<void>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "durable",
+          "type": "boolean",
+          "default": null
+        },
+        {
+          "name": "ownerWorkerId",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "priority",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "maxRetries",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "timeoutMs",
+          "type": "number | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "mode",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "releaseLock",
+      "kind": "method",
+      "signature": "releaseLock(name: string, ownerId: string): boolean",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "ownerId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "replayJob",
+      "kind": "method",
+      "signature": "replayJob(jobId: string): Promise<string>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<string>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "requestCancel",
+      "kind": "method",
+      "signature": "requestCancel(id: string): boolean",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "requeueJob",
+      "kind": "method",
+      "signature": "requeueJob(jobId: string): boolean",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "resolveWorkflowGate",
+      "kind": "method",
+      "signature": "resolveWorkflowGate(runId: string, nodeName: string, approved: boolean, error?: string | undefined | null): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "approved",
+          "type": "boolean",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "resumeQueue",
+      "kind": "method",
+      "signature": "resumeQueue(queue: string): void",
+      "params": [
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "retryDead",
+      "kind": "method",
+      "signature": "retryDead(deadId: string): string",
+      "params": [
+        {
+          "name": "deadId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "runWorker",
+      "kind": "method",
+      "signature": "runWorker(callback: ((arg: JsTaskInvocation) => Promise<JsTaskOutcome>), outcomeCallback: ((arg: JsOutcome) => unknown), options?: WorkerOptions | undefined | null): JsWorker",
+      "params": [
+        {
+          "name": "callback",
+          "type": "((arg: JsTaskInvocation) => Promise<JsTaskOutcome>)",
+          "default": null
+        },
+        {
+          "name": "outcomeCallback",
+          "type": "((arg: JsOutcome) => unknown)",
+          "default": null
+        },
+        {
+          "name": "options",
+          "type": "WorkerOptions | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "JsWorker"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setMinContract",
+      "kind": "method",
+      "signature": "setMinContract(level: number): void",
+      "params": [
+        {
+          "name": "level",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setPeriodicEnabled",
+      "kind": "method",
+      "signature": "setPeriodicEnabled(name: string, enabled: boolean): boolean",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setSetting",
+      "kind": "method",
+      "signature": "setSetting(key: string, value: string): void",
+      "params": [
+        {
+          "name": "key",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setSettingIf",
+      "kind": "method",
+      "signature": "setSettingIf(key: string, expected: string | undefined | null, value: string): boolean",
+      "params": [
+        {
+          "name": "key",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "expected",
+          "type": "string | undefined | null",
+          "default": null
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setSubscriptionActive",
+      "kind": "method",
+      "signature": "setSubscriptionActive(topic: string, subscriptionName: string, active: boolean): Promise<boolean>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "default": null
+        }
+      ],
+      "returns": "Promise<boolean>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setWorkflowNodeCompensated",
+      "kind": "method",
+      "signature": "setWorkflowNodeCompensated(runId: string, nodeName: string, completedAt: number): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "completedAt",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setWorkflowNodeCompensationFailed",
+      "kind": "method",
+      "signature": "setWorkflowNodeCompensationFailed(runId: string, nodeName: string, error: string, completedAt: number): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "completedAt",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setWorkflowNodeRunning",
+      "kind": "method",
+      "signature": "setWorkflowNodeRunning(runId: string, nodeName: string): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setWorkflowNodeWaitingApproval",
+      "kind": "method",
+      "signature": "setWorkflowNodeWaitingApproval(runId: string, nodeName: string): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "setWorkflowRunState",
+      "kind": "method",
+      "signature": "setWorkflowRunState(runId: string, state: string, error?: string | undefined | null, completedAt?: number | undefined | null): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "completedAt",
+          "type": "number | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "skipWorkflowNode",
+      "kind": "method",
+      "signature": "skipWorkflowNode(runId: string, nodeName: string): void",
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodeName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "stats",
+      "kind": "method",
+      "signature": "stats(): Promise<JsStats>",
+      "params": [],
+      "returns": "Promise<JsStats>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "statsAllQueues",
+      "kind": "method",
+      "signature": "statsAllQueues(): Promise<Record<string, JsStats>>",
+      "params": [],
+      "returns": "Promise<Record<string, JsStats>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "statsByQueue",
+      "kind": "method",
+      "signature": "statsByQueue(queue: string): Promise<JsStats>",
+      "params": [
+        {
+          "name": "queue",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<JsStats>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "submitWorkflow",
+      "kind": "method",
+      "signature": "submitWorkflow(name: string, version: number, dagBytes: Buffer, stepMetadataJson: string, nodePayloads: Record<string, Buffer>, queueDefault?: string | undefined | null, paramsJson?: string | undefined | null, deferredNodeNames?: Array<string> | undefined | null, parentRunId?: string | undefined | null, parentNodeName?: string | undefined | null): string",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "version",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "dagBytes",
+          "type": "Buffer",
+          "default": null
+        },
+        {
+          "name": "stepMetadataJson",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "nodePayloads",
+          "type": "Record<string, Buffer>",
+          "default": null
+        },
+        {
+          "name": "queueDefault",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "paramsJson",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "deferredNodeNames",
+          "type": "Array<string> | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "parentRunId",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "parentNodeName",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "string"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "supportsSteps",
+      "kind": "method",
+      "signature": "supportsSteps(): boolean",
+      "params": [],
+      "returns": "boolean"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "topicBacklogStats",
+      "kind": "method",
+      "signature": "topicBacklogStats(): Promise<Array<JsTopicStat>>",
+      "params": [],
+      "returns": "Promise<Array<JsTopicStat>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "topicLogStats",
+      "kind": "method",
+      "signature": "topicLogStats(): Promise<Array<JsTopicLogStat>>",
+      "params": [],
+      "returns": "Promise<Array<JsTopicLogStat>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "unsubscribe",
+      "kind": "method",
+      "signature": "unsubscribe(topic: string, subscriptionName: string): Promise<boolean>",
+      "params": [
+        {
+          "name": "topic",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "subscriptionName",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "Promise<boolean>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "updateProgress",
+      "kind": "method",
+      "signature": "updateProgress(id: string, progress: number): void",
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "progress",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "workerHeartbeat",
+      "kind": "method",
+      "signature": "workerHeartbeat(workerId: string, resourceHealth?: string | undefined | null): Promise<Array<string>>",
+      "params": [
+        {
+          "name": "workerId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "resourceHealth",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<Array<string>>"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "workflowNodeForJob",
+      "kind": "method",
+      "signature": "workflowNodeForJob(jobId: string): JsWorkflowNodeRef | null",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        }
+      ],
+      "returns": "JsWorkflowNodeRef | null"
+    },
+    {
+      "owner": "JsQueue",
+      "name": "writeTaskLog",
+      "kind": "method",
+      "signature": "writeTaskLog(jobId: string, taskName: string, level: string, message: string, extra?: string | undefined | null): void",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "taskName",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "void"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "beginRun",
+      "kind": "method",
+      "signature": "beginRun(name: string, key?: string | undefined | null): Promise<JsStepDecision>",
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "key",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsStepDecision>"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "commitRun",
+      "kind": "method",
+      "signature": "commitRun(encoded: Buffer): Promise<void>",
+      "params": [
+        {
+          "name": "encoded",
+          "type": "Buffer",
+          "default": null
+        }
+      ],
+      "returns": "Promise<void>"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "finish",
+      "kind": "method",
+      "signature": "finish(): void",
+      "params": [],
+      "returns": "void"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "runKey",
+      "kind": "method",
+      "signature": "runKey(): Promise<string>",
+      "params": [],
+      "returns": "Promise<string>"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "sleepFor",
+      "kind": "method",
+      "signature": "sleepFor(durationMs: number, name?: string | undefined | null, key?: string | undefined | null): Promise<JsStepSleepOutcome>",
+      "params": [
+        {
+          "name": "durationMs",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "key",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsStepSleepOutcome>"
+    },
+    {
+      "owner": "JsStepSession",
+      "name": "sleepUntil",
+      "kind": "method",
+      "signature": "sleepUntil(wakeAt: number, name?: string | undefined | null, key?: string | undefined | null): Promise<JsStepSleepOutcome>",
+      "params": [
+        {
+          "name": "wakeAt",
+          "type": "number",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "string | undefined | null",
+          "default": "optional"
+        },
+        {
+          "name": "key",
+          "type": "string | undefined | null",
+          "default": "optional"
+        }
+      ],
+      "returns": "Promise<JsStepSleepOutcome>"
+    },
+    {
+      "owner": "JsWorker",
+      "name": "id",
+      "kind": "property",
+      "signature": "id(): string",
+      "params": [],
+      "returns": "string"
+    },
+    {
+      "owner": "JsWorker",
+      "name": "openStepSession",
+      "kind": "method",
+      "signature": "openStepSession(jobId: string, attempt: number): Promise<JsStepSession>",
+      "params": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "default": null
+        },
+        {
+          "name": "attempt",
+          "type": "number",
+          "default": null
+        }
+      ],
+      "returns": "Promise<JsStepSession>"
+    },
+    {
+      "owner": "JsWorker",
+      "name": "stop",
+      "kind": "method",
+      "signature": "stop(): void",
+      "params": [],
+      "returns": "void"
+    }
+  ]
+}

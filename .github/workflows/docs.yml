@@ -1,15 +1,24 @@
 name: Deploy Docs
 
+# The SDK declaration files are listed alongside docs/** because the API
+# reference is generated from them: changing one without running
+# `pnpm sync:api` is exactly what the coverage gate exists to catch.
+# `sdks/node/native/index.d.ts` is missing on purpose — it is a build artifact,
+# so ci-node.yml gates the Node snapshot where the real file exists.
 on:
   pull_request:
     paths:
       - "docs/**"
       - ".github/workflows/docs.yml"
+      - "sdks/python/flexiq/_flexiq.pyi"
+      - "sdks/java/src/main/java/org/byteveda/flexiq/*.java"
   push:
     branches: [master]
     paths:
       - "docs/**"
       - ".github/workflows/docs.yml"
+      - "sdks/python/flexiq/_flexiq.pyi"
+      - "sdks/java/src/main/java/org/byteveda/flexiq/*.java"
   workflow_dispatch:
 
 permissions:

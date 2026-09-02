@@ -3,20 +3,105 @@ title: Job Management
 description: "Job results, cancellation, listing, and error history."
 ---
 
+Signatures on this page are generated from `FlexiQ.java` — see the
+[symbol index](/java/api-reference/symbols/queue) for the rest of the surface.
+
 ## Results & cancellation
 
-| Method | Description |
-|---|---|
-| `getJob(id)` → `Optional<Job>` | A job snapshot (status, progress, timestamps). |
-| `awaitJob(id, Duration)` → `Optional<Job>` | Block until terminal; throws on timeout. |
-| `getResult(id)` → `Optional<byte[]>` / `getResult(id, Class<R>)` → `Optional<R>` | The job's result, raw or [deserialized](/java/api-reference/result). |
-| `cancel(id)` | Cancel a pending job. |
-| `requestCancel(id)` / `isCancelRequested(id)` | Cooperative cancellation of a running job. |
-| `setProgress(id, int)` | Record 0–100 progress for inspection / the dashboard. |
+### `flexiq.getJob()`
+
+{/* api:FlexiQ.getJob */}
+```java
+Optional<Job> getJob(String jobId)
+```
+{/* /api */}
+
+A job snapshot — status, progress, timestamps. Empty when no job has that id.
+
+### `flexiq.awaitJob()`
+
+{/* api:FlexiQ.awaitJob */}
+```java
+Optional<Job> awaitJob(String jobId, Duration timeout)
+```
+{/* /api */}
+
+Block until the job reaches a terminal state; throws once `timeout` elapses.
+
+### `flexiq.getResult()`
+
+{/* api:FlexiQ.getResult */}
+```java
+<R> Optional<R> getResult(String jobId, Class<R> type)
+Optional<byte[]> getResult(String jobId)
+```
+{/* /api */}
+
+The job's stored result, raw or [deserialized](/java/api-reference/result) into
+`type`. Empty while the job is still running, and after its result TTL expires.
+
+### `flexiq.cancel()`
+
+{/* api:FlexiQ.cancel */}
+```java
+boolean cancel(String jobId)
+```
+{/* /api */}
+
+Cancel a pending job. Returns `false` once it has started — use
+`requestCancel` for a running one.
+
+### `flexiq.requestCancel()`
+
+{/* api:FlexiQ.requestCancel */}
+```java
+boolean requestCancel(String jobId)
+```
+{/* /api */}
+
+Ask a running job to stop. Cooperative: the handler observes it through
+`isCancelRequested` and returns.
+
+### `flexiq.isCancelRequested()`
+
+{/* api:FlexiQ.isCancelRequested */}
+```java
+boolean isCancelRequested(String jobId)
+```
+{/* /api */}
+
+Whether a cancel has been requested for this job. Poll it from long-running
+handlers; a job that never checks runs to completion.
+
+### `flexiq.setProgress()`
+
+{/* api:FlexiQ.setProgress */}
+```java
+void setProgress(String jobId, int progress)
+```
+{/* /api */}
+
+Record 0–100 progress for inspection and the dashboard.
 
 ## Listing & errors
 
-| Method | Description |
-|---|---|
-| `listJobs(JobFilter)` | List jobs — filter by status/queue/task with limit/offset. |
-| `jobErrors(id)` → `List<JobError>` | Per-attempt error history. |
+### `flexiq.listJobs()`
+
+{/* api:FlexiQ.listJobs */}
+```java
+List<Job> listJobs(JobFilter filter)
+```
+{/* /api */}
+
+List jobs by status, queue or task, newest first. `listJobsAfter` is the
+keyset-paginated twin — pass a page's cursor back as `after`.
+
+### `flexiq.jobErrors()`
+
+{/* api:FlexiQ.jobErrors */}
+```java
+List<JobError> jobErrors(String jobId)
+```
+{/* /api */}
+
+Per-attempt error history, oldest attempt first.
