@@ -1,0 +1,96 @@
+---
+title: CLI usage
+description: "Operate the queue from the terminal with the flexiq command — workers, dashboard, migrations, scaling."
+---
+
+The `flexiq` command is installed with the package and is the supported way to
+run workers in production. Unlike a DSN-driven admin tool, it **imports your
+application**: `--app module:attribute` names the `Queue` instance, so every
+command sees exactly the tasks, resources and backend your code configured.
+
+```bash
+flexiq worker --app myapp.tasks:queue --queues emails,media
+flexiq info --app myapp.tasks:queue --watch
+flexiq pause --app myapp.tasks:queue emails
+flexiq resume --app myapp.tasks:queue emails
+```
+
+The module must be importable from the working directory — installed as a
+package, or with its parent on `PYTHONPATH`.
+
+## Running a worker
+
+`worker` is what you point a container entrypoint or a systemd unit at. It
+blocks until interrupted and shuts down gracefully: `SIGTERM` (or `Ctrl+C`)
+stops new claims and lets in-flight jobs finish.
+
+```bash
+flexiq worker --app myapp.tasks:queue --queues emails,media \
+  --pool prefork --drain-timeout 60
+```
+
+| Flag | Default | Why you'd set it |
+|---|---|---|
+| `--queues` | all registered | Give a workload its own process — a slow queue then can't starve a fast one. |
+| `--pool` | `thread` | `prefork` runs child processes with independent GILs, for CPU-bound tasks. |
+| `--drain-timeout` | `30` | Seconds to let in-flight jobs finish on shutdown. Raise it above your longest task, or a deploy turns into duplicate execution. |
+
+Set the supervisor's own kill deadline *above* `--drain-timeout`; see
+[Deployment](/python/operate/deployment).
+
+## Serving the dashboard
+
+```bash
+flexiq dashboard --app myapp.tasks:queue --host 127.0.0.1 --port 8080 --auth
+```
+
+Binds to loopback by default. `--auth` turns on session authentication (login,
+CSRF, roles); without it the dashboard serves openly, so only ever do that
+behind a network boundary — see
+[Dashboard](/python/modules/dashboard).
+
+## Applying schema changes
+
+A queue applies pending DDL when it opens. Where the application's database
+credentials can't do DDL, turn that off (`Queue(auto_migrate=False)`) and apply
+the schema explicitly on deploy — the command is idempotent:
+
+```bash
+flexiq migrate --app myapp.tasks:queue
+```
+
+It reports what it applied, core and workflow tables both, and says so when
+there was nothing to do.
+
+## Scaling
+
+```bash
+# Queue-depth metrics endpoint for KEDA
+flexiq scaler --app myapp.tasks:queue --port 9091 --target-queue-depth 5
+
+# Or spawn and drain worker processes directly, without Kubernetes
+flexiq autoscale --app myapp.tasks:queue --min-workers 2 --max-workers 20
+```
+
+See [KEDA](/python/modules/autoscaling/keda) and
+[Autoscaling](/python/modules/autoscaling).
+
+## Inspecting and reloading resources
+
+```bash
+flexiq resources --app myapp.tasks:queue   # scope, health, init time, dependencies
+flexiq reload --pid 12345                  # SIGHUP a worker to rebuild its resources
+```
+
+`reload` re-initialises a running worker's resources without restarting the
+process — useful after rotating a credential. Add `--resource <name>` to reload
+one. Background in the [resource system](/python/modules/injection).
+
+<Callout type="info" title="Attached executors">
+  `flexiq executor --app myapp.tasks:queue --attach host:port` runs task bodies
+  for a detached scheduler and needs no database credentials of its own — see
+  [Attached Executors](/python/modules/executor).
+</Callout>
+
+Every flag of every command is in the
+[CLI reference](/python/api-reference/cli).
