@@ -1,10 +1,18 @@
 import { Check, Copy, Eye, EyeOff, KeyRound, Shield } from "lucide-react";
-import { useState } from "react";
-import { Button, Callout } from "@/components/ui";
+import { type ReactNode, useState } from "react";
+import { Button } from "./button";
+import { Callout } from "./callout";
 
 interface Props {
   secret: string;
   hint?: string;
+  /**
+   * What happens to the secret once this dialog closes. Stated by the caller
+   * because it differs: a webhook signing secret is kept so payloads can be
+   * signed, while a gRPC token is kept only as a hash and is genuinely
+   * unrecoverable.
+   */
+  note?: ReactNode;
 }
 
 /**
@@ -12,7 +20,7 @@ interface Props {
  * copy it, and reminds them that the secret won't be shown again. Used by
  * the create response and the rotate-secret response.
  */
-export function SecretReveal({ secret, hint }: Props) {
+export function SecretReveal({ secret, hint, note }: Props) {
   const [shown, setShown] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -30,8 +38,7 @@ export function SecretReveal({ secret, hint }: Props) {
   return (
     <div className="flex flex-col gap-3">
       <Callout tone="warning" icon={<Shield aria-hidden />}>
-        For security, flexiq stores only a hash of this secret. If you lose it you'll need to rotate
-        to a new one.
+        {note ?? "This is the only time the secret is shown. If you lose it, rotate to a new one."}
       </Callout>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2 text-xs font-medium text-[var(--fg)]">

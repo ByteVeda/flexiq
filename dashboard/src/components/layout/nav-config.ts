@@ -5,6 +5,7 @@ import {
   CircuitBoard,
   Cog,
   GitBranch,
+  KeyRound,
   LayoutDashboard,
   ListTree,
   type LucideIcon,
@@ -23,7 +24,8 @@ export interface NavItem {
   icon: LucideIcon;
   /**
    * Route only some servers serve. Hidden until the server confirms it: the
-   * standalone scheduler exposes executors, an SDK dashboard does not.
+   * standalone scheduler exposes executors and gRPC tokens, an SDK dashboard
+   * does not.
    */
   optional?: boolean;
 }
@@ -71,6 +73,7 @@ export const NAV: NavGroup[] = [
     items: [
       { to: "/tasks", label: "Tasks", icon: ListTree },
       { to: "/webhooks", label: "Webhooks", icon: WebhookIcon },
+      { to: "/grpc-tokens", label: "gRPC tokens", icon: KeyRound, optional: true },
       { to: "/settings", label: "Settings", icon: Cog },
     ],
   },

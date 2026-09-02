@@ -10,6 +10,7 @@ import {
   SheetTrigger,
 } from "@/components/ui";
 import { useExecutorsSupported } from "@/features/executors";
+import { useGrpcTokensSupported } from "@/features/grpc-tokens";
 import { useBranding, useExternalLinks } from "@/features/settings";
 import { cn } from "@/lib/cn";
 import { visibleNav } from "./nav-config";
@@ -19,7 +20,10 @@ export function MobileMenu() {
   const { title } = useBranding();
   const externalLinks = useExternalLinks();
   const [open, setOpen] = useState(false);
-  const nav = visibleNav({ "/executors": useExecutorsSupported() });
+  const nav = visibleNav({
+    "/executors": useExecutorsSupported(),
+    "/grpc-tokens": useGrpcTokensSupported(),
+  });
 
   const close = () => setOpen(false);
 

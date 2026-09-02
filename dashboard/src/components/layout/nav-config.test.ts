@@ -13,6 +13,16 @@ describe("visibleNav", () => {
     expect(labels(visibleNav({ "/executors": true }))).toContain("Executors");
   });
 
+  it("hides gRPC tokens until the server confirms it serves them", () => {
+    // The SPA is served by the SDK dashboards too, and they answer 404 for
+    // /api/grpc-tokens — a nav entry that leads to an error page is worse than
+    // one that appears a moment late.
+    expect(labels(visibleNav({}))).not.toContain("gRPC tokens");
+    expect(labels(visibleNav({ "/grpc-tokens": undefined }))).not.toContain("gRPC tokens");
+    expect(labels(visibleNav({ "/grpc-tokens": false }))).not.toContain("gRPC tokens");
+    expect(labels(visibleNav({ "/grpc-tokens": true }))).toContain("gRPC tokens");
+  });
+
   it("leaves every unconditional route alone", () => {
     const always = NAV.flatMap((group) => group.items)
       .filter((item) => !item.optional)
