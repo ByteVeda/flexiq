@@ -32,6 +32,20 @@ use crate::config::{value, Env};
 /// The variable that turns the role on, named once.
 pub const LISTEN_VAR: &str = "FLEXIQ_GRPC_LISTEN";
 
+/// Variables an earlier build honoured that this one does not read at all.
+///
+/// A leftover value is not harmless: it is a credential the operator believes
+/// is in force. Same reasoning as [`UNHONOURED_TLS_VARS`] — a variable that
+/// looks like a security control and does nothing is worse than no variable —
+/// and the Helm chart refuses the matching value at template time, but a
+/// Compose, systemd or bare-environment deployment has no such gate.
+const RETIRED_VARS: [(&str, &str); 1] = [(
+    "FLEXIQ_GRPC_TOKEN",
+    "the gRPC door no longer takes a shared secret; callers present a scoped API \
+     token stored in the database. Unset it and mint one with `flexiq-server token \
+     create --name <name> --scope produce`, or from the dashboard.",
+)];
+
 /// TLS variables the gRPC listener does not terminate. Accepting them would let
 /// an operator believe the connection is encrypted when it is not.
 const UNHONOURED_TLS_VARS: [&str; 2] = ["FLEXIQ_GRPC_TLS_CERT", "FLEXIQ_GRPC_TLS_KEY"];
@@ -63,6 +77,12 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
              cargo feature and has no gRPC server to start. Rebuild with \
              `--features grpc`, or unset {LISTEN_VAR}."
         );
+    }
+
+    for (name, guidance) in RETIRED_VARS {
+        if value(env, name).is_some() {
+            bail!("{name} is set, but this build does not read it — {guidance}");
+        }
     }
 
     for name in UNHONOURED_TLS_VARS {
@@ -197,6 +217,26 @@ mod tests {
             assert!(
                 error.to_string().contains("FLEXIQ_NAMESPACE"),
                 "unexpected message: {error}"
+            );
+        }
+    }
+
+    /// A deployment upgrading from #716 still sets the old variable. Starting
+    /// quietly would leave the operator believing it credentials the door.
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_retired_variable_fails_loudly() {
+        for (name, _) in RETIRED_VARS {
+            let error = from_env(
+                &env(&[(LISTEN_VAR, "127.0.0.1:50051"), (name, "0123456789abcdef")]),
+                Some("prod"),
+            )
+            .expect_err("must refuse a variable this build does not read");
+            let message = error.to_string();
+            assert!(message.contains(name), "unexpected message: {message}");
+            assert!(
+                message.contains("flexiq-server token create"),
+                "the message must say what to do instead: {message}"
             );
         }
     }
