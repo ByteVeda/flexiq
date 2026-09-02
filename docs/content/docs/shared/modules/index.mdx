@@ -87,7 +87,9 @@ first and come back when you hit the problem a module solves.
 ## What earns a section here
 
 This list is meant to stay short. A subsystem gets a section of its own — and a
-card above — only when all three of these hold:
+card above — only when the first two of these hold. The third holds for every
+module listed here, so a proposal that fails it owes an argument, not an
+exemption:
 
 - **Its own surface.** API you go and reach for: a builder, a web UI, a separate
   process, a set of CLI verbs. One more option on the call that enqueues a job
@@ -95,8 +97,8 @@ card above — only when all three of these hold:
 - **Its own operational story.** Adopting it changes what you deploy, watch and
   debug — another process, another table, another panel, another way for the
   system to fail.
-- **Usually its own opt-in.** A queue that never mentions it behaves exactly as
-  if the module did not exist.
+- **Its own opt-in.** A queue that never mentions it behaves exactly as if the
+  module did not exist.
 
 Most of flexiq fails that test, on purpose. Retries are one option on a task, so
 they sit with the rest of day-to-day queue behaviour in
