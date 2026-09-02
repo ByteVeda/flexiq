@@ -17,7 +17,7 @@
 //! self-hosted default ships a `noopAuthorizer` that allows everything, and that
 //! is the shape of failure this refuses to have.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use flexiq_core::{now_millis, StorageBackend};
@@ -46,6 +46,14 @@ pub struct TokenStore {
     warned: Mutex<HashMap<String, i64>>,
     /// When each token's `last_used_at` was last written.
     touched: Mutex<HashMap<String, i64>>,
+    /// Tokens already reported as belonging to another namespace.
+    ///
+    /// A client holding a valid credential for a different namespace will
+    /// usually retry, and every attempt reaches the same refusal. The first
+    /// warning carries everything an operator needs — the token, both
+    /// namespaces — and the thousandth carries nothing more, so it is logged
+    /// once per token per process.
+    mismatched: Mutex<HashSet<String>>,
 }
 
 impl std::fmt::Debug for TokenStore {
@@ -64,6 +72,7 @@ impl TokenStore {
             namespace: namespace.into(),
             warned: Mutex::new(HashMap::new()),
             touched: Mutex::new(HashMap::new()),
+            mismatched: Mutex::new(HashSet::new()),
         }
     }
 
@@ -127,6 +136,30 @@ impl TokenStore {
             token.id,
         );
     }
+
+    /// Report a credential minted for another namespace, once.
+    ///
+    /// Rate-limited rather than per call: a misconfigured client retries, and an
+    /// unbounded warning is a log-volume amplifier driven by whoever holds the
+    /// wrong token. The refusal itself is unchanged and still happens every
+    /// time.
+    fn warn_once_about_namespace(&self, token: &ApiToken) {
+        let mut seen = match self.mismatched.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if !seen.insert(token.id.clone()) {
+            return;
+        }
+        log::warn!(
+            "gRPC token '{}' is bound to namespace '{}' and was presented to a \
+             listener serving '{}'; refusing it. Further attempts with this token \
+             are refused without another message.",
+            token.id,
+            token.namespace,
+            self.namespace,
+        );
+    }
 }
 
 #[async_trait::async_trait]
@@ -162,13 +195,7 @@ impl Authenticator for TokenStore {
         // `UNAUTHENTICATED` rather than `PERMISSION_DENIED`, because the latter
         // would confirm that the id exists.
         if *token.namespace != *self.namespace {
-            log::warn!(
-                "gRPC token '{}' is bound to namespace '{}' and was presented to a \
-                 listener serving '{}'; refusing it",
-                token.id,
-                token.namespace,
-                self.namespace,
-            );
+            self.warn_once_about_namespace(&token);
             return Err(refused());
         }
         let now = now_millis();
@@ -421,6 +448,31 @@ mod tests {
                 "at {days} days remaining"
             );
         }
+    }
+
+    /// A client retrying with a valid credential for another namespace must not
+    /// be able to drive unbounded log volume.
+    #[tokio::test]
+    async fn a_namespace_mismatch_is_reported_once_and_refused_every_time() {
+        let storage = backend();
+        let (_, plaintext) = mint(&storage, "staging", ScopeSet::ALL);
+        let authenticator = TokenStore::new(storage, "prod");
+
+        for _ in 0..5 {
+            assert_eq!(
+                authenticator
+                    .authenticate(&with_bearer(&plaintext))
+                    .await
+                    .expect_err("refused every time")
+                    .code(),
+                Code::Unauthenticated
+            );
+        }
+        assert_eq!(
+            authenticator.mismatched.lock().expect("lock").len(),
+            1,
+            "one token, one warning"
+        );
     }
 
     #[test]
