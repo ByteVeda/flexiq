@@ -225,8 +225,12 @@ Purge completed jobs older than `older_than` seconds. Returns count deleted.
 Retention is the periodic sweep that deletes history — task logs, archived jobs,
 job errors, task metrics and dead letters — past a per-table window. It runs in
 the **worker** process under one elected cleaner per namespace, so a producer
-configures nothing and reads the policy back rather than owning it. Windows are
-milliseconds, and a `None` window keeps that table forever.
+configures nothing and reads the policy back rather than owning it.
+
+Mind the units, because they differ by direction: a `Retention` you **configure**
+takes **seconds**, while every window and timestamp **reported** back is in
+milliseconds — the `_ms` suffix marks them. An unset window keeps that table
+forever.
 
 ### `queue.effective_retention()`
 
@@ -323,8 +327,9 @@ migrate. Empty version lists mean the database was already current.
 
 Idempotent, and the only path that applies DDL when the queue was opened with
 `auto_migrate=False` — the shape for a deployment whose runtime credentials
-cannot issue DDL. Until it has run there, queries fail, because the tables do
-not exist yet.
+cannot issue DDL. Opening that way against an already-current database is fine
+and queries work immediately; it is **fresh or otherwise unmigrated** storage
+where they fail until this has run, because the tables do not exist yet.
 
 ### `queue.min_contract()` / `queue.set_min_contract()`
 

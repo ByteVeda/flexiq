@@ -84,8 +84,12 @@ to switch off a misbehaving instrumentation middleware in production.
 Retention is the periodic sweep that deletes history — task logs, archived jobs,
 job errors, task metrics and dead letters — past a per-table window. It runs in
 the **worker** process under one elected cleaner per namespace, so a producer
-configures nothing and reads the policy back rather than owning it. Windows are
-milliseconds, and a `null` window keeps a table forever.
+configures nothing and reads the policy back rather than owning it.
+
+Mind the units, because they differ by direction: `Retention.Builder` takes
+**seconds**, while every window and timestamp **reported** back is in
+milliseconds — the `Ms` suffix marks them. An unset window keeps that table
+forever.
 
 | Method | Description |
 |---|---|
@@ -134,8 +138,10 @@ at the same backend reads the same values.
 
 `migrate()` is idempotent, and the only path that applies DDL when the client
 was built with [`autoMigrate(false)`](/java/api-reference/queue#builder) —
-the shape for a deployment whose runtime credentials cannot issue DDL. Until it
-has run there, queries fail, because the tables do not exist yet.
+the shape for a deployment whose runtime credentials cannot issue DDL. Building
+that way against an already-current database is fine and queries work
+immediately; it is **fresh or otherwise unmigrated** storage where they fail
+until this has run, because the tables do not exist yet.
 
 <Callout type="warn">
   All three are native-only: they throw `UnsupportedOperationException` on an

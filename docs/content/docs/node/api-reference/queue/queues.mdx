@@ -53,8 +53,12 @@ background thread pool.
 Retention is the periodic sweep that deletes history — task logs, archived jobs,
 job errors, task metrics and dead letters — past a per-table window. It runs in
 the **worker** process under one elected cleaner per namespace, so a producer
-configures nothing and reads the policy back rather than owning it. Windows are
-milliseconds, and `null` keeps a table forever.
+configures nothing and reads the policy back rather than owning it.
+
+Mind the units, because they differ by direction: the `RetentionOptions` you
+**configure** take **seconds**, while every window and timestamp **reported**
+back is in milliseconds — the `Ms` suffix marks them. An unset window keeps that
+table forever.
 
 | Method | Description |
 |---|---|
@@ -104,8 +108,10 @@ worker and dashboard pointed at the same backend reads the same values.
 
 `migrate()` is idempotent, and the only path that applies DDL when the queue was
 opened with `autoMigrate: false` — the shape for a deployment whose runtime
-credentials cannot issue DDL. Until it has run there, queries fail, because the
-tables do not exist yet.
+credentials cannot issue DDL. Opening that way against an already-current
+database is fine and queries work immediately; it is **fresh or otherwise
+unmigrated** storage where they fail until this has run, because the tables do
+not exist yet.
 
 <Callout type="warn">
   Raise the floor only once every process in the deployment has been upgraded.
