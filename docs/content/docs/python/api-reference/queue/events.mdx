@@ -49,26 +49,38 @@ Register a webhook URL for one or more events. 4xx responses are not retried;
 
 ## Logs
 
+Durable, per-job structured log rows in shared storage — not process stdout, so
+a producer or dashboard reads what a worker on another host wrote. Beyond
+diagnostics they carry streaming partial results: a running task publishes at
+level `"result"`, and those rows are what a stream consumer polls.
+
 ### `queue.task_logs()`
 
 ```python
-queue.task_logs(job_id: str, limit: int = 100) -> list[dict]
+queue.task_logs(job_id: str) -> list[dict]
 ```
 
-Return structured log entries emitted by `current_job.log()` during the given
-job's execution.
+Every row for one job, oldest first, published partials included. Each dict
+carries `id`, `job_id`, `task_name`, `level`, `message`, `extra` and
+`logged_at` (Unix milliseconds). Declared as `get_task_logs`.
 
 ### `queue.query_logs()`
 
 ```python
 queue.query_logs(
     task_name: str | None = None,
-    level: str | None = None,
-    message_like: str | None = None,
-    since: float | None = None,
+    level: LogLevel | None = None,
+    since: int = 3600,
     limit: int = 100,
-    offset: int = 0,
 ) -> list[dict]
 ```
 
-Query task logs across all jobs with optional filters.
+The same rows across jobs, newest first. `since` is an age **in seconds**
+(default one hour), not a timestamp, and `limit` defaults to 100 — both exist so
+an unfiltered call cannot scan the whole table. `level` is a `LogLevel`, not a
+bare string. Declared as `query_task_logs`, whose `since_seconds` this passes
+through.
+
+Writing is the running task's job, not the queue's: `current_job.log()` and
+`current_job.publish()` are the API, and `write_task_log` is what they call —
+which is why it takes the `job_id` and `task_name` the context already knows.
