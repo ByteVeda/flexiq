@@ -58,8 +58,8 @@ a release that still sets one is configuring something that no longer exists —
 fail rather than start a door the operator believes is credentialled by a value
 nothing reads.
 */}}
-{{- if or .Values.grpc.token .Values.grpc.existingSecret -}}
-{{- fail "flexiq-server: grpc.token and grpc.existingSecret are gone — the gRPC door now accepts scoped API tokens stored in the database. Remove the value and mint one with `kubectl exec deploy/<release>-flexiq-server -- flexiq-server token create --name <name> --scope produce`, or from the dashboard." -}}
+{{- if or .Values.grpc.token .Values.grpc.existingSecret .Values.grpc.existingSecretKey -}}
+{{- fail "flexiq-server: grpc.token, grpc.existingSecret and grpc.existingSecretKey are gone — the gRPC door now accepts scoped API tokens stored in the database. Remove the value and mint one with `kubectl exec deploy/<release>-flexiq-server -- flexiq-server token create --name <name> --scope produce`, or from the dashboard." -}}
 {{- end -}}
 
 {{/*
