@@ -58,14 +58,14 @@ message shape asks for. `SubmitWorkflow` is #771 and has no RPC to route yet.
 
 ## Steps
 
-- [ ] 1. `facade/json/` — proto3 JSON for the `flexiq.v1` messages (+ `chrono`).
-- [ ] 2. `facade/error.rs` — the `google.rpc.Status` JSON body and the code →
+- [x] 1. `facade/json/` — proto3 JSON for the `flexiq.v1` messages (+ `chrono`).
+- [x] 2. `facade/error.rs` — the `google.rpc.Status` JSON body and the code →
       HTTP mapping; `NO_SUCH_METHOD`, `malformed_payload`, `payload_too_large`.
-- [ ] 3. `facade/routes.rs` + `listener.rs` + `auth/` — the routes, the
+- [x] 3. `facade/routes.rs` + `listener.rs` + `auth/` — the routes, the
       descriptor-driven drift test, `accept_http1`, and refusals rendered for the
       door the request arrived at.
-- [ ] 4. `tests/grpc_facade.rs` — end to end over a real socket.
-- [ ] 5. Docs: the design-doc amendment, `deployment.mdx`, the crate README.
+- [x] 4. `tests/grpc_facade.rs` — end to end over a real socket.
+- [x] 5. Docs: the design-doc amendment, `deployment.mdx`, the crate README.
 
 ## Review
 
