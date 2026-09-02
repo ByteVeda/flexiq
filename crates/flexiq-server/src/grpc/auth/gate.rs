@@ -30,13 +30,14 @@ const PRODUCER: &str = "/flexiq.v1.";
 /// The executor package (#720). Classified now so the RPCs that land in it
 /// arrive already gated, rather than relying on that PR to remember.
 const EXECUTOR: &str = "/flexiq.executor.v1.";
-/// The JSON facade (#718), which transcodes the producer package and only it.
+/// The JSON facade's namespace (#718), which transcodes the producer package
+/// and only it.
 ///
 /// It is a prefix here for the same reason a package is: a route added to the
 /// facade inherits the producer scope without anyone editing this file, and it
 /// **must** inherit it — a door that transcodes an RPC must not be a way to
 /// call it with a credential the RPC itself would refuse.
-const FACADE: &str = "/v1/";
+const FACADE: &str = "/v1";
 
 /// What a path asks of its caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +50,18 @@ pub enum Requirement {
     Scoped(Scope),
 }
 
+/// Whether a path belongs to the JSON facade's namespace.
+///
+/// `/v1` itself as well as everything under it: the root matches no binding,
+/// but it is still this door's address, and a path inside the facade that a
+/// non-producer credential can reach at all is one the gate table does not
+/// cover. `/v1beta` is **not** in it — a bare `starts_with` would hand another
+/// namespace's paths the producer scope.
+fn in_facade(path: &str) -> bool {
+    path.strip_prefix(FACADE)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// Classify one gRPC path.
 pub fn requirement(path: &str) -> Requirement {
     if HEALTH.contains(&path) {
@@ -58,7 +71,7 @@ pub fn requirement(path: &str) -> Requirement {
         // bit — whether storage answers — to something that already reached
         // the port.
         Requirement::Public
-    } else if path.starts_with(PRODUCER) || path.starts_with(FACADE) {
+    } else if path.starts_with(PRODUCER) || in_facade(path) {
         Requirement::Scoped(Scope::Produce)
     } else if path.starts_with(EXECUTOR) {
         Requirement::Scoped(Scope::Execute)
@@ -127,6 +140,8 @@ mod tests {
     #[test]
     fn the_json_facade_carries_the_producer_scope() {
         for path in [
+            "/v1",
+            "/v1/",
             "/v1/jobs",
             "/v1/jobs/01924f",
             "/v1/queues/emails/stats",
@@ -167,6 +182,10 @@ mod tests {
             requirement("/flexiq.v1beta.ProducerService/Enqueue"),
             Requirement::Authenticated
         );
+        // Same rule on the facade's side: `/v1` is a path segment, not a
+        // prefix, so a future `/v1beta` namespace does not inherit its scope.
+        assert_eq!(requirement("/v1beta/jobs"), Requirement::Authenticated);
+        assert_eq!(requirement("/v1x"), Requirement::Authenticated);
         assert_eq!(
             requirement("/grpc.health.v1beta.Health/Check"),
             Requirement::Authenticated
