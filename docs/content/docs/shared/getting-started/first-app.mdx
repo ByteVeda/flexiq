@@ -1,0 +1,299 @@
+---
+title: Build a real app
+description: "A signup pipeline: a request handler that enqueues, two tasks on two queues, and one worker draining both."
+---
+
+The quickstart added two numbers. This page builds the smallest thing that is
+actually worth a queue: **the work that happens after someone signs up.**
+
+Creating the account is fast. Everything around it is not — the welcome email
+goes through a third-party API that is occasionally down, and the default avatar
+has to be rendered. Doing either inside the request means the user waits on it,
+and a failure in either loses the signup.
+
+So the handler writes the account, enqueues two jobs, and returns. Nothing else
+in this page is more complicated than that.
+
+<Seq
+  heads={["POST /signup", "Worker"]}
+  rows={[
+    { self: "insert user row" },
+    { left: "enqueue send_welcome_email → emails" },
+    { left: "enqueue generate_avatar → media" },
+    { self: "201 Created — user is done waiting" },
+    { right: "drains both queues, at its own pace", rev: true },
+  ]}
+/>
+
+## 1. The tasks
+
+One file holds the queue and both tasks. Note the `emails` and `media` labels:
+they are **named queues** — routing lanes inside the same store — so a slow
+render can never hold up a welcome email.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+`tasks.py`:
+
+```python
+from flexiq import Queue
+
+queue = Queue(db_path="signup.db")
+
+
+@queue.task(queue="emails", max_retries=3, retry_backoff=2.0)
+def send_welcome_email(user_id: int, address: str) -> str:
+    # Your real mailer goes here. Raising is fine — see the next page.
+    print(f"welcome mail → {address}")
+    return f"sent:{user_id}"
+
+
+@queue.task(queue="media")
+def generate_avatar(user_id: int) -> str:
+    print(f"rendering avatar for {user_id}")
+    return f"avatars/{user_id}.png"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+`tasks.ts`:
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+export const queue = new Queue({ dbPath: "signup.db" });
+
+queue.task(
+  "sendWelcomeEmail",
+  async (userId: number, address: string) => {
+    // Your real mailer goes here. Throwing is fine — see the next page.
+    console.log(`welcome mail → ${address}`);
+    return `sent:${userId}`;
+  },
+  { maxRetries: 3, retryBackoff: { baseMs: 2000, maxMs: 300_000 } },
+);
+
+queue.task("generateAvatar", async (userId: number) => {
+  console.log(`rendering avatar for ${userId}`);
+  return `avatars/${userId}.png`;
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+`Tasks.java` — the descriptors. A descriptor is a name plus a payload type, so
+the web tier can enqueue without holding any of the handler code:
+
+```java
+import org.byteveda.flexiq.task.Task;
+
+public final class Tasks {
+    public record Signup(long userId, String address) {}
+
+    public static final Task<Signup> SEND_WELCOME_EMAIL =
+            Task.of("send_welcome_email", Signup.class).queue("emails").maxRetries(3);
+
+    public static final Task<Long> GENERATE_AVATAR =
+            Task.of("generate_avatar", Long.class).queue("media");
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+<Callout type="info" title="Why two queues and not two workers">
+  Queues are labels; workers choose which labels they serve. Splitting the work
+  now costs one word and buys you the option later of giving `media` its own
+  machine without touching a line of this file.
+</Callout>
+
+## 2. Enqueue from the request handler
+
+The handler's job is to be boring: create the account, enqueue, return. Neither
+`delay`/`enqueue` call runs anything — each writes a row and comes straight back
+with a job id.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flask import Flask, request
+
+from tasks import generate_avatar, send_welcome_email
+
+app = Flask(__name__)
+
+
+@app.post("/signup")
+def signup():
+    user = create_user(request.json["email"])  # your own code
+
+    send_welcome_email.delay(user.id, user.email)
+    generate_avatar.delay(user.id)
+
+    return {"id": user.id}, 201
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import express from "express";
+import { queue } from "./tasks.js";
+
+const app = express();
+
+app.post("/signup", async (req, res) => {
+  const user = await createUser(req.body.email); // your own code
+
+  queue.enqueue("sendWelcomeEmail", [user.id, user.email], { queue: "emails" });
+  queue.enqueue("generateAvatar", [user.id], { queue: "media" });
+
+  res.status(201).json({ id: user.id });
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+@PostMapping("/signup")
+ResponseEntity<Map<String, Long>> signup(@RequestBody SignupRequest body) {
+    User user = users.create(body.email());   // your own code
+
+    flexiq.enqueue(Tasks.SEND_WELCOME_EMAIL, new Tasks.Signup(user.id(), user.email()));
+    flexiq.enqueue(Tasks.GENERATE_AVATAR, user.id());
+
+    return ResponseEntity.status(201).body(Map.of("id", user.id()));
+}
+```
+
+  </Tab>
+</CodeTabs>
+
+The handler never imports a mailer or an image library. That is the point: the
+web process only needs to know the *names* of the work, and stays deployable
+without the dependencies that do it.
+
+## 3. Run the worker
+
+Now start the process that actually does the work. It is separate on purpose —
+different lifecycle, different scaling, different failure blast radius.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+flexiq worker --app tasks:queue --queues emails,media
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```bash
+flexiq run ./tasks.js --queues emails,media
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+The handlers live with the worker, not with the descriptors:
+
+```java
+Worker worker = flexiq.worker()
+        .queues("emails", "media")
+        .handle(Tasks.SEND_WELCOME_EMAIL, s -> mailer.send(s.address()))
+        .handle(Tasks.GENERATE_AVATAR, userId -> avatars.render(userId))
+        .start();
+
+Runtime.getRuntime().addShutdownHook(new Thread(worker::close));
+```
+
+  </Tab>
+</CodeTabs>
+
+<Callout type="warn" title="A worker only drains what it is told to">
+  Name every queue you want served. A job sitting in `media` while the worker
+  watches only `emails` will wait forever, and nothing will report an error —
+  the row is perfectly healthy, just unread.
+</Callout>
+
+## 4. Watch it happen
+
+Send a signup, and the job counts move.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+queue.stats()
+# {'pending': 0, 'running': 0, 'completed': 2, 'failed': 0, 'dead': 0, 'cancelled': 0}
+```
+
+Or from the terminal, live:
+
+```bash
+flexiq info --app tasks:queue --watch
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+await queue.stats();
+// { pending: 0, running: 0, completed: 2, failed: 0, dead: 0, cancelled: 0 }
+```
+
+Or from the terminal:
+
+```bash
+flexiq --db signup.db stats
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+QueueStats stats = flexiq.stats();
+// pending, running, completed, failed, dead, cancelled
+```
+
+Or from the terminal:
+
+```bash
+flexiq --url signup.db stats
+```
+
+  </Tab>
+</CodeTabs>
+
+## 5. The part that proves it works
+
+Do this once; it is the whole idea in thirty seconds.
+
+1. **Stop the worker.** Ctrl-C it.
+2. **Send three signups.** Every request still returns `201` immediately — the
+   producer does not care that nobody is listening.
+3. **Check the stats.** `pending` is 6 and nothing has run. The jobs are durable
+   rows; they are not lost, and they are not in anyone's memory.
+4. **Restart the worker.** It claims the backlog and drains it.
+
+That is the guarantee you bought: the request path is decoupled from the work,
+and the work survives the worker not being there. It survives the worker
+*crashing* mid-job too — the claim expires and another worker picks the job up.
+
+## What you have now
+
+A producer and a consumer that share nothing but a database file, two isolated
+lanes of work, and a backlog that outlives both processes.
+
+What you do not have yet is an answer for the mailer being down. Right now
+`send_welcome_email` has `max_retries` set and you have not seen what that
+means, `generate_avatar` has no timeout, and neither task has anywhere to go
+when it truly cannot succeed.
+
+**Next:** <SdkLink to="getting-started/reliability">Handle failure</SdkLink> —
+retries, error handling, timeouts, and the dead-letter queue.

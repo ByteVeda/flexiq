@@ -1,0 +1,247 @@
+---
+title: Capabilities at a glance
+description: "Everything flexiq already does, in one place — for evaluating it, or for checking whether the thing you need is missing."
+---
+
+import {
+  ShieldCheck,
+  Workflow,
+  Cpu,
+  CalendarClock,
+  Activity,
+  Plug,
+  Network,
+} from "lucide-react";
+
+This page is a map, not a lesson. It is here for two readers: someone deciding
+whether flexiq covers what they need, and someone who suspects a capability is
+missing and wants to check before working around it.
+
+If you are learning flexiq rather than evaluating it, the linear track is a
+better use of the next hour — <SdkLink to="getting-started">Start here</SdkLink>.
+
+<SdkOnly sdk="python">
+
+Every card below links to the guide that documents it.
+
+## If you think it's missing, it isn't
+
+These are the capabilities most often assumed absent. They aren't.
+
+| You might assume… | Reality |
+| --- | --- |
+| No canvas / workflows — no chain, group, or chord | [`chain` / `group` / `chord`](/python/modules/workflows/canvas) are exported from the top-level package, backed by a full workflow DSL. |
+| No Flower-like dashboard | [`flexiq dashboard --app myapp:queue`](/python/modules/dashboard) serves a built-in monitoring UI. |
+| No retry backoff or per-exception retries | [`max_retries`, `retry_backoff`, `retry_on`, `dont_retry_on`](/python/guides/reliability/retries) are arguments on every task. |
+| No soft timeouts | [`current_job.check_timeout()`](/python/guides/reliability/error-handling) gives cooperative soft timeouts. |
+| GIL bottleneck with no escape hatch | [`--pool prefork`](/python/guides/core/prefork) runs child processes with independent GILs for true CPU parallelism. |
+
+## By capability
+
+<Cards>
+  <Card
+    icon={<ShieldCheck />}
+    title="Reliability"
+    href="/python/guides/reliability"
+    description="Retries with exponential backoff, per-exception rules, soft timeouts, dead-letter replay, circuit breakers, and idempotent enqueue."
+  />
+  <Card
+    icon={<Workflow />}
+    title="Workflows"
+    href="/python/modules/workflows/canvas"
+    description="Compose with chain, fan out with group, fan in with chord — plus dependency graphs with cascade cancel."
+  />
+  <Card
+    icon={<Cpu />}
+    title="Concurrency"
+    href="/python/guides/core/prefork"
+    description="A thread pool for I/O-bound work and a prefork pool for true CPU parallelism, with a native async API."
+  />
+  <Card
+    icon={<CalendarClock />}
+    title="Scheduling"
+    href="/python/guides/core/scheduling"
+    description="Priorities, rate limiting, periodic (cron) tasks, delayed execution, and job expiration."
+  />
+  <Card
+    icon={<Activity />}
+    title="Observability"
+    href="/python/modules/dashboard"
+    description="A built-in dashboard, events, HMAC-signed webhooks, Prometheus, OpenTelemetry, and structured logging."
+  />
+  <Card
+    icon={<Plug />}
+    title="Extensibility"
+    href="/python/guides/extend"
+    description="Pluggable serializers, per-task middleware, enqueue predicates, argument interception, a fully async API, and Postgres or Redis backends."
+  />
+  <Card
+    icon={<Network />}
+    title="Distribution"
+    href="/python/guides/core/pubsub"
+    description="Topic pub/sub fan-out to independent subscribers, distributed locks, a decentralized work-stealing mesh, and streaming partial results."
+  />
+</Cards>
+
+## One-liners
+
+```python
+# Reliability — backoff + per-exception retry rules
+@queue.task(max_retries=5, retry_backoff=2.0, retry_on=[TimeoutError])
+def fetch_url(url: str) -> str: ...
+
+# Workflows — sequential pipeline (group / chord for fan-out / fan-in)
+chain(fetch.s(url), parse.s(), store.s()).apply()
+
+# Scheduling — priority + rate limit
+@queue.task(priority=9, rate_limit="100/m")
+def notify(user_id: int) -> None: ...
+```
+
+```bash
+flexiq worker --pool prefork --app tasks:queue   # CPU-bound: true parallelism
+flexiq dashboard --app tasks:queue               # Flower-style monitoring UI
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+A map of the Node SDK's features. Everything here runs over the shared Rust core
+with zero Python — pick a backend, register tasks, run workers.
+
+## Core
+
+| Feature | Guide |
+|---|---|
+| Typed task registry, enqueue, await results | [Tasks](/node/guides/core/tasks) · [Result](/node/api-reference/result) |
+| SQLite / Postgres / Redis backends | [Backends](/node/operate/backends) |
+| Named queues, priority, pause/resume | [Queues](/node/guides/core/queues) |
+| Cron-scheduled & delayed jobs | [Scheduling](/node/guides/core/scheduling) |
+| Cooperative cancellation (`AbortSignal`) | [Cancellation](/node/guides/core/cancellation) |
+| Streaming partial results (`publish` / `stream`) | [Streaming](/node/guides/core/streaming) |
+| Execution model (async, concurrency) | [Execution model](/node/guides/core/execution-model) |
+| Topic pub/sub fan-out to independent subscribers | [Pub/Sub](/node/guides/core/pubsub) |
+
+## Reliability
+
+| Feature | Guide |
+|---|---|
+| Retries with backoff, dead-letter queue | [Retries](/node/guides/reliability/retries) · [Dead-letter](/node/guides/reliability/dead-letter) |
+| Per-attempt timeouts | [Timeouts](/node/guides/reliability/timeouts) |
+| Concurrency caps & rate limits | [Concurrency](/node/guides/reliability/concurrency) · [Rate limiting](/node/guides/reliability/rate-limiting) |
+| Circuit breakers | [Circuit breakers](/node/guides/reliability/circuit-breakers) |
+| Idempotent enqueue (`uniqueKey`) | [Idempotency](/node/guides/reliability/idempotency) |
+| Distributed locks | [Locks](/node/guides/reliability/locks) |
+| At-least-once delivery | [Guarantees](/node/guides/reliability/guarantees) |
+
+## Orchestration
+
+| Feature | Guide |
+|---|---|
+| DAG workflows: fan-out/in, conditions, gates, sub-workflows, saga | [Workflows](/node/modules/workflows) |
+| Decentralized work-stealing mesh | [Mesh](/node/modules/mesh) |
+
+## Extensibility
+
+| Feature | Guide |
+|---|---|
+| Lifecycle events & middleware | [Events](/node/guides/extend/events) · [Middleware](/node/guides/extend/middleware) |
+| Signed webhook delivery | [Webhooks](/node/guides/extend/webhooks) |
+| Resource injection & enqueue interception | [Resources](/node/modules/injection) |
+| Pluggable serializers (JSON / msgpack / signed / encrypted) | [Serializers](/node/guides/extend/serializers) |
+
+## Observability & ops
+
+| Feature | Guide |
+|---|---|
+| Stats, metrics, progress, worker heartbeats | [Monitoring](/node/guides/extend/monitoring) |
+| Leveled logger | [Logging](/node/guides/extend/logging) |
+| OpenTelemetry / Prometheus / Sentry | [Integrations](/node/guides/extend) |
+| React dashboard + REST API | [Dashboard](/node/modules/dashboard) · [REST API](/node/modules/dashboard/rest-api) |
+| KEDA autoscaling (queue-depth scaler) | [KEDA](/node/modules/autoscaling/keda) |
+| Bare-metal autoscaler (worker processes) | [Autoscaling](/node/modules/autoscaling) |
+| Standalone CLI | [CLI](/node/operate/cli) |
+
+## Framework integrations
+
+[Express](/node/guides/extend/express) · [Fastify](/node/guides/extend/fastify) · [NestJS](/node/guides/extend/nest)
+
+<Callout type="info">
+  Some features need the native addon built with optional cargo features —
+  workflows and mesh ship with `pnpm build:native`. See
+  [installation](/node/getting-started/installation).
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+A map of the Java SDK's features. Everything here runs over the shared Rust
+core — pick a backend, describe tasks, run workers.
+
+## Core
+
+| Feature | Guide |
+|---|---|
+| Typed task descriptors, enqueue, read results | [Tasks](/java/guides/core/tasks) |
+| SQLite / Postgres / Redis backends | [Installation](/java/getting-started/installation#pick-a-backend) |
+| Named queues, priority, pause/resume | [Queues](/java/guides/core/queues) |
+| Cron-scheduled & delayed jobs | [Scheduling](/java/guides/core/scheduling) |
+| Cooperative cancellation & progress | [Cancellation](/java/guides/core/cancellation) |
+| Partial results via task logs | [Streaming](/java/guides/core/streaming) |
+| Execution model (thread pools, autoscaling) | [Execution model](/java/guides/core/execution-model) |
+| Topic pub/sub fan-out to independent subscribers | [Pub/Sub](/java/guides/core/pubsub) |
+| Compile-time `TaskHandler` bindings (no reflection) | [Tasks](/java/guides/core/tasks#typed-tasks-from-taskhandler) |
+
+## Reliability
+
+| Feature | Guide |
+|---|---|
+| Retries with backoff curves (`RetryPolicy`), dead-letter queue | [Retries](/java/guides/reliability/retries) · [Dead-letter](/java/guides/reliability/dead-letter) |
+| Per-attempt timeouts | [Timeouts](/java/guides/reliability/timeouts) |
+| Circuit breakers (`CircuitBreakerConfig`) | [Circuit breakers](/java/guides/reliability/circuit-breakers) |
+| Idempotent enqueue (`uniqueKey`) | [Idempotency](/java/guides/reliability/idempotency) |
+| Distributed locks | [Locks](/java/guides/reliability/locks) |
+| At-least-once delivery | [Guarantees](/java/guides/reliability/guarantees) |
+
+## Orchestration
+
+| Feature | Guide |
+|---|---|
+| DAG workflows: fan-out/in, conditions, gates, sub-workflows, sagas, visualization | [Workflows](/java/modules/workflows) |
+| Decentralized work-stealing mesh | [Mesh](/java/modules/mesh) |
+
+## Extensibility
+
+| Feature | Guide |
+|---|---|
+| Lifecycle events & middleware | [Events](/java/guides/extend/events) · [Middleware](/java/guides/extend/middleware) |
+| Signed webhook delivery | [Webhooks](/java/guides/extend/webhooks) |
+| Resource injection, enqueue predicates & interception | [Resources](/java/modules/injection) · [Predicates](/java/guides/core/predicates) |
+| Signed cross-process references (proxies) | [Resources](/java/modules/injection) |
+| Pluggable serializers (JSON / MessagePack / signed / encrypted) & payload codecs | [Serializers](/java/guides/extend/serializers) |
+| Producer-side batching (`Batcher`) | [Batching](/java/guides/core/batching) |
+
+## Observability & ops
+
+| Feature | Guide |
+|---|---|
+| Stats, metrics, progress, worker heartbeats | [Monitoring](/java/guides/extend/monitoring) |
+| Micrometer Observation / Sentry middleware | [Integrations](/java/guides/extend) |
+| React dashboard + REST API | [Dashboard](/java/modules/dashboard) |
+| In-process autoscaling + KEDA scaler endpoint | [Autoscaling](/java/modules/autoscaling) |
+| Standalone CLI | [CLI](/java/operate/cli) |
+
+## Framework integrations
+
+[Spring Boot 3 starter](/java/guides/extend/spring) — auto-configures a
+`FlexiQ` bean from `flexiq.url` / `flexiq.pool-size` / `flexiq.namespace`.
+
+<Callout type="info">
+  Observability and MessagePack dependencies are `compileOnly` — add
+  `io.micrometer:micrometer-observation`, `io.sentry:sentry`, or
+  `org.msgpack:jackson-dataformat-msgpack` only if you use them.
+</Callout>
+
+</SdkOnly>

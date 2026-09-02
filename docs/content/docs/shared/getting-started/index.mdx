@@ -1,0 +1,91 @@
+---
+title: Start here
+description: "A linear track from an empty project to a worker draining a real queue — seven pages, each one naming what the next adds."
+---
+
+Something in your app is slow. Sending the welcome email, generating the
+thumbnail, rebuilding the report — the user is waiting on work that has nothing
+to do with the page they asked for.
+
+A **task queue** takes that work out of the request. Your code writes down what
+needs doing and returns immediately; a separate process picks the work up and
+runs it. flexiq is a task queue with no broker to install: the list of pending
+work, the results, and the schedule all live in one database you already have —
+an SQLite file to start with.
+
+This track is linear. Read it in order and you will finish with a worker
+draining a queue for an application that looks like something you would actually
+deploy, not `add(a, b)`. Budget about an hour.
+
+## The track
+
+1. **<SdkLink to="getting-started/installation">Install flexiq</SdkLink>** — get
+   the package in, pick a database, confirm the CLI runs.
+   *Next page adds:* the first job that actually executes.
+
+2. **<SdkLink to="getting-started/quickstart">Quickstart</SdkLink>** — define a
+   task, start a worker, enqueue a job, read its result. Five minutes, one file.
+   *Next page adds:* the vocabulary for what you just ran.
+
+3. **<SdkLink to="getting-started/concepts">Concepts</SdkLink>** — task, job,
+   queue, worker, result, namespace, and the execution model. Prose and
+   diagrams, no options tables.
+   *Next page adds:* more than one task, and a reason for them to exist.
+
+4. **<SdkLink to="getting-started/first-app">Build a real app</SdkLink>** — a
+   signup pipeline: a web handler that enqueues, two tasks on two queues, a
+   worker draining both. This is the page that ends with something running.
+   *Next page adds:* what happens when one of those tasks fails.
+
+5. **<SdkLink to="getting-started/reliability">Handle failure</SdkLink>** —
+   retries, error handling, timeouts, and where a job goes when it has run out
+   of chances. In that order, because that is the order you meet them.
+   *Next page adds:* the move off your laptop.
+
+6. **<SdkLink to="getting-started/production">Go to production</SdkLink>** —
+   choose a backend, run workers as a service, watch the queue, and the short
+   list of things to get right before you ship.
+   *Next page adds:* where to go once the basics hold.
+
+7. **<SdkLink to="getting-started/next-steps">Next steps</SdkLink>** — the
+   deliberate hand-off into guides, modules, and the engine internals.
+
+## What this track deliberately leaves out
+
+Everything you do not need in the first hour. flexiq has workflows, durable
+steps, a dashboard, dependency injection, a work-stealing mesh and more — none
+of it is required to run a queue, and meeting it now would only obscure the four
+ideas that are.
+
+When you want it, it is signposted:
+
+<Cards>
+  <Card
+    title="Guides"
+    to="guides"
+    description="Task-shaped how-tos for the day-to-day surface — scheduling, cancellation, rate limits, events."
+  />
+  <Card
+    title="Modules"
+    to="modules"
+    description="The optional subsystems: workflows, durable steps, dashboard, injection, mesh, executors, autoscaling."
+  />
+  <Card
+    title="Operate"
+    to="operate"
+    description="Backends, deployment, security, inspection, troubleshooting, migration."
+  />
+  <Card
+    title="Architecture"
+    href="/architecture/overview"
+    description="How the Rust engine schedules, claims and recovers work. Read it when a behaviour surprises you."
+  />
+</Cards>
+
+<Callout type="info" title="Already run a task queue before?">
+  Skip to the <SdkLink to="getting-started/quickstart">Quickstart</SdkLink>, then
+  read <SdkLink to="getting-started/reliability">Handle failure</SdkLink> — the
+  retry and dead-letter semantics are the part that differs most from what you
+  are used to. The [comparison](/about/comparison) and the
+  [migration guide](/about/migrating-to-flexiq) are written for you.
+</Callout>

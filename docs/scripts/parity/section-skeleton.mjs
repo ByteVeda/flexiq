@@ -21,9 +21,21 @@
 
 export const SECTION_SKELETON = [
   {
+    // The beginner track (#781). It is a linear sequence, not a menu: every page
+    // names what the next one adds, so the order here is the content, and a page
+    // inserted out of order breaks the promise rather than just the nav.
     dir: "getting-started",
-    title: "Getting Started",
-    pages: ["installation", "quickstart", "concepts", "capabilities"],
+    title: "Start here",
+    pages: [
+      "index",
+      "installation",
+      "quickstart",
+      "concepts",
+      "first-app",
+      "reliability",
+      "production",
+      "next-steps",
+    ],
   },
   {
     dir: "guides",

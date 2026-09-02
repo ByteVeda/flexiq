@@ -24,17 +24,13 @@ const ARCH_PAGES = [
 
 const SDKS = ["node", "python", "java"];
 
-// Sections that have child pages but no landing/index page. A bare hit on the
-// section URL (e.g. from a breadcrumb crumb or an external link) would otherwise
-// 404, so send it to the section's first page. This covers both the bare SDK
-// root (`/python`) and its index-less sections.
-const SECTION_LANDINGS = SDKS.flatMap((sdk): [string, string][] => {
-  const first = `/${sdk}/getting-started/installation`;
-  return [
-    [`/${sdk}`, first],
-    [`/${sdk}/getting-started`, first],
-  ];
-});
+// The bare SDK root (`/python`) is a URL prefix, not a page — a breadcrumb crumb
+// or an external link landing there would otherwise 404. Every section below it
+// now has its own index page, so this is the only landing left to synthesise.
+const SECTION_LANDINGS = SDKS.map((sdk): [string, string] => [
+  `/${sdk}`,
+  `/${sdk}/getting-started`,
+]);
 
 // #780 — the modules came out of `guides/`. Every entry is a page that moved in
 // all (or most) of the three trees; fanning a path an SDK never had costs one
@@ -158,6 +154,15 @@ export const REDIRECTS: Record<string, string> = {
   ...Object.fromEntries(sdkMoves()),
   ...Object.fromEntries(
     ABOUT_PAGES.map((page) => [`/resources/${page}`, `/about/${page}`]),
+  ),
+  // #781 — `capabilities` left the beginner track. It is an evaluation page, so
+  // it now sits beside the comparison under About, as one SDK-scoped page
+  // instead of three.
+  ...Object.fromEntries(
+    SDKS.map((sdk) => [
+      `/${sdk}/getting-started/capabilities`,
+      "/about/capabilities",
+    ]),
   ),
   "/about": "/about/comparison",
   "/resources": "/about/comparison",

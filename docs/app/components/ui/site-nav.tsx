@@ -153,7 +153,7 @@ function SdkSelect() {
 // `sdk` links are SDK-relative (prefixed with the active /python|/node); the rest
 // are shared, SDK-neutral pages.
 const LINKS: { label: string; href: string; sdk?: boolean }[] = [
-  { label: "Getting Started", href: "getting-started/installation", sdk: true },
+  { label: "Start here", href: "getting-started", sdk: true },
   { label: "Guides", href: "guides", sdk: true },
   { label: "Modules", href: "modules", sdk: true },
   { label: "Architecture", href: "/architecture" },

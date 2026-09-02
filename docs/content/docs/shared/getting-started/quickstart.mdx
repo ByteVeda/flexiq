@@ -330,11 +330,16 @@ Open `http://localhost:8080` in your browser.
   </Tab>
 </CodeTabs>
 
-## Next steps
+## Next
 
-- <SdkLink to="getting-started/concepts">Concepts</SdkLink> — the mental model behind queue, task, worker, and result
-- <SdkLink to="guides/core/tasks">Tasks</SdkLink> — registration options and per-task configuration
-- <SdkLink to="guides/core/workers">Workers</SdkLink> — running workers, concurrency, and graceful shutdown
-- <SdkLink to="guides/reliability/retries">Retries</SdkLink> — exponential backoff and the dead letter queue
-- <SdkLink to="modules/workflows">Workflows</SdkLink> — orchestrate multi-step DAGs of dependent tasks
-- <SdkLink to="guides/extend/testing">Testing</SdkLink> — unit-test tasks directly, or run them through a real worker in your suite
+You have run the whole loop once. What you do not have yet is the vocabulary for
+it — the difference between a task and a job, what "at-least-once" costs you,
+and why the worker is a separate process at all.
+
+**Next:** <SdkLink to="getting-started/concepts">Concepts</SdkLink> — the seven
+words the rest of these docs assume you know, in prose and diagrams.
+
+Not following the track? The three pages people usually want from here are
+<SdkLink to="guides/core/tasks">Tasks</SdkLink> (registration options),
+<SdkLink to="guides/core/workers">Workers</SdkLink> (pools and graceful
+shutdown) and <SdkLink to="guides/extend/testing">Testing</SdkLink>.

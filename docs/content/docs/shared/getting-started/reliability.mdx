@@ -1,0 +1,267 @@
+---
+title: Handle failure
+description: "Retries, which errors deserve one, per-attempt timeouts, and where a job goes when it has run out of chances."
+---
+
+Your signup pipeline works while the mail API is up. This page is about the
+other days.
+
+Four things, in the order you meet them: a job fails and is **retried**; some
+failures should not be retried at all, which is **error handling**; a job that
+never returns needs a **timeout**; and a job that has genuinely run out of road
+has to go somewhere, which is the **dead-letter queue**. Get these four right
+and the rest of production is deployment.
+
+Everything here is enforced by the Rust scheduler, not by your process. A worker
+that dies mid-backoff does not take the schedule with it.
+
+## Retries
+
+A task that raises is retried automatically, with **backoff** — each wait longer
+than the last, so a struggling dependency is not hammered by every worker at
+once. Two settings: how many attempts, and how fast the waits grow.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(queue="emails", max_retries=3, retry_backoff=2.0)
+def send_welcome_email(user_id: int, address: str) -> str:
+    ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("sendWelcomeEmail", sendWelcomeEmail, {
+  maxRetries: 3,
+  retryBackoff: { baseMs: 2000, maxMs: 300_000 },
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
+        .queue("emails")
+        .maxRetries(3)
+        .retryPolicy(RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(5)));
+```
+
+  </Tab>
+</CodeTabs>
+
+With a 2-second base the waits run roughly 2s, 4s, 8s, plus jitter so a burst of
+identical failures does not retry in lockstep. Three retries buys about fourteen
+seconds of outage; a mail API that is down for ten minutes needs a bigger budget
+or a longer cap.
+
+<Callout type="warn" title="A retry re-runs the whole task body">
+  Not the part that failed — all of it. If your task charges a card and then
+  sends a receipt, a failure in the receipt re-charges the card. Make the body
+  safe to repeat
+  (<SdkLink to="guides/reliability/idempotency">idempotency</SdkLink>), or
+  checkpoint the parts that succeeded with
+  <SdkLink to="modules/steps">durable steps</SdkLink>.
+</Callout>
+
+Full behaviour, the backoff formula and per-job overrides:
+<SdkLink to="guides/reliability/retries">Retries</SdkLink>.
+
+## Which errors deserve a retry
+
+Retrying a timeout is sensible. Retrying a malformed email address is three more
+identical failures and a slower path to the same conclusion. Classify the error
+and the second kind fails fast instead.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(max_retries=3, dont_retry_on=[ValueError])
+def send_welcome_email(user_id: int, address: str) -> str:
+    ...
+```
+
+`retry_on` is the whitelist form (only these retry); `dont_retry_on` is the
+blacklist. Set one, not both.
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("sendWelcomeEmail", sendWelcomeEmail, {
+  maxRetries: 3,
+  retryOn: (error) => !(error instanceof ValidationError),
+});
+```
+
+`retryOn` classifies the thrown error: `false` dead-letters immediately.
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
+        .maxRetries(3)
+        .retryOn(error -> !(error instanceof IllegalArgumentException));
+```
+
+`retryOn` classifies the thrown exception: `false` dead-letters immediately.
+
+  </Tab>
+</CodeTabs>
+
+The rule of thumb: retry what is **someone else's** transient problem — network,
+rate limit, a 503. Do not retry what is wrong with the *input*, because no
+amount of waiting will change it.
+
+More, including how to fail a job deliberately and how errors are recorded per
+attempt: <SdkLink to="guides/reliability/error-handling">Error
+handling</SdkLink>.
+
+## Timeouts
+
+A failure announces itself. A hang does not — it holds a worker slot until
+someone notices. Bound every attempt.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(queue="emails", max_retries=3, timeout=30)
+def send_welcome_email(user_id: int, address: str) -> str:
+    ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("sendWelcomeEmail", sendWelcomeEmail, {
+  maxRetries: 3,
+  timeoutMs: 30_000,
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
+        .maxRetries(3)
+        .timeout(Duration.ofSeconds(30));
+```
+
+  </Tab>
+</CodeTabs>
+
+A timeout bounds **one attempt**, not the job: it counts as a failure, consumes
+one retry, and the job comes back on the usual backoff. What the deadline can
+actually interrupt depends on the pool and the language —
+<SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink> is explicit about
+what stops and what merely stops being waited on.
+
+Set one on every task you deploy. A task with no timeout is a task that can
+wedge a worker forever.
+
+## The dead-letter queue
+
+When the retries are gone, the job does not vanish and it does not stay in the
+queue pretending it might still run. It moves to the **dead-letter queue** — a
+separate store that keeps the payload, the final error, and the error history
+from every attempt.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+for entry in queue.dead_letters(limit=20):
+    print(entry["task_name"], entry["error"])
+
+queue.retry_dead(dead_id)   # re-enqueue with a fresh budget
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const dead = await queue.deadLetters();
+queue.retryDead(deadId); // re-enqueue with a fresh budget
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+List<DeadJob> dead = queue.listDead(50, 0);
+String newJobId = queue.retryDead(deadId); // re-enqueue with a fresh budget
+```
+
+  </Tab>
+</CodeTabs>
+
+The per-attempt history is the useful part: "failed the same way four times" is
+a bug in your code, "three timeouts then a different error" is an unhealthy
+dependency. Fix the cause before replaying — a retry against an unchanged cause
+just walks back into the DLQ.
+
+<SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink> covers
+listing, bulk purge, and letting the queue drain the DLQ on its own for failures
+that are transient by nature.
+
+## The finished task
+
+Putting the four together, the signup mailer from the last page now says what it
+expects of the world:
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task(
+    queue="emails",
+    max_retries=5,
+    retry_backoff=2.0,
+    timeout=30,
+    dont_retry_on=[ValueError],
+)
+def send_welcome_email(user_id: int, address: str) -> str:
+    ...
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("sendWelcomeEmail", sendWelcomeEmail, {
+  maxRetries: 5,
+  retryBackoff: { baseMs: 2000, maxMs: 300_000 },
+  timeoutMs: 30_000,
+  retryOn: (error) => !(error instanceof ValidationError),
+});
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
+        .queue("emails")
+        .maxRetries(5)
+        .retryPolicy(RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(5)))
+        .timeout(Duration.ofSeconds(30))
+        .retryOn(error -> !(error instanceof IllegalArgumentException));
+```
+
+  </Tab>
+</CodeTabs>
+
+Five attempts over about a minute for anything transient, immediate rejection
+for a bad address, thirty seconds before an attempt is abandoned, and a
+dead-letter entry with the full history if it still cannot succeed.
+
+**Next:** <SdkLink to="getting-started/production">Go to production</SdkLink> —
+choosing a backend, running workers as a service, and watching the queue.

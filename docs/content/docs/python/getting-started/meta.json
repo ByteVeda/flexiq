@@ -1,5 +1,14 @@
 {
-  "title": "Getting Started",
+  "title": "Start here",
   "root": true,
-  "pages": ["installation", "quickstart", "concepts", "capabilities"]
+  "pages": [
+    "index",
+    "installation",
+    "quickstart",
+    "concepts",
+    "first-app",
+    "reliability",
+    "production",
+    "next-steps"
+  ]
 }
