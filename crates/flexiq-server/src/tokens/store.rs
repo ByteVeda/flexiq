@@ -126,8 +126,15 @@ pub fn revoke(storage: &impl Storage, id: &str, namespace: Option<&str>) -> Resu
 /// Unscoped, unlike [`revoke`]: the only caller is the authenticator, which has
 /// already compared the row's namespace against the listener's and would not be
 /// here otherwise. A second check would be a second place to keep in step.
+///
+/// The timestamp only ever moves forward. Two concurrent calls can lose the CAS
+/// race in either order, so a retry re-reads a row that may already carry a
+/// *newer* time; taking the maximum keeps "last used" from going backwards, and
+/// costs nothing because an unchanged document is not written at all.
 pub fn touch(storage: &impl Storage, id: &str, now: i64) -> Result<bool> {
-    update(storage, id, None, |token| token.last_used_at = Some(now))
+    update(storage, id, None, |token| {
+        token.last_used_at = Some(token.last_used_at.map_or(now, |last| last.max(now)));
+    })
 }
 
 /// Read, mutate and conditionally write one row, retrying a lost race.
@@ -357,6 +364,34 @@ mod tests {
             .expect("present")
             .revoked_at
             .is_some());
+    }
+
+    /// A retry can re-read a row another writer already stamped with a newer
+    /// time, so the field must never move backwards.
+    #[test]
+    fn last_used_at_only_moves_forward() {
+        let storage = storage();
+        let (row, _) = create(&storage, request("ci", "prod")).expect("create");
+
+        assert!(touch(&storage, &row.id, 2_000).expect("touch"));
+        assert!(touch(&storage, &row.id, 1_000).expect("an older stamp is accepted"));
+        assert_eq!(
+            get(&storage, &row.id)
+                .expect("read")
+                .expect("present")
+                .last_used_at,
+            Some(2_000),
+            "the newer time must survive an out-of-order write"
+        );
+
+        assert!(touch(&storage, &row.id, 3_000).expect("touch"));
+        assert_eq!(
+            get(&storage, &row.id)
+                .expect("read")
+                .expect("present")
+                .last_used_at,
+            Some(3_000)
+        );
     }
 
     #[test]
