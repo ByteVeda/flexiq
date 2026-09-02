@@ -57,6 +57,11 @@ jobs:
       - name: Diagrams parse
         run: pnpm check:diagrams
 
+      # Likewise for the full-text index: a stripping regex that eats code
+      # fences still builds, and search just quietly stops finding symbols.
+      - name: Search index
+        run: pnpm check:search
+
       - name: Build
         env:
           DOCS_BASE_PATH: /flexiq

@@ -1,7 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type { Sdk } from "@/hooks";
-import { type SearchHit, searchDocs } from "@/lib/search";
+import {
+  browseDocs,
+  prefetchSearchIndex,
+  type SearchHit,
+  searchDocs,
+} from "@/lib/search";
 
 // Section glyphs mirror the prototype's command-palette icons.
 const SECTION_ICON: { match: string; path: string }[] = [
@@ -79,11 +84,47 @@ export function SearchModal({
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const groups = useMemo(
-    () => groupBySection(searchDocs(query, sdk)),
-    [query, sdk],
-  );
+  // Browsing is synchronous (it reads the manifest already in memory); a real
+  // query awaits the code-split full-text index, so results arrive as state.
+  const [hits, setHits] = useState<SearchHit[]>(() => browseDocs(sdk));
+  const [pending, setPending] = useState(false);
+  const groups = useMemo(() => groupBySection(hits), [hits]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+
+  // Warm the index chunk while the user is still reaching for the keyboard.
+  useEffect(() => {
+    if (open) {
+      prefetchSearchIndex();
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setPending(false);
+      setHits(browseDocs(sdk));
+      return;
+    }
+    let current = true;
+    setPending(true);
+    searchDocs(query, sdk).then(
+      (results) => {
+        if (current) {
+          setHits(results);
+          setPending(false);
+        }
+      },
+      () => {
+        if (current) {
+          setHits([]);
+          setPending(false);
+        }
+      },
+    );
+    // A slower earlier query must not overwrite a later one's results.
+    return () => {
+      current = false;
+    };
+  }, [query, sdk]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection as results change
   useEffect(() => {
@@ -173,7 +214,9 @@ export function SearchModal({
         </div>
         <div className="cmdk-results" role="listbox" ref={listRef}>
           {flat.length === 0 ? (
-            <div className="cmdk-empty">No results for “{query}”.</div>
+            <div className="cmdk-empty">
+              {pending ? "Searching…" : `No results for “${query}”.`}
+            </div>
           ) : (
             groups.map((group) => (
               <Fragment key={group.section}>

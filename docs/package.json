@@ -12,6 +12,7 @@
     "lint": "biome check",
     "check:parity": "node scripts/parity/index.mjs",
     "check:diagrams": "node scripts/check-diagrams.mjs",
+    "check:search": "node scripts/check-search-index.mjs",
     "format": "biome format --write"
   },
   "dependencies": {
