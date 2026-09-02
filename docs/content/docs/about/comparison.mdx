@@ -79,19 +79,6 @@ widely adopted.
 **Choose flexiq** if you want zero-infrastructure simplicity on a single machine.
 **Choose Celery** if you need distributed workers, complex routing, or enterprise features.
 
-{/* Split per SDK rather than one <SdkLink>: the migration guide is written per
-    source queue, and not every SDK has one to point at. */}
-
-<SdkOnly sdk="python">
-Looking to switch? See the [Migrating from Celery](/python/operate/migration)
-guide for a step-by-step walkthrough with side-by-side code examples.
-</SdkOnly>
-
-<SdkOnly sdk="node">
-Looking to switch? See the [Migrating from BullMQ](/node/operate/migration)
-guide for a step-by-step walkthrough with side-by-side code examples.
-</SdkOnly>
-
 ### vs RQ (Redis Queue)
 
 RQ focuses on simplicity — a minimal task queue built on Redis.
@@ -204,3 +191,13 @@ workflow engine. **Choose Quartz/Spring Batch** for pure cron scheduling or
 chunk-oriented batch processing tightly coupled to Spring.
 
 </SdkOnly>
+
+{/* Outside the three blocks above on purpose. Every SDK has an
+    `operate/migration` page now, so one <SdkLink> resolves per SDK — and this
+    is the only spot on the page all three readers reach. */}
+
+Looking to switch? See the{" "}
+<SdkLink to="operate/migration">
+  Migrating from <SdkSwap python="Celery" node="BullMQ" java="JVM job scheduling" />
+</SdkLink>{" "}
+guide for a step-by-step walkthrough with side-by-side code examples.
