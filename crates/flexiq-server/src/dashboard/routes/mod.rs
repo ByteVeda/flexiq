@@ -6,6 +6,7 @@
 
 pub mod dead_letters;
 pub mod executors;
+pub mod grpc_tokens;
 pub mod jobs;
 pub mod logs;
 pub mod metrics;
@@ -118,6 +119,13 @@ pub fn router() -> Router<SharedState> {
             "/api/tasks/{task_name}/middleware/{middleware_name}",
             put(middleware::set),
         )
+        // ── gRPC API tokens ─────────────────────────────────────────
+        .route(
+            "/api/grpc-tokens",
+            get(grpc_tokens::list).post(grpc_tokens::create),
+        )
+        .route("/api/grpc-tokens/scopes", get(grpc_tokens::scopes))
+        .route("/api/grpc-tokens/{id}", delete(grpc_tokens::revoke))
         // ── Webhooks ────────────────────────────────────────────────
         .route("/api/event-types", get(webhooks::event_types))
         .route("/api/webhooks", get(webhooks::list).post(webhooks::create))

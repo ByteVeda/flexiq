@@ -74,7 +74,13 @@ mod tests {
         assert!(requires_admin("/api/jobs/abc/cancel", "POST"));
         assert!(requires_admin("/api/settings/key", "DELETE"));
         assert!(requires_admin("/api/webhooks", "POST"));
+        // Minting and revoking a gRPC credential are admin actions, and they are
+        // admin actions because of the rule above rather than because of a line
+        // naming them — which is the property worth pinning.
+        assert!(requires_admin("/api/grpc-tokens", "POST"));
+        assert!(requires_admin("/api/grpc-tokens/abc123", "DELETE"));
         assert!(!requires_admin("/api/jobs", "GET"));
+        assert!(!requires_admin("/api/grpc-tokens", "GET"));
     }
 
     #[test]
