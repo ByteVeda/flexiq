@@ -164,8 +164,29 @@ actually interrupt depends on the pool and the language —
 <SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink> is explicit about
 what stops and what merely stops being waited on.
 
-Set one on every task you deploy. A task with no timeout is a task that can
-wedge a worker forever.
+Set one on every task you deploy — a fallback is not a bound you chose.
+
+<SdkOnly sdk="python">
+
+An omitted `timeout` falls back to 300 seconds, or the queue's
+`default_timeout`. Nothing wedges a slot forever, but five minutes is a ceiling
+rather than a decision about this task.
+
+</SdkOnly>
+
+<SdkOnly sdk="node">
+
+`timeoutMs` has no default. A task left unbounded holds its worker slot until it
+returns, however long that takes.
+
+</SdkOnly>
+
+<SdkOnly sdk="java">
+
+An unset timeout — or `0` — means no limit. A handler left unbounded holds its
+worker thread until it returns, however long that takes.
+
+</SdkOnly>
 
 ## The dead-letter queue
 
@@ -259,8 +280,9 @@ Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
   </Tab>
 </CodeTabs>
 
-Five attempts over about a minute for anything transient, immediate rejection
-for a bad address, thirty seconds before an attempt is abandoned, and a
+One attempt plus five retries — six runs spread over about a minute
+(2+4+8+16+32 seconds, plus jitter) — for anything transient; immediate rejection
+for a bad address; thirty seconds before an attempt is abandoned; and a
 dead-letter entry with the full history if it still cannot succeed.
 
 **Next:** <SdkLink to="getting-started/production">Go to production</SdkLink> —
