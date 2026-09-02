@@ -1,0 +1,77 @@
+---
+title: Next steps
+description: "Where to go once a worker is draining a real queue — the guides, modules and internals worth reading next, and when."
+---
+
+You have a producer, a worker, two queues, a retry policy that reflects what you
+actually expect to go wrong, and a plan for deploying it. That is the whole
+core. Everything below is optional, and the best time to read any of it is when
+you hit the problem it solves — not before.
+
+## When you hit these problems
+
+| The problem | Read |
+|---|---|
+| "This job should run every night at 3am." | <SdkLink to="guides/core/scheduling">Scheduling</SdkLink> — cron, delays, priorities, expiry. |
+| "The user closed the tab; stop the job." | <SdkLink to="guides/core/cancellation">Cancellation</SdkLink> — cooperative cancel and progress. |
+| "This third-party API allows 100 requests a minute." | <SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink> and <SdkLink to="guides/reliability/concurrency">concurrency caps</SdkLink>. |
+| "The same signup got queued twice." | <SdkLink to="guides/reliability/idempotency">Idempotency</SdkLink> — unique keys and dedup at enqueue. |
+| "The job charges a card, then fails after." | <SdkLink to="modules/steps">Durable steps</SdkLink> — checkpoint inside one job so a retry replays instead of repeating. |
+| "Step B needs step A's output, and C needs both." | <SdkLink to="modules/workflows">Workflows</SdkLink> — pipelines as a DAG, with fan-out, gates and sagas. |
+| "The task needs a database handle I can't serialize." | <SdkLink to="modules/injection">Dependency Injection</SdkLink> — resources, proxies, interception. |
+| "I want my metrics in the dashboard I already have." | <SdkLink to="guides/extend/events">Events</SdkLink> and <SdkLink to="guides/extend/middleware">middleware</SdkLink>. |
+| "How do I test code that enqueues?" | <SdkLink to="guides/extend/testing">Testing</SdkLink> — run tasks inline, or through a real worker in your suite. |
+| "I need to look at the queue from a terminal, not a browser." | <SdkLink to="operate/cli">CLI usage</SdkLink> — workers, stats, pause/resume, dead letters. |
+| "The queue is busy at 9am and idle at 3am." | <SdkLink to="modules/autoscaling">Autoscaling</SdkLink> — scale workers from queue depth. |
+
+## The three sections you will live in
+
+<Cards>
+  <Card
+    title="Guides"
+    to="guides"
+    description="Task-shaped how-tos for the day-to-day surface. Self-contained; read one, not all of them."
+  />
+  <Card
+    title="Modules"
+    to="modules"
+    description="The optional subsystems. Each is adoptable on its own and none is required."
+  />
+  <Card
+    title="API Reference"
+    to="api-reference"
+    description="Generated from the SDK declarations — every public symbol, with its signature."
+  />
+</Cards>
+
+## When to read the internals
+
+[Architecture](/architecture/overview) documents the Rust engine underneath
+every SDK. It is not background reading; it is what you go to when a *behaviour*
+surprises you and the guide only told you what to type. Four places it earns its
+keep:
+
+- **A job ran twice, or ran after the worker died.** [Job
+  lifecycle](/architecture/job-lifecycle) has the claim, the lease and the
+  recovery path — the reason at-least-once is a guarantee and not an accident.
+- **Throughput is not what you expected.** [Scheduler](/architecture/scheduler)
+  explains the poll loop, batch claiming and the backoff that idles a quiet
+  queue.
+- **You are sizing a database, or debugging a lock.**
+  [Storage](/architecture/storage) has the schema and the difference between
+  what SQLite and Postgres do under contention.
+- **You are deciding how much to trust a retry.** [Failure
+  model](/architecture/failure-model) is explicit about what is guaranteed and
+  what is merely likely.
+
+## Working examples
+
+Complete programs rather than fragments, each solving one realistic problem:
+<SdkLink to="more/examples">Examples</SdkLink>.
+
+## Coming from another queue
+
+If this track was your second task queue rather than your first, the
+[comparison](/about/comparison) covers where flexiq differs by design, and the
+[migration guide](/about/migrating-to-flexiq) maps the concepts across.
+Questions that come up often are collected in the [FAQ](/about/faq).

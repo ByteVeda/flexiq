@@ -1,0 +1,276 @@
+---
+title: Concepts
+description: "Task, job, queue, worker, result, namespace, and the execution model — the seven words the rest of the docs assume you know."
+---
+
+The <SdkLink to="getting-started/quickstart">quickstart</SdkLink> had you run
+four things without naming them. This page names them. Seven words cover the
+whole core: **queue**, **task**, **job**, **worker**, **result**, **namespace**,
+and the **execution model** that ties them together. Everything else in these
+docs is built out of these.
+
+No prior task-queue experience is assumed. If you have used one before, the
+short version is: there is no broker, and a job is a database row.
+
+## The loop, once through
+
+Your application code hands off work and carries on. A separate process picks
+the work up, runs it, and writes down what happened.
+
+<Seq
+  heads={["Your app", "Worker"]}
+  rows={[
+    { left: "enqueue \"send_welcome\" → job id" },
+    { self: "row written: pending" },
+    { right: "claimed, running", rev: true },
+    { self: "return value written: complete" },
+    { left: "read result by id → value" },
+  ]}
+/>
+
+Nothing in the middle is a message on a wire. Every arrow is a write to, or a
+read from, one database.
+
+## Queue
+
+A **queue** is a handle to one store — an SQLite file, a Postgres schema, or a
+Redis prefix. You register tasks on it, enqueue jobs through it, run workers
+from it, and inspect state with it.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+from flexiq import Queue
+
+queue = Queue(db_path="tasks.db")
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+import { Queue } from "@byteveda/flexiq";
+
+const queue = new Queue({ dbPath: "flexiq.db" });
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+import org.byteveda.flexiq.FlexiQ;
+
+FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
+```
+
+  </Tab>
+</CodeTabs>
+
+That is the whole setup. Most task queues need a **broker** here — a separate
+server, usually Redis or RabbitMQ, whose job is to hold pending work and hand it
+out — plus a **result backend** to store return values. flexiq has neither.
+Pending work and finished results are rows in the same database, so there is no
+extra service to install, secure, or keep running.
+
+Any number of processes pointed at the same file or DSN share one logical queue.
+That is how a web process and a worker process talk to each other: not over a
+socket, but by both writing to the same store.
+
+<Callout type="info" title="Named queues are a different thing">
+  Confusingly, "queue" also means a *lane* within that store — `default`,
+  `emails`, `reports`. One store holds many named lanes, and a worker chooses
+  which lanes to drain. See <SdkLink to="guides/core/queues">Queues</SdkLink>.
+  When these docs say "the queue" without qualification, they mean the handle.
+</Callout>
+
+## Task
+
+A **task** is a named function you register on the queue. The name is the
+contract: producers enqueue by name and never need the function body, so the
+process that asks for the work does not have to be able to do it.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+@queue.task()
+def send_welcome(user_id: int) -> str:
+    return f"welcomed {user_id}"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.task("send_welcome", (userId: number) => `welcomed ${userId}`);
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+// The descriptor is the name plus the payload type; the handler is registered
+// on the worker, so a producer only ever needs this.
+Task<Long> SEND_WELCOME = Task.of("send_welcome", Long.class);
+```
+
+  </Tab>
+</CodeTabs>
+
+Per-task settings — retries, timeout, concurrency cap, rate limit — are attached
+here, once, rather than repeated at every call site.
+<SdkLink to="guides/core/tasks">Tasks</SdkLink> covers the full set.
+
+## Job
+
+Enqueuing a task does **not** run it. It writes a **job**: one row holding the
+task name, the arguments, a priority, a status, and eventually a result. You get
+back an id immediately.
+
+A task is the recipe; a job is one request to cook it — one that may take
+several attempts. One task produces thousands of jobs.
+
+Jobs move through a small state machine. The engine claims each one atomically,
+so the same job never runs twice at the same time:
+
+<JobStateMachine />
+
+A job that raises is retried with **backoff** — each wait longer than the last —
+until its retry budget runs out. Then it lands in the **dead-letter queue**: a
+holding area for jobs that failed for good, which you can inspect and replay
+rather than lose. <SdkLink to="guides/reliability/dead-letter">Dead
+letters</SdkLink> covers it.
+
+<Callout type="warn" title="No worker, no execution">
+  Enqueuing always succeeds as long as the database accepts the write. If no
+  worker is running, jobs simply accumulate in `pending`. A queue that looks
+  stuck is usually a queue nobody is draining.
+</Callout>
+
+## Worker
+
+A **worker** is a process that polls the store, claims due jobs, runs the
+matching task, and writes the outcome back. It is the only place your task code
+executes.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+flexiq worker --app tasks:queue
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```bash
+flexiq run ./app.js --queues default
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+Worker worker = flexiq.worker()
+        .handle(SEND_WELCOME, userId -> "welcomed " + userId)
+        .start();
+```
+
+  </Tab>
+</CodeTabs>
+
+Workers are interchangeable and disposable. Run one, or twenty across five
+machines — they coordinate through the store, not with each other. A worker that
+dies mid-job does not lose it: the job's claim expires and another worker picks
+it up. <SdkLink to="guides/core/workers">Workers</SdkLink> covers pools,
+concurrency and graceful shutdown.
+
+## Result
+
+A **result** is what the task returned, serialized and written back to the same
+store. Because it is a row and not a callback, *any* process holding the store
+can read it, minutes or days later.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+job = send_welcome.delay(42)
+print(job.result(timeout=30))   # "welcomed 42"
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+const id = queue.enqueue("send_welcome", [42]);
+console.log(await queue.result(id)); // "welcomed 42"
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+String id = flexiq.enqueue(SEND_WELCOME, 42L);
+flexiq.awaitJob(id, Duration.ofSeconds(30));
+String value = flexiq.getResult(id, String.class).orElseThrow();
+```
+
+  </Tab>
+</CodeTabs>
+
+Waiting on a result blocks the caller, which gives back the latency you enqueued
+to avoid — so it belongs in tests, scripts and CLI tools, not in a request
+handler. In a web app, enqueue and return; let the job report its own outcome.
+How values are encoded is the
+<SdkLink to="guides/extend/serializers">serializer</SdkLink>'s business.
+
+## Namespace
+
+A **namespace** scopes everything one deployment can see. Set it on the queue
+and every worker, dashboard and admin call inherits it — listings, totals,
+recovery and job ids all stop at the boundary.
+
+<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} />
+
+Leaving it unset — the default — addresses every namespace, which is what a
+single-tenant deployment wants. You can ignore namespaces entirely until you are
+running more than one logical system out of one database.
+
+<Callout type="warn" title="Not an authorization boundary">
+  A namespace confines a correctly-configured process; it does not authenticate
+  one. Anything holding the database credentials can open an unscoped queue and
+  read every namespace. See
+  <SdkLink to="operate/deployment">Deployment</SdkLink>.
+</Callout>
+
+## The execution model
+
+Two properties explain most of flexiq's behaviour, and both follow from jobs
+being rows.
+
+**Execution is at-least-once.** A job is claimed with a lease. If the worker
+holding it dies, the lease expires and the job becomes claimable again — which
+is what makes crashes survivable, and also means a job body can run more than
+once. Anything with an external effect (charging a card, sending mail) should be
+safe to repeat; <SdkLink to="guides/reliability/idempotency">idempotency</SdkLink>
+is how, and <SdkLink to="modules/steps">durable steps</SdkLink> is how to keep
+the parts that already succeeded.
+
+**Scheduling is Rust; your code is not.** Polling, claiming, retry timing, rate
+limits, concurrency caps and cleanup all run in the shared engine — identical
+under every SDK, and still running while your task body executes. Your language
+runtime only ever runs the task body itself.
+<SdkLink to="guides/core/execution-model">Execution model</SdkLink> has the
+detail for <SdkName />.
+
+## Next
+
+You have the vocabulary. Next you use all of it at once, on something bigger
+than one function: <SdkLink to="getting-started/first-app">Build a real
+app</SdkLink> — a signup pipeline with two queues and a worker draining both.
+
+For how the engine actually implements the state machine above — claims, leases,
+recovery, storage layout — read [Job lifecycle](/architecture/job-lifecycle)
+when you want it. It is not required to finish this track.

@@ -5,6 +5,7 @@
     "index",
     "backends",
     "inspection",
+    "cli",
     "deployment",
     "security",
     "troubleshooting",

@@ -1,0 +1,160 @@
+---
+title: Go to production
+description: "Choose a backend, run workers as a service, watch the queue, and the short list of things to get right before you ship."
+---
+
+Everything so far ran against an SQLite file on your laptop with a worker in a
+terminal. This page is the move to a machine you do not sit in front of. It is
+deliberately short: four decisions and a checklist, each linking to the
+<SdkLink to="operate">Operate</SdkLink> page that goes deep.
+
+## 1. Choose a backend
+
+The queue is a database. Which one you point at is the first production
+decision, and the only one that is awkward to change later.
+
+| Backend | Use it when | Cost |
+|---|---|---|
+| **SQLite** (default) | Everything runs on one machine — a single app server, a container with a persistent volume, a CLI tool. | Writers must share a filesystem. Not an option across machines. |
+| **Postgres** | Workers and web processes live on different machines, or you already run Postgres. | One server to operate — the only external service flexiq ever needs. |
+| **Redis** | You want the lowest dispatch latency and already run Redis. | Durability is Redis's durability. No SQL to query the queue with. |
+
+SQLite is not a toy setting here — with WAL mode it will carry a real workload
+on one host. Move to Postgres when you need *more than one host*, not when you
+need "production".
+
+<SdkLink to="operate/backends">Backends</SdkLink> has the connection strings,
+the WAL and pool settings, and what changes behaviourally between them.
+
+## 2. Run workers as a service
+
+A worker is a long-running process with no state of its own, which makes it the
+easy half: run it under whatever already supervises your services, and let it be
+restarted freely.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```ini
+# /etc/systemd/system/flexiq-worker.service
+[Service]
+ExecStart=/srv/app/.venv/bin/flexiq worker --app tasks:queue --queues emails,media
+Restart=always
+KillSignal=SIGTERM
+TimeoutStopSec=60
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ini
+# /etc/systemd/system/flexiq-worker.service
+[Service]
+ExecStart=/srv/app/node_modules/.bin/flexiq run ./tasks.js --queues emails,media
+Restart=always
+KillSignal=SIGTERM
+TimeoutStopSec=60
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```ini
+# /etc/systemd/system/flexiq-worker.service
+[Service]
+ExecStart=/usr/bin/java -jar /srv/app/worker.jar
+Restart=always
+KillSignal=SIGTERM
+TimeoutStopSec=60
+```
+
+  </Tab>
+</CodeTabs>
+
+Two things matter more than the unit file:
+
+- **Give shutdown a grace period.** `SIGTERM` starts a drain — in-flight jobs
+  finish, no new ones are claimed. Killing before the drain completes never
+  loses a job (the claim expires and another worker takes it) but the task body
+  runs again from the top, so a hard kill is only harmless for tasks that are
+  safe to repeat. Every rushed deploy is a round of duplicate execution.
+- **Scale by adding processes, not threads.** Workers coordinate through the
+  store. Two more workers on a second machine need no configuration beyond the
+  same DSN.
+
+<SdkLink to="operate/deployment">Deployment</SdkLink> covers containers,
+Kubernetes, WAL tuning, rolling restarts and the full production checklist.
+
+## 3. Watch the queue
+
+You need one number and one place to look. The number is **pending** — if it
+climbs and does not come down, you are under-provisioned or nothing is draining.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```bash
+flexiq info --app tasks:queue --watch          # live counts in the terminal
+flexiq dashboard --app tasks:queue --auth     # full web UI, session auth on
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```bash
+flexiq --db signup.db stats               # counts
+flexiq --db signup.db dashboard --port 8787 --auth
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```bash
+flexiq --url signup.db stats              # counts
+flexiq --url signup.db dashboard --port 8080 --token "$DASH_TOKEN"
+```
+
+  </Tab>
+</CodeTabs>
+
+Both come from the bundled <SdkLink to="operate/cli">CLI</SdkLink>, which is
+also what a container entrypoint or systemd unit should invoke.
+
+The <SdkLink to="modules/dashboard">dashboard</SdkLink> ships in the package —
+job browsing, dead-letter replay, per-task limits, no separate service. For
+metrics that belong in the monitoring you already have, tasks emit lifecycle
+events and there are Prometheus and OpenTelemetry integrations:
+<SdkLink to="guides/extend/monitoring">Monitoring</SdkLink>.
+
+## 4. Close the obvious holes
+
+Three that are easy to miss on the first deploy:
+
+- **The dashboard is not public.** It exposes job payloads and queue controls.
+  Put it behind authentication before it is reachable —
+  <SdkLink to="modules/dashboard">Dashboard</SdkLink>.
+- **Payloads are data at rest.** Anything in a job's arguments is stored in the
+  database until retention removes it, readable by anything holding the
+  credentials. **Encrypt** what must stay confidential; signing is a separate
+  control that detects tampering but hides nothing —
+  <SdkLink to="operate/security">Security</SdkLink>.
+- **Jobs accumulate.** Completed jobs and dead letters are rows, and rows are
+  disk. Set a retention policy rather than discovering it —
+  <SdkLink to="operate/inspection">Job management</SdkLink>.
+
+## Before you ship
+
+- [ ] A backend chosen for how many machines you have, not for the word "production".
+- [ ] Every task has a **timeout**.
+- [ ] Every task that talks to the network has a **retry budget** you have actually reasoned about.
+- [ ] The worker is supervised and gets a grace period on `SIGTERM`.
+- [ ] Someone or something is watching **pending** and **dead**.
+- [ ] The dashboard, if exposed, requires a login.
+- [ ] Retention is configured, so the queue database does not grow forever.
+
+When something does go wrong,
+<SdkLink to="operate/troubleshooting">Troubleshooting</SdkLink> is organised by
+symptom — stuck jobs, lock contention, workers that claim nothing.
+
+**Next:** <SdkLink to="getting-started/next-steps">Next steps</SdkLink> — where
+to go now that the basics hold.

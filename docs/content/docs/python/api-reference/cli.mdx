@@ -195,7 +195,7 @@ flexiq scaler --app <module:attribute> [--host <addr>] [--port <port>] [--target
 | Flag | Default | Description |
 |---|---|---|
 | `--app` | — | Python path to the `Queue` instance |
-| `--host` | `0.0.0.0` | Bind address |
+| `--host` | `127.0.0.1` | Bind address. Use `0.0.0.0` only behind a network boundary. |
 | `--port` | `9091` | Bind port |
 | `--target-queue-depth` | `10` | Scaling target hint returned to KEDA in `/api/scaler` responses |
 

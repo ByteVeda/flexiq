@@ -165,9 +165,11 @@
   align-items: center;
   gap: 28px;
   padding: 16px 32px;
-  background: color-mix(in oklch, var(--bg) 78%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  /* Opaque, not glass. The article scrolls under this bar, and a translucent
+     background leaves it readable through the nav wherever `backdrop-filter`
+     silently no-ops — software compositing, GPU off, reduced transparency.
+     Legibility can't depend on a blur the browser is free to skip. */
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 .brand {

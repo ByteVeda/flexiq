@@ -2,6 +2,7 @@
   "title": "Modules",
   "root": true,
   "pages": [
+    "index",
     "workflows",
     "steps",
     "dashboard",
