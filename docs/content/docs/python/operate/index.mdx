@@ -1,0 +1,45 @@
+---
+title: Operate
+description: "Run flexiq reliably in production — backends, deployment, scaling, migration."
+---
+
+Run flexiq reliably in production — with no Redis or RabbitMQ broker to operate,
+just an embedded SQLite file or a Postgres instance.
+
+<Cards>
+  <Card
+    title="Postgres Backend"
+    href="/python/operate/backends"
+    description="Set up and run flexiq with PostgreSQL"
+  />
+  <Card
+    title="Job management"
+    href="/python/operate/inspection"
+    description="Cancel, pause, archive, revoke, replay, and clean up jobs"
+  />
+  <Card
+    title="Deployment"
+    href="/python/operate/deployment"
+    description="systemd, Docker, WAL mode, Postgres, and production checklists"
+  />
+  <Card
+    title="Security"
+    href="/python/operate/security"
+    description="Serializer signing/encryption, dashboard auth, and SSRF guards"
+  />
+  <Card
+    title="Troubleshooting"
+    href="/python/operate/troubleshooting"
+    description="Diagnose stuck jobs, lock contention, and worker issues"
+  />
+  <Card
+    title="Migrating from Celery"
+    href="/python/operate/migration"
+    description="Side-by-side comparison and step-by-step migration guide"
+  />
+  <Card
+    title="Upgrading to 0.15"
+    href="/python/operate/upgrading-0.15"
+    description="Breaking changes and migration steps for the 0.15 release"
+  />
+</Cards>

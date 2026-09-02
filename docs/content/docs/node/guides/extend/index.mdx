@@ -9,6 +9,9 @@ vendors on the other end of those signals.
 
 ## Extension points
 
+Lifecycle events and middleware are the extension points for pushing any of
+these signals to an external system.
+
 <Cards>
   <Card
     title="Events"
@@ -33,6 +36,10 @@ vendors on the other end of those signals.
 </Cards>
 
 ## Watch it run
+
+See what the queue is doing — counts, per-task latency, job progress, live
+workers — and emit structured logs, all from the `Queue` handle with no extra
+service.
 
 <Cards>
   <Card
@@ -59,35 +66,56 @@ vendors on the other end of those signals.
 
 ## Integrations
 
+Integrations are optional helpers that ship alongside the core SDK but are **not
+exported from the main `@byteveda/flexiq` barrel**. Each lives behind its own
+`@byteveda/flexiq/contrib/*` subpath and requires you to install its peer
+dependency.
+
+```bash
+# Only install what you use.
+pnpm add @opentelemetry/api               # @byteveda/flexiq/contrib/otel
+pnpm add prom-client                      # @byteveda/flexiq/contrib/prometheus
+pnpm add @sentry/node                     # @byteveda/flexiq/contrib/sentry
+pnpm add express                          # @byteveda/flexiq/contrib/express
+pnpm add fastify                          # @byteveda/flexiq/contrib/fastify
+pnpm add @nestjs/common reflect-metadata  # @byteveda/flexiq/contrib/nest
+```
+
+<Callout type="info">
+  Integrations never auto-initialize. Nothing runs until you call the export and
+  register it with your queue or framework. If a peer dependency is missing,
+  importing its subpath fails with a standard module-not-found error.
+</Callout>
+
 <Cards>
   <Card
     title="OpenTelemetry"
     href="/node/guides/extend/otel"
-    description="Spans across enqueue and execution, with context propagation"
+    description="one span per execution attempt."
   />
   <Card
     title="Prometheus"
     href="/node/guides/extend/prometheus"
-    description="Scrape queue, worker, and task metrics"
+    description="execution metrics + polled depth gauges."
   />
   <Card
     title="Sentry"
     href="/node/guides/extend/sentry"
-    description="Report task failures with task-aware context"
+    description="capture the original exception on dead-letter."
   />
   <Card
     title="Express"
     href="/node/guides/extend/express"
-    description="Enqueue from route handlers and share app state"
+    description="REST router + dashboard mount."
   />
   <Card
     title="Fastify"
     href="/node/guides/extend/fastify"
-    description="Plugin wiring, decorators, and enqueue from handlers"
+    description="REST + dashboard plugins."
   />
   <Card
     title="NestJS"
     href="/node/guides/extend/nest"
-    description="Providers, modules, and injecting the queue"
+    description="injectable FlexiQService."
   />
 </Cards>

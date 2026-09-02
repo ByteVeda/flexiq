@@ -157,6 +157,7 @@ export const SECTION_SKELETON = [
     dir: "operate",
     title: "Operate",
     pages: [
+      "index",
       "backends",
       "inspection",
       "cli",

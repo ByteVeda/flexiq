@@ -122,8 +122,10 @@ Done. 306 content files, 563 prerendered URLs (real pages + redirect stubs).
 
 - Java has no "migrating from a brokered queue" guide. `about/comparison.mdx`
   linked one for all three SDKs; it is now per-SDK and java gets no link.
-- `operate` and `modules` have no landing page, so their sidebar headers are
-  labels rather than links and a bare hit relies on a section-landing redirect.
+- `modules` has no landing page, so its sidebar header is a label rather than a
+  link and a bare hit relies on a section-landing redirect. `operate` has one:
+  the retired `guides/operations/index.mdx` prose moved there rather than being
+  deleted with the group.
 
 ### Verified
 

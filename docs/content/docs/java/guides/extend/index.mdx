@@ -9,6 +9,9 @@ vendors on the other end of those signals.
 
 ## Extension points
 
+Lifecycle events and middleware are the extension points for pushing any of
+these signals to an external system.
+
 <Cards>
   <Card
     title="Events"
@@ -33,6 +36,10 @@ vendors on the other end of those signals.
 </Cards>
 
 ## Watch it run
+
+See what the queue is doing — counts, per-execution metrics, live workers,
+per-job logs — and emit structured logs, all from the `FlexiQ` handle with no
+extra service.
 
 <Cards>
   <Card
@@ -59,11 +66,31 @@ vendors on the other end of those signals.
 
 ## Integrations
 
+The Java SDK ships a Spring Boot 3 starter as a separate artifact, and two
+observability helpers in the `org.byteveda.flexiq.contrib` package of the main
+artifact. The contrib classes compile against their third-party APIs as
+`compileOnly` dependencies — nothing is pulled onto your classpath until you
+add the matching runtime dependency yourself.
+
+```kotlin
+// Only add what you use.
+implementation("org.byteveda:flexiq-spring:1.0.0")        // Spring Boot 3 starter
+implementation("io.micrometer:micrometer-observation:1.13.6") // contrib.FlexiQObservation
+implementation("io.sentry:sentry:7.14.0")                     // contrib.SentryMiddleware
+```
+
+<Callout type="info">
+  Integrations never auto-initialize. Nothing runs until you construct the
+  class and register it with `flexiq.use(...)` (or, for Spring, until the
+  starter is on the classpath). If the runtime dependency is missing, using the
+  contrib class fails with a standard `NoClassDefFoundError`.
+</Callout>
+
 <Cards>
   <Card
     title="Micrometer"
     href="/java/guides/extend/micrometer"
-    description="Observation API instrumentation for enqueue and execution"
+    description="one Observation per execution: a timer plus a trace span."
   />
   <Card
     title="Prometheus"
@@ -73,11 +100,11 @@ vendors on the other end of those signals.
   <Card
     title="Sentry"
     href="/java/guides/extend/sentry"
-    description="Report task failures with task-aware context"
+    description="capture handler exceptions and dead-letters."
   />
   <Card
     title="Spring Boot"
     href="/java/guides/extend/spring"
-    description="The starter, auto-configuration, and injecting the queue"
+    description="auto-configured FlexiQ bean from flexiq.* properties."
   />
 </Cards>
