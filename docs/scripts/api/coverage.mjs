@@ -19,10 +19,16 @@ export const CONFIG = JSON.parse(
   readFileSync(new URL("../parity/api-coverage.json", import.meta.url), "utf8"),
 );
 
+/** Every regex metacharacter, `\` included — one escape for both builders. */
+const REGEX_META = /[.*+?^${}()|[\]\\]/g;
+
+function escapeRegExp(text) {
+  return text.replace(REGEX_META, "\\$&");
+}
+
 /** `PyQueue.set_workflow_*` → a regex over qualified names. */
 function toPattern(entry) {
-  const escaped = entry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replace(/\\\*/g, "[\\w.$]*")}$`);
+  return new RegExp(`^${escapeRegExp(entry).replace(/\\\*/g, "[\\w.$]*")}$`);
 }
 
 /** Code from every hand-written reference page of one SDK, concatenated. */
@@ -41,9 +47,7 @@ function referenceCode(files, sdk) {
 }
 
 function mentions(code, name) {
-  return new RegExp(`(?<![\\w])${name.replace(/\$/g, "\\$")}(?![\\w])`).test(
-    code,
-  );
+  return new RegExp(`(?<![\\w])${escapeRegExp(name)}(?![\\w])`).test(code);
 }
 
 /**
