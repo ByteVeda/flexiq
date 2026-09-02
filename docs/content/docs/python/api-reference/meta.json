@@ -16,6 +16,7 @@
     "batching",
     "testing",
     "errors",
-    "cli"
+    "cli",
+    "symbols"
   ]
 }
