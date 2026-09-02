@@ -263,3 +263,35 @@ queue.list_topics() -> list[str]
 ```
 
 Distinct topics that currently have at least one subscription.
+
+### `queue.topic_stats()`
+
+```python
+queue.topic_stats(topic: str | None = None) -> list[dict[str, Any]]
+```
+
+Backlog snapshot per subscription, optionally narrowed to one topic. Each dict
+carries `topic`, `subscription`, `task_name`, `queue`, `active`, `durable`,
+`pending`, `running`, `dead` and `oldest_pending_age_ms` (`None` when there is
+no pending backlog). Every registered subscription appears — paused and
+ephemeral ones included — even at zero backlog, so a subscription that has
+stopped consuming is visible rather than absent. Computed live off indexed
+columns, so it is safe to poll. Declared as `topic_backlog_stats`.
+
+This is the fan-out side; `topic_log_stats()` above is the cursor side. A
+subscription appears in exactly one of them.
+
+### Declared names
+
+The [symbol index](/python/api-reference/symbols/queue) lists the native queue's
+spelling, which differs from the API for the pub/sub calls. The mapping:
+
+| Declared | Python API |
+|---|---|
+| `read_topic_messages` | `queue.read_topic()` |
+| `ack_topic_cursor` | `queue.ack_topic()` |
+| `lease_topic_messages` | `queue.lease_topic()` — the declared `visibility_ms` is milliseconds; the API takes `visibility` in seconds |
+| `register_subscription` | written by `@queue.subscriber()` via `queue.declare_subscriptions()`, and by `run_worker()` at startup |
+| `set_subscription_active` | `queue.pause_subscription()` / `queue.resume_subscription()` |
+| `topic_backlog_stats` | `queue.topic_stats()` |
+| `reap_ephemeral_subscriptions` | no public method — the worker sweeps ephemeral subscriptions whose owner is gone on its heartbeat cadence, under the same reaper election, so only one worker does it |
