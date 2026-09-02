@@ -63,6 +63,13 @@ and the execution model, replacing three per-SDK copies that had drifted.
 `capabilities` moved to `/about/capabilities` as one SDK-scoped page — it is an
 evaluation page, and two card walls at the same depth was the actual complaint.
 
-**Not done here.** The generated API reference coverage ratchet is untouched;
-`operate/cli` and `operate/migration` still exist for only two of three SDKs, so
-the track links around them rather than papering over the gap.
+**Gaps closed after the first pass.** `operate/cli` and `operate/migration` each
+existed in only two of the three trees, so the track had to link around them.
+Both are written now — python's CLI page (app-oriented `--app module:attribute`,
+not a DSN) and java's concept map from Spring async / Quartz / JMS — and the
+track links them directly. The documented scaler bind address was wrong
+(`0.0.0.0`; the CLI binds loopback) and is corrected.
+
+**Still not done here.** The generated API reference coverage ratchet is
+untouched — python 30%, node 35%, java 84%. That is #779's backlog, not this
+issue's.

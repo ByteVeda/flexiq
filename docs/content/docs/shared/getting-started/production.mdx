@@ -116,6 +116,9 @@ flexiq --url signup.db dashboard --port 8080 --token "$DASH_TOKEN"
   </Tab>
 </CodeTabs>
 
+Both come from the bundled <SdkLink to="operate/cli">CLI</SdkLink>, which is
+also what a container entrypoint or systemd unit should invoke.
+
 The <SdkLink to="modules/dashboard">dashboard</SdkLink> ships in the package —
 job browsing, dead-letter replay, per-task limits, no separate service. For
 metrics that belong in the monitoring you already have, tasks emit lifecycle
