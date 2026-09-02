@@ -295,6 +295,40 @@ mod tests {
         );
     }
 
+    /// A oneof renders one arm at a time, so the assertion is a subset rather
+    /// than an equality — but the arm names are hand-spelled in
+    /// [`enqueue_batch`], and without this nothing compares them with the
+    /// contract at all: the message above renders an empty `results` list, so
+    /// the item's keys never reach [`assert_names`].
+    #[test]
+    fn a_batch_item_carries_only_names_the_contract_gives_it() {
+        let names = descriptor::json_names("EnqueueBatchItemResult");
+        for outcome in [
+            pb::enqueue_batch_item_result::Outcome::Enqueued(pb::EnqueueResponse {
+                job: Some(populated_job()),
+                deduplicated: false,
+            }),
+            pb::enqueue_batch_item_result::Outcome::Error(tonic_types::pb::Status::default()),
+        ] {
+            let rendered = enqueue_batch(&pb::EnqueueBatchResponse {
+                results: vec![pb::EnqueueBatchItemResult {
+                    outcome: Some(outcome),
+                }],
+            });
+            let emitted: std::collections::BTreeSet<String> = rendered["results"][0]
+                .as_object()
+                .expect("an item renders as an object")
+                .keys()
+                .cloned()
+                .collect();
+            assert_eq!(emitted.len(), 1, "a oneof renders exactly one arm");
+            assert!(
+                emitted.is_subset(&names),
+                "EnqueueBatchItemResult drifted from the contract: {emitted:?}"
+            );
+        }
+    }
+
     /// The distinction the frame protocol already draws and the wire inherits:
     /// a blob nobody asked for is a missing key, and an empty one is present.
     #[test]
