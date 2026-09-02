@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync:api": "node scripts/api/sync.mjs",
     "sync:changelog": "node ../scripts/sync-changelog.mjs",
     "build": "pnpm sync:changelog && react-router build",
     "dev": "pnpm sync:changelog && react-router dev",

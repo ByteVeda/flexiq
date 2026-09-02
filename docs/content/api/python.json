@@ -1,0 +1,3230 @@
+{
+  "sdk": "python",
+  "source": [
+    "sdks/python/flexiq/_flexiq.pyi"
+  ],
+  "symbols": [
+    {
+      "owner": "AttachedSteps",
+      "name": "__init__",
+      "kind": "method",
+      "signature": "__init__(relay: Any, job_frame: str, snapshot: bytes, supported: bool) -> None",
+      "params": [
+        {
+          "name": "relay",
+          "type": "Any",
+          "default": null
+        },
+        {
+          "name": "job_frame",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "snapshot",
+          "type": "bytes",
+          "default": null
+        },
+        {
+          "name": "supported",
+          "type": "bool",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "AttachedSteps",
+      "name": "open_step_session",
+      "kind": "method",
+      "signature": "open_step_session(job_id: str, attempt: int) -> StepSession",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "attempt",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "StepSession"
+    },
+    {
+      "owner": "Executor",
+      "name": "__init__",
+      "kind": "method",
+      "signature": "__init__(address: str, app_path: str, tasks: list[str], slots: int, token: str | None = None, executor_id: str | None = None) -> None",
+      "params": [
+        {
+          "name": "address",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "app_path",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "tasks",
+          "type": "list[str]",
+          "default": null
+        },
+        {
+          "name": "slots",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "token",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "executor_id",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "Executor",
+      "name": "executor_id",
+      "kind": "property",
+      "signature": "executor_id: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "Executor",
+      "name": "is_running",
+      "kind": "method",
+      "signature": "is_running() -> bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": "Executor",
+      "name": "peer",
+      "kind": "property",
+      "signature": "peer: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "Executor",
+      "name": "scheduler_id",
+      "kind": "property",
+      "signature": "scheduler_id: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "Executor",
+      "name": "shutdown",
+      "kind": "method",
+      "signature": "shutdown() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "Executor",
+      "name": "stop",
+      "kind": "method",
+      "signature": "stop() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "Executor",
+      "name": "wait",
+      "kind": "method",
+      "signature": "wait(timeout_ms: int) -> bool",
+      "params": [
+        {
+          "name": "timeout_ms",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyJob",
+      "name": "__repr__",
+      "kind": "method",
+      "signature": "__repr__() -> str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "PyJob",
+      "name": "payload_bytes",
+      "kind": "property",
+      "signature": "payload_bytes: bytes",
+      "params": [],
+      "returns": "bytes"
+    },
+    {
+      "owner": "PyJob",
+      "name": "result_bytes",
+      "kind": "property",
+      "signature": "result_bytes: bytes | None",
+      "params": [],
+      "returns": "bytes | None"
+    },
+    {
+      "owner": "PyJob",
+      "name": "status",
+      "kind": "property",
+      "signature": "status: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "__init__",
+      "kind": "method",
+      "signature": "__init__(db_path: str = \".flexiq/flexiq.db\", workers: int = 0, default_retry: int = 3, default_timeout: int = 300, default_priority: int = 0, result_ttl: int | None = None, backend: str = \"sqlite\", db_url: str | None = None, schema: str = \"flexiq\", pool_size: int | None = None, scheduler_poll_interval_ms: int = 50, scheduler_reap_interval: int = 100, scheduler_cleanup_interval: int = 1200, scheduler_batch_size: int = 1, namespace: str | None = None, push_dispatch: bool = False, dlq_auto_retry_delay: int | None = None, dlq_auto_retry_max: int = 1, retention: dict[str, int] | None = None, auto_migrate: bool = True) -> None",
+      "params": [
+        {
+          "name": "db_path",
+          "type": "str",
+          "default": "\".flexiq/flexiq.db\""
+        },
+        {
+          "name": "workers",
+          "type": "int",
+          "default": "0"
+        },
+        {
+          "name": "default_retry",
+          "type": "int",
+          "default": "3"
+        },
+        {
+          "name": "default_timeout",
+          "type": "int",
+          "default": "300"
+        },
+        {
+          "name": "default_priority",
+          "type": "int",
+          "default": "0"
+        },
+        {
+          "name": "result_ttl",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "backend",
+          "type": "str",
+          "default": "\"sqlite\""
+        },
+        {
+          "name": "db_url",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "schema",
+          "type": "str",
+          "default": "\"flexiq\""
+        },
+        {
+          "name": "pool_size",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "scheduler_poll_interval_ms",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "scheduler_reap_interval",
+          "type": "int",
+          "default": "100"
+        },
+        {
+          "name": "scheduler_cleanup_interval",
+          "type": "int",
+          "default": "1200"
+        },
+        {
+          "name": "scheduler_batch_size",
+          "type": "int",
+          "default": "1"
+        },
+        {
+          "name": "namespace",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "push_dispatch",
+          "type": "bool",
+          "default": "False"
+        },
+        {
+          "name": "dlq_auto_retry_delay",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "dlq_auto_retry_max",
+          "type": "int",
+          "default": "1"
+        },
+        {
+          "name": "retention",
+          "type": "dict[str, int] | None",
+          "default": "None"
+        },
+        {
+          "name": "auto_migrate",
+          "type": "bool",
+          "default": "True"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "ack_message",
+      "kind": "method",
+      "signature": "ack_message(topic: str, subscription_name: str, message_id: str) -> bool",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "message_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "ack_topic_cursor",
+      "kind": "method",
+      "signature": "ack_topic_cursor(topic: str, subscription_name: str, cursor: str) -> bool",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "cursor",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "acquire_lock",
+      "kind": "method",
+      "signature": "acquire_lock(lock_name: str, owner_id: str, ttl_ms: int = 30000) -> bool",
+      "params": [
+        {
+          "name": "lock_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "owner_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "ttl_ms",
+          "type": "int",
+          "default": "30000"
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "archive_old_jobs",
+      "kind": "method",
+      "signature": "archive_old_jobs(older_than_seconds: int) -> int",
+      "params": [
+        {
+          "name": "older_than_seconds",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "cancel_job",
+      "kind": "method",
+      "signature": "cancel_job(job_id: str) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "cancel_workflow_run",
+      "kind": "method",
+      "signature": "cancel_workflow_run(run_id: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "check_fan_out_completion",
+      "kind": "method",
+      "signature": "check_fan_out_completion(run_id: str, parent_node_name: str) -> tuple[bool, list[str]] | None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "parent_node_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "tuple[bool, list[str]] | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "count_pending_by_queue",
+      "kind": "method",
+      "signature": "count_pending_by_queue(queue_name: str) -> int",
+      "params": [
+        {
+          "name": "queue_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "create_deferred_job",
+      "kind": "method",
+      "signature": "create_deferred_job(run_id: str, node_name: str, payload: bytes, task_name: str, queue: str, max_retries: int, timeout_ms: int, priority: int) -> str",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "max_retries",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "timeout_ms",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "dead_letters",
+      "kind": "method",
+      "signature": "dead_letters(limit: int = 10, offset: int = 0) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "10"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "dead_letters_after",
+      "kind": "method",
+      "signature": "dead_letters_after(limit: int = 10, after: str | None = None) -> tuple[list[dict[str, Any]], str | None]",
+      "params": [
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "10"
+        },
+        {
+          "name": "after",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[list[dict[str, Any]], str | None]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "dead_letters_by_task",
+      "kind": "method",
+      "signature": "dead_letters_by_task(task_name: str, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "10"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "declare_topic",
+      "kind": "method",
+      "signature": "declare_topic(name: str, mode: str, retention_ms: int | None = None) -> None",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "mode",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "retention_ms",
+          "type": "int | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "delete_dead",
+      "kind": "method",
+      "signature": "delete_dead(dead_id: str) -> bool",
+      "params": [
+        {
+          "name": "dead_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "delete_periodic",
+      "kind": "method",
+      "signature": "delete_periodic(name: str) -> bool",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "delete_setting",
+      "kind": "method",
+      "signature": "delete_setting(key: str) -> bool",
+      "params": [
+        {
+          "name": "key",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "dry_run_retention",
+      "kind": "method",
+      "signature": "dry_run_retention(retention: dict[str, int] | None = None) -> str",
+      "params": [
+        {
+          "name": "retention",
+          "type": "dict[str, int] | None",
+          "default": "None"
+        }
+      ],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "effective_retention",
+      "kind": "method",
+      "signature": "effective_retention() -> str | None",
+      "params": [],
+      "returns": "str | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "enqueue(task_name: str, payload: bytes, queue: str = \"default\", priority: int | None = None, delay_seconds: float | None = None, max_retries: int | None = None, timeout: int | None = None, unique_key: str | None = None, metadata: str | None = None, notes: str | None = None, depends_on: list[str] | None = None, expires: float | None = None, result_ttl: int | None = None, debounce_key: str | None = None, debounce_window_ms: int | None = None, debounce_max_wait_ms: int | None = None, debounce_replace_payload: bool = False, debounce_max_pending: int | None = None) -> PyJob",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": "\"default\""
+        },
+        {
+          "name": "priority",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "delay_seconds",
+          "type": "float | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retries",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "unique_key",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "metadata",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "notes",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "depends_on",
+          "type": "list[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "expires",
+          "type": "float | None",
+          "default": "None"
+        },
+        {
+          "name": "result_ttl",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "debounce_key",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "debounce_window_ms",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "debounce_max_wait_ms",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "debounce_replace_payload",
+          "type": "bool",
+          "default": "False"
+        },
+        {
+          "name": "debounce_max_pending",
+          "type": "int | None",
+          "default": "None"
+        }
+      ],
+      "returns": "PyJob"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "enqueue_batch",
+      "kind": "method",
+      "signature": "enqueue_batch(task_names: list[str], payloads: list[bytes], queues: list[str] | None = None, priorities: list[int | None] | None = None, max_retries_list: list[int | None] | None = None, timeouts: list[int | None] | None = None, delay_seconds_list: list[float | None] | None = None, unique_keys: list[str | None] | None = None, metadata_list: list[str | None] | None = None, notes_list: list[str | None] | None = None, expires_list: list[float | None] | None = None, result_ttl_list: list[int | None] | None = None) -> list[PyJob]",
+      "params": [
+        {
+          "name": "task_names",
+          "type": "list[str]",
+          "default": null
+        },
+        {
+          "name": "payloads",
+          "type": "list[bytes]",
+          "default": null
+        },
+        {
+          "name": "queues",
+          "type": "list[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "priorities",
+          "type": "list[int | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retries_list",
+          "type": "list[int | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "timeouts",
+          "type": "list[int | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "delay_seconds_list",
+          "type": "list[float | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "unique_keys",
+          "type": "list[str | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "metadata_list",
+          "type": "list[str | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "notes_list",
+          "type": "list[str | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "expires_list",
+          "type": "list[float | None] | None",
+          "default": "None"
+        },
+        {
+          "name": "result_ttl_list",
+          "type": "list[int | None] | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "expand_fan_out",
+      "kind": "method",
+      "signature": "expand_fan_out(run_id: str, parent_node_name: str, child_names: list[str], child_payloads: list[bytes], task_name: str, queue: str, max_retries: int, timeout_ms: int, priority: int) -> list[str]",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "parent_node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "child_names",
+          "type": "list[str]",
+          "default": null
+        },
+        {
+          "name": "child_payloads",
+          "type": "list[bytes]",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "max_retries",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "timeout_ms",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "priority",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "extend_lock",
+      "kind": "method",
+      "signature": "extend_lock(lock_name: str, owner_id: str, ttl_ms: int = 30000) -> bool",
+      "params": [
+        {
+          "name": "lock_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "owner_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "ttl_ms",
+          "type": "int",
+          "default": "30000"
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "fail_workflow_node",
+      "kind": "method",
+      "signature": "fail_workflow_node(run_id: str, node_name: str, error: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "finalize_run_if_terminal",
+      "kind": "method",
+      "signature": "finalize_run_if_terminal(run_id: str) -> str | None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_base_run_node_data",
+      "kind": "method",
+      "signature": "get_base_run_node_data(base_run_id: str) -> list[tuple[str, str, str | None]]",
+      "params": [
+        {
+          "name": "base_run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[tuple[str, str, str | None]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_child_workflow_runs",
+      "kind": "method",
+      "signature": "get_child_workflow_runs(parent_run_id: str) -> list[PyWorkflowRun]",
+      "params": [
+        {
+          "name": "parent_run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[PyWorkflowRun]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_dependencies",
+      "kind": "method",
+      "signature": "get_dependencies(job_id: str) -> list[str]",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_dependents",
+      "kind": "method",
+      "signature": "get_dependents(job_id: str) -> list[str]",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_job",
+      "kind": "method",
+      "signature": "get_job(job_id: str) -> PyJob | None",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "PyJob | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_job_errors",
+      "kind": "method",
+      "signature": "get_job_errors(job_id: str) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_lock_info",
+      "kind": "method",
+      "signature": "get_lock_info(lock_name: str) -> dict[str, Any] | None",
+      "params": [
+        {
+          "name": "lock_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "dict[str, Any] | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_metrics",
+      "kind": "method",
+      "signature": "get_metrics(task_name: str | None = None, since_seconds: int = 3600) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "since_seconds",
+          "type": "int",
+          "default": "3600"
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_replay_history",
+      "kind": "method",
+      "signature": "get_replay_history(job_id: str) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_setting",
+      "kind": "method",
+      "signature": "get_setting(key: str) -> str | None",
+      "params": [
+        {
+          "name": "key",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_task_logs",
+      "kind": "method",
+      "signature": "get_task_logs(job_id: str) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_workflow_definition_dag",
+      "kind": "method",
+      "signature": "get_workflow_definition_dag(run_id: str) -> bytes",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bytes"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_workflow_run_detail",
+      "kind": "method",
+      "signature": "get_workflow_run_detail(run_id: str) -> tuple[PyWorkflowRun, list[PyWorkflowRunNode]]",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "tuple[PyWorkflowRun, list[PyWorkflowRunNode]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "get_workflow_run_status",
+      "kind": "method",
+      "signature": "get_workflow_run_status(run_id: str) -> PyWorkflowRunStatus",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "PyWorkflowRunStatus"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "inherited_worker_steps",
+      "kind": "method",
+      "signature": "inherited_worker_steps() -> WorkerSteps | None",
+      "params": [],
+      "returns": "WorkerSteps | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "is_cancel_requested",
+      "kind": "method",
+      "signature": "is_cancel_requested(job_id: str) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "is_migrated",
+      "kind": "method",
+      "signature": "is_migrated() -> bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "lease_topic_messages",
+      "kind": "method",
+      "signature": "lease_topic_messages(topic: str, subscription_name: str, limit: int, visibility_ms: int) -> list[tuple[str, bytes, str | None, str | None, int]]",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "visibility_ms",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "list[tuple[str, bytes, str | None, str | None, int]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_archived",
+      "kind": "method",
+      "signature": "list_archived(limit: int = 50, offset: int = 0) -> list[PyJob]",
+      "params": [
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        }
+      ],
+      "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_archived_after",
+      "kind": "method",
+      "signature": "list_archived_after(limit: int = 50, after: str | None = None) -> tuple[list[PyJob], str | None]",
+      "params": [
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "after",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[list[PyJob], str | None]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_circuit_breakers",
+      "kind": "method",
+      "signature": "list_circuit_breakers() -> list[dict[str, Any]]",
+      "params": [],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_declared_topics",
+      "kind": "method",
+      "signature": "list_declared_topics() -> list[tuple[str, str, int | None, int]]",
+      "params": [],
+      "returns": "list[tuple[str, str, int | None, int]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_jobs",
+      "kind": "method",
+      "signature": "list_jobs(status: str | None = None, queue: str | None = None, task_name: str | None = None, limit: int = 50, offset: int = 0, namespace: str | None = None) -> list[PyJob]",
+      "params": [
+        {
+          "name": "status",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        },
+        {
+          "name": "namespace",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_jobs_after",
+      "kind": "method",
+      "signature": "list_jobs_after(status: str | None = None, queue: str | None = None, task_name: str | None = None, limit: int = 50, after: str | None = None, namespace: str | None = None) -> tuple[list[PyJob], str | None]",
+      "params": [
+        {
+          "name": "status",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "after",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "namespace",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[list[PyJob], str | None]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_jobs_filtered",
+      "kind": "method",
+      "signature": "list_jobs_filtered(status: str | None = None, queue: str | None = None, task_name: str | None = None, metadata_like: str | None = None, error_like: str | None = None, created_after: int | None = None, created_before: int | None = None, limit: int = 50, offset: int = 0, namespace: str | None = None) -> list[PyJob]",
+      "params": [
+        {
+          "name": "status",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "metadata_like",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "error_like",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "created_after",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "created_before",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        },
+        {
+          "name": "namespace",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_jobs_filtered_after",
+      "kind": "method",
+      "signature": "list_jobs_filtered_after(status: str | None = None, queue: str | None = None, task_name: str | None = None, metadata_like: str | None = None, error_like: str | None = None, created_after: int | None = None, created_before: int | None = None, limit: int = 50, after: str | None = None, namespace: str | None = None) -> tuple[list[PyJob], str | None]",
+      "params": [
+        {
+          "name": "status",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "metadata_like",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "error_like",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "created_after",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "created_before",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "after",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "namespace",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[list[PyJob], str | None]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_paused_queues",
+      "kind": "method",
+      "signature": "list_paused_queues() -> list[str]",
+      "params": [],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_periodic",
+      "kind": "method",
+      "signature": "list_periodic() -> list[dict[str, Any]]",
+      "params": [],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_settings",
+      "kind": "method",
+      "signature": "list_settings() -> dict[str, str]",
+      "params": [],
+      "returns": "dict[str, str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_subscriptions",
+      "kind": "method",
+      "signature": "list_subscriptions(topic: str | None = None) -> list[tuple[str, str, str, str, bool, bool]]",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[tuple[str, str, str, str, bool, bool]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_workers",
+      "kind": "method",
+      "signature": "list_workers() -> list[dict[str, Any]]",
+      "params": [],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_workflow_runs",
+      "kind": "method",
+      "signature": "list_workflow_runs(definition_name: str | None = None, state: str | None = None, limit: int = 50, offset: int = 0) -> list[PyWorkflowRun]",
+      "params": [
+        {
+          "name": "definition_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "state",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "type": "int",
+          "default": "0"
+        }
+      ],
+      "returns": "list[PyWorkflowRun]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "list_workflow_runs_after",
+      "kind": "method",
+      "signature": "list_workflow_runs_after(definition_name: str | None = None, state: str | None = None, limit: int = 50, after: str | None = None) -> tuple[list[PyWorkflowRun], str | None]",
+      "params": [
+        {
+          "name": "definition_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "state",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "50"
+        },
+        {
+          "name": "after",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[list[PyWorkflowRun], str | None]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "mark_workflow_node_result",
+      "kind": "method",
+      "signature": "mark_workflow_node_result(job_id: str, succeeded: bool, error: str | None = None, skip_cascade: bool = False, result_hash: str | None = None) -> tuple[str, str, str | None] | None",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "succeeded",
+          "type": "bool",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "skip_cascade",
+          "type": "bool",
+          "default": "False"
+        },
+        {
+          "name": "result_hash",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "tuple[str, str, str | None] | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "migrate",
+      "kind": "method",
+      "signature": "migrate() -> dict[str, Any]",
+      "params": [],
+      "returns": "dict[str, Any]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "min_contract",
+      "kind": "method",
+      "signature": "min_contract() -> int",
+      "params": [],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "nack_message",
+      "kind": "method",
+      "signature": "nack_message(topic: str, subscription_name: str, message_id: str) -> bool",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "message_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "pause_periodic",
+      "kind": "method",
+      "signature": "pause_periodic(name: str) -> bool",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "pause_queue",
+      "kind": "method",
+      "signature": "pause_queue(queue_name: str) -> None",
+      "params": [
+        {
+          "name": "queue_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "publish",
+      "kind": "method",
+      "signature": "publish(topic: str, payload: bytes, idempotency_key: str | None = None, metadata: str | None = None, notes: str | None = None, priority: int | None = None, delay_seconds: float | None = None, max_retries: int | None = None, timeout: int | None = None, expires: float | None = None, result_ttl: int | None = None) -> list[PyJob]",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "default": null
+        },
+        {
+          "name": "idempotency_key",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "metadata",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "notes",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "priority",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "delay_seconds",
+          "type": "float | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retries",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "timeout",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "expires",
+          "type": "float | None",
+          "default": "None"
+        },
+        {
+          "name": "result_ttl",
+          "type": "int | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[PyJob]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "purge_completed",
+      "kind": "method",
+      "signature": "purge_completed(older_than_seconds: int) -> int",
+      "params": [
+        {
+          "name": "older_than_seconds",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "purge_dead",
+      "kind": "method",
+      "signature": "purge_dead(older_than_seconds: int) -> int",
+      "params": [
+        {
+          "name": "older_than_seconds",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "purge_dead_by_task",
+      "kind": "method",
+      "signature": "purge_dead_by_task(task_name: str) -> int",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "purge_queue",
+      "kind": "method",
+      "signature": "purge_queue(queue_name: str) -> int",
+      "params": [
+        {
+          "name": "queue_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "query_task_logs",
+      "kind": "method",
+      "signature": "query_task_logs(task_name: str | None = None, level: str | None = None, since_seconds: int = 3600, limit: int = 100) -> list[dict[str, Any]]",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "level",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "since_seconds",
+          "type": "int",
+          "default": "3600"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": "100"
+        }
+      ],
+      "returns": "list[dict[str, Any]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "read_topic_messages",
+      "kind": "method",
+      "signature": "read_topic_messages(topic: str, subscription_name: str, limit: int) -> list[tuple[str, bytes, str | None, str | None, int]]",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "list[tuple[str, bytes, str | None, str | None, int]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "reap_ephemeral_subscriptions",
+      "kind": "method",
+      "signature": "reap_ephemeral_subscriptions(worker_id: str | None = None) -> int",
+      "params": [
+        {
+          "name": "worker_id",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "register_periodic",
+      "kind": "method",
+      "signature": "register_periodic(name: str, task_name: str, cron_expr: str, args: bytes | None = None, kwargs: bytes | None = None, queue: str = \"default\", timezone: str | None = None) -> None",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "cron_expr",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "args",
+          "type": "bytes | None",
+          "default": "None"
+        },
+        {
+          "name": "kwargs",
+          "type": "bytes | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": "\"default\""
+        },
+        {
+          "name": "timezone",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "register_subscription",
+      "kind": "method",
+      "signature": "register_subscription(topic: str, subscription_name: str, task_name: str, queue: str = \"default\", durable: bool = True, owner_worker_id: str | None = None, priority: int | None = None, max_retries: int | None = None, timeout_ms: int | None = None, mode: str = \"fanout\") -> None",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": "\"default\""
+        },
+        {
+          "name": "durable",
+          "type": "bool",
+          "default": "True"
+        },
+        {
+          "name": "owner_worker_id",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "priority",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retries",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "timeout_ms",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "mode",
+          "type": "str",
+          "default": "\"fanout\""
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "release_lock",
+      "kind": "method",
+      "signature": "release_lock(lock_name: str, owner_id: str) -> bool",
+      "params": [
+        {
+          "name": "lock_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "owner_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "replay_job",
+      "kind": "method",
+      "signature": "replay_job(job_id: str) -> str",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "request_cancel",
+      "kind": "method",
+      "signature": "request_cancel(job_id: str) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "request_shutdown",
+      "kind": "method",
+      "signature": "request_shutdown() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "requeue_job",
+      "kind": "method",
+      "signature": "requeue_job(job_id: str) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "resolve_workflow_gate",
+      "kind": "method",
+      "signature": "resolve_workflow_gate(run_id: str, node_name: str, approved: bool, error: str | None = None) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "approved",
+          "type": "bool",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "resume_periodic",
+      "kind": "method",
+      "signature": "resume_periodic(name: str) -> bool",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "resume_queue",
+      "kind": "method",
+      "signature": "resume_queue(queue_name: str) -> None",
+      "params": [
+        {
+          "name": "queue_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "retry_dead",
+      "kind": "method",
+      "signature": "retry_dead(dead_id: str) -> str",
+      "params": [
+        {
+          "name": "dead_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "revoke_task",
+      "kind": "method",
+      "signature": "revoke_task(task_name: str) -> int",
+      "params": [
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "int"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "run_worker",
+      "kind": "method",
+      "signature": "run_worker(task_registry: dict[str, Any], task_configs: list[PyTaskConfig], queues: list[str] | None = None, drain_timeout_secs: int | None = None, tags: str | None = None, worker_id: str | None = None, resources: str | None = None, threads: int = 1, async_concurrency: int = 100, queue_configs: str | None = None, pool: str | None = None, app_path: str | None = None, mesh_config: str | None = None) -> None",
+      "params": [
+        {
+          "name": "task_registry",
+          "type": "dict[str, Any]",
+          "default": null
+        },
+        {
+          "name": "task_configs",
+          "type": "list[PyTaskConfig]",
+          "default": null
+        },
+        {
+          "name": "queues",
+          "type": "list[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "drain_timeout_secs",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "tags",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "worker_id",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "resources",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "threads",
+          "type": "int",
+          "default": "1"
+        },
+        {
+          "name": "async_concurrency",
+          "type": "int",
+          "default": "100"
+        },
+        {
+          "name": "queue_configs",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "pool",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "app_path",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "mesh_config",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_min_contract",
+      "kind": "method",
+      "signature": "set_min_contract(level: int) -> None",
+      "params": [
+        {
+          "name": "level",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_setting",
+      "kind": "method",
+      "signature": "set_setting(key: str, value: str) -> None",
+      "params": [
+        {
+          "name": "key",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "value",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_setting_if",
+      "kind": "method",
+      "signature": "set_setting_if(key: str, expected: str | None, value: str) -> bool",
+      "params": [
+        {
+          "name": "key",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "expected",
+          "type": "str | None",
+          "default": null
+        },
+        {
+          "name": "value",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_subscription_active",
+      "kind": "method",
+      "signature": "set_subscription_active(topic: str, subscription_name: str, active: bool) -> bool",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_worker_status",
+      "kind": "method",
+      "signature": "set_worker_status(worker_id: str, status: str) -> None",
+      "params": [
+        {
+          "name": "worker_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_compensated",
+      "kind": "method",
+      "signature": "set_workflow_node_compensated(run_id: str, node_name: str, completed_at: int) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "completed_at",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_compensation_failed",
+      "kind": "method",
+      "signature": "set_workflow_node_compensation_failed(run_id: str, node_name: str, error: str, completed_at: int) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "completed_at",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_compensation_job",
+      "kind": "method",
+      "signature": "set_workflow_node_compensation_job(run_id: str, node_name: str, compensation_job_id: str, started_at: int) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "compensation_job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "started_at",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_fan_out_count",
+      "kind": "method",
+      "signature": "set_workflow_node_fan_out_count(run_id: str, node_name: str, count: int) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "count",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_running",
+      "kind": "method",
+      "signature": "set_workflow_node_running(run_id: str, node_name: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_node_waiting_approval",
+      "kind": "method",
+      "signature": "set_workflow_node_waiting_approval(run_id: str, node_name: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_run_compensated",
+      "kind": "method",
+      "signature": "set_workflow_run_compensated(run_id: str, completed_at: int) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "completed_at",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_run_compensating",
+      "kind": "method",
+      "signature": "set_workflow_run_compensating(run_id: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_run_compensation_failed",
+      "kind": "method",
+      "signature": "set_workflow_run_compensation_failed(run_id: str, completed_at: int, error: str | None = None) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "completed_at",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "set_workflow_run_completed_with_failures",
+      "kind": "method",
+      "signature": "set_workflow_run_completed_with_failures(run_id: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "skip_workflow_node",
+      "kind": "method",
+      "signature": "skip_workflow_node(run_id: str, node_name: str) -> None",
+      "params": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "stats",
+      "kind": "method",
+      "signature": "stats() -> dict[str, int]",
+      "params": [],
+      "returns": "dict[str, int]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "stats_all_queues",
+      "kind": "method",
+      "signature": "stats_all_queues() -> dict[str, dict[str, int]]",
+      "params": [],
+      "returns": "dict[str, dict[str, int]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "stats_by_queue",
+      "kind": "method",
+      "signature": "stats_by_queue(queue_name: str) -> dict[str, int]",
+      "params": [
+        {
+          "name": "queue_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "dict[str, int]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "submit_workflow",
+      "kind": "method",
+      "signature": "submit_workflow(name: str, version: int, dag_bytes: bytes, step_metadata_json: str, node_payloads: dict[str, bytes], queue_default: str = \"default\", params_json: str | None = None, deferred_node_names: list[str] | None = None, parent_run_id: str | None = None, parent_node_name: str | None = None, cache_hit_nodes: dict[str, str] | None = None) -> PyWorkflowHandle",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "version",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "dag_bytes",
+          "type": "bytes",
+          "default": null
+        },
+        {
+          "name": "step_metadata_json",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "node_payloads",
+          "type": "dict[str, bytes]",
+          "default": null
+        },
+        {
+          "name": "queue_default",
+          "type": "str",
+          "default": "\"default\""
+        },
+        {
+          "name": "params_json",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "deferred_node_names",
+          "type": "list[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "parent_run_id",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "parent_node_name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "cache_hit_nodes",
+          "type": "dict[str, str] | None",
+          "default": "None"
+        }
+      ],
+      "returns": "PyWorkflowHandle"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "supports_steps",
+      "kind": "method",
+      "signature": "supports_steps() -> bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "topic_backlog_stats",
+      "kind": "method",
+      "signature": "topic_backlog_stats() -> list[tuple[str, str, str, str, bool, bool, int, int, int, int | None]]",
+      "params": [],
+      "returns": "list[tuple[str, str, str, str, bool, bool, int, int, int, int | None]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "topic_log_stats",
+      "kind": "method",
+      "signature": "topic_log_stats() -> list[tuple[str, str, str | None, int, int | None]]",
+      "params": [],
+      "returns": "list[tuple[str, str, str | None, int, int | None]]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "unsubscribe",
+      "kind": "method",
+      "signature": "unsubscribe(topic: str, subscription_name: str) -> bool",
+      "params": [
+        {
+          "name": "topic",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "subscription_name",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "update_progress",
+      "kind": "method",
+      "signature": "update_progress(job_id: str, progress: int) -> None",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "progress",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "worker_heartbeat",
+      "kind": "method",
+      "signature": "worker_heartbeat(worker_id: str, resource_health: str | None = None) -> list[str]",
+      "params": [
+        {
+          "name": "worker_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "resource_health",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "write_task_log",
+      "kind": "method",
+      "signature": "write_task_log(job_id: str, task_name: str, level: str, message: str, extra: str | None = None) -> None",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "level",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "message",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "extra",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyResultSender",
+      "name": "try_report_cancelled",
+      "kind": "method",
+      "signature": "try_report_cancelled(job_id: str, task_name: str, wall_time_ns: int) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "wall_time_ns",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyResultSender",
+      "name": "try_report_failure",
+      "kind": "method",
+      "signature": "try_report_failure(job_id: str, task_name: str, error: str, retry_count: int, max_retries: int, wall_time_ns: int, should_retry: bool) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "error",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "retry_count",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "max_retries",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "wall_time_ns",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "should_retry",
+          "type": "bool",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyResultSender",
+      "name": "try_report_slept",
+      "kind": "method",
+      "signature": "try_report_slept(job_id: str, task_name: str, wake_at: int, wall_time_ns: int) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "wake_at",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "wall_time_ns",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyResultSender",
+      "name": "try_report_success",
+      "kind": "method",
+      "signature": "try_report_success(job_id: str, task_name: str, result: bytes | None, wall_time_ns: int) -> bool",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "result",
+          "type": "bytes | None",
+          "default": null
+        },
+        {
+          "name": "wall_time_ns",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "bool"
+    },
+    {
+      "owner": "PyTaskConfig",
+      "name": "__init__",
+      "kind": "method",
+      "signature": "__init__(name: str, max_retries: int = 3, retry_backoff: float = 1.0, timeout: int = 300, priority: int = 0, rate_limit: str | None = None, queue: str = \"default\", circuit_breaker_threshold: int | None = None, circuit_breaker_window: int | None = None, circuit_breaker_cooldown: int | None = None, retry_delays: list[float] | None = None, max_retry_delay: int | None = None, max_concurrent: int | None = None, circuit_breaker_half_open_probes: int | None = None, circuit_breaker_half_open_success_rate: float | None = None, max_in_flight_per_task: int | None = None, retry_budget: str | None = None, on_excess: str | None = None) -> None",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "max_retries",
+          "type": "int",
+          "default": "3"
+        },
+        {
+          "name": "retry_backoff",
+          "type": "float",
+          "default": "1.0"
+        },
+        {
+          "name": "timeout",
+          "type": "int",
+          "default": "300"
+        },
+        {
+          "name": "priority",
+          "type": "int",
+          "default": "0"
+        },
+        {
+          "name": "rate_limit",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str",
+          "default": "\"default\""
+        },
+        {
+          "name": "circuit_breaker_threshold",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "circuit_breaker_window",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "circuit_breaker_cooldown",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "retry_delays",
+          "type": "list[float] | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retry_delay",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "max_concurrent",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "circuit_breaker_half_open_probes",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "circuit_breaker_half_open_success_rate",
+          "type": "float | None",
+          "default": "None"
+        },
+        {
+          "name": "max_in_flight_per_task",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "retry_budget",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "on_excess",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyWorkflowBuilder",
+      "name": "__init__",
+      "kind": "method",
+      "signature": "__init__() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "PyWorkflowBuilder",
+      "name": "add_step",
+      "kind": "method",
+      "signature": "add_step(name: str, task_name: str, after: list[str] | None = None, queue: str | None = None, max_retries: int | None = None, timeout_ms: int | None = None, priority: int | None = None, args_template: str | None = None, kwargs_template: str | None = None, fan_out: str | None = None, fan_in: str | None = None, condition: str | None = None) -> None",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "task_name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "after",
+          "type": "list[str] | None",
+          "default": "None"
+        },
+        {
+          "name": "queue",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "max_retries",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "timeout_ms",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "priority",
+          "type": "int | None",
+          "default": "None"
+        },
+        {
+          "name": "args_template",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "kwargs_template",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "fan_out",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "fan_in",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "condition",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "PyWorkflowBuilder",
+      "name": "serialize",
+      "kind": "method",
+      "signature": "serialize() -> tuple[bytes, str]",
+      "params": [],
+      "returns": "tuple[bytes, str]"
+    },
+    {
+      "owner": "PyWorkflowBuilder",
+      "name": "step_count",
+      "kind": "method",
+      "signature": "step_count() -> int",
+      "params": [],
+      "returns": "int"
+    },
+    {
+      "owner": "PyWorkflowBuilder",
+      "name": "step_names",
+      "kind": "method",
+      "signature": "step_names() -> list[str]",
+      "params": [],
+      "returns": "list[str]"
+    },
+    {
+      "owner": "PyWorkflowRunStatus",
+      "name": "node_statuses",
+      "kind": "method",
+      "signature": "node_statuses() -> dict[str, dict[str, Any]]",
+      "params": [],
+      "returns": "dict[str, dict[str, Any]]"
+    },
+    {
+      "owner": "StepDecision",
+      "name": "idempotency_key",
+      "kind": "property",
+      "signature": "idempotency_key: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "StepDecision",
+      "name": "memoized",
+      "kind": "property",
+      "signature": "memoized: bytes | None",
+      "params": [],
+      "returns": "bytes | None"
+    },
+    {
+      "owner": "StepDecision",
+      "name": "step_key",
+      "kind": "property",
+      "signature": "step_key: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "StepSession",
+      "name": "begin_run",
+      "kind": "method",
+      "signature": "begin_run(name: str, key: str | None = None) -> StepDecision",
+      "params": [
+        {
+          "name": "name",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "key",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "StepDecision"
+    },
+    {
+      "owner": "StepSession",
+      "name": "commit_run",
+      "kind": "method",
+      "signature": "commit_run(decision: StepDecision, encoded: bytes) -> None",
+      "params": [
+        {
+          "name": "decision",
+          "type": "StepDecision",
+          "default": null
+        },
+        {
+          "name": "encoded",
+          "type": "bytes",
+          "default": null
+        }
+      ],
+      "returns": "None"
+    },
+    {
+      "owner": "StepSession",
+      "name": "finish",
+      "kind": "method",
+      "signature": "finish() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "StepSession",
+      "name": "idempotency_key",
+      "kind": "method",
+      "signature": "idempotency_key(step_key: str) -> str",
+      "params": [
+        {
+          "name": "step_key",
+          "type": "str",
+          "default": null
+        }
+      ],
+      "returns": "str"
+    },
+    {
+      "owner": "StepSession",
+      "name": "run_key",
+      "kind": "method",
+      "signature": "run_key() -> str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "StepSession",
+      "name": "sleep_for",
+      "kind": "method",
+      "signature": "sleep_for(duration_ms: int, name: str | None = None, key: str | None = None) -> StepSleepOutcome",
+      "params": [
+        {
+          "name": "duration_ms",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "key",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "StepSleepOutcome"
+    },
+    {
+      "owner": "StepSession",
+      "name": "sleep_until",
+      "kind": "method",
+      "signature": "sleep_until(wake_at: int, name: str | None = None, key: str | None = None) -> StepSleepOutcome",
+      "params": [
+        {
+          "name": "wake_at",
+          "type": "int",
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "str | None",
+          "default": "None"
+        },
+        {
+          "name": "key",
+          "type": "str | None",
+          "default": "None"
+        }
+      ],
+      "returns": "StepSleepOutcome"
+    },
+    {
+      "owner": "StepSleepOutcome",
+      "name": "elapsed",
+      "kind": "property",
+      "signature": "elapsed: bool",
+      "params": [],
+      "returns": "bool"
+    },
+    {
+      "owner": "StepSleepOutcome",
+      "name": "step_key",
+      "kind": "property",
+      "signature": "step_key: str",
+      "params": [],
+      "returns": "str"
+    },
+    {
+      "owner": "StepSleepOutcome",
+      "name": "wake_at",
+      "kind": "property",
+      "signature": "wake_at: int",
+      "params": [],
+      "returns": "int"
+    },
+    {
+      "owner": "WorkerSteps",
+      "name": "open_step_session",
+      "kind": "method",
+      "signature": "open_step_session(job_id: str, attempt: int) -> StepSession",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "default": null
+        },
+        {
+          "name": "attempt",
+          "type": "int",
+          "default": null
+        }
+      ],
+      "returns": "StepSession"
+    },
+    {
+      "owner": "WorkerSteps",
+      "name": "owner",
+      "kind": "property",
+      "signature": "owner: str",
+      "params": [],
+      "returns": "str"
+    }
+  ]
+}
