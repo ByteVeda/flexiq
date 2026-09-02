@@ -76,7 +76,10 @@ can reach its DSN — no listener has to be running:
 export FLEXIQ_DSN=postgres://user:pass@host/db
 export FLEXIQ_NAMESPACE=prod
 
-flexiq-server token create --name my-producer --scope produce
+# The token goes to stdout and the summary to stderr, so a command substitution
+# captures the credential alone while the confirmation still reaches your
+# terminal.
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
 # fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
 
 flexiq-server token list

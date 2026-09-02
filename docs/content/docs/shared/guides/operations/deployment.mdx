@@ -1080,6 +1080,13 @@ the secret half, so the token is not recoverable from the row, from a database
 dump, or from anyone with admin access. If it is lost, revoke it and issue
 another.
 
+The token is the *only* thing on stdout — the confirmation goes to stderr — so a
+command substitution captures the credential and nothing else:
+
+```bash
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
+```
+
 Then run the door and present it:
 
 ```bash
