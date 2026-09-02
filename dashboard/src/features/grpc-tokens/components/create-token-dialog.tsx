@@ -47,6 +47,14 @@ export function CreateGrpcTokenDialog() {
   }
 
   function onOpenChange(next: boolean) {
+    // A dismissal while the request is in flight is refused, not deferred.
+    // `reset()` would clear `created` while the mutation kept running, and its
+    // per-call `onSuccess` would then set it again behind a closed dialog — so
+    // reopening would reveal a token from an earlier request. Holding the
+    // dialog open until the request settles also means the operator always
+    // sees the credential they just created: it exists server-side either way,
+    // and one they never read is one they can only revoke.
+    if (!next && create.isPending) return;
     if (!next) reset();
     setOpen(next);
   }
