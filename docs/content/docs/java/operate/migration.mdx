@@ -10,8 +10,9 @@ of a broker. FlexiQ replaces all three with one client and one store.
 The three shifts worth understanding before you start:
 
 - **Durability comes from the store, not the broker.** `@Async` work lives in an
-  in-process executor and is gone on restart; FlexiQ jobs are rows and survive
-  it. There is no broker, exchange or DLX to declare.
+  in-process executor and is gone on restart; FlexiQ jobs are durable records in
+  the configured store and survive it. There is no broker, exchange or DLX to
+  declare.
 - **Tasks are named descriptors.** A producer holds a `Task<T>` — a name plus a
   payload type — and never needs the handler. That is what lets the web tier
   enqueue without the dependencies that do the work.
