@@ -23,7 +23,30 @@ description: "Injectable resources, enqueue gates, distributed locks, and period
 
 | Member | Description |
 |---|---|
-| `lock(name, opts)` / `withLock(name, fn)` | [Distributed locks](/node/guides/reliability/locks). |
+| `lock(name, opts)` → `Lock` | A [lock](/node/guides/reliability/locks) handle, **not yet acquired**. `opts` is `{ ttlMs = 30000, ownerId = randomUUID(), autoExtend = true }`; a non-positive or non-finite `ttlMs` throws `RangeError` at construction rather than at acquire time. |
+| `withLock(name, fn, opts?)` → `Promise<T>` | **async.** Acquire, run `fn`, release. Rejects with `LockNotAcquiredError` if another owner holds the lock, and with `LockLostError` if the lease was gone by the time `fn` finished — a thrown `fn` still releases, and its own error propagates unchanged. |
+
+### The `Lock` handle
+
+`Lock` implements `Symbol.dispose`, so `using lock = queue.lock("report")`
+releases at block exit. Acquisition is never implicit — a handle you never
+`acquire()` guards nothing.
+
+| Member | Description |
+|---|---|
+| `acquire()` → `boolean` | Take the lease for this handle's `ownerId` (`acquireLock`). `false` when another owner holds a live one — it does not wait. On a handle that already believes it holds the lock, it re-validates by extending first rather than trusting local state. |
+| `extend(ttlMs?)` → `boolean` | Push the expiry out (`extendLock`), defaulting to the handle's own `ttlMs`. `false` once the lease is gone, which is how auto-extend learns it lost the lock and stops the timer. |
+| `release()` → `boolean` | Stop renewing and drop the lease (`releaseLock`). `false` when this handle was not the holder: releasing is owner-scoped, so a stale handle cannot free somebody else's lock. |
+| `info()` → `LockInfo \| undefined` | Current holder (`getLockInfo`): `{ lockName, ownerId, acquiredAt, expiresAt }`, timestamps in Unix milliseconds. `undefined` when the lock is free. |
+| `locked` | Whether *this handle* believes it holds the lock. Local state — `info()` is the authoritative answer. |
+
+<Callout type="warn">
+  A lock is a TTL lease, not a mutex. `autoExtend` renews at `ttlMs / 3` and its
+  timer is `unref`'d, so it never keeps the process alive; a holder that stalls
+  past `ttlMs` anyway loses the lease while still inside its critical section.
+  Size `ttlMs` against your worst case, and treat a `false` from `release()` as
+  "the section ran unprotected", not as a no-op.
+</Callout>
 
 ## Periodic
 
