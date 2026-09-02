@@ -978,13 +978,11 @@ fourth beside attach, the dashboard and the admission webhook. It is the
 network-side producer door — enqueue, read and cancel over gRPC rather than over
 a database connection — alongside `grpc.health.v1` and server reflection.
 
-<Callout type="warn" title="A shared secret is not a finished credential">
-`FLEXIQ_GRPC_TOKEN` is one secret every client presents. It cannot be revoked
-for one client, it carries no scope, and it leaves no audit trail. It is enough
-to keep an anonymous caller off an `Enqueue` port, and it is not enough to put
-that port on an untrusted network: terminate TLS in front of the listener and
-keep it reachable only from networks you already trust, until scoped tokens
-land.
+<Callout type="info" title="A token proves who is calling, not that the line is private">
+Callers present a scoped API token, and the door refuses every call that does
+not. What a bearer token does not do is encrypt the connection — the listener
+terminates no TLS, the same posture the attach listener takes. Put TLS in a
+sidecar proxy or a service mesh in front of it.
 </Callout>
 
 ```bash
@@ -994,11 +992,14 @@ FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
 flexiq-server
 ```
 
+That listener refuses every call until a token exists, loopback included — see
+[The credential](#the-credential).
+
 The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
 (which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
 Unix socket lands at mode `0660` through the same hardened bind the attach
-listener uses, so the shared **group** is again the access control — which is
-why a Unix socket needs no token even though it is not a loopback address.
+listener uses, so the shared **group** is a boundary in front of the credential
+— not a replacement for it. A Unix bind presents a token like any other.
 
 The role ships behind a cargo feature. The published image has it compiled in;
 a binary you built yourself without `--features grpc` rejects
@@ -1028,13 +1029,14 @@ than conditionally absent.
 `CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
 
 ```bash
-# $FLEXIQ_GRPC_TOKEN is the value the listener was started with — see
-# "The credential" below for where it comes from.
-grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
+# $FLEXIQ_TOKEN is a token you minted — see "The credential" below. Exported
+# rather than prefixed onto the command: a `VAR=x cmd` assignment reaches that
+# one process, and every call in this block needs the value.
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   localhost:50051 list
 # Health is the exception, and needs no credential.
 grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
-grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
@@ -1051,37 +1053,112 @@ is **no way to name a namespace**; see below.
 
 ### The credential
 
-`FLEXIQ_GRPC_TOKEN` is the secret a caller presents, as an `authorization`
-metadata entry:
+A caller presents a **scoped API token** as an `authorization` metadata entry.
+Tokens live in the database rather than in the environment, which is what makes
+each of the next three sentences true: one can be revoked without touching any
+other, one can be granted less than the whole surface, and one carries a record
+of when it was last used.
+
+Mint the first one wherever the server can reach its database — no listener has
+to be running:
 
 ```bash
-# Exported rather than prefixed onto the command: a `VAR=x cmd` assignment
-# reaches that one process, and a client on the same shell needs the value too.
-export FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32)
+export FLEXIQ_DSN=postgres://user:pass@host/db
+export FLEXIQ_NAMESPACE=prod
 
+flexiq-server token create --name my-producer --scope produce
+```
+
+It prints the token to stdout, once:
+
+```text
+fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
+```
+
+That is the only time it is shown. What the server stores is a SHA-256 digest of
+the secret half, so the token is not recoverable from the row, from a database
+dump, or from anyone with admin access. If it is lost, revoke it and issue
+another.
+
+Then run the door and present it:
+
+```bash
 FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
 FLEXIQ_NAMESPACE=prod \
 FLEXIQ_DSN=postgres://user:pass@host/db \
 flexiq-server
 ```
 
-It must be at least 16 characters — the same floor `FLEXIQ_ATTACH_TOKEN` has,
-because a guessable secret is not a control — and the server removes it from its
-own environment once parsed, so a task body or a crash dump cannot read it back.
+```bash
+grpcurl -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -d '{"task_name": "send_email", "options": {"queue": "emails"}}' \
+  localhost:50051 flexiq.v1.ProducerService/Enqueue
+```
 
-**A non-loopback bind without it is refused at boot.** Loopback and Unix sockets
-still need no token: there the network stack and the filesystem mode are the
-boundary. Setting one on a loopback bind is honoured rather than optimised away.
+The dashboard does the same three things under **Configuration → gRPC tokens**,
+behind its existing admin role — minting is an operator action, and a producer
+credential must never be able to mint itself a wider one.
 
-**One check covers the whole listener**, not one per RPC. With a token
-configured, a wrong one, a missing one, one under the wrong scheme and a call to
-an RPC that does not exist all answer `UNAUTHENTICATED` with the reason
-`UNAUTHENTICATED` and the same message — nothing distinguishes them, because a
+<Callout type="warn" title="There is no fallback credential">
+An unprovisioned door serves **nothing**. Loopback and Unix-socket binds are not
+exempt: a listener with no token minted refuses every call, because a door with
+no credential configured is a misconfiguration rather than a permission grant.
+Earlier releases accepted a `FLEXIQ_GRPC_TOKEN` shared secret and let a loopback
+bind through anonymously; both are gone, and the variable is no longer read.
+</Callout>
+
+#### Scopes
+
+A token grants one scope per proto package, and the two are deliberately not a
+hierarchy:
+
+| Scope | Package | What it opens |
+| --- | --- | --- |
+| `produce` | `flexiq.v1` | Submit, read and cancel work |
+| `execute` | `flexiq.executor.v1` | Claim work and report on it |
+
+A producer and an executor need opposite permissions, so **a token that can poll
+for work cannot enqueue it**, and a `produce` token asked for an executor RPC is
+refused with `PERMISSION_DENIED` and the reason `SCOPE_DENIED`, carrying the
+scope it lacked in the error metadata. Repeat `--scope` to grant both, and grant
+both only to something that genuinely does both.
+
+#### Expiry
+
+Every token expires. The default is 90 days and the maximum is 365 — a
+credential with no end date is a permanent one with extra steps — and a request
+for longer is refused rather than quietly clamped. Once a token is inside 30, 20
+and 10 days of expiry, the server logs a warning the first time it is *used* at
+each threshold, so the credentials that get a reminder are the ones actually
+carrying traffic.
+
+#### Revocation
+
+```bash
+flexiq-server token list
+flexiq-server token revoke 9f2c1ab74e05d366
+```
+
+**A revoked token fails on its next call, with no restart.** The door reads the
+row per call rather than caching a verdict, so a revocation from the dashboard,
+from another pod, or from a shell takes effect immediately everywhere. The row
+survives revocation — it is the record that the credential existed, who minted
+it and when it was last used.
+
+The id (`9f2c1ab74e05d366` above, and the part of the token before the dot) is
+public: it is what a listing shows and what `revoke` takes, and it is safe in a
+log.
+
+#### One check, one answer
+
+**One check covers the whole listener**, not one per RPC. A missing token, a
+wrong one, a well-formed token for an id that was never minted, one under the
+wrong scheme, an expired one, a revoked one, one minted for another namespace,
+and a call to an RPC that does not exist all answer `UNAUTHENTICATED` with the
+reason `UNAUTHENTICATED` and the same message. Nothing distinguishes them: a
 distinguishable answer tells a client guessing tokens which guess was closer,
 and a path answered before authentication tells it which services the build
-carries. On a tokenless loopback or Unix-socket listener there is nothing to
-guess: every caller is accepted, so an unknown RPC reaches the router and comes
-back `UNIMPLEMENTED` as it would on any gRPC server.
+carries.
 
 **The two `grpc.health.v1` RPCs are the one exception** and are answered without
 a credential. `Check` and `Watch` by name, not the whole service prefix — an
@@ -1092,9 +1169,11 @@ What it publishes is one bit — whether storage answers — to something that h
 already reached the port. Reflection is gated with everything else.
 
 The namespace comes from the credential, never from a request: no message in
-`flexiq.v1` has a namespace field, in any RPC. Under a shared secret that
-namespace is the server's own `FLEXIQ_NAMESPACE`, so a token is implicitly
-scoped to the one namespace this process schedules.
+`flexiq.v1` has a namespace field, in any RPC. A token is bound to one namespace
+at mint time, and to the namespace the minting process itself serves — a
+credential for a namespace this deployment does not schedule would accept
+enqueues that nothing ever dequeues, which is a success response and no work. A
+token presented to a listener serving a different namespace is refused.
 
 ### Two doors for one payload, and only one of them is lossless
 
@@ -1166,38 +1245,50 @@ falls back to a socket connect.
 
 ### Security
 
-Same posture as the attach listener, and the same warning applies more strongly
-while the door is young:
+Same posture as the attach listener:
 
 - **No TLS is terminated here.** `FLEXIQ_GRPC_TLS_CERT` and
   `FLEXIQ_GRPC_TLS_KEY` are rejected outright rather than accepted and ignored,
   because a variable that looks like it encrypts the connection and does not is
   worse than no variable. Terminate TLS in a sidecar proxy or a service mesh.
-- **The credential is a shared secret, and it is one factor.** It proves the
-  peer knows a string; it does not encrypt the connection, it cannot be revoked
-  for one client, and it grants everything. A non-loopback bind without it is
-  refused at boot rather than allowed with a warning, because an unauthenticated
-  port that accepts `Enqueue` is not a thing to leave running behind a log line.
+- **The credential is a bearer token, and it is one factor.** It proves the peer
+  holds a string; it does not encrypt the connection. What it is *not* is a
+  shared secret: each token is named, scoped, expiring and revocable on its own,
+  so a leak costs you one client's access rather than a rotation across every
+  client at once. Only its SHA-256 digest is stored, so the database does not
+  hold anything that can be replayed.
+- **There is no anonymous path and no fallback credential.** A door with no token
+  minted refuses every call, loopback included, because a listener with no
+  credential provisioned is a misconfiguration rather than a permission grant.
 - **Nothing on this door is an admin surface.** Pausing queues, settings,
   dead-letter operations and webhook secrets stay behind the dashboard's session
   and role check. A token that leaks costs you an enqueue path, not a tenant.
 
 ### With Helm
 
-`grpc.enabled` needs `grpc.token` or `grpc.existingSecret`, refused at `helm
-template` time rather than rendering a Deployment that CrashLoopBackOffs: the
-chart binds `0.0.0.0` because kubelet dials the pod IP for every probe type, and
-the server refuses that bind without a credential.
+`grpc.enabled` needs `namespace` and nothing else — the credential is not a
+chart value, because tokens live in the database. A release that still sets
+`grpc.token` or `grpc.existingSecret` is refused at `helm template` time rather
+than starting a door credentialled by a value nothing reads.
 
 ```yaml
 namespace: prod
 grpc:
   enabled: true
-  token: "" # or existingSecret, holding key `grpc-token`
 ```
 
-The rest of the wiring is already in the chart and takes effect when the value
-works again: the door gets its own `ClusterIP` Service — never merged with the
+Mint the first token against the running release:
+
+```bash
+kubectl exec deploy/flexiq-flexiq-server -- \
+  flexiq-server token create --name my-producer --scope produce
+```
+
+That is also why rotating this credential needs no rollout, unlike the others
+the chart carries: a `secretKeyRef` is resolved into the container's environment
+once at pod start, while a token is read from the database per call.
+
+The door gets its own `ClusterIP` Service — never merged with the
 dashboard's, for the same reason attach is separate — with `appProtocol: grpc`
 so a mesh or an Ingress keyed off it speaks HTTP/2 rather than downgrading and
 breaking every stream. `grpc.enabled` also requires `namespace`.

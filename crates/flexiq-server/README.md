@@ -30,7 +30,6 @@ Run `flexiq-server --help` for the full list; the essentials:
 | `FLEXIQ_DASHBOARD_AUTH` | `off` (default) or `session` |
 | `FLEXIQ_MAINTENANCE` | `off` to leave retention to another replica |
 | `FLEXIQ_GRPC_LISTEN` | gRPC address, or `unix:/run/flexiq-grpc.sock` |
-| `FLEXIQ_GRPC_TOKEN` | Shared secret gRPC callers present; required off loopback |
 
 At least one of `FLEXIQ_LISTEN`, `FLEXIQ_DASHBOARD`, `FLEXIQ_WEBHOOK_LISTEN` or
 `FLEXIQ_GRPC_LISTEN` must be set.
@@ -57,47 +56,61 @@ FLEXIQ_NAMESPACE=prod \
 FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
 flexiq-server
 
-grpcurl -plaintext localhost:50051 list
-grpcurl -plaintext -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" localhost:50051 list
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
 
 ### The credential
 
-`FLEXIQ_GRPC_TOKEN` is the secret a caller presents, as
-`authorization: Bearer <token>`. It gates everything on the listener except
-`grpc.health.v1`, which stays open because a Kubernetes `grpc:` probe has no way
-to send metadata; reflection is gated with the rest.
+Callers present a **scoped API token**, as `authorization: Bearer <token>`. It
+gates everything on the listener except the two `grpc.health.v1` RPCs, which stay
+open because a Kubernetes `grpc:` probe has no way to send metadata; reflection
+is gated with the rest.
+
+Tokens live in the database, not in the environment. Mint one wherever the server
+can reach its DSN — no listener has to be running:
 
 ```bash
-# Exported, not prefixed: a `VAR=x cmd` assignment reaches that one command,
-# and the client below needs the same value.
-export FLEXIQ_GRPC_TOKEN=$(openssl rand -base64 32)
+export FLEXIQ_DSN=postgres://user:pass@host/db
+export FLEXIQ_NAMESPACE=prod
 
-FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 ... flexiq-server
+flexiq-server token create --name my-producer --scope produce
+# fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
 
-grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_GRPC_TOKEN" \
-  localhost:50051 list
+flexiq-server token list
+flexiq-server token revoke 9f2c1ab74e05d366
 ```
 
-It is a **shared secret**, so it cannot be revoked for one client, carries no
-scope and leaves no audit trail. Treat the listener as reachable only from a
-trusted network until scoped tokens land, and terminate TLS in front of it.
+The token is printed once; only a SHA-256 digest of it is stored, so it is not
+recoverable from the row. The dashboard does the same three things under
+Configuration → gRPC tokens, behind its admin role. **A revoked token fails on
+its next call, with no restart** — the door reads the row per call rather than
+caching a verdict.
 
-Three things it refuses. **A non-loopback bind with no `FLEXIQ_GRPC_TOKEN`**,
-because a port that accepts `Enqueue` does not serve an unauthenticated network
-— set the token, use loopback, or use `unix:/run/flexiq-grpc.sock`, where the
-socket's `0660` mode is the boundary. **A missing `FLEXIQ_NAMESPACE`**, because
-an unset namespace means "every namespace" to an id-addressed read and "only the
-unnamespaced rows" to a dequeue, and a wire that can express that is one bug
-away from a cross-tenant read. And **`FLEXIQ_GRPC_LISTEN` itself** on a binary
-built without the `grpc` feature, so a misconfigured deployment fails at boot
-instead of serving nothing on the port its clients dial.
+`--scope produce` opens `flexiq.v1` (submit, read, cancel) and `--scope execute`
+opens `flexiq.executor.v1` (claim work, report on it). They are not a hierarchy:
+a token that can poll for work must not be able to enqueue it. Every token
+expires — 90 days by default, 365 at most — and the server warns on use at 30, 20
+and 10 days remaining.
+
+Three things it refuses. **Every call on a door with no token minted**, loopback
+and Unix sockets included, because a listener with no credential provisioned is a
+misconfiguration rather than a permission grant. **A missing `FLEXIQ_NAMESPACE`**,
+because an unset namespace means "every namespace" to an id-addressed read and
+"only the unnamespaced rows" to a dequeue, and a wire that can express that is one
+bug away from a cross-tenant read — a token is bound at mint time to the namespace
+the minting process serves, and refused by a listener serving another. And
+**`FLEXIQ_GRPC_LISTEN` itself** on a binary built without the `grpc` feature, so a
+misconfigured deployment fails at boot instead of serving nothing on the port its
+clients dial.
 
 Health is answered out of storage — the same question `/readiness` answers — so
 an orchestrator can take a replica that cannot reach its database out of
-rotation. TLS is not terminated here either; that belongs to a sidecar proxy or
-a service mesh.
+rotation. TLS is not terminated here; a bearer token proves who is calling and
+does not encrypt the connection, so that belongs to a sidecar proxy or a service
+mesh.
 
 ## Container image
 
