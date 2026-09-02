@@ -43,9 +43,12 @@ function parseCallable(text, name) {
   if (close === -1) {
     return null;
   }
+  // napi emits no terminator today, but a `;` folded into the return type would
+  // reach the rendered signature verbatim.
   const returns = text
     .slice(close + 1)
     .replace(/^\s*:\s*/, "")
+    .replace(/[;,]\s*$/, "")
     .trim();
   return { params: parseParams(text.slice(open + 1, close)), returns };
 }
