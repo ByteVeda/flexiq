@@ -25,6 +25,11 @@ export const INLINE_OPEN = "{/* api:";
 const INLINE_BLOCK =
   /(\{\/\* api:([\w.$]+) \*\/\}\n)[\s\S]*?(\n\{\/\* \/api \*\/\})/g;
 
+/** Drop generated blocks, markers and all — what a page says in its own words. */
+export function stripInlineBlocks(raw) {
+  return raw.replace(INLINE_BLOCK, "");
+}
+
 function sectionDir(sdk) {
   return join(CONTENT_DIR, sdk, SECTION);
 }
@@ -99,6 +104,17 @@ export function planInline(inventories) {
   const missing = [];
   for (const file of loadContentFiles()) {
     if (!file.rel.endsWith(".mdx") || !file.raw.includes(INLINE_OPEN)) {
+      continue;
+    }
+    // `replace` only ever sees complete blocks, so an unterminated marker would
+    // leave stale content in place and report nothing — the one shape of this
+    // failure the gate could not otherwise see.
+    const opened = file.raw.split(INLINE_OPEN).length - 1;
+    const complete = [...file.raw.matchAll(INLINE_BLOCK)].length;
+    if (opened !== complete) {
+      missing.push(
+        `${file.rel}: ${opened - complete} api block(s) never closed with {/* /api */}`,
+      );
       continue;
     }
     const sdk = file.rel.split("/")[0];

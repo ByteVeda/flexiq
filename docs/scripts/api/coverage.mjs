@@ -12,7 +12,7 @@
 
 import { readFileSync } from "node:fs";
 import { extractDocText } from "../../app/lib/mdx-extract.ts";
-import { SECTION } from "./generate.mjs";
+import { SECTION, stripInlineBlocks } from "./generate.mjs";
 import { documentable, qualify, SDKS } from "./inventory.mjs";
 
 export const CONFIG = JSON.parse(
@@ -31,7 +31,14 @@ function toPattern(entry) {
   return new RegExp(`^${escapeRegExp(entry).replace(/\\\*/g, "[\\w.$]*")}$`);
 }
 
-/** Code from every hand-written reference page of one SDK, concatenated. */
+/**
+ * Code from every hand-written reference page of one SDK, concatenated.
+ *
+ * Inline `api:` blocks are cut out first. `extractDocText` collects fences
+ * before it strips MDX comments, so a generated signature would otherwise read
+ * as a hand-written mention of its own symbol — the measure would count the
+ * generator's output as the writing it exists to track.
+ */
 function referenceCode(files, sdk) {
   const generated = `${sdk}/${SECTION}/`;
   return files
@@ -42,7 +49,7 @@ function referenceCode(files, sdk) {
         (file.rel.startsWith(`${sdk}/api-reference/`) ||
           file.rel.startsWith("shared/api-reference/")),
     )
-    .map((file) => extractDocText(file.raw).code)
+    .map((file) => extractDocText(stripInlineBlocks(file.raw)).code)
     .join("\n");
 }
 
