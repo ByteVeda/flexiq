@@ -20,7 +20,7 @@ tasks, so the app image needs no DSN and no inbound port.
 | `attach.enabled` | `true` | The attach listener and, once an executor attaches, the scheduler |
 | `dashboard.enabled` | `true` | The dashboard SPA and its JSON API |
 | `webhook.enabled` | `false` | The mutating admission webhook that injects executor sidecars |
-| `grpc.enabled` | `false` | The gRPC producer door, on its own Service. Needs a credential and `namespace` |
+| `grpc.enabled` | `false` | The gRPC producer door, on its own Service. Needs `namespace` |
 
 At least one must be on. `storage.dsn` is required unless the release runs the
 webhook alone — that role rewrites pod specs and reads no jobs.
@@ -30,27 +30,42 @@ this chart mounts no volume for it, and a second replica would not see the first
 one's jobs; the chart refuses the DSN rather than shipping a database that
 disappears with the pod.
 
-`grpc.enabled` requires a credential: either `grpc.token`, which the chart puts
-in the Secret it generates under the key `grpc-token`, or `grpc.existingSecret`
-naming a Secret you already manage. The key read from that Secret is
-`grpc.existingSecretKey`, which defaults to `grpc-token` — set it if yours is
-named something else. The door serves the `flexiq.v1` producer service —
-enqueue, read, cancel — and the chart binds it `0.0.0.0`, because kubelet dials
-the pod IP for every probe type and a loopback listener would never pass
-readiness. The server refuses that bind without a credential, so the chart
-refuses it a step earlier, where the message can name the value to set.
+The gRPC door serves the `flexiq.v1` producer service — enqueue, read, cancel —
+and the chart binds it `0.0.0.0`, because kubelet dials the pod IP for every
+probe type and a loopback listener would never pass readiness.
 
-**Rotating a token needs the pods to restart.** A `secretKeyRef` is resolved
-into the container's environment once, at pod start. The chart annotates the pod
-template with a checksum of the Secret it generates, so changing `grpc.token` or
-`attach.token` rolls the Deployment on the next `helm upgrade`. A Secret the
-chart does not own cannot be hashed at render time, so after rotating an
-`existingSecret` run `kubectl rollout restart deploy/<release>-flexiq-server`
-yourself.
+**Its credential is not a chart value.** Callers present a scoped API token that
+lives in the database, so there is no `grpc.token` to set and no Secret for the
+chart to generate; a release that still sets one is refused at template time
+rather than starting a door credentialled by a value nothing reads. Mint tokens
+per client, once the release is up:
 
-It is a **shared secret**: one string every client presents, granting the whole
-producer surface, revocable only by rotating it everywhere. Keep the
-`-grpc` Service reachable only from workloads that should be enqueueing.
+```bash
+kubectl exec deploy/<release>-flexiq-server -- \
+  flexiq-server token create --name my-producer --scope produce
+```
+
+The token is printed once. `--scope execute` is the other half of the surface
+and is deliberately separate: a client that submits work should not be able to
+claim it. Every token carries an expiry, at most a year, and
+`flexiq-server token revoke <id>` — or the dashboard, under
+Configuration → gRPC tokens — takes one out of service **without restarting a
+pod**, because the door reads the row per call rather than caching a verdict.
+That is the whole reason the credential moved out of the environment: rotating
+a `secretKeyRef` needs a rollout, and revoking one client's access used to mean
+re-issuing to all of them.
+
+**Rotating the remaining secrets still needs the pods to restart.** A
+`secretKeyRef` is resolved into the container's environment once, at pod start.
+The chart annotates the pod template with a checksum of the Secret it generates,
+so changing `attach.token` or the admin password rolls the Deployment on the next
+`helm upgrade`. A Secret the chart does not own cannot be hashed at render time,
+so after rotating an `existingSecret` run
+`kubectl rollout restart deploy/<release>-flexiq-server` yourself.
+
+Nothing here terminates TLS: a token proves who is calling, it does not encrypt
+the connection. Terminate TLS in a proxy or a mesh in front of the `-grpc`
+Service.
 
 `grpc.enabled` also requires `namespace`. The gRPC door serves exactly
 one namespace, because an unset one means "every namespace" to a read and "only

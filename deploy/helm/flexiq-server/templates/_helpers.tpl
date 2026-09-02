@@ -56,7 +56,6 @@ was supplied inline rather than pointed at an existing Secret.
 {{- $create := false -}}
 {{- if and .Values.storage.dsn (not .Values.storage.existingSecret) -}}{{- $create = true -}}{{- end -}}
 {{- if and .Values.attach.token (not .Values.attach.existingSecret) -}}{{- $create = true -}}{{- end -}}
-{{- if and .Values.grpc.token (not .Values.grpc.existingSecret) -}}{{- $create = true -}}{{- end -}}
 {{- if and .Values.dashboard.adminPassword (not .Values.dashboard.existingSecret) -}}{{- $create = true -}}{{- end -}}
 {{- if .Values.dashboard.metricsToken -}}{{- $create = true -}}{{- end -}}
 {{- if $create -}}true{{- end -}}
