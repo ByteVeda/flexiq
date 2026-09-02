@@ -94,8 +94,8 @@ climbs and does not come down, you are under-provisioned or nothing is draining.
   <Tab sdk="python">
 
 ```bash
-flexiq info --app tasks:queue --watch     # live counts in the terminal
-flexiq dashboard --app tasks:queue        # full web UI
+flexiq info --app tasks:queue --watch          # live counts in the terminal
+flexiq dashboard --app tasks:queue --auth     # full web UI, session auth on
 ```
 
   </Tab>
@@ -103,7 +103,7 @@ flexiq dashboard --app tasks:queue        # full web UI
 
 ```bash
 flexiq --db signup.db stats               # counts
-flexiq --db signup.db dashboard --port 8787
+flexiq --db signup.db dashboard --port 8787 --auth
 ```
 
   </Tab>
