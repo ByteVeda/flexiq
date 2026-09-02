@@ -209,8 +209,10 @@ HTTP API is the supported way to reach them:
 | `GET /api/workflows/runs/{run_id}/children` | `get_child_workflow_runs` |
 | `GET /api/workflows/runs/{run_id}/dag` | `get_workflow_definition_dag` |
 
-For a run you submitted yourself, the `WorkflowRun` handle above already answers
-without any of these.
+For a run you submitted yourself, `WorkflowRun` covers status, per-node status,
+cancellation and visualization without any of these. Listing and child-run
+queries have no handle equivalent — the dashboard API above is the way to reach
+them.
 
 ---
 

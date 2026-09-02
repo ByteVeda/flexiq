@@ -32,9 +32,10 @@ worker binds the scope around the handler call; outside one it throws a
 JobContext job = JobContext.current();
 ```
 
-The job running on **this thread**, so a handler reaches its own identity
-without threading it through every signature. A `static` accessor: it is reached
-through the type, because a handler has no `JobContext` until this hands it one.
+This returns the job running on **this thread**, so a handler can reach its own
+identity without threading it through every signature. It is a `static`
+accessor, reached through the type rather than an instance, because a handler
+has no `JobContext` until this call hands it one.
 
 Outside a task body it throws `IllegalStateException` rather than returning
 null — there is no job to describe, and any answer would be a guess. That also
