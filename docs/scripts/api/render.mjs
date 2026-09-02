@@ -54,7 +54,11 @@ const PARAM_FORM = {
  * not Java, and javadoc is what a Java reader is used to.
  */
 function callForm(sdk, symbol, receiver) {
-  const prefix = sdk === "java" || !receiver ? "" : `${receiver}.`;
+  // A static is reached through its type, never through an instance: a caller
+  // has no `ctx` until `JobContext.current()` has handed them one.
+  const isStatic = symbol.kind === "static";
+  const prefix =
+    sdk === "java" || !receiver ? "" : `${isStatic ? symbol.owner : receiver}.`;
   if (symbol.kind === "property") {
     const type = symbol.returns ?? (sdk === "python" ? "Any" : "unknown");
     return sdk === "java"
@@ -63,10 +67,16 @@ function callForm(sdk, symbol, receiver) {
   }
   const params = symbol.params.map(PARAM_FORM[sdk]);
   const ctor = isConstructor(symbol);
+  const declared = [
+    ...(symbol.deprecated ? ["@Deprecated"] : []),
+    ...(isStatic ? ["static"] : []),
+    symbol.typeParams,
+    symbol.returns ?? "void",
+  ].filter(Boolean);
   const head = ctor
     ? symbol.owner
     : sdk === "java"
-      ? `${symbol.returns ?? "void"} ${symbol.name}`
+      ? `${declared.join(" ")} ${symbol.name}`
       : `${prefix}${symbol.name}`;
   const tail =
     ctor || sdk === "java"
@@ -90,7 +100,8 @@ export function displayName(symbol) {
     return `${symbol.owner}()`;
   }
   const call = symbol.kind === "property" ? "" : "()";
-  return `${receiver ? `${receiver}.` : ""}${symbol.name}${call}`;
+  const target = symbol.kind === "static" ? symbol.owner : receiver;
+  return `${target ? `${target}.` : ""}${symbol.name}${call}`;
 }
 
 /**
