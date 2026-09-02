@@ -14,11 +14,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  SecretReveal,
 } from "@/components/ui";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { useDeleteWebhook, useRotateSecret } from "../hooks";
 import type { Webhook } from "../types";
-import { SecretReveal } from "./secret-reveal";
 
 interface Props {
   webhook: Webhook;
@@ -105,7 +105,12 @@ export function WebhookRowActions({ webhook }: Props) {
             <DialogTitle>New signing secret</DialogTitle>
             <DialogDescription>Configure your receiver with this value.</DialogDescription>
           </DialogHeader>
-          {revealedSecret ? <SecretReveal secret={revealedSecret} /> : null}
+          {revealedSecret ? (
+            <SecretReveal
+              secret={revealedSecret}
+              note="flexiq keeps this secret so it can sign your payloads, but never shows it again. If you lose it, rotate to a new one."
+            />
+          ) : null}
           <Button onClick={() => setRevealedSecret(null)}>
             <Eye aria-hidden /> Done
           </Button>

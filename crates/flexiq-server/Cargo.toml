@@ -38,6 +38,7 @@ grpc = [
   "dep:tower-layer",
   "dep:tower-service",
   "dep:tonic-prost-build",
+  "dep:async-trait",
 ]
 
 [dependencies]
@@ -68,6 +69,9 @@ rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
 # The gRPC role, all optional behind `grpc`. Default features carry the router
 # and server; they also carry the channel client, which is what the role's
 # integration test dials its own listener with.
+# The `Authenticator` seam answers from storage, which is blocking, so the
+# trait returns a boxed future — `dyn Authenticator` rules out a plain async fn.
+async-trait = { workspace = true, optional = true }
 tonic = { version = "0.14", optional = true }
 tonic-health = { version = "0.14", optional = true }
 tonic-reflection = { version = "0.14", optional = true }

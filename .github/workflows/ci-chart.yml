@@ -68,16 +68,18 @@ jobs:
           refuses "a gRPC door with no namespace" \
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set grpc.enabled=true
-          # And the door with no credential: the chart binds 0.0.0.0 because
-          # kubelet dials the pod IP, and the server refuses that bind without
-          # a token.
-          refuses "a gRPC door with no credential" \
-            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
-            --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod
-          refuses "a guessable gRPC token" \
+          # The gRPC credential moved into the database, so a release still
+          # setting one is configuring a value nothing reads — refused rather
+          # than silently ignored, which would leave an operator believing the
+          # door is credentialled by it.
+          refuses "a stale grpc.token" \
             --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
             --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod \
-            --set grpc.token=short
+            --set grpc.token="$TOKEN"
+          refuses "a stale grpc.existingSecret" \
+            --set storage.dsn=postgres://u:p@db/x --set attach.enabled=false \
+            --set dashboard.enabled=false --set grpc.enabled=true --set namespace=prod \
+            --set grpc.existingSecret=my-secret
 
       # A readiness probe that 401s leaves the pod NotReady forever, and the
       # only thing distinguishing the two cases is one env var reaching the
@@ -112,14 +114,13 @@ jobs:
       # and `grpc.healthProbe=false` falls readiness back to a socket for
       # clusters older than 1.24, whose API server rejects the `grpc` probe
       # field outright rather than ignoring it.
-      - name: A gRPC-only release probes gRPC health and carries its token
+      - name: A gRPC-only release probes gRPC health and carries no credential
         run: |
           set -euo pipefail
           grpc_only() {
             helm template t "$CHART" --set storage.dsn=postgres://u:p@db/x \
               --set attach.enabled=false --set dashboard.enabled=false \
-              --set grpc.enabled=true --set namespace=prod \
-              --set grpc.token="$TOKEN" "$@" \
+              --set grpc.enabled=true --set namespace=prod "$@" \
               | python3 -c '
           import sys, yaml
           for doc in yaml.safe_load_all(sys.stdin):
@@ -136,9 +137,11 @@ jobs:
           legacy="$(grpc_only --set grpc.healthProbe=false)"
           echo "1.24+: $modern"
           echo "pre-1.24: $legacy"
-          [ "$modern" = "['tcpSocket'] ['grpc'] True" ] \
-            || { echo "::error::readiness must use the grpc probe and liveness the socket"; exit 1; }
-          [ "$legacy" = "['tcpSocket'] ['tcpSocket'] True" ] \
+          # The `False` is the point: tokens live in the database now, so the
+          # pod must carry no gRPC credential in its environment at all.
+          [ "$modern" = "['tcpSocket'] ['grpc'] False" ] \
+            || { echo "::error::readiness must use the grpc probe and liveness the socket, with no token in env"; exit 1; }
+          [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
 
       # The regression this exists for: `genCA` is random, so a helper called

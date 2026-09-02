@@ -1105,6 +1105,7 @@ name = "flexiq-server"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "axum-server",
  "base64 0.23.1",

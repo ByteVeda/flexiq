@@ -63,6 +63,7 @@ export { MeterBar } from "./meter-bar";
 export { Pagination } from "./pagination";
 export { QueueBar } from "./queue-bar";
 export { ScrollArea, ScrollBar } from "./scroll-area";
+export { SecretReveal } from "./secret-reveal";
 export { Segmented, type SegmentedOption } from "./segmented";
 export {
   Select,

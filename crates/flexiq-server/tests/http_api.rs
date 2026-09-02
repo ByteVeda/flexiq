@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use flexiq_server::config::dashboard::AuthMode;
 use flexiq_server::dashboard::static_assets::StaticAssets;
 use support::{
-    call, dashboard_state, dashboard_state_with_assets, get, json_request, temp_assets,
-    temp_storage,
+    call, dashboard_state, dashboard_state_in_namespace, dashboard_state_with_assets, get,
+    json_request, temp_assets, temp_storage,
 };
 
 fn new_job(task_name: &str) -> NewJob {
@@ -312,6 +312,182 @@ async fn settings_round_trip_and_reserved_keys_stay_hidden() {
     )
     .await;
     assert_eq!(body["deleted"], json!(true));
+}
+
+#[tokio::test]
+async fn grpc_tokens_are_shown_once_and_revocable_by_id() {
+    let storage = temp_storage("http-grpc-tokens");
+    let state = dashboard_state_in_namespace(&storage, AuthMode::Open, "prod");
+
+    let (status, _, created) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "ci", "scopes": ["produce"], "expires_in_days": 30 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = created["id"].as_str().expect("an id").to_string();
+    let token = created["token"].as_str().expect("shown once").to_string();
+    assert!(token.starts_with("fqt_"));
+    assert!(token.contains(&id), "the id is the handle inside the token");
+    assert_eq!(created["scopes"], json!(["produce"]));
+    assert_eq!(created["namespace"], json!("prod"));
+    assert_eq!(created["status"], json!("active"));
+    assert!(
+        created.get("hash").is_none(),
+        "the stored digest is never a response field"
+    );
+
+    let (_, _, listed) = call(&state, get("/api/grpc-tokens")).await;
+    let rows = listed.as_array().expect("an array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], json!(id));
+    assert!(
+        rows[0].get("token").is_none(),
+        "the token must never be readable again"
+    );
+    assert!(rows[0].get("hash").is_none());
+    assert!(
+        !listed.to_string().contains(&token),
+        "no field of a later read may carry the token"
+    );
+
+    let (status, _, revoked) = call(
+        &state,
+        json_request("DELETE", &format!("/api/grpc-tokens/{id}"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(revoked["revoked"], json!(true));
+
+    // Revoked, not deleted: the row is the record of a credential that existed.
+    let (_, _, listed) = call(&state, get("/api/grpc-tokens")).await;
+    let rows = listed.as_array().expect("an array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], json!("revoked"));
+
+    let (status, _, _) = call(
+        &state,
+        json_request("DELETE", "/api/grpc-tokens/ffffffffffffffff", json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// §5.4: a token for a namespace this process does not serve would accept
+/// enqueues nothing ever dequeues, so the mint refuses rather than substituting
+/// the right answer.
+#[tokio::test]
+async fn a_grpc_token_cannot_be_minted_for_another_namespace() {
+    let storage = temp_storage("http-grpc-tokens-namespace");
+    let state = dashboard_state_in_namespace(&storage, AuthMode::Open, "prod");
+
+    let (status, _, body) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "ci", "scopes": ["produce"], "namespace": "staging" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error = body["error"].as_str().expect("a message");
+    assert!(
+        error.contains("staging") && error.contains("prod"),
+        "{error}"
+    );
+
+    // Naming this process's own namespace is fine — the field exists so the
+    // refusal above is explicit, not so it can be left out.
+    let (status, _, _) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "ci", "scopes": ["produce"], "namespace": "prod" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// D11: there is no way to mint against the ambiguous namespace, so a process
+/// with none cannot mint at all.
+#[tokio::test]
+async fn a_process_with_no_namespace_cannot_mint_a_grpc_token() {
+    let storage = temp_storage("http-grpc-tokens-unnamespaced");
+    let state = dashboard_state(&storage, AuthMode::Open);
+
+    let (status, _, body) = call(
+        &state,
+        json_request(
+            "POST",
+            "/api/grpc-tokens",
+            json!({ "name": "ci", "scopes": ["produce"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"]
+        .as_str()
+        .expect("a message")
+        .contains("FLEXIQ_NAMESPACE"));
+}
+
+#[tokio::test]
+async fn a_grpc_token_mint_refuses_a_request_it_cannot_honour() {
+    let storage = temp_storage("http-grpc-tokens-invalid");
+    let state = dashboard_state_in_namespace(&storage, AuthMode::Open, "prod");
+
+    for (label, body) in [
+        ("no name", json!({ "scopes": ["produce"] })),
+        ("no scopes", json!({ "name": "ci" })),
+        ("empty scopes", json!({ "name": "ci", "scopes": [] })),
+        (
+            "an unknown scope",
+            json!({ "name": "ci", "scopes": ["admin"] }),
+        ),
+        (
+            "a lifetime past the cap",
+            json!({ "name": "ci", "scopes": ["produce"], "expires_in_days": 4000 }),
+        ),
+        (
+            "a lifetime that is not a number",
+            json!({ "name": "ci", "scopes": ["produce"], "expires_in_days": "forever" }),
+        ),
+    ] {
+        let (status, _, _) = call(&state, json_request("POST", "/api/grpc-tokens", body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label} must be refused");
+    }
+
+    let (_, _, listed) = call(&state, get("/api/grpc-tokens")).await;
+    assert_eq!(
+        listed.as_array().expect("an array").len(),
+        0,
+        "a refused mint must leave no row"
+    );
+}
+
+/// The scope list is served rather than hard-coded in the SPA, so a build that
+/// grows one renders it without a frontend change.
+#[tokio::test]
+async fn the_grpc_scope_list_is_served() {
+    let storage = temp_storage("http-grpc-scopes");
+    let state = dashboard_state(&storage, AuthMode::Open);
+
+    let (status, _, body) = call(&state, get("/api/grpc-tokens/scopes")).await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = body
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|scope| scope["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, vec!["produce", "execute"]);
 }
 
 #[tokio::test]

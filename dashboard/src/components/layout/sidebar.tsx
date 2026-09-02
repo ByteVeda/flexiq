@@ -2,6 +2,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { ExternalLink as ExternalLinkIcon } from "lucide-react";
 import { LiveDot } from "@/components/ui";
 import { useExecutorsSupported } from "@/features/executors";
+import { useGrpcTokensSupported } from "@/features/grpc-tokens";
 import { useStats } from "@/features/overview/hooks";
 import { useBranding, useExternalLinks } from "@/features/settings";
 import { cn } from "@/lib/cn";
@@ -16,7 +17,10 @@ export function Sidebar() {
   const externalLinks = useExternalLinks();
   const { data: stats, isError, isPending } = useStats();
   const deadCount = stats?.dead ?? 0;
-  const nav = visibleNav({ "/executors": useExecutorsSupported() });
+  const nav = visibleNav({
+    "/executors": useExecutorsSupported(),
+    "/grpc-tokens": useGrpcTokensSupported(),
+  });
 
   const coreTone = isError ? "danger" : isPending && !stats ? "warning" : "success";
   const coreLabel = isError

@@ -332,6 +332,12 @@ async fn a_viewer_can_read_but_not_mutate() {
     let (status, _, _) = call(&state, viewer.get("/api/jobs")).await;
     assert_eq!(status, StatusCode::OK, "viewers keep read access");
 
+    // Except the credential inventory: a viewer must not learn which gRPC
+    // tokens exist, what each may call, or when one lapses.
+    let (status, _, body) = call(&state, viewer.get("/api/grpc-tokens")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], json!("forbidden"));
+
     let (status, _, body) = call(&state, viewer.post("/api/queues/default/pause", json!({}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], json!("forbidden"));

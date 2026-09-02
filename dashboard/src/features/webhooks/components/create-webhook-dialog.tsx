@@ -10,6 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
   Input,
+  SecretReveal,
   Stepper,
   Switch,
 } from "@/components/ui";
@@ -17,7 +18,6 @@ import { ApiError } from "@/lib/api-client";
 import { useCreateWebhook } from "../hooks";
 import type { Webhook } from "../types";
 import { EventTypeMultiSelect } from "./event-type-multi-select";
-import { SecretReveal } from "./secret-reveal";
 import { TaskFilterInput } from "./task-filter-input";
 
 const DEFAULT_RETRIES = 3;
@@ -209,7 +209,12 @@ function SuccessView({ webhook, onDone }: { webhook: Webhook; onDone: () => void
         <div className="text-xs text-[var(--fg-subtle)]">URL</div>
         <div className="font-mono text-xs break-all">{webhook.url}</div>
       </div>
-      {webhook.secret ? <SecretReveal secret={webhook.secret} /> : null}
+      {webhook.secret ? (
+        <SecretReveal
+          secret={webhook.secret}
+          note="flexiq keeps this secret so it can sign your payloads, but never shows it again. If you lose it, rotate to a new one."
+        />
+      ) : null}
       <DialogFooter>
         <Button onClick={onDone}>Done</Button>
       </DialogFooter>

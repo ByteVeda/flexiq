@@ -20,6 +20,13 @@
 //! the namespace reaches the handlers. A handler that finds none fails closed,
 //! so a service registered *without* this layer serves nothing rather than
 //! serving everything unauthenticated.
+//!
+//! The check is `async` because the credential is a stored row (#717), so the
+//! inner service has to be owned by the future rather than borrowed from
+//! `&mut self`. That is what the clone-and-replace in [`Authenticated::call`]
+//! is for, and the direction matters: the *ready* service is moved into the
+//! future and the fresh clone is left behind, because `poll_ready`'s
+//! reservation belongs to the one that was polled.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -76,9 +83,10 @@ pub struct Authenticated<S> {
 
 impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for Authenticated<S>
 where
-    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>>,
+    S: Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Send + 'static,
+    ReqBody: Send + 'static,
     ResBody: Default + Send + 'static,
 {
     type Response = http::Response<ResBody>;
@@ -90,31 +98,36 @@ where
     }
 
     fn call(&mut self, request: http::Request<ReqBody>) -> Self::Future {
-        let (mut parts, body) = request.into_parts();
+        let authenticator = Arc::clone(&self.authenticator);
+        // The service this future calls must be the one `poll_ready` reserved
+        // capacity on, so the ready service moves into the future and the clone
+        // stays behind to be polled again.
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
 
-        // The headers are moved into the `MetadataMap` and moved back, rather
-        // than cloned: an `Authenticator` is handed metadata by contract, and
-        // the request still needs its headers afterwards. tonic's own
-        // interceptor takes a request apart the same way.
-        let metadata = MetadataMap::from_headers(std::mem::take(&mut parts.headers));
-        let outcome = authorize(&*self.authenticator, parts.uri.path(), &metadata);
-        parts.headers = metadata.into_headers();
+        Box::pin(async move {
+            let (mut parts, body) = request.into_parts();
 
-        match outcome {
-            Ok(Some(principal)) => {
-                parts.extensions.insert(principal);
+            // The headers are moved into the `MetadataMap` and moved back,
+            // rather than cloned: an `Authenticator` is handed metadata by
+            // contract, and the request still needs its headers afterwards.
+            // tonic's own interceptor takes a request apart the same way.
+            let metadata = MetadataMap::from_headers(std::mem::take(&mut parts.headers));
+            let outcome = authorize(&*authenticator, parts.uri.path(), &metadata).await;
+            parts.headers = metadata.into_headers();
+
+            match outcome {
+                Ok(Some(principal)) => {
+                    parts.extensions.insert(principal);
+                }
+                // A public path: routed with no principal, because nothing
+                // behind one needs a namespace.
+                Ok(None) => {}
+                Err(status) => return Ok(status.into_http()),
             }
-            // A public path: routed with no principal, because nothing behind
-            // one needs a namespace.
-            Ok(None) => {}
-            Err(status) => {
-                let response = status.into_http();
-                return Box::pin(std::future::ready(Ok(response)));
-            }
-        }
 
-        let future = self.inner.call(http::Request::from_parts(parts, body));
-        Box::pin(future)
+            inner.call(http::Request::from_parts(parts, body)).await
+        })
     }
 }
 
@@ -123,17 +136,19 @@ where
 ///
 /// `Ok(None)` is a public path. Split out of [`Authenticated::call`] so the
 /// policy is testable without a service behind it.
-fn authorize(
+async fn authorize(
     authenticator: &dyn Authenticator,
     path: &str,
     metadata: &MetadataMap,
 ) -> Result<Option<Principal>, Status> {
     let requirement = gate::requirement(path);
     if requirement == Requirement::Public {
+        // Not merely allowed through: not even *asked*. A public path must not
+        // reach storage, or an unauthenticated caller could keep the pool busy.
         return Ok(None);
     }
 
-    let principal = authenticator.authenticate(metadata)?;
+    let principal = authenticator.authenticate(metadata).await?;
     if let Requirement::Scoped(scope) = requirement {
         if !principal.grants(scope) {
             return Err(WireError::scope_denied(scope.as_str()).into());
@@ -145,7 +160,6 @@ fn authorize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grpc::auth::authenticator::Anonymous;
     use crate::grpc::auth::principal::{Scope, ScopeSet};
     use crate::grpc::status::reason;
     use tonic::Code;
@@ -155,8 +169,9 @@ mod tests {
     /// scope half of the gate without a credential scheme in the way.
     struct Fixed(Principal);
 
+    #[async_trait::async_trait]
     impl Authenticator for Fixed {
-        fn authenticate(&self, _metadata: &MetadataMap) -> Result<Principal, Status> {
+        async fn authenticate(&self, _metadata: &MetadataMap) -> Result<Principal, Status> {
             Ok(self.0.clone())
         }
     }
@@ -164,57 +179,65 @@ mod tests {
     /// An authenticator that refuses everything, for the other half.
     struct Refuses;
 
+    #[async_trait::async_trait]
     impl Authenticator for Refuses {
-        fn authenticate(&self, _metadata: &MetadataMap) -> Result<Principal, Status> {
+        async fn authenticate(&self, _metadata: &MetadataMap) -> Result<Principal, Status> {
             Err(WireError::unauthenticated().into())
         }
     }
 
-    #[test]
-    fn health_is_routed_without_a_credential() {
+    fn grants_everything() -> Fixed {
+        Fixed(Principal::new("prod", ScopeSet::ALL))
+    }
+
+    #[tokio::test]
+    async fn health_is_routed_without_a_credential() {
         let outcome = authorize(
             &Refuses,
             "/grpc.health.v1.Health/Check",
             &MetadataMap::new(),
         )
+        .await
         .expect("health must not need a credential");
         assert!(outcome.is_none(), "health needs no principal either");
     }
 
-    #[test]
-    fn every_other_path_needs_one() {
+    #[tokio::test]
+    async fn every_other_path_needs_one() {
         for path in [
             "/flexiq.v1.ProducerService/Enqueue",
             "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
             "/whatever",
         ] {
-            let Err(status) = authorize(&Refuses, path, &MetadataMap::new()) else {
+            let Err(status) = authorize(&Refuses, path, &MetadataMap::new()).await else {
                 panic!("{path} must be gated");
             };
             assert_eq!(status.code(), Code::Unauthenticated, "path: {path}");
         }
     }
 
-    #[test]
-    fn an_authenticated_call_carries_its_principal_onward() {
+    #[tokio::test]
+    async fn an_authenticated_call_carries_its_principal_onward() {
         let principal = authorize(
-            &Anonymous::new("prod"),
+            &grants_everything(),
             "/flexiq.v1.ProducerService/Enqueue",
             &MetadataMap::new(),
         )
+        .await
         .expect("accepted")
         .expect("a gated path yields a principal");
         assert_eq!(&**principal.namespace(), "prod");
     }
 
-    #[test]
-    fn a_credential_without_the_package_scope_is_refused() {
+    #[tokio::test]
+    async fn a_credential_without_the_package_scope_is_refused() {
         let produce_only = Fixed(Principal::new("prod", ScopeSet::of(&[Scope::Produce])));
         assert!(authorize(
             &produce_only,
             "/flexiq.v1.ProducerService/Enqueue",
             &MetadataMap::new()
         )
+        .await
         .is_ok());
 
         let status = authorize(
@@ -222,6 +245,7 @@ mod tests {
             "/flexiq.executor.v1.ExecutorService/Dispatch",
             &MetadataMap::new(),
         )
+        .await
         .expect_err("a produce credential must not open an executor stream");
         assert_eq!(status.code(), Code::PermissionDenied);
         let all = status.get_error_details();

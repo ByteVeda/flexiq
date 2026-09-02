@@ -53,17 +53,13 @@ token.
 {{- end -}}
 
 {{/*
-The gRPC port binds 0.0.0.0 so producers in other pods can reach it — and a pod
-is only ever a non-loopback bind, because kubelet dials the pod IP for both the
-`grpc` and the `tcpSocket` probe. The server refuses that bind without a token,
-so requiring one here is the same rule stated a step earlier.
+The gRPC credential is no longer a chart value. Tokens live in the database, so
+a release that still sets one is configuring something that no longer exists —
+fail rather than start a door the operator believes is credentialled by a value
+nothing reads.
 */}}
-{{- if and .Values.grpc.enabled (not (or .Values.grpc.token .Values.grpc.existingSecret)) -}}
-{{- fail "flexiq-server: grpc.token or grpc.existingSecret is required — the gRPC door accepts enqueues and binds beyond loopback in a pod. Generate one with `openssl rand -base64 32`." -}}
-{{- end -}}
-
-{{- if and .Values.grpc.token (lt (len .Values.grpc.token) 16) -}}
-{{- fail "flexiq-server: grpc.token must be at least 16 characters — the server rejects a guessable one." -}}
+{{- if or .Values.grpc.token .Values.grpc.existingSecret .Values.grpc.existingSecretKey -}}
+{{- fail "flexiq-server: grpc.token, grpc.existingSecret and grpc.existingSecretKey are gone — the gRPC door now accepts scoped API tokens stored in the database. Remove the value and mint one with `kubectl exec deploy/<release>-flexiq-server -- flexiq-server token create --name <name> --scope produce`, or from the dashboard." -}}
 {{- end -}}
 
 {{/*

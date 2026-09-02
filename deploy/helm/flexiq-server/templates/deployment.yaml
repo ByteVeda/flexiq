@@ -26,7 +26,7 @@ spec:
         {{- end }}
         # Same reason, for every credential the chart owns: a Secret referenced
         # through secretKeyRef is resolved into the container's environment once,
-        # at pod start. Changing grpc.token or attach.token rewrites the Secret
+        # at pod start. Changing attach.token or the admin password rewrites the Secret
         # and leaves the Deployment spec untouched, so without this the pods keep
         # presenting the old value and reject the new one until someone restarts
         # them by hand — a rotation that silently does not take effect.
@@ -144,18 +144,10 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.grpc.enabled }}
+            # No credential variable: the door authenticates against tokens in
+            # the database, so there is nothing here to rotate or restart for.
             - name: FLEXIQ_GRPC_LISTEN
               value: "0.0.0.0:{{ .Values.grpc.port }}"
-            - name: FLEXIQ_GRPC_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  {{- if .Values.grpc.existingSecret }}
-                  name: {{ .Values.grpc.existingSecret }}
-                  key: {{ .Values.grpc.existingSecretKey }}
-                  {{- else }}
-                  name: {{ include "flexiq-server.secretName" . }}
-                  key: grpc-token
-                  {{- end }}
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN
