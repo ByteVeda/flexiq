@@ -432,6 +432,22 @@ mod tests {
         }
     }
 
+    /// The sign is stripped before the magnitude is parsed, so the negation at
+    /// the end never sees a value `i64` cannot hold: `i64::MIN` seconds is
+    /// refused by the parse itself, and the largest magnitude that does parse
+    /// negates exactly.
+    #[test]
+    fn the_signed_boundary_is_refused_by_the_parse_and_not_by_the_negation() {
+        assert!(duration_from_json("-9223372036854775808s").is_err());
+        assert_eq!(
+            duration_from_json("-9223372036854775807s").expect("the largest magnitude"),
+            ProtoDuration {
+                seconds: -9_223_372_036_854_775_807,
+                nanos: 0
+            }
+        );
+    }
+
     #[test]
     fn bytes_read_back_from_either_alphabet_and_either_padding() {
         let payload = vec![0xfb_u8, 0xff, 0x00, 0x3e];
