@@ -1,0 +1,285 @@
+// UNSTABLE. Until the release that first ships the gRPC role, these files may
+// change under the `proto-breaking` label (§2.2 of
+// tasks/specs/2026-09-01-flexiq-v1-proto-design.md). After that release the
+// label is for reverting a mistake made in the same release train, never for
+// changing a shipped shape.
+//
+// The rules this package is held to are stated in full in job.proto, because a
+// client reads the .proto and not the design document.
+
+syntax = "proto3";
+
+package flexiq.v1;
+
+import "flexiq/v1/job.proto";
+import "google/protobuf/timestamp.proto";
+
+// A workflow's shape: which steps exist, how they depend on one another, and
+// each step's own configuration.
+//
+// Two independent pieces, matching how a workflow is actually built and
+// compiled server-side (crates/flexiq-python/src/py_workflow/mod.rs): a bare
+// graph of node names and edges, and a name-keyed configuration map. Neither
+// this message nor WorkflowNodeConfig ever carries `dag_data` — the JSON
+// dagron_core::SerializableGraph produces internally. This message compiles
+// into that form; it does not transmit it.
+message WorkflowGraph {
+  repeated WorkflowGraphNode nodes = 1;
+  repeated WorkflowGraphEdge edges = 2;
+  // Every non-empty node in `nodes` must have exactly one entry here, keyed by
+  // WorkflowNodeConfig.name.
+  repeated WorkflowNodeConfig node_configs = 3;
+}
+
+// One node in the graph's shape. The node's configuration lives in the
+// matching WorkflowNodeConfig, not here — this message carries only what the
+// DAG itself needs.
+message WorkflowGraphNode {
+  string name = 1;
+}
+
+// One edge, `from` must complete before `to` becomes eligible.
+message WorkflowGraphEdge {
+  string from = 1;
+  string to = 2;
+}
+
+// How an edge into a node gates that node, evaluated against its
+// predecessor's outcome. The callable predicates some SDKs also support are
+// not representable here — they are code, not data — so a workflow using one
+// is not submittable over this RPC; its language SDK's own submission path is
+// unaffected.
+enum EdgeCondition {
+  EDGE_CONDITION_UNSPECIFIED = 0;
+  // Only if every predecessor succeeded. The graph's implicit default.
+  EDGE_CONDITION_ON_SUCCESS = 1;
+  // Only if a predecessor failed.
+  EDGE_CONDITION_ON_FAILURE = 2;
+  // Regardless of predecessor outcome.
+  EDGE_CONDITION_ALWAYS = 3;
+}
+
+// A gate: the node pauses and waits for an external decision before running.
+//
+// **`SubmitWorkflow` refuses any graph where a node sets this field.** Gate
+// evaluation is driven by a live SDK tracker process today, and nothing
+// reachable from the producer door can drive one — see WorkflowNodeConfig.
+// The field exists so the wire never needs a second, breaking pass to add it
+// once that changes.
+message GateConfig {
+  // Unset waits indefinitely.
+  optional int64 timeout_ms = 1;
+  OnTimeout on_timeout = 2;
+  optional string message = 3;
+}
+
+// What a gate does if its timeout elapses with no decision.
+enum OnTimeout {
+  ON_TIMEOUT_UNSPECIFIED = 0;
+  ON_TIMEOUT_APPROVE = 1;
+  ON_TIMEOUT_REJECT = 2;
+}
+
+// Memoize this node's result and skip re-running it on a later, otherwise
+// identical, submission.
+//
+// **`SubmitWorkflow` refuses any graph where a node sets this field**, for the
+// same reason as GateConfig: nothing reachable from the producer door
+// resolves a cache hit yet.
+message CacheConfig {
+  // Unset caches indefinitely.
+  optional int64 ttl_ms = 1;
+}
+
+// Expand this node into one job per item at runtime.
+//
+// **`SubmitWorkflow` refuses any graph where a node sets this field.** Runtime
+// expansion is exactly the kind of thing a live SDK tracker does and a
+// stateless RPC cannot.
+message FanOutConfig {
+  // The node whose result supplies the items to expand over. Unset infers the
+  // single predecessor structurally, the same inference a fan-out with no
+  // explicit source already falls back to in every shell.
+  optional string items_from = 1;
+}
+
+// Collect a fan-out's expanded results back into one node.
+//
+// **`SubmitWorkflow` refuses any graph where a node sets this field**, for the
+// same reason as FanOutConfig.
+message FanInConfig {
+  // The fan-out node this collects.
+  string from = 1;
+}
+
+// A child workflow, submitted and tracked as part of running this node.
+//
+// **`SubmitWorkflow` refuses any graph where a node sets this field.**
+// Recursive on WorkflowGraph rather than a bespoke transport: a child node
+// already carries its own args on its own `body` oneof, so nothing here needs
+// a second, parallel payload map the way today's per-SDK sub-workflow
+// transports each independently invented one.
+message SubWorkflowSpec {
+  string name = 1;
+  int32 version = 2;
+  WorkflowGraph graph = 3;
+  // Node names in `graph` whose job is not pre-enqueued at submission — an
+  // SDK tracker creates it at runtime once its gating condition resolves.
+  repeated string deferred_node_names = 4;
+}
+
+// One node's configuration: what it runs, and how it relates to the workflow
+// around it.
+//
+// Every StepMetadata field (crates/flexiq-workflows/src/definition.rs:9-45)
+// has a typed home here, including the five that are opaque JSON strings
+// server-side today — gate, cache, fan_out, fan_in, sub_workflow — so the wire
+// never needs a breaking pass to type them later. `args_template` and
+// `kwargs_template` do not appear: a node's arguments travel on `body`, the
+// same oneof EnqueueRequest already uses, and `kwargs_template` had no reader
+// in any shell.
+//
+// Fields 1-15 fit the one-byte range (see job.proto's Job message) because
+// every field here is a real per-node decision, not a hot path some caller
+// skips.
+message WorkflowNodeConfig {
+  // Matches a WorkflowGraphNode.name in the same WorkflowGraph.
+  string name = 1;
+  // The registered task to run. Not validated here; see ProducerService.
+  string task_name = 2;
+  // Empty means "default".
+  optional string queue = 3;
+
+  // The node's arguments. Setting no arm is an error, the same as
+  // EnqueueRequest.body.
+  oneof body {
+    bytes raw = 4;
+    StructuredArgs structured = 5;
+  }
+
+  optional int32 max_retries = 6;
+  optional int64 timeout_ms = 7;
+  optional int32 priority = 8;
+
+  // How an inbound edge gates this node. Unset behaves as ALWAYS.
+  EdgeCondition condition = 9;
+
+  optional GateConfig gate = 10;
+  optional CacheConfig cache = 11;
+  optional FanOutConfig fan_out = 12;
+  optional FanInConfig fan_in = 13;
+  optional SubWorkflowSpec sub_workflow = 14;
+
+  // The task to run if this node needs to be rolled back by a saga
+  // compensation. A task name, never JSON.
+  optional string compensate = 15;
+}
+
+// Lifecycle state of a workflow run.
+//
+// One-to-one with `WorkflowState` in crates/flexiq-workflows/src/state.rs,
+// offset by one the same way JobStatus is: zero is spent here on
+// `_UNSPECIFIED`, and the conversion is an exhaustive match with no wildcard.
+// A reader that does not recognise a value must treat the run as **not
+// terminal**.
+enum WorkflowState {
+  WORKFLOW_STATE_UNSPECIFIED = 0;
+  WORKFLOW_STATE_PENDING = 1;
+  WORKFLOW_STATE_RUNNING = 2;
+  WORKFLOW_STATE_PAUSED = 3;
+  WORKFLOW_STATE_COMPLETED = 4;
+  // Every node reached a terminal state, but at least one failed and the run
+  // was constructed to continue rather than fail fast.
+  WORKFLOW_STATE_COMPLETED_WITH_FAILURES = 5;
+  WORKFLOW_STATE_FAILED = 6;
+  WORKFLOW_STATE_CANCELLED = 7;
+  // Saga rollback is in flight.
+  WORKFLOW_STATE_COMPENSATING = 8;
+  // Saga rollback finished successfully.
+  WORKFLOW_STATE_COMPENSATED = 9;
+  // Saga rollback itself failed.
+  WORKFLOW_STATE_COMPENSATION_FAILED = 10;
+}
+
+// A workflow run, as a reader sees it.
+//
+// Mirrors crates/flexiq-workflows/src/run.rs. Fields whose absence differs
+// from their zero carry explicit presence.
+message WorkflowRun {
+  string id = 1;
+  string definition_id = 2;
+  WorkflowState state = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp completed_at = 5;
+  optional string error = 6;
+  // Set when this run is a sub-workflow: the parent run and the node in it
+  // that started this run.
+  optional string parent_run_id = 7;
+  optional string parent_node_name = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// Status of one node within a run.
+//
+// One-to-one with `WorkflowNodeStatus` in crates/flexiq-workflows/src/node.rs,
+// offset by one the same way WorkflowState is.
+enum WorkflowNodeStatus {
+  WORKFLOW_NODE_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_NODE_STATUS_PENDING = 1;
+  WORKFLOW_NODE_STATUS_READY = 2;
+  WORKFLOW_NODE_STATUS_RUNNING = 3;
+  WORKFLOW_NODE_STATUS_COMPLETED = 4;
+  WORKFLOW_NODE_STATUS_FAILED = 5;
+  WORKFLOW_NODE_STATUS_SKIPPED = 6;
+  WORKFLOW_NODE_STATUS_WAITING_APPROVAL = 7;
+  WORKFLOW_NODE_STATUS_CACHE_HIT = 8;
+  WORKFLOW_NODE_STATUS_COMPENSATING = 9;
+  WORKFLOW_NODE_STATUS_COMPENSATED = 10;
+  WORKFLOW_NODE_STATUS_COMPENSATION_FAILED = 11;
+}
+
+// One node's state within a run.
+message WorkflowNode {
+  string name = 1;
+  WorkflowNodeStatus status = 2;
+  // Unset while the node has not yet been enqueued (deferred nodes, before an
+  // SDK tracker creates their job).
+  optional string job_id = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp completed_at = 5;
+  optional string error = 6;
+}
+
+// Submit a workflow graph for execution.
+//
+// Refused, FAILED_PRECONDITION, naming the offending node, if any
+// WorkflowNodeConfig sets gate, cache, fan_out, fan_in or sub_workflow — see
+// WorkflowNodeConfig's per-field comments. A graph that clears that check is
+// pre-enqueued as one Job per node, chained by the graph's edges, exactly as
+// an equivalent call through an SDK's own submit_workflow would be; any
+// worker with workflow tracking enabled advances it, whether or not it is the
+// caller that submitted the graph.
+message SubmitWorkflowRequest {
+  string name = 1;
+  WorkflowGraph graph = 2;
+  // Arbitrary caller data attached to the run, not read by the graph itself.
+  // Setting no arm leaves it unset.
+  oneof params {
+    bytes params_raw = 3;
+    StructuredArgs params_structured = 4;
+  }
+}
+
+message SubmitWorkflowResponse {
+  string run_id = 1;
+}
+
+message GetWorkflowRunRequest {
+  string run_id = 1;
+}
+
+message GetWorkflowRunResponse {
+  WorkflowRun run = 1;
+  // Every node the run has, in no particular order.
+  repeated WorkflowNode nodes = 2;
+}
