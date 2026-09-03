@@ -108,6 +108,7 @@ struct Harness {
     storage: TempStorage,
     dispatcher: RemoteDispatcher,
     supervisor: Arc<SchedulerSupervisor>,
+    door: ExecutorDoor,
     addr: SocketAddr,
     token: String,
     attach: Option<listener::ListenerHandle>,
@@ -177,12 +178,16 @@ impl Harness {
             .local_addr()
             .expect("a TCP listener knows what it bound");
         let door = ExecutorDoor::new(dispatcher.clone(), supervisor.clone(), rotation);
-        let served = tokio::spawn(listener.serve((*storage).clone(), Some(door), shutdown.clone()));
+        // Cloned, not moved: the clone shares the session registry, which is
+        // what lets a test see whether a finished stream left one behind.
+        let served =
+            tokio::spawn(listener.serve((*storage).clone(), Some(door.clone()), shutdown.clone()));
 
         Self {
             storage,
             dispatcher,
             supervisor,
+            door,
             addr,
             token,
             attach,
@@ -1063,4 +1068,26 @@ async fn a_client_that_never_closes_its_half_cannot_hold_the_listener_open() {
     );
 
     executor.close();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stream_that_ends_leaves_no_session_behind() {
+    // The session map is keyed by a token minted per stream, so a reconnect
+    // loop would grow it for the life of the process if a finished stream did
+    // not take its own entry with it.
+    let harness = Harness::start("grpc-attach-sessions").await;
+    let executor = Executor::attach(&harness, "exec-1", &["greet"]).await;
+    assert_eq!(harness.door.sessions().len(), 1);
+
+    drop(executor);
+    assert!(
+        poll_until(Duration::from_secs(10), || harness
+            .door
+            .sessions()
+            .is_empty())
+        .await,
+        "a stream that ended must not leave its session registered"
+    );
+
+    harness.stop().await;
 }
