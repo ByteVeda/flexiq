@@ -1380,7 +1380,7 @@ impl Shared {
                 job.id,
                 executor.id
             );
-            self.deregister(&executor.id);
+            self.deregister(executor);
         }
     }
 
@@ -1812,7 +1812,7 @@ impl Shared {
     /// the scheduler's reaper — the same recovery a crashed worker gets, and
     /// the only correct answer when a lost result may still have run.
     fn abandon(&self, executor: &Arc<Executor>) {
-        self.deregister(&executor.id);
+        self.deregister(executor);
         let held: Vec<(String, InFlight)> = executor
             .in_flight
             .lock()
@@ -1848,17 +1848,28 @@ impl Shared {
         }
     }
 
-    /// Remove an executor from the registry. Idempotent — the writer and the
-    /// reader can both discover a broken connection.
-    fn deregister(&self, executor_id: &str) {
-        let removed = self
-            .executors
-            .lock()
-            .unwrap_or_else(recover)
-            .remove(executor_id);
-        if removed.is_some() {
-            self.capacity_changed.notify_waiters();
+    /// Remove *this connection* from the registry, if it is still the one
+    /// registered under its id. Idempotent — the writer and the reader can both
+    /// discover a broken connection.
+    fn deregister(&self, executor: &Arc<Executor>) {
+        let mut executors = self.executors.lock().unwrap_or_else(recover);
+        // Instance-aware, not id-aware, and that is the whole point.
+        // [`Shared::detach`] removes the id *before* it closes the connection,
+        // so that a reconnect under the same id is not refused as a duplicate.
+        // That leaves a window in which the departing connection's reader
+        // thread is still alive while its replacement is already registered,
+        // and an id-keyed removal would have the old reader evict the new
+        // executor on its way out — silently, and with the scheduler then
+        // dispatching to nobody.
+        if !executors
+            .get(&executor.id)
+            .is_some_and(|current| Arc::ptr_eq(current, executor))
+        {
+            return;
         }
+        executors.remove(&executor.id);
+        drop(executors);
+        self.capacity_changed.notify_waiters();
     }
 
     /// Cancel router: forwards requests to whichever executor holds the job.
@@ -1946,8 +1957,10 @@ impl Shared {
         // Removed before the close, not left to the reader thread's `abandon`:
         // an executor reconnecting the instant its stream ends would otherwise
         // race a registry entry that is still there and be refused as a
-        // duplicate id.
-        self.deregister(executor_id);
+        // duplicate id. What makes that safe is that `deregister` matches the
+        // instance, so the reader thread this is about to wake cannot remove
+        // whatever attached in its place.
+        self.deregister(&executor);
         executor.connection.close();
         true
     }
@@ -2022,10 +2035,98 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+    use std::sync::{Arc, Mutex};
 
-    use super::{divergent_peer, only_in, register_dispatch, MAX_LOGGED_TASK_NAMES};
+    use super::{
+        divergent_peer, only_in, register_dispatch, Executor, RemoteConfig, RemoteDispatcher,
+        MAX_LOGGED_TASK_NAMES,
+    };
     use crate::job::Job;
-    use crate::worker::protocol::SchedulerMessage;
+    use crate::worker::protocol::{FrameWriter, SchedulerMessage};
+    use crate::worker::transport::{MemoryTransport, Transport};
+
+    /// One registered executor, over an in-memory connection nobody drives.
+    ///
+    /// Enough of an `Executor` to be a registry entry, which is all the
+    /// deregistration contract is about.
+    fn registered(id: &str) -> Arc<Executor> {
+        let (near, _far) = MemoryTransport::pair();
+        let (_read, write, connection) = Box::new(near).split().expect("split");
+        Arc::new(Executor {
+            id: id.to_string(),
+            sdk: "test".to_string(),
+            version: "0.0.0".to_string(),
+            tasks: HashSet::new(),
+            registry_fingerprint: None,
+            slots: 1,
+            free: AtomicU32::new(1),
+            steps: false,
+            leases: false,
+            in_flight: Mutex::new(HashMap::new()),
+            draining: AtomicBool::new(false),
+            writer: Mutex::new(FrameWriter::new(write)),
+            connection,
+            peer: "memory:test".to_string(),
+            last_seen_ms: AtomicU32::new(0),
+        })
+    }
+
+    /// `detach` removes the id *before* it closes the connection, so a
+    /// reconnect under the same id is not refused as a duplicate. That leaves
+    /// the departing connection's reader thread alive while its replacement is
+    /// already registered, and an id-keyed removal would have the old reader
+    /// evict the new executor on its way out.
+    ///
+    /// Pinned here rather than by racing the two threads: the window is a
+    /// thread wake wide, so a test that tried to land inside it would pass by
+    /// luck about half the time. What the fix actually says is that
+    /// deregistration names an instance, and that is what this asserts.
+    #[test]
+    fn deregistering_a_departed_connection_leaves_its_replacement_alone() {
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let departing = registered("exec-1");
+        let replacement = registered("exec-1");
+
+        dispatcher
+            .shared
+            .executors
+            .lock()
+            .expect("registry")
+            .insert("exec-1".to_string(), Arc::clone(&replacement));
+
+        dispatcher.shared.deregister(&departing);
+        assert_eq!(
+            dispatcher.capacity().executors,
+            1,
+            "the old connection must not remove the entry that replaced it"
+        );
+
+        dispatcher.shared.deregister(&replacement);
+        assert_eq!(
+            dispatcher.capacity().executors,
+            0,
+            "its own entry is still its to remove"
+        );
+    }
+
+    /// And removing twice is still a no-op, which every caller relies on: the
+    /// writer and the reader can both discover a broken connection.
+    #[test]
+    fn deregistering_the_same_connection_twice_is_a_no_op() {
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let executor = registered("exec-1");
+        dispatcher
+            .shared
+            .executors
+            .lock()
+            .expect("registry")
+            .insert("exec-1".to_string(), Arc::clone(&executor));
+
+        dispatcher.shared.deregister(&executor);
+        dispatcher.shared.deregister(&executor);
+        assert_eq!(dispatcher.capacity().executors, 0);
+    }
 
     fn set(names: &[&str]) -> HashSet<String> {
         names.iter().map(|n| (*n).to_string()).collect()
