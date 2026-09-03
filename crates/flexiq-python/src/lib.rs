@@ -55,6 +55,7 @@ fn _flexiq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Same reason: a capability a child spells out by hand is one that drifts
     // out of agreement with the pool negotiating against it.
     m.add("CAP_STEPS", flexiq_core::worker::protocol::CAP_STEPS)?;
+    m.add("CAP_LEASE", flexiq_core::worker::protocol::CAP_LEASE)?;
     m.add_class::<PyQueue>()?;
     m.add_class::<PyJob>()?;
     m.add_class::<PyTaskConfig>()?;

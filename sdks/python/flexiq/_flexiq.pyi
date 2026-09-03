@@ -723,4 +723,5 @@ def reserved_setting_prefixes() -> list[str]:
 
 WORKER_PROTOCOL_VERSION: int
 CAP_STEPS: str
+CAP_LEASE: str
 """Frame-format version an executor must announce to attach."""

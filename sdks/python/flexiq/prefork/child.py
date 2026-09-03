@@ -30,7 +30,7 @@ import traceback
 from typing import TYPE_CHECKING, Any
 
 from flexiq import __version__
-from flexiq._flexiq import CAP_STEPS, AttachedSteps
+from flexiq._flexiq import CAP_LEASE, CAP_STEPS, AttachedSteps
 from flexiq.async_support.helpers import run_maybe_async
 from flexiq.context import (
     _clear_context,
@@ -90,10 +90,61 @@ def _import_queue(app_path: str) -> Any:
 _stdout_lock = threading.Lock()
 
 
+# The lease each in-flight job was dispatched under, keyed by job id.
+#
+# The parent hands it out on the ``job`` frame and requires it back on every
+# frame that settles or advances the attempt — that is how it tells this child's
+# answer from a sibling's after a job has been re-dispatched. The value is opaque
+# here: this child only ever echoes it.
+_leases: dict[str, str] = {}
+_leases_lock = threading.Lock()
+
+# Frame types that end the attempt, and so release the lease that was kept for
+# it. Matches the Rust side's `into_job_result`.
+_TERMINAL_FRAMES = frozenset({"success", "failure", "cancelled", "slept"})
+
+# What this child claims in its ``hello``.
+#
+# Both unconditional: it speaks the step frames, and a parent with nothing to
+# relay simply never sends one; echoing a lease is likewise entirely this
+# module's work, done in ``_write_message`` for every frame at once. A capability
+# a child had to opt into would only be one it could forget.
+_CHILD_CAPABILITIES = [CAP_STEPS, CAP_LEASE]
+
+
+def _remember_lease(job_id: str, lease: str | None) -> None:
+    """Record the lease a dispatch arrived under."""
+    if lease is None:
+        return
+    with _leases_lock:
+        _leases[job_id] = lease
+
+
+def _stamp_lease(header: dict[str, Any]) -> dict[str, Any]:
+    """Add the job's lease to an outgoing frame, and release it on a terminal one.
+
+    Applied in one place rather than at each call site so "which frames carry a
+    lease" is a single decision: any frame naming a ``job_id`` carries it, which
+    is exactly the rule the parent enforces.
+    """
+    job_id = header.get("job_id")
+    if not isinstance(job_id, str):
+        return header
+    with _leases_lock:
+        lease = (
+            _leases.pop(job_id, None)
+            if header.get("type") in _TERMINAL_FRAMES
+            else _leases.get(job_id)
+        )
+    if lease is not None:
+        header["lease"] = lease
+    return header
+
+
 def _write_message(header: dict[str, Any], payload: bytes = b"") -> None:
     """Write one frame to the parent."""
     with _stdout_lock:
-        write_frame(sys.stdout.buffer, header, payload)
+        write_frame(sys.stdout.buffer, _stamp_lease(header), payload)
 
 
 class _ParentSink:
@@ -161,9 +212,7 @@ def _handshake(queue: Any) -> bool:
             "tasks": sorted(queue._task_registry),
             "slots": _SLOTS,
             "protocol_version": WORKER_PROTOCOL_VERSION,
-            # Claimed unconditionally: this child speaks the step frames, and
-            # a pool with nothing to relay simply never sends one.
-            "capabilities": [CAP_STEPS],
+            "capabilities": _CHILD_CAPABILITIES,
         }
     )
 
@@ -377,6 +426,10 @@ def _spawn_stdin_reader(
                 if msg_type == "job":
                     job_id = msg.get("id")
                     snapshot = snapshots.pop(job_id, b"") if isinstance(job_id, str) else b""
+                    if isinstance(job_id, str):
+                        # Before the job is queued, so the first ``progress`` or
+                        # ``step_commit`` the task sends already carries it.
+                        _remember_lease(job_id, msg.get("lease"))
                     job_queue.put((msg, payload, snapshot))
                 elif msg_type == "job_steps":
                     job_id = msg.get("job_id")
