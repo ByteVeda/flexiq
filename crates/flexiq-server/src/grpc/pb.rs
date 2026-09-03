@@ -31,3 +31,13 @@
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("../../../../contracts/descriptor.binpb");
 
 include!(concat!(env!("OUT_DIR"), "/flexiq.v1.rs"));
+
+/// The generated `flexiq.executor.v1` types.
+///
+/// A separate module because it is a separate package: the two doors have
+/// different audiences, different credentials and different message limits, and
+/// nothing in one may import the other. Compiled from the same descriptor, so
+/// there is still one artifact and one gate.
+pub mod executor {
+    include!(concat!(env!("OUT_DIR"), "/flexiq.executor.v1.rs"));
+}
