@@ -12,10 +12,15 @@ credential at all.
 
 | | Local mode | Server mode |
 |---|---|---|
-| **Process shape** | Your app opens storage directly | `flexiq-server` opens storage; everything else dials in |
+| **Process shape** | Your app opens storage directly | `flexiq-server` opens storage; a producer or executor that uses one of its doors never needs to |
 | **Who can enqueue** | A process with the Rust core compiled into it — Python, Node or Java | Any process that can speak gRPC or JSON over HTTP — no native binding required |
 | **Who can run tasks** | A worker in the same process, or an <SdkLink to="modules/executor">attached executor</SdkLink> over TCP/Unix | The same executors, reachable now over a gRPC stream too |
 | **Reach for it when** | The default — this is nearly always the right answer | A producer has no native binding to reach for, or the database credential must not live in every caller |
+
+Nothing forces an all-or-nothing switch. A deployment can put only its producer
+on the network door and leave its workers opening storage directly, same as
+today — the "Try it" section below points at an example of exactly that
+hybrid.
 
 ## What it costs
 

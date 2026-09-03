@@ -1365,8 +1365,12 @@ flexiq-server
 
 The `execute` scope opens this package, on the same token mechanism
 [the credential](#the-credential) already covers — mint one with
-`flexiq-server token create --scope execute` and present it the same way an
-attach connection presents `FLEXIQ_ATTACH_TOKEN`.
+`flexiq-server token create --scope execute` and send it as
+`authorization: Bearer $FLEXIQ_TOKEN` gRPC metadata, exactly like a producer
+call. `Attach` is gated by the same tower layer as every other RPC on this
+listener, and checks it before the handshake — `FLEXIQ_ATTACH_TOKEN` is a
+different credential for a different listener (the TCP/Unix attach port) and
+does nothing here.
 
 <Callout type="warn" title="Raise your own message-size limit">
   gRPC libraries default to 4 MiB in each direction. This door carries whatever

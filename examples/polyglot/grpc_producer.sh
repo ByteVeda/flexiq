@@ -12,6 +12,21 @@ set -euo pipefail
 ADDR="${FLEXIQ_GRPC_ADDR:-localhost:50051}"
 ORDERS="${1:-3}"
 
+if [[ ! "$ORDERS" =~ ^[0-9]+$ ]]; then
+  echo "Error: order count must be a positive integer, got '${ORDERS}'" >&2
+  exit 1
+fi
+ORDERS=$((10#$ORDERS)) # reject octal surprises like 08, and drop leading zeros
+
+case "$ADDR" in
+  localhost:*|127.0.0.1:*|\[::1\]:*) ;;
+  *)
+    echo "Warning: FLEXIQ_GRPC_ADDR=${ADDR} is not loopback." >&2
+    echo "  grpcurl -plaintext sends FLEXIQ_TOKEN with no encryption — only point this" >&2
+    echo "  at a remote host behind a TLS-terminating proxy or over a private network." >&2
+    ;;
+esac
+
 if [[ -z "${FLEXIQ_TOKEN:-}" ]]; then
   echo "Error: FLEXIQ_TOKEN is required — mint one with" >&2
   echo "  flexiq-server token create --name polyglot-producer --scope produce" >&2
