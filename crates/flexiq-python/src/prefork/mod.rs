@@ -56,6 +56,11 @@ type WriterPool = Arc<Vec<Mutex<Option<ChildWriter>>>>;
 type ProcessPool = Arc<Vec<Mutex<Option<ChildProcess>>>>;
 type InFlightCounters = Arc<Vec<AtomicU32>>;
 
+/// Whether each child claimed `CAP_LEASE`, indexed like every other per-child
+/// vector. Re-read on every respawn: `FLEXIQ_PYTHON` can point a restarted
+/// child at a different flexiq install than the one that answered last time.
+type LeaseClaims = Arc<Vec<AtomicBool>>;
+
 /// Where a child's progress and task logs are relayed, once this pool is
 /// attached to a scheduler.
 ///
@@ -228,6 +233,12 @@ impl WorkerDispatcher for PreforkPool {
         let processes: ProcessPool = Arc::new((0..num_workers).map(|_| Mutex::new(None)).collect());
         let writers: WriterPool = Arc::new((0..num_workers).map(|_| Mutex::new(None)).collect());
         let steps = StepRelayState::new(self.relay_steps, num_workers, self.steps.clone());
+        // Whether each child claimed `CAP_LEASE` in its own `hello`. Read on
+        // both sides of the dispatch, because the give-up has to be symmetric:
+        // a lease is withheld from a child that will not echo one, exactly as
+        // the socket hop withholds it from an executor that did not claim it.
+        let lease_claimed: LeaseClaims =
+            Arc::new((0..num_workers).map(|_| AtomicBool::new(false)).collect());
         let mut reader_handles: Vec<JoinHandle<()>> = Vec::new();
 
         for idx in 0..num_workers {
@@ -244,6 +255,7 @@ impl WorkerDispatcher for PreforkPool {
                 &self.side_channel,
                 &steps,
                 self.lease_book(),
+                &lease_claimed,
             ) {
                 reader_handles.push(handle);
             }
@@ -294,6 +306,7 @@ impl WorkerDispatcher for PreforkPool {
                     &self.side_channel,
                     &steps,
                     self.lease_book(),
+                    &lease_claimed,
                 ) {
                     reader_handles.push(handle);
                     log::info!(
@@ -309,8 +322,12 @@ impl WorkerDispatcher for PreforkPool {
             let idx = dispatch::least_loaded(&counts);
 
             // Read before the dispatch, so the frame carries the lease this
-            // job is *currently* dispatched under.
-            let lease = self.lease_book().and_then(|book| book.current(&job.id));
+            // job is *currently* dispatched under — and only for a child that
+            // said it would echo one back.
+            let lease = lease_claimed[idx]
+                .load(Ordering::Relaxed)
+                .then(|| self.lease_book()?.current(&job.id))
+                .flatten();
 
             dispatch_job(
                 idx,
@@ -613,6 +630,7 @@ fn start_child(
     side_channel: &SideChannelSlot,
     steps: &StepRelayState,
     leases: Option<Arc<LeaseBook>>,
+    lease_claimed: &LeaseClaims,
 ) -> Option<JoinHandle<()>> {
     match spawn_child(python, app_path, claim_owner, steps.supported) {
         Ok(child) => {
@@ -620,9 +638,7 @@ fn start_child(
             // Re-read on every respawn: a restarted child is a new interpreter,
             // and a stale `true` would send it a snapshot it never asked for.
             steps.claimed[idx].store(child.steps, Ordering::Relaxed);
-            // Likewise re-read on every respawn: `FLEXIQ_PYTHON` can point a
-            // restarted child at a different flexiq install than the one that
-            // answered last time.
+            lease_claimed[idx].store(child.leases, Ordering::Relaxed);
             let leases = leases.filter(|_| child.leases);
             if let Ok(mut guard) = writers[idx].lock() {
                 *guard = Some(child.writer);
