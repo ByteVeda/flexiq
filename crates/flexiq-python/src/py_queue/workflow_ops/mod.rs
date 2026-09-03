@@ -13,9 +13,7 @@ mod nodes;
 mod queries;
 mod saga;
 
-use std::collections::HashMap;
-
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use flexiq_core::error::Result as CoreResult;
@@ -25,8 +23,8 @@ use flexiq_workflows::WorkflowPostgresStorage;
 #[cfg(feature = "redis")]
 use flexiq_workflows::WorkflowRedisStorage;
 use flexiq_workflows::{
-    StepMetadata, WorkflowNode, WorkflowNodeStatus, WorkflowSqliteStorage, WorkflowState,
-    WorkflowStorage, WorkflowStorageBackend,
+    WorkflowNode, WorkflowNodeStatus, WorkflowSqliteStorage, WorkflowState, WorkflowStorage,
+    WorkflowStorageBackend,
 };
 
 use crate::py_queue::PyQueue;
@@ -113,23 +111,11 @@ pub(super) fn require_visible_run(wf: &WorkflowStorageBackend, run_id: &str) -> 
     Ok(())
 }
 
-pub(super) fn parse_step_metadata(json: &str) -> PyResult<HashMap<String, StepMetadata>> {
-    serde_json::from_str(json)
-        .map_err(|e| PyValueError::new_err(format!("invalid step_metadata JSON: {e}")))
-}
-
-/// Build a job-metadata JSON blob that carries workflow routing info.
-///
-/// Uses `serde_json` to guarantee proper escaping of node names containing
-/// backslashes, control characters, or Unicode — hand-rolled escaping previously
-/// produced invalid JSON for such inputs.
-pub(super) fn build_metadata_json(run_id: &str, node_name: &str) -> String {
-    serde_json::json!({
-        "workflow_run_id": run_id,
-        "workflow_node_name": node_name,
-    })
-    .to_string()
-}
+/// Re-exported rather than duplicated: `flexiq-workflows` is the one place
+/// this logic lives now (`crates/flexiq-workflows/src/lifecycle.rs`), shared
+/// with `flexiq-server`'s `SubmitWorkflow` handler. `fan_out.rs` is the
+/// remaining caller here.
+pub(super) use flexiq_workflows::lifecycle::build_metadata_json;
 
 pub(super) fn status_to_py(status: WorkflowState) -> String {
     status.as_str().to_string()
@@ -186,49 +172,8 @@ mod tests {
     use super::test_helpers::*;
     use super::*;
 
-    #[test]
-    fn build_metadata_json_round_trips_special_characters() {
-        let json = build_metadata_json("run-1", "node\\with\"quotes\nand\ttabs");
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["workflow_run_id"], "run-1");
-        assert_eq!(v["workflow_node_name"], "node\\with\"quotes\nand\ttabs");
-    }
-
-    #[test]
-    fn build_metadata_json_preserves_unicode_node_names() {
-        let json = build_metadata_json("run-2", "ノード/ステップ");
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["workflow_node_name"], "ノード/ステップ");
-    }
-
-    #[test]
-    fn parse_step_metadata_round_trips_minimal_payload() {
-        let json = r#"{
-            "extract": {
-                "task_name": "task_extract",
-                "queue": null,
-                "args_template": null,
-                "kwargs_template": null,
-                "max_retries": null,
-                "timeout_ms": null,
-                "priority": null,
-                "fan_out": null,
-                "fan_in": null,
-                "condition": null
-            }
-        }"#;
-        let map = parse_step_metadata(json).unwrap();
-        assert_eq!(map.len(), 1);
-        assert_eq!(map["extract"].task_name, "task_extract");
-    }
-
-    #[test]
-    fn parse_step_metadata_rejects_invalid_json() {
-        // PyValueError construction needs a live Python interpreter.
-        pyo3::Python::initialize();
-        let err = parse_step_metadata("not-json").unwrap_err();
-        assert!(err.to_string().contains("invalid step_metadata JSON"));
-    }
+    // build_metadata_json's and parse_step_metadata's own tests moved with
+    // them to crates/flexiq-workflows/src/lifecycle.rs.
 
     #[test]
     fn status_to_py_returns_canonical_strings() {

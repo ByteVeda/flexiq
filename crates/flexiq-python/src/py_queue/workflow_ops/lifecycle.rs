@@ -6,16 +6,11 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use flexiq_core::error::Result as CoreResult;
-use flexiq_core::job::{now_millis, NewJob};
-use flexiq_core::storage::Storage;
-use flexiq_workflows::{
-    topological_order, WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowState,
-    WorkflowStorage,
-};
+use flexiq_core::job::now_millis;
+use flexiq_workflows::lifecycle::{parse_step_metadata, SubmitStaticWorkflowRequest};
+use flexiq_workflows::{WorkflowNodeStatus, WorkflowState, WorkflowStorage};
 
-use crate::py_queue::workflow_ops::{
-    build_metadata_json, cascade_skip_pending_nodes, parse_step_metadata, workflow_storage,
-};
+use crate::py_queue::workflow_ops::{cascade_skip_pending_nodes, workflow_storage};
 use crate::py_queue::PyQueue;
 use crate::py_workflow::PyWorkflowHandle;
 
@@ -52,189 +47,40 @@ impl PyQueue {
         cache_hit_nodes: Option<HashMap<String, String>>,
     ) -> PyResult<PyWorkflowHandle> {
         let wf_storage = workflow_storage(self)?;
-        let step_meta = parse_step_metadata(step_metadata_json)?;
-        let ordered =
-            topological_order(&dag_bytes).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let step_metadata = parse_step_metadata(step_metadata_json)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let deferred: HashSet<String> = deferred_node_names
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        let cached: HashMap<String, String> = cache_hit_nodes.unwrap_or_default();
-
-        let definition_id = match wf_storage
-            .get_workflow_definition(name, Some(version))
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
-        {
-            Some(existing) => existing.id,
-            None => {
-                let def = flexiq_workflows::WorkflowDefinition {
-                    id: uuid::Uuid::now_v7().to_string(),
-                    name: name.to_string(),
-                    version,
-                    dag_data: dag_bytes.clone(),
-                    step_metadata: step_meta.clone(),
-                    created_at: now_millis(),
-                };
-                let def_id = def.id.clone();
-                wf_storage
-                    .create_workflow_definition(&def)
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                def_id
-            }
-        };
-
-        let run_id = uuid::Uuid::now_v7().to_string();
-        let now = now_millis();
-        let run = WorkflowRun {
-            id: run_id.clone(),
-            definition_id: definition_id.clone(),
-            params: params_json,
-            state: WorkflowState::Pending,
-            started_at: Some(now),
-            completed_at: None,
-            error: None,
-            parent_run_id,
-            parent_node_name,
-            created_at: now,
-        };
-        wf_storage
-            .create_workflow_run(&run)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let mut job_ids: HashMap<String, String> = HashMap::new();
-        for topo in &ordered {
-            // Deferred nodes get a WorkflowNode only — no job.
-            // Cache-hit nodes: copy result_hash from base run, no job.
-            if let Some(rh) = cached.get(&topo.name) {
-                let wf_node = WorkflowNode {
-                    id: uuid::Uuid::now_v7().to_string(),
-                    run_id: run_id.clone(),
-                    node_name: topo.name.clone(),
-                    job_id: None,
-                    status: WorkflowNodeStatus::CacheHit,
-                    result_hash: Some(rh.clone()),
-                    fan_out_count: None,
-                    fan_in_data: None,
-                    started_at: None,
-                    completed_at: Some(now),
-                    error: None,
-                    compensation_job_id: None,
-                    compensation_started_at: None,
-                    compensation_completed_at: None,
-                    compensation_error: None,
-                };
-                wf_storage
-                    .create_workflow_node(&wf_node)
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                continue;
-            }
-
-            // Deferred nodes: WorkflowNode only, no job.
-            if deferred.contains(&topo.name) {
-                let wf_node = WorkflowNode {
-                    id: uuid::Uuid::now_v7().to_string(),
-                    run_id: run_id.clone(),
-                    node_name: topo.name.clone(),
-                    job_id: None,
-                    status: WorkflowNodeStatus::Pending,
-                    result_hash: None,
-                    fan_out_count: None,
-                    fan_in_data: None,
-                    started_at: None,
-                    completed_at: None,
-                    error: None,
-                    compensation_job_id: None,
-                    compensation_started_at: None,
-                    compensation_completed_at: None,
-                    compensation_error: None,
-                };
-                wf_storage
-                    .create_workflow_node(&wf_node)
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                continue;
-            }
-
-            let meta = step_meta.get(&topo.name).ok_or_else(|| {
-                PyValueError::new_err(format!("step '{}' missing from step_metadata", topo.name))
-            })?;
-            let payload = node_payloads.get(&topo.name).cloned().ok_or_else(|| {
-                PyValueError::new_err(format!("step '{}' missing from node_payloads", topo.name))
-            })?;
-
-            // Only resolve depends_on for non-deferred predecessors.
-            let depends_on: Vec<String> = topo
-                .predecessors
-                .iter()
-                .filter(|p| !deferred.contains(*p))
-                .map(|p| {
-                    job_ids.get(p).cloned().ok_or_else(|| {
-                        PyValueError::new_err(format!(
-                            "predecessor '{}' of step '{}' has no job id",
-                            p, topo.name
-                        ))
-                    })
-                })
-                .collect::<PyResult<Vec<_>>>()?;
-
-            let timeout_ms = meta.timeout_ms.unwrap_or(self.default_timeout * 1000);
-            let new_job = NewJob {
-                queue: meta
-                    .queue
-                    .clone()
-                    .unwrap_or_else(|| queue_default.to_string()),
-                task_name: meta.task_name.clone(),
-                payload,
-                priority: meta.priority.unwrap_or(self.default_priority),
-                scheduled_at: now,
-                max_retries: meta.max_retries.unwrap_or(self.default_retry),
-                timeout_ms,
-                unique_key: None,
-                metadata: Some(build_metadata_json(&run_id, &topo.name)),
-                notes: None,
-                depends_on,
-                expires_at: None,
+        let handle = flexiq_workflows::lifecycle::submit_workflow(
+            &self.storage,
+            &wf_storage,
+            SubmitStaticWorkflowRequest {
+                name: name.to_string(),
+                version,
+                dag_bytes,
+                step_metadata,
+                node_payloads,
+                queue_default: queue_default.to_string(),
+                params_json,
+                deferred_node_names: deferred_node_names
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                cache_hit_nodes: cache_hit_nodes.unwrap_or_default(),
+                parent_run_id,
+                parent_node_name,
+                default_timeout_ms: self.default_timeout * 1000,
+                default_priority: self.default_priority,
+                default_max_retries: self.default_retry,
                 result_ttl_ms: self.result_ttl_ms,
                 namespace: self.namespace.clone(),
-                debounce_key: None,
-            };
-
-            let job = self
-                .storage
-                .enqueue(new_job)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            job_ids.insert(topo.name.clone(), job.id.clone());
-
-            let wf_node = WorkflowNode {
-                id: uuid::Uuid::now_v7().to_string(),
-                run_id: run_id.clone(),
-                node_name: topo.name.clone(),
-                job_id: Some(job.id),
-                status: WorkflowNodeStatus::Pending,
-                result_hash: None,
-                fan_out_count: None,
-                fan_in_data: None,
-                started_at: None,
-                completed_at: None,
-                error: None,
-                compensation_job_id: None,
-                compensation_started_at: None,
-                compensation_completed_at: None,
-                compensation_error: None,
-            };
-            wf_storage
-                .create_workflow_node(&wf_node)
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        }
-
-        wf_storage
-            .update_workflow_run_state(&run_id, WorkflowState::Running, None)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            },
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         Ok(PyWorkflowHandle {
-            run_id,
+            run_id: handle.run_id,
             name: name.to_string(),
-            definition_id,
+            definition_id: handle.definition_id,
         })
     }
 
@@ -362,6 +208,7 @@ impl PyQueue {
 mod tests {
     use super::*;
     use crate::py_queue::workflow_ops::test_helpers::*;
+    use flexiq_core::storage::Storage;
 
     /// Submitting a 2-node linear DAG inserts a node per step, enqueues a job
     /// per step, and threads the predecessor's job id through the successor's
