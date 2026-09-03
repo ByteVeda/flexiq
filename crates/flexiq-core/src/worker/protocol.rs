@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use super::auth::Secret;
 use crate::error::QueueError;
 use crate::job::{Job, JobStatus};
+use crate::lease::Lease;
 use crate::scheduler::JobResult;
 use crate::step::StepFailure;
 use crate::storage::records::{JobStep, StepKind};
@@ -62,6 +63,23 @@ pub const CAP_SIDE_CHANNEL: &str = "side_channel";
 /// version of "your charge step silently lost its memo" that beats a failure
 /// naming the executor.
 pub const CAP_STEPS: &str = "steps";
+
+/// Capability: every frame that settles or advances an attempt carries the
+/// [`Lease`] its `job` frame was dispatched with.
+///
+/// Announced by *both* sides, because each half is useless without the other. A
+/// scheduler advertises it in `hello_ack` when it will check the value; an
+/// executor advertises it in `hello` so a scheduler never *requires* a lease
+/// from a peer that will not echo one.
+///
+/// **What an executor without it gives up.** It still attaches and still runs
+/// jobs. Its results are fenced on the claim's `(owner, attempt, epoch)` alone,
+/// which is enough to refuse a result whose job has been reclaimed or retried —
+/// but not enough to tell one dispatch of a job from a later one made under a
+/// *new* claim, which is what `Storage::requeue_stuck` produces every time an
+/// operator unsticks a job an executor is still running. Against that, a stale
+/// completion from such an executor is indistinguishable from the live one.
+pub const CAP_LEASE: &str = "lease";
 
 /// Header cap, bounding a peer that never sends a newline.
 pub const MAX_HEADER_BYTES: u64 = 64 * 1024;
@@ -180,6 +198,15 @@ pub enum SchedulerMessage {
         /// executor cannot fetch the row itself.
         #[serde(default)]
         metadata: Option<String>,
+        /// The lease this dispatch is made under, opaque to the executor and
+        /// required back on every frame that settles or advances the attempt.
+        ///
+        /// Absent when the executor did not advertise [`CAP_LEASE`], or when
+        /// the scheduler has no lease to name — a pool that was handed no
+        /// [`LeaseBook`](crate::lease::LeaseBook). Either way the executor
+        /// echoes what it was given, which is nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// The steps a job has already committed, sent immediately *before* its
     /// [`Job`](Self::Job) frame so the executor can answer a memo hit without a
@@ -243,6 +270,21 @@ pub enum SchedulerMessage {
 /// A message an executor sends to the scheduler.
 ///
 /// `#[non_exhaustive]` for the same reason as [`SchedulerMessage`].
+///
+/// # The lease
+///
+/// Every variant that **settles or advances an attempt** carries the [`Lease`]
+/// its `job` frame arrived with: `Success`, `Failure`, `Cancelled`, `Slept`,
+/// `Progress`, `TaskLog` and `StepCommit`. The rule is that question, not this
+/// list — a frame added later that names a dispatched job inherits it.
+///
+/// `Hello` and `Heartbeat` carry none: they are the connection's own, not any
+/// job's.
+///
+/// The executor never mints, reads or chooses the value; it echoes what the
+/// dispatch handed it. That is the same principle `StepCommit` states about the
+/// owner — a value a peer can choose is a request to be trusted, not a fencing
+/// token.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -298,6 +340,9 @@ pub enum ExecutorMessage {
         job_id: String,
         /// Completion percentage, 0-100.
         progress: i32,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// One structured log line for a running job, applied by the scheduler.
     ///
@@ -322,6 +367,9 @@ pub enum ExecutorMessage {
         /// published partial can be arbitrarily large, and a header is capped
         /// at [`MAX_HEADER_BYTES`].
         extra_len: Option<usize>,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// The task completed. Its serialized result, if any, follows the header.
     Success {
@@ -334,6 +382,9 @@ pub enum ExecutorMessage {
         task_name: String,
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// The task raised or timed out.
     Failure {
@@ -354,6 +405,9 @@ pub enum ExecutorMessage {
         should_retry: bool,
         /// True when the failure was an execution timeout.
         timed_out: bool,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// The task observed its cancel request and stopped.
     Cancelled {
@@ -363,6 +417,9 @@ pub enum ExecutorMessage {
         task_name: String,
         /// Wall-clock execution time in nanoseconds.
         wall_time_ns: i64,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// Commit one durable step, or one `step.sleep`, through the scheduler
     /// (§9.2). Answered with [`SchedulerMessage::StepAck`].
@@ -400,6 +457,14 @@ pub enum ExecutorMessage {
         /// Length of the encoded result that follows. Zero for a sleep, which
         /// commits no bytes.
         payload_len: usize,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        ///
+        /// Not in tension with the "carries no owner" rule above: the lease is
+        /// not the executor's claim of identity, it is the scheduler's own
+        /// value handed back, and it is what resolves *which dispatch* of this
+        /// job the frame belongs to before the scheduler supplies the fence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
     /// The attempt ended in a `step.sleep`, and the job is already `Pending` at
     /// its deadline. Ends the attempt like a cancel, without being a failure.
@@ -419,6 +484,9 @@ pub enum ExecutorMessage {
         wake_at: i64,
         /// Wall-clock time the attempt ran before it slept, in nanoseconds.
         wall_time_ns: i64,
+        /// Lease this attempt was dispatched under. See the enum's docs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<Lease>,
     },
 }
 
@@ -697,12 +765,24 @@ pub struct Dispatch {
     pub job: Job,
     /// Middleware disabled for this task, as resolved by the scheduler.
     pub disabled_middleware: Vec<String>,
+    /// Lease this dispatch was made under, to be echoed on every frame that
+    /// settles or advances the attempt. `None` when the scheduler named none.
+    pub lease: Option<Lease>,
 }
 
 impl SchedulerMessage {
     /// Build a dispatch frame for `job`, carrying the middleware the scheduler
     /// resolved as disabled for its task.
+    ///
+    /// Leaseless. A scheduler that holds one uses
+    /// [`SchedulerMessage::job_leased`]; a pipe or pool that does not is
+    /// unchanged.
     pub fn job_with(job: &Job, disabled_middleware: Vec<String>) -> Self {
+        Self::job_leased(job, disabled_middleware, None)
+    }
+
+    /// Build a dispatch frame for `job` under `lease`.
+    pub fn job_leased(job: &Job, disabled_middleware: Vec<String>, lease: Option<Lease>) -> Self {
         Self::Job {
             id: job.id.clone(),
             task_name: job.task_name.clone(),
@@ -714,6 +794,7 @@ impl SchedulerMessage {
             namespace: job.namespace.clone(),
             disabled_middleware,
             metadata: job.metadata.clone(),
+            lease,
         }
     }
 
@@ -753,6 +834,7 @@ impl SchedulerMessage {
                 namespace,
                 disabled_middleware,
                 metadata,
+                lease,
                 payload_len: _,
             } => Some(Dispatch {
                 job: Job {
@@ -785,6 +867,7 @@ impl SchedulerMessage {
                     debounce_key: None,
                 },
                 disabled_middleware,
+                lease,
             }),
         }
     }
@@ -828,6 +911,10 @@ impl ExecutorMessage {
     /// The inverse of [`ExecutorMessage::into_job_result`]. A success carries
     /// its serialized result as the frame's blob, so the payload is returned
     /// alongside the header rather than inside it.
+    ///
+    /// Leaseless: a [`JobResult`] does not know which dispatch produced it.
+    /// An executor stamps the lease with [`ExecutorMessage::with_lease`], from
+    /// the `job` frame it is answering.
     pub fn from_job_result(result: JobResult) -> (Self, Vec<u8>) {
         match result {
             JobResult::Success {
@@ -847,6 +934,7 @@ impl ExecutorMessage {
                         result_len,
                         task_name,
                         wall_time_ns,
+                        lease: None,
                     },
                     payload,
                 )
@@ -870,6 +958,7 @@ impl ExecutorMessage {
                     wall_time_ns,
                     should_retry,
                     timed_out,
+                    lease: None,
                 },
                 Vec::new(),
             ),
@@ -882,6 +971,7 @@ impl ExecutorMessage {
                     job_id,
                     task_name,
                     wall_time_ns,
+                    lease: None,
                 },
                 Vec::new(),
             ),
@@ -896,6 +986,7 @@ impl ExecutorMessage {
                     task_name,
                     wake_at,
                     wall_time_ns,
+                    lease: None,
                 },
                 Vec::new(),
             ),
@@ -925,6 +1016,7 @@ impl ExecutorMessage {
                 // `extra` and no `extra` are different, exactly as they are for
                 // a success result.
                 extra_len: payload.as_ref().map(Vec::len),
+                lease: None,
             },
             payload.unwrap_or_default(),
         )
@@ -948,6 +1040,7 @@ impl ExecutorMessage {
                 result_len,
                 task_name,
                 wall_time_ns,
+                lease: _,
             } => Some(JobResult::Success {
                 job_id,
                 result: result_len.map(|_| payload),
@@ -963,6 +1056,7 @@ impl ExecutorMessage {
                 wall_time_ns,
                 should_retry,
                 timed_out,
+                lease: _,
             } => Some(JobResult::Failure {
                 job_id,
                 error,
@@ -977,6 +1071,7 @@ impl ExecutorMessage {
                 job_id,
                 task_name,
                 wall_time_ns,
+                lease: _,
             } => Some(JobResult::Cancelled {
                 job_id,
                 task_name,
@@ -987,12 +1082,56 @@ impl ExecutorMessage {
                 task_name,
                 wake_at,
                 wall_time_ns,
+                lease: _,
             } => Some(JobResult::Slept {
                 job_id,
                 task_name,
                 wake_at,
                 wall_time_ns,
             }),
+        }
+    }
+
+    /// Stamp the lease this attempt was dispatched under.
+    ///
+    /// Applied by the executor on its way out, from the `job` frame it is
+    /// answering — [`from_job_result`](Self::from_job_result) and
+    /// [`task_log`](Self::task_log) build leaseless frames because neither a
+    /// [`JobResult`] nor a log line knows which dispatch produced it.
+    ///
+    /// The match is exhaustive on purpose. A new frame type has to answer "does
+    /// this settle or advance an attempt" here, in code, rather than inherit a
+    /// silent `None` from a wildcard arm.
+    pub fn with_lease(mut self, stamp: Option<Lease>) -> Self {
+        match &mut self {
+            Self::Success { lease, .. }
+            | Self::Failure { lease, .. }
+            | Self::Cancelled { lease, .. }
+            | Self::Slept { lease, .. }
+            | Self::Progress { lease, .. }
+            | Self::TaskLog { lease, .. }
+            | Self::StepCommit { lease, .. } => *lease = stamp,
+            // The connection's own frames, not any job's.
+            Self::Hello { .. } | Self::Heartbeat { .. } => {}
+        }
+        self
+    }
+
+    /// The job this frame settles or advances, and the lease it claims to hold
+    /// on it. `None` for a frame that names no job.
+    ///
+    /// One accessor rather than two, because the pair is what a scheduler
+    /// checks: a lease without the job it is for authorizes nothing.
+    pub fn leased_job(&self) -> Option<(&str, Option<&Lease>)> {
+        match self {
+            Self::Success { job_id, lease, .. }
+            | Self::Failure { job_id, lease, .. }
+            | Self::Cancelled { job_id, lease, .. }
+            | Self::Slept { job_id, lease, .. }
+            | Self::Progress { job_id, lease, .. }
+            | Self::TaskLog { job_id, lease, .. }
+            | Self::StepCommit { job_id, lease, .. } => Some((job_id, lease.as_ref())),
+            Self::Hello { .. } | Self::Heartbeat { .. } => None,
         }
     }
 }
@@ -1045,8 +1184,19 @@ impl<W: Write> FrameWriter<W> {
         job: &Job,
         disabled_middleware: Vec<String>,
     ) -> Result<(), ProtocolError> {
+        self.write_job_leased(job, disabled_middleware, None)
+    }
+
+    /// Dispatch a job under `lease`, which the executor echoes on every frame
+    /// that settles or advances the attempt.
+    pub fn write_job_leased(
+        &mut self,
+        job: &Job,
+        disabled_middleware: Vec<String>,
+        lease: Option<Lease>,
+    ) -> Result<(), ProtocolError> {
         self.write(
-            &SchedulerMessage::job_with(job, disabled_middleware),
+            &SchedulerMessage::job_leased(job, disabled_middleware, lease),
             &job.payload,
         )
     }
@@ -1230,6 +1380,7 @@ mod tests {
                 namespace,
                 disabled_middleware,
                 metadata,
+                ..
             } => {
                 assert_eq!(id, "job-1");
                 assert_eq!(task_name, "resize");
@@ -1509,12 +1660,14 @@ mod tests {
             &ExecutorMessage::Progress {
                 job_id: "job-1".into(),
                 progress: 42,
+                lease: None,
             },
             &[],
         );
         assert!(matches!(
             &progress,
-            ExecutorMessage::Progress { job_id, progress } if job_id == "job-1" && *progress == 42
+            ExecutorMessage::Progress { job_id, progress, .. }
+                if job_id == "job-1" && *progress == 42
         ));
         assert!(
             progress.into_job_result(payload).is_none(),
@@ -1532,6 +1685,7 @@ mod tests {
                 level,
                 message,
                 extra_len,
+                ..
             } => {
                 assert_eq!(job_id, "job-1");
                 assert_eq!(task_name, "resize");
@@ -1646,6 +1800,7 @@ mod tests {
             result_len: Some(0),
             task_name: "t".into(),
             wall_time_ns: 5,
+            lease: None,
         };
         let (frame, payload) = round_trip(&empty, &[]);
         match frame.into_job_result(payload) {
@@ -1658,6 +1813,7 @@ mod tests {
             result_len: None,
             task_name: "t".into(),
             wall_time_ns: 5,
+            lease: None,
         };
         let (frame, payload) = round_trip(&none, &[]);
         match frame.into_job_result(payload) {
@@ -1678,6 +1834,7 @@ mod tests {
                 wall_time_ns: 42,
                 should_retry: false,
                 timed_out: true,
+                lease: None,
             },
             &[],
         );
@@ -1700,6 +1857,7 @@ mod tests {
                 job_id: "job-1".into(),
                 task_name: "t".into(),
                 wall_time_ns: 7,
+                lease: None,
             },
             &[],
         );
@@ -1797,6 +1955,58 @@ mod tests {
     }
 
     #[test]
+    fn a_lease_survives_the_wire_and_its_absence_still_parses() {
+        // Both directions of the same compatibility promise: a lease reaches
+        // the far side intact, and a peer that predates the field — which is
+        // every executor built before this shipped — still decodes.
+        let lease = Lease::from_epoch(7);
+        let (stamped, _) = round_trip(
+            &ExecutorMessage::Success {
+                job_id: "job-1".into(),
+                result_len: None,
+                task_name: "t".into(),
+                wall_time_ns: 1,
+                lease: Some(lease.clone()),
+            },
+            &[],
+        );
+        assert_eq!(stamped.leased_job(), Some(("job-1", Some(&lease))));
+
+        let (bare, _) = round_trip(
+            &ExecutorMessage::Success {
+                job_id: "job-1".into(),
+                result_len: None,
+                task_name: "t".into(),
+                wall_time_ns: 1,
+                lease: None,
+            },
+            &[],
+        );
+        assert_eq!(bare.leased_job(), Some(("job-1", None)));
+
+        // Not merely absent from the struct — absent from the *bytes*, so an
+        // older peer sees the frame it has always seen.
+        let header = serde_json::to_value(&bare).expect("encode");
+        assert!(header.get("lease").is_none());
+    }
+
+    #[test]
+    fn the_connections_own_frames_carry_no_lease() {
+        // The rule is "does this frame settle or advance an attempt". `hello`
+        // and `heartbeat` are the connection's, so stamping them is a no-op
+        // rather than a field nobody checks.
+        for frame in [
+            ExecutorMessage::hello("e", "python", "1", vec!["t".into()], 1).build(),
+            ExecutorMessage::Heartbeat { free_slots: 1 },
+        ] {
+            let stamped = frame.with_lease(Some(Lease::from_epoch(7)));
+            assert_eq!(stamped.leased_job(), None);
+            let header = serde_json::to_value(&stamped).expect("encode");
+            assert!(header.get("lease").is_none());
+        }
+    }
+
+    #[test]
     fn every_frame_reports_its_own_wire_type_as_known() {
         // `is_known_type` is what separates "a peer newer than us" from "a frame
         // we should have been able to read". A tag missing from it would make a
@@ -1839,6 +2049,7 @@ mod tests {
             ExecutorMessage::Progress {
                 job_id: "job-1".into(),
                 progress: 10,
+                lease: None,
             },
             ExecutorMessage::task_log("job-1", "t", "info", "m", None).0,
             ExecutorMessage::StepCommit {
@@ -1848,12 +2059,14 @@ mod tests {
                 kind: StepKind::Run,
                 wake_at: None,
                 payload_len: 0,
+                lease: None,
             },
             ExecutorMessage::Success {
                 job_id: "job-1".into(),
                 result_len: None,
                 task_name: "t".into(),
                 wall_time_ns: 1,
+                lease: None,
             },
             ExecutorMessage::Failure {
                 job_id: "job-1".into(),
@@ -1864,17 +2077,20 @@ mod tests {
                 wall_time_ns: 1,
                 should_retry: true,
                 timed_out: false,
+                lease: None,
             },
             ExecutorMessage::Cancelled {
                 job_id: "job-1".into(),
                 task_name: "t".into(),
                 wall_time_ns: 1,
+                lease: None,
             },
             ExecutorMessage::Slept {
                 job_id: "job-1".into(),
                 task_name: "t".into(),
                 wake_at: 1,
                 wall_time_ns: 1,
+                lease: None,
             },
         ] {
             let tag = wire_type(&frame);
@@ -2059,6 +2275,7 @@ mod tests {
                 kind: StepKind::Run,
                 wake_at: None,
                 payload_len: 7,
+                lease: None,
             },
             b"receipt",
         );
@@ -2098,6 +2315,7 @@ mod tests {
             kind: StepKind::Run,
             wake_at: None,
             payload_len: 7,
+            lease: None,
         };
         let header = serde_json::to_value(&frame).expect("encode");
         assert_eq!(header["payload_len"], 7);
@@ -2150,6 +2368,7 @@ mod tests {
             kind: StepKind::Run,
             wake_at: None,
             payload_len: 0,
+            lease: None,
         }
         .into_job_result(Vec::new())
         .is_none());

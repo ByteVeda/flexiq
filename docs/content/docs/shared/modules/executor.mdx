@@ -101,6 +101,20 @@ first to report and fails retryably with `was not dispatched: every executor wit
 a free slot is already running an earlier attempt of it` if the placement timeout
 elapses first.
 
+Across executors, the **lease** is what separates the attempts. The scheduler
+mints one when it wins a job's execution claim, sends it on the job frame, and
+requires it back on every frame that settles or advances the attempt. A frame
+carrying a lease the job is no longer dispatched under is refused and logged at
+error level — the frame is dropped, but what it reports is a job that ran twice,
+so it is an incident rather than housekeeping. The case this exists for is the
+one nothing else catches: requeuing a stuck job from the dashboard leaves both
+its owner and its attempt number alone, so without the lease the stalled
+executor's late result is indistinguishable from the live one's.
+
+An executor built before the lease existed still attaches and still runs jobs;
+it does not negotiate the capability, is dispatched no lease, and keeps the
+weaker fence. Nothing about the rollout needs coordinating.
+
 <Callout type="warn" title="The token is read from the environment, never a flag">
   A secret in `argv` shows up in `ps` output and shell history. Every SDK reads
   `FLEXIQ_ATTACH_TOKEN` from the environment and offers no flag for it.
@@ -235,6 +249,11 @@ which capabilities it negotiated at attach.
 goes nowhere costs a dashboard bar; a step that goes nowhere re-runs a charge.
 The failure is retryable, so a fleet mid-rollout still makes progress: the next
 attempt may land on a worker or an executor that can commit.
+
+`lease` degrades symmetrically, which is the point: a scheduler dispatches a
+lease only to an executor that said it would echo one, so it never *requires*
+a value the peer will not send. An executor without it keeps the fence it always
+had — the claim's owner, the attempt, and the claim's epoch.
 
 Skew in the other direction is covered too. A frame type the receiving side has
 never heard of is logged once and skipped rather than treated as a corrupt

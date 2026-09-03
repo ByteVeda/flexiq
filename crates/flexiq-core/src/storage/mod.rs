@@ -1224,14 +1224,14 @@ macro_rules! impl_storage {
                 &self,
                 job_id: &str,
                 worker_id: &str,
-            ) -> $crate::error::Result<bool> {
+            ) -> $crate::error::Result<Option<i64>> {
                 self.claim_execution(job_id, worker_id)
             }
             fn claim_execution_batch(
                 &self,
                 job_ids: &[&str],
                 worker_id: &str,
-            ) -> $crate::error::Result<Vec<bool>> {
+            ) -> $crate::error::Result<Vec<Option<i64>>> {
                 self.claim_execution_batch(job_ids, worker_id)
             }
             fn complete_execution(
@@ -1252,7 +1252,7 @@ macro_rules! impl_storage {
                 job_id: &str,
                 expected_owner: &str,
                 new_owner: &str,
-            ) -> $crate::error::Result<bool> {
+            ) -> $crate::error::Result<Option<i64>> {
                 self.reclaim_execution(job_id, expected_owner, new_owner)
             }
             fn supports_steps(&self) -> bool {
@@ -1270,30 +1270,33 @@ macro_rules! impl_storage {
                 step: &$crate::storage::records::NewJobStep<'_>,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 limits: &$crate::step::StepLimits,
                 namespace: Option<&str>,
             ) -> $crate::error::Result<$crate::storage::records::StepCommit> {
-                self.record_step_result(step, owner, attempt, limits, namespace)
+                self.record_step_result(step, owner, attempt, epoch, limits, namespace)
             }
             fn sleep_job(
                 &self,
                 step: &$crate::storage::records::NewJobStep<'_>,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 wake_at: i64,
                 limits: &$crate::step::StepLimits,
                 namespace: Option<&str>,
             ) -> $crate::error::Result<$crate::storage::records::SleepOutcome> {
-                self.sleep_job(step, owner, attempt, wake_at, limits, namespace)
+                self.sleep_job(step, owner, attempt, epoch, wake_at, limits, namespace)
             }
             fn authorize_attempt(
                 &self,
                 job_id: &str,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 namespace: Option<&str>,
             ) -> $crate::error::Result<$crate::storage::records::AttemptFence> {
-                self.authorize_attempt(job_id, owner, attempt, namespace)
+                self.authorize_attempt(job_id, owner, attempt, epoch, namespace)
             }
             fn delete_job_steps(
                 &self,
@@ -2094,10 +2097,10 @@ impl Storage for StorageBackend {
     fn reap_expired_locks(&self, now: i64) -> Result<u64> {
         delegate!(self, reap_expired_locks, now)
     }
-    fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<bool> {
+    fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<Option<i64>> {
         delegate!(self, claim_execution, job_id, worker_id)
     }
-    fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>> {
+    fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<Option<i64>>> {
         delegate!(self, claim_execution_batch, job_ids, worker_id)
     }
     fn complete_execution(&self, job_id: &str, namespace: Option<&str>) -> Result<()> {
@@ -2111,7 +2114,7 @@ impl Storage for StorageBackend {
         job_id: &str,
         expected_owner: &str,
         new_owner: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         delegate!(self, reclaim_execution, job_id, expected_owner, new_owner)
     }
     fn supports_steps(&self) -> bool {
@@ -2129,6 +2132,7 @@ impl Storage for StorageBackend {
         step: &records::NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         limits: &crate::step::StepLimits,
         namespace: Option<&str>,
     ) -> Result<records::StepCommit> {
@@ -2138,6 +2142,7 @@ impl Storage for StorageBackend {
             step,
             owner,
             attempt,
+            epoch,
             limits,
             namespace
         )
@@ -2147,20 +2152,30 @@ impl Storage for StorageBackend {
         step: &records::NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         wake_at: i64,
         limits: &crate::step::StepLimits,
         namespace: Option<&str>,
     ) -> Result<records::SleepOutcome> {
-        delegate!(self, sleep_job, step, owner, attempt, wake_at, limits, namespace)
+        delegate!(self, sleep_job, step, owner, attempt, epoch, wake_at, limits, namespace)
     }
     fn authorize_attempt(
         &self,
         job_id: &str,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         namespace: Option<&str>,
     ) -> Result<records::AttemptFence> {
-        delegate!(self, authorize_attempt, job_id, owner, attempt, namespace)
+        delegate!(
+            self,
+            authorize_attempt,
+            job_id,
+            owner,
+            attempt,
+            epoch,
+            namespace
+        )
     }
     fn delete_job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<u64> {
         delegate!(self, delete_job_steps, job_id, namespace)

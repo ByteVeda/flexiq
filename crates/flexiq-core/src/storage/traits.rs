@@ -653,29 +653,41 @@ pub trait Storage: Send + Sync + Clone {
 
     // ── Execution claims (exactly-once) ────────────────────────
 
-    /// Claim exclusive execution of a job for `worker_id`. Returns `false`
-    /// when a claim already exists.
-    fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<bool>;
+    /// Claim exclusive execution of a job for `worker_id`. Returns the
+    /// **epoch** the claim was won under, or `None` when a claim already
+    /// exists.
+    ///
+    /// The epoch is the identity of this claim, and of the dispatch made under
+    /// it. Without it `(owner, attempt)` cannot separate two claims that
+    /// [`Storage::requeue_stuck`] produced from one attempt, and the first
+    /// executor's late result authorizes over the second's. See
+    /// [`crate::lease`].
+    fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<Option<i64>>;
     /// Batch variant of [`Storage::claim_execution`]: attempt to claim every
     /// `job_id` for `worker_id` in as few round trips as the backend allows.
-    /// Returns one flag per input id, in order — `true` if this worker won the
-    /// claim, `false` if a claim already existed.
-    fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>>;
+    /// Returns one result per input id, in order — the epoch if this worker won
+    /// the claim, `None` if a claim already existed. Each won claim gets its
+    /// **own** epoch: two jobs claimed together are still two claims.
+    fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<Option<i64>>>;
     /// Remove the execution claim of a finished job.
     fn complete_execution(&self, job_id: &str, namespace: Option<&str>) -> Result<()>;
     /// Purge execution claims older than the cutoff. Returns the count
     /// removed.
     fn purge_execution_claims(&self, older_than_ms: i64) -> Result<u64>;
     /// Atomically transfer an existing claim from `expected_owner` to
-    /// `new_owner`. Returns `true` only if the claim was held by
-    /// `expected_owner` — the `job_id` PK serializes concurrent rescuers so
-    /// exactly one wins.
+    /// `new_owner`. Returns the transfer's **new epoch**, and only if the claim
+    /// was held by `expected_owner` — the `job_id` PK serializes concurrent
+    /// rescuers so exactly one wins.
+    ///
+    /// The epoch moves with the owner: a rescuer that kept the old one could
+    /// authorize a result the dead owner's executor is still on its way to
+    /// sending.
     fn reclaim_execution(
         &self,
         job_id: &str,
         expected_owner: &str,
         new_owner: &str,
-    ) -> Result<bool>;
+    ) -> Result<Option<i64>>;
 
     // ── Durable inline steps ──────────────────────────────────────
 
@@ -708,10 +720,15 @@ pub trait Storage: Send + Sync + Clone {
     /// refused — claims are swept by age, so a long job legitimately outlives
     /// its own claim row while still being the only thing executing.
     ///
-    /// `owner` is never something the caller asserts about itself: in-process
-    /// and prefork workers pass the id they won the claim with, and an attached
-    /// executor's comes from the scheduler's dispatch record, never off a
-    /// frame.
+    /// `epoch` is the third part of the same fence: the identity of the claim
+    /// the writer was dispatched under, which is what separates two claims one
+    /// owner won at one attempt. `None` skips the comparison — a caller that
+    /// holds no lease, which is what every caller was before it existed.
+    ///
+    /// None of the three is something the caller asserts about itself:
+    /// in-process and prefork workers pass what they won the claim with, and an
+    /// attached executor's comes from the scheduler's dispatch record, never
+    /// off a frame.
     ///
     /// Enforces `limits` — clamped to the hard ceilings, on the encoded bytes —
     /// and rejects a `seq` that is not exactly the number of steps already
@@ -723,10 +740,11 @@ pub trait Storage: Send + Sync + Clone {
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<StepCommit> {
-        let _ = (step, owner, attempt, limits, namespace);
+        let _ = (step, owner, attempt, epoch, limits, namespace);
         Err(steps_unsupported())
     }
 
@@ -744,26 +762,30 @@ pub trait Storage: Send + Sync + Clone {
     /// targets that stored value — otherwise a duration sleep would push its
     /// own deadline further out on every replay. A sleep commits no bytes, so
     /// only `max_steps` can bite, but it is counted like any other step.
+    // The arguments are the fence (`owner`, `attempt`, `epoch`) plus the
+    // sleep's own three; bundling them would only hide which half is which.
+    #[allow(clippy::too_many_arguments)]
     fn sleep_job(
         &self,
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         wake_at: i64,
         limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<SleepOutcome> {
-        let _ = (step, owner, attempt, wake_at, limits, namespace);
+        let _ = (step, owner, attempt, epoch, wake_at, limits, namespace);
         Err(steps_unsupported())
     }
 
-    /// Whether a result carrying `(owner, attempt)` still speaks for this job.
+    /// Whether a result carrying `(owner, attempt, epoch)` still speaks for
+    /// this job.
     ///
-    /// The same four-case resolution
-    /// [`record_step_result`](Self::record_step_result) fences writes with,
-    /// exposed for the scheduler: a terminal transition applied to the wrong
-    /// attempt is no longer only a wrong status — it deletes another attempt's
-    /// steps.
+    /// The same resolution [`record_step_result`](Self::record_step_result)
+    /// fences writes with, exposed for the scheduler: a terminal transition
+    /// applied to the wrong attempt is no longer only a wrong status — it
+    /// deletes another attempt's steps.
     ///
     /// Defaults to [`AttemptFence::Authorized`], which is exactly how every
     /// caller behaved before the fence existed. This is the one gate here that
@@ -774,9 +796,10 @@ pub trait Storage: Send + Sync + Clone {
         job_id: &str,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         namespace: Option<&str>,
     ) -> Result<AttemptFence> {
-        let _ = (job_id, owner, attempt, namespace);
+        let _ = (job_id, owner, attempt, epoch, namespace);
         Ok(AttemptFence::Authorized)
     }
 

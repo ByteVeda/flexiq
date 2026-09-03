@@ -23,10 +23,20 @@ impl Scheduler {
     /// run proceeding correctly elsewhere.
     ///
     /// A job this scheduler never dispatched has no token to check against — a
-    /// duplicate result, or a foreign id — and is left to the transitions' own
-    /// guards, exactly as before the fence existed.
+    /// foreign id — and is left to the transitions' own guards, exactly as
+    /// before the fence existed.
+    ///
+    /// A job whose slot was already freed *does* have one: the record is
+    /// retired, not forgotten. That is the reaper's case — it settles a stalled
+    /// job by synthesizing a failure, and the executor that was merely slow
+    /// then reports for real. Before the record was retired, that result found
+    /// nothing to check itself against and was waved through onto a job that
+    /// had since moved on.
     fn authorize_finished(&self, job_id: &str) -> Result<bool> {
-        let Some(record) = self.release_in_flight(job_id) else {
+        let Some(record) = self
+            .release_in_flight(job_id)
+            .or_else(|| self.last_dispatch(job_id))
+        else {
             return Ok(true);
         };
         // The fence fails **open**, and deliberately. Propagating the error
@@ -40,6 +50,7 @@ impl Scheduler {
             job_id,
             &record.owner,
             record.attempt,
+            record.epoch,
             self.namespace.as_deref(),
         ) {
             Ok(fence) => fence,
@@ -49,8 +60,13 @@ impl Scheduler {
             }
         };
         if fence == AttemptFence::Superseded {
-            warn!(
-                "dropping superseded result for job {job_id} from attempt {}",
+            // An incident, not housekeeping: something ran this job to
+            // completion while the job itself had moved on to another owner,
+            // another attempt, or another claim. The result is dropped, but the
+            // duplicate execution behind it already happened.
+            error!(
+                "dropping superseded result for job {job_id} from attempt {}: \
+                 the job is proceeding under another claim",
                 record.attempt
             );
             return Ok(false);

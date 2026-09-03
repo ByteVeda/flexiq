@@ -718,7 +718,10 @@ fn debounce_leaves_a_claimed_job_alone() {
     let claimed = storage
         .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
         .unwrap();
-    assert!(storage.claim_execution(&claimed.id, "worker-1").unwrap());
+    assert!(storage
+        .claim_execution(&claimed.id, "worker-1")
+        .unwrap()
+        .is_some());
 
     let fresh = storage
         .enqueue_debounced(debounced_job("report:user-7"), debounce_opts(5_000, 60_000))
@@ -2804,7 +2807,7 @@ fn claimed_job(storage: &SqliteStorage, owner: &str) -> crate::job::Job {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    assert!(storage.claim_execution(&job.id, owner).unwrap());
+    assert!(storage.claim_execution(&job.id, owner).unwrap().is_some());
     storage.get_job(&job.id, None).unwrap().unwrap()
 }
 
@@ -2831,6 +2834,7 @@ fn steps_commit_and_replay_in_order() {
                     &run_step(&job.id, seq, key, key.as_bytes()),
                     "worker-a",
                     0,
+                    None,
                     &limits,
                     None
                 )
@@ -2854,11 +2858,11 @@ fn an_identical_recommit_is_a_success() {
     let step = run_step(&job.id, 0, "charge#0", b"ok");
 
     storage
-        .record_step_result(&step, "worker-a", 0, &limits, None)
+        .record_step_result(&step, "worker-a", 0, None, &limits, None)
         .unwrap();
     assert_eq!(
         storage
-            .record_step_result(&step, "worker-a", 0, &limits, None)
+            .record_step_result(&step, "worker-a", 0, None, &limits, None)
             .unwrap(),
         StepCommit::AlreadyCommitted
     );
@@ -2876,6 +2880,7 @@ fn a_different_result_at_the_same_position_diverges() {
             &run_step(&job.id, 0, "charge#0", b"first"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -2885,6 +2890,7 @@ fn a_different_result_at_the_same_position_diverges() {
             &run_step(&job.id, 0, "charge#0", b"second"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -2909,6 +2915,7 @@ fn a_purged_claim_on_a_running_job_re_asserts() {
                 &run_step(&job.id, 0, "charge#0", b"ok"),
                 "worker-a",
                 0,
+                None,
                 &limits,
                 None
             )
@@ -2930,12 +2937,14 @@ fn a_write_from_a_superseded_owner_is_refused() {
 
     assert!(storage
         .reclaim_execution(&job.id, "worker-a", "worker-b")
-        .unwrap());
+        .unwrap()
+        .is_some());
     let err = storage
         .record_step_result(
             &run_step(&job.id, 0, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -2955,13 +2964,17 @@ fn a_write_from_the_previous_attempt_is_refused() {
     storage
         .dequeue("default", now_millis() + 1000, None)
         .unwrap();
-    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+    assert!(storage
+        .claim_execution(&job.id, "worker-a")
+        .unwrap()
+        .is_some());
 
     let err = storage
         .record_step_result(
             &run_step(&job.id, 0, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -2983,6 +2996,7 @@ fn an_over_cap_step_is_refused_at_the_storage_boundary() {
             &run_step(&job.id, 0, "render#0", &[0u8; 64]),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3017,6 +3031,7 @@ fn the_step_count_cap_holds_where_the_byte_cap_cannot() {
                 &run_step(&job.id, seq, &format!("noop#{seq}"), &[]),
                 "worker-a",
                 0,
+                None,
                 &limits,
                 None,
             )
@@ -3027,6 +3042,7 @@ fn the_step_count_cap_holds_where_the_byte_cap_cannot() {
             &run_step(&job.id, 2, "noop#2", &[]),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3052,7 +3068,7 @@ fn a_sleep_pins_its_deadline_on_the_first_commit() {
     let first_deadline = now_millis() + 3_600_000;
 
     let outcome = storage
-        .sleep_job(&sleep, "worker-a", 0, first_deadline, &limits, None)
+        .sleep_job(&sleep, "worker-a", 0, None, first_deadline, &limits, None)
         .unwrap();
     assert_eq!(
         outcome,
@@ -3077,12 +3093,16 @@ fn a_sleep_pins_its_deadline_on_the_first_commit() {
     storage
         .dequeue("default", first_deadline + 1, None)
         .unwrap();
-    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+    assert!(storage
+        .claim_execution(&job.id, "worker-a")
+        .unwrap()
+        .is_some());
     let replayed = storage
         .sleep_job(
             &sleep,
             "worker-a",
             0,
+            None,
             first_deadline + 3_600_000,
             &limits,
             None,
@@ -3117,18 +3137,30 @@ fn a_run_commit_onto_a_stored_sleep_diverges() {
         result: None,
     };
     storage
-        .sleep_job(&sleep, "worker-a", 0, now_millis() + 1000, &limits, None)
+        .sleep_job(
+            &sleep,
+            "worker-a",
+            0,
+            None,
+            now_millis() + 1000,
+            &limits,
+            None,
+        )
         .unwrap();
 
     storage
         .dequeue("default", now_millis() + 100_000, None)
         .unwrap();
-    assert!(storage.claim_execution(&job.id, "worker-a").unwrap());
+    assert!(storage
+        .claim_execution(&job.id, "worker-a")
+        .unwrap()
+        .is_some());
     let err = storage
         .record_step_result(
             &run_step(&job.id, 0, "cool_off#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3147,6 +3179,7 @@ fn an_explicit_key_cannot_be_spent_twice() {
             &run_step(&job.id, 0, "charge:order-7", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3156,6 +3189,7 @@ fn an_explicit_key_cannot_be_spent_twice() {
             &run_step(&job.id, 1, "charge:order-7", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3174,6 +3208,7 @@ fn a_gap_in_the_sequence_is_refused() {
             &run_step(&job.id, 3, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3193,6 +3228,7 @@ fn a_terminal_write_leaves_no_orphan_steps() {
                 &run_step(&job.id, 0, "charge#0", b"ok"),
                 "worker-a",
                 0,
+                None,
                 &limits,
                 None,
             )
@@ -3232,6 +3268,7 @@ fn a_retry_keeps_the_steps_and_drops_the_claim() {
             &run_step(&job.id, 0, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3263,6 +3300,7 @@ fn requeue_stuck_keeps_the_steps_for_the_next_worker() {
             &run_step(&job.id, 0, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )
@@ -3282,6 +3320,7 @@ fn delete_job_steps_is_scoped_to_the_namespace() {
             &run_step(&job.id, 0, "charge#0", b"ok"),
             "worker-a",
             0,
+            None,
             &limits,
             None,
         )

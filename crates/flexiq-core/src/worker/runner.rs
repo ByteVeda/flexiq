@@ -215,6 +215,9 @@ impl Worker {
         // The same id, to the pool: a dispatcher that writes on the scheduler's
         // behalf has to fence on the claim this scheduler actually holds.
         dispatcher.set_claim_owner(&worker_id);
+        // And the book naming *which* claim, so a dispatch can be told from a
+        // later one of the same job made under a new claim.
+        dispatcher.set_lease_book(scheduler.lease_book());
         for (task_name, config) in task_configs {
             scheduler.register_task(task_name, config);
         }

@@ -5,6 +5,7 @@ use super::super::schema::{distributed_locks, execution_claims};
 use super::PostgresStorage;
 use crate::error::Result;
 use crate::job::now_millis;
+use crate::lease::mint_claim_epoch;
 
 // Shared lock operations (release, extend, get_info, reap, complete_execution, purge_claims)
 crate::storage::diesel_common::impl_diesel_lock_ops!(PostgresStorage);
@@ -66,29 +67,36 @@ impl PostgresStorage {
         })
     }
 
-    /// Claim exclusive execution of a job. Returns true if claimed.
-    pub fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<bool> {
+    /// Claim exclusive execution of a job. Returns the epoch the claim was won
+    /// under, or `None` when another worker already holds it.
+    pub fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<Option<i64>> {
         let mut conn = self.conn()?;
         let now = now_millis();
+        let epoch = mint_claim_epoch();
 
         let result = diesel::insert_into(execution_claims::table)
             .values(&NewExecutionClaimRow {
                 job_id,
                 worker_id,
                 claimed_at: now,
+                epoch: Some(epoch),
             })
             .on_conflict(execution_claims::job_id)
             .do_nothing()
             .execute(&mut conn)?;
 
-        Ok(result > 0)
+        Ok((result > 0).then_some(epoch))
     }
 
     /// Batch variant of [`Self::claim_execution`]. Postgres supports multi-row
     /// `INSERT ... ON CONFLICT DO NOTHING RETURNING`, so every free claim is
     /// taken in one statement and the returned job ids are exactly the ones this
-    /// worker won — any id whose claim already existed is reported `false`.
-    pub fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>> {
+    /// worker won — any id whose claim already existed is reported `None`.
+    pub fn claim_execution_batch(
+        &self,
+        job_ids: &[&str],
+        worker_id: &str,
+    ) -> Result<Vec<Option<i64>>> {
         if job_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -105,30 +113,42 @@ impl PostgresStorage {
         // returns `Err`, the poller falls back to per-job dispatch, and those
         // jobs come back `AlreadyClaimed` — stranded `Running` with no owner
         // dispatching them. Matches the SQLite path's single-transaction claim.
-        let claimed: std::collections::HashSet<String> = conn
-            .transaction::<_, crate::error::QueueError, _>(|conn| {
-                let mut claimed = std::collections::HashSet::with_capacity(job_ids.len());
+        // `RETURNING` gives back the epoch the row was actually written with,
+        // so a won claim reports its own identity rather than the value this
+        // call happened to propose — the two can only differ if the insert did
+        // not land, which is exactly the case that must report `None`.
+        let claimed: std::collections::HashMap<String, Option<i64>> =
+            conn.transaction::<_, crate::error::QueueError, _>(|conn| {
+                let mut claimed = std::collections::HashMap::with_capacity(job_ids.len());
                 for chunk in job_ids.chunks(CLAIM_BATCH_CHUNK) {
+                    // One epoch per row, not per batch: the epoch is the
+                    // identity of a claim, and two jobs claimed together are
+                    // still two claims.
                     let rows: Vec<NewExecutionClaimRow> = chunk
                         .iter()
                         .map(|job_id| NewExecutionClaimRow {
                             job_id,
                             worker_id,
                             claimed_at: now,
+                            epoch: Some(mint_claim_epoch()),
                         })
                         .collect();
 
-                    let won: Vec<String> = diesel::insert_into(execution_claims::table)
-                        .values(&rows)
-                        .on_conflict(execution_claims::job_id)
-                        .do_nothing()
-                        .returning(execution_claims::job_id)
-                        .get_results(conn)?;
+                    let won: Vec<(String, Option<i64>)> =
+                        diesel::insert_into(execution_claims::table)
+                            .values(&rows)
+                            .on_conflict(execution_claims::job_id)
+                            .do_nothing()
+                            .returning((execution_claims::job_id, execution_claims::epoch))
+                            .get_results(conn)?;
                     claimed.extend(won);
                 }
                 Ok(claimed)
             })?;
 
-        Ok(job_ids.iter().map(|id| claimed.contains(*id)).collect())
+        Ok(job_ids
+            .iter()
+            .map(|id| claimed.get(*id).copied().flatten())
+            .collect())
     }
 }

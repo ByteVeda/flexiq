@@ -329,6 +329,10 @@ impl Executor {
                 result_len: None,
                 task_name: job.1.clone(),
                 wall_time_ns: 1_000,
+                // This hand-rolled executor never advertises `CAP_LEASE`, so
+                // the scheduler dispatches it no lease and requires none back —
+                // the give-up that capability documents, exercised end to end.
+                lease: None,
             })
             .expect("send the success frame");
     }
@@ -344,6 +348,7 @@ impl Executor {
                 wall_time_ns: 1_000,
                 should_retry: true,
                 timed_out: false,
+                lease: None,
             })
             .expect("send the failure frame");
     }
@@ -369,6 +374,7 @@ impl Executor {
             .write_header(&ExecutorMessage::Progress {
                 job_id: job.0.clone(),
                 progress,
+                lease: None,
             })
             .expect("send the progress frame");
     }

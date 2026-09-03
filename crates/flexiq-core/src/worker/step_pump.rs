@@ -45,6 +45,9 @@ pub(super) struct StepWrite {
     pub owner: String,
     /// `retry_count` the job carried when it was dispatched.
     pub attempt: i32,
+    /// Epoch of the execution claim the dispatch was made under, resolved by
+    /// the scheduler from the lease it issued — never from the frame.
+    pub epoch: Option<i64>,
     /// Namespace the job was dispatched in.
     pub namespace: Option<String>,
     /// Where the answer goes — a closure so this module never has to know what
@@ -135,6 +138,7 @@ fn apply(sink: &dyn SideChannel, write: StepWrite) {
         result,
         owner,
         attempt,
+        epoch,
         namespace,
         reply,
     } = write;
@@ -151,14 +155,21 @@ fn apply(sink: &dyn SideChannel, write: StepWrite) {
 
     let answer = match kind {
         StepKind::Run => sink
-            .record_step(&step, &owner, attempt, namespace.as_deref())
+            .record_step(&step, &owner, attempt, epoch, namespace.as_deref())
             .map(|commit| Settled {
                 already: matches!(commit, StepCommit::AlreadyCommitted),
                 wake_at: None,
             }),
         StepKind::Sleep => match wake_at {
             Some(candidate) => sink
-                .sleep_job(&step, &owner, attempt, candidate, namespace.as_deref())
+                .sleep_job(
+                    &step,
+                    &owner,
+                    attempt,
+                    epoch,
+                    candidate,
+                    namespace.as_deref(),
+                )
                 .map(|outcome| Settled {
                     already: matches!(outcome, SleepOutcome::AlreadySleeping { .. }),
                     // The deadline storage settled on, which on a replay is not

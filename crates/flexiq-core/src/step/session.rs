@@ -75,6 +75,15 @@ impl<S: Storage> StorageStepSession<S> {
     ///
     /// A backend without a step store fails here. It must never degrade to "no
     /// steps recorded": that answer re-runs a charge.
+    ///
+    /// **Fenced on `(owner, attempt)` only** — no claim epoch, so this session
+    /// cannot separate two claims one owner won at one attempt, which
+    /// [`Storage::requeue_stuck`](crate::storage::Storage::requeue_stuck)
+    /// produces. Closing that means the *dispatch* carrying its epoch, and the
+    /// caller here has a [`Job`] rather than the claim the poller won; a
+    /// session that looked the current epoch up for itself would hand a
+    /// superseded attempt the live claim's value and turn the fence from silent
+    /// into wrong. See [`crate::lease`] and [`StorageSteps::with_epoch`].
     pub fn load(storage: S, job: &Job, owner: &str, limits: StepLimits) -> Result<Self> {
         Self::open(
             StorageSteps::new(storage, owner, job.retry_count),
@@ -368,7 +377,10 @@ mod tests {
         storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        assert!(storage.claim_execution(&job.id, "worker-1").unwrap());
+        assert!(storage
+            .claim_execution(&job.id, "worker-1")
+            .unwrap()
+            .is_some());
         storage.get_job(&job.id, None).unwrap().unwrap()
     }
 
@@ -383,7 +395,10 @@ mod tests {
             .dequeue("default", job.scheduled_at, None)
             .unwrap()
             .is_some());
-        assert!(storage.claim_execution(job_id, "worker-1").unwrap());
+        assert!(storage
+            .claim_execution(job_id, "worker-1")
+            .unwrap()
+            .is_some());
         storage.get_job(job_id, None).unwrap().unwrap()
     }
 
@@ -746,7 +761,8 @@ mod tests {
 
         assert!(storage
             .reclaim_execution(&job.id, "worker-1", "worker-2")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let err = session.sleep_for(Some("nap"), None, 60_000).unwrap_err();
         assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
@@ -988,7 +1004,8 @@ mod tests {
         // Another worker takes the job over mid-attempt.
         assert!(storage
             .reclaim_execution(&job.id, "worker-1", "worker-2")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let err = session.run("charge", None, |_| Ok(vec![])).unwrap_err();
         assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");

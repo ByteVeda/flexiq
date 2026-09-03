@@ -775,13 +775,13 @@ fn test_execution_claims_purge(s: &impl Storage) {
     let old_job = "old-claim-job-id";
     let fresh_job = "fresh-claim-job-id";
 
-    assert!(s.claim_execution(old_job, worker).unwrap());
+    assert!(s.claim_execution(old_job, worker).unwrap().is_some());
     // Advance past the old claim so the cutoff below can catch it but miss
     // the fresh claim (claimed after the cutoff below is computed).
     std::thread::sleep(std::time::Duration::from_millis(20));
     let cutoff = now_millis();
     std::thread::sleep(std::time::Duration::from_millis(20));
-    assert!(s.claim_execution(fresh_job, worker).unwrap());
+    assert!(s.claim_execution(fresh_job, worker).unwrap().is_some());
 
     let purged = s.purge_execution_claims(cutoff).unwrap();
     assert!(
@@ -790,9 +790,9 @@ fn test_execution_claims_purge(s: &impl Storage) {
     );
 
     // The old claim is gone — a fresh claim_execution for the same job succeeds.
-    assert!(s.claim_execution(old_job, worker).unwrap());
+    assert!(s.claim_execution(old_job, worker).unwrap().is_some());
     // The fresh claim must still be held.
-    assert!(!s.claim_execution(fresh_job, worker).unwrap());
+    assert!(s.claim_execution(fresh_job, worker).unwrap().is_none());
 
     s.complete_execution(old_job, None).unwrap();
     s.complete_execution(fresh_job, None).unwrap();
@@ -820,46 +820,73 @@ fn test_reap_stale_jobs(s: &impl Storage) {
 fn test_reclaim_execution(s: &impl Storage) {
     // Atomic claim transfer: only the rescuer expecting the current owner wins.
     let job = "reclaim-job-id";
-    assert!(s.claim_execution(job, "dead").unwrap());
-    assert!(s.reclaim_execution(job, "dead", "rescuer").unwrap());
+    assert!(s.claim_execution(job, "dead").unwrap().is_some());
+    assert!(s
+        .reclaim_execution(job, "dead", "rescuer")
+        .unwrap()
+        .is_some());
     // A second rescuer still expecting "dead" loses — owner is now "rescuer".
-    assert!(!s.reclaim_execution(job, "dead", "other").unwrap());
+    assert!(s.reclaim_execution(job, "dead", "other").unwrap().is_none());
     // The current owner can hand it on.
-    assert!(s.reclaim_execution(job, "rescuer", "rescuer2").unwrap());
+    assert!(s
+        .reclaim_execution(job, "rescuer", "rescuer2")
+        .unwrap()
+        .is_some());
     // No claim row → no-op.
-    assert!(!s.reclaim_execution("no-such-claim", "x", "y").unwrap());
+    assert!(s
+        .reclaim_execution("no-such-claim", "x", "y")
+        .unwrap()
+        .is_none());
     s.complete_execution(job, None).unwrap();
 
     // Owners may contain ':' (e.g. "host:pid"). The numeric timestamp suffix is
     // split off from the LAST ':', so the full owner must match — a truncated
     // prefix must not.
     let colon_job = "reclaim-colon-job";
-    assert!(s.claim_execution(colon_job, "host:42").unwrap());
+    assert!(s.claim_execution(colon_job, "host:42").unwrap().is_some());
     assert!(
-        !s.reclaim_execution(colon_job, "host", "x").unwrap(),
+        s.reclaim_execution(colon_job, "host", "x")
+            .unwrap()
+            .is_none(),
         "a truncated owner prefix must not match"
     );
     assert!(s
         .reclaim_execution(colon_job, "host:42", "rescuer")
-        .unwrap());
+        .unwrap()
+        .is_some());
     s.complete_execution(colon_job, None).unwrap();
 }
 
 fn test_claim_execution_batch(s: &impl Storage) {
-    // Batch claim returns one flag per id, in order, and matches single-claim
-    // semantics: an id already claimed (by any owner) comes back `false`.
+    // Batch claim returns one result per id, in order, and matches single-claim
+    // semantics: an id already claimed (by any owner) comes back `None`.
     let pre = "batch-claim-pre"; // already held before the batch runs
-    assert!(s.claim_execution(pre, "other").unwrap());
+    assert!(s.claim_execution(pre, "other").unwrap().is_some());
 
     let ids = ["batch-claim-a", pre, "batch-claim-c"];
     let won = s.claim_execution_batch(&ids, "batch-worker").unwrap();
-    assert_eq!(won, vec![true, false, true]);
+    assert_eq!(
+        won.iter().map(Option::is_some).collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    // Each won claim is its own claim, so each carries its own epoch — two jobs
+    // claimed in one round trip are still two dispatches to tell apart.
+    assert_ne!(
+        won[0], won[2],
+        "a batch must not hand two claims the same epoch"
+    );
 
     // The won claims are now real: a follow-up single claim is rejected, and the
     // one we lost is still owned by the original holder (also rejected).
-    assert!(!s.claim_execution("batch-claim-a", "batch-worker").unwrap());
-    assert!(!s.claim_execution("batch-claim-c", "batch-worker").unwrap());
-    assert!(!s.claim_execution(pre, "batch-worker").unwrap());
+    assert!(s
+        .claim_execution("batch-claim-a", "batch-worker")
+        .unwrap()
+        .is_none());
+    assert!(s
+        .claim_execution("batch-claim-c", "batch-worker")
+        .unwrap()
+        .is_none());
+    assert!(s.claim_execution(pre, "batch-worker").unwrap().is_none());
 
     // Empty input is a no-op, not an error.
     assert!(s
@@ -881,7 +908,7 @@ fn test_complete_batch(s: &impl Storage) {
     for _ in 0..3 {
         let job = s.enqueue(make_job(q, task)).unwrap();
         s.dequeue(q, now_millis(), None).unwrap().unwrap(); // -> Running
-        assert!(s.claim_execution(&job.id, "cb-worker").unwrap());
+        assert!(s.claim_execution(&job.id, "cb-worker").unwrap().is_some());
         ids.push(job.id);
     }
 
@@ -918,7 +945,7 @@ fn test_requeue_stuck(s: &impl Storage) {
     let job = s.enqueue(make_job(q, "stuck_task")).unwrap();
     let t0 = now_millis();
     s.dequeue(q, t0, None).unwrap().unwrap(); // Running
-    assert!(s.claim_execution(&job.id, "hung-worker").unwrap());
+    assert!(s.claim_execution(&job.id, "hung-worker").unwrap().is_some());
     assert!(s.request_cancel(&job.id, None).unwrap());
 
     assert!(s.requeue_stuck(&job.id, t0).unwrap());
@@ -935,7 +962,7 @@ fn test_requeue_stuck(s: &impl Storage) {
         "a stale cancel request must not kill the fresh attempt"
     );
     // The claim was deleted, not transferred — an insert-only claim succeeds.
-    assert!(s.claim_execution(&job.id, "rescuer").unwrap());
+    assert!(s.claim_execution(&job.id, "rescuer").unwrap().is_some());
     // And the job is dequeuable again.
     let redispatched = s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
     assert_eq!(redispatched.id, job.id);
@@ -956,7 +983,7 @@ fn test_reap_orphaned_jobs(s: &impl Storage) {
     let q = "q-orphan-recovery";
     let job = s.enqueue(make_job(q, "orphan_task")).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap().unwrap();
-    assert!(s.claim_execution(&job.id, "dead-worker").unwrap());
+    assert!(s.claim_execution(&job.id, "dead-worker").unwrap().is_some());
 
     let orphans = s
         .reap_orphaned_jobs(&["other".to_string()], now_millis(), None)
@@ -995,7 +1022,7 @@ fn test_reap_orphaned_jobs(s: &impl Storage) {
     let cq = "q-orphan-colon";
     let cjob = s.enqueue(make_job(cq, "orphan_colon_task")).unwrap();
     s.dequeue(cq, now_millis() + 1000, None).unwrap().unwrap();
-    assert!(s.claim_execution(&cjob.id, "host:7").unwrap());
+    assert!(s.claim_execution(&cjob.id, "host:7").unwrap().is_some());
     let co = s
         .reap_orphaned_jobs(&["other".to_string()], now_millis(), None)
         .unwrap();
@@ -2075,6 +2102,9 @@ fn run_storage_tests(s: &impl Storage) {
     test_steps_reject_a_reused_explicit_key(s);
     test_delete_job_steps_is_namespace_scoped(s);
     test_authorize_attempt_writes_nothing(s);
+    test_the_epoch_separates_two_claims_of_one_attempt(s);
+    test_reclaim_mints_a_new_epoch(s);
+    test_a_step_commit_is_fenced_on_the_epoch(s);
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
     test_step_session_memoizes_across_attempts(s);
     test_step_idempotency_key_survives_a_dlq_retry(s);
@@ -2091,7 +2121,7 @@ fn run_storage_tests(s: &impl Storage) {
 fn stepped_job(s: &impl Storage, queue: &str, owner: &str) -> flexiq_core::job::Job {
     let job = s.enqueue(make_job(queue, "stepped_task")).unwrap();
     s.dequeue(queue, now_millis() + 1000, None).unwrap();
-    assert!(s.claim_execution(&job.id, owner).unwrap());
+    assert!(s.claim_execution(&job.id, owner).unwrap().is_some());
     s.get_job(&job.id, None).unwrap().unwrap()
 }
 
@@ -2110,7 +2140,7 @@ fn commit(
     step: &NewJobStep<'_>,
     owner: &str,
 ) -> flexiq_core::error::Result<StepCommit> {
-    s.record_step_result(step, owner, 0, &StepLimits::default(), None)
+    s.record_step_result(step, owner, 0, None, &StepLimits::default(), None)
 }
 
 fn test_steps_commit_and_replay_in_order(s: &impl Storage) {
@@ -2168,6 +2198,7 @@ fn test_steps_refuse_a_result_over_the_cap(s: &impl Storage) {
             &run_step(&job.id, 0, "render#0", &[7u8; 64]),
             "w-cap",
             0,
+            None,
             &limits,
             None,
         )
@@ -2191,6 +2222,7 @@ fn test_steps_refuse_a_result_over_the_cap(s: &impl Storage) {
         &run_step(&job.id, 0, "noop#0", &[]),
         "w-cap",
         0,
+        None,
         &counted,
         None,
     )
@@ -2200,6 +2232,7 @@ fn test_steps_refuse_a_result_over_the_cap(s: &impl Storage) {
             &run_step(&job.id, 1, "noop#1", &[]),
             "w-cap",
             0,
+            None,
             &counted,
             None,
         )
@@ -2231,7 +2264,8 @@ fn test_steps_refuse_a_superseded_owner(s: &impl Storage) {
     let job = stepped_job(s, "q-steps-superseded", "w-superseded");
     assert!(s
         .reclaim_execution(&job.id, "w-superseded", "worker-b")
-        .unwrap());
+        .unwrap()
+        .is_some());
 
     let err = commit(s, &run_step(&job.id, 0, "charge#0", b"ok"), "w-superseded").unwrap_err();
     assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
@@ -2247,7 +2281,7 @@ fn test_steps_refuse_the_previous_attempt(s: &impl Storage) {
     s.retry(&job.id, now_millis(), None).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
     assert!(
-        s.claim_execution(&job.id, "w-attempt").unwrap(),
+        s.claim_execution(&job.id, "w-attempt").unwrap().is_some(),
         "the retry must have revoked the ended attempt's claim"
     );
 
@@ -2334,7 +2368,7 @@ fn test_steps_sleep_pins_its_deadline(s: &impl Storage) {
     let deadline = now_millis() + 3_600_000;
 
     assert_eq!(
-        s.sleep_job(&sleep, "w-sleep", 0, deadline, &limits, None)
+        s.sleep_job(&sleep, "w-sleep", 0, None, deadline, &limits, None)
             .unwrap(),
         SleepOutcome::Slept { wake_at: deadline }
     );
@@ -2349,10 +2383,18 @@ fn test_steps_sleep_pins_its_deadline(s: &impl Storage) {
 
     // A replay of the same `sleep("1h")` must not push the deadline an hour out.
     s.dequeue(q, deadline + 1, None).unwrap();
-    assert!(s.claim_execution(&job.id, "w-sleep").unwrap());
+    assert!(s.claim_execution(&job.id, "w-sleep").unwrap().is_some());
     assert_eq!(
-        s.sleep_job(&sleep, "w-sleep", 0, deadline + 3_600_000, &limits, None)
-            .unwrap(),
+        s.sleep_job(
+            &sleep,
+            "w-sleep",
+            0,
+            None,
+            deadline + 3_600_000,
+            &limits,
+            None
+        )
+        .unwrap(),
         SleepOutcome::AlreadySleeping { wake_at: deadline }
     );
     assert_eq!(
@@ -2363,7 +2405,7 @@ fn test_steps_sleep_pins_its_deadline(s: &impl Storage) {
     // `kind` is part of the replay match: a run commit onto a stored sleep is a
     // divergence, not a digest mismatch.
     s.dequeue(q, deadline + 1, None).unwrap();
-    assert!(s.claim_execution(&job.id, "w-sleep").unwrap());
+    assert!(s.claim_execution(&job.id, "w-sleep").unwrap().is_some());
     let err = commit(s, &run_step(&job.id, 0, "cool_off#0", b"ok"), "w-sleep").unwrap_err();
     assert!(matches!(err, QueueError::StepDiverged { .. }), "{err}");
     s.complete(&job.id, None, None).unwrap();
@@ -2463,7 +2505,10 @@ fn test_step_idempotency_key_survives_a_dlq_retry(s: &impl Storage) {
     assert_ne!(resurrected, job.id, "retry_dead mints a new job id");
 
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    assert!(s.claim_execution(&resurrected, "w-dlq-key").unwrap());
+    assert!(s
+        .claim_execution(&resurrected, "w-dlq-key")
+        .unwrap()
+        .is_some());
     let retried = s.get_job(&resurrected, None).unwrap().unwrap();
     let mut second = StepSession::load(s.clone(), &retried, "w-dlq-key", limits).unwrap();
     assert_eq!(
@@ -2563,7 +2608,7 @@ fn test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s: &impl Stor
     //    so the payment API sees the request it has already answered.
     let twice = s.retry_dead(&dead.id, None).unwrap();
     s.dequeue(q, now_millis() + 1000, None).unwrap();
-    assert!(s.claim_execution(&twice, "w-budget-key").unwrap());
+    assert!(s.claim_execution(&twice, "w-budget-key").unwrap().is_some());
     let twice = s.get_job(&twice, None).unwrap().unwrap();
     let mut third = StepSession::load(s.clone(), &twice, "w-budget-key", limits).unwrap();
     assert_eq!(third.run_key(), job.id);
@@ -2716,7 +2761,7 @@ fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
     // Picked up early — an operator requeue, or an orphan reclaim. The stored
     // deadline stands rather than starting another hour.
     s.dequeue(q, wake_at, None).unwrap();
-    assert!(s.claim_execution(&job.id, "w-sleeper").unwrap());
+    assert!(s.claim_execution(&job.id, "w-sleeper").unwrap().is_some());
     let early = s.get_job(&job.id, None).unwrap().unwrap();
     let mut second = StepSession::load(s.clone(), &job, "w-sleeper", limits).unwrap();
     let ran = std::cell::Cell::new(false);
@@ -2756,7 +2801,7 @@ fn test_step_session_sleeps_by_ending_the_attempt(s: &impl Storage) {
         StepSleep::Sleeping { .. }
     ));
     s.dequeue("q-step-sleep-done", past, None).unwrap();
-    assert!(s.claim_execution(&elapsed.id, "w-woken").unwrap());
+    assert!(s.claim_execution(&elapsed.id, "w-woken").unwrap().is_some());
     let woken = s.get_job(&elapsed.id, None).unwrap().unwrap();
     let mut fourth = StepSession::load(s.clone(), &woken, "w-woken", limits).unwrap();
     assert_eq!(
@@ -2850,7 +2895,10 @@ fn test_enqueue_debounced_skips_a_claimed_job(s: &impl Storage) {
     let claimed = s
         .enqueue_debounced(debounced(q, "claimed:user-1"), debounce_opts(5_000, 60_000))
         .unwrap();
-    assert!(s.claim_execution(&claimed.id, "w-debounce").unwrap());
+    assert!(s
+        .claim_execution(&claimed.id, "w-debounce")
+        .unwrap()
+        .is_some());
 
     let fresh = s
         .enqueue_debounced(debounced(q, "claimed:user-1"), debounce_opts(5_000, 60_000))
@@ -3910,7 +3958,7 @@ fn test_authorize_attempt_writes_nothing(s: &impl Storage) {
     // a step *write* re-asserts here, a check must not.
     s.purge_execution_claims(now_millis() + 1000).unwrap();
     assert_eq!(
-        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+        s.authorize_attempt(&job.id, "w-authorize", 0, None, None)
             .unwrap(),
         AttemptFence::Authorized,
         "an absent claim on a still-Running job at the same attempt is not a lost one"
@@ -3922,9 +3970,156 @@ fn test_authorize_attempt_writes_nothing(s: &impl Storage) {
 
     s.complete(&job.id, None, None).unwrap();
     assert_eq!(
-        s.authorize_attempt(&job.id, "w-authorize", 0, None)
+        s.authorize_attempt(&job.id, "w-authorize", 0, None, None)
             .unwrap(),
         AttemptFence::Superseded
+    );
+}
+
+/// The epoch separates two claims one owner won at one attempt.
+///
+/// `requeue_stuck` is what produces that pair in the wild: it returns a
+/// `Running` job to `Pending` and deletes its claim without touching
+/// `retry_count`, so the next dispatch carries the identical `(owner,
+/// attempt)`. Before the epoch, the stalled executor's late result authorized
+/// against the *new* attempt's claim and wrote over it.
+fn test_the_epoch_separates_two_claims_of_one_attempt(s: &impl Storage) {
+    use flexiq_core::storage::records::AttemptFence;
+
+    // Claimed here rather than through `stepped_job`, because the epoch is
+    // deliberately not readable back — the only way to hold one is to be the
+    // caller that won the claim.
+    let job = s
+        .enqueue(make_job("q-steps-epoch", "stepped_task"))
+        .unwrap();
+    s.dequeue("q-steps-epoch", now_millis() + 1000, None)
+        .unwrap();
+    let stalled = s
+        .claim_execution(&job.id, "w-epoch")
+        .unwrap()
+        .expect("the first claim wins");
+
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-epoch", 0, Some(stalled), None)
+            .unwrap(),
+        AttemptFence::Authorized,
+        "the claim it was dispatched under still speaks for the job"
+    );
+
+    // The dashboard's requeue button, then the poller re-claiming it.
+    assert!(s.requeue_stuck(&job.id, now_millis()).unwrap());
+    s.dequeue("q-steps-epoch", now_millis() + 1000, None)
+        .unwrap();
+    let current = s
+        .claim_execution(&job.id, "w-epoch")
+        .unwrap()
+        .expect("the re-claim wins, the old claim having been deleted");
+
+    assert_ne!(
+        current, stalled,
+        "a re-claim must not reuse the epoch the deleted one held"
+    );
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-epoch", 0, Some(current), None)
+            .unwrap(),
+        AttemptFence::Authorized,
+        "the live dispatch still authorizes"
+    );
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-epoch", 0, Some(stalled), None)
+            .unwrap(),
+        AttemptFence::Superseded,
+        "the stalled attempt's result must not settle the job the new one holds"
+    );
+    // Same owner, same attempt — so nothing but the epoch could have told them
+    // apart. Stated as an assertion rather than a comment, because a change
+    // that made the requeue bump `retry_count` would make this test pass for
+    // the wrong reason.
+    assert_eq!(s.get_job(&job.id, None).unwrap().unwrap().retry_count, 0);
+
+    // A caller holding no epoch is fenced as it was before the column existed:
+    // the give-up an executor without `CAP_LEASE` accepts.
+    assert_eq!(
+        s.authorize_attempt(&job.id, "w-epoch", 0, None, None)
+            .unwrap(),
+        AttemptFence::Authorized
+    );
+}
+
+/// A reclaim mints a new epoch, so the dead owner's executor — which may still
+/// be on its way to reporting — cannot authorize against the rescuer's claim.
+fn test_reclaim_mints_a_new_epoch(s: &impl Storage) {
+    let job = "reclaim-epoch-job";
+    let first = s.claim_execution(job, "dead").unwrap().expect("claimed");
+    let rescued = s
+        .reclaim_execution(job, "dead", "rescuer")
+        .unwrap()
+        .expect("the transfer wins");
+    assert_ne!(
+        first, rescued,
+        "a reclaim must move the epoch with the owner"
+    );
+    assert!(
+        s.reclaim_execution(job, "dead", "other").unwrap().is_none(),
+        "a rescuer expecting the old owner still loses"
+    );
+    s.complete_execution(job, None).unwrap();
+}
+
+/// A step commit is fenced on the epoch too, not only on `(owner, attempt)`.
+///
+/// The same pair the result path faces: an executor still running the stalled
+/// attempt would otherwise write into the live attempt's step sequence.
+fn test_a_step_commit_is_fenced_on_the_epoch(s: &impl Storage) {
+    let job = s
+        .enqueue(make_job("q-steps-epoch-commit", "stepped_task"))
+        .unwrap();
+    s.dequeue("q-steps-epoch-commit", now_millis() + 1000, None)
+        .unwrap();
+    let stalled = s
+        .claim_execution(&job.id, "w-epoch-step")
+        .unwrap()
+        .expect("the first claim wins");
+
+    assert!(s.requeue_stuck(&job.id, now_millis()).unwrap());
+    s.dequeue("q-steps-epoch-commit", now_millis() + 1000, None)
+        .unwrap();
+    let current = s
+        .claim_execution(&job.id, "w-epoch-step")
+        .unwrap()
+        .expect("the re-claim wins");
+
+    let step = run_step(&job.id, 0, "charge#0", b"receipt");
+    assert!(
+        matches!(
+            s.record_step_result(
+                &step,
+                "w-epoch-step",
+                0,
+                Some(stalled),
+                &StepLimits::default(),
+                None,
+            ),
+            Err(flexiq_core::QueueError::ClaimLost(_))
+        ),
+        "the stalled attempt must not commit into the live attempt's sequence"
+    );
+    assert!(
+        s.get_job_steps(&job.id, None).unwrap().is_empty(),
+        "a refused commit writes nothing"
+    );
+    assert_eq!(
+        s.record_step_result(
+            &step,
+            "w-epoch-step",
+            0,
+            Some(current),
+            &StepLimits::default(),
+            None,
+        )
+        .unwrap(),
+        StepCommit::Committed,
+        "the live dispatch still commits"
     );
 }
 
@@ -3944,6 +4139,7 @@ fn test_a_step_at_the_cap_round_trips_byte_for_byte(s: &impl Storage) {
             &run_step(&job.id, 0, "blob#0", &payload),
             "w-bytes",
             0,
+            None,
             &limits,
             None
         )
@@ -3964,6 +4160,7 @@ fn test_a_step_at_the_cap_round_trips_byte_for_byte(s: &impl Storage) {
             &run_step(&job.id, 1, "blob#1", &payload),
             "w-bytes",
             0,
+            None,
             &limits,
             None,
         )
@@ -4001,7 +4198,7 @@ fn test_an_elapsed_sleep_wakes_the_job_immediately(s: &impl Storage) {
     // continues through. Storage's job is to answer truthfully about the
     // deadline it holds.
     assert_eq!(
-        s.sleep_job(&sleep, "w-elapsed", 0, deadline, &limits, None)
+        s.sleep_job(&sleep, "w-elapsed", 0, None, deadline, &limits, None)
             .unwrap(),
         SleepOutcome::Slept { wake_at: deadline }
     );
@@ -4019,12 +4216,13 @@ fn test_an_elapsed_sleep_wakes_the_job_immediately(s: &impl Storage) {
     );
 
     // Replaying it keeps the original instant, elapsed or not.
-    assert!(s.claim_execution(&job.id, "w-elapsed").unwrap());
+    assert!(s.claim_execution(&job.id, "w-elapsed").unwrap().is_some());
     assert_eq!(
         s.sleep_job(
             &sleep,
             "w-elapsed",
             0,
+            None,
             now_millis() + 3_600_000,
             &limits,
             None

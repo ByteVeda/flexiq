@@ -13,7 +13,8 @@ use std::io::BufReader;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use flexiq_core::worker::protocol::{
-    ExecutorMessage, FrameReader, FrameWriter, SchedulerMessage, CAP_STEPS, PROTOCOL_VERSION,
+    ExecutorMessage, FrameReader, FrameWriter, SchedulerMessage, CAP_LEASE, CAP_STEPS,
+    PROTOCOL_VERSION,
 };
 
 /// Identity this pool announces in `hello_ack`. Informational — it only ever
@@ -85,6 +86,14 @@ pub struct SpawnedChild {
     /// will use one — the same negotiation the socket hop makes, one level
     /// down.
     pub steps: bool,
+    /// Whether the child claimed [`CAP_LEASE`] in its `hello`, and so echoes
+    /// the lease on every frame that settles or advances an attempt.
+    ///
+    /// A child that did not is dispatched without one and its frames are never
+    /// refused for the lack — the same symmetric give-up the socket hop makes.
+    /// Reachable in practice: `FLEXIQ_PYTHON` lets a child run from a different
+    /// flexiq install than its parent.
+    pub leases: bool,
 }
 
 /// Spawn a child worker process and complete the `hello`/`hello_ack` handshake.
@@ -134,11 +143,12 @@ pub fn spawn_child(
     let mut child = ChildProcess { process };
 
     match handshake(&mut reader, &mut writer, steps) {
-        Ok(claimed_steps) => Ok(SpawnedChild {
+        Ok(claimed) => Ok(SpawnedChild {
             writer,
             reader,
             process: child,
-            steps: claimed_steps,
+            steps: claimed.steps,
+            leases: claimed.leases,
         }),
         Err(e) => {
             child.kill_and_reap();
@@ -147,14 +157,18 @@ pub fn spawn_child(
     }
 }
 
+/// What the child claimed in its `hello`.
+struct ClaimedCapabilities {
+    steps: bool,
+    leases: bool,
+}
+
 /// Read the child's `hello`, acknowledge it, and check the protocol version.
-///
-/// Returns whether the child claimed [`CAP_STEPS`].
 fn handshake(
     reader: &mut ChildReader,
     writer: &mut ChildWriter,
     steps: bool,
-) -> Result<bool, String> {
+) -> Result<ClaimedCapabilities, String> {
     let hello = reader
         .read::<ExecutorMessage>()
         .map_err(|e| format!("child handshake failed: {e}"))?
@@ -178,10 +192,12 @@ fn handshake(
             // own progress, logs and steps, so it is told nothing: there is
             // nothing for this pool to do on its behalf. Under an executor the
             // pool relays, and `steps` is what the scheduler said it can apply.
-            capabilities: if steps {
-                vec![CAP_STEPS.to_string()]
-            } else {
-                Vec::new()
+            capabilities: {
+                let mut advertised = vec![CAP_LEASE.to_string()];
+                if steps {
+                    advertised.push(CAP_STEPS.to_string());
+                }
+                advertised
             },
         })
         .map_err(|e| format!("failed to acknowledge child handshake: {e}"))?;
@@ -193,5 +209,8 @@ fn handshake(
         ));
     }
 
-    Ok(capabilities.iter().any(|cap| cap == CAP_STEPS))
+    Ok(ClaimedCapabilities {
+        steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
+        leases: capabilities.iter().any(|cap| cap == CAP_LEASE),
+    })
 }

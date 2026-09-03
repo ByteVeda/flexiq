@@ -132,18 +132,18 @@ bytes of the section above, unchanged. `MAX_HEADER_BYTES` (64 KiB) and
 | `hello` | executor → scheduler | `{executor_id, sdk, version, tasks[], slots, protocol_version, token?}` |
 | `hello_ack` | scheduler → executor | `{scheduler_id, protocol_version, capabilities[]}` |
 | `heartbeat` | executor → scheduler | `{free_slots}` |
-| `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace, disabled_middleware[], metadata}` + blob |
+| `job` | scheduler → executor | `{id, task_name, payload_len, retry_count, max_retries, queue, timeout_ms, namespace, disabled_middleware[], metadata, lease?}` + blob |
 | `job_steps` | scheduler → executor | `{job_id, payload_len}` + snapshot blob |
 | `cancel` | scheduler → executor | `{job_id}` |
 | `shutdown` | scheduler → executor | — |
 | `step_ack` | scheduler → executor | `{job_id, seq, ok, already, wake_at?, error?, failure?}` |
-| `progress` | executor → scheduler | `{job_id, progress}` |
-| `task_log` | executor → scheduler | `{job_id, task_name, level, message, extra_len}` + blob |
-| `step_commit` | executor → scheduler | `{job_id, seq, step_key, kind, wake_at?, payload_len}` + blob |
-| `success` | executor → scheduler | `{job_id, result_len, task_name, wall_time_ns}` + blob |
-| `failure` | executor → scheduler | `{job_id, error, retry_count, max_retries, task_name, wall_time_ns, should_retry, timed_out}` |
-| `cancelled` | executor → scheduler | `{job_id, task_name, wall_time_ns}` |
-| `slept` | executor → scheduler | `{job_id, task_name, wake_at, wall_time_ns}` |
+| `progress` | executor → scheduler | `{job_id, progress, lease?}` |
+| `task_log` | executor → scheduler | `{job_id, task_name, level, message, extra_len, lease?}` + blob |
+| `step_commit` | executor → scheduler | `{job_id, seq, step_key, kind, wake_at?, payload_len, lease?}` + blob |
+| `success` | executor → scheduler | `{job_id, result_len, task_name, wall_time_ns, lease?}` + blob |
+| `failure` | executor → scheduler | `{job_id, error, retry_count, max_retries, task_name, wall_time_ns, should_retry, timed_out, lease?}` |
+| `cancelled` | executor → scheduler | `{job_id, task_name, wall_time_ns, lease?}` |
+| `slept` | executor → scheduler | `{job_id, task_name, wake_at, wall_time_ns, lease?}` |
 
 Rules:
 - `hello` is the first frame on every connection; no `job` may precede its ack.
@@ -157,11 +157,13 @@ Rules:
 - **Optional behaviour is negotiated, not versioned.** `capabilities` lists what
   the scheduler will do on an executor's behalf; `side_channel` means it applies
   `progress` and `task_log` frames to storage, and `steps` means it applies
-  `step_commit` frames. An executor sends neither frame unless it was
+  `step_commit` frames, and `lease` means it checks the lease every frame about
+  a dispatched job carries. An executor sends none of those frames unless it was
   advertised. Adding one never bumps `protocol_version`, which would force
   scheduler and executors to upgrade together. `hello` carries a `capabilities`
   list too, for the direction that runs the other way: the scheduler sends a
-  `job_steps` snapshot only to an executor that claimed `steps`.
+  `job_steps` snapshot only to an executor that claimed `steps`, and a `lease`
+  only to one that claimed `lease`.
 - **An unknown frame type is skipped, not fatal.** A reader that cannot name a
   frame reads its declared payload length, discards that many bytes, logs once
   and continues — the stream stays aligned, and a session keeps its in-flight
@@ -188,6 +190,39 @@ Rules:
   running. `progress` is 0–100; a value outside that range is never written —
   SDK boundaries clamp where they can, and the scheduler drops what still
   reaches it rather than failing the job over a progress report.
+
+### The dispatch lease
+
+`lease` is an opaque string the scheduler mints when it wins a job's execution
+claim. It rides the `job` frame, and an executor **echoes it back on every frame
+that settles or advances that attempt** — `success`, `failure`, `cancelled`,
+`slept`, `progress`, `task_log` and `step_commit`. `hello` and `heartbeat` carry
+none: they are the connection's, not any job's.
+
+- **The rule is the question, not the list.** "Does this frame settle or advance
+  an attempt" is what decides, so a frame type added later that names a
+  dispatched job carries a lease without this section being amended.
+- **The executor never mints, reads or chooses one.** It stores what the `job`
+  frame carried and hands it back, exactly as it does nothing to the payload.
+  The value is deliberately structureless — nothing in it can be acted on, and
+  the next one cannot be predicted from it.
+- **A mismatch is refused, loudly.** A frame whose lease is not the one the job
+  is *currently* dispatched under is dropped and logged at error level; a
+  `step_commit` is answered `Superseded` rather than left to time out. What it
+  reports is not a protocol slip but a job that ran twice: the executor was
+  still working while its job was handed to someone else.
+- **Negotiated through `capabilities`, never a version bump.** Both sides
+  announce `lease` — the scheduler in `hello_ack` when it will check the value,
+  the executor in `hello` when it will echo it — and the scheduler dispatches a
+  lease only to a peer that claimed it.
+- **What an executor without the capability gives up.** It attaches and runs
+  jobs unchanged. Its results are still fenced on the execution claim's owner,
+  the job's `retry_count` and the claim's epoch, which is enough to refuse a
+  result whose job has been reclaimed or retried. It is *not* enough to tell one
+  dispatch of a job from a later one made under a **new** claim — which is what
+  an operator produces every time they requeue a job an executor is still
+  running. Against that, such an executor's stale completion is indistinguishable
+  from the live one's.
 
 ### Durable steps
 

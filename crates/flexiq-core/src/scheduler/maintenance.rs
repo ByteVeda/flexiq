@@ -155,14 +155,19 @@ impl Scheduler {
                 .storage
                 .reclaim_execution(&job.id, &dead_owner, &self.claim_owner)
             {
-                Ok(true) => {
-                    // The reclaim *is* the authorization: it returns true only
-                    // for the survivor that won the transfer. Writing the
+                Ok(Some(epoch)) => {
+                    // The reclaim *is* the authorization: it returns an epoch
+                    // only for the survivor that won the transfer. Writing the
                     // dispatch record from it lets the synthesised result
                     // validate like any other — without it the fence would drop
                     // the one result that exists to unstick the job, and after a
                     // restart there is no record to consult at all.
-                    self.track_in_flight(&job.id, &job.task_name, job.retry_count);
+                    //
+                    // The epoch is the transfer's, not the dead owner's: the
+                    // rescue is a new claim, so the dead owner's executor —
+                    // which may still be on its way to reporting — is fenced
+                    // out by the same value that authorizes this result.
+                    self.track_in_flight(&job.id, &job.task_name, job.retry_count, Some(epoch));
                     let error = format!("worker {dead_owner} died; recovering in-flight job");
                     if let Err(e) = self.handle_result(JobResult::Failure {
                         job_id: job.id.clone(),
@@ -180,7 +185,7 @@ impl Scheduler {
                         );
                     }
                 }
-                Ok(false) => {} // another survivor won the race
+                Ok(None) => {} // another survivor won the race
                 Err(e) => warn!("reclaim_execution failed for {}: {e}", job.id),
             }
         }
