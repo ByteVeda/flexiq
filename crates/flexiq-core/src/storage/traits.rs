@@ -32,7 +32,9 @@ pub trait Storage: Send + Sync + Clone {
     /// another job in the same batch.
     fn enqueue_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;
     /// Enqueue with `unique_key` deduplication: returns the existing active
-    /// job when a duplicate is found instead of inserting.
+    /// job when a duplicate is found instead of inserting. The match is
+    /// scoped to the job's own namespace, like `depends_on` in
+    /// [`enqueue`](Self::enqueue).
     fn enqueue_unique(&self, new_job: NewJob) -> Result<Job>;
     /// Batch variant of [`enqueue_unique`](Self::enqueue_unique), one transaction.
     fn enqueue_unique_batch(&self, new_jobs: Vec<NewJob>) -> Result<Vec<Job>>;

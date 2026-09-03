@@ -141,15 +141,9 @@ message EnqueueOptions {
   google.protobuf.Timestamp scheduled_at = 4;
   // Unset takes the server's default.
   google.protobuf.Duration timeout = 5;
-  // Dedupes against the **active** job carrying the same key, so a terminal job
-  // releases it. It is not an idempotency key without an expiry: a retry that
-  // arrives after the original finished enqueues a second job.
-  //
-  // The key is matched across every namespace sharing the database, not within
-  // one, so on a shared database a key another tenant is already using returns
-  // that tenant's job instead of creating one. Scope keys per deployment until
-  // that is fixed; it is the one place a namespace does not bound a read.
-  // See https://github.com/ByteVeda/flexiq/issues/773.
+  // Dedupes against the **active** job carrying the same key, in the caller's
+  // own namespace. It is not an idempotency key without an expiry: a retry
+  // that arrives after the original finished enqueues a second job.
   optional string unique_key = 6;
   // Opaque JSON text, byte-preserved (see Job.metadata).
   optional string metadata = 7;
