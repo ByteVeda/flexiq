@@ -562,7 +562,7 @@ impl RedisStorage {
         let mut conn = self.conn()?;
 
         if let Some(uk) = new_job.unique_key.clone() {
-            let unique_key = self.key(&["jobs", "unique", &uk]);
+            let unique_key = self.unique_key_key(new_job.namespace.as_deref(), &uk);
 
             // Active-status comparison values are sourced from Rust via ARGV
             // rather than hardcoded in Lua, keeping the wire-format contract

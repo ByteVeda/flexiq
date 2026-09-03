@@ -3681,7 +3681,9 @@ fn redis_complete_preserves_reused_unique_key(s: &flexiq_core::RedisStorage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
     let mut conn = s.conn().unwrap();
-    let ukey = rkey(s, &["jobs", "unique", shared]);
+    // `-` is the default-namespace segment `unique_key_key` writes (mirrors
+    // `debounce_index_key`'s scheme) — `a` was enqueued with no namespace.
+    let ukey = rkey(s, &["jobs", "unique", "-", shared]);
     let _: () = conn.set(&ukey, "other-live-job-id").unwrap();
 
     s.complete(&a.id, None, None).unwrap();

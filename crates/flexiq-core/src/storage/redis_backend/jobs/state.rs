@@ -81,7 +81,7 @@ impl RedisStorage {
         // `job:<id>` may have already repointed it to a new job, whose dedup
         // lock an unconditional DEL would clobber.
         if let Some(ref uk) = job.unique_key {
-            self.release_unique_key(&mut conn, uk, id)?;
+            self.release_unique_key(&mut conn, job.namespace.as_deref(), uk, id)?;
         }
 
         Ok(())
