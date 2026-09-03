@@ -389,10 +389,17 @@ impl Read for ChannelReader {
             };
         }
 
+        // Copied in blocks, not one byte at a time: a ring buffer is at most two
+        // contiguous runs, and this path carries every payload byte a
+        // frame-speaking transport moves — up to `MAX_PAYLOAD_BYTES` per job.
         let count = out.len().min(state.buffer.len());
-        for (slot, byte) in out.iter_mut().zip(state.buffer.drain(..count)) {
-            *slot = byte;
+        {
+            let (front, back) = state.buffer.as_slices();
+            let from_front = count.min(front.len());
+            out[..from_front].copy_from_slice(&front[..from_front]);
+            out[from_front..count].copy_from_slice(&back[..count - from_front]);
         }
+        state.buffer.drain(..count);
         drop(state);
         // Room freed: a bounded writer parked on a full buffer has to be woken
         // here or it waits out its whole timeout for space that already exists.
