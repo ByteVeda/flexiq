@@ -250,6 +250,26 @@ impl RemoteDispatcher {
         self.shared.attach(transport)
     }
 
+    /// Send one executor away gracefully: stop matching work to it, wait up to
+    /// `drain` for what it already holds, then close its connection.
+    ///
+    /// `false` when no executor by that id is attached.
+    ///
+    /// This is what makes a *bounded* connection lifetime safe. A stream that
+    /// ends on a timer, or a peer being drained before a deploy, cannot simply
+    /// be closed: a job matched to it a moment earlier is a job nobody will
+    /// read, and it then waits out the reaper's patience instead of running.
+    /// Removing the executor from placement first, and only closing once every
+    /// slot has come back, is what closes that window.
+    ///
+    /// Deliberately *not* a `shutdown` frame. Shutdown tells an executor to
+    /// exit; this tells it nothing at all, and a peer that wants to come back —
+    /// which is the whole point of a rotating stream — reads a clean end as
+    /// "reconnect".
+    pub async fn detach(&self, executor_id: &str, drain: Duration) -> bool {
+        self.shared.detach(executor_id, drain).await
+    }
+
     /// Snapshot every attached executor.
     pub fn executors(&self) -> Vec<AttachedExecutor> {
         self.shared.snapshot()
@@ -388,6 +408,10 @@ struct Executor {
     /// map names a job and nothing else, so two dispatches of one id would be
     /// indistinguishable to all three of those uses.
     in_flight: Mutex<HashMap<String, InFlight>>,
+    /// Set by [`Shared::detach`]: the connection is going away, so placement
+    /// skips it while everything else — cancel routing, the side channel, the
+    /// dashboard's view — keeps working until its last job reports.
+    draining: AtomicBool,
     writer: Mutex<FrameWriter<WriteHalf>>,
     connection: Connection,
     peer: String,
@@ -398,6 +422,19 @@ struct Executor {
 impl Executor {
     fn is_busy(executor: &Arc<Self>) -> bool {
         !executor.in_flight.lock().unwrap_or_else(recover).is_empty()
+    }
+
+    /// Whether every slot has been given back — nothing running, and nothing
+    /// *matched* either.
+    ///
+    /// Strictly stronger than `!is_busy`, and the difference is the whole point.
+    /// [`Shared::place`] reserves a slot, awaits two storage reads and only then
+    /// writes the job frame; in between, the job is matched to this executor and
+    /// has no [`in_flight`](Self::in_flight) entry at all. Closing on the weaker
+    /// predicate would strand exactly that job — matched to a connection nobody
+    /// will ever read.
+    fn is_idle(&self) -> bool {
+        self.free.load(Ordering::Relaxed) >= self.slots
     }
 
     /// Whether this executor is already running `job_id`.
@@ -902,6 +939,7 @@ impl Shared {
             steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
             leases: capabilities.iter().any(|cap| cap == CAP_LEASE),
             in_flight: Mutex::new(HashMap::new()),
+            draining: AtomicBool::new(false),
             writer: Mutex::new(writer),
             connection,
             peer: peer.clone(),
@@ -1161,9 +1199,12 @@ impl Shared {
             if !executor.tasks.contains(&job.task_name) {
                 continue;
             }
+            // Advertised, then skipped: a draining executor is still the reason
+            // this task is placeable, so the job waits for the replacement
+            // stream rather than failing as "nobody advertises it".
             advertised = true;
             let free = executor.free.load(Ordering::Relaxed);
-            if free == 0 {
+            if free == 0 || executor.draining.load(Ordering::Relaxed) {
                 continue;
             }
             // One attempt of a job id per connection ([`register_dispatch`]).
@@ -1863,6 +1904,52 @@ impl Shared {
                     .contains_key(job_id)
             })
             .cloned()
+    }
+
+    /// Stop matching work to one executor, wait for what it already holds, then
+    /// close its connection.
+    async fn detach(&self, executor_id: &str, drain: Duration) -> bool {
+        let executor = {
+            // Under the registry lock, so `try_acquire` and this cannot disagree
+            // about whether a job may still be matched here.
+            let executors = self.executors.lock().unwrap_or_else(recover);
+            let Some(executor) = executors.get(executor_id).cloned() else {
+                return false;
+            };
+            executor.draining.store(true, Ordering::Relaxed);
+            executor
+        };
+
+        // Idle, not un-busy: see [`Executor::is_idle`]. A job matched between a
+        // reservation and its frame has no in-flight entry, and closing on it
+        // would hand the job to a stream nobody reads — the loss this exists to
+        // prevent.
+        let deadline = Instant::now() + drain;
+        while Instant::now() < deadline && !executor.is_idle() {
+            tokio::time::sleep(DRAIN_POLL).await;
+        }
+
+        if !executor.is_idle() {
+            let running = executor.in_flight.lock().unwrap_or_else(recover).len();
+            let matched = executor
+                .slots
+                .saturating_sub(executor.free.load(Ordering::Relaxed))
+                as usize;
+            log::warn!(
+                "[flexiq] executor {executor_id} did not drain within its budget: \
+                 {running} running, {} matched but not yet dispatched; closing — \
+                 they will be reaped",
+                matched.saturating_sub(running)
+            );
+        }
+
+        // Removed before the close, not left to the reader thread's `abandon`:
+        // an executor reconnecting the instant its stream ends would otherwise
+        // race a registry entry that is still there and be refused as a
+        // duplicate id.
+        self.deregister(executor_id);
+        executor.connection.close();
+        true
     }
 
     /// Ask every attached executor to finish, wait out the drain budget, then
