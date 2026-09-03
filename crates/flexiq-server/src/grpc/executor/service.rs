@@ -297,6 +297,14 @@ impl ExecutorService for ExecutorDoor {
                     }
                 };
 
+                // The outbound pump is the response stream's only other sender,
+                // and the stream ends when the last one is dropped. Holding
+                // this clone past the handshake would keep a finished stream
+                // open until the client hung up — and a graceful listener
+                // shutdown waits for exactly that, so the process would never
+                // exit while an executor was attached.
+                drop(refusals);
+
                 let mut done = done_rx;
                 match rotation.deadline() {
                     Some(max_age) => {

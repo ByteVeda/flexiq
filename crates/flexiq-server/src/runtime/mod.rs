@@ -142,6 +142,21 @@ pub fn run(config: Config) -> Result<()> {
             }
         });
 
+        // Executors are drained *while* the listeners are winding down, not
+        // after. An attach stream is an in-flight gRPC request and a graceful
+        // listener waits for it to end — but the stream only ends when the
+        // dispatcher closes the connection, which is what this does. Waiting
+        // for the roles first would be a circle neither side can leave.
+        let draining = supervisor.clone().map(|supervisor| {
+            let shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                shutdown.wait().await;
+                // Blocking: it joins the scheduler's threads, and one of them
+                // is waiting on this very runtime to finish the drain.
+                let _ = tokio::task::spawn_blocking(move || supervisor.shutdown()).await;
+            })
+        });
+
         let dashboard = match (&config.dashboard, &backend) {
             (Some(dashboard_config), Some(backend)) => {
                 prepare_auth(&backend.storage, dashboard_config);
@@ -216,6 +231,13 @@ pub fn run(config: Config) -> Result<()> {
         };
 
         signals.abort();
+        if let Some(draining) = draining {
+            // Already finished in the ordinary case — the roles cannot stop
+            // until it has closed their streams — but a role that failed its
+            // bind never waited for anything, and this is where that drain is
+            // still owed.
+            let _ = draining.await;
+        }
         result
     });
 
