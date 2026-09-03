@@ -6,7 +6,8 @@
 [#710](https://github.com/ByteVeda/flexiq/issues/710)
 **Governs:** #712 (buf CI) · #713 (server role) · #714 (producer service) · #715
 (payload) · #716 (shared secret) · #717 (scoped tokens) · #718 (JSON facade) ·
-#719 (lease token) · #720 (executor transport) · #721 (docs)
+#719 (lease token) · #720 (executor transport) · #721 (docs) · #771 (workflow
+RPCs)
 
 ## Why this document exists
 
@@ -172,6 +173,9 @@ is avoidable is letting it be a *string*.
 | D22 | **The producer door caps messages at 4 MiB; the executor door caps them at `MAX_PAYLOAD_BYTES` + 4 MiB of envelope headroom (68 MiB).** A payload limit and a message limit are different numbers and both are declared, in one place per package. | 4 MiB is gRPC's default and #718's body cap, so the two producer doors agree about "too large". The executor door carries payloads the local frame protocol already allows (64 MiB); tonic's `max_decoding_message_size` measures the *serialized message*, so a 64 MiB `bytes` field plus its tag, length prefix and sibling fields exceeds a 64 MiB limit and the gRPC transport would reject work the TCP transport accepts. |
 | D23 | **Generated code lives in `flexiq-server` behind the `grpc` feature. A `flexiq-proto` crate is not published until the protos are stable.** | Publishing generated types creates a *second* permanent compatibility surface — a Rust API under `cargo-semver-checks` — on top of the wire one, and #704 already showed what that wall costs. |
 | D24 | **The executor package mirrors the frames additively and keeps `capabilities[]` as strings.** An unknown frame arm is ignored, not fatal. The registry fingerprint is never a wire field. | E6: turning capabilities into an enum would make adding one a proto change, undoing the mechanism. #703 replaced the fingerprint with derivation from `tasks[]`; a wire field would be a second copy of one fact, free to disagree. |
+| D25 | **`WorkflowNodeConfig` types every `StepMetadata` field — `gate`, `cache`, `fan_out`, `fan_in`, `sub_workflow` become typed submessages, not opaque JSON strings — even though this release does not execute what some of them describe (D26).** `args_template`/`kwargs_template` are dropped; a node's args travel through the same `raw`/`structured` `oneof` §7.1 already defines, not a base64 third encoding. | §7.6's original text left this open on purpose. Typing it now means the wire never has to break to type it later — additive fields for constructs #771 executes today, the same additive fields for the ones it does not (D3, D4). Leaving it a string would reproduce the `dag_data` mistake one level down, which is the exact failure §7.6 already named. `kwargs_template` was declared in three SDKs and read by none of them — a dead field is not a decision worth shipping to a wire that cannot un-ship it. |
+| D26 | **`SubmitWorkflow` executes only statically-sequenceable graphs. A node setting `gate`, `cache`, `fan_out`, `fan_in` or `sub_workflow` is refused at submit time, `FAILED_PRECONDITION`, naming the node.** | E13: nothing today advances a workflow outside a live SDK `Queue`/`Worker` process — the tracking logic that creates deferred jobs and evaluates gates/fan-out/conditions is duplicated once per SDK shell and unreachable from `flexiq-server`'s crate graph. A *static* graph's completion path is already storage-driven, not memory-driven (`mark_workflow_node_result` reads job metadata, not submitter state), so any unmodified worker with tracking enabled genuinely advances it. A dynamic graph needs config seeded in the submitting process's memory, which a stateless RPC cannot provide without inventing a second, unbuilt tracking substrate — refusing is honest, a silently-stuck `Pending` run is the same failure shape §5.4 already refuses for a misrouted token. |
+| D27 | **`WorkflowState` (11 values incl. `_UNSPECIFIED`) and `WorkflowNodeStatus` (12 values incl. `_UNSPECIFIED`) are enums mapped to the wire by an exhaustive conversion, offset by one from the Rust discriminant, no wildcard arm — the same discipline D18 established for `JobStatus`, one direction only.** Neither wire enum is ever read back off a request in this release, so only `_to_wire` exists; a `_from_wire` with no caller is not written on the strength of `JobStatus` having one. | Two more state machines, same reason: an unrecognised value must tell a reader something rather than nothing, and an exhaustive match fails to compile the day a variant is added and the conversion is not. `JobStatus` needed both directions because `ListJobs` filters by status; nothing here takes a `WorkflowState` as input. |
 
 ---
 
@@ -906,6 +910,192 @@ and `GetWorkflowRun` ship in a later, additive release.** What must not happen i
 a `bytes dag_data = N` placeholder: a field number spent on an internal format is
 spent forever.
 
+**Amended during #771: the graph message, and what ships now.**
+
+```proto
+message WorkflowGraphNode { string name = 1; }
+message WorkflowGraphEdge  { string from = 1; string to = 2; }
+
+message WorkflowGraph {
+  repeated WorkflowGraphNode nodes        = 1;
+  repeated WorkflowGraphEdge edges        = 2;
+  repeated WorkflowNodeConfig node_configs = 3;   // name-keyed against `nodes`
+}
+
+message WorkflowNodeConfig {
+  string name      = 1;
+  string task_name = 2;
+  optional string queue = 3;
+  oneof body { bytes raw = 4; StructuredArgs structured = 5; }   // §7.1's oneof, unchanged
+  optional int32 max_retries = 6;
+  google.protobuf.Duration timeout = 7;   // D20: a duration is Duration at the wire boundary, never a bare _ms int
+  optional int32 priority    = 8;
+  EdgeCondition condition            = 9;
+  optional GateConfig gate           = 10;
+  optional CacheConfig cache         = 11;
+  optional FanOutConfig fan_out      = 12;
+  optional FanInConfig fan_in        = 13;
+  optional SubWorkflowSpec sub_workflow = 14;
+  optional string compensate         = 15;   // a task name, never JSON
+}
+
+enum EdgeCondition {
+  EDGE_CONDITION_UNSPECIFIED = 0;   // no filter — identical to ALWAYS, never ON_SUCCESS
+  EDGE_CONDITION_ON_SUCCESS  = 1;
+  EDGE_CONDITION_ON_FAILURE  = 2;
+  EDGE_CONDITION_ALWAYS      = 3;
+}
+message GateConfig  { google.protobuf.Duration timeout = 1; OnTimeout on_timeout = 2; optional string message = 3; }
+enum OnTimeout       { ON_TIMEOUT_UNSPECIFIED = 0; ON_TIMEOUT_APPROVE = 1; ON_TIMEOUT_REJECT = 2; }
+message CacheConfig  { google.protobuf.Duration ttl = 1; }
+message FanOutConfig { optional string items_from = 1; }   // absent = infer from the single predecessor
+message FanInConfig  { string from = 1; }                  // the fan-out node this collects
+message SubWorkflowSpec {
+  string name    = 1;
+  int32 version  = 2;
+  WorkflowGraph graph = 3;                    // recursive — a node's own args ride its own `body` oneof
+  repeated string deferred_node_names = 4;
+}
+
+enum WorkflowState {
+  WORKFLOW_STATE_UNSPECIFIED = 0;
+  WORKFLOW_STATE_PENDING = 1;  WORKFLOW_STATE_RUNNING = 2;  WORKFLOW_STATE_PAUSED = 3;
+  WORKFLOW_STATE_COMPLETED = 4;  WORKFLOW_STATE_COMPLETED_WITH_FAILURES = 5;
+  WORKFLOW_STATE_FAILED = 6;  WORKFLOW_STATE_CANCELLED = 7;
+  WORKFLOW_STATE_COMPENSATING = 8;  WORKFLOW_STATE_COMPENSATED = 9;
+  WORKFLOW_STATE_COMPENSATION_FAILED = 10;
+}
+message WorkflowRun {
+  string id = 1;  string definition_id = 2;  WorkflowState state = 3;
+  optional int64 started_at = 4;  optional int64 completed_at = 5;
+  optional string error = 6;
+  optional string parent_run_id = 7;  optional string parent_node_name = 8;
+  int64 created_at = 9;
+}
+enum WorkflowNodeStatus {
+  WORKFLOW_NODE_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_NODE_STATUS_PENDING = 1;  WORKFLOW_NODE_STATUS_READY = 2;  WORKFLOW_NODE_STATUS_RUNNING = 3;
+  WORKFLOW_NODE_STATUS_COMPLETED = 4;  WORKFLOW_NODE_STATUS_FAILED = 5;  WORKFLOW_NODE_STATUS_SKIPPED = 6;
+  WORKFLOW_NODE_STATUS_WAITING_APPROVAL = 7;  WORKFLOW_NODE_STATUS_CACHE_HIT = 8;
+  WORKFLOW_NODE_STATUS_COMPENSATING = 9;  WORKFLOW_NODE_STATUS_COMPENSATED = 10;
+  WORKFLOW_NODE_STATUS_COMPENSATION_FAILED = 11;
+}
+message WorkflowNode {
+  string name = 1;  WorkflowNodeStatus status = 2;  optional string job_id = 3;
+  optional int64 started_at = 4;  optional int64 completed_at = 5;  optional string error = 6;
+}
+
+message SubmitWorkflowRequest {
+  string name = 1;
+  WorkflowGraph graph = 2;
+  optional string params_json = 3;  // opaque JSON text, byte-preserved — Job.metadata's convention (D21), not the raw/structured envelope: this is data the run carries, not a call a task receives
+}
+message SubmitWorkflowResponse { string run_id = 1; }
+message GetWorkflowRunRequest  { string run_id = 1; }
+message GetWorkflowRunResponse { WorkflowRun run = 1; repeated WorkflowNode nodes = 2; }
+```
+
+- `WorkflowNodeConfig` fields 1–15 fit the one-byte range of §1.4 whole, the way
+  `Job`'s always-present fields do — there is no optional tail here because
+  every field is a real per-node decision, not a hot path some caller skips.
+- **`args_template`/`kwargs_template` do not appear.** They were a base64
+  side-channel that existed only because a node's args had nowhere else to
+  ride on the wire; `body` is that place now, the same `oneof` `EnqueueRequest`
+  already uses (§7.1), reused rather than reinvented. `kwargs_template` carried
+  nothing to reuse — declared in the Rust struct and two SDKs' types, read by
+  none of the three trackers — so D25 drops it outright instead of shipping a
+  field with no reader.
+- **`fan_out`/`fan_in` are typed despite disagreeing across shells today.**
+  Node writes `{itemsFrom}`/`{from}` JSON; Java ignores the payload and infers
+  the same relationship structurally from the DAG. `FanOutConfig.items_from`
+  keeps Node's explicit form and makes "absent" the sanctioned spelling of
+  Java's inference, rather than the wire adjudicating a fight that is really
+  an SDK-side convergence — that convergence is not this issue's scope, only
+  the wire shape that does not block it.
+- **`sub_workflow` reuses `WorkflowGraph` recursively instead of a bespoke
+  transport.** Node's `SubWorkflowTransport` and Java's `ChildSpec` each carry
+  a node-payload map alongside a serialized graph, because neither shell's
+  today-shape lets a node's args travel with the node. A nested `WorkflowGraph`
+  needs no such map — its own nodes already carry `body` — which is the
+  concrete benefit of designing the wire message before making the two shells
+  agree, not after.
+- **`condition`'s wire form is the three static values only.** A Python
+  `callable` predicate is not a value `SubmitWorkflow` can accept in any
+  encoding — it is code, not data — so it is not a fourth enum arm with no
+  meaning off the wire; a caller using one keeps submitting through the SDK's
+  own `submit_workflow()`, unaffected by this RPC's existence.
+
+**Amended during #771: this release executes static graphs only (D26).**
+`SubmitWorkflow` compiles `WorkflowGraph` into `dagron_core::SerializableGraph`
++ the internal `StepMetadata` map, then walks `node_configs` before writing
+anything: a node setting `gate`, `cache`, `fan_out`, `fan_in` or `sub_workflow`
+refuses the call whole, `FAILED_PRECONDITION`, `ErrorInfo.metadata{node}` naming
+which one. A graph that clears the walk gets exactly what
+`PyQueue::submit_workflow`'s static path produces today — a `WorkflowDefinition`,
+a `WorkflowRun`, one `WorkflowNode` row per graph node, and one `Job` row per
+graph node pre-enqueued with a `depends_on` chain that mirrors the edges. Any
+worker with workflow tracking enabled — attached, TCP, or in-process, and
+regardless of whether it is the caller that submitted the graph — advances it
+correctly, because completion recording reads the job's own metadata
+(`workflow_run_id`, `workflow_node_name`) and never the submitter's memory.
+This is the literal reading of the issue's acceptance criterion: tracked by an
+unmodified worker, or refused with a reason.
+
+Only the **create** half needs to move. `PyQueue::submit_workflow`'s static
+path (`py_queue/workflow_ops/lifecycle.rs:40-239`) is already pyo3-free below
+its `#[pymethods]` signature — it reads `flexiq_core::storage::StorageBackend`
+and `flexiq_workflows::{WorkflowStorage, topological_order}` and nothing
+Python-specific — so it moves into `flexiq-workflows` (a new module,
+alongside `WorkflowStorage`) verbatim, taking `&StorageBackend` and
+`&WorkflowStorageBackend` instead of `&self` on `PyQueue`. `parse_step_metadata`
+and `build_metadata_json` (`py_queue/workflow_ops/mod.rs:116-132`) move with
+it for the same reason. `flexiq-python`'s `submit_workflow` becomes a thin
+`#[pymethods]` wrapper over the shared function; `flexiq-server`'s
+`SubmitWorkflow` handler calls the same function directly.
+
+**`mark_workflow_node_result` does not move, and does not need to.** It is
+called by a worker's *own* tracker, reacting to *that worker's own* job
+completion — never by whoever created the job — and it already resolves
+`run_id`/`node_name` from the completed job's storage metadata, not from
+anything the creator held in memory. A job `SubmitWorkflow` pre-enqueues is
+indistinguishable, at completion time, from one `PyQueue::submit_workflow`
+pre-enqueued — same three metadata keys, same table. So the existing
+per-SDK completion path keeps working unmodified, and `flexiq-server` never
+calls it, because nothing in the producer door executes a job. Lifting it
+would be dedup for its own sake, not something #771 needs.
+
+`GateConfig`/`CacheConfig`/`FanOutConfig`/`FanInConfig`/`SubWorkflowSpec` exist
+on the wire and compile cleanly into `StepMetadata`'s JSON fields when present
+— a client can construct one — but constructing one is exactly what trips the
+refusal above. Executing them is a later, additive release the same way §7.6
+originally deferred this whole section: the message does not change, only the
+walk that decides what `SubmitWorkflow` accepts.
+
+`WorkflowState`'s Rust enum has 10 variants, not the 9 the issue text counted —
+`Pending, Running, Paused, Completed, CompletedWithFailures, Failed, Cancelled,
+Compensating, Compensated, CompensationFailed` — so the wire enum is 11 values
+including `_UNSPECIFIED` (D27). `GetWorkflowRunResponse` returns
+`WorkflowNode` per node rather than the run row alone, mirroring the
+dashboard's existing `detail()` handler (`dashboard/routes/workflows.rs`) —
+a caller can otherwise see `Running` and nothing about which node it is stuck
+on.
+
+**`name`+version 1 identity, and why resubmission checks content.** There is no
+caller-supplied `version` on `SubmitWorkflowRequest` — every gRPC submission is
+version 1 of `name`. Reusing an existing `(name, version)` without comparing
+`dag_data`/`step_metadata` would let a run's `definition_id` describe a graph
+that is not the one that produced its jobs — silently, since nothing about a
+successful `SubmitWorkflowResponse` would say so. `submit_workflow` compares
+the submitted graph against whatever `name`+version 1 already holds and
+refuses a mismatch, `INVALID_ARGUMENT`, rather than reuse it: a caller
+resubmitting a materially different graph uses a different `name` until this
+gains a real version field.
+
+**Still not solved, same as the rest of §10's point 10:** `SubmitWorkflow` has
+no `unique_key` equivalent. A retried call after a dropped connection can
+double-submit. This section does not change that; it was already the stated
+gap before #771 existed.
+
 ---
 
 ## §8 The executor surface (`flexiq.executor.v1`)
@@ -1015,6 +1205,12 @@ belong in the `.proto` comments as well as in #721.
 12. **Not a migration off attach.** The frame protocol keeps its property that a
     JSON header and raw bytes let anyone write an executor with a standard
     library alone. gRPC earns a place beside it.
+13. **No dynamic workflow execution over gRPC yet** (D26, §7.6). A graph using
+    `gate`, `cache`, `fan_out`, `fan_in` or `sub_workflow` is refused at submit
+    time. The wire message can carry all five; nothing today can advance a run
+    that uses them outside a live SDK process, and shipping the field without
+    the tracking substrate behind it would be the `Pending`-run failure §5.4
+    already refuses for a namespace a token cannot pick.
 
 ---
 
@@ -1035,6 +1231,7 @@ document first.
 | **#719** lease token | E7, §8 | The token is minted or chosen by the executor; any frame that settles or advances an attempt — `cancelled` and `slept` included — goes without one; a reclaim or reap does not move the epoch; a stale completion is swallowed rather than raised; it is negotiated by a version bump instead of a capability. |
 | **#720** executor transport | D1, D22, D24, §8 | It becomes a second dispatcher rather than a fourth `Transport`; capabilities become an enum; a fingerprint rides the wire; heartbeats ride the dispatch stream; an unknown frame arm is fatal; the message limit is set to the payload limit rather than above it; the executor package gains an HTTP binding. |
 | **#721** docs | §4.3, §5.2, §10 | The page reads as though embedded mode is deprecated; the NULL-namespace cost is unstated; `unique_key` is presented as an idempotency key without saying it expires with the job; the `raw`/`structured` precision loss is a footnote; the untrusted-network warning is missing while #717 is open. |
+| **#771** workflow RPCs | D3, D4, D25, D26, D27, §7.6 | A `bytes dag_data` field ships, in whole or in part; `args_template`/`kwargs_template` reappear instead of the `body` oneof; a dynamic-construct node (`gate`/`cache`/`fan_out`/`fan_in`/`sub_workflow`) executes rather than refuses; the refusal omits which node; `WorkflowState`/`WorkflowNodeStatus`'s conversion gains a wildcard arm, or gains an unused `_from_wire`; the static pre-enqueue logic is written a third time in `flexiq-server` instead of shared from `flexiq-workflows`; `GetWorkflowRun` returns the run without its nodes. |
 
 ---
 

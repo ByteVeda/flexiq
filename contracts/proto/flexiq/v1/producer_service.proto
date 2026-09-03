@@ -12,6 +12,7 @@ syntax = "proto3";
 package flexiq.v1;
 
 import "flexiq/v1/job.proto";
+import "flexiq/v1/workflow.proto";
 import "google/rpc/status.proto";
 
 // The producer door: submit work, read it back, cancel it, count it.
@@ -79,6 +80,18 @@ service ProducerService {
 
   // Per-status job counts, for one queue or for the whole namespace.
   rpc QueueStats(QueueStatsRequest) returns (QueueStatsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+
+  // Submit a workflow graph for execution.
+  //
+  // Not idempotent: there is no unique_key equivalent for a workflow, so a
+  // retried call after a dropped connection can submit twice. See
+  // SubmitWorkflowRequest.
+  rpc SubmitWorkflow(SubmitWorkflowRequest) returns (SubmitWorkflowResponse);
+
+  // Read a workflow run's state and every node's.
+  rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
 }

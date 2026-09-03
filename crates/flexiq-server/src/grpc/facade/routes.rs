@@ -69,6 +69,10 @@ pub enum Rpc {
     CancelJob,
     /// `ProducerService.QueueStats`.
     QueueStats,
+    /// `ProducerService.SubmitWorkflow`.
+    SubmitWorkflow,
+    /// `ProducerService.GetWorkflowRun`.
+    GetWorkflowRun,
 }
 
 impl Rpc {
@@ -81,6 +85,8 @@ impl Rpc {
             Self::ListJobs => "ListJobs",
             Self::CancelJob => "CancelJob",
             Self::QueueStats => "QueueStats",
+            Self::SubmitWorkflow => "SubmitWorkflow",
+            Self::GetWorkflowRun => "GetWorkflowRun",
         }
     }
 }
@@ -115,6 +121,10 @@ pub enum Binding {
     QueueStats,
     /// `GET /v1/stats` — every queue in the namespace.
     NamespaceStats,
+    /// `POST /v1/workflows`.
+    SubmitWorkflow,
+    /// `GET /v1/workflows/{run_id}`.
+    GetWorkflowRun,
 }
 
 impl Binding {
@@ -127,14 +137,22 @@ impl Binding {
             Self::ListJobs => Rpc::ListJobs,
             Self::CancelJob => Rpc::CancelJob,
             Self::QueueStats | Self::NamespaceStats => Rpc::QueueStats,
+            Self::SubmitWorkflow => Rpc::SubmitWorkflow,
+            Self::GetWorkflowRun => Rpc::GetWorkflowRun,
         }
     }
 
     /// The method it answers.
     pub const fn verb(self) -> Verb {
         match self {
-            Self::Enqueue | Self::EnqueueBatch | Self::CancelJob => Verb::Post,
-            Self::GetJob | Self::ListJobs | Self::QueueStats | Self::NamespaceStats => Verb::Get,
+            Self::Enqueue | Self::EnqueueBatch | Self::CancelJob | Self::SubmitWorkflow => {
+                Verb::Post
+            }
+            Self::GetJob
+            | Self::ListJobs
+            | Self::QueueStats
+            | Self::NamespaceStats
+            | Self::GetWorkflowRun => Verb::Get,
         }
     }
 
@@ -148,6 +166,8 @@ impl Binding {
             Self::CancelJob => "/v1/jobs/{job_id}:cancel",
             Self::QueueStats => "/v1/queues/{queue}/stats",
             Self::NamespaceStats => "/v1/stats",
+            Self::SubmitWorkflow => "/v1/workflows",
+            Self::GetWorkflowRun => "/v1/workflows/{run_id}",
         }
     }
 
@@ -170,6 +190,8 @@ impl Binding {
             Self::CancelJob => post(job_custom_method),
             Self::QueueStats => get(queue_stats),
             Self::NamespaceStats => get(namespace_stats),
+            Self::SubmitWorkflow => post(submit_workflow),
+            Self::GetWorkflowRun => get(get_workflow_run),
         }
     }
 }
@@ -183,6 +205,8 @@ pub const ROUTES: &[Binding] = &[
     Binding::CancelJob,
     Binding::QueueStats,
     Binding::NamespaceStats,
+    Binding::SubmitWorkflow,
+    Binding::GetWorkflowRun,
 ];
 
 /// The facade's routes, built from [`ROUTES`].
@@ -352,6 +376,52 @@ async fn namespace_stats(State(producer): State<Producer>, parts: Parts) -> Resp
         Err(error) => return error::refuse(error),
     };
     finish(producer.queue_stats(request).await, write::queue_stats)
+}
+
+async fn submit_workflow(State(producer): State<Producer>, request: Request) -> Response {
+    let (parts, body) = request.into_parts();
+    let request = match prepare_submit_workflow(&parts, body).await {
+        Ok(request) => request,
+        Err(error) => return error::refuse(error),
+    };
+    finish(
+        producer.submit_workflow(request).await,
+        write::submit_workflow,
+    )
+}
+
+async fn prepare_submit_workflow(
+    parts: &Parts,
+    body: AxumBody,
+) -> Result<tonic::Request<pb::SubmitWorkflowRequest>, WireError> {
+    let message = decode::<read::SubmitWorkflow>(body)
+        .await?
+        .into_message()
+        .map_err(WireError::invalid_request)?;
+    scoped(parts, message)
+}
+
+async fn get_workflow_run(
+    State(producer): State<Producer>,
+    run_id: Result<Path<String>, PathRejection>,
+    parts: Parts,
+) -> Response {
+    let request = match prepare_get_workflow_run(&parts, run_id) {
+        Ok(request) => request,
+        Err(error) => return error::refuse(error),
+    };
+    finish(
+        producer.get_workflow_run(request).await,
+        write::get_workflow_run,
+    )
+}
+
+fn prepare_get_workflow_run(
+    parts: &Parts,
+    run_id: Result<Path<String>, PathRejection>,
+) -> Result<tonic::Request<pb::GetWorkflowRunRequest>, WireError> {
+    let run_id = path_param(run_id)?;
+    scoped(parts, pb::GetWorkflowRunRequest { run_id })
 }
 
 // ── The three things every handler does ──────────────────────────────

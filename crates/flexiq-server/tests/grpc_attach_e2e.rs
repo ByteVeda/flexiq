@@ -39,7 +39,7 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic::{Code, Streaming};
 
-use support::{mint_token, temp_storage, Bearer, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
 
 /// The one namespace this door serves. Jobs are enqueued into it, because the
 /// gRPC role refuses to serve the ambiguous unnamespaced one.
@@ -180,8 +180,12 @@ impl Harness {
         let door = ExecutorDoor::new(dispatcher.clone(), supervisor.clone(), rotation);
         // Cloned, not moved: the clone shares the session registry, which is
         // what lets a test see whether a finished stream left one behind.
-        let served =
-            tokio::spawn(listener.serve((*storage).clone(), Some(door.clone()), shutdown.clone()));
+        let served = tokio::spawn(listener.serve(
+            (*storage).clone(),
+            temp_workflows(&storage),
+            Some(door.clone()),
+            shutdown.clone(),
+        ));
 
         Self {
             storage,

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use flexiq_core::StorageBackend;
+use flexiq_workflows::WorkflowStorageBackend;
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -132,10 +133,11 @@ impl Listener {
     pub async fn serve(
         self,
         storage: StorageBackend,
+        workflows: WorkflowStorageBackend,
         executor: Option<ExecutorDoor>,
         shutdown: Shutdown,
     ) -> Result<()> {
-        let producer = Producer::new(storage.clone());
+        let producer = Producer::new(storage.clone(), workflows);
         let health = health::serve(
             storage.clone(),
             self.config.namespace.clone(),

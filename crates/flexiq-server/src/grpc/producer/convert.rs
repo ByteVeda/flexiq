@@ -11,6 +11,7 @@
 
 use flexiq_core::job::{Job, JobStatus, NewJob};
 use flexiq_core::storage::records::DebounceOptions;
+use flexiq_workflows::{WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowState};
 use prost_types::{Duration as ProtoDuration, Timestamp};
 
 use crate::grpc::pb;
@@ -155,13 +156,83 @@ pub fn job_to_wire(job: Job, blobs: Blobs) -> pb::Job {
     }
 }
 
+// ── Workflow ─────────────────────────────────────────────────────────
+
+/// The core's `WorkflowState` discriminant as the wire's enum.
+///
+/// Same shape as [`status_to_wire`], one direction only (D27 of
+/// `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`): nothing in this
+/// service ever reads a `WorkflowState` back off a request, so there is no
+/// `workflow_state_from_wire` with no caller.
+pub fn workflow_state_to_wire(state: WorkflowState) -> pb::WorkflowState {
+    match state {
+        WorkflowState::Pending => pb::WorkflowState::Pending,
+        WorkflowState::Running => pb::WorkflowState::Running,
+        WorkflowState::Paused => pb::WorkflowState::Paused,
+        WorkflowState::Completed => pb::WorkflowState::Completed,
+        WorkflowState::CompletedWithFailures => pb::WorkflowState::CompletedWithFailures,
+        WorkflowState::Failed => pb::WorkflowState::Failed,
+        WorkflowState::Cancelled => pb::WorkflowState::Cancelled,
+        WorkflowState::Compensating => pb::WorkflowState::Compensating,
+        WorkflowState::Compensated => pb::WorkflowState::Compensated,
+        WorkflowState::CompensationFailed => pb::WorkflowState::CompensationFailed,
+    }
+}
+
+/// The core's `WorkflowNodeStatus` discriminant as the wire's enum. Same
+/// rationale as [`workflow_state_to_wire`].
+pub fn workflow_node_status_to_wire(status: WorkflowNodeStatus) -> pb::WorkflowNodeStatus {
+    match status {
+        WorkflowNodeStatus::Pending => pb::WorkflowNodeStatus::Pending,
+        WorkflowNodeStatus::Ready => pb::WorkflowNodeStatus::Ready,
+        WorkflowNodeStatus::Running => pb::WorkflowNodeStatus::Running,
+        WorkflowNodeStatus::Completed => pb::WorkflowNodeStatus::Completed,
+        WorkflowNodeStatus::Failed => pb::WorkflowNodeStatus::Failed,
+        WorkflowNodeStatus::Skipped => pb::WorkflowNodeStatus::Skipped,
+        WorkflowNodeStatus::WaitingApproval => pb::WorkflowNodeStatus::WaitingApproval,
+        WorkflowNodeStatus::CacheHit => pb::WorkflowNodeStatus::CacheHit,
+        WorkflowNodeStatus::Compensating => pb::WorkflowNodeStatus::Compensating,
+        WorkflowNodeStatus::Compensated => pb::WorkflowNodeStatus::Compensated,
+        WorkflowNodeStatus::CompensationFailed => pb::WorkflowNodeStatus::CompensationFailed,
+    }
+}
+
+/// A core workflow run as the wire's `WorkflowRun`.
+pub fn workflow_run_to_wire(run: WorkflowRun) -> pb::WorkflowRun {
+    pb::WorkflowRun {
+        id: run.id,
+        definition_id: run.definition_id,
+        state: workflow_state_to_wire(run.state) as i32,
+        started_at: run.started_at.map(timestamp),
+        completed_at: run.completed_at.map(timestamp),
+        error: run.error,
+        parent_run_id: run.parent_run_id,
+        parent_node_name: run.parent_node_name,
+        created_at: Some(timestamp(run.created_at)),
+    }
+}
+
+/// A core workflow node as the wire's `WorkflowNode`.
+pub fn workflow_node_to_wire(node: WorkflowNode) -> pb::WorkflowNode {
+    pb::WorkflowNode {
+        name: node.node_name,
+        status: workflow_node_status_to_wire(node.status) as i32,
+        job_id: node.job_id,
+        started_at: node.started_at.map(timestamp),
+        completed_at: node.completed_at.map(timestamp),
+        error: node.error,
+    }
+}
+
 // ── Enqueue ──────────────────────────────────────────────────────────
 
 /// The default a job takes when the request sets no timeout.
 ///
 /// The same five minutes the SDKs default to, so a job enqueued over the wire
-/// and one enqueued in-process behave alike.
-const DEFAULT_TIMEOUT_MS: i64 = 300_000;
+/// and one enqueued in-process behave alike. `pub(crate)` because
+/// `producer::workflows` needs the same default for a workflow node that sets
+/// no `timeout_ms` of its own, rather than a second literal `300_000`.
+pub(crate) const DEFAULT_TIMEOUT_MS: i64 = 300_000;
 
 /// Build a `NewJob` from one request.
 ///
@@ -271,6 +342,46 @@ mod tests {
             nanos: 999_999,
         };
         assert_eq!(millis_from_timestamp(&value), 1_000);
+    }
+
+    #[test]
+    fn workflow_state_is_offset_by_exactly_one() {
+        for state in [
+            WorkflowState::Pending,
+            WorkflowState::Running,
+            WorkflowState::Paused,
+            WorkflowState::Completed,
+            WorkflowState::CompletedWithFailures,
+            WorkflowState::Failed,
+            WorkflowState::Cancelled,
+            WorkflowState::Compensating,
+            WorkflowState::Compensated,
+            WorkflowState::CompensationFailed,
+        ] {
+            assert_eq!(workflow_state_to_wire(state) as i32, state as i32 + 1);
+        }
+    }
+
+    #[test]
+    fn workflow_node_status_is_offset_by_exactly_one() {
+        for status in [
+            WorkflowNodeStatus::Pending,
+            WorkflowNodeStatus::Ready,
+            WorkflowNodeStatus::Running,
+            WorkflowNodeStatus::Completed,
+            WorkflowNodeStatus::Failed,
+            WorkflowNodeStatus::Skipped,
+            WorkflowNodeStatus::WaitingApproval,
+            WorkflowNodeStatus::CacheHit,
+            WorkflowNodeStatus::Compensating,
+            WorkflowNodeStatus::Compensated,
+            WorkflowNodeStatus::CompensationFailed,
+        ] {
+            assert_eq!(
+                workflow_node_status_to_wire(status) as i32,
+                status as i32 + 1
+            );
+        }
     }
 
     #[test]

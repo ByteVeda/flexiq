@@ -37,7 +37,7 @@ use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
 use tonic_reflection::pb::v1::ServerReflectionRequest;
 use tonic_types::StatusExt;
 
-use support::{temp_storage, TempStorage};
+use support::{temp_storage, temp_workflows, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-auth-tests";
@@ -71,7 +71,12 @@ impl Harness {
             .local_addr()
             .expect("a TCP listener knows what it bound");
 
-        let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+        let served = tokio::spawn(listener.serve(
+            (*storage).clone(),
+            temp_workflows(&storage),
+            None,
+            shutdown.clone(),
+        ));
 
         // Dial loopback even for a wildcard bind: the port is what matters.
         let channel = Channel::from_shared(format!("http://127.0.0.1:{}", addr.port()))

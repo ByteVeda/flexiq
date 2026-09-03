@@ -33,10 +33,12 @@ pub mod cursor;
 pub mod enqueue;
 pub mod reads;
 pub mod structured;
+pub mod workflows;
 
 use std::sync::Arc;
 
 use flexiq_core::StorageBackend;
+use flexiq_workflows::WorkflowStorageBackend;
 use tonic::{Request, Response, Status};
 
 use crate::grpc::auth::Principal;
@@ -45,10 +47,12 @@ use crate::grpc::pb;
 use crate::grpc::pb::producer_service_server::{ProducerService, ProducerServiceServer};
 use crate::grpc::status::WireError;
 
-/// The producer door's state: one storage handle, and nothing else.
+/// The producer door's state: the two storage handles this process holds, and
+/// nothing else.
 #[derive(Clone)]
 pub struct Producer {
     storage: StorageBackend,
+    workflows: WorkflowStorageBackend,
 }
 
 // Hand-written rather than derived: `StorageBackend` is not `Debug`, and it
@@ -61,9 +65,10 @@ impl std::fmt::Debug for Producer {
 }
 
 impl Producer {
-    /// Serve out of `storage`. The namespace arrives per request.
-    pub fn new(storage: StorageBackend) -> Self {
-        Self { storage }
+    /// Serve out of `storage` and `workflows`. The namespace arrives per
+    /// request.
+    pub fn new(storage: StorageBackend, workflows: WorkflowStorageBackend) -> Self {
+        Self { storage, workflows }
     }
 
     /// The registered service, capped at the producer door's message size.
@@ -96,20 +101,22 @@ impl Producer {
             })?;
         let scoped = Scoped {
             storage: &self.storage,
+            workflows: &self.workflows,
             namespace: Arc::clone(principal.namespace()),
         };
         Ok((scoped, request.into_inner()))
     }
 }
 
-/// One request's view of the door: the storage handle, and the namespace this
-/// caller's credential grants.
+/// One request's view of the door: the storage handles, and the namespace
+/// this caller's credential grants.
 ///
 /// The handlers take this rather than [`Producer`] so that "which namespace"
 /// has exactly one answer inside a request and it is never the process's by
 /// default.
 pub(crate) struct Scoped<'a> {
     storage: &'a StorageBackend,
+    workflows: &'a WorkflowStorageBackend,
     namespace: Arc<str>,
 }
 
@@ -122,6 +129,13 @@ impl Scoped<'_> {
 
     pub(crate) fn storage(&self) -> &StorageBackend {
         self.storage
+    }
+
+    /// The workflow storage handle. Already scoped to this process's one
+    /// namespace at construction — unlike [`Self::storage`], no per-call
+    /// namespace argument exists on `WorkflowStorage`.
+    pub(crate) fn workflows(&self) -> &WorkflowStorageBackend {
+        self.workflows
     }
 }
 
@@ -173,5 +187,21 @@ impl ProducerService for Producer {
     ) -> Result<Response<pb::QueueStatsResponse>, Status> {
         let (scoped, message) = self.scope(request)?;
         reads::queue_stats(&scoped, message).await
+    }
+
+    async fn submit_workflow(
+        &self,
+        request: Request<pb::SubmitWorkflowRequest>,
+    ) -> Result<Response<pb::SubmitWorkflowResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        workflows::submit_workflow(&scoped, message).await
+    }
+
+    async fn get_workflow_run(
+        &self,
+        request: Request<pb::GetWorkflowRunRequest>,
+    ) -> Result<Response<pb::GetWorkflowRunResponse>, Status> {
+        let (scoped, message) = self.scope(request)?;
+        workflows::get_workflow_run(&scoped, message).await
     }
 }

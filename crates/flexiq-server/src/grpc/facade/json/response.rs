@@ -106,6 +106,84 @@ pub fn queue_stats(response: &pb::QueueStatsResponse) -> Value {
     ]))
 }
 
+/// `SubmitWorkflowResponse`.
+pub fn submit_workflow(response: &pb::SubmitWorkflowResponse) -> Value {
+    Value::Object(Map::from_iter([(
+        "runId".to_string(),
+        response.run_id.clone().into(),
+    )]))
+}
+
+/// `GetWorkflowRunResponse`.
+pub fn get_workflow_run(response: &pb::GetWorkflowRunResponse) -> Value {
+    let mut object = Map::new();
+    if let Some(value) = response.run.as_ref() {
+        object.insert("run".to_string(), workflow_run(value));
+    }
+    object.insert(
+        "nodes".to_string(),
+        response.nodes.iter().map(workflow_node).collect::<Value>(),
+    );
+    Value::Object(object)
+}
+
+/// One `WorkflowRun`.
+fn workflow_run(run: &pb::WorkflowRun) -> Value {
+    let mut object = Map::new();
+    object.insert("id".to_string(), run.id.clone().into());
+    object.insert("definitionId".to_string(), run.definition_id.clone().into());
+    object.insert("state".to_string(), workflow_state(run.state));
+    insert_timestamp(&mut object, "startedAt", run.started_at.as_ref());
+    insert_timestamp(&mut object, "completedAt", run.completed_at.as_ref());
+    if let Some(error) = run.error.as_ref() {
+        object.insert("error".to_string(), error.clone().into());
+    }
+    if let Some(parent_run_id) = run.parent_run_id.as_ref() {
+        object.insert("parentRunId".to_string(), parent_run_id.clone().into());
+    }
+    if let Some(parent_node_name) = run.parent_node_name.as_ref() {
+        object.insert(
+            "parentNodeName".to_string(),
+            parent_node_name.clone().into(),
+        );
+    }
+    insert_timestamp(&mut object, "createdAt", run.created_at.as_ref());
+    Value::Object(object)
+}
+
+/// One `WorkflowNode`.
+fn workflow_node(node: &pb::WorkflowNode) -> Value {
+    let mut object = Map::new();
+    object.insert("name".to_string(), node.name.clone().into());
+    object.insert("status".to_string(), workflow_node_status(node.status));
+    if let Some(job_id) = node.job_id.as_ref() {
+        object.insert("jobId".to_string(), job_id.clone().into());
+    }
+    insert_timestamp(&mut object, "startedAt", node.started_at.as_ref());
+    insert_timestamp(&mut object, "completedAt", node.completed_at.as_ref());
+    if let Some(error) = node.error.as_ref() {
+        object.insert("error".to_string(), error.clone().into());
+    }
+    Value::Object(object)
+}
+
+/// A `WorkflowState` by name, or by number when this build does not know it.
+/// Same rationale as [`status`].
+fn workflow_state(state: i32) -> Value {
+    match pb::WorkflowState::try_from(state) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => state.into(),
+    }
+}
+
+/// A `WorkflowNodeStatus` by name, or by number. Same rationale as [`status`].
+fn workflow_node_status(status: i32) -> Value {
+    match pb::WorkflowNodeStatus::try_from(status) {
+        Ok(known) => known.as_str_name().into(),
+        Err(_) => status.into(),
+    }
+}
+
 /// One `Job`.
 pub fn job(job: &pb::Job) -> Value {
     let mut object = Map::new();
