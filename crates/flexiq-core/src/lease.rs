@@ -122,11 +122,14 @@ impl Lease {
     ///
     /// `None` when the bytes are not a token this scheduler could have minted,
     /// which every caller already reads the way it reads a value that does not
-    /// decode: not the current dispatch, so the frame is refused.
+    /// decode: not the current dispatch, so the frame is refused. Checked by
+    /// decoding the epoch, not just validating UTF-8 — a value that is valid
+    /// UTF-8 but not a real token must fail here rather than reach a peer
+    /// equality check as a well-formed-looking `Lease`.
     pub fn from_wire(bytes: &[u8]) -> Option<Self> {
-        std::str::from_utf8(bytes)
-            .ok()
-            .map(|token| Self(token.to_string()))
+        let token = std::str::from_utf8(bytes).ok()?;
+        let lease = Self(token.to_string());
+        lease.epoch().is_some().then_some(lease)
     }
 }
 
@@ -234,11 +237,10 @@ mod tests {
     fn bytes_that_are_not_a_token_resolve_to_no_lease() {
         // Refused rather than accepted-and-ignored: a peer echoing garbage is
         // not the current dispatch, which is what the caller reads `None` as.
+        // `from_wire` itself returns `None` here — valid UTF-8 that is not a
+        // real minted token must not survive as a well-formed-looking `Lease`.
         assert!(Lease::from_wire(&[0xff, 0xfe]).is_none());
-        assert_eq!(
-            Lease::from_wire(b"not a lease").and_then(|lease| lease.epoch()),
-            None
-        );
+        assert!(Lease::from_wire(b"not a lease").is_none());
     }
 
     #[test]
