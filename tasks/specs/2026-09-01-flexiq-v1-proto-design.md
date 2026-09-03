@@ -928,7 +928,7 @@ message WorkflowNodeConfig {
   optional string queue = 3;
   oneof body { bytes raw = 4; StructuredArgs structured = 5; }   // §7.1's oneof, unchanged
   optional int32 max_retries = 6;
-  optional int64 timeout_ms  = 7;
+  google.protobuf.Duration timeout = 7;   // D20: a duration is Duration at the wire boundary, never a bare _ms int
   optional int32 priority    = 8;
   EdgeCondition condition            = 9;
   optional GateConfig gate           = 10;
@@ -940,14 +940,14 @@ message WorkflowNodeConfig {
 }
 
 enum EdgeCondition {
-  EDGE_CONDITION_UNSPECIFIED = 0;
+  EDGE_CONDITION_UNSPECIFIED = 0;   // no filter — identical to ALWAYS, never ON_SUCCESS
   EDGE_CONDITION_ON_SUCCESS  = 1;
   EDGE_CONDITION_ON_FAILURE  = 2;
   EDGE_CONDITION_ALWAYS      = 3;
 }
-message GateConfig  { optional int64 timeout_ms = 1; OnTimeout on_timeout = 2; optional string message = 3; }
+message GateConfig  { google.protobuf.Duration timeout = 1; OnTimeout on_timeout = 2; optional string message = 3; }
 enum OnTimeout       { ON_TIMEOUT_UNSPECIFIED = 0; ON_TIMEOUT_APPROVE = 1; ON_TIMEOUT_REJECT = 2; }
-message CacheConfig  { optional int64 ttl_ms = 1; }
+message CacheConfig  { google.protobuf.Duration ttl = 1; }
 message FanOutConfig { optional string items_from = 1; }   // absent = infer from the single predecessor
 message FanInConfig  { string from = 1; }                  // the fan-out node this collects
 message SubWorkflowSpec {
@@ -1079,6 +1079,17 @@ including `_UNSPECIFIED` (D27). `GetWorkflowRunResponse` returns
 dashboard's existing `detail()` handler (`dashboard/routes/workflows.rs`) —
 a caller can otherwise see `Running` and nothing about which node it is stuck
 on.
+
+**`name`+version 1 identity, and why resubmission checks content.** There is no
+caller-supplied `version` on `SubmitWorkflowRequest` — every gRPC submission is
+version 1 of `name`. Reusing an existing `(name, version)` without comparing
+`dag_data`/`step_metadata` would let a run's `definition_id` describe a graph
+that is not the one that produced its jobs — silently, since nothing about a
+successful `SubmitWorkflowResponse` would say so. `submit_workflow` compares
+the submitted graph against whatever `name`+version 1 already holds and
+refuses a mismatch, `INVALID_ARGUMENT`, rather than reuse it: a caller
+resubmitting a materially different graph uses a different `name` until this
+gains a real version field.
 
 **Still not solved, same as the rest of §10's point 10:** `SubmitWorkflow` has
 no `unique_key` equivalent. A retried call after a dropped connection can

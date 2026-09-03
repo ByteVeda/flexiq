@@ -334,8 +334,8 @@ pub struct NodeConfig {
     pub structured: Option<Structured>,
     #[serde(default, alias = "max_retries")]
     pub max_retries: Option<i32>,
-    #[serde(default, alias = "timeout_ms")]
-    pub timeout_ms: Option<JsonInt64>,
+    #[serde(default)]
+    pub timeout: Option<JsonDuration>,
     #[serde(default)]
     pub priority: Option<i32>,
     #[serde(default)]
@@ -381,7 +381,7 @@ impl NodeConfig {
             queue: self.queue,
             body,
             max_retries: self.max_retries,
-            timeout_ms: self.timeout_ms.map(|value| value.0),
+            timeout: self.timeout.map(|value| value.0),
             priority: self.priority,
             condition,
             gate: self.gate.map(Gate::into_message).transpose()?,
@@ -401,8 +401,8 @@ impl NodeConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Gate {
-    #[serde(default, alias = "timeout_ms")]
-    pub timeout_ms: Option<JsonInt64>,
+    #[serde(default)]
+    pub timeout: Option<JsonDuration>,
     #[serde(default, alias = "on_timeout")]
     pub on_timeout: Option<String>,
     #[serde(default)]
@@ -418,7 +418,7 @@ impl Gate {
             .transpose()?
             .unwrap_or(pb::OnTimeout::Unspecified as i32);
         Ok(pb::GateConfig {
-            timeout_ms: self.timeout_ms.map(|value| value.0),
+            timeout: self.timeout.map(|value| value.0),
             on_timeout,
             message: self.message,
         })
@@ -429,14 +429,14 @@ impl Gate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Cache {
-    #[serde(default, alias = "ttl_ms")]
-    pub ttl_ms: Option<JsonInt64>,
+    #[serde(default)]
+    pub ttl: Option<JsonDuration>,
 }
 
 impl Cache {
     fn into_message(self) -> pb::CacheConfig {
         pb::CacheConfig {
-            ttl_ms: self.ttl_ms.map(|value| value.0),
+            ttl: self.ttl.map(|value| value.0),
         }
     }
 }

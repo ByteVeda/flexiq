@@ -7,8 +7,9 @@
 //! [`submit_workflow`] directly rather than each carrying their own copy.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
-use flexiq_core::error::Result;
+use flexiq_core::error::{QueueError, Result};
 use flexiq_core::job::{now_millis, NewJob};
 use flexiq_core::storage::{Storage, StorageBackend};
 
@@ -17,6 +18,50 @@ use crate::{
     topological_order, StepMetadata, WorkflowDefinition, WorkflowNode, WorkflowNodeStatus,
     WorkflowRun, WorkflowState, WorkflowStorage, WorkflowStorageBackend,
 };
+
+/// Why [`submit_workflow`] refused a request.
+///
+/// Kept distinct from [`QueueError`] rather than flattened into
+/// `QueueError::Other` on the way out: a caller error (bad `step_metadata`, a
+/// missing payload) and an infrastructure error (a failed write) are different
+/// things to both callers of this function — `flexiq-python`'s wrapper maps
+/// the former to `PyValueError` and the latter to `PyRuntimeError`, and
+/// `flexiq-server`'s handler maps the former to `INVALID_ARGUMENT` and the
+/// latter through the ordinary `QueueError` classification.
+#[derive(Debug)]
+pub enum SubmitWorkflowError {
+    /// The caller's `step_metadata`, `node_payloads` or `dag_bytes` do not
+    /// describe a submittable graph.
+    InvalidStepMetadata(String),
+    /// A storage write or read failed.
+    Storage(QueueError),
+}
+
+impl fmt::Display for SubmitWorkflowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidStepMetadata(msg) => write!(f, "{msg}"),
+            Self::Storage(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for SubmitWorkflowError {}
+
+impl From<QueueError> for SubmitWorkflowError {
+    fn from(err: QueueError) -> Self {
+        Self::Storage(err)
+    }
+}
+
+impl From<WorkflowError> for SubmitWorkflowError {
+    fn from(err: WorkflowError) -> Self {
+        match err {
+            WorkflowError::InvalidStepMetadata(msg) => Self::InvalidStepMetadata(msg),
+            other => Self::Storage(other.into()),
+        }
+    }
+}
 
 /// Everything [`submit_workflow`] needs beyond the two storage handles.
 ///
@@ -80,16 +125,60 @@ pub fn build_metadata_json(run_id: &str, node_name: &str) -> String {
 /// runs them in the correct order. Nodes listed in `deferred_node_names` get a
 /// `WorkflowNode` only (no job) — their jobs are created at runtime by a
 /// caller's own tracker.
+///
+/// Every non-deferred, non-cache-hit node's `step_metadata` and
+/// `node_payloads` entry is checked **before any row is written** — a caller
+/// mistake refuses the whole call rather than leaving an orphaned job behind
+/// for a node earlier in topological order than the one that failed. A
+/// storage failure once writes are underway still can't be rolled back across
+/// two separate storage handles, so the run is marked `Failed` on that path
+/// instead of left `Pending` forever.
 pub fn submit_workflow(
     storage: &StorageBackend,
     wf_storage: &WorkflowStorageBackend,
     request: SubmitStaticWorkflowRequest,
-) -> Result<WorkflowRunHandle> {
+) -> std::result::Result<WorkflowRunHandle, SubmitWorkflowError> {
     let ordered = topological_order(&request.dag_bytes)?;
+
+    for topo in &ordered {
+        if request.cache_hit_nodes.contains_key(&topo.name)
+            || request.deferred_node_names.contains(&topo.name)
+        {
+            continue;
+        }
+        if !request.step_metadata.contains_key(&topo.name) {
+            return Err(SubmitWorkflowError::InvalidStepMetadata(format!(
+                "step '{}' missing from step_metadata",
+                topo.name
+            )));
+        }
+        if !request.node_payloads.contains_key(&topo.name) {
+            return Err(SubmitWorkflowError::InvalidStepMetadata(format!(
+                "step '{}' missing from node_payloads",
+                topo.name
+            )));
+        }
+    }
 
     let definition_id =
         match wf_storage.get_workflow_definition(&request.name, Some(request.version))? {
-            Some(existing) => existing.id,
+            Some(existing) => {
+                // A run's definition_id is read by anyone inspecting the run
+                // later (the dashboard's DAG view, a future submission that
+                // reuses this name+version) — it must describe the graph
+                // that actually produced this run's jobs, not whichever
+                // graph first claimed this name+version.
+                if existing.dag_data != request.dag_bytes
+                    || existing.step_metadata != request.step_metadata
+                {
+                    return Err(SubmitWorkflowError::InvalidStepMetadata(format!(
+                        "workflow '{}' version {} already exists with a different graph; \
+                         submit under a new version instead of reusing this one",
+                        request.name, request.version
+                    )));
+                }
+                existing.id
+            }
             None => {
                 let def = WorkflowDefinition {
                     id: uuid::Uuid::now_v7().to_string(),
@@ -110,24 +199,58 @@ pub fn submit_workflow(
     let run = WorkflowRun {
         id: run_id.clone(),
         definition_id: definition_id.clone(),
-        params: request.params_json,
+        params: request.params_json.clone(),
         state: WorkflowState::Pending,
         started_at: Some(now),
         completed_at: None,
         error: None,
-        parent_run_id: request.parent_run_id,
-        parent_node_name: request.parent_node_name,
+        parent_run_id: request.parent_run_id.clone(),
+        parent_node_name: request.parent_node_name.clone(),
         created_at: now,
     };
     wf_storage.create_workflow_run(&run)?;
 
+    if let Err(err) = submit_nodes(storage, wf_storage, &request, &run_id, &ordered, now) {
+        // Not a rollback — there is no transaction spanning both storage
+        // handles, so a job already enqueued for an earlier node stays
+        // enqueued. What this closes is the silent side of the failure: a
+        // caller polling GetWorkflowRun sees Failed with the reason, rather
+        // than a run stuck Pending forever with nothing to say why.
+        let _ = wf_storage.update_workflow_run_state(
+            &run_id,
+            WorkflowState::Failed,
+            Some(&err.to_string()),
+        );
+        let _ = wf_storage.set_workflow_run_completed(&run_id, now_millis());
+        return Err(err);
+    }
+
+    wf_storage.update_workflow_run_state(&run_id, WorkflowState::Running, None)?;
+
+    Ok(WorkflowRunHandle {
+        run_id,
+        definition_id,
+    })
+}
+
+/// The per-node half of [`submit_workflow`]: one `WorkflowNode` row for
+/// every node, and a `Job` pre-enqueued for every one that is neither
+/// cache-hit nor deferred.
+fn submit_nodes(
+    storage: &StorageBackend,
+    wf_storage: &WorkflowStorageBackend,
+    request: &SubmitStaticWorkflowRequest,
+    run_id: &str,
+    ordered: &[crate::TopologicalNode],
+    now: i64,
+) -> std::result::Result<(), SubmitWorkflowError> {
     let mut job_ids: HashMap<String, String> = HashMap::new();
-    for topo in &ordered {
+    for topo in ordered {
         // Cache-hit nodes: copy result_hash from a previous run, no job.
         if let Some(rh) = request.cache_hit_nodes.get(&topo.name) {
             let wf_node = WorkflowNode {
                 id: uuid::Uuid::now_v7().to_string(),
-                run_id: run_id.clone(),
+                run_id: run_id.to_string(),
                 node_name: topo.name.clone(),
                 job_id: None,
                 status: WorkflowNodeStatus::CacheHit,
@@ -150,7 +273,7 @@ pub fn submit_workflow(
         if request.deferred_node_names.contains(&topo.name) {
             let wf_node = WorkflowNode {
                 id: uuid::Uuid::now_v7().to_string(),
-                run_id: run_id.clone(),
+                run_id: run_id.to_string(),
                 node_name: topo.name.clone(),
                 job_id: None,
                 status: WorkflowNodeStatus::Pending,
@@ -169,8 +292,12 @@ pub fn submit_workflow(
             continue;
         }
 
+        // Both entries are guaranteed by submit_workflow's pre-validation
+        // pass; refusing here too rather than indexing costs nothing and
+        // keeps this function correct on its own if that guarantee ever
+        // moves.
         let meta = request.step_metadata.get(&topo.name).ok_or_else(|| {
-            WorkflowError::InvalidStepMetadata(format!(
+            SubmitWorkflowError::InvalidStepMetadata(format!(
                 "step '{}' missing from step_metadata",
                 topo.name
             ))
@@ -180,27 +307,32 @@ pub fn submit_workflow(
             .get(&topo.name)
             .cloned()
             .ok_or_else(|| {
-                WorkflowError::InvalidStepMetadata(format!(
+                SubmitWorkflowError::InvalidStepMetadata(format!(
                     "step '{}' missing from node_payloads",
                     topo.name
                 ))
             })?;
 
-        // Only resolve depends_on for non-deferred predecessors.
+        // depends_on excludes deferred predecessors (no job exists yet) and
+        // cache-hit predecessors (no job was created at all — the run's
+        // result is copied, not recomputed) — every other predecessor is
+        // topologically earlier and already has a job id.
         let depends_on: Vec<String> = topo
             .predecessors
             .iter()
-            .filter(|p| !request.deferred_node_names.contains(*p))
+            .filter(|p| {
+                !request.deferred_node_names.contains(*p)
+                    && !request.cache_hit_nodes.contains_key(*p)
+            })
             .map(|p| {
                 job_ids.get(p).cloned().ok_or_else(|| {
-                    WorkflowError::InvalidStepMetadata(format!(
+                    SubmitWorkflowError::InvalidStepMetadata(format!(
                         "predecessor '{}' of step '{}' has no job id",
                         p, topo.name
                     ))
-                    .into()
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let timeout_ms = meta.timeout_ms.unwrap_or(request.default_timeout_ms);
         let new_job = NewJob {
@@ -215,7 +347,7 @@ pub fn submit_workflow(
             max_retries: meta.max_retries.unwrap_or(request.default_max_retries),
             timeout_ms,
             unique_key: None,
-            metadata: Some(build_metadata_json(&run_id, &topo.name)),
+            metadata: Some(build_metadata_json(run_id, &topo.name)),
             notes: None,
             depends_on,
             expires_at: None,
@@ -229,7 +361,7 @@ pub fn submit_workflow(
 
         let wf_node = WorkflowNode {
             id: uuid::Uuid::now_v7().to_string(),
-            run_id: run_id.clone(),
+            run_id: run_id.to_string(),
             node_name: topo.name.clone(),
             job_id: Some(job.id),
             status: WorkflowNodeStatus::Pending,
@@ -246,13 +378,7 @@ pub fn submit_workflow(
         };
         wf_storage.create_workflow_node(&wf_node)?;
     }
-
-    wf_storage.update_workflow_run_state(&run_id, WorkflowState::Running, None)?;
-
-    Ok(WorkflowRunHandle {
-        run_id,
-        definition_id,
-    })
+    Ok(())
 }
 
 #[cfg(test)]
@@ -472,6 +598,42 @@ mod tests {
         assert_ne!(first.run_id, second.run_id);
     }
 
+    /// Resubmitting `(name, version)` with a *different* graph is refused —
+    /// silently reusing the existing definition would leave a run whose
+    /// `definition_id` describes the wrong graph.
+    #[test]
+    fn submit_workflow_rejects_a_changed_graph_under_the_same_name_and_version() {
+        let (storage, wf) = make_storages();
+        let first_dag = dag_bytes(&["a"], &[]);
+        let first_metadata = step_metadata_json(&[("a", "task_a")]);
+        submit_workflow(
+            &storage,
+            &wf,
+            base_request("reused", first_dag, &first_metadata, node_payloads(&["a"])),
+        )
+        .unwrap();
+
+        // Same name and (implicit) version, a materially different graph.
+        let second_dag = dag_bytes(&["a", "b"], &[("a", "b")]);
+        let second_metadata = step_metadata_json(&[("a", "task_a"), ("b", "task_b")]);
+        let err = submit_workflow(
+            &storage,
+            &wf,
+            base_request(
+                "reused",
+                second_dag,
+                &second_metadata,
+                node_payloads(&["a", "b"]),
+            ),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, SubmitWorkflowError::InvalidStepMetadata(_)));
+        assert!(err
+            .to_string()
+            .contains("already exists with a different graph"));
+    }
+
     /// Missing `step_metadata` for a non-deferred, non-cached node is refused.
     #[test]
     fn submit_workflow_rejects_missing_step_metadata() {
@@ -482,6 +644,66 @@ mod tests {
         let request = base_request("broken", dag, &metadata, node_payloads(&["a", "b"]));
 
         let err = submit_workflow(&storage, &wf, request).unwrap_err();
+        assert!(matches!(err, SubmitWorkflowError::InvalidStepMetadata(_)));
         assert!(err.to_string().contains("missing from step_metadata"));
+    }
+
+    /// The same failure as above, but pinning that it is refused *before*
+    /// node 'a' — topologically earlier and otherwise valid — is enqueued.
+    /// A partial submission would otherwise leave an orphaned job and no
+    /// workflow run to explain it.
+    #[test]
+    fn submit_workflow_rejects_missing_step_metadata_before_writing_anything() {
+        let (storage, wf) = make_storages();
+        let dag = dag_bytes(&["a", "b"], &[("a", "b")]);
+        let metadata = step_metadata_json(&[("a", "task_a")]);
+        let request = base_request("broken", dag, &metadata, node_payloads(&["a", "b"]));
+
+        submit_workflow(&storage, &wf, request).unwrap_err();
+
+        assert!(
+            wf.get_workflow_definition("broken", Some(1))
+                .unwrap()
+                .is_none(),
+            "no definition row on a refused submission"
+        );
+        assert!(
+            storage
+                .list_jobs(None, None, None, 10, 0, None)
+                .unwrap()
+                .is_empty(),
+            "no job for 'a' was left behind"
+        );
+    }
+
+    /// A node with a cache-hit predecessor gets no `depends_on` entry for
+    /// it — a cache-hit node never gets a job, so looking one up for it
+    /// would always fail, and the run would wrongly be refused for a
+    /// perfectly normal incremental re-run.
+    #[test]
+    fn submit_workflow_excludes_cache_hit_predecessors_from_depends_on() {
+        let (storage, wf) = make_storages();
+        let dag = dag_bytes(&["a", "b"], &[("a", "b")]);
+        let metadata = step_metadata_json(&[("a", "task_a"), ("b", "task_b")]);
+        let mut request = base_request("incremental", dag, &metadata, node_payloads(&["a", "b"]));
+        request
+            .cache_hit_nodes
+            .insert("a".to_string(), "hash-of-a".to_string());
+
+        let handle = submit_workflow(&storage, &wf, request).unwrap();
+
+        let nodes = wf.get_workflow_nodes(&handle.run_id).unwrap();
+        let a = nodes.iter().find(|n| n.node_name == "a").unwrap();
+        let b = nodes.iter().find(|n| n.node_name == "b").unwrap();
+        assert_eq!(a.status, WorkflowNodeStatus::CacheHit);
+        assert!(a.job_id.is_none());
+        let b_job_id = b.job_id.clone().expect("b is dirty and gets a job");
+        assert!(
+            storage
+                .get_dependencies(&b_job_id, None)
+                .unwrap()
+                .is_empty(),
+            "a cache-hit predecessor must not appear in depends_on"
+        );
     }
 }

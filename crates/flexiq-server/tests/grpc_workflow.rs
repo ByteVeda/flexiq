@@ -98,7 +98,7 @@ fn plain_node(name: &str, task: &str) -> WorkflowNodeConfig {
         queue: None,
         body: Some(workflow_node_config::Body::Raw(Vec::new())),
         max_retries: None,
-        timeout_ms: None,
+        timeout: None,
         priority: None,
         condition: EdgeCondition::Unspecified as i32,
         gate: None,
@@ -231,7 +231,7 @@ async fn a_dynamic_construct_is_refused_before_anything_is_written() {
 
     let mut graph = linear_graph();
     graph.node_configs[1].gate = Some(GateConfig {
-        timeout_ms: None,
+        timeout: None,
         on_timeout: 0,
         message: None,
     });

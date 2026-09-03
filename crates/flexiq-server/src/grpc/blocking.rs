@@ -58,20 +58,28 @@ where
 /// pre-enqueue nodes, workflow storage to write the run and its nodes — and
 /// running them as one blocking task is what `flexiq_workflows::lifecycle::submit_workflow`
 /// already assumes of its two `&` parameters.
-pub async fn on_storage_and_workflows<T, F>(
+///
+/// Generic over the closure's error type — `SubmitWorkflow` distinguishes a
+/// caller mistake from a storage failure (`SubmitWorkflowError`), which a
+/// `QueueError`-only signature could not carry — so the caller supplies its
+/// own `Into<WireError>` rather than this function assuming `QueueError`.
+pub async fn on_storage_and_workflows<T, E, F>(
     storage: &StorageBackend,
     workflows: &WorkflowStorageBackend,
     work: F,
 ) -> Result<T, Status>
 where
-    F: FnOnce(&StorageBackend, &WorkflowStorageBackend) -> flexiq_core::Result<T> + Send + 'static,
+    F: FnOnce(&StorageBackend, &WorkflowStorageBackend) -> std::result::Result<T, E>
+        + Send
+        + 'static,
+    E: Into<WireError> + Send + 'static,
     T: Send + 'static,
 {
     let storage = storage.clone();
     let workflows = workflows.clone();
     match tokio::task::spawn_blocking(move || work(&storage, &workflows)).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(status::from_queue_error(&error)),
+        Ok(Err(error)) => Err(error.into().into()),
         Err(error) => {
             log::error!("grpc: storage task failed to run: {error}");
             Err(WireError::internal().into())

@@ -12,6 +12,7 @@ syntax = "proto3";
 package flexiq.v1;
 
 import "flexiq/v1/job.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 // A workflow's shape: which steps exist, how they depend on one another, and
@@ -50,12 +51,15 @@ message WorkflowGraphEdge {
 // is not submittable over this RPC; its language SDK's own submission path is
 // unaffected.
 enum EdgeCondition {
+  // No filter — the same behavior as ALWAYS. A node's WorkflowNodeConfig
+  // that sets no condition reads as this.
   EDGE_CONDITION_UNSPECIFIED = 0;
-  // Only if every predecessor succeeded. The graph's implicit default.
+  // Only if every predecessor succeeded.
   EDGE_CONDITION_ON_SUCCESS = 1;
   // Only if a predecessor failed.
   EDGE_CONDITION_ON_FAILURE = 2;
-  // Regardless of predecessor outcome.
+  // Regardless of predecessor outcome. Identical to UNSPECIFIED; exists so a
+  // caller can say "always" explicitly rather than by omission.
   EDGE_CONDITION_ALWAYS = 3;
 }
 
@@ -68,7 +72,7 @@ enum EdgeCondition {
 // once that changes.
 message GateConfig {
   // Unset waits indefinitely.
-  optional int64 timeout_ms = 1;
+  google.protobuf.Duration timeout = 1;
   OnTimeout on_timeout = 2;
   optional string message = 3;
 }
@@ -88,7 +92,7 @@ enum OnTimeout {
 // resolves a cache hit yet.
 message CacheConfig {
   // Unset caches indefinitely.
-  optional int64 ttl_ms = 1;
+  google.protobuf.Duration ttl = 1;
 }
 
 // Expand this node into one job per item at runtime.
@@ -158,7 +162,7 @@ message WorkflowNodeConfig {
   }
 
   optional int32 max_retries = 6;
-  optional int64 timeout_ms = 7;
+  google.protobuf.Duration timeout = 7;
   optional int32 priority = 8;
 
   // How an inbound edge gates this node. Unset behaves as ALWAYS.
@@ -259,6 +263,13 @@ message WorkflowNode {
 // an equivalent call through an SDK's own submit_workflow would be; any
 // worker with workflow tracking enabled advances it, whether or not it is the
 // caller that submitted the graph.
+//
+// There is no caller-supplied version: every submission is version 1 of
+// `name`. Resubmitting `name` with a graph that differs from what version 1
+// already holds is refused, INVALID_ARGUMENT — never silently reused —
+// because a run's definition must describe the graph that produced its jobs.
+// Submit a materially different graph under a different `name` until this
+// gains a real version field.
 message SubmitWorkflowRequest {
   string name = 1;
   WorkflowGraph graph = 2;

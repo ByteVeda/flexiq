@@ -7,7 +7,9 @@ use pyo3::prelude::*;
 
 use flexiq_core::error::Result as CoreResult;
 use flexiq_core::job::now_millis;
-use flexiq_workflows::lifecycle::{parse_step_metadata, SubmitStaticWorkflowRequest};
+use flexiq_workflows::lifecycle::{
+    parse_step_metadata, SubmitStaticWorkflowRequest, SubmitWorkflowError,
+};
 use flexiq_workflows::{WorkflowNodeStatus, WorkflowState, WorkflowStorage};
 
 use crate::py_queue::workflow_ops::{cascade_skip_pending_nodes, workflow_storage};
@@ -75,7 +77,13 @@ impl PyQueue {
                 namespace: self.namespace.clone(),
             },
         )
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        .map_err(|e| match e {
+            // A caller mistake — the graph or its metadata does not describe
+            // a submittable workflow — reads as ValueError, the same as
+            // every other input-validation failure this SDK raises.
+            SubmitWorkflowError::InvalidStepMetadata(msg) => PyValueError::new_err(msg),
+            SubmitWorkflowError::Storage(err) => PyRuntimeError::new_err(err.to_string()),
+        })?;
 
         Ok(PyWorkflowHandle {
             run_id: handle.run_id,

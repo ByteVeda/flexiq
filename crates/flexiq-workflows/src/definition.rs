@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Stored alongside the DAG structure to map node names to task queue details.
 /// Every optional field is `#[serde(default)]` so the JSON blob stays
 /// backward-compatible as new step kinds are added (no schema migration).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepMetadata {
     pub task_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

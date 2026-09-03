@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use flexiq_workflows::lifecycle::{self, SubmitStaticWorkflowRequest};
+use flexiq_workflows::lifecycle::{self, SubmitStaticWorkflowRequest, SubmitWorkflowError};
 use flexiq_workflows::{StepMetadata, WorkflowStorage};
 use tonic::{Response, Status};
 
@@ -21,6 +21,18 @@ use super::Scoped;
 use crate::grpc::blocking::{on_storage_and_workflows, on_workflows};
 use crate::grpc::pb;
 use crate::grpc::status::WireError;
+
+/// A caller mistake (`InvalidStepMetadata`) reads `INVALID_ARGUMENT`, the same
+/// code every other request-shape refusal on this door uses; a storage
+/// failure keeps the ordinary `QueueError` classification.
+impl From<SubmitWorkflowError> for WireError {
+    fn from(err: SubmitWorkflowError) -> Self {
+        match err {
+            SubmitWorkflowError::InvalidStepMetadata(msg) => WireError::invalid_request(msg),
+            SubmitWorkflowError::Storage(err) => WireError::from_queue_error(&err),
+        }
+    }
+}
 
 /// A node with no `priority` of its own takes this — the same zero value
 /// `EnqueueOptions.priority` defaults to.
@@ -169,7 +181,7 @@ fn compile_graph(graph: pb::WorkflowGraph) -> Result<CompiledGraph, WireError> {
                 args_template: None,
                 kwargs_template: None,
                 max_retries: node.max_retries,
-                timeout_ms: node.timeout_ms,
+                timeout_ms: node.timeout.as_ref().map(convert::millis_from_duration),
                 priority: node.priority,
                 fan_out: None,
                 fan_in: None,
