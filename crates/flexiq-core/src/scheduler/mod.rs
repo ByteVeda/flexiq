@@ -388,7 +388,7 @@ impl InFlight {
     fn insert(&mut self, job_id: &str, record: DispatchRecord) {
         // A new dispatch of this id supersedes the memory of the last one: the
         // live record is the only one that can still speak for the job.
-        self.retired.remove(job_id);
+        self.drop_retired(job_id);
         let task_name = record.task_name.clone();
         if self.by_job.insert(job_id.to_string(), record).is_none() {
             *self.count_by_task.entry(task_name).or_insert(0) += 1;
@@ -436,13 +436,23 @@ impl InFlight {
         }
     }
 
+    /// Drop a retired record, keeping [`Self::retired_order`] in step with it.
+    ///
+    /// The two must hold the same ids: `retired_order` is the trim's only
+    /// notion of age, so a left-behind entry is one the trim will later pop and
+    /// use to delete whatever record that id holds *then* — which, after a
+    /// re-dispatch, is a record still well inside the window.
+    fn drop_retired(&mut self, job_id: &str) {
+        if self.retired.remove(job_id).is_some() {
+            self.retired_order.retain(|id| id != job_id);
+        }
+    }
+
     /// Forget a dispatch outright, without retiring it — the rollback path,
     /// where the job never reached a worker and there is nothing to fence.
     fn forget(&mut self, job_id: &str) {
         self.take(job_id);
-        if self.retired.remove(job_id).is_some() {
-            self.retired_order.retain(|id| id != job_id);
-        }
+        self.drop_retired(job_id);
     }
 }
 
@@ -1366,6 +1376,51 @@ mod tests {
         let pending = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(pending.status, JobStatus::Pending);
         assert_eq!(pending.retry_count, 1);
+    }
+
+    /// A dispatch record for a job that is only ever retired, never inspected.
+    fn dispatched_as(job_id: &str) -> DispatchRecord {
+        DispatchRecord {
+            task_name: format!("task-for-{job_id}"),
+            owner: "owner".to_string(),
+            attempt: 0,
+            epoch: Some(1),
+        }
+    }
+
+    #[test]
+    fn a_redispatched_job_does_not_evict_its_own_retired_record() {
+        // `retired_order` is the trim's only notion of age, so it has to hold
+        // exactly one entry per retired record. A job that is dispatched,
+        // settled, re-dispatched and settled again — the ordinary retry path —
+        // used to leave two entries and one record: the first pop then deleted
+        // a record that was still well inside the window.
+        let mut in_flight = InFlight::default();
+
+        in_flight.insert("job-1", dispatched_as("job-1"));
+        in_flight.remove("job-1");
+        in_flight.insert("job-1", dispatched_as("job-1"));
+        in_flight.remove("job-1");
+
+        assert_eq!(
+            in_flight.retired_order.len(),
+            in_flight.retired.len(),
+            "one order entry per retired record, or the trim evicts the wrong one"
+        );
+
+        // Retire enough others to reach the cap but not to age `job-1` out of
+        // it. With a duplicate entry the trim starts one retirement early, and
+        // the entry it pops first is `job-1`'s stale one.
+        for n in 0..RETIRED_DISPATCHES - 1 {
+            let id = format!("filler-{n}");
+            in_flight.insert(&id, dispatched_as(&id));
+            in_flight.remove(&id);
+        }
+
+        assert!(
+            in_flight.last_dispatch("job-1").is_some(),
+            "a record still inside the window must not be evicted by a stale order entry"
+        );
     }
 
     #[test]
