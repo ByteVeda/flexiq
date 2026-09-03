@@ -14,6 +14,11 @@ public final class NotifyWorker {
 
     public static void main(String[] args) throws Exception {
         String db = System.getenv().getOrDefault("FLEXIQ_DB", "../flexiq.db");
+        // Set by the gRPC variant only: a job enqueued through the producer door
+        // always carries its token's namespace, so a worker with no namespace
+        // would never see it. Unset here, same as every process in the original
+        // example.
+        String namespace = System.getenv("FLEXIQ_NAMESPACE");
 
         CountDownLatch stop = new CountDownLatch(1);
         CountDownLatch closed = new CountDownLatch(1);
@@ -32,10 +37,11 @@ public final class NotifyWorker {
 
         // Each SDK's own default serializer is same-language-only. CBOR is the
         // cross-SDK format, and every runtime here opts into it explicitly.
-        try (FlexiQ flexiq = FlexiQ.builder()
-                        .sqlite(db)
-                        .serializer(new CborSerializer())
-                        .open();
+        FlexiQ.Builder builder = FlexiQ.builder().sqlite(db).serializer(new CborSerializer());
+        if (namespace != null) {
+            builder = builder.namespace(namespace);
+        }
+        try (FlexiQ flexiq = builder.open();
                 Worker worker = flexiq.worker()
                         .handle("orders.notify", Map.class, NotifyWorker::notifyCustomer)
                         // Poll only this stage's queue. A worker claims whatever is in

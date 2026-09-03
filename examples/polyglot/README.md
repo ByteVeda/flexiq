@@ -90,6 +90,54 @@ PostgreSQL or Redis — point every process at the same backend instead of the
 same file. SQLite is fine for a single host; for workers on separate machines,
 use PostgreSQL.
 
+## Server mode: the gRPC variant
+
+Everything above shares one thing: a file. Every process opens `flexiq.db`
+directly, which means every process needs the Rust core compiled into it — the
+polyglot story is gated on someone having written a native binding for that
+language.
+
+This variant swaps the **producer** for one that doesn't need a binding at
+all — a shell script, talking to a running `flexiq-server` over its gRPC
+producer door instead of opening the file. The workers are unchanged: they
+still open `flexiq.db` directly, same as above. (Turning them into attached
+executors too — so nothing but `flexiq-server` touches the file — is filed as
+follow-up work: [#796](https://github.com/ByteVeda/flexiq/issues/796) for the
+Node worker, [#797](https://github.com/ByteVeda/flexiq/issues/797) for Java.)
+
+Reach for the original example when every stage is a process that can hold a
+database credential. Reach for this one when the producer is a script, a
+webhook handler, or anything else with no native binding to reach for.
+
+```bash
+# 1. Run flexiq-server against the same file, with the gRPC door open.
+#    FLEXIQ_NAMESPACE is mandatory for that door — see the "server mode" docs.
+docker run --rm -p 50051:50051 -v "$PWD:/data" \
+  -e FLEXIQ_DSN=/data/flexiq.db \
+  -e FLEXIQ_NAMESPACE=polyglot \
+  -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+  ghcr.io/byteveda/flexiq-server:1.0.0
+
+# 2. Mint a producer token (any shell that can reach the same file):
+docker run --rm -v "$PWD:/data" \
+  -e FLEXIQ_DSN=/data/flexiq.db -e FLEXIQ_NAMESPACE=polyglot \
+  ghcr.io/byteveda/flexiq-server:1.0.0 \
+  token create --name polyglot-producer --scope produce
+export FLEXIQ_TOKEN=fqt_...   # printed by the command above
+
+# 3. Enqueue over gRPC instead of running producer.py:
+FLEXIQ_TOKEN=$FLEXIQ_TOKEN ./grpc_producer.sh 3
+
+# 4. Workers need the same namespace — a job enqueued through the gRPC door
+#    always carries its token's namespace, and a worker polling the default
+#    (unnamespaced) rows would never see it.
+(cd node-worker && FLEXIQ_DB=../flexiq.db FLEXIQ_NAMESPACE=polyglot npm start)
+(cd java-worker && FLEXIQ_DB=../flexiq.db FLEXIQ_NAMESPACE=polyglot ./gradlew run)
+```
+
+`grpc_producer.sh` needs [`grpcurl`](https://github.com/fullstorydev/grpcurl)
+and `jq` — nothing else, which is the whole point.
+
 ## Running against a local build
 
 The commands above use published packages. To run against this repository

@@ -114,8 +114,6 @@ export const SECTION_SKELETON = [
   {
     dir: "modules",
     title: "Modules",
-    // `server` (gRPC server mode) lands here with #721 — add it between
-    // `executor` and `autoscaling` along with the pages, not before them.
     pages: [
       "index",
       "workflows",
@@ -124,6 +122,7 @@ export const SECTION_SKELETON = [
       "injection",
       "mesh",
       "executor",
+      "server",
       "autoscaling",
     ],
   },
