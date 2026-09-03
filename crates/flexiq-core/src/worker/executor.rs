@@ -42,17 +42,35 @@ use tokio::sync::mpsc::error::TrySendError;
 use super::auth::Secret;
 use super::protocol::{
     decode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError,
-    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
 use crate::error::QueueError;
 use crate::job::Job;
+use crate::lease::Lease;
 use crate::scheduler::JobResult;
 use crate::step::{
     classify_step_failure, refusal_error, StepFailure, StepLimits, StepSession, StepStore,
 };
 use crate::storage::records::{JobStep, NewJobStep, SleepOutcome, StepCommit, StepKind};
+
+/// What this executor announces in `hello`: what the shell wired up, plus what
+/// this module provides on every shell's behalf.
+///
+/// [`CAP_LEASE`] is the second kind. Echoing a lease is entirely this module's
+/// work — it keeps the map, and it stamps every outgoing frame — so making a
+/// shell opt in would only create a way to forget. [`CAP_STEPS`] is the first
+/// kind and stays opt-in: it needs a job context the shell has to build.
+///
+/// De-duplicated, so a shell that names it anyway does not announce it twice.
+fn advertised_capabilities(configured: &[String]) -> Vec<String> {
+    let mut capabilities = configured.to_vec();
+    if !capabilities.iter().any(|cap| cap == CAP_LEASE) {
+        capabilities.push(CAP_LEASE.to_string());
+    }
+    capabilities
+}
 
 /// How often a waiting loop wakes to re-check its condition.
 const POLL: Duration = Duration::from_millis(20);
@@ -202,7 +220,7 @@ impl ExecutorClient {
                 config.tasks.clone(),
                 config.slots,
             )
-            .capabilities(config.capabilities.clone())
+            .capabilities(advertised_capabilities(&config.capabilities))
             .token(config.token.clone())
             .build(),
         )?;
@@ -303,6 +321,7 @@ impl ExecutorClient {
             toggles: Mutex::new(HashMap::new()),
             steps,
             snapshots: Mutex::new(HashMap::new()),
+            leases: Mutex::new(HashMap::new()),
             step_acks: Mutex::new(HashMap::new()),
             step_ack_timeout: config.step_ack_timeout,
         });
@@ -935,6 +954,14 @@ struct Shared {
     /// wrong answer. A job with no `job_steps` frame is simply absent here,
     /// which *is* an empty snapshot.
     snapshots: Mutex<HashMap<String, std::result::Result<Vec<JobStep>, String>>>,
+    /// Job id → the lease its `job` frame carried.
+    ///
+    /// Kept rather than derived because nothing else on this side knows it: the
+    /// lease is the scheduler's own value, opaque here, and every frame that
+    /// settles or advances the attempt has to hand back the one that came with
+    /// the dispatch. Released with the rest of the dispatch when the job
+    /// reports.
+    leases: Mutex<HashMap<String, Lease>>,
     /// `(job_id, seq)` → where that commit's ack goes.
     ///
     /// Keyed on both because one executor runs many jobs concurrently; the
@@ -1114,6 +1141,37 @@ impl Shared {
     fn forget_dispatch(&self, job_id: &str) {
         self.toggles.lock().unwrap_or_else(recover).remove(job_id);
         self.snapshots.lock().unwrap_or_else(recover).remove(job_id);
+        self.leases.lock().unwrap_or_else(recover).remove(job_id);
+    }
+
+    /// Record the lease a dispatch arrived under.
+    fn remember_lease(&self, job_id: &str, lease: Option<Lease>) {
+        // Absent means the scheduler named none, which is also what an empty
+        // entry would mean — so nothing is stored for it.
+        if let Some(lease) = lease {
+            self.leases
+                .lock()
+                .unwrap_or_else(recover)
+                .insert(job_id.to_string(), lease);
+        }
+    }
+
+    /// The lease `job_id` was dispatched under, for stamping a frame about it.
+    fn lease_for(&self, job_id: &str) -> Option<Lease> {
+        self.leases
+            .lock()
+            .unwrap_or_else(recover)
+            .get(job_id)
+            .cloned()
+    }
+
+    /// Send a frame that names a dispatched job, stamped with that job's lease.
+    ///
+    /// Every outgoing frame about a job goes through here rather than through
+    /// [`Shared::send`] directly, so "which frames carry a lease" is one
+    /// decision in one place instead of a rule each call site remembers.
+    fn send_about(&self, job_id: &str, frame: ExecutorMessage, payload: &[u8]) -> bool {
+        self.send(&frame.with_lease(self.lease_for(job_id)), payload)
     }
 
     /// Decode and keep the snapshot a `job_steps` frame carried.
@@ -1210,8 +1268,9 @@ impl Shared {
             kind,
             wake_at,
             payload_len: result.len(),
+            lease: None,
         };
-        if !self.send(&frame, result) {
+        if !self.send_about(job_id, frame, result) {
             return Err(QueueError::Other(format!(
                 "step '{step_key}' of job {job_id} could not be sent to the scheduler"
             )));
@@ -1269,7 +1328,12 @@ impl Shared {
     fn flush_progress(&self) -> bool {
         let batch = std::mem::take(&mut *self.pending_progress.lock().unwrap_or_else(recover));
         for (job_id, progress) in batch {
-            if !self.send(&ExecutorMessage::Progress { job_id, progress }, &[]) {
+            let frame = ExecutorMessage::Progress {
+                job_id: job_id.clone(),
+                progress,
+                lease: None,
+            };
+            if !self.send_about(&job_id, frame, &[]) {
                 return false;
             }
         }
@@ -1285,7 +1349,7 @@ impl Shared {
             line.message.as_str(),
             line.extra.as_deref(),
         );
-        self.send(&frame, &payload)
+        self.send_about(&line.job_id, frame, &payload)
     }
 
     /// Recompute free capacity from the in-flight count, unless draining — a
@@ -1476,8 +1540,10 @@ fn accept_job(shared: &Arc<Shared>, frame: SchedulerMessage, payload: Vec<u8>) {
     let job = dispatch.job;
 
     // Recorded before the job is handed over, so a handler that reaches for the
-    // toggle list on its very first line already finds it.
+    // toggle list on its very first line already finds it — and so does the
+    // first `progress` or `step_commit` it sends, which must carry the lease.
     shared.remember_toggles(&job.id, dispatch.disabled_middleware);
+    shared.remember_lease(&job.id, dispatch.lease);
 
     let Some(sender) = shared.job_sender() else {
         decline(shared, &job, "the executor is draining");
@@ -1514,7 +1580,6 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
     // This job reports here instead of through `send_result`, so the entry
     // `accept_job` recorded before it knew the job would be declined has to be
     // released on this path too.
-    shared.forget_dispatch(&job.id);
     let (frame, payload) = ExecutorMessage::from_job_result(JobResult::Failure {
         job_id: job.id.clone(),
         error: format!("executor did not run '{}': {reason}", job.task_name),
@@ -1525,7 +1590,10 @@ fn decline(shared: &Arc<Shared>, job: &Job, reason: &str) {
         should_retry: true,
         timed_out: false,
     });
-    shared.send(&frame, &payload);
+    // Stamped before the dispatch is forgotten: a decline is still this
+    // dispatch's outcome, and the scheduler fences it like any other.
+    shared.send_about(&job.id, frame, &payload);
+    shared.forget_dispatch(&job.id);
 }
 
 /// Result thread: every outcome the pool produces, framed back to the
@@ -1616,9 +1684,12 @@ fn flush_side_channel(shared: &Arc<Shared>, log_rx: &Receiver<PendingLog>) -> bo
 
 /// Frame one job outcome. Returns whether the connection is still usable.
 fn send_result(shared: &Arc<Shared>, result: JobResult) -> bool {
-    shared.forget_dispatch(result.job_id());
+    let job_id = result.job_id().to_string();
     let (frame, payload) = ExecutorMessage::from_job_result(result);
-    let sent = shared.send(&frame, &payload);
+    // Stamped before the dispatch is forgotten, and forgotten after: the lease
+    // this result is answering under is part of the dispatch it is settling.
+    let sent = shared.send_about(&job_id, frame, &payload);
+    shared.forget_dispatch(&job_id);
     shared.job_finished();
     sent
 }

@@ -601,6 +601,16 @@ impl PyQueue {
                     // their own sessions under the claim inherited from here.
                     false,
                 ));
+            // The book naming which claim each dispatch was made under, so a
+            // child that outlived its dispatch cannot report for the attempt a
+            // sibling is now running.
+            //
+            // Only the pools that frame a dispatch can take it. The in-process
+            // pools below hand the `Job` itself to a thread and get a
+            // `JobResult` back, and a `JobResult` names only a job — so there
+            // is nothing there to stamp a lease on, and they stay fenced on
+            // `(owner, attempt, epoch)` alone.
+            pool_arc.set_lease_book(scheduler_arc.lease_book());
             self.set_dispatcher(Some(pool_arc.clone()));
             pool_arc
         } else {

@@ -19,7 +19,15 @@ macro_rules! impl_diesel_step_ops {
             /// | names `owner` | `Running`, `retry_count == attempt` | proceed |
             /// | absent | `Running`, `retry_count == attempt` | proceed, re-asserting the claim if `reassert` |
             /// | names another worker | — | `ClaimLost` |
+            /// | names `owner` under another epoch | — | `ClaimLost` |
             /// | absent | gone, not `Running`, or a different attempt | `ClaimLost` |
+            ///
+            /// The epoch is what separates two claims one owner won at one
+            /// attempt, which `requeue_stuck` produces every time an operator
+            /// unsticks a job an executor is still running. It is compared only
+            /// when both sides have one: a claim row written before the column
+            /// existed carries `None`, and so does a caller that was never
+            /// handed a lease, and neither is evidence of anything.
             ///
             /// An absent claim is not a lost one. `purge_execution_claims`
             /// sweeps by age, so a job that legitimately runs longer than the
@@ -48,6 +56,7 @@ macro_rules! impl_diesel_step_ops {
                 job_id: &str,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 namespace: Option<&str>,
                 reassert: bool,
             ) -> Result<Option<String>> {
@@ -69,21 +78,31 @@ macro_rules! impl_diesel_step_ops {
                     return Err(QueueError::ClaimLost(job_id.to_string()));
                 }
 
-                let claim: Option<String> = execution_claims::table
+                let claim: Option<(String, Option<i64>)> = execution_claims::table
                     .find(job_id)
-                    .select(execution_claims::worker_id)
+                    .select((execution_claims::worker_id, execution_claims::epoch))
                     .first(conn)
                     .optional()?;
 
                 match claim {
-                    Some(holder) if holder == owner => {}
+                    Some((holder, held_epoch))
+                        if holder == owner && !$crate::lease::epochs_agree(held_epoch, epoch) =>
+                    {
+                        return Err(QueueError::ClaimLost(job_id.to_string()));
+                    }
+                    Some((holder, _)) if holder == owner => {}
                     Some(_) => return Err(QueueError::ClaimLost(job_id.to_string())),
                     None if reassert => {
+                        // Re-assert under the caller's own epoch, not a fresh
+                        // one: this puts back the claim the age sweep removed
+                        // from a still-running attempt, so it has to come back
+                        // as the same claim the lease already names.
                         diesel::insert_into(execution_claims::table)
                             .values(&NewExecutionClaimRow {
                                 job_id,
                                 worker_id: owner,
                                 claimed_at: now_millis(),
+                                epoch,
                             })
                             .execute(conn)?;
                     }
@@ -223,6 +242,7 @@ macro_rules! impl_diesel_step_ops {
                 step: &NewJobStep<'_>,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 limits: &$crate::step::StepLimits,
                 namespace: Option<&str>,
             ) -> Result<$crate::storage::records::StepCommit> {
@@ -250,6 +270,7 @@ macro_rules! impl_diesel_step_ops {
                         step.job_id,
                         owner,
                         attempt,
+                        epoch,
                         namespace,
                         true,
                     )?;
@@ -310,11 +331,13 @@ macro_rules! impl_diesel_step_ops {
 
             /// End the attempt in a sleep: commit the row, release the claim,
             /// and reschedule the job — one transaction.
+            #[allow(clippy::too_many_arguments)]
             pub fn sleep_job(
                 &self,
                 step: &NewJobStep<'_>,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 wake_at: i64,
                 limits: &$crate::step::StepLimits,
                 namespace: Option<&str>,
@@ -328,6 +351,7 @@ macro_rules! impl_diesel_step_ops {
                         step.job_id,
                         owner,
                         attempt,
+                        epoch,
                         namespace,
                         true,
                     )?;
@@ -416,22 +440,24 @@ macro_rules! impl_diesel_step_ops {
                 })
             }
 
-            /// Whether a result carrying `(owner, attempt)` still speaks for
-            /// this job. The step fence, read rather than written — no claim is
-            /// re-asserted and no write transaction is taken, because this runs
-            /// once per result on the drain path.
+            /// Whether a result carrying `(owner, attempt, epoch)` still speaks
+            /// for this job. The step fence, read rather than written — no
+            /// claim is re-asserted and no write transaction is taken, because
+            /// this runs once per result on the drain path.
             pub fn authorize_attempt(
                 &self,
                 job_id: &str,
                 owner: &str,
                 attempt: i32,
+                epoch: Option<i64>,
                 namespace: Option<&str>,
             ) -> Result<$crate::storage::records::AttemptFence> {
                 use $crate::storage::records::AttemptFence;
 
                 let mut conn = self.conn()?;
-                match Self::resolve_step_fence(&mut conn, job_id, owner, attempt, namespace, false)
-                {
+                match Self::resolve_step_fence(
+                    &mut conn, job_id, owner, attempt, epoch, namespace, false,
+                ) {
                     Ok(_) => Ok(AttemptFence::Authorized),
                     // The job moved on, or another worker holds it. Not an
                     // error: the result is dropped, and the attempt that is

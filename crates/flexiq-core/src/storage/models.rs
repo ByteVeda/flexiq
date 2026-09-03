@@ -678,6 +678,9 @@ pub struct NewExecutionClaimRow<'a> {
     pub job_id: &'a str,
     pub worker_id: &'a str,
     pub claimed_at: i64,
+    /// Identity of this claim, and of the dispatch made under it. `None` only
+    /// for a row written by a build that predates the column.
+    pub epoch: Option<i64>,
 }
 
 // ── Archived Jobs ───────────────────────────────────────────────

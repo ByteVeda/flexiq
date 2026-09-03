@@ -110,6 +110,7 @@ pub struct StorageSteps<S: Storage> {
     storage: S,
     owner: String,
     attempt: i32,
+    epoch: Option<i64>,
 }
 
 impl<S: Storage> StorageSteps<S> {
@@ -119,7 +120,19 @@ impl<S: Storage> StorageSteps<S> {
             storage,
             owner: owner.into(),
             attempt,
+            epoch: None,
         }
+    }
+
+    /// Also fence on the epoch of the claim this dispatch was made under.
+    ///
+    /// Separate from [`Self::new`] because not every writer knows one: a caller
+    /// that was never handed a lease is fenced on `(owner, attempt)` alone,
+    /// which is what every caller had before the epoch existed. See
+    /// [`crate::lease`].
+    pub fn with_epoch(mut self, epoch: Option<i64>) -> Self {
+        self.epoch = epoch;
+        self
     }
 
     /// The worker id these writes are fenced on.
@@ -130,6 +143,11 @@ impl<S: Storage> StorageSteps<S> {
     /// The attempt these writes are fenced on.
     pub fn attempt(&self) -> i32 {
         self.attempt
+    }
+
+    /// The claim epoch these writes are fenced on, if the writer holds one.
+    pub fn epoch(&self) -> Option<i64> {
+        self.epoch
     }
 }
 
@@ -148,8 +166,14 @@ impl<S: Storage> StepStore for StorageSteps<S> {
         limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<StepCommit> {
-        self.storage
-            .record_step_result(step, &self.owner, self.attempt, limits, namespace)
+        self.storage.record_step_result(
+            step,
+            &self.owner,
+            self.attempt,
+            self.epoch,
+            limits,
+            namespace,
+        )
     }
 
     fn commit_sleep(
@@ -159,7 +183,14 @@ impl<S: Storage> StepStore for StorageSteps<S> {
         limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<SleepOutcome> {
-        self.storage
-            .sleep_job(step, &self.owner, self.attempt, wake_at, limits, namespace)
+        self.storage.sleep_job(
+            step,
+            &self.owner,
+            self.attempt,
+            self.epoch,
+            wake_at,
+            limits,
+            namespace,
+        )
     }
 }

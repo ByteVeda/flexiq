@@ -16,6 +16,7 @@ use crossbeam_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
 use flexiq_core::job::{Job, JobStatus};
+use flexiq_core::lease::Lease;
 use flexiq_core::scheduler::JobResult;
 use flexiq_core::step::{classify_step_failure, StepFailure, StepLimits};
 use flexiq_core::storage::records::{JobStep, StepKind};
@@ -25,7 +26,7 @@ use flexiq_core::worker::executor::{
 };
 use flexiq_core::worker::protocol::{
     encode_step_snapshot, ExecutorMessage, Frame, FrameReader, FrameWriter, ProtocolError,
-    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use flexiq_core::worker::remote::{RemoteConfig, RemoteDispatcher};
 use flexiq_core::worker::transport::{Connection, MemoryTransport, ReadHalf, Transport, WriteHalf};
@@ -381,6 +382,9 @@ impl Default for ExecutorTuning {
 struct FakeScheduler {
     reader: FrameReader<ReadHalf>,
     writer: FrameWriter<WriteHalf>,
+    /// What the executor claimed in its `hello`, kept so a test can assert on
+    /// the half of the negotiation this side merely receives.
+    hello_capabilities: Vec<String>,
 }
 
 impl FakeScheduler {
@@ -474,9 +478,12 @@ impl FakeScheduler {
             let mut scheduler = Self {
                 reader: FrameReader::new(read),
                 writer: FrameWriter::new(write),
+                hello_capabilities: Vec::new(),
             };
             match scheduler.reader.read::<ExecutorMessage>().expect("hello").0 {
-                ExecutorMessage::Hello { .. } => {}
+                ExecutorMessage::Hello { capabilities, .. } => {
+                    scheduler.hello_capabilities = capabilities;
+                }
                 other => panic!("expected hello, got {other:?}"),
             }
             scheduler
@@ -516,6 +523,12 @@ impl FakeScheduler {
         self.send_job_with(id, task_name, payload, Vec::new());
     }
 
+    /// Dispatch under a lease, so the frames the executor sends back can be
+    /// checked for it.
+    fn send_leased_job(&mut self, id: &str, task_name: &str, payload: &[u8], lease: Lease) {
+        self.dispatch(id, task_name, payload, Vec::new(), Some(lease));
+    }
+
     /// Write a frame type no executor built today can name.
     fn send_future_frame(&mut self, frame_type: &str, payload: &[u8]) {
         self.writer
@@ -530,6 +543,17 @@ impl FakeScheduler {
         payload: &[u8],
         disabled_middleware: Vec<String>,
     ) {
+        self.dispatch(id, task_name, payload, disabled_middleware, None);
+    }
+
+    fn dispatch(
+        &mut self,
+        id: &str,
+        task_name: &str,
+        payload: &[u8],
+        disabled_middleware: Vec<String>,
+        lease: Option<Lease>,
+    ) {
         self.writer
             .write(
                 &SchedulerMessage::Job {
@@ -543,6 +567,7 @@ impl FakeScheduler {
                     namespace: None,
                     disabled_middleware,
                     metadata: None,
+                    lease,
                 },
                 payload,
             )
@@ -646,6 +671,7 @@ impl FakeExecutor {
                 result_len: None,
                 task_name: "resize".to_string(),
                 wall_time_ns: 1,
+                lease: None,
             })
             .expect("send success");
     }
@@ -1362,6 +1388,7 @@ fn progress_and_logs_reach_a_scheduler_that_advertised_the_side_channel() {
             ExecutorMessage::Progress {
                 job_id,
                 progress: p,
+                ..
             } => progress = Some((job_id, p)),
             ExecutorMessage::TaskLog { level, message, .. } => logs.push((level, message, payload)),
             other => panic!("unexpected frame {other:?}"),
@@ -1375,6 +1402,95 @@ fn progress_and_logs_reach_a_scheduler_that_advertised_the_side_channel() {
         String::new(),
         br#"{"step":3}"#.to_vec()
     )));
+
+    handle.shutdown();
+}
+
+#[test]
+fn an_executor_advertises_the_lease_capability_without_being_asked() {
+    // Echoing a lease is entirely this crate's work — it keeps the map and
+    // stamps every outgoing frame — so making a shell opt in would only create
+    // a way to forget. `CAP_STEPS` is the opposite kind and stays opt-in.
+    let (scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+
+    assert!(
+        scheduler
+            .hello_capabilities
+            .contains(&CAP_LEASE.to_string()),
+        "an executor built with no capabilities configured still claims the lease"
+    );
+    assert!(
+        !scheduler
+            .hello_capabilities
+            .contains(&CAP_STEPS.to_string()),
+        "steps need a job context the shell builds, so they stay opt-in"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
+fn every_frame_about_a_job_carries_the_lease_it_was_dispatched_under() {
+    // The rule is "does this frame settle or advance an attempt", not a list —
+    // so the side-channel frames are checked alongside the result, and a frame
+    // added later that names a job inherits the same assertion.
+    let lease = Lease::from_epoch(7);
+    let (mut scheduler, handle, pool) =
+        FakeScheduler::attach_with(&["resize"], 1, vec![CAP_SIDE_CHANNEL.to_string()]);
+
+    // Held in flight, so the side-channel frames are written while the dispatch
+    // is still live rather than racing the result that retires it.
+    let (release, held) = crossbeam_channel::bounded(1);
+    pool.on("resize", Behaviour::Block(held));
+
+    let side_channel = handle.side_channel();
+    scheduler.send_leased_job("job-1", "resize", b"payload", lease.clone());
+
+    // The dispatch has to have been *accepted* before a frame about it is
+    // written, or the lease it carried is simply not recorded yet — a race in
+    // the test, not the code.
+    let deadline = Instant::now() + SETTLE;
+    while pool.received("job-1").is_none() {
+        assert!(Instant::now() < deadline, "the job never reached the pool");
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    side_channel.report_progress("job-1", 42);
+    side_channel.write_task_log("job-1", "resize", "info", "halfway", None);
+    for (frame, _) in drain_side_channel(&mut scheduler, 2) {
+        let (job_id, carried) = frame.leased_job().expect("a frame naming a job");
+        assert_eq!(job_id, "job-1");
+        assert_eq!(
+            carried,
+            Some(&lease),
+            "every frame about a dispatched job echoes its lease"
+        );
+    }
+
+    drop(release);
+    for (frame, _) in drain_side_channel(&mut scheduler, 1) {
+        let (job_id, carried) = frame.leased_job().expect("a frame naming a job");
+        assert_eq!(job_id, "job-1");
+        assert_eq!(
+            carried,
+            Some(&lease),
+            "every frame about a dispatched job echoes its lease"
+        );
+    }
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_scheduler_that_named_no_lease_is_answered_without_one() {
+    // The other side of the same negotiation: an executor invents nothing, so a
+    // dispatch that carried no lease is answered by frames that carry none.
+    let (mut scheduler, handle, _pool) = FakeScheduler::attach(&["resize"], 1);
+
+    scheduler.send_job("job-1", "resize", b"payload");
+    let result = scheduler.expect_result();
+    let (_, carried) = result.leased_job().expect("a frame naming a job");
+    assert_eq!(carried, None);
 
     handle.shutdown();
 }
@@ -1395,9 +1511,10 @@ fn a_scheduler_that_advertised_nothing_is_never_sent_a_side_channel_frame() {
     // of it has been, so a leaked progress frame would surface here.
     scheduler.send_job("job-1", "resize", b"payload");
     assert!(matches!(
-        scheduler.expect_result(),
-        ExecutorMessage::Success { job_id, .. } if job_id == "job-1"
-    ));
+            scheduler.expect_result(),
+            ExecutorMessage::Success { job_id, ..
+    } if job_id == "job-1"
+        ));
 
     handle.shutdown();
 }
@@ -1519,9 +1636,10 @@ fn a_frame_from_a_newer_scheduler_is_ignored_rather_than_ending_the_session() {
     // skip consumed exactly the right number of bytes.
     scheduler.send_job("job-1", "resize", b"payload");
     assert!(matches!(
-        scheduler.expect_result(),
-        ExecutorMessage::Success { job_id, .. } if job_id == "job-1"
-    ));
+            scheduler.expect_result(),
+            ExecutorMessage::Success { job_id, ..
+    } if job_id == "job-1"
+        ));
 
     handle.shutdown();
 }

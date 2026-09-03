@@ -122,10 +122,16 @@ mod base64_bytes {
 /// A step write puts an age-swept claim back, because the writes after it need
 /// one to fence against. A read-only check must not: it would leave a claim its
 /// caller never asked for.
-fn fence(reassert: bool) -> String {
-    let mut lua = FENCE.to_string();
+///
+/// `epoch_argv` is the position of the caller's epoch, which every script
+/// appends as its **last** `ARGV`. Interpolated rather than fixed because the
+/// fence is a prefix: pinning it to a low index would renumber every
+/// script-specific argument that follows, and those numbers are load-bearing —
+/// `sleep_job_script` even passes *KEYS positions* as `ARGV` values.
+fn fence(reassert: bool, epoch_argv: usize) -> String {
+    let mut lua = FENCE.replace("ARGV[EPOCH]", &format!("ARGV[{epoch_argv}]"));
     if reassert {
-        lua.push_str(FENCE_REASSERT);
+        lua.push_str(&FENCE_REASSERT.replace("ARGV[EPOCH]", &format!("ARGV[{epoch_argv}]")));
     }
     lua
 }
@@ -144,10 +150,19 @@ const FENCE: &str = r#"
     if ARGV[6] ~= '' and job_ns ~= ARGV[6] then return {'claim_lost'} end
     local claim = redis.call('GET', KEYS[2])
     if claim then
-        -- Owner is everything before the LAST ':' (the timestamp is a numeric
-        -- suffix); the owner itself may contain ':' (e.g. "host:pid").
+        -- Owner is everything before the LAST ':' (the rest of the value is a
+        -- numeric suffix); the owner itself may contain ':' (e.g. "host:pid").
         local owner = string.match(claim, '^(.*):') or claim
         if owner ~= ARGV[2] then return {'claim_lost'} end
+        -- The epoch separates two claims one owner won at one attempt, which
+        -- `requeue_stuck` produces every time an operator unsticks a job an
+        -- executor is still running. Compared only when both sides have one:
+        -- a claim written before the epoch existed, and a caller that was
+        -- never handed a lease, are each an absence rather than a mismatch.
+        local claim_epoch = string.match(claim, ':%d+%.(%d+)$')
+        if claim_epoch and ARGV[EPOCH] ~= '' and claim_epoch ~= ARGV[EPOCH] then
+            return {'claim_lost'}
+        end
     end
 "#;
 
@@ -157,25 +172,41 @@ const FENCE: &str = r#"
 /// would be a stall caused entirely by housekeeping. Safe because `SET NX`
 /// semantics are unnecessary here: the fence above already established that
 /// nothing else holds it, inside the same single-threaded script.
+///
+/// Re-asserted under the caller's own epoch, not a fresh one: this puts back
+/// the claim the age sweep removed from a still-running attempt, so it has to
+/// come back as the same claim the lease already names.
 const FENCE_REASSERT: &str = r#"
     if not claim then
-        redis.call('SET', KEYS[2], ARGV[2] .. ':' .. ARGV[4], 'PX', 86400000)
+        local value = ARGV[2] .. ':' .. ARGV[4]
+        if ARGV[EPOCH] ~= '' then value = value .. '.' .. ARGV[EPOCH] end
+        redis.call('SET', KEYS[2], value, 'PX', 86400000)
         redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1])
     end
 "#;
 
+/// Render a caller's claim epoch for the fence's `ARGV`.
+///
+/// The empty string is "I hold no lease", which the fence reads as an absence
+/// rather than a mismatch. `redis::Script` has no null argument, so the absence
+/// has to be a value the script can recognise, and an epoch is always digits.
+fn epoch_arg(epoch: Option<i64>) -> String {
+    epoch.map(|e| e.to_string()).unwrap_or_default()
+}
+
 /// The fence on its own, for a result the scheduler is about to act on.
 fn authorize_attempt_script() -> String {
-    format!("{}\n    return {{'ok'}}\n", fence(false))
+    format!("{}\n    return {{'ok'}}\n", fence(false, 7))
 }
 
 /// Commit one step.
 ///
 /// `KEYS[4]` steps hash. `ARGV[7]` seq · `ARGV[8]` step key · `ARGV[9]` the
 /// document · `ARGV[10]` result_len · `ARGV[11]` max_steps · `ARGV[12]`
-/// max_total_bytes · `ARGV[13]` kind · `ARGV[14]` created_at.
+/// max_total_bytes · `ARGV[13]` kind · `ARGV[14]` created_at · `ARGV[15]` the
+/// caller's claim epoch, empty when it has none.
 fn record_step_script() -> String {
-    let fence = fence(true);
+    let fence = fence(true, 15);
     format!(
         r#"{fence}
     local steps = KEYS[4]
@@ -224,9 +255,10 @@ fn record_step_script() -> String {
 /// expected at this position · `ARGV[13]` the patched job JSON · `ARGV[14]`
 /// dequeue score · `ARGV[15]` the deadline · `ARGV[16]` job `created_at` ·
 /// `ARGV[17..19]` the KEYS index of the debounce, sub-pending and sub-running
-/// indices, or `0`.
+/// indices, or `0` · `ARGV[20]` the caller's claim epoch, empty when it has
+/// none.
 fn sleep_job_script() -> String {
-    let fence = fence(true);
+    let fence = fence(true, 20);
     format!(
         r#"{fence}
     local steps = KEYS[4]
@@ -338,6 +370,7 @@ impl RedisStorage {
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         limits: &StepLimits,
         namespace: Option<&str>,
     ) -> Result<StepCommit> {
@@ -376,6 +409,7 @@ impl RedisStorage {
             .arg(limits.max_total_bytes as i64)
             .arg(step.kind.as_str())
             .arg(now)
+            .arg(epoch_arg(epoch))
             .invoke(&mut conn)
             .map_err(map_err)?;
 
@@ -394,11 +428,13 @@ impl RedisStorage {
     /// itself — re-encoding through `lua-cjson` corrupts an empty payload — so
     /// the deadline is read first and the script re-checks what was read.
     /// A committed sleep row is immutable, so the check can only fail once.
+    #[allow(clippy::too_many_arguments)]
     pub fn sleep_job(
         &self,
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         wake_at: i64,
         limits: &StepLimits,
         namespace: Option<&str>,
@@ -461,6 +497,7 @@ impl RedisStorage {
                 .arg(debounce_slot)
                 .arg(sub_pending_slot)
                 .arg(sub_running_slot)
+                .arg(epoch_arg(epoch))
                 .invoke(&mut conn)
                 .map_err(map_err)?;
 
@@ -480,12 +517,14 @@ impl RedisStorage {
         )))
     }
 
-    /// Whether a result carrying `(owner, attempt)` still speaks for this job.
+    /// Whether a result carrying `(owner, attempt, epoch)` still speaks for
+    /// this job.
     pub fn authorize_attempt(
         &self,
         job_id: &str,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         namespace: Option<&str>,
     ) -> Result<AttemptFence> {
         let mut conn = self.conn()?;
@@ -499,6 +538,7 @@ impl RedisStorage {
             .arg(now_millis())
             .arg(JobStatus::Running.wire_name())
             .arg(namespace.unwrap_or(""))
+            .arg(epoch_arg(epoch))
             .invoke(&mut conn)
             .map_err(map_err)?;
 

@@ -8,13 +8,14 @@ pub mod shed;
 #[doc(hidden)]
 pub mod wake;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use log::error;
 use tokio::sync::Notify;
 
+use crate::lease::{Lease, LeaseBook};
 use crate::resilience::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 use crate::resilience::dlq::DeadLetterQueue;
 use crate::resilience::rate_limiter::RateLimiter;
@@ -322,18 +323,34 @@ impl Default for TaskConfig {
     }
 }
 
-/// What this scheduler dispatched a job as: the task it named, and the
-/// `(owner, attempt)` it claimed under.
+/// How many settled dispatches are remembered after their slot is freed.
 ///
-/// The pair is the fencing token every result is checked against. It is derived
-/// here, by the side that won the claim — never taken from a worker, and never
-/// from a frame, because a value a peer can choose is not a fencing token but a
-/// request to be trusted.
+/// Bounds [`InFlight::retired`]. Large enough that a straggler arriving after
+/// its own reaper still finds its record — the window is one attempt, not one
+/// deployment — and small enough that the map cannot grow with the job table.
+const RETIRED_DISPATCHES: usize = 1024;
+
+/// What this scheduler dispatched a job as: the task it named, and the
+/// `(owner, attempt, epoch)` it claimed under.
+///
+/// The triple is the fencing token every result is checked against. It is
+/// derived here, by the side that won the claim — never taken from a worker,
+/// and never from a frame, because a value a peer can choose is not a fencing
+/// token but a request to be trusted.
+///
+/// The epoch is there because the first two cannot separate two claims that
+/// `requeue_stuck` produced from one attempt: it returns the job to
+/// `Pending` and deletes the claim without touching `retry_count`, so the next
+/// dispatch has the identical owner and attempt. See [`crate::lease`].
 #[derive(Clone)]
 struct DispatchRecord {
     task_name: String,
     owner: String,
     attempt: i32,
+    /// Epoch of the execution claim this dispatch was made under. `None` for a
+    /// claim written by a build that predates the column, which the fence reads
+    /// as an absence rather than a mismatch.
+    epoch: Option<i64>,
 }
 
 /// In-flight bookkeeping: which jobs this scheduler dispatched, under what
@@ -346,6 +363,17 @@ struct DispatchRecord {
 struct InFlight {
     by_job: HashMap<String, DispatchRecord>,
     count_by_task: HashMap<String, usize>,
+    /// Dispatches whose slot has been freed, kept so a result can still be
+    /// fenced after its record was spent.
+    ///
+    /// The reaper is what makes this necessary: it settles a stalled job by
+    /// synthesizing a failure, which frees the slot — and the executor that was
+    /// merely slow then reports for real, finds nothing to check itself
+    /// against, and is waved through onto a job that has since moved on.
+    retired: HashMap<String, DispatchRecord>,
+    /// Insertion order of `retired`, so it can be trimmed to
+    /// [`RETIRED_DISPATCHES`] oldest-first.
+    retired_order: VecDeque<String>,
 }
 
 impl InFlight {
@@ -358,16 +386,26 @@ impl InFlight {
     }
 
     fn insert(&mut self, job_id: &str, record: DispatchRecord) {
+        // A new dispatch of this id supersedes the memory of the last one: the
+        // live record is the only one that can still speak for the job.
+        self.retired.remove(job_id);
         let task_name = record.task_name.clone();
         if self.by_job.insert(job_id.to_string(), record).is_none() {
             *self.count_by_task.entry(task_name).or_insert(0) += 1;
         }
     }
 
-    /// The dispatch record, removed. `None` when this scheduler never
-    /// dispatched the job — a maintenance-recovered orphan, or a result that
-    /// arrived twice.
+    /// The dispatch record, removed and retired. `None` when this scheduler
+    /// never dispatched the job — a maintenance-recovered orphan, or an id it
+    /// has no memory of at all.
     fn remove(&mut self, job_id: &str) -> Option<DispatchRecord> {
+        let record = self.take(job_id)?;
+        self.retire(job_id, record.clone());
+        Some(record)
+    }
+
+    /// Take the live record and its per-task count, retiring nothing.
+    fn take(&mut self, job_id: &str) -> Option<DispatchRecord> {
         let record = self.by_job.remove(job_id)?;
         if let Some(count) = self.count_by_task.get_mut(&record.task_name) {
             *count -= 1;
@@ -376,6 +414,35 @@ impl InFlight {
             }
         }
         Some(record)
+    }
+
+    /// What this scheduler last dispatched `job_id` as, live or retired.
+    ///
+    /// A retired record answers the same question a live one does — "which
+    /// attempt is this result speaking for" — and the fence, not this map, is
+    /// what decides whether that attempt still owns the job.
+    fn last_dispatch(&self, job_id: &str) -> Option<&DispatchRecord> {
+        self.by_job.get(job_id).or_else(|| self.retired.get(job_id))
+    }
+
+    fn retire(&mut self, job_id: &str, record: DispatchRecord) {
+        if self.retired.insert(job_id.to_string(), record).is_none() {
+            self.retired_order.push_back(job_id.to_string());
+        }
+        while self.retired_order.len() > RETIRED_DISPATCHES {
+            if let Some(oldest) = self.retired_order.pop_front() {
+                self.retired.remove(&oldest);
+            }
+        }
+    }
+
+    /// Forget a dispatch outright, without retiring it — the rollback path,
+    /// where the job never reached a worker and there is nothing to fence.
+    fn forget(&mut self, job_id: &str) {
+        self.take(job_id);
+        if self.retired.remove(job_id).is_some() {
+            self.retired_order.retain(|id| id != job_id);
+        }
     }
 }
 
@@ -421,6 +488,13 @@ pub struct Scheduler {
     /// the poller stops dispatching once it hits the cap, and [`Self::handle_result`]
     /// removes a job as it finishes.
     in_flight: Mutex<InFlight>,
+    /// The lease of each job's current dispatch, shared with the worker pool.
+    ///
+    /// The pool needs it to stamp the job frame, and it is written here because
+    /// this is the side that won the claim the lease names. A pool that is
+    /// never handed it dispatches without a lease and is fenced on
+    /// `(owner, attempt, epoch)` alone. See [`crate::lease`].
+    leases: Arc<LeaseBook>,
     /// Signalled when a finished job frees an in-flight slot, so the poll loop
     /// can refill immediately instead of waiting out its backoff — keeping
     /// throughput up despite the in-flight cap.
@@ -484,6 +558,7 @@ impl Scheduler {
             // `worker_id` via `set_claim_owner`.
             claim_owner: format!("{}-{}", poller::SCHEDULER_CLAIM_OWNER, uuid::Uuid::now_v7()),
             in_flight: Mutex::new(InFlight::default()),
+            leases: Arc::new(LeaseBook::default()),
             dispatch_wake: Arc::new(Notify::new()),
             retention_announced: std::sync::Once::new(),
             #[cfg(feature = "push-dispatch")]
@@ -524,13 +599,22 @@ impl Scheduler {
         })
     }
 
+    /// The lease book this scheduler writes as it dispatches.
+    ///
+    /// Handed to the worker pool so it can stamp the job frame — see
+    /// [`WorkerDispatcher::set_lease_book`](crate::worker::WorkerDispatcher::set_lease_book).
+    pub fn lease_book(&self) -> Arc<LeaseBook> {
+        self.leases.clone()
+    }
+
     /// Record a job as in flight once it is handed to the worker channel, under
-    /// the `(owner, attempt)` this scheduler claimed it with.
+    /// the `(owner, attempt, epoch)` this scheduler claimed it with, and issue
+    /// the lease its dispatch travels under.
     ///
     /// Unconditional, unlike the caps it also feeds: the record is what every
     /// result is fenced against, so a scheduler with no `max_in_flight` still
     /// needs one.
-    fn track_in_flight(&self, job_id: &str, task_name: &str, attempt: i32) {
+    fn track_in_flight(&self, job_id: &str, task_name: &str, attempt: i32, epoch: Option<i64>) {
         self.in_flight
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -540,19 +624,31 @@ impl Scheduler {
                     task_name: task_name.to_string(),
                     owner: self.claim_owner.clone(),
                     attempt,
+                    epoch,
                 },
             );
+        // Issuing the lease is what makes the *previous* dispatch of this id
+        // stale, so it happens on every dispatch — including one with no epoch
+        // to name, which simply issues none and leaves the pool unfenced.
+        match epoch {
+            Some(epoch) => self.leases.issue(job_id, Lease::from_epoch(epoch)),
+            None => self.leases.forget(job_id),
+        }
     }
 
     /// Forget a job that was tracked but never reached the worker channel
     /// (dispatch rollback). Unlike [`Self::release_in_flight`] this never wakes
     /// the poller — the slot was returned by the same thread that took it, and
     /// the send just failed, so an immediate retry would only spin.
+    ///
+    /// Forgotten rather than retired: nothing ran, so there is no result coming
+    /// that would need a record to be fenced against.
     fn untrack_in_flight(&self, job_id: &str) {
         self.in_flight
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(job_id);
+            .forget(job_id);
+        self.leases.forget(job_id);
     }
 
     /// How many of this task's jobs this worker currently has in flight.
@@ -592,6 +688,16 @@ impl Scheduler {
         }
     }
 
+    /// What this scheduler last dispatched `job_id` as, whether or not its slot
+    /// has already been freed. `None` only for an id it has no memory of.
+    fn last_dispatch(&self, job_id: &str) -> Option<DispatchRecord> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .last_dispatch(job_id)
+            .cloned()
+    }
+
     /// Take a finished job's dispatch record and wake the poller to refill its
     /// slot. Returns `None` for a job this scheduler never dispatched — a
     /// maintenance-recovered orphan, or a duplicate result.
@@ -607,6 +713,13 @@ impl Scheduler {
             .is_some_and(|max| in_flight.len() >= max);
         let record = in_flight.remove(job_id);
         drop(in_flight);
+        // The dispatch has settled, so its lease is no longer current — which
+        // is what refuses the *stalled* executor when the reaper settled the
+        // job on its behalf and it reports afterwards. Guarded by the lease
+        // itself, so retiring an old dispatch cannot evict a newer one.
+        if let Some(epoch) = record.as_ref().and_then(|record| record.epoch) {
+            self.leases.retire(job_id, &Lease::from_epoch(epoch));
+        }
         if record.is_some() && was_full {
             self.dispatch_wake.notify_one();
         }
@@ -1207,7 +1320,8 @@ mod tests {
         assert!(scheduler
             .storage
             .reclaim_execution(&job.id, scheduler.claim_owner(), "rescuer")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let outcome = scheduler
             .handle_result(JobResult::Success {
@@ -1252,6 +1366,105 @@ mod tests {
         let pending = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
         assert_eq!(pending.status, JobStatus::Pending);
         assert_eq!(pending.retry_count, 1);
+    }
+
+    #[test]
+    fn a_result_whose_dispatch_the_reaper_already_settled_is_still_fenced() {
+        // The reaper's own case, and the one the fence used to fail open on: it
+        // settles a stalled job by synthesizing a failure, which spends the
+        // dispatch record — and the executor that was merely slow then reports
+        // for real, with nothing left to be checked against.
+        let mut scheduler = test_scheduler();
+        scheduler.register_task("stalled_task".to_string(), retry_task_config(3));
+        let job = enqueue_and_run(&scheduler, "stalled_task");
+
+        // What the reaper does, minus the wait: settle the attempt.
+        let reaped = scheduler
+            .handle_result(JobResult::Failure {
+                job_id: job.id.clone(),
+                error: "job timed out".to_string(),
+                retry_count: 0,
+                max_retries: 3,
+                task_name: "stalled_task".to_string(),
+                wall_time_ns: 0,
+                should_retry: true,
+                timed_out: true,
+            })
+            .unwrap();
+        assert!(!matches!(reaped, ResultOutcome::Superseded { .. }));
+
+        // Now the slow executor finishes.
+        let late = scheduler
+            .handle_result(JobResult::Success {
+                job_id: job.id.clone(),
+                result: Some(vec![42]),
+                task_name: "stalled_task".to_string(),
+                wall_time_ns: 1,
+            })
+            .unwrap();
+
+        assert!(
+            matches!(late, ResultOutcome::Superseded { .. }),
+            "a retired dispatch still answers 'which attempt was this'"
+        );
+        let retried = scheduler.storage.get_job(&job.id, None).unwrap().unwrap();
+        assert_eq!(retried.status, JobStatus::Pending);
+        assert_eq!(retried.retry_count, 1);
+    }
+
+    #[test]
+    fn a_requeued_jobs_earlier_dispatch_is_fenced_out_by_the_epoch() {
+        // Neither the owner nor the attempt moves here — `requeue_stuck` leaves
+        // both alone — so the epoch is the only thing that can tell the stalled
+        // dispatch from the one that replaced it.
+        let scheduler = test_scheduler();
+        let job = enqueue_and_run(&scheduler, "requeued_task");
+        let stalled = scheduler
+            .last_dispatch(&job.id)
+            .expect("the tick dispatched it");
+
+        assert!(scheduler
+            .storage
+            .requeue_stuck(&job.id, now_millis())
+            .unwrap());
+        let (tx, _rx) = make_channel(16);
+        let mut counters = TickCounters::default();
+        scheduler.tick(&tx, &mut counters);
+
+        let current = scheduler
+            .last_dispatch(&job.id)
+            .expect("the re-tick dispatched it again");
+        assert_eq!(
+            (current.owner.as_str(), current.attempt),
+            (stalled.owner.as_str(), stalled.attempt),
+            "the requeue moved neither half of the old fence"
+        );
+        assert_ne!(current.epoch, stalled.epoch, "but it did move the epoch");
+
+        // The book has moved on with it, which is what refuses the stalled
+        // executor's frame before it can ever become a result.
+        let stalled_lease = Lease::from_epoch(stalled.epoch.expect("dispatched under a claim"));
+        assert!(!scheduler.leases.is_current(&job.id, &stalled_lease));
+        assert!(scheduler.leases.is_current(
+            &job.id,
+            &Lease::from_epoch(current.epoch.expect("dispatched under a claim"))
+        ));
+
+        // And storage refuses it too, for a result that reached the fence
+        // without one — a different process, or a pool with no book.
+        assert_eq!(
+            scheduler
+                .storage
+                .authorize_attempt(
+                    &job.id,
+                    &stalled.owner,
+                    stalled.attempt,
+                    stalled.epoch,
+                    None
+                )
+                .unwrap(),
+            crate::storage::records::AttemptFence::Superseded
+        );
     }
 
     #[test]
@@ -1300,7 +1513,8 @@ mod tests {
         assert!(scheduler
             .storage
             .reclaim_execution(&job.id, scheduler.claim_owner(), "dead-worker")
-            .unwrap());
+            .unwrap()
+            .is_some());
         scheduler.untrack_in_flight(&job.id);
 
         scheduler.recover_orphaned_jobs(now_millis()).unwrap();
@@ -2645,7 +2859,8 @@ mod tests {
         assert!(scheduler
             .storage
             .claim_execution(&job.id, "dead-worker")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         scheduler.reap_stale().unwrap();
 
@@ -2697,11 +2912,12 @@ mod tests {
             .storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        assert!(scheduler
+        let epoch = scheduler
             .storage
             .claim_execution(&job.id, &scheduler.claim_owner)
-            .unwrap());
-        scheduler.track_in_flight(&job.id, task_name, 0);
+            .unwrap();
+        assert!(epoch.is_some());
+        scheduler.track_in_flight(&job.id, task_name, 0, epoch);
         (scheduler, job)
     }
 
@@ -2784,7 +3000,7 @@ mod tests {
         assert_eq!(
             scheduler
                 .storage
-                .authorize_attempt(&job.id, &scheduler.claim_owner, 0, None)
+                .authorize_attempt(&job.id, &scheduler.claim_owner, 0, None, None)
                 .unwrap(),
             crate::storage::records::AttemptFence::Superseded,
             "the fence would refuse this attempt",
@@ -2966,7 +3182,8 @@ mod tests {
         assert!(scheduler
             .storage
             .claim_execution(&job.id, "survivor")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         scheduler.reap_stale().unwrap();
 
@@ -2993,7 +3210,8 @@ mod tests {
         assert!(scheduler
             .storage
             .claim_execution(&job.id, "dead-worker")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         scheduler.reap_stale().unwrap();
 

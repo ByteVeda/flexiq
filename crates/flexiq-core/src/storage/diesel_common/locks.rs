@@ -94,14 +94,21 @@ macro_rules! impl_diesel_lock_ops {
             /// owner, every other rescuer's filter no longer matches → 0 rows.
             /// `claim_execution` is INSERT-only and cannot reclaim, so this is a
             /// distinct primitive.
+            ///
+            /// The transfer mints a **new epoch**, so the rescued job's next
+            /// dispatch is a different claim: the owner alone would leave the
+            /// rescuer able to authorize a result the dead owner's executor is
+            /// still on its way to sending. Returns it, because the rescuer
+            /// records that dispatch and needs the identity it was made under.
             pub fn reclaim_execution(
                 &self,
                 job_id: &str,
                 expected_owner: &str,
                 new_owner: &str,
-            ) -> Result<bool> {
+            ) -> Result<Option<i64>> {
                 let mut conn = self.conn()?;
                 let now = now_millis();
+                let epoch = $crate::lease::mint_claim_epoch();
 
                 let affected = diesel::update(
                     execution_claims::table
@@ -111,10 +118,11 @@ macro_rules! impl_diesel_lock_ops {
                 .set((
                     execution_claims::worker_id.eq(new_owner),
                     execution_claims::claimed_at.eq(now),
+                    execution_claims::epoch.eq(Some(epoch)),
                 ))
                 .execute(&mut conn)?;
 
-                Ok(affected > 0)
+                Ok((affected > 0).then_some(epoch))
             }
 
             /// Purge old execution claims. Returns count removed.

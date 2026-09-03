@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use flexiq_core::job::{now_millis, Job, JobStatus, NewJob};
+use flexiq_core::lease::{Lease, LeaseBook};
 use flexiq_core::scheduler::{JobResult, SchedulerConfig};
 use flexiq_core::step::StepFailure;
 use flexiq_core::storage::records::StepKind;
@@ -17,7 +18,7 @@ use flexiq_core::storage::{Storage, StorageBackend};
 use flexiq_core::worker::auth::Secret;
 use flexiq_core::worker::protocol::{
     decode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, ProtocolError,
-    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use flexiq_core::worker::remote::{AttachError, RemoteConfig, RemoteDispatcher};
 use flexiq_core::worker::side_channel::{SideChannel, StorageSideChannel};
@@ -31,6 +32,11 @@ const SETTLE: Duration = Duration::from_secs(5);
 struct FakeExecutor {
     reader: FrameReader<ReadHalf>,
     writer: FrameWriter<WriteHalf>,
+    /// Stamped on every frame this executor writes about a job, the way a real
+    /// executor echoes what its `job` frame carried. `None` is the peer that
+    /// never negotiated [`CAP_LEASE`]; a test that wants a *stale* lease sets
+    /// this to one the scheduler is no longer dispatching under.
+    lease: Option<Lease>,
 }
 
 impl FakeExecutor {
@@ -126,6 +132,7 @@ impl FakeExecutor {
         let mut executor = Self {
             reader: FrameReader::new(read),
             writer: FrameWriter::new(write),
+            lease: None,
         };
 
         executor
@@ -184,8 +191,20 @@ impl FakeExecutor {
         loop {
             match self.read().expect("read frame") {
                 (SchedulerMessage::HelloAck { .. }, _) => continue,
-                (SchedulerMessage::Job { id, task_name, .. }, payload) => {
-                    return (id, task_name, payload)
+                (
+                    SchedulerMessage::Job {
+                        id,
+                        task_name,
+                        lease,
+                        ..
+                    },
+                    payload,
+                ) => {
+                    // Echoed on everything this executor sends about the job,
+                    // exactly as `ExecutorClient` does — so a test that does
+                    // nothing special reports under the lease it was given.
+                    self.lease = lease;
+                    return (id, task_name, payload);
                 }
                 (other, _) => panic!("expected a job frame, got {other:?}"),
             }
@@ -220,6 +239,7 @@ impl FakeExecutor {
                     kind: StepKind::Run,
                     wake_at: None,
                     payload_len: result.len(),
+                    lease: self.lease.clone(),
                 },
                 result,
             )
@@ -235,6 +255,7 @@ impl FakeExecutor {
                 kind: StepKind::Sleep,
                 wake_at: Some(wake_at),
                 payload_len: 0,
+                lease: self.lease.clone(),
             })
             .expect("send sleep commit");
     }
@@ -268,6 +289,7 @@ impl FakeExecutor {
                 task_name: task_name.to_string(),
                 wake_at,
                 wall_time_ns: 1,
+                lease: self.lease.clone(),
             })
             .expect("send slept");
     }
@@ -280,6 +302,7 @@ impl FakeExecutor {
                     result_len: result.map(<[u8]>::len),
                     task_name: task_name.to_string(),
                     wall_time_ns: 1,
+                    lease: self.lease.clone(),
                 },
                 result.unwrap_or(&[]),
             )
@@ -548,6 +571,7 @@ fn cancel_reaches_the_executor_running_the_job() {
                 job_id: "job-1".to_string(),
                 task_name: "resize".to_string(),
                 wall_time_ns: 1,
+                lease: None,
             })
             .expect("send cancelled");
         assert!(matches!(
@@ -887,6 +911,7 @@ impl FakeExecutor {
             .write_header(&ExecutorMessage::Progress {
                 job_id: job_id.to_string(),
                 progress,
+                lease: self.lease.clone(),
             })
             .expect("send progress");
     }
@@ -1447,8 +1472,31 @@ fn claimed_job(storage: &SqliteStorage, task_name: &str, owner: &str) -> Job {
     storage
         .dequeue("default", now_millis() + 1_000, None)
         .expect("dequeue");
-    assert!(storage.claim_execution(&job.id, owner).expect("claim"));
+    assert!(storage
+        .claim_execution(&job.id, owner)
+        .expect("claim")
+        .is_some());
     storage.get_job(&job.id, None).expect("get").expect("job")
+}
+
+/// The same, returning the epoch the claim was won under.
+///
+/// A test that wants to isolate the dispatcher's own lease check needs it: a
+/// lease naming an epoch storage never wrote would be refused by the *fence*,
+/// and the test would pass with the check deleted.
+fn claimed_job_with_epoch(storage: &SqliteStorage, task_name: &str, owner: &str) -> (Job, i64) {
+    let job = claimed_job(storage, task_name, owner);
+    // Re-claim under the same owner to learn the epoch: it is deliberately not
+    // readable back, so the only way to hold one is to be the caller that won
+    // the claim.
+    storage
+        .complete_execution(&job.id, None)
+        .expect("release the fixture's claim");
+    let epoch = storage
+        .claim_execution(&job.id, owner)
+        .expect("re-claim")
+        .expect("the re-claim wins");
+    (job, epoch)
 }
 
 #[test]
@@ -1589,6 +1637,7 @@ fn a_replayed_jobs_snapshot_rides_its_dispatch() {
             },
             "scheduler-test",
             0,
+            None,
             &flexiq_core::step::StepLimits::default(),
             None,
         )
@@ -1626,6 +1675,7 @@ fn an_executor_that_never_claimed_steps_is_sent_no_snapshot() {
             },
             "scheduler-test",
             0,
+            None,
             &flexiq_core::step::StepLimits::default(),
             None,
         )
@@ -1678,7 +1728,8 @@ fn a_sleep_commit_reschedules_the_job_and_echoes_the_stored_deadline() {
             .expect("dequeue at the deadline");
         assert!(storage
             .claim_execution(&job_id, "scheduler-test")
-            .expect("reclaim"));
+            .expect("reclaim")
+            .is_some());
         let woken = storage.get_job(&job_id, None).expect("get").expect("job");
 
         jobs.blocking_send(woken).expect("dispatch the wake");
@@ -1796,7 +1847,8 @@ fn a_superseded_dispatch_never_relabels_the_running_attempts_fence() {
             .expect("dequeue");
         assert!(storage
             .claim_execution(&job_id, "scheduler-test")
-            .expect("re-claim"));
+            .expect("re-claim")
+            .is_some());
         let live = storage.get_job(&job_id, None).expect("get").expect("job");
         assert_eq!(live.retry_count, 1, "storage is at the second attempt");
         jobs.blocking_send(live).expect("dispatch attempt 1");
@@ -1883,6 +1935,143 @@ fn a_superseded_dispatch_leaves_the_running_attempt_reportable() {
     // The next frame after the first job is the shutdown: the second dispatch
     // was never written to a connection already running that id.
     executor.expect_shutdown();
+}
+
+// ── The dispatch lease ──────────────────────────────────────────────
+
+/// A dispatcher wired to a book, plus the executor that negotiated the
+/// capability — the pairing every lease test needs.
+fn dispatcher_with_leases(book: &Arc<LeaseBook>) -> (RemoteDispatcher, FakeExecutor) {
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    dispatcher.set_lease_book(book.clone());
+    let executor =
+        FakeExecutor::attach_with_capabilities(&dispatcher, "exec-1", &["resize"], 2, &[CAP_LEASE])
+            .expect("attach");
+    (dispatcher, executor)
+}
+
+#[test]
+fn a_result_under_a_lease_that_is_no_longer_current_is_refused() {
+    // The `requeue_stuck` case, one level down from storage: nothing about the
+    // job moved except the claim it is dispatched under, so the frame's lease
+    // is the only thing that separates the stalled attempt from the live one.
+    let book = Arc::new(LeaseBook::default());
+    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+
+        // The job is requeued and re-claimed elsewhere, so the book moves on
+        // while this executor is still running its copy.
+        book.issue("job-1", Lease::from_epoch(2));
+        executor.succeed("job-1", "resize", None);
+
+        // Asserted by polling the dispatcher, never by reading a frame that
+        // will not come: on an unfixed build the result *is* emitted, so the
+        // wait has to be for the slot rather than for a result.
+        wait_until(
+            || dispatcher.executors()[0].in_flight == 0,
+            "the refused result must still free the executor's slot",
+        );
+        assert!(
+            results.try_recv().is_err(),
+            "a result under a stale lease must never reach the scheduler"
+        );
+    });
+}
+
+#[test]
+fn a_result_under_the_current_lease_is_applied() {
+    // The other half, so the refusal above cannot pass by refusing everything.
+    let book = Arc::new(LeaseBook::default());
+    let (dispatcher, mut executor) = dispatcher_with_leases(&book);
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn an_executor_that_never_claimed_the_lease_capability_still_reports() {
+    // The give-up `CAP_LEASE` documents, and the reason the check is written as
+    // three absences rather than one comparison: a peer that will not echo a
+    // lease must not be dispatched one, or every result it sends is refused.
+    let book = Arc::new(LeaseBook::default());
+    let dispatcher = dispatcher_with(Duration::from_secs(5));
+    dispatcher.set_lease_book(book.clone());
+    let mut executor = FakeExecutor::attach(&dispatcher, "exec-1", &["resize"], 2).expect("attach");
+
+    with_running(&dispatcher, 4, |jobs, results| {
+        book.issue("job-1", Lease::from_epoch(1));
+        jobs.blocking_send(make_job("job-1", "resize", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, "job-1");
+        assert!(
+            executor.lease.is_none(),
+            "a peer that did not negotiate the capability is dispatched no lease"
+        );
+        executor.succeed("job-1", "resize", None);
+        assert_eq!(kind(&expect_result(results)), "success");
+    });
+}
+
+#[test]
+fn a_step_commit_under_a_stale_lease_is_refused_without_waiting() {
+    // Refused rather than merely dropped: the executor is blocked on the ack,
+    // and `Superseded` is what ends that attempt now instead of at the end of
+    // its ack timeout.
+    let storage = SqliteStorage::in_memory().expect("storage");
+    let book = Arc::new(LeaseBook::default());
+    let dispatcher = dispatcher_with_storage(&storage);
+    dispatcher.set_lease_book(book.clone());
+    let mut executor = FakeExecutor::attach_with_capabilities(
+        &dispatcher,
+        "exec-1",
+        &["charge"],
+        1,
+        &[CAP_STEPS, CAP_LEASE],
+    )
+    .expect("attach");
+
+    // Dispatched under the epoch the live claim actually holds, so the *fence*
+    // would authorize this commit. Only the book can refuse it — which is what
+    // makes this a test of the dispatcher's check rather than of storage's.
+    let (job, epoch) = claimed_job_with_epoch(&storage, "charge", "scheduler-test");
+
+    with_running(&dispatcher, 4, |jobs, _results| {
+        book.issue(&job.id, Lease::from_epoch(epoch));
+        jobs.blocking_send(make_job(&job.id, "charge", b""))
+            .expect("dispatch");
+        assert_eq!(executor.expect_job().0, job.id);
+
+        // Requeued and re-dispatched while this attempt is still running.
+        book.issue(&job.id, Lease::from_epoch(epoch.wrapping_add(1)));
+        executor.commit_step(&job.id, 0, "charge#0", b"receipt");
+
+        let (_, ok, _, _, failure) = executor.expect_step_ack();
+        assert!(!ok, "a commit under a stale lease must be refused");
+        assert_eq!(
+            failure,
+            Some(StepFailure::Superseded),
+            "the attempt is not entitled to this job, which ends it without a result"
+        );
+    });
+
+    assert!(
+        storage
+            .get_job_steps(&job.id, None)
+            .expect("steps")
+            .is_empty(),
+        "a refused commit must never reach storage"
+    );
 }
 
 #[test]

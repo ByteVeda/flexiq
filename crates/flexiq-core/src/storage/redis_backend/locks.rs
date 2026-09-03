@@ -3,20 +3,42 @@ use redis::Commands;
 use super::{map_err, RedisStorage};
 use crate::error::Result;
 use crate::job::now_millis;
+use crate::lease::mint_claim_epoch;
 use crate::storage::records::LockInfo;
 
+/// Render the value an execution claim is stored under.
+///
+/// `"{owner}:{claimed_at}.{epoch}"`, and `"{owner}:{claimed_at}"` when there is
+/// no epoch — which is what a claim written before this column existed looks
+/// like, and what it keeps looking like until its 24-hour expiry.
+///
+/// The epoch rides the timestamp field rather than being appended as a fourth
+/// one because every reader of this value — the reclaim script, the step fence,
+/// `reap_orphaned_jobs` — takes the owner as *everything before the last* `:`.
+/// A new `:` would move that boundary and silently truncate every owner that
+/// contains one (`"host:pid"`, pinned by the contract suite). A `.` inside the
+/// final field moves nothing, and the two forms stay distinguishable because a
+/// legacy value's last field is digits with no dot.
+pub(super) fn claim_value(worker_id: &str, claimed_at: i64, epoch: Option<i64>) -> String {
+    match epoch {
+        Some(epoch) => format!("{worker_id}:{claimed_at}.{epoch}"),
+        None => format!("{worker_id}:{claimed_at}"),
+    }
+}
+
 /// Lua script: atomically transfer an execution claim from `expected_owner`
-/// (ARGV[2]) to `new_owner` (ARGV[3]). The claim value is "{owner}:{ts}";
-/// returns 1 only if the current owner matches. KEYS[1] = claim key,
-/// KEYS[2] = the by-time index; ARGV[1] = job_id, ARGV[4] = now.
+/// (ARGV[2]) to `new_owner` (ARGV[3]). The claim value is
+/// "{owner}:{ts}.{epoch}"; returns 1 only if the current owner matches.
+/// KEYS[1] = claim key, KEYS[2] = the by-time index; ARGV[1] = job_id,
+/// ARGV[4] = now, ARGV[5] = the epoch the transfer mints.
 const RECLAIM_CLAIM_SCRIPT: &str = r#"
     local cur = redis.call('GET', KEYS[1])
     if not cur then return 0 end
-    -- Owner is everything before the LAST ':' (the timestamp is a numeric
-    -- suffix); the owner itself may contain ':' (e.g. "host:pid").
+    -- Owner is everything before the LAST ':' (the rest of the value is a
+    -- numeric suffix); the owner itself may contain ':' (e.g. "host:pid").
     local owner = string.match(cur, '^(.*):') or cur
     if owner ~= ARGV[2] then return 0 end
-    redis.call('SET', KEYS[1], ARGV[3] .. ':' .. ARGV[4], 'PX', 86400000)
+    redis.call('SET', KEYS[1], ARGV[3] .. ':' .. ARGV[4] .. '.' .. ARGV[5], 'PX', 86400000)
     redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
     return 1
 "#;
@@ -194,10 +216,12 @@ impl RedisStorage {
     }
 
     /// Claim exclusive execution of a job via `SET NX` with a 24-hour expiry.
-    /// Returns `false` when a claim already exists.
-    pub fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<bool> {
+    /// Returns the epoch the claim was won under, or `None` when a claim
+    /// already exists.
+    pub fn claim_execution(&self, job_id: &str, worker_id: &str) -> Result<Option<i64>> {
         let mut conn = self.conn()?;
         let now = now_millis();
+        let epoch = mint_claim_epoch();
         let ckey = self.key(&["exec_claim", job_id]);
         let index_key = self.key(&["exec_claims", "by_time"]);
 
@@ -205,7 +229,7 @@ impl RedisStorage {
         // orphaned claims from dead workers don't block re-execution forever.
         let acquired: bool = redis::cmd("SET")
             .arg(&ckey)
-            .arg(format!("{worker_id}:{now}"))
+            .arg(claim_value(worker_id, now, Some(epoch)))
             .arg("NX")
             .arg("PX")
             .arg(86_400_000i64) // 24 hours in milliseconds
@@ -220,14 +244,18 @@ impl RedisStorage {
                 .map_err(map_err)?;
         }
 
-        Ok(acquired)
+        Ok(acquired.then_some(epoch))
     }
 
     /// Batch variant of `claim_execution`. Issues all NX sets in one pipeline,
     /// then mirrors only the won claims into the by-time index in a second
     /// pipeline — two round trips regardless of batch size. Returns one flag per
-    /// input id, in order: `true` if this worker won the claim.
-    pub fn claim_execution_batch(&self, job_ids: &[&str], worker_id: &str) -> Result<Vec<bool>> {
+    /// input id, in order: the epoch if this worker won the claim.
+    pub fn claim_execution_batch(
+        &self,
+        job_ids: &[&str],
+        worker_id: &str,
+    ) -> Result<Vec<Option<i64>>> {
         if job_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -235,28 +263,36 @@ impl RedisStorage {
         let now = now_millis();
         let index_key = self.key(&["exec_claims", "by_time"]);
 
+        // One epoch per row, not per batch: the epoch is the identity of a
+        // claim, and two jobs claimed together are still two claims.
+        let epochs: Vec<i64> = job_ids.iter().map(|_| mint_claim_epoch()).collect();
+
         // One pipeline of NX sets; each reply is the "OK" status on a win or Nil
         // when a claim already existed. Decoding as Option maps that to Some/None.
         let mut set_pipe = redis::pipe();
-        for job_id in job_ids {
+        for (job_id, epoch) in job_ids.iter().zip(&epochs) {
             let ckey = self.key(&["exec_claim", job_id]);
             set_pipe
                 .cmd("SET")
                 .arg(ckey)
-                .arg(format!("{worker_id}:{now}"))
+                .arg(claim_value(worker_id, now, Some(*epoch)))
                 .arg("NX")
                 .arg("PX")
                 .arg(86_400_000i64); // 24 hours in milliseconds
         }
         let outcomes: Vec<Option<String>> = set_pipe.query(&mut conn).map_err(map_err)?;
-        let claimed: Vec<bool> = outcomes.iter().map(Option::is_some).collect();
+        let claimed: Vec<Option<i64>> = outcomes
+            .iter()
+            .zip(&epochs)
+            .map(|(won, epoch)| won.is_some().then_some(*epoch))
+            .collect();
 
         // Mirror the won claims into the time-indexed set so the maintenance
         // loop can range-purge stale claims, exactly as `claim_execution` does.
         let mut index_pipe = redis::pipe();
         let mut any_won = false;
         for (job_id, won) in job_ids.iter().zip(&claimed) {
-            if *won {
+            if won.is_some() {
                 any_won = true;
                 index_pipe.zadd(&index_key, *job_id, now as f64);
             }
@@ -291,16 +327,23 @@ impl RedisStorage {
     }
 
     /// Atomically transfer a claim from `expected_owner` to `new_owner`. Returns
-    /// `true` only if the claim was held by `expected_owner` — the single GET/SET
-    /// in the Lua script serializes concurrent rescuers so exactly one wins.
+    /// the new epoch only if the claim was held by `expected_owner` — the single
+    /// GET/SET in the Lua script serializes concurrent rescuers so exactly one
+    /// wins.
+    ///
+    /// The transfer mints a **new epoch**, so the rescued job's next dispatch is
+    /// a different claim: the owner alone would leave the rescuer able to
+    /// authorize a result the dead owner's executor is still on its way to
+    /// sending.
     pub fn reclaim_execution(
         &self,
         job_id: &str,
         expected_owner: &str,
         new_owner: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<i64>> {
         let mut conn = self.conn()?;
         let now = now_millis();
+        let epoch = mint_claim_epoch();
         let ckey = self.key(&["exec_claim", job_id]);
         let index_key = self.key(&["exec_claims", "by_time"]);
 
@@ -311,10 +354,11 @@ impl RedisStorage {
             .arg(expected_owner)
             .arg(new_owner)
             .arg(now)
+            .arg(epoch)
             .invoke(&mut conn)
             .map_err(map_err)?;
 
-        Ok(result == 1)
+        Ok((result == 1).then_some(epoch))
     }
 
     /// Purge execution claims older than the cutoff via the time-indexed sorted

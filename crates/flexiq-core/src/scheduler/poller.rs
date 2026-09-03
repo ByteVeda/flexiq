@@ -39,8 +39,9 @@ pub(super) const SCHEDULER_CLAIM_OWNER: &str = "scheduler";
 /// Result of attempting to claim a job for dispatch. Each outcome needs
 /// distinct handling, so they can't collapse to a bool.
 enum ClaimOutcome {
-    /// This scheduler now owns the claim — proceed to dispatch.
-    Claimed,
+    /// This scheduler now owns the claim — proceed to dispatch, under the
+    /// epoch the claim was won with.
+    Claimed(Option<i64>),
     /// Another scheduler already holds the claim — leave the job to its owner.
     AlreadyClaimed,
     /// The claim attempt errored — roll the job back to `Pending`.
@@ -230,10 +231,10 @@ impl Scheduler {
             // A lost claim means another scheduler owns the job; leave it to
             // that owner, exactly like the single path's `AlreadyClaimed`. The
             // job stays legitimately Running, so its concurrency slot stands.
-            if !won {
+            let Some(epoch) = won else {
                 continue;
-            }
-            match self.dispatch_claimed(job, now, &mut counts, job_tx) {
+            };
+            match self.dispatch_claimed(job, now, Some(epoch), &mut counts, job_tx) {
                 Ok(true) => dispatched_any = true,
                 Ok(false) => {}
                 Err(e) => warn!("batch dispatch failed for a claimed job: {e}"),
@@ -326,8 +327,8 @@ impl Scheduler {
 
         // Claim exactly-once execution. After this point, the job is reserved
         // for this scheduler instance.
-        match self.claim_for_dispatch(&job) {
-            ClaimOutcome::Claimed => {}
+        let epoch = match self.claim_for_dispatch(&job) {
+            ClaimOutcome::Claimed(epoch) => epoch,
             // Another scheduler already owns the claim; it will dispatch the
             // job. Leave it alone — rolling back here would clear the owner's
             // claim and race its dispatch.
@@ -344,9 +345,9 @@ impl Scheduler {
                 )?;
                 return Ok(false);
             }
-        }
+        };
 
-        self.finish_dispatch(job, now, counts, job_tx)
+        self.finish_dispatch(job, now, epoch, counts, job_tx)
     }
 
     /// Dispatch a job this scheduler has *already* claimed (its claim row is
@@ -358,6 +359,7 @@ impl Scheduler {
         &self,
         job: Job,
         now: i64,
+        epoch: Option<i64>,
         counts: &mut GateCounts,
         job_tx: &tokio::sync::mpsc::Sender<Job>,
     ) -> Result<bool> {
@@ -376,7 +378,7 @@ impl Scheduler {
             }
         }
 
-        self.finish_dispatch(job, now, counts, job_tx)
+        self.finish_dispatch(job, now, epoch, counts, job_tx)
     }
 
     /// Post-claim tail shared by the single and batch paths: enforce the hard
@@ -387,6 +389,7 @@ impl Scheduler {
         &self,
         job: Job,
         now: i64,
+        epoch: Option<i64>,
         counts: &mut GateCounts,
         job_tx: &tokio::sync::mpsc::Sender<Job>,
     ) -> Result<bool> {
@@ -415,10 +418,12 @@ impl Scheduler {
         // failure arms untrack what never left.
         let job_id = job.id.clone();
         let task_name = job.task_name.clone();
-        // `retry_count` as of the claim is half the fencing token: `retry` bumps
-        // it without changing who may claim next, so the owner alone cannot
-        // separate two runs of the same job.
-        self.track_in_flight(&job_id, &task_name, job.retry_count);
+        // `retry_count` as of the claim is the second third of the fencing
+        // token: `retry` bumps it without changing who may claim next, so the
+        // owner alone cannot separate two runs of the same job. The epoch is
+        // the third, and separates two claims that `requeue_stuck` produced
+        // from one attempt — where neither of the other two moves.
+        self.track_in_flight(&job_id, &task_name, job.retry_count, epoch);
         match job_tx.try_send(job) {
             Ok(()) => Ok(true),
             Err(TrySendError::Full(job)) => {
@@ -548,8 +553,8 @@ impl Scheduler {
     /// `Pending`, whereas an already-claimed job must be left for its owner.
     fn claim_for_dispatch(&self, job: &Job) -> ClaimOutcome {
         match self.storage.claim_execution(&job.id, &self.claim_owner) {
-            Ok(true) => ClaimOutcome::Claimed,
-            Ok(false) => ClaimOutcome::AlreadyClaimed,
+            Ok(Some(epoch)) => ClaimOutcome::Claimed(Some(epoch)),
+            Ok(None) => ClaimOutcome::AlreadyClaimed,
             Err(e) => {
                 // Dispatching anyway would double-execute (no claim row guards
                 // the job); the caller instead rolls it back to Pending.

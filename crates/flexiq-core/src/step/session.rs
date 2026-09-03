@@ -368,7 +368,10 @@ mod tests {
         storage
             .dequeue("default", now_millis() + 1000, None)
             .unwrap();
-        assert!(storage.claim_execution(&job.id, "worker-1").unwrap());
+        assert!(storage
+            .claim_execution(&job.id, "worker-1")
+            .unwrap()
+            .is_some());
         storage.get_job(&job.id, None).unwrap().unwrap()
     }
 
@@ -383,7 +386,10 @@ mod tests {
             .dequeue("default", job.scheduled_at, None)
             .unwrap()
             .is_some());
-        assert!(storage.claim_execution(job_id, "worker-1").unwrap());
+        assert!(storage
+            .claim_execution(job_id, "worker-1")
+            .unwrap()
+            .is_some());
         storage.get_job(job_id, None).unwrap().unwrap()
     }
 
@@ -746,7 +752,8 @@ mod tests {
 
         assert!(storage
             .reclaim_execution(&job.id, "worker-1", "worker-2")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let err = session.sleep_for(Some("nap"), None, 60_000).unwrap_err();
         assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");
@@ -988,7 +995,8 @@ mod tests {
         // Another worker takes the job over mid-attempt.
         assert!(storage
             .reclaim_execution(&job.id, "worker-1", "worker-2")
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let err = session.run("charge", None, |_| Ok(vec![])).unwrap_err();
         assert!(matches!(err, QueueError::ClaimLost(_)), "{err}");

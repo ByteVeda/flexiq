@@ -28,6 +28,7 @@ use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 
 use flexiq_core::job::Job;
+use flexiq_core::lease::{Lease, LeaseBook};
 use flexiq_core::scheduler::JobResult;
 use flexiq_core::step::classify_step_failure;
 use flexiq_core::worker::protocol::{encode_step_snapshot, ExecutorMessage, SchedulerMessage};
@@ -131,6 +132,14 @@ pub struct PreforkPool {
     /// in-process worker's pool — see [`Self::new`].
     relay_steps: bool,
     steps: StepsSlot,
+    /// The scheduler's lease book, when this pool runs beside one.
+    ///
+    /// A child is as capable of outliving its dispatch as an attached executor
+    /// is: an operator requeues a job the child is wedged on, the pool hands
+    /// the next attempt to a sibling, and the first child then finishes and
+    /// reports. The book is what tells the two apart. `None` under an attached
+    /// executor, whose dispatches belong to a scheduler in another process.
+    leases: Mutex<Option<Arc<LeaseBook>>>,
 }
 
 impl PreforkPool {
@@ -164,7 +173,16 @@ impl PreforkPool {
             side_channel: Arc::new(Mutex::new(None)),
             relay_steps,
             steps: Arc::new(Mutex::new(None)),
+            leases: Mutex::new(None),
         }
+    }
+
+    /// The lease book, once a worker has installed one.
+    fn lease_book(&self) -> Option<Arc<LeaseBook>> {
+        self.leases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Relay children's progress and task logs to `side_channel`.
@@ -225,6 +243,7 @@ impl WorkerDispatcher for PreforkPool {
                 &result_tx,
                 &self.side_channel,
                 &steps,
+                self.lease_book(),
             ) {
                 reader_handles.push(handle);
             }
@@ -274,6 +293,7 @@ impl WorkerDispatcher for PreforkPool {
                     &result_tx,
                     &self.side_channel,
                     &steps,
+                    self.lease_book(),
                 ) {
                     reader_handles.push(handle);
                     log::info!(
@@ -288,9 +308,14 @@ impl WorkerDispatcher for PreforkPool {
                 .collect();
             let idx = dispatch::least_loaded(&counts);
 
+            // Read before the dispatch, so the frame carries the lease this
+            // job is *currently* dispatched under.
+            let lease = self.lease_book().and_then(|book| book.current(&job.id));
+
             dispatch_job(
                 idx,
                 job,
+                lease,
                 &writers,
                 &slots,
                 &in_flight,
@@ -346,6 +371,13 @@ impl WorkerDispatcher for PreforkPool {
         self.shutdown.store(true, Ordering::SeqCst);
     }
 
+    fn set_lease_book(&self, leases: Arc<LeaseBook>) {
+        *self
+            .leases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(leases);
+    }
+
     fn notify_cancel(&self, job_id: &str) {
         let Ok(guard) = self.cancel_tx.lock() else {
             return;
@@ -398,6 +430,7 @@ fn is_child_dead(processes: &ProcessPool, idx: usize) -> bool {
 fn dispatch_job(
     idx: usize,
     job: Job,
+    lease: Option<Lease>,
     writers: &WriterPool,
     slots: &SlotState,
     in_flight: &InFlightCounters,
@@ -467,7 +500,7 @@ fn dispatch_job(
             // Both frames under the one lock, and the snapshot first: the child
             // pairs `job_steps` with the `job` frame that follows it, exactly
             // as an attached executor pairs them on the socket.
-            Some(writer) => write_dispatch(writer, &job, disabled, snapshot),
+            Some(writer) => write_dispatch(writer, &job, disabled, snapshot, lease),
             None => {
                 drop(guard);
                 let _ = slot::take(slots, idx);
@@ -549,6 +582,7 @@ fn write_dispatch(
     job: &Job,
     disabled: Vec<String>,
     snapshot: Option<Vec<u8>>,
+    lease: Option<Lease>,
 ) -> Result<(), flexiq_core::worker::protocol::ProtocolError> {
     if let Some(snapshot) = snapshot {
         writer.write(
@@ -559,7 +593,7 @@ fn write_dispatch(
             &snapshot,
         )?;
     }
-    writer.write_job_with(job, disabled)
+    writer.write_job_leased(job, disabled, lease)
 }
 
 /// Spawn child `idx` and its reader thread, plumbing the writer + process into
@@ -578,6 +612,7 @@ fn start_child(
     result_tx: &Sender<JobResult>,
     side_channel: &SideChannelSlot,
     steps: &StepRelayState,
+    leases: Option<Arc<LeaseBook>>,
 ) -> Option<JoinHandle<()>> {
     match spawn_child(python, app_path, claim_owner, steps.supported) {
         Ok(child) => {
@@ -585,6 +620,10 @@ fn start_child(
             // Re-read on every respawn: a restarted child is a new interpreter,
             // and a stale `true` would send it a snapshot it never asked for.
             steps.claimed[idx].store(child.steps, Ordering::Relaxed);
+            // Likewise re-read on every respawn: `FLEXIQ_PYTHON` can point a
+            // restarted child at a different flexiq install than the one that
+            // answered last time.
+            let leases = leases.filter(|_| child.leases);
             if let Ok(mut guard) = writers[idx].lock() {
                 *guard = Some(child.writer);
             }
@@ -605,6 +644,7 @@ fn start_child(
                 side_channel.clone(),
                 writers.clone(),
                 steps.clone(),
+                leases,
             ))
         }
         Err(e) => {
@@ -630,12 +670,21 @@ fn spawn_reader_thread(
     side_channel: SideChannelSlot,
     writers: WriterPool,
     steps: StepRelayState,
+    leases: Option<Arc<LeaseBook>>,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name(format!("flexiq-prefork-reader-{idx}"))
         .spawn(move || loop {
             match reader.read::<ExecutorMessage>() {
                 Ok((msg, payload)) => {
+                    // Before anything is relayed or applied: a child that
+                    // outlived its dispatch is answering for a job the pool has
+                    // since handed to a sibling, and only the frame still says
+                    // which dispatch it came from.
+                    if !frame_is_current(leases.as_deref(), &msg) {
+                        refuse_stale(idx, msg, &slots, &in_flight, &writers);
+                        continue;
+                    }
                     // A detached child cannot reach storage, so its progress and
                     // logs arrive here to be passed on. Handled before the
                     // result path: they are not outcomes, and taking the slot —
@@ -669,6 +718,75 @@ fn spawn_reader_thread(
         .expect("failed to spawn prefork reader thread")
 }
 
+/// Whether a frame from a child belongs to the dispatch that is current.
+///
+/// The pool's half of [`flexiq_core::lease`]'s rule, and the same three
+/// absences the scheduler's own check treats as `true`: no book, no entry for
+/// the job, or no lease on a frame from a child whose dispatch carried none.
+fn frame_is_current(leases: Option<&LeaseBook>, msg: &ExecutorMessage) -> bool {
+    // `None` is either pool without a book *or* a child that never claimed
+    // `CAP_LEASE` — `start_child` collapses the two, because both mean "no
+    // lease was ever handed out here".
+    let Some(book) = leases else {
+        return true;
+    };
+    let Some((job_id, lease)) = msg.leased_job() else {
+        return true;
+    };
+    let Some(current) = book.current(job_id) else {
+        return true;
+    };
+    lease == Some(&current)
+}
+
+/// Answer a frame whose dispatch is no longer current.
+///
+/// `error!`, not `warn!`: the frame is dropped, but behind it is a second
+/// execution of a job that had already been handed to a sibling child.
+///
+/// What "answer" means depends on the frame. A result is dropped and the slot
+/// released — the child's attempt is over either way, and holding the slot
+/// would strand a live worker. A step commit is *refused*, because the child is
+/// blocked on the ack and would otherwise wait out its whole backstop. A
+/// progress report or log line is simply dropped.
+fn refuse_stale(
+    idx: usize,
+    msg: ExecutorMessage,
+    slots: &SlotState,
+    in_flight: &InFlightCounters,
+    writers: &WriterPool,
+) {
+    if let Some((job_id, _)) = msg.leased_job() {
+        log::error!(
+            "[flexiq] prefork child {idx} answered for job {job_id} under a lease that is no \
+             longer current; refusing it — the job was re-dispatched while that attempt was \
+             still running"
+        );
+    }
+    match &msg {
+        ExecutorMessage::StepCommit { job_id, seq, .. } => {
+            let ack = refusal(job_id, *seq, QueueError::ClaimLost(job_id.clone()));
+            answer_child(writers, idx, ack);
+        }
+        ExecutorMessage::Success { .. }
+        | ExecutorMessage::Failure { .. }
+        | ExecutorMessage::Cancelled { .. }
+        | ExecutorMessage::Slept { .. } => release_slot(slots, in_flight, idx),
+        _ => {}
+    }
+}
+
+/// Free child `idx`'s slot, if it still holds one.
+///
+/// Taking the slot is the ownership token for a job's single outcome, so this
+/// is also what keeps a stale result from being counted twice — the watchdog
+/// may already have taken it.
+fn release_slot(slots: &SlotState, in_flight: &InFlightCounters, idx: usize) {
+    if slot::take(slots, idx).is_some() {
+        in_flight[idx].fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Pass a child's progress or task log on to the scheduler.
 ///
 /// Returns the frame untouched when it is not one of those, so the caller can
@@ -690,7 +808,9 @@ fn relay_side_channel(
         .clone()?;
 
     match msg {
-        ExecutorMessage::Progress { job_id, progress } => {
+        ExecutorMessage::Progress {
+            job_id, progress, ..
+        } => {
             relay.report_progress(&job_id, progress);
         }
         ExecutorMessage::TaskLog {
@@ -699,6 +819,7 @@ fn relay_side_channel(
             level,
             message,
             extra_len,
+            ..
         } => {
             // Absent and empty are different, so the blob is taken from the
             // declared length rather than from whether the payload is empty.
@@ -735,6 +856,7 @@ fn relay_step_commit(
         kind,
         wake_at,
         payload_len: _,
+        lease: _,
     } = msg
     else {
         return Some(msg);
@@ -781,13 +903,22 @@ fn relay_step_commit(
         }
     };
 
+    answer_child(writers, idx, ack);
+    None
+}
+
+/// Write one answer back to child `idx`.
+///
+/// Every step commit gets exactly one of these: a child parked on an ack that
+/// never comes waits out its whole backstop, so a failure to write is logged
+/// rather than propagated — its own bounded wait then ends the attempt
+/// retryably, which is right, because a commit whose answer was lost may or may
+/// not have landed.
+fn answer_child(writers: &WriterPool, idx: usize, ack: SchedulerMessage) {
     match writers[idx].lock() {
         Ok(mut guard) => match guard.as_mut() {
             Some(writer) => {
                 if let Err(error) = writer.write_header(&ack) {
-                    // Nothing left to do but log: the child's own bounded wait
-                    // ends the attempt retryably, which is right, because a
-                    // commit whose answer was lost may or may not have landed.
                     log::warn!(
                         "[flexiq] could not answer a step commit from prefork child {idx}: {error}"
                     );
@@ -797,7 +928,6 @@ fn relay_step_commit(
         },
         Err(_) => log::error!("[flexiq] writer mutex poisoned for child {idx}"),
     }
-    None
 }
 
 /// A refusal this pool produced, carrying what the child should do about it.

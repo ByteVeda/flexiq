@@ -227,6 +227,7 @@ diesel::table! {
         job_id -> Text,
         worker_id -> Text,
         claimed_at -> BigInt,
+        epoch -> Nullable<BigInt>,
     }
 }
 

@@ -27,7 +27,7 @@ pub use executor::{
 pub use fingerprint::registry_fingerprint;
 pub use protocol::{
     decode_step_snapshot, encode_step_snapshot, Dispatch, ExecutorMessage, HelloBuilder, Incoming,
-    ProtocolError, SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    ProtocolError, SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 pub use registry::{TaskError, TaskHandler, TaskRegistry, TaskResult};
 pub use remote::{AttachError, AttachedExecutor, Capacity, RemoteConfig, RemoteDispatcher};
@@ -72,4 +72,15 @@ pub trait WorkerDispatcher: Send + Sync {
     /// owner it supplies is an owner it can forge. Everyone else runs where the
     /// claim was won and ignores this.
     fn set_claim_owner(&self, _owner: &str) {}
+
+    /// Give the pool the scheduler's lease book, so a dispatch can name the
+    /// claim it was made under.
+    ///
+    /// The same shape as [`set_claim_owner`](Self::set_claim_owner) and for the
+    /// same reason: the value belongs to the side that won the claim, and the
+    /// pool needs it to stamp a frame. A pool that ignores this dispatches
+    /// without a lease, and its results are fenced on `(owner, attempt, epoch)`
+    /// alone — which cannot tell one dispatch of a job from a later one made
+    /// under a *new* claim. See [`crate::lease`].
+    fn set_lease_book(&self, _leases: std::sync::Arc<crate::lease::LeaseBook>) {}
 }

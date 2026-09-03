@@ -84,17 +84,18 @@ pub trait SideChannel: Send + Sync + 'static {
 
     /// Commit one step under the fence the *scheduler* holds.
     ///
-    /// `owner` and `attempt` come from the dispatch this scheduler recorded,
-    /// never off the frame: an owner an executor supplies is an owner it can
-    /// forge, and a forged one writes into the live attempt's sequence.
+    /// `owner`, `attempt` and `epoch` come from the dispatch this scheduler
+    /// recorded, never off the frame: an owner an executor supplies is an owner
+    /// it can forge, and a forged one writes into the live attempt's sequence.
     fn record_step(
         &self,
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         namespace: Option<&str>,
     ) -> Result<StepCommit> {
-        let _ = (step, owner, attempt, namespace);
+        let _ = (step, owner, attempt, epoch, namespace);
         Err(steps_unsupported())
     }
 
@@ -106,10 +107,11 @@ pub trait SideChannel: Send + Sync + 'static {
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         wake_at: i64,
         namespace: Option<&str>,
     ) -> Result<SleepOutcome> {
-        let _ = (step, owner, attempt, wake_at, namespace);
+        let _ = (step, owner, attempt, epoch, wake_at, namespace);
         Err(steps_unsupported())
     }
 }
@@ -261,10 +263,11 @@ impl SideChannel for StorageSideChannel {
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         namespace: Option<&str>,
     ) -> Result<StepCommit> {
         self.storage
-            .record_step_result(step, owner, attempt, &self.step_limits, namespace)
+            .record_step_result(step, owner, attempt, epoch, &self.step_limits, namespace)
     }
 
     fn sleep_job(
@@ -272,11 +275,19 @@ impl SideChannel for StorageSideChannel {
         step: &NewJobStep<'_>,
         owner: &str,
         attempt: i32,
+        epoch: Option<i64>,
         wake_at: i64,
         namespace: Option<&str>,
     ) -> Result<SleepOutcome> {
-        self.storage
-            .sleep_job(step, owner, attempt, wake_at, &self.step_limits, namespace)
+        self.storage.sleep_job(
+            step,
+            owner,
+            attempt,
+            epoch,
+            wake_at,
+            &self.step_limits,
+            namespace,
+        )
     }
 }
 
@@ -407,7 +418,8 @@ mod tests {
         assert!(channel
             .storage
             .claim_execution(&job_id, owner)
-            .expect("claim"));
+            .expect("claim")
+            .is_some());
         job_id
     }
 
@@ -425,7 +437,7 @@ mod tests {
         };
         assert_eq!(
             channel
-                .record_step(&step, "scheduler-1", 0, None)
+                .record_step(&step, "scheduler-1", 0, None, None)
                 .expect("commit"),
             StepCommit::Committed
         );
@@ -433,7 +445,7 @@ mod tests {
         // And a retransmission after a lost ack is a success, not a second row.
         assert_eq!(
             channel
-                .record_step(&step, "scheduler-1", 0, None)
+                .record_step(&step, "scheduler-1", 0, None, None)
                 .expect("recommit"),
             StepCommit::AlreadyCommitted
         );
@@ -457,6 +469,7 @@ mod tests {
             },
             "an-impostor",
             0,
+            None,
             None,
         );
         assert!(

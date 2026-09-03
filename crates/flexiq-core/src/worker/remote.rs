@@ -19,7 +19,7 @@ use super::auth::Secret;
 use super::fingerprint::registry_fingerprint;
 use super::protocol::{
     encode_step_snapshot, ExecutorMessage, FrameReader, FrameWriter, Incoming, ProtocolError,
-    SchedulerMessage, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
+    SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,
 };
 use super::side_channel::SideChannel;
 use super::step_pump::{refusal, StepPump, StepWrite};
@@ -27,6 +27,7 @@ use super::transport::{Connection, ReadHalf, Transport, WriteHalf};
 use super::WorkerDispatcher;
 use crate::error::QueueError;
 use crate::job::Job;
+use crate::lease::{Lease, LeaseBook};
 use crate::scheduler::JobResult;
 use crate::storage::records::StepKind;
 
@@ -239,6 +240,7 @@ impl RemoteDispatcher {
                 side_channel_drain: Mutex::new(drain),
                 steps,
                 claim_owner: Mutex::new(None),
+                leases: Mutex::new(None),
             }),
         }
     }
@@ -279,6 +281,10 @@ impl WorkerDispatcher for RemoteDispatcher {
     fn set_claim_owner(&self, owner: &str) {
         *self.shared.claim_owner.lock().unwrap_or_else(recover) = Some(owner.to_string());
     }
+
+    fn set_lease_book(&self, leases: Arc<LeaseBook>) {
+        *self.shared.leases.lock().unwrap_or_else(recover) = Some(leases);
+    }
 }
 
 /// What the scheduler remembers about a job it handed to an executor.
@@ -299,6 +305,11 @@ struct InFlight {
     /// makes an id-keyed lookup enough to resolve it — see
     /// [`register_dispatch`].
     attempt: i32,
+    /// The lease this dispatch was made under, which is what the executor
+    /// echoes on every frame about the job. Kept here so the step fence can
+    /// name the claim as well as the owner and the attempt — the scheduler
+    /// resolves all three, never the frame.
+    lease: Option<Lease>,
     /// Deadline this job was rescheduled to by an acknowledged `step.sleep`,
     /// once one has landed.
     ///
@@ -326,7 +337,11 @@ struct InFlight {
 /// a slot.
 ///
 /// `Err` carries the attempt already in flight, for the caller's refusal.
-fn register_dispatch(in_flight: &mut HashMap<String, InFlight>, job: &Job) -> Result<(), i32> {
+fn register_dispatch(
+    in_flight: &mut HashMap<String, InFlight>,
+    job: &Job,
+    lease: Option<Lease>,
+) -> Result<(), i32> {
     match in_flight.entry(job.id.clone()) {
         Entry::Occupied(running) => Err(running.get().attempt),
         Entry::Vacant(slot) => {
@@ -334,6 +349,7 @@ fn register_dispatch(in_flight: &mut HashMap<String, InFlight>, job: &Job) -> Re
                 task_name: job.task_name.clone(),
                 namespace: job.namespace.clone(),
                 attempt: job.retry_count,
+                lease,
                 slept_at: None,
             });
             Ok(())
@@ -358,6 +374,11 @@ struct Executor {
     /// a storage read per dispatch, and an unclaimed frame would only be
     /// skipped at the far end anyway.
     steps: bool,
+    /// Whether this executor advertised [`CAP_LEASE`], and so echoes the lease
+    /// on every frame that settles or advances an attempt. A peer that did not
+    /// is dispatched without one and fenced by storage alone — the give-up
+    /// [`CAP_LEASE`] documents.
+    leases: bool,
     /// Job id → what was dispatched. Taking an entry is the exactly-once token
     /// for emitting that job's single `JobResult`; holding one is also this
     /// executor's authority to report progress or logs against that job.
@@ -765,6 +786,11 @@ struct Shared {
     /// it; without one, steps are refused, because a write fenced on a guess is
     /// a write into whichever attempt happens to hold the job.
     claim_owner: Mutex<Option<String>>,
+    /// The scheduler's lease book, installed by
+    /// [`WorkerDispatcher::set_lease_book`]. `None` leaves every dispatch
+    /// leaseless and every frame accepted, which is how this dispatcher behaved
+    /// before leases existed.
+    leases: Mutex<Option<Arc<LeaseBook>>>,
 }
 
 impl Drop for Shared {
@@ -866,6 +892,7 @@ impl Shared {
             slots,
             free: AtomicU32::new(slots),
             steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
+            leases: capabilities.iter().any(|cap| cap == CAP_LEASE),
             in_flight: Mutex::new(HashMap::new()),
             writer: Mutex::new(writer),
             connection,
@@ -945,7 +972,58 @@ impl Shared {
         if self.steps.is_some() {
             capabilities.push(CAP_STEPS.to_string());
         }
+        // Likewise withheld without a book: a scheduler that asked for a lease
+        // it would never check would be advertising a guarantee it does not
+        // provide.
+        if self.lease_book().is_some() {
+            capabilities.push(CAP_LEASE.to_string());
+        }
         capabilities
+    }
+
+    /// The lease book, once a worker has installed one.
+    fn lease_book(&self) -> Option<Arc<LeaseBook>> {
+        self.leases.lock().unwrap_or_else(recover).clone()
+    }
+
+    /// Whether a frame naming `job_id` belongs to the dispatch that is current.
+    ///
+    /// The one predicate behind every rejection below; what a rejection *does*
+    /// differs per frame, which is why the call sites are separate.
+    ///
+    /// Three answers are `true` without comparing anything, and each is an
+    /// absence rather than a match:
+    ///
+    /// - no book — this dispatcher was never given one, so it mints no leases;
+    /// - no entry for the job — nothing was dispatched under a lease, or the
+    ///   dispatch has already settled, and in both cases the storage fence is
+    ///   what still decides;
+    /// - no lease on the frame from a peer that never advertised [`CAP_LEASE`] —
+    ///   the documented give-up.
+    fn frame_is_current(&self, executor: &Executor, job_id: &str, lease: Option<&Lease>) -> bool {
+        let Some(book) = self.lease_book() else {
+            return true;
+        };
+        let Some(current) = book.current(job_id) else {
+            return true;
+        };
+        match lease {
+            Some(lease) => *lease == current,
+            None => !executor.leases,
+        }
+    }
+
+    /// Report a frame that named a dispatch which is no longer current.
+    ///
+    /// `error!`, not `warn!`: the frame itself is dropped, but behind it is a
+    /// second execution of a job that had already been handed to someone else.
+    fn report_stale(&self, executor: &Executor, job_id: &str, frame: &str) {
+        log::error!(
+            "[flexiq] executor {} sent a {frame} for job {job_id} under a lease that is no \
+             longer current; refusing it — the job was re-dispatched while that attempt was \
+             still running",
+            executor.id
+        );
     }
 
     /// Milliseconds since the dispatcher was created — a monotonic clock for
@@ -1187,8 +1265,24 @@ impl Shared {
         // temporary in an `if let` condition lives for the whole block, and the
         // refusal below emits — a bounded-channel send that must not be made
         // while a reader thread is waiting on this same lock.
-        let registered =
-            register_dispatch(&mut executor.in_flight.lock().unwrap_or_else(recover), &job);
+        // Read before the write, not after: the frame has to carry the lease
+        // this job is *currently* dispatched under, and the scheduler wrote
+        // that entry before it handed the job over.
+        //
+        // Withheld from a peer that never advertised [`CAP_LEASE`], because a
+        // value it will not echo is a value the scheduler must not then require
+        // — the give-up has to be symmetric or it becomes a silent rejection of
+        // every result that executor sends.
+        let lease = executor
+            .leases
+            .then(|| self.lease_book()?.current(&job.id))
+            .flatten();
+
+        let registered = register_dispatch(
+            &mut executor.in_flight.lock().unwrap_or_else(recover),
+            &job,
+            lease.clone(),
+        );
         if let Err(running) = registered {
             // Not reachable through `place`, which skips an executor already
             // running the job — kept because this is where the invariant every
@@ -1222,7 +1316,7 @@ impl Shared {
                     )
                 })
                 .unwrap_or(Ok(()))
-                .and_then(|()| writer.write_job_with(&job, disabled))
+                .and_then(|()| writer.write_job_leased(&job, disabled, lease))
         };
 
         if let Err(e) = write {
@@ -1347,7 +1441,15 @@ impl Shared {
         // the exactly-once token for the job's single outcome, and a progress
         // report must never spend it.
         let message = match message {
-            ExecutorMessage::Progress { job_id, progress } => {
+            ExecutorMessage::Progress {
+                job_id,
+                progress,
+                lease,
+            } => {
+                if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
+                    self.report_stale(executor, &job_id, "progress report");
+                    return;
+                }
                 self.apply_progress(executor, &job_id, progress);
                 return;
             }
@@ -1357,7 +1459,12 @@ impl Shared {
                 message: text,
                 task_name: _,
                 extra_len,
+                lease,
             } => {
+                if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
+                    self.report_stale(executor, &job_id, "task log line");
+                    return;
+                }
                 // `extra_len` is what says whether there was a blob at all: an
                 // `extra` of `""` and no `extra` both arrive as an empty
                 // payload, and only one of them should store NULL.
@@ -1372,12 +1479,22 @@ impl Shared {
                 kind,
                 wake_at,
                 payload_len: _,
+                lease,
             } => {
-                self.apply_step_commit(executor, job_id, seq, step_key, kind, wake_at, payload);
+                self.apply_step_commit(
+                    executor, job_id, seq, step_key, kind, wake_at, lease, payload,
+                );
                 return;
             }
             other => other,
         };
+
+        // Checked before the frame becomes a `JobResult`, because that is the
+        // last point at which it still says which dispatch it came from: a
+        // `JobResult` names only a job.
+        let stale = message
+            .leased_job()
+            .is_some_and(|(job_id, lease)| !self.frame_is_current(executor, job_id, lease));
 
         let Some(result) = message.into_job_result(payload) else {
             log::warn!(
@@ -1412,8 +1529,15 @@ impl Shared {
             pump.settle_progress(result.job_id());
         }
 
+        // The slot is freed either way: this executor's attempt is over, and
+        // holding the slot for a result nobody will act on would strand it
+        // until the connection dies. Only the *result* is dropped.
         executor.free.fetch_add(1, Ordering::Relaxed);
         self.capacity_changed.notify_waiters();
+        if stale {
+            self.report_stale(executor, result.job_id(), "result");
+            return;
+        }
         self.emit(result);
     }
 
@@ -1434,6 +1558,7 @@ impl Shared {
         step_key: String,
         kind: StepKind,
         wake_at: Option<i64>,
+        lease: Option<Lease>,
         result: Vec<u8>,
     ) {
         let reply = {
@@ -1508,6 +1633,17 @@ impl Shared {
             return;
         };
 
+        // Same answer, one dispatch finer: the executor *is* running this id,
+        // but not under the lease the job is currently dispatched with. Refused
+        // here rather than left to the fence so the stale attempt ends now,
+        // instead of at the end of its ack timeout.
+        if !self.frame_is_current(executor, &job_id, lease.as_ref()) {
+            self.report_stale(executor, &job_id, "step commit");
+            let lost = QueueError::ClaimLost(job_id.clone());
+            reply(refusal(job_id, seq, lost));
+            return;
+        }
+
         let Some(owner) = self.claim_owner() else {
             // Unreachable through `Worker`, which installs the owner before the
             // first dispatch. Refused rather than guessed: a write fenced on a
@@ -1533,6 +1669,10 @@ impl Shared {
             result,
             owner,
             attempt: dispatched.attempt,
+            // Resolved from the dispatch, like the owner and the attempt: the
+            // frame's lease said *which* dispatch, and this is what that
+            // dispatch was made under.
+            epoch: dispatched.lease.as_ref().and_then(Lease::epoch),
             namespace: dispatched.namespace,
             reply: Box::new(reply),
         });
@@ -1811,6 +1951,7 @@ mod tests {
             namespace: None,
             disabled_middleware: Vec::new(),
             metadata: None,
+            lease: None,
         }
         .into_dispatch(Vec::new())
         .expect("a job frame is a dispatch")
@@ -1824,12 +1965,12 @@ mod tests {
     fn a_second_dispatch_of_one_job_id_is_refused() {
         let mut in_flight = HashMap::new();
         assert_eq!(
-            register_dispatch(&mut in_flight, &dispatch("job-1", 0)),
+            register_dispatch(&mut in_flight, &dispatch("job-1", 0), None),
             Ok(())
         );
 
         assert_eq!(
-            register_dispatch(&mut in_flight, &dispatch("job-1", 1)),
+            register_dispatch(&mut in_flight, &dispatch("job-1", 1), None),
             Err(0),
             "the refusal names the attempt already in flight"
         );
@@ -1845,11 +1986,11 @@ mod tests {
     #[test]
     fn a_released_entry_admits_the_next_attempt() {
         let mut in_flight = HashMap::new();
-        register_dispatch(&mut in_flight, &dispatch("job-1", 0)).expect("first");
+        register_dispatch(&mut in_flight, &dispatch("job-1", 0), None).expect("first");
         in_flight.remove("job-1");
 
         assert_eq!(
-            register_dispatch(&mut in_flight, &dispatch("job-1", 1)),
+            register_dispatch(&mut in_flight, &dispatch("job-1", 1), None),
             Ok(())
         );
         assert_eq!(in_flight["job-1"].attempt, 1);
@@ -1859,10 +2000,10 @@ mod tests {
     #[test]
     fn a_different_job_id_is_admitted_alongside() {
         let mut in_flight = HashMap::new();
-        register_dispatch(&mut in_flight, &dispatch("job-1", 0)).expect("first");
+        register_dispatch(&mut in_flight, &dispatch("job-1", 0), None).expect("first");
 
         assert_eq!(
-            register_dispatch(&mut in_flight, &dispatch("job-2", 0)),
+            register_dispatch(&mut in_flight, &dispatch("job-2", 0), None),
             Ok(())
         );
         assert_eq!(in_flight.len(), 2);

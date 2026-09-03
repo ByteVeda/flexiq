@@ -7,6 +7,8 @@ pub mod contract;
 pub mod error;
 /// Core job model: [`Job`], [`JobStatus`], [`NewJob`], [`JobCompletion`].
 pub mod job;
+/// The lease on one dispatch of one job: [`Lease`], [`LeaseBook`].
+pub mod lease;
 /// Periodic (cron) task scheduling helpers.
 pub mod periodic;
 pub mod pubsub;
@@ -42,6 +44,7 @@ pub use contract::{
 };
 pub use error::{QueueError, Result, StepDivergence};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};
+pub use lease::{mint_claim_epoch, Lease, LeaseBook};
 pub use resilience::circuit_breaker::{CircuitBreakerConfig, CircuitState};
 pub use resilience::rate_limiter::RateLimitConfig;
 pub use resilience::retry::RetryPolicy;
