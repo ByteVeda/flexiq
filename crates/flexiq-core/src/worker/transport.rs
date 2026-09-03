@@ -430,6 +430,16 @@ impl Write for ChannelWriter {
         }
         let Some(capacity) = self.channel.capacity else {
             let mut state = self.channel.state.lock().unwrap_or_else(recover);
+            // The same refusal the bounded path gives, and for the same reason:
+            // a write nobody will read is not a write that succeeded. Reporting
+            // one as `Ok` tells a caller its frame was delivered and leaves the
+            // bytes in a buffer with no reader behind it.
+            if !state.reader_open {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "the peer stopped reading",
+                ));
+            }
             state.buffer.extend(data);
             drop(state);
             self.channel.ready.notify_all();

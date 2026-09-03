@@ -324,6 +324,46 @@ mod tests {
     }
 
     #[test]
+    fn a_send_to_a_scheduler_that_is_gone_fails_rather_than_buffering() {
+        // The scheduler-bound direction is unbounded, so nothing back-pressures
+        // it; without a reader check a `send` after the connection ended would
+        // answer `Ok` for a frame that reached no one, and each one would grow a
+        // buffer nobody drains. A heartbeat is the caller that would report
+        // that success straight back to an executor.
+        let (transport, endpoint) = FrameTransport::new("grpc:test", false);
+        let (_reader, _writer, connection) = split(transport);
+
+        endpoint
+            .send(&ExecutorMessage::Heartbeat { free_slots: 2 }, &[])
+            .expect("a live connection takes it");
+
+        connection.close();
+        let error = endpoint
+            .send(&ExecutorMessage::Heartbeat { free_slots: 1 }, &[])
+            .expect_err("a send to a closed connection must fail");
+        assert!(
+            matches!(&error, ProtocolError::Io(io) if io.kind() == io::ErrorKind::BrokenPipe),
+            "expected a broken pipe, got {error}"
+        );
+    }
+
+    #[test]
+    fn a_send_after_the_reader_half_is_dropped_fails_too() {
+        // Same rule by the other route: the dispatcher's read half going away
+        // is the scheduler going away, whether or not anyone called `close`.
+        let (transport, endpoint) = FrameTransport::new("grpc:test", false);
+        let (reader, _writer, _connection) = split(transport);
+        drop(reader);
+
+        assert!(
+            endpoint
+                .send(&ExecutorMessage::Heartbeat { free_slots: 1 }, &[])
+                .is_err(),
+            "a send with no reader behind it must not report success"
+        );
+    }
+
+    #[test]
     fn closing_the_connection_ends_the_endpoint() {
         let (transport, endpoint) = FrameTransport::new("grpc:test", false);
         let (_reader, _writer, connection) = split(transport);
