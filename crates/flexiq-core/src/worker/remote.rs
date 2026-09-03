@@ -816,6 +816,10 @@ impl Shared {
             return Err(AttachError::ShuttingDown);
         }
         let peer = transport.peer();
+        // Read before the split consumes the transport. A door that checked the
+        // peer before the RPC was entered vouches for it here, and the frame
+        // credential below is then a value nobody has to forge on its behalf.
+        let vouched = transport.is_authenticated();
         let (read, write, connection) = transport.split()?;
         connection.set_write_timeout(Some(self.config.write_timeout))?;
         let mut reader = FrameReader::new(read);
@@ -841,7 +845,11 @@ impl Shared {
             return Err(ProtocolError::UnexpectedFrame { expected: "hello" }.into());
         };
 
-        if let Some(expected) = &self.config.auth_token {
+        // A transport that authenticated its own peer is not asked for the
+        // frame credential: it has no way to present one, and filling the
+        // configured secret in for it would be forging the check rather than
+        // making it. See [`Transport::is_authenticated`].
+        if let Some(expected) = self.config.auth_token.as_ref().filter(|_| !vouched) {
             if !token.is_some_and(|presented| expected.matches(&presented)) {
                 // Vague on purpose: a peer probing the port learns only that it
                 // was refused, not whether its token was missing or wrong.

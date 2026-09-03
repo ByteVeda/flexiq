@@ -10,7 +10,7 @@ use flexiq_core::job::{Job, JobStatus};
 use flexiq_core::scheduler::JobResult;
 use flexiq_core::worker::protocol::{FrameReader, FrameWriter};
 use flexiq_core::worker::transport::{ReadHalf, WriteHalf};
-use flexiq_core::worker::MemoryTransport;
+use flexiq_core::worker::{FrameEndpoint, FrameTransport, MemoryTransport};
 use flexiq_core::{
     AttachError, ExecutorMessage, ProtocolError, RemoteConfig, RemoteDispatcher, SchedulerMessage,
     Secret, Transport, WorkerDispatcher, PROTOCOL_VERSION,
@@ -134,6 +134,72 @@ fn a_dispatcher_without_a_token_ignores_one() {
     let (_executor, attached) = FakeExecutor::attach(&dispatcher, "exec-1", Some("anything"));
 
     assert_eq!(attached.expect("no credential is required"), "exec-1");
+}
+
+/// Attach over a [`FrameTransport`] carrying `hello` with no credential.
+fn attach_frames(
+    dispatcher: &RemoteDispatcher,
+    executor_id: &str,
+    authenticated: bool,
+) -> (FrameEndpoint, Result<String, AttachError>) {
+    let (transport, endpoint) = FrameTransport::new("grpc:test", authenticated);
+    endpoint
+        .send(
+            &ExecutorMessage::hello(executor_id, "test", "0.0.0", vec!["greet".to_string()], 1)
+                .build(),
+            &[],
+        )
+        .expect("send hello");
+
+    let attached = dispatcher.attach(Box::new(transport));
+    (endpoint, attached)
+}
+
+#[test]
+fn a_vouched_transport_attaches_without_a_frame_credential() {
+    // A gRPC door checks its bearer token in a layer, before the RPC is even
+    // entered, so its `hello` has no token to carry. Filling the configured
+    // secret in on the executor's behalf would forge the check rather than make
+    // it — the transport says it was already made.
+    let dispatcher = authenticated_dispatcher();
+    let (endpoint, attached) = attach_frames(&dispatcher, "exec-1", true);
+
+    assert_eq!(attached.expect("a vouched transport must attach"), "exec-1");
+    assert!(matches!(
+        endpoint.recv().expect("recv").expect("an ack"),
+        (SchedulerMessage::HelloAck { .. }, _)
+    ));
+    assert_eq!(dispatcher.capacity().executors, 1);
+}
+
+#[test]
+fn an_unvouched_transport_still_needs_the_frame_credential() {
+    // The skip is the transport's to claim, not a property of speaking frames:
+    // the same handshake over a transport that vouches for nothing is refused.
+    let dispatcher = authenticated_dispatcher();
+    let (_endpoint, attached) = attach_frames(&dispatcher, "exec-1", false);
+
+    assert!(matches!(&attached, Err(AttachError::Unauthorized(id)) if id == "exec-1"));
+    assert_eq!(dispatcher.capacity().executors, 0);
+}
+
+#[test]
+fn a_vouched_transport_does_not_bypass_the_version_check() {
+    let dispatcher = authenticated_dispatcher();
+    let (transport, endpoint) = FrameTransport::new("grpc:test", true);
+    endpoint
+        .send(
+            &ExecutorMessage::hello("exec-1", "test", "0.0.0", vec!["greet".to_string()], 1)
+                .protocol_version(PROTOCOL_VERSION + 1)
+                .build(),
+            &[],
+        )
+        .expect("send hello");
+
+    assert!(matches!(
+        dispatcher.attach(Box::new(transport)),
+        Err(AttachError::Protocol(ProtocolError::VersionMismatch { .. }))
+    ));
 }
 
 #[test]
