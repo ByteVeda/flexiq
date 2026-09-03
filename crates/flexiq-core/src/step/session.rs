@@ -75,6 +75,15 @@ impl<S: Storage> StorageStepSession<S> {
     ///
     /// A backend without a step store fails here. It must never degrade to "no
     /// steps recorded": that answer re-runs a charge.
+    ///
+    /// **Fenced on `(owner, attempt)` only** — no claim epoch, so this session
+    /// cannot separate two claims one owner won at one attempt, which
+    /// [`Storage::requeue_stuck`](crate::storage::Storage::requeue_stuck)
+    /// produces. Closing that means the *dispatch* carrying its epoch, and the
+    /// caller here has a [`Job`] rather than the claim the poller won; a
+    /// session that looked the current epoch up for itself would hand a
+    /// superseded attempt the live claim's value and turn the fence from silent
+    /// into wrong. See [`crate::lease`] and [`StorageSteps::with_epoch`].
     pub fn load(storage: S, job: &Job, owner: &str, limits: StepLimits) -> Result<Self> {
         Self::open(
             StorageSteps::new(storage, owner, job.retry_count),
