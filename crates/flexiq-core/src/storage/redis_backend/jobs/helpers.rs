@@ -52,6 +52,15 @@ impl RedisStorage {
     /// job in another namespace sending the same key is a different job, not
     /// a duplicate (#773), so the namespace rides in the key rather than being
     /// checked after the fact. See `namespace_segment` for the encoding.
+    ///
+    /// Upgrade note: this renames the pointer from the pre-#773 `jobs:unique:<key>`
+    /// (no namespace segment). Those old-format keys are orphaned, not
+    /// migrated: nothing reads or deletes a key in the old shape once every
+    /// caller reads and writes this one instead, and neither carries an
+    /// `EXPIRE`, so a pre-upgrade unique job leaves one small stale pointer
+    /// behind rather than being swept — bounded by however many distinct
+    /// `unique_key`s were live at upgrade time, and harmless (it names a job
+    /// id nothing looks up through it any more).
     pub(in crate::storage::redis_backend) fn unique_key_key(
         &self,
         namespace: Option<&str>,
