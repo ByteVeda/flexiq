@@ -22,6 +22,7 @@
 
 pub mod auth;
 pub mod blocking;
+pub mod executor;
 pub mod facade;
 pub mod health;
 pub mod limits;
@@ -37,15 +38,21 @@ use flexiq_core::StorageBackend;
 use crate::config::grpc::GrpcConfig;
 use crate::runtime::shutdown::Shutdown;
 
+pub use executor::ExecutorDoor;
 pub use listener::Listener;
 
 /// Bind and serve until `shutdown` fires.
 ///
 /// The two halves are separate on [`Listener`] for tests and for a caller that
 /// needs the port a `:0` bind chose; a deployment only ever wants both.
-pub async fn serve(config: GrpcConfig, storage: StorageBackend, shutdown: Shutdown) -> Result<()> {
+pub async fn serve(
+    config: GrpcConfig,
+    storage: StorageBackend,
+    executor: Option<ExecutorDoor>,
+    shutdown: Shutdown,
+) -> Result<()> {
     Listener::bind(&config)
         .await?
-        .serve(storage, shutdown)
+        .serve(storage, executor, shutdown)
         .await
 }

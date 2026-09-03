@@ -24,13 +24,27 @@
 //! belongs to a sidecar proxy or a service mesh, and a variable that looks like
 //! it encrypts the connection but does not is worse than no variable.
 
-use anyhow::{bail, Result};
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
 
 use crate::config::listen::{parse, ListenAddress};
 use crate::config::{value, Env};
 
 /// The variable that turns the role on, named once.
 pub const LISTEN_VAR: &str = "FLEXIQ_GRPC_LISTEN";
+
+/// How long one executor's attach stream may live, in seconds.
+pub const STREAM_MAX_AGE_VAR: &str = "FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE";
+
+/// Thirty minutes.
+///
+/// A stream cannot be load balanced once it has started, so it has to end for a
+/// replacement to be placed somewhere else. It also has to end rarely: a
+/// rotation drains the executor first, which costs a brief window in which it
+/// is matched no new work, and paying that every few minutes would be worse
+/// than the imbalance it fixes.
+const DEFAULT_STREAM_MAX_AGE: Duration = Duration::from_secs(1_800);
 
 /// Variables an earlier build honoured that this one does not read at all.
 ///
@@ -57,6 +71,9 @@ pub struct GrpcConfig {
     pub listen: ListenAddress,
     /// Tenant namespace every call is scoped to. Non-empty by construction.
     pub namespace: String,
+    /// How long one executor's attach stream lives before the scheduler drains
+    /// it and closes it. Zero leaves streams unbounded.
+    pub executor_stream_max_age: Duration,
 }
 
 /// Parse the gRPC block, or `None` when the role is disabled.
@@ -107,9 +124,20 @@ pub fn from_env(env: &Env, namespace: Option<&str>) -> Result<Option<GrpcConfig>
 
     let listen = parse(LISTEN_VAR, &spec)?;
 
+    // Zero is honoured rather than rejected: an operator behind a proxy that
+    // already recycles connections has a reason to turn this off, and the
+    // alternative is a variable that cannot express what they want.
+    let executor_stream_max_age = match value(env, STREAM_MAX_AGE_VAR) {
+        None => DEFAULT_STREAM_MAX_AGE,
+        Some(raw) => Duration::from_secs(raw.parse().with_context(|| {
+            format!("{STREAM_MAX_AGE_VAR} must be a whole number of seconds, got '{raw}'")
+        })?),
+    };
+
     Ok(Some(GrpcConfig {
         listen,
         namespace: namespace.to_string(),
+        executor_stream_max_age,
     }))
 }
 
@@ -151,6 +179,43 @@ mod tests {
         assert_eq!(
             config.listen,
             ListenAddress::Tcp("127.0.0.1:50051".parse().unwrap())
+        );
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn executor_streams_rotate_by_default() {
+        let config = from_env(&env(&[(LISTEN_VAR, ":50051")]), Some("prod"))
+            .expect("valid")
+            .expect("configured");
+        assert_eq!(config.executor_stream_max_age, DEFAULT_STREAM_MAX_AGE);
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_zero_stream_age_leaves_streams_unbounded() {
+        // Honoured, not refused: a deployment behind a proxy that already
+        // recycles connections has a reason to turn this off.
+        let config = from_env(
+            &env(&[(LISTEN_VAR, ":50051"), (STREAM_MAX_AGE_VAR, "0")]),
+            Some("prod"),
+        )
+        .expect("valid")
+        .expect("configured");
+        assert_eq!(config.executor_stream_max_age, Duration::ZERO);
+    }
+
+    #[cfg(feature = "grpc")]
+    #[test]
+    fn a_stream_age_that_is_not_seconds_names_its_variable() {
+        let error = from_env(
+            &env(&[(LISTEN_VAR, ":50051"), (STREAM_MAX_AGE_VAR, "30m")]),
+            Some("prod"),
+        )
+        .expect_err("must refuse");
+        assert!(
+            error.to_string().contains(STREAM_MAX_AGE_VAR),
+            "unexpected message: {error}"
         );
     }
 

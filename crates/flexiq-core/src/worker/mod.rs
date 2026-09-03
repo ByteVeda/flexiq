@@ -8,6 +8,7 @@ pub mod executor;
 // column an executor written outside this workspace has to agree with — see
 // `BINDING_CONTRACT.md`, which pins the algorithm and its vectors.
 pub mod fingerprint;
+pub mod frame_transport;
 pub mod protocol;
 pub mod registry;
 pub mod remote;
@@ -25,6 +26,7 @@ pub use executor::{
     ExecutorSideChannel, ExecutorStepStore, ExecutorSteps, StepRelay,
 };
 pub use fingerprint::registry_fingerprint;
+pub use frame_transport::{FrameEndpoint, FrameTransport};
 pub use protocol::{
     decode_step_snapshot, encode_step_snapshot, Dispatch, ExecutorMessage, HelloBuilder, Incoming,
     ProtocolError, SchedulerMessage, CAP_LEASE, CAP_SIDE_CHANNEL, CAP_STEPS, PROTOCOL_VERSION,

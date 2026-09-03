@@ -250,6 +250,26 @@ impl RemoteDispatcher {
         self.shared.attach(transport)
     }
 
+    /// Send one executor away gracefully: stop matching work to it, wait up to
+    /// `drain` for what it already holds, then close its connection.
+    ///
+    /// `false` when no executor by that id is attached.
+    ///
+    /// This is what makes a *bounded* connection lifetime safe. A stream that
+    /// ends on a timer, or a peer being drained before a deploy, cannot simply
+    /// be closed: a job matched to it a moment earlier is a job nobody will
+    /// read, and it then waits out the reaper's patience instead of running.
+    /// Removing the executor from placement first, and only closing once every
+    /// slot has come back, is what closes that window.
+    ///
+    /// Deliberately *not* a `shutdown` frame. Shutdown tells an executor to
+    /// exit; this tells it nothing at all, and a peer that wants to come back —
+    /// which is the whole point of a rotating stream — reads a clean end as
+    /// "reconnect".
+    pub async fn detach(&self, executor_id: &str, drain: Duration) -> bool {
+        self.shared.detach(executor_id, drain).await
+    }
+
     /// Snapshot every attached executor.
     pub fn executors(&self) -> Vec<AttachedExecutor> {
         self.shared.snapshot()
@@ -388,6 +408,10 @@ struct Executor {
     /// map names a job and nothing else, so two dispatches of one id would be
     /// indistinguishable to all three of those uses.
     in_flight: Mutex<HashMap<String, InFlight>>,
+    /// Set by [`Shared::detach`]: the connection is going away, so placement
+    /// skips it while everything else — cancel routing, the side channel, the
+    /// dashboard's view — keeps working until its last job reports.
+    draining: AtomicBool,
     writer: Mutex<FrameWriter<WriteHalf>>,
     connection: Connection,
     peer: String,
@@ -398,6 +422,19 @@ struct Executor {
 impl Executor {
     fn is_busy(executor: &Arc<Self>) -> bool {
         !executor.in_flight.lock().unwrap_or_else(recover).is_empty()
+    }
+
+    /// Whether every slot has been given back — nothing running, and nothing
+    /// *matched* either.
+    ///
+    /// Strictly stronger than `!is_busy`, and the difference is the whole point.
+    /// [`Shared::place`] reserves a slot, awaits two storage reads and only then
+    /// writes the job frame; in between, the job is matched to this executor and
+    /// has no [`in_flight`](Self::in_flight) entry at all. Closing on the weaker
+    /// predicate would strand exactly that job — matched to a connection nobody
+    /// will ever read.
+    fn is_idle(&self) -> bool {
+        self.free.load(Ordering::Relaxed) >= self.slots
     }
 
     /// Whether this executor is already running `job_id`.
@@ -816,6 +853,10 @@ impl Shared {
             return Err(AttachError::ShuttingDown);
         }
         let peer = transport.peer();
+        // Read before the split consumes the transport. A door that checked the
+        // peer before the RPC was entered vouches for it here, and the frame
+        // credential below is then a value nobody has to forge on its behalf.
+        let vouched = transport.is_authenticated();
         let (read, write, connection) = transport.split()?;
         connection.set_write_timeout(Some(self.config.write_timeout))?;
         let mut reader = FrameReader::new(read);
@@ -841,7 +882,11 @@ impl Shared {
             return Err(ProtocolError::UnexpectedFrame { expected: "hello" }.into());
         };
 
-        if let Some(expected) = &self.config.auth_token {
+        // A transport that authenticated its own peer is not asked for the
+        // frame credential: it has no way to present one, and filling the
+        // configured secret in for it would be forging the check rather than
+        // making it. See [`Transport::is_authenticated`].
+        if let Some(expected) = self.config.auth_token.as_ref().filter(|_| !vouched) {
             if !token.is_some_and(|presented| expected.matches(&presented)) {
                 // Vague on purpose: a peer probing the port learns only that it
                 // was refused, not whether its token was missing or wrong.
@@ -894,6 +939,7 @@ impl Shared {
             steps: capabilities.iter().any(|cap| cap == CAP_STEPS),
             leases: capabilities.iter().any(|cap| cap == CAP_LEASE),
             in_flight: Mutex::new(HashMap::new()),
+            draining: AtomicBool::new(false),
             writer: Mutex::new(writer),
             connection,
             peer: peer.clone(),
@@ -1153,9 +1199,12 @@ impl Shared {
             if !executor.tasks.contains(&job.task_name) {
                 continue;
             }
+            // Advertised, then skipped: a draining executor is still the reason
+            // this task is placeable, so the job waits for the replacement
+            // stream rather than failing as "nobody advertises it".
             advertised = true;
             let free = executor.free.load(Ordering::Relaxed);
-            if free == 0 {
+            if free == 0 || executor.draining.load(Ordering::Relaxed) {
                 continue;
             }
             // One attempt of a job id per connection ([`register_dispatch`]).
@@ -1331,7 +1380,7 @@ impl Shared {
                 job.id,
                 executor.id
             );
-            self.deregister(&executor.id);
+            self.deregister(executor);
         }
     }
 
@@ -1763,7 +1812,7 @@ impl Shared {
     /// the scheduler's reaper — the same recovery a crashed worker gets, and
     /// the only correct answer when a lost result may still have run.
     fn abandon(&self, executor: &Arc<Executor>) {
-        self.deregister(&executor.id);
+        self.deregister(executor);
         let held: Vec<(String, InFlight)> = executor
             .in_flight
             .lock()
@@ -1799,17 +1848,28 @@ impl Shared {
         }
     }
 
-    /// Remove an executor from the registry. Idempotent — the writer and the
-    /// reader can both discover a broken connection.
-    fn deregister(&self, executor_id: &str) {
-        let removed = self
-            .executors
-            .lock()
-            .unwrap_or_else(recover)
-            .remove(executor_id);
-        if removed.is_some() {
-            self.capacity_changed.notify_waiters();
+    /// Remove *this connection* from the registry, if it is still the one
+    /// registered under its id. Idempotent — the writer and the reader can both
+    /// discover a broken connection.
+    fn deregister(&self, executor: &Arc<Executor>) {
+        let mut executors = self.executors.lock().unwrap_or_else(recover);
+        // Instance-aware, not id-aware, and that is the whole point.
+        // [`Shared::detach`] removes the id *before* it closes the connection,
+        // so that a reconnect under the same id is not refused as a duplicate.
+        // That leaves a window in which the departing connection's reader
+        // thread is still alive while its replacement is already registered,
+        // and an id-keyed removal would have the old reader evict the new
+        // executor on its way out — silently, and with the scheduler then
+        // dispatching to nobody.
+        if !executors
+            .get(&executor.id)
+            .is_some_and(|current| Arc::ptr_eq(current, executor))
+        {
+            return;
         }
+        executors.remove(&executor.id);
+        drop(executors);
+        self.capacity_changed.notify_waiters();
     }
 
     /// Cancel router: forwards requests to whichever executor holds the job.
@@ -1855,6 +1915,54 @@ impl Shared {
                     .contains_key(job_id)
             })
             .cloned()
+    }
+
+    /// Stop matching work to one executor, wait for what it already holds, then
+    /// close its connection.
+    async fn detach(&self, executor_id: &str, drain: Duration) -> bool {
+        let executor = {
+            // Under the registry lock, so `try_acquire` and this cannot disagree
+            // about whether a job may still be matched here.
+            let executors = self.executors.lock().unwrap_or_else(recover);
+            let Some(executor) = executors.get(executor_id).cloned() else {
+                return false;
+            };
+            executor.draining.store(true, Ordering::Relaxed);
+            executor
+        };
+
+        // Idle, not un-busy: see [`Executor::is_idle`]. A job matched between a
+        // reservation and its frame has no in-flight entry, and closing on it
+        // would hand the job to a stream nobody reads — the loss this exists to
+        // prevent.
+        let deadline = Instant::now() + drain;
+        while Instant::now() < deadline && !executor.is_idle() {
+            tokio::time::sleep(DRAIN_POLL).await;
+        }
+
+        if !executor.is_idle() {
+            let running = executor.in_flight.lock().unwrap_or_else(recover).len();
+            let matched = executor
+                .slots
+                .saturating_sub(executor.free.load(Ordering::Relaxed))
+                as usize;
+            log::warn!(
+                "[flexiq] executor {executor_id} did not drain within its budget: \
+                 {running} running, {} matched but not yet dispatched; closing — \
+                 they will be reaped",
+                matched.saturating_sub(running)
+            );
+        }
+
+        // Removed before the close, not left to the reader thread's `abandon`:
+        // an executor reconnecting the instant its stream ends would otherwise
+        // race a registry entry that is still there and be refused as a
+        // duplicate id. What makes that safe is that `deregister` matches the
+        // instance, so the reader thread this is about to wake cannot remove
+        // whatever attached in its place.
+        self.deregister(&executor);
+        executor.connection.close();
+        true
     }
 
     /// Ask every attached executor to finish, wait out the drain budget, then
@@ -1927,10 +2035,98 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+    use std::sync::{Arc, Mutex};
 
-    use super::{divergent_peer, only_in, register_dispatch, MAX_LOGGED_TASK_NAMES};
+    use super::{
+        divergent_peer, only_in, register_dispatch, Executor, RemoteConfig, RemoteDispatcher,
+        MAX_LOGGED_TASK_NAMES,
+    };
     use crate::job::Job;
-    use crate::worker::protocol::SchedulerMessage;
+    use crate::worker::protocol::{FrameWriter, SchedulerMessage};
+    use crate::worker::transport::{MemoryTransport, Transport};
+
+    /// One registered executor, over an in-memory connection nobody drives.
+    ///
+    /// Enough of an `Executor` to be a registry entry, which is all the
+    /// deregistration contract is about.
+    fn registered(id: &str) -> Arc<Executor> {
+        let (near, _far) = MemoryTransport::pair();
+        let (_read, write, connection) = Box::new(near).split().expect("split");
+        Arc::new(Executor {
+            id: id.to_string(),
+            sdk: "test".to_string(),
+            version: "0.0.0".to_string(),
+            tasks: HashSet::new(),
+            registry_fingerprint: None,
+            slots: 1,
+            free: AtomicU32::new(1),
+            steps: false,
+            leases: false,
+            in_flight: Mutex::new(HashMap::new()),
+            draining: AtomicBool::new(false),
+            writer: Mutex::new(FrameWriter::new(write)),
+            connection,
+            peer: "memory:test".to_string(),
+            last_seen_ms: AtomicU32::new(0),
+        })
+    }
+
+    /// `detach` removes the id *before* it closes the connection, so a
+    /// reconnect under the same id is not refused as a duplicate. That leaves
+    /// the departing connection's reader thread alive while its replacement is
+    /// already registered, and an id-keyed removal would have the old reader
+    /// evict the new executor on its way out.
+    ///
+    /// Pinned here rather than by racing the two threads: the window is a
+    /// thread wake wide, so a test that tried to land inside it would pass by
+    /// luck about half the time. What the fix actually says is that
+    /// deregistration names an instance, and that is what this asserts.
+    #[test]
+    fn deregistering_a_departed_connection_leaves_its_replacement_alone() {
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let departing = registered("exec-1");
+        let replacement = registered("exec-1");
+
+        dispatcher
+            .shared
+            .executors
+            .lock()
+            .expect("registry")
+            .insert("exec-1".to_string(), Arc::clone(&replacement));
+
+        dispatcher.shared.deregister(&departing);
+        assert_eq!(
+            dispatcher.capacity().executors,
+            1,
+            "the old connection must not remove the entry that replaced it"
+        );
+
+        dispatcher.shared.deregister(&replacement);
+        assert_eq!(
+            dispatcher.capacity().executors,
+            0,
+            "its own entry is still its to remove"
+        );
+    }
+
+    /// And removing twice is still a no-op, which every caller relies on: the
+    /// writer and the reader can both discover a broken connection.
+    #[test]
+    fn deregistering_the_same_connection_twice_is_a_no_op() {
+        let dispatcher = RemoteDispatcher::new(RemoteConfig::default());
+        let executor = registered("exec-1");
+        dispatcher
+            .shared
+            .executors
+            .lock()
+            .expect("registry")
+            .insert("exec-1".to_string(), Arc::clone(&executor));
+
+        dispatcher.shared.deregister(&executor);
+        dispatcher.shared.deregister(&executor);
+        assert_eq!(dispatcher.capacity().executors, 0);
+    }
 
     fn set(names: &[&str]) -> HashSet<String> {
         names.iter().map(|n| (*n).to_string()).collect()

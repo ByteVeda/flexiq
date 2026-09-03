@@ -69,11 +69,22 @@ pub fn run(config: Config) -> Result<()> {
     };
     let shutdown = Shutdown::default();
 
-    // The dispatcher exists only when executors can reach us; without a
-    // listener there is nothing to dispatch to and the scheduler stays off.
-    let dispatcher = match (&config.attach, &backend) {
-        (Some(attach), Some(backend)) => Some(RemoteDispatcher::new(RemoteConfig {
-            auth_token: attach.token.clone(),
+    // The dispatcher exists only when executors can reach us; without a door
+    // there is nothing to dispatch to and the scheduler stays off. Either door
+    // counts — the gRPC one carries the same executors, and its gate is the
+    // token scope rather than a fourth environment variable.
+    // `config.grpc` is `Some` only on a build with the feature: the parser
+    // refuses the variable outright otherwise, rather than ignoring it.
+    let executors_can_reach_us = config.attach.is_some() || config.grpc.is_some();
+    let dispatcher = match (executors_can_reach_us, &backend) {
+        (true, Some(backend)) => Some(RemoteDispatcher::new(RemoteConfig {
+            // Only the socket door has a frame credential to check. The gRPC
+            // door's transport vouches for its own peer, so this is never
+            // asked of it.
+            auth_token: config
+                .attach
+                .as_ref()
+                .and_then(|attach| attach.token.clone()),
             // This process holds the connection an executor deliberately does
             // not, so it is the one that applies its progress and task logs and
             // resolves its middleware toggles.
@@ -131,6 +142,21 @@ pub fn run(config: Config) -> Result<()> {
             }
         });
 
+        // Executors are drained *while* the listeners are winding down, not
+        // after. An attach stream is an in-flight gRPC request and a graceful
+        // listener waits for it to end — but the stream only ends when the
+        // dispatcher closes the connection, which is what this does. Waiting
+        // for the roles first would be a circle neither side can leave.
+        let draining = supervisor.clone().map(|supervisor| {
+            let shutdown = shutdown.clone();
+            tokio::spawn(async move {
+                shutdown.wait().await;
+                // Blocking: it joins the scheduler's threads, and one of them
+                // is waiting on this very runtime to finish the drain.
+                let _ = tokio::task::spawn_blocking(move || supervisor.shutdown()).await;
+            })
+        });
+
         let dashboard = match (&config.dashboard, &backend) {
             (Some(dashboard_config), Some(backend)) => {
                 prepare_auth(&backend.storage, dashboard_config);
@@ -171,9 +197,26 @@ pub fn run(config: Config) -> Result<()> {
         }
         #[cfg(feature = "grpc")]
         if let (Some(grpc), Some(backend)) = (config.grpc.clone(), &backend) {
+            // Present whenever this process has somewhere to put an executor.
+            // A deployment that wants none simply mints no `execute`-scoped
+            // token, which is the gate the package already has.
+            let door =
+                dispatcher
+                    .clone()
+                    .zip(supervisor.clone())
+                    .map(|(dispatcher, supervisor)| {
+                        crate::grpc::ExecutorDoor::new(
+                            dispatcher,
+                            supervisor,
+                            crate::grpc::executor::Rotation::new(Some(
+                                grpc.executor_stream_max_age,
+                            )),
+                        )
+                    });
             roles.spawn(crate::grpc::serve(
                 grpc,
                 backend.storage.clone(),
+                door,
                 shutdown.clone(),
             ));
         }
@@ -188,6 +231,13 @@ pub fn run(config: Config) -> Result<()> {
         };
 
         signals.abort();
+        if let Some(draining) = draining {
+            // Already finished in the ordinary case — the roles cannot stop
+            // until it has closed their streams — but a role that failed its
+            // bind never waited for anything, and this is where that drain is
+            // still owed.
+            let _ = draining.await;
+        }
         result
     });
 

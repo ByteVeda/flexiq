@@ -32,6 +32,9 @@ fn config(listen: ListenAddress) -> GrpcConfig {
     GrpcConfig {
         listen,
         namespace: NAMESPACE.to_string(),
+        // These tests drive the producer door; a rotating executor stream would
+        // only add a timer to every one of them.
+        executor_stream_max_age: std::time::Duration::ZERO,
     }
 }
 
@@ -82,7 +85,7 @@ async fn health_reports_serving_once_storage_has_answered() {
     let addr = listener
         .local_addr()
         .expect("a TCP listener knows what it bound");
-    let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
+    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
 
     let mut health = HealthClient::new(dial(&format!("http://{addr}")).await);
     let status = health
@@ -115,7 +118,7 @@ async fn reflection_lists_the_health_service_and_resolves_the_committed_contract
             .local_addr()
             .expect("a TCP listener knows what it bound")
     );
-    let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
+    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
 
     // What `grpcurl list` asks for.
     let listed = reflect(&url, &token, MessageRequest::ListServices(String::new())).await;
@@ -181,7 +184,7 @@ async fn a_unix_socket_lands_narrow_and_is_cleaned_up() {
         listener.local_addr().is_none(),
         "a Unix listener has no socket address to report"
     );
-    let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
+    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
 
     // Owner and group, and nobody else — whatever the umask was.
     let mode = std::fs::metadata(&path)

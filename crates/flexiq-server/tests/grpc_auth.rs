@@ -63,6 +63,7 @@ impl Harness {
         let listener = Listener::bind(&GrpcConfig {
             listen: ListenAddress::Tcp(spec.parse().expect("valid address")),
             namespace: NAMESPACE.to_string(),
+            executor_stream_max_age: std::time::Duration::ZERO,
         })
         .await
         .expect("bind");
@@ -70,7 +71,7 @@ impl Harness {
             .local_addr()
             .expect("a TCP listener knows what it bound");
 
-        let served = tokio::spawn(listener.serve((*storage).clone(), shutdown.clone()));
+        let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
 
         // Dial loopback even for a wildcard bind: the port is what matters.
         let channel = Channel::from_shared(format!("http://127.0.0.1:{}", addr.port()))
