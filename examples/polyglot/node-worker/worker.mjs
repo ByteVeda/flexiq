@@ -7,10 +7,14 @@
 import { CborSerializer, Queue } from "@byteveda/flexiq";
 
 const dbPath = process.env.FLEXIQ_DB ?? "../flexiq.db";
+// Set by the gRPC variant only: a job enqueued through the producer door
+// always carries its token's namespace, so a worker with no namespace would
+// never see it. Unset here, same as every process in the original example.
+const namespace = process.env.FLEXIQ_NAMESPACE;
 
 // Each SDK's own default serializer is same-language-only. CBOR is the
 // cross-SDK format, and every runtime here opts into it explicitly.
-const queue = new Queue({ dbPath, serializer: new CborSerializer() });
+const queue = new Queue({ dbPath, serializer: new CborSerializer(), namespace });
 
 queue.task("orders.process", (order) => {
   const total = (order.amount_cents / 100).toFixed(2);
