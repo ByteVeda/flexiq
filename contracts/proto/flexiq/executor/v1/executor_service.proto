@@ -1,0 +1,379 @@
+// UNSTABLE. Until the release that first ships the gRPC role, these files may
+// change under the `proto-breaking` label (§2.2 of
+// tasks/specs/2026-09-01-flexiq-v1-proto-design.md). After that release the
+// label is for reverting a mistake made in the same release train, never for
+// changing a shipped shape.
+//
+// The rules this package is held to, because a client reads the .proto and not
+// the design document:
+//
+//   1. Field numbers are never reused and never renumbered.
+//   2. Fields are deprecated in place, and on removal both the number and the
+//      name are reserved.
+//   3. New RPCs, messages, fields and enum values are additive and never bump
+//      the package version.
+//   4. A field's meaning and units are frozen with its number.
+//   5. Readers tolerate what they do not know: unknown fields, unknown enum
+//      values, unknown oneof arms.
+//
+// This package is deliberately separate from flexiq.v1. The audiences,
+// credentials and exposure differ: a producer submits work, an executor runs
+// it. flexiq.executor.v1 may import flexiq.v1; the reverse import is forbidden,
+// so the package a third party generates a producer client from stays
+// compilable and reviewable on its own.
+
+syntax = "proto3";
+
+package flexiq.executor.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// The executor door: attach, run what you are given, report what happened.
+//
+// An attached executor holds no database credential. It never reads a job row,
+// never writes a result, and never resolves its own namespace, owner or attempt
+// — the scheduler applies every one of those from the dispatch it recorded.
+// That is what makes this a door an application container may dial out through.
+//
+// The frames below are the worker frame protocol in BINDING_CONTRACT.md, with
+// the same ordering rules and the same meanings. This service is a fourth
+// transport for that protocol, not a second one: an executor attached over gRPC
+// and an executor attached over a socket are the same executor to the
+// scheduler, are placed by the same rules, and appear side by side in the same
+// registry.
+//
+// What this service deliberately does not have:
+//
+//   * No HTTP binding, ever. The JSON facade serves flexiq.v1 and nothing else.
+//   * No admin surface, and no producer surface. A credential scoped to this
+//     package may run work; it may not submit any.
+//   * No way to name a namespace, an owner, an attempt or a resource cap.
+//     Anything an executor could name is something an executor could forge, so
+//     the scheduler resolves all of them itself.
+//   * No registry fingerprint on the wire. `hello` carries `tasks` and the
+//     scheduler derives the fingerprint from it; a wire field would be a second
+//     copy of one fact, free to disagree with the first.
+service ExecutorService {
+  // Attach for the lifetime of one stream: `hello` in, `hello_ack` out, then
+  // jobs out and results in until either side ends it.
+  //
+  // **The stream is bounded on purpose.** A stream cannot be load balanced once
+  // it has started, so the scheduler ends it on a timer and expects the
+  // executor to reconnect. Before it does, it stops matching new work to the
+  // stream and waits for what the executor already holds, so a rotation never
+  // costs a job. A clean end means "reconnect"; a `shutdown` frame means "stop".
+  rpc Attach(stream AttachRequest) returns (stream AttachResponse);
+
+  // Report liveness and current free capacity.
+  //
+  // Off the dispatch stream on purpose. A heartbeat sharing the stream it is
+  // meant to report on cannot distinguish a busy stream from a dead peer, and
+  // it is the first thing a stream-per-connection design has to take back out.
+  //
+  // `session` comes from the `flexiq-attach-session-bin` metadata on the Attach
+  // response. It is the scheduler's own value handed back: an executor naming
+  // itself here could shrink a peer's advertised capacity by claiming its id.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// Whether a step commit carries a memoized value or a deadline.
+enum StepKind {
+  STEP_KIND_UNSPECIFIED = 0;
+  // A step whose result is recorded so a later attempt replays it.
+  STEP_KIND_RUN = 1;
+  // A `step.sleep`: the attempt ends and the job is rescheduled.
+  STEP_KIND_SLEEP = 2;
+}
+
+// What an executor should do about a refused step commit.
+//
+// Classified by the side that holds storage, because only it can see the error.
+enum StepFailure {
+  STEP_FAILURE_UNSPECIFIED = 0;
+  // Transient. The attempt fails and the job retries.
+  STEP_FAILURE_RETRYABLE = 1;
+  // The commit will never succeed. Retrying only wastes an attempt.
+  STEP_FAILURE_PERMANENT = 2;
+  // Another attempt owns this job now. This one must stop without writing.
+  STEP_FAILURE_SUPERSEDED = 3;
+}
+
+// One frame from the executor.
+//
+// A oneof, so a frame this build does not recognise decodes to no arm and is
+// skipped rather than ending the stream — the protobuf form of the frame
+// protocol's "an unknown frame type is skipped, not fatal".
+message AttachRequest {
+  oneof frame {
+    HelloFrame hello = 1;
+    SuccessFrame success = 2;
+    FailureFrame failure = 3;
+    CancelledFrame cancelled = 4;
+    SleptFrame slept = 5;
+    ProgressFrame progress = 6;
+    TaskLogFrame task_log = 7;
+    StepCommitFrame step_commit = 8;
+  }
+}
+
+// One frame from the scheduler. Unknown arms are skipped, as above.
+message AttachResponse {
+  oneof frame {
+    HelloAckFrame hello_ack = 1;
+    JobFrame job = 2;
+    JobStepsFrame job_steps = 3;
+    StepAckFrame step_ack = 4;
+    CancelFrame cancel = 5;
+    ShutdownFrame shutdown = 6;
+  }
+}
+
+// First frame on every stream: who is attaching and what it can run.
+//
+// It carries no credential. The bearer token authorised this RPC before it was
+// entered, and a second credential inside the body would be a second thing to
+// keep in step with the first.
+message HelloFrame {
+  // Stable identity of this executor. One live stream per id; a second attach
+  // under an id already attached is refused.
+  string executor_id = 1;
+  // SDK this executor is built on, for logs and inventory.
+  string sdk = 2;
+  string version = 3;
+  // Tasks this executor has handlers for. Nothing else is ever sent to it, and
+  // the scheduler derives its registry fingerprint from exactly this list.
+  repeated string tasks = 4;
+  // How many jobs it can run at once.
+  uint32 slots = 5;
+  // Worker frame protocol version. A mismatch is refused, after an ack, so both
+  // ends can log both numbers.
+  uint32 protocol_version = 6;
+  // Optional behaviours this executor takes part in, e.g. "steps", "lease".
+  //
+  // Strings, not an enum: adding a capability must not be a proto change, which
+  // is the entire cost the capability mechanism exists to avoid. An executor
+  // claims nothing it has not implemented, and the scheduler sends no frame for
+  // a behaviour that was not claimed.
+  repeated string capabilities = 7;
+}
+
+// Answer to HelloFrame, completing the handshake.
+message HelloAckFrame {
+  // Identity of the scheduler that accepted the attach.
+  string scheduler_id = 1;
+  uint32 protocol_version = 2;
+  // Behaviours this scheduler supports. An executor that sees no capability
+  // sends no frames that depend on one.
+  repeated string capabilities = 3;
+}
+
+// Run a job.
+message JobFrame {
+  string id = 1;
+  string task_name = 2;
+  // The tagged envelope from BINDING_CONTRACT.md, opaque and never re-encoded.
+  bytes payload = 3;
+  // Retries already attempted.
+  int32 retry_count = 4;
+  int32 max_retries = 5;
+  string queue = 6;
+  // How long this attempt may run. Unset means no limit — which is also what
+  // the frame protocol's non-positive `timeout_ms` means.
+  google.protobuf.Duration timeout = 7;
+  // Namespace the job belongs to, so a task that needs it does not have to ask.
+  // Told to the executor; never accepted from one.
+  optional string namespace = 8;
+  // Middleware the operator has disabled for this task, resolved at dispatch.
+  //
+  // It rides the dispatch because an executor has no settings store to read it
+  // from. A toggle flipped in the dashboard takes effect on the next job.
+  repeated string disabled_middleware = 9;
+  // The job's metadata blob as stored: opaque JSON text, byte-preserved.
+  optional string metadata = 10;
+  // The lease this dispatch was made under. Opaque, minted by the scheduler,
+  // and required back on every frame that settles or advances the attempt.
+  //
+  // Absent when the executor did not advertise the "lease" capability. It is
+  // not a credential and grants nothing: it identifies *which dispatch* of this
+  // job a frame belongs to, so a stalled executor cannot write over the attempt
+  // that replaced it.
+  optional bytes lease = 11;
+}
+
+// The steps a job has already committed, sent immediately before its JobFrame
+// so the executor can answer a memo hit without a storage read it has no
+// credentials for.
+//
+// No frame means an empty snapshot, never an unknown one. Sent only to an
+// executor that advertised the "steps" capability.
+message JobStepsFrame {
+  // Job the snapshot belongs to. The JobFrame that follows repeats it.
+  string job_id = 1;
+  // The encoded snapshot, in the encoding BINDING_CONTRACT.md pins.
+  bytes snapshot = 2;
+}
+
+// Answer to StepCommitFrame.
+//
+// The executor blocks on this before returning from a step: an unconfirmed
+// commit is indistinguishable from one that never happened, and carrying on
+// past it re-runs the step next attempt with the side effect already applied.
+message StepAckFrame {
+  string job_id = 1;
+  // Position the commit named. (job_id, seq) is the correlation — one executor
+  // runs many jobs, and a job id alone would not pair them.
+  int32 seq = 2;
+  // Whether the step is durable now. True covers a fresh write and a
+  // byte-identical retransmission alike.
+  bool ok = 3;
+  // A byte-identical row was already at this position: a retransmission after a
+  // lost ack, which is a success.
+  bool already = 4;
+  // Deadline the job was *actually* rescheduled to, for a sleep commit. On a
+  // replay this is the stored deadline, not the one proposed.
+  google.protobuf.Timestamp wake_at = 5;
+  // Why the commit was refused, when ok is false.
+  optional string error = 6;
+  // What to do about it, when ok is false.
+  StepFailure failure = 7;
+}
+
+// Cooperative cancel, so an executor observes a cancel without polling storage.
+message CancelFrame {
+  string job_id = 1;
+}
+
+// Stop accepting work and exit once in-flight jobs finish.
+//
+// Distinct from the stream simply ending, which means "reconnect".
+message ShutdownFrame {}
+
+// Progress for a running job, applied to storage by the scheduler.
+//
+// Fire and forget: there is nothing to answer, and a task that only wanted to
+// report progress must never block on the scheduler to do it.
+message ProgressFrame {
+  // The scheduler drops a frame naming a job the sending stream is not running.
+  string job_id = 1;
+  // 0-100. Anything else is dropped rather than stored.
+  int32 progress = 2;
+  // See JobFrame.lease.
+  optional bytes lease = 3;
+}
+
+// One structured log line for a running job, applied by the scheduler.
+//
+// A published partial is this frame at level "result", so logging and
+// publishing share one frame.
+message TaskLogFrame {
+  string job_id = 1;
+  string task_name = 2;
+  // e.g. "info", or "result" for a published partial.
+  string level = 3;
+  // Empty for a published partial, whose value lives in `extra`.
+  string message = 4;
+  // Pre-encoded JSON. Bytes rather than a string because the scheduler already
+  // decides what to do with a blob that is not UTF-8 — it drops the blob and
+  // keeps the line — and a string field would instead lose the whole frame.
+  optional bytes extra = 5;
+  // See JobFrame.lease.
+  optional bytes lease = 6;
+}
+
+// The task completed.
+message SuccessFrame {
+  string job_id = 1;
+  string task_name = 2;
+  // Absent means the task returned nothing; present and empty means it returned
+  // an empty value. They are different answers.
+  optional bytes result = 3;
+  // Wall-clock time the attempt ran.
+  google.protobuf.Duration wall_time = 4;
+  // See JobFrame.lease.
+  optional bytes lease = 5;
+}
+
+// The task raised or timed out.
+message FailureFrame {
+  string job_id = 1;
+  string task_name = 2;
+  // Canonical JSON {errtype, message, traceback[]} when the SDK wrote one, and
+  // free prose otherwise. Readers fall back on non-JSON.
+  string error = 3;
+  int32 retry_count = 4;
+  int32 max_retries = 5;
+  google.protobuf.Duration wall_time = 6;
+  // The executor decides: only it can see the exception, and the scheduler
+  // never inspects one.
+  bool should_retry = 7;
+  // The failure was an execution timeout.
+  bool timed_out = 8;
+  // See JobFrame.lease.
+  optional bytes lease = 9;
+}
+
+// The task observed its cancel request and stopped.
+message CancelledFrame {
+  string job_id = 1;
+  string task_name = 2;
+  google.protobuf.Duration wall_time = 3;
+  // See JobFrame.lease.
+  optional bytes lease = 4;
+}
+
+// Commit one durable step, or one sleep, through the scheduler.
+//
+// The frame carries no owner, and must not. An owner an executor fills in is an
+// owner it can forge, and after a reclaim a stale executor sending the current
+// owner's id would write straight into the live attempt's sequence. The
+// scheduler supplies both halves of the fence from the dispatch it recorded.
+//
+// A retransmission after a lost ack is expected and safe: the same (seq,
+// step_key) and payload comes back as `already`.
+message StepCommitFrame {
+  string job_id = 1;
+  // Position in the job's step sequence, which must be exactly the number of
+  // steps already committed.
+  int32 seq = 2;
+  // Identity of the step within the job ("name#occurrence" or "name:key").
+  string step_key = 3;
+  StepKind kind = 4;
+  // The encoded result. Empty for a sleep, which commits no bytes.
+  bytes payload = 5;
+  // Candidate deadline for a sleep. A sleep row already at this position keeps
+  // the deadline it was first given, which is what the ack echoes back.
+  google.protobuf.Timestamp wake_at = 6;
+  // See JobFrame.lease. Not in tension with "carries no owner" above: the lease
+  // is not the executor's claim of identity, it is the scheduler's own value
+  // handed back, and it says which dispatch this frame belongs to.
+  optional bytes lease = 7;
+}
+
+// The attempt ended in a sleep, and the job is already scheduled at its
+// deadline. Ends the attempt like a cancel, without being a failure.
+message SleptFrame {
+  string job_id = 1;
+  string task_name = 2;
+  // The deadline storage settled on, which on a replay is not the one proposed.
+  google.protobuf.Timestamp wake_at = 3;
+  // Wall-clock time the attempt ran before it slept.
+  google.protobuf.Duration wall_time = 4;
+  // See JobFrame.lease.
+  optional bytes lease = 5;
+}
+
+message HeartbeatRequest {
+  // The `flexiq-attach-session-bin` value from the Attach response's metadata.
+  // Opaque, minted by the scheduler, and the only thing that says which stream
+  // this heartbeat belongs to. A `-bin` key because the value is bytes; gRPC
+  // base64s it on the wire and hands the raw bytes back.
+  bytes session = 1;
+  // Slots free right now. Local accounting is exact, so this may only shrink
+  // the scheduler's view of free capacity, never grow it.
+  uint32 free_slots = 2;
+}
+
+// Empty today. It is a message rather than nothing so it can grow a field
+// without becoming a new response type.
+message HeartbeatResponse {}
