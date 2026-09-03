@@ -95,6 +95,56 @@ impl WireError {
         }
     }
 
+    /// Bytes that will not decode into the request they claim to be.
+    ///
+    /// Distinct from [`Self::invalid_request`], and the line between them is
+    /// where the failure happened: this one is a body that never became a
+    /// message, that one is a message whose contents this service refuses. A
+    /// client acts on them differently — one is a serialiser bug, the other is
+    /// a value.
+    pub fn malformed_payload(message: impl Into<String>) -> Self {
+        Self {
+            code: Code::InvalidArgument,
+            reason: reason::MALFORMED_PAYLOAD,
+            message: message.into(),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// A request body over the door's message cap.
+    ///
+    /// `OUT_OF_RANGE` is the code tonic answers when a gRPC message exceeds
+    /// `max_decoding_message_size`, and the cap is the same number on both
+    /// doors — so the two answer alike, and a client cannot learn that one of
+    /// them is more permissive by trying.
+    pub fn payload_too_large(limit: usize) -> Self {
+        Self {
+            code: Code::OutOfRange,
+            reason: reason::INVALID_REQUEST,
+            message: format!("the request body is larger than the {limit}-byte limit"),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
+    /// Nothing is served at the path the caller asked for.
+    ///
+    /// The path is quoted back because it is the caller's own input and is the
+    /// only useful thing to say; it is truncated because an error message is
+    /// not a place to echo an arbitrary amount of it.
+    pub fn no_such_method(method: &str, path: &str) -> Self {
+        const MAX_ECHOED_PATH: usize = 200;
+        let path: String = path.chars().take(MAX_ECHOED_PATH).collect();
+        Self {
+            code: Code::Unimplemented,
+            reason: reason::NO_SUCH_METHOD,
+            message: format!("no RPC is served at `{method} {path}`"),
+            metadata: HashMap::new(),
+            retry_after: None,
+        }
+    }
+
     /// No usable credential.
     ///
     /// There is exactly one constructor, and it takes no argument, because the

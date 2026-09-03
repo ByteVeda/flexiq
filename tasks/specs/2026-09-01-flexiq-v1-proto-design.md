@@ -398,6 +398,22 @@ This is what replaces E5. `QUEUE_FULL` arrives with
 stays exactly where it is — an FFI expedient for a boundary that can only carry a
 string, not something the network inherits.
 
+**Amended during #718: a second reason with no `QueueError` behind it, and one
+rendering rule.** `NO_SUCH_METHOD` covers a path that names no RPC — an unrouted
+URL, or a route reached with a method it does not answer. The gRPC router
+answers that case `UNIMPLEMENTED` with no details attached, which is tonic's and
+not ours to change; a JSON caller gets a body, and a body must carry a reason.
+It is not `INVALID_REQUEST` because the two are different instructions to a
+client: one says fix the request, the other says the URL is not a door.
+
+The rendering rule is that **the HTTP status is a pure function of the
+`google.rpc.Code`**, with no per-case exceptions. The consequence worth stating
+is the one that looks wrong: a request body over the 4 MiB cap is
+`OUT_OF_RANGE` — the code tonic answers for a message over
+`max_decoding_message_size`, so the two doors agree — and `OUT_OF_RANGE` maps to
+**400, not 413**. A mapping with one exception in it is two mappings, and a
+client that wants the finer answer has `status` and `reason` for it.
+
 ### 4.2 The mapping
 
 Reachability: **P** = producer door, **X** = executor door, **—** = not reachable

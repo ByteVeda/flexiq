@@ -45,10 +45,10 @@ cargo build -p flexiq-server --features grpc
 ## The gRPC door
 
 `FLEXIQ_GRPC_LISTEN` binds a fourth listener beside the other three, serving
-`flexiq.v1.ProducerService` — enqueue, read, cancel, count — alongside
-`grpc.health.v1` and server reflection. Reflection is seeded from
-`contracts/descriptor.binpb`, the descriptor the buf gate builds and commits, so
-a client needs no `.proto` on hand:
+`flexiq.v1.ProducerService` — enqueue, read, cancel, count — over gRPC and over
+plain HTTP with JSON bodies, alongside `grpc.health.v1` and server reflection.
+Reflection is seeded from `contracts/descriptor.binpb`, the descriptor the buf
+gate builds and commits, so a client needs no `.proto` on hand:
 
 ```bash
 FLEXIQ_DSN=/var/lib/flexiq/app.db \
@@ -61,6 +61,26 @@ grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
+
+### The same RPCs over plain HTTP
+
+The producer service is also served as JSON on that same listener, so a client
+with no protobuf toolchain — a shell script, `curl`, a language with no codec —
+can enqueue:
+
+```bash
+curl -X POST http://localhost:50051/v1/jobs \
+  -H "authorization: Bearer $FLEXIQ_TOKEN" -H "content-type: application/json" \
+  -d '{"taskName":"send_email","structured":{"args":["a@b.c"]},"options":{"queue":"emails"}}'
+```
+
+`POST /v1/jobs`, `POST /v1/jobs:batchEnqueue`, `GET /v1/jobs`,
+`GET /v1/jobs/{job_id}`, `POST /v1/jobs/{job_id}:cancel`,
+`GET /v1/queues/{queue}/stats` and `GET /v1/stats` — the six producer RPCs, with
+`GET` served for the read-only ones and nothing else. Same credential, same
+handlers, same 4 MiB cap; failures carry the same `reason` in the standard
+`google.rpc` JSON body. The executor API is not exposed this way, and there is
+no stream to transcode.
 
 ### The credential
 

@@ -39,6 +39,7 @@ grpc = [
   "dep:tower-service",
   "dep:tonic-prost-build",
   "dep:async-trait",
+  "dep:chrono",
 ]
 
 [dependencies]
@@ -94,6 +95,10 @@ http = { version = "1", optional = true }
 # rather than reaching through `tonic::codegen`.
 tower-layer = { version = "0.3", optional = true }
 tower-service = { version = "0.3", optional = true }
+# RFC 3339, for the JSON facade. `SecondsFormat::AutoSi` is exactly proto3
+# JSON's 0/3/6/9 fractional-digit rule, and chrono is already in this
+# workspace's lock through flexiq-core, so naming it here moves nothing.
+chrono = { workspace = true, optional = true }
 
 [build-dependencies]
 # Codegen reads contracts/descriptor.binpb — the FileDescriptorSet buf already

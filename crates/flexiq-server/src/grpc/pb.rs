@@ -21,4 +21,13 @@
     clippy::large_enum_variant
 )]
 
+/// The committed `FileDescriptorSet` these types were generated from.
+///
+/// Built by `scripts/proto-check.sh`, verified byte-for-byte in CI, and read
+/// here by everything that needs the contract at runtime rather than as Rust
+/// types: [`super::reflection`] serves it, and the JSON facade's drift tests
+/// ask it which RPCs exist and what their fields are called. One artifact, so
+/// nothing can be checked against a copy.
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("../../../../contracts/descriptor.binpb");
+
 include!(concat!(env!("OUT_DIR"), "/flexiq.v1.rs"));
