@@ -107,6 +107,27 @@ impl Lease {
         let bytes: [u8; 8] = bytes.try_into().ok()?;
         Some(i64::from_be_bytes(bytes))
     }
+
+    /// The token as bytes, for a transport that carries it as an opaque `bytes`
+    /// field instead of the JSON string the frame protocol uses.
+    ///
+    /// The same token either way. A wire that re-derived it — carrying the
+    /// epoch's eight bytes, say — would be a second encoding of one value, free
+    /// to disagree with the first.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    /// Read a lease back off such a transport.
+    ///
+    /// `None` when the bytes are not a token this scheduler could have minted,
+    /// which every caller already reads the way it reads a value that does not
+    /// decode: not the current dispatch, so the frame is refused.
+    pub fn from_wire(bytes: &[u8]) -> Option<Self> {
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(|token| Self(token.to_string()))
+    }
 }
 
 /// Redacted, like [`Secret`](crate::worker::Secret): a lease is what authorizes
@@ -197,6 +218,27 @@ mod tests {
         // cannot buy authority by inventing a value.
         assert_eq!(Lease("not base64".to_string()).epoch(), None);
         assert_eq!(Lease(URL_SAFE_NO_PAD.encode([0u8; 4])).epoch(), None);
+    }
+
+    #[test]
+    fn a_lease_survives_a_transport_that_carries_it_as_bytes() {
+        // The bytes are the token, not a re-encoding of the epoch: a wire that
+        // derived its own form would be a second encoding of one value.
+        let lease = Lease::from_epoch(mint_claim_epoch());
+        let back = Lease::from_wire(lease.as_bytes()).expect("the token is its own bytes");
+        assert_eq!(back, lease);
+        assert_eq!(back.epoch(), lease.epoch());
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_token_resolve_to_no_lease() {
+        // Refused rather than accepted-and-ignored: a peer echoing garbage is
+        // not the current dispatch, which is what the caller reads `None` as.
+        assert!(Lease::from_wire(&[0xff, 0xfe]).is_none());
+        assert_eq!(
+            Lease::from_wire(b"not a lease").and_then(|lease| lease.epoch()),
+            None
+        );
     }
 
     #[test]
