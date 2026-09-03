@@ -92,6 +92,13 @@ because its field was seconds; the shared function takes milliseconds
 directly (matching `producer/convert.rs::DEFAULT_TIMEOUT_MS`), and
 `PyQueue`'s thin wrapper does the `* 1000` at the call site instead.
 
+`crates/flexiq-workflows/src/error.rs` gains one variant,
+`InvalidStepMetadata(String)`, for the validation `PyValueError`s the ported
+body raised inline (bad JSON, a step missing from `step_metadata`, a
+predecessor with no job id, a step missing from `node_payloads`) — `WorkflowError`
+already has `impl From<WorkflowError> for QueueError` (`error.rs:47-51`), so
+these propagate through `?` with no new conversion needed.
+
 `parse_step_metadata` and `build_metadata_json`
 (`crates/flexiq-python/src/py_queue/workflow_ops/mod.rs:116-132`) move into
 the same file — both are already pyo3-free except `parse_step_metadata`'s
