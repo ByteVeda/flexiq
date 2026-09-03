@@ -1,0 +1,84 @@
+---
+title: Server mode
+description: "Run flexiq-server as a network endpoint any language can reach, and know when to reach for it instead of an in-process queue."
+---
+
+**No — this does not replace the mode you already use.** Embedded/local mode —
+one process, no daemon, straight to SQLite — stays the default and stays why
+you'd pick FlexiQ over a broker-backed queue. Server mode is additive: a
+separate `flexiq-server` process that holds the database credential and exposes
+it over the network, for the cases where nothing in-process can reach that
+credential at all.
+
+| | Local mode | Server mode |
+|---|---|---|
+| **Process shape** | Your app opens storage directly | `flexiq-server` opens storage; everything else dials in |
+| **Who can enqueue** | A process with the Rust core compiled into it — Python, Node or Java | Any process that can speak gRPC or JSON over HTTP — no native binding required |
+| **Who can run tasks** | A worker in the same process, or an <SdkLink to="modules/executor">attached executor</SdkLink> over TCP/Unix | The same executors, reachable now over a gRPC stream too |
+| **Reach for it when** | The default — this is nearly always the right answer | A producer has no native binding to reach for, or the database credential must not live in every caller |
+
+## What it costs
+
+The prefork pool, and the worker pool underneath it, assume an OS process on
+the same machine as the jobs it runs — that's where the CPU-parallelism story
+lives. A remote executor, whether it dials in over the attach protocol today or
+over `flexiq.executor.v1` once a client speaks it, gets none of that: it is a
+Celery-style remote consumer, one network hop from the scheduler, with the
+capacity of whatever container it happens to run in. Server mode buys you a
+network door; it does not buy you more cores.
+
+## The two doors
+
+`flexiq-server` puts two independent things on the network, not one door with
+two names:
+
+| | Producer door | Executor door |
+|---|---|---|
+| **Package** | `flexiq.v1` | `flexiq.executor.v1` |
+| **Does** | Enqueue, read, cancel work | Claim work, report on it |
+| **Reachable over** | gRPC, and plain HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding |
+| **Scope** | `produce` | `execute` |
+| **Admin surface** | None — settings, pausing and dead-letter operations stay behind the dashboard | None |
+
+A `produce` token cannot open an executor stream, and an `execute` token cannot
+enqueue — they are not a hierarchy, and a credential scoped to one package
+never opens the other. See
+<SdkLink to="operate/deployment#the-grpc-door">the gRPC door</SdkLink> for the
+producer RPCs and the token lifecycle, and
+<SdkLink to="operate/deployment#the-executor-door">the executor door</SdkLink>
+for the `Attach` stream.
+
+<Callout type="info" title="No SDK dials the executor door yet">
+  Every SDK's `executor` CLI still attaches over TCP or a Unix socket — the
+  protocol <SdkLink to="modules/executor">attached executors</SdkLink> already
+  use. `flexiq.executor.v1` exists today for a custom executor written directly
+  against the proto, in any language with a gRPC library, which is the same
+  "no native binding" pitch the producer door makes.
+</Callout>
+
+## `raw` versus `structured`
+
+The producer door takes a job's payload two ways. `raw` is the CBOR envelope
+an SDK already builds, byte for byte — nothing lost, but it needs a CBOR
+library. `structured` takes ordinary JSON values and lets the server build that
+same envelope, so a shell script can enqueue with no codec at all. What it
+cannot carry, it refuses rather than rounds: integers past `2^53 - 1`,
+non-finite numbers, and anything JSON has no syntax for. See <SdkLink to="operate/deployment#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink> for the one thing it silently normalises instead
+— object key order — and what that costs an `auto:` idempotency key.
+
+## Try it
+
+[`examples/polyglot`](https://github.com/ByteVeda/flexiq/tree/master/examples/polyglot)
+has a gRPC-speaking variant beside the original shared-database one: a producer
+that enqueues over the gRPC door with `grpcurl`, no SDK installed at all. The
+workers still open the database file directly in that variant — only the
+producer moved to the network door.
+
+## Trade-offs
+
+| Cost | Mitigation |
+|---|---|
+| No CPU-parallelism story — a remote executor is a network hop from the scheduler | Colocate the executor with its scheduler when raw throughput matters more than isolation |
+| A second process to deploy, watch and restart | Reach for it only when local mode's constraint — a native binding, or the credential itself — is the actual blocker |
+| The executor door has no SDK client yet | Use TCP/Unix attach for an SDK-based executor; the gRPC stream is for a custom one |
+| TLS is not terminated by `flexiq-server` on either door | Put a sidecar proxy or service mesh in front of both listeners |

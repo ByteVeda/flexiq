@@ -10,6 +10,7 @@ import {
   Syringe,
   Network,
   PlugZap,
+  Server,
   Gauge,
 } from "lucide-react";
 
@@ -70,6 +71,12 @@ first and come back when you hit the problem a module solves.
     title="Attached Executors"
     to="modules/executor"
     description="Run task bodies in your app container while a separate scheduler holds the database credentials."
+  />
+  <Card
+    icon={<Server />}
+    title="Server mode"
+    to="modules/server"
+    description="Put a producer and executor door on the network, for callers with no native binding to reach for."
   />
 </Cards>
 
