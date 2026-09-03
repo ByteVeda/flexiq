@@ -1041,17 +1041,28 @@ correctly, because completion recording reads the job's own metadata
 This is the literal reading of the issue's acceptance criterion: tracked by an
 unmodified worker, or refused with a reason.
 
-This logic — pre-enqueue-with-`depends_on`, and node-completion recording with
-cascade and terminal-state detection — is lifted out of `flexiq-python`'s
-`py_queue/workflow_ops/{lifecycle,nodes}.rs` and `flexiq-node`'s separate copy
-of the same thing into `flexiq-workflows` (pyo3- and napi-free, already the
-home of `WorkflowStorage`), so `flexiq-server` calls the one implementation
-the three shells otherwise each carry their own copy of. The PyO3/napi
-bindings become thin wrappers over it. This is a dedup #771 forces, not scope
-creep: `flexiq-server` cannot reach `flexiq-python` or `flexiq-node`'s crates
-at all (D1's package split has a code-graph analogue — the producer door does
-not depend on a binding), so the only place shared logic can live is a crate
-both the shells and the server already depend on.
+Only the **create** half needs to move. `PyQueue::submit_workflow`'s static
+path (`py_queue/workflow_ops/lifecycle.rs:40-239`) is already pyo3-free below
+its `#[pymethods]` signature — it reads `flexiq_core::storage::StorageBackend`
+and `flexiq_workflows::{WorkflowStorage, topological_order}` and nothing
+Python-specific — so it moves into `flexiq-workflows` (a new module,
+alongside `WorkflowStorage`) verbatim, taking `&StorageBackend` and
+`&WorkflowStorageBackend` instead of `&self` on `PyQueue`. `parse_step_metadata`
+and `build_metadata_json` (`py_queue/workflow_ops/mod.rs:116-132`) move with
+it for the same reason. `flexiq-python`'s `submit_workflow` becomes a thin
+`#[pymethods]` wrapper over the shared function; `flexiq-server`'s
+`SubmitWorkflow` handler calls the same function directly.
+
+**`mark_workflow_node_result` does not move, and does not need to.** It is
+called by a worker's *own* tracker, reacting to *that worker's own* job
+completion — never by whoever created the job — and it already resolves
+`run_id`/`node_name` from the completed job's storage metadata, not from
+anything the creator held in memory. A job `SubmitWorkflow` pre-enqueues is
+indistinguishable, at completion time, from one `PyQueue::submit_workflow`
+pre-enqueued — same three metadata keys, same table. So the existing
+per-SDK completion path keeps working unmodified, and `flexiq-server` never
+calls it, because nothing in the producer door executes a job. Lifting it
+would be dedup for its own sake, not something #771 needs.
 
 `GateConfig`/`CacheConfig`/`FanOutConfig`/`FanInConfig`/`SubWorkflowSpec` exist
 on the wire and compile cleanly into `StepMetadata`'s JSON fields when present
@@ -1209,7 +1220,7 @@ document first.
 | **#719** lease token | E7, §8 | The token is minted or chosen by the executor; any frame that settles or advances an attempt — `cancelled` and `slept` included — goes without one; a reclaim or reap does not move the epoch; a stale completion is swallowed rather than raised; it is negotiated by a version bump instead of a capability. |
 | **#720** executor transport | D1, D22, D24, §8 | It becomes a second dispatcher rather than a fourth `Transport`; capabilities become an enum; a fingerprint rides the wire; heartbeats ride the dispatch stream; an unknown frame arm is fatal; the message limit is set to the payload limit rather than above it; the executor package gains an HTTP binding. |
 | **#721** docs | §4.3, §5.2, §10 | The page reads as though embedded mode is deprecated; the NULL-namespace cost is unstated; `unique_key` is presented as an idempotency key without saying it expires with the job; the `raw`/`structured` precision loss is a footnote; the untrusted-network warning is missing while #717 is open. |
-| **#771** workflow RPCs | D3, D4, D25, D26, D27, §7.6 | A `bytes dag_data` field ships, in whole or in part; `args_template`/`kwargs_template` reappear instead of the `body` oneof; a dynamic-construct node (`gate`/`cache`/`fan_out`/`fan_in`/`sub_workflow`) executes rather than refuses; the refusal omits which node; `WorkflowState`/`WorkflowNodeStatus` gain a wildcard arm in either conversion direction; the create/advance logic is written a fourth time in `flexiq-server` instead of shared from `flexiq-workflows`; `GetWorkflowRun` returns the run without its nodes. |
+| **#771** workflow RPCs | D3, D4, D25, D26, D27, §7.6 | A `bytes dag_data` field ships, in whole or in part; `args_template`/`kwargs_template` reappear instead of the `body` oneof; a dynamic-construct node (`gate`/`cache`/`fan_out`/`fan_in`/`sub_workflow`) executes rather than refuses; the refusal omits which node; `WorkflowState`/`WorkflowNodeStatus` gain a wildcard arm in either conversion direction; the static pre-enqueue logic is written a third time in `flexiq-server` instead of shared from `flexiq-workflows`; `GetWorkflowRun` returns the run without its nodes. |
 
 ---
 
