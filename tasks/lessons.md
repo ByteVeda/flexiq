@@ -22,3 +22,35 @@ Fix was not to restore the old wording: the message legitimately names two
 fields now. The existing test absorbed the second case and the near-duplicate
 added in `test_admission.py` was dropped — a binding-boundary debounce test
 belongs in `test_debounce.py`.
+
+## A graceful streaming listener needs something to end its streams
+
+**2026-09-03, #720.** The gRPC executor door compiled, passed clippy and passed
+every unit test, and then every end-to-end test hung — not in an assertion, but
+in teardown. Two separate causes, both invisible below the integration level:
+
+1. **The listener was joined before the thing that ends its streams ran.** An
+   attach stream is an in-flight gRPC request, and `serve_with_incoming_shutdown`
+   waits for one. The stream only ends when the dispatcher closes the
+   connection, and that happened *after* the roles were joined. A circle neither
+   side can leave.
+2. **An HTTP/2 stream is open until *both* halves close.** The server ending its
+   response does not end the call. A client that keeps its request half open —
+   because it froze, or because a test held the sender — keeps the listener
+   waiting for it.
+
+The rules to carry forward:
+
+- **Adding a long-lived stream to a listener changes its shutdown, always.**
+  Before writing the handler, ask what closes the stream and whether that thing
+  runs before or after the listener is joined.
+- **Never let a graceful shutdown be unbounded.** It is a hang in production,
+  where it reads as a `SIGKILL` rather than an error. A grace period after the
+  signal costs nothing and turns a deadlock into a warning.
+- **A second sender on a response channel is a stream that will not end.** The
+  refusal path kept a `tx.clone()` for the life of the connection; the stream
+  stayed open until the client hung up. Drop it the moment it cannot be used.
+- **Teardown is part of the test.** Every one of these failed at `stop()`, not
+  at an assertion. A harness whose teardown is unbounded reports a deadlock as
+  a timeout in whatever ran next.
+
