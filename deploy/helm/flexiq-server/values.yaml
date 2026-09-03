@@ -99,6 +99,11 @@ dashboard:
 grpc:
   enabled: false
   port: 50051
+  # Seconds an attached executor's stream lives before the scheduler drains it
+  # and closes it. A stream cannot be load balanced once it has started, so it
+  # has to end for a replacement to land somewhere else; the drain is what makes
+  # ending it free of dropped work. 0 never rotates.
+  executorStreamMaxAge: 1800
   # There is no credential to set here. Callers present a scoped API token
   # stored in the database, which is why this chart no longer carries a gRPC
   # secret: a token is minted per client, expires, and is revoked on its own

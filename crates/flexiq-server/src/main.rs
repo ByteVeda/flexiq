@@ -36,12 +36,18 @@ Configuration (environment only):
                                  injection, e.g. 0.0.0.0:9443 (default: off)
   FLEXIQ_WEBHOOK_TLS_CERT       PEM chain the webhook serves; required with it
   FLEXIQ_WEBHOOK_TLS_KEY        PEM key for that chain; required with it
-  FLEXIQ_GRPC_LISTEN            gRPC producer door, e.g. 127.0.0.1:50051 or
-                                 unix:/run/flexiq-grpc.sock (default: off).
-                                 Requires FLEXIQ_NAMESPACE and a build with the
-                                 `grpc` cargo feature. Callers present an API
-                                 token; mint one with `flexiq-server token
-                                 create`, and see `token --help`
+  FLEXIQ_GRPC_LISTEN            gRPC producer and executor doors, e.g.
+                                 127.0.0.1:50051 or unix:/run/flexiq-grpc.sock
+                                 (default: off). Requires FLEXIQ_NAMESPACE and a
+                                 build with the `grpc` cargo feature. Callers
+                                 present an API token; mint one with
+                                 `flexiq-server token create`, and see
+                                 `token --help`. Which door a caller reaches is
+                                 its token's scope: `produce` or `execute`
+  FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE  seconds an executor's attach stream lives
+                                 before the scheduler drains it and closes it,
+                                 so the executor reconnects and can be placed
+                                 elsewhere (default: 1800; 0 never rotates)
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
 FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a

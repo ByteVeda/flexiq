@@ -148,6 +148,8 @@ spec:
             # the database, so there is nothing here to rotate or restart for.
             - name: FLEXIQ_GRPC_LISTEN
               value: "0.0.0.0:{{ .Values.grpc.port }}"
+            - name: FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE
+              value: "{{ .Values.grpc.executorStreamMaxAge }}"
             {{- end }}
             {{- if .Values.webhook.enabled }}
             - name: FLEXIQ_WEBHOOK_LISTEN
