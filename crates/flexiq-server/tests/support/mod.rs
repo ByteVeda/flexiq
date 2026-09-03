@@ -75,6 +75,19 @@ pub fn temp_storage(label: &str) -> TempStorage {
     }
 }
 
+/// A `WorkflowStorageBackend` sharing `storage`'s pool.
+///
+/// Only builds the SQLite case — the one every `temp_storage` handle is.
+pub fn temp_workflows(storage: &StorageBackend) -> WorkflowStorageBackend {
+    match storage {
+        StorageBackend::Sqlite(sqlite) => WorkflowStorageBackend::Sqlite(
+            WorkflowSqliteStorage::new(sqlite.clone(), None).expect("workflow tables"),
+        ),
+        #[allow(unreachable_patterns)]
+        _ => panic!("temp_workflows only builds SQLite state"),
+    }
+}
+
 /// Attaches a bearer credential to every gRPC request.
 ///
 /// A named type rather than a closure so the client it wraps has a nameable

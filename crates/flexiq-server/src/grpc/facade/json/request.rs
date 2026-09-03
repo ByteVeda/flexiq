@@ -242,6 +242,291 @@ impl ListJobs {
     }
 }
 
+/// `POST /v1/workflows` — a `SubmitWorkflowRequest`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SubmitWorkflow {
+    #[serde(default)]
+    pub name: String,
+    pub graph: Graph,
+    #[serde(default, alias = "params_json")]
+    pub params_json: Option<String>,
+}
+
+impl SubmitWorkflow {
+    pub fn into_message(self) -> Result<pb::SubmitWorkflowRequest, String> {
+        Ok(pb::SubmitWorkflowRequest {
+            name: self.name,
+            graph: Some(self.graph.into_message()?),
+            params_json: self.params_json,
+        })
+    }
+}
+
+/// `WorkflowGraph`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Graph {
+    #[serde(default)]
+    pub nodes: Vec<GraphNode>,
+    #[serde(default)]
+    pub edges: Vec<GraphEdge>,
+    #[serde(default, alias = "node_configs")]
+    pub node_configs: Vec<NodeConfig>,
+}
+
+impl Graph {
+    fn into_message(self) -> Result<pb::WorkflowGraph, String> {
+        Ok(pb::WorkflowGraph {
+            nodes: self
+                .nodes
+                .into_iter()
+                .map(|node| pb::WorkflowGraphNode { name: node.name })
+                .collect(),
+            edges: self
+                .edges
+                .into_iter()
+                .map(|edge| pb::WorkflowGraphEdge {
+                    from: edge.from,
+                    to: edge.to,
+                })
+                .collect(),
+            node_configs: self
+                .node_configs
+                .into_iter()
+                .map(NodeConfig::into_message)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// `WorkflowGraphNode`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GraphNode {
+    #[serde(default)]
+    pub name: String,
+}
+
+/// `WorkflowGraphEdge`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GraphEdge {
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+}
+
+/// `WorkflowNodeConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NodeConfig {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, alias = "task_name")]
+    pub task_name: String,
+    #[serde(default)]
+    pub queue: Option<String>,
+    #[serde(default)]
+    pub raw: Option<JsonBytes>,
+    #[serde(default)]
+    pub structured: Option<Structured>,
+    #[serde(default, alias = "max_retries")]
+    pub max_retries: Option<i32>,
+    #[serde(default, alias = "timeout_ms")]
+    pub timeout_ms: Option<JsonInt64>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+    #[serde(default)]
+    pub condition: Option<String>,
+    #[serde(default)]
+    pub gate: Option<Gate>,
+    #[serde(default)]
+    pub cache: Option<Cache>,
+    #[serde(default, alias = "fan_out")]
+    pub fan_out: Option<FanOut>,
+    #[serde(default, alias = "fan_in")]
+    pub fan_in: Option<FanIn>,
+    #[serde(default, alias = "sub_workflow")]
+    pub sub_workflow: Option<SubWorkflow>,
+    #[serde(default)]
+    pub compensate: Option<String>,
+}
+
+impl NodeConfig {
+    fn into_message(self) -> Result<pb::WorkflowNodeConfig, String> {
+        let body = match (self.raw, self.structured) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "`raw` and `structured` are the two arms of one field; send one of them"
+                        .to_string(),
+                )
+            }
+            (Some(raw), None) => Some(pb::workflow_node_config::Body::Raw(raw.0)),
+            (None, Some(structured)) => Some(pb::workflow_node_config::Body::Structured(
+                structured.into_message()?,
+            )),
+            (None, None) => None,
+        };
+        let condition = self
+            .condition
+            .as_deref()
+            .map(edge_condition_from_name)
+            .transpose()?
+            .unwrap_or(pb::EdgeCondition::Unspecified as i32);
+        Ok(pb::WorkflowNodeConfig {
+            name: self.name,
+            task_name: self.task_name,
+            queue: self.queue,
+            body,
+            max_retries: self.max_retries,
+            timeout_ms: self.timeout_ms.map(|value| value.0),
+            priority: self.priority,
+            condition,
+            gate: self.gate.map(Gate::into_message).transpose()?,
+            cache: self.cache.map(Cache::into_message),
+            fan_out: self.fan_out.map(FanOut::into_message),
+            fan_in: self.fan_in.map(FanIn::into_message),
+            sub_workflow: self
+                .sub_workflow
+                .map(SubWorkflow::into_message)
+                .transpose()?,
+            compensate: self.compensate,
+        })
+    }
+}
+
+/// `GateConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Gate {
+    #[serde(default, alias = "timeout_ms")]
+    pub timeout_ms: Option<JsonInt64>,
+    #[serde(default, alias = "on_timeout")]
+    pub on_timeout: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl Gate {
+    fn into_message(self) -> Result<pb::GateConfig, String> {
+        let on_timeout = self
+            .on_timeout
+            .as_deref()
+            .map(on_timeout_from_name)
+            .transpose()?
+            .unwrap_or(pb::OnTimeout::Unspecified as i32);
+        Ok(pb::GateConfig {
+            timeout_ms: self.timeout_ms.map(|value| value.0),
+            on_timeout,
+            message: self.message,
+        })
+    }
+}
+
+/// `CacheConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Cache {
+    #[serde(default, alias = "ttl_ms")]
+    pub ttl_ms: Option<JsonInt64>,
+}
+
+impl Cache {
+    fn into_message(self) -> pb::CacheConfig {
+        pb::CacheConfig {
+            ttl_ms: self.ttl_ms.map(|value| value.0),
+        }
+    }
+}
+
+/// `FanOutConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FanOut {
+    #[serde(default, alias = "items_from")]
+    pub items_from: Option<String>,
+}
+
+impl FanOut {
+    fn into_message(self) -> pb::FanOutConfig {
+        pb::FanOutConfig {
+            items_from: self.items_from,
+        }
+    }
+}
+
+/// `FanInConfig`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FanIn {
+    #[serde(default)]
+    pub from: String,
+}
+
+impl FanIn {
+    fn into_message(self) -> pb::FanInConfig {
+        pb::FanInConfig { from: self.from }
+    }
+}
+
+/// `SubWorkflowSpec`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SubWorkflow {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version: i32,
+    pub graph: Graph,
+    #[serde(default, alias = "deferred_node_names")]
+    pub deferred_node_names: Vec<String>,
+}
+
+impl SubWorkflow {
+    fn into_message(self) -> Result<pb::SubWorkflowSpec, String> {
+        Ok(pb::SubWorkflowSpec {
+            name: self.name,
+            version: self.version,
+            graph: Some(self.graph.into_message()?),
+            deferred_node_names: self.deferred_node_names,
+        })
+    }
+}
+
+/// One `EdgeCondition`, by the name the enum gives it.
+fn edge_condition_from_name(name: &str) -> Result<i32, String> {
+    pb::EdgeCondition::from_str_name(name)
+        .map(|value| value as i32)
+        .ok_or_else(|| {
+            format!(
+                "`{name}` is not an edge condition; one of {}",
+                [
+                    pb::EdgeCondition::OnSuccess,
+                    pb::EdgeCondition::OnFailure,
+                    pb::EdgeCondition::Always,
+                ]
+                .map(|value| value.as_str_name())
+                .join(", ")
+            )
+        })
+}
+
+/// One `OnTimeout`, by the name the enum gives it.
+fn on_timeout_from_name(name: &str) -> Result<i32, String> {
+    pb::OnTimeout::from_str_name(name)
+        .map(|value| value as i32)
+        .ok_or_else(|| {
+            format!(
+                "`{name}` is not a gate timeout policy; one of {}",
+                [pb::OnTimeout::Approve, pb::OnTimeout::Reject]
+                    .map(|value| value.as_str_name())
+                    .join(", ")
+            )
+        })
+}
+
 /// One `JobStatus`, by the name the enum gives it.
 ///
 /// The number is accepted too, because proto3 JSON accepts both — but the

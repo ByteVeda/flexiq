@@ -69,6 +69,7 @@ pub struct SubmitStaticWorkflowRequest {
     pub parent_node_name: Option<String>,
     pub default_timeout_ms: i64,
     pub default_priority: i32,
+    pub default_max_retries: i32,
     pub result_ttl_ms: Option<i64>,
     pub namespace: Option<String>,
 }
@@ -200,7 +201,7 @@ pub async fn submit_workflow(
     let graph = request.graph.ok_or_else(|| WireError::invalid_request("graph is required"))?;
     refuse_dynamic_constructs(&graph)?;                       // D26
     let (dag_bytes, step_metadata, node_payloads) = compile_graph(&graph)?;
-    let params_json = decode_params(request.params)?;         // oneof params_raw/params_structured -> Option<String>, reusing producer::structured
+    let params_json = request.params_json;                    // opaque JSON text, straight through — SubmitWorkflowRequest.params_json is Job.metadata's convention, not the raw/structured envelope
     let handle = flexiq_workflows::lifecycle::submit_workflow(
         scoped.storage(), scoped.workflows(),
         flexiq_workflows::lifecycle::SubmitStaticWorkflowRequest {

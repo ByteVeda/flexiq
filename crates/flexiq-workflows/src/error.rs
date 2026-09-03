@@ -19,6 +19,9 @@ pub enum WorkflowError {
     InvalidDag(String),
     /// The workflow definition already exists (name + version conflict).
     DuplicateDefinition { name: String, version: i32 },
+    /// `step_metadata` failed to parse, or a node is missing from it, from
+    /// `node_payloads`, or from a predecessor's job id at submit time.
+    InvalidStepMetadata(String),
 }
 
 impl fmt::Display for WorkflowError {
@@ -38,6 +41,7 @@ impl fmt::Display for WorkflowError {
             Self::DuplicateDefinition { name, version } => {
                 write!(f, "workflow definition already exists: {name} v{version}")
             }
+            Self::InvalidStepMetadata(msg) => write!(f, "invalid step_metadata: {msg}"),
         }
     }
 }

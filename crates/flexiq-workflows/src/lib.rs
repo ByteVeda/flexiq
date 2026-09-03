@@ -2,6 +2,7 @@ pub(crate) mod common;
 mod definition;
 pub(crate) mod diesel_common;
 mod error;
+pub mod lifecycle;
 /// Code-first workflow schema migrations. Files live at the crate root
 /// (`crates/flexiq-workflows/migrations/`) but compile as part of this crate.
 #[path = "../migrations/mod.rs"]

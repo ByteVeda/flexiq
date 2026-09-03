@@ -34,6 +34,7 @@ pub mod status;
 
 use anyhow::Result;
 use flexiq_core::StorageBackend;
+use flexiq_workflows::WorkflowStorageBackend;
 
 use crate::config::grpc::GrpcConfig;
 use crate::runtime::shutdown::Shutdown;
@@ -48,11 +49,12 @@ pub use listener::Listener;
 pub async fn serve(
     config: GrpcConfig,
     storage: StorageBackend,
+    workflows: WorkflowStorageBackend,
     executor: Option<ExecutorDoor>,
     shutdown: Shutdown,
 ) -> Result<()> {
     Listener::bind(&config)
         .await?
-        .serve(storage, executor, shutdown)
+        .serve(storage, workflows, executor, shutdown)
         .await
 }

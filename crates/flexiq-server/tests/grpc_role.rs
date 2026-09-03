@@ -23,7 +23,7 @@ use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
 use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
 use tonic_reflection::pb::v1::ServerReflectionRequest;
 
-use support::{mint_token, temp_storage, Bearer};
+use support::{mint_token, temp_storage, temp_workflows, Bearer};
 
 /// The role serves exactly one namespace, and refuses to start without one.
 const NAMESPACE: &str = "grpc-tests";
@@ -85,7 +85,12 @@ async fn health_reports_serving_once_storage_has_answered() {
     let addr = listener
         .local_addr()
         .expect("a TCP listener knows what it bound");
-    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+    let served = tokio::spawn(listener.serve(
+        (*storage).clone(),
+        temp_workflows(&storage),
+        None,
+        shutdown.clone(),
+    ));
 
     let mut health = HealthClient::new(dial(&format!("http://{addr}")).await);
     let status = health
@@ -118,7 +123,12 @@ async fn reflection_lists_the_health_service_and_resolves_the_committed_contract
             .local_addr()
             .expect("a TCP listener knows what it bound")
     );
-    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+    let served = tokio::spawn(listener.serve(
+        (*storage).clone(),
+        temp_workflows(&storage),
+        None,
+        shutdown.clone(),
+    ));
 
     // What `grpcurl list` asks for.
     let listed = reflect(&url, &token, MessageRequest::ListServices(String::new())).await;
@@ -184,7 +194,12 @@ async fn a_unix_socket_lands_narrow_and_is_cleaned_up() {
         listener.local_addr().is_none(),
         "a Unix listener has no socket address to report"
     );
-    let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+    let served = tokio::spawn(listener.serve(
+        (*storage).clone(),
+        temp_workflows(&storage),
+        None,
+        shutdown.clone(),
+    ));
 
     // Owner and group, and nobody else — whatever the umask was.
     let mode = std::fs::metadata(&path)

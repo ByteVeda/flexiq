@@ -216,6 +216,7 @@ pub fn run(config: Config) -> Result<()> {
             roles.spawn(crate::grpc::serve(
                 grpc,
                 backend.storage.clone(),
+                backend.workflows.clone(),
                 door,
                 shutdown.clone(),
             ));

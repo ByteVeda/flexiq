@@ -82,6 +82,11 @@ pub const SERVER_MISCONFIGURED: &str = "SERVER_MISCONFIGURED";
 pub const LOCK_HELD: &str = "LOCK_HELD";
 /// A setting was changed by another writer. Read again and retry.
 pub const SETTING_CONFLICT: &str = "SETTING_CONFLICT";
+/// A workflow node uses a construct `SubmitWorkflow` does not execute yet —
+/// `gate`, `cache`, `fan_out`, `fan_in` or `sub_workflow` (D26 of
+/// `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`). Carries `node` and
+/// `field`. Never retryable as sent; resubmitting without that field succeeds.
+pub const WORKFLOW_CONSTRUCT_UNSUPPORTED: &str = "WORKFLOW_CONSTRUCT_UNSUPPORTED";
 /// Nothing above matched.
 pub const UNKNOWN: &str = "UNKNOWN";
 
@@ -120,3 +125,8 @@ pub const KEY_SCOPE: &str = "scope";
 /// raised rather than getting a reason of its own, because a client that gets
 /// `QUEUE_FULL` on a batch needs both facts at once.
 pub const KEY_INDEX: &str = "index";
+/// The offending `WorkflowNodeConfig.name`. `WORKFLOW_CONSTRUCT_UNSUPPORTED`.
+pub const KEY_NODE: &str = "node";
+/// The unsupported field on that node — `gate`, `cache`, `fan_out`, `fan_in`
+/// or `sub_workflow`. `WORKFLOW_CONSTRUCT_UNSUPPORTED`.
+pub const KEY_FIELD: &str = "field";

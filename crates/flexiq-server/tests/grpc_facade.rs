@@ -26,7 +26,7 @@ use flexiq_server::tokens::{Scope, ScopeSet};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
-use support::{mint_token, temp_storage, Bearer, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-facade-tests";
@@ -84,7 +84,12 @@ impl Harness {
         let addr = listener
             .local_addr()
             .expect("a TCP listener knows what it bound");
-        let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+        let served = tokio::spawn(listener.serve(
+            (*storage).clone(),
+            temp_workflows(&storage),
+            None,
+            shutdown.clone(),
+        ));
 
         Self {
             base: format!("http://{addr}"),

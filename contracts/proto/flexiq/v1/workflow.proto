@@ -262,12 +262,10 @@ message WorkflowNode {
 message SubmitWorkflowRequest {
   string name = 1;
   WorkflowGraph graph = 2;
-  // Arbitrary caller data attached to the run, not read by the graph itself.
-  // Setting no arm leaves it unset.
-  oneof params {
-    bytes params_raw = 3;
-    StructuredArgs params_structured = 4;
-  }
+  // Arbitrary caller data attached to the run, opaque JSON text and
+  // byte-preserved — the same convention as Job.metadata, not the raw/structured
+  // envelope: it is data the run carries, never a call a task receives.
+  optional string params_json = 3;
 }
 
 message SubmitWorkflowResponse {

@@ -988,7 +988,7 @@ message WorkflowNode {
 message SubmitWorkflowRequest {
   string name = 1;
   WorkflowGraph graph = 2;
-  oneof params { bytes params_raw = 3; StructuredArgs params_structured = 4; }
+  optional string params_json = 3;  // opaque JSON text, byte-preserved — Job.metadata's convention (D21), not the raw/structured envelope: this is data the run carries, not a call a task receives
 }
 message SubmitWorkflowResponse { string run_id = 1; }
 message GetWorkflowRunRequest  { string run_id = 1; }

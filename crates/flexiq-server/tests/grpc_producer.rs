@@ -30,7 +30,7 @@ use tonic::transport::Channel;
 use tonic::Code;
 use tonic_types::StatusExt;
 
-use support::{mint_token, temp_storage, Bearer, TempStorage};
+use support::{mint_token, temp_storage, temp_workflows, Bearer, TempStorage};
 
 /// The one namespace this door serves.
 const NAMESPACE: &str = "grpc-producer-tests";
@@ -61,7 +61,12 @@ impl Harness {
         let addr = listener
             .local_addr()
             .expect("a TCP listener knows what it bound");
-        let served = tokio::spawn(listener.serve((*storage).clone(), None, shutdown.clone()));
+        let served = tokio::spawn(listener.serve(
+            (*storage).clone(),
+            temp_workflows(&storage),
+            None,
+            shutdown.clone(),
+        ));
 
         let channel = Channel::from_shared(format!("http://{addr}"))
             .expect("a valid endpoint")

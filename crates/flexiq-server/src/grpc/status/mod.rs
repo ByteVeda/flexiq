@@ -145,6 +145,32 @@ impl WireError {
         }
     }
 
+    /// A `SubmitWorkflow` node sets a construct this release does not execute
+    /// (D26 of `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`) —
+    /// `gate`, `cache`, `fan_out`, `fan_in` or `sub_workflow`.
+    ///
+    /// `FAILED_PRECONDITION`, not `INVALID_ARGUMENT`: the message is
+    /// well-formed and the field is a real part of the wire contract (D25) —
+    /// it is the server's current state, not the request's shape, that
+    /// refuses it. `node` and `field` are typed metadata so a client does not
+    /// parse the offending name back out of the message.
+    pub fn workflow_construct_unsupported(node: &str, field: &str) -> Self {
+        let mut wire = Self {
+            code: Code::FailedPrecondition,
+            reason: reason::WORKFLOW_CONSTRUCT_UNSUPPORTED,
+            message: format!(
+                "node '{node}' sets '{field}', which SubmitWorkflow does not execute yet"
+            ),
+            metadata: HashMap::new(),
+            retry_after: None,
+        };
+        wire.metadata
+            .insert(reason::KEY_NODE.to_string(), node.to_string());
+        wire.metadata
+            .insert(reason::KEY_FIELD.to_string(), field.to_string());
+        wire
+    }
+
     /// No usable credential.
     ///
     /// There is exactly one constructor, and it takes no argument, because the
