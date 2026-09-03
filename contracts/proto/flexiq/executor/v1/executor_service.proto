@@ -80,6 +80,11 @@ service ExecutorService {
   // `session` comes from the `flexiq-attach-session-bin` metadata on the Attach
   // response. It is the scheduler's own value handed back: an executor naming
   // itself here could shrink a peer's advertised capacity by claiming its id.
+  //
+  // The metadata arrives before the handshake finishes, but this RPC is still
+  // ordered behind it: `hello` is the first thing the scheduler reads on a
+  // stream, and a heartbeat that overtakes it is read *as* the handshake and
+  // refuses the attach. Wait for `hello_ack`.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
 
