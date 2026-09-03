@@ -1326,6 +1326,70 @@ how the Helm chart wires a gRPC-only release. The `grpc` probe field needs
 Kubernetes 1.24; on an older cluster set `grpc.healthProbe=false` and readiness
 falls back to a socket connect.
 
+### The executor door
+
+The same listener also serves `flexiq.executor.v1.ExecutorService` — a fourth
+`Transport` beside the attach protocol's TCP and Unix-socket transports, not a
+second dispatcher. An executor placed over this stream is placed by the exact
+rules `RemoteDispatcher::attach` already applies, shows up in the same
+registry as a socket-attached one, and is compared against it by the same
+registry-divergence check. Nothing about a job's dispatch, retries or
+dead-lettering changes because the executor that ran it dialled in over gRPC.
+
+<Callout type="info" title="No SDK attaches this way yet">
+  Every SDK's `executor` CLI still dials `FLEXIQ_ATTACH` over TCP or a Unix
+  socket — see <SdkLink to="modules/executor">Attached executors</SdkLink>.
+  `flexiq.executor.v1` exists today for a custom executor written directly
+  against the proto, in any language with a gRPC library — the same
+  "no native binding required" story the producer door tells. Reflection
+  serves this package too, off the same embedded descriptor, so a client
+  needs no `.proto` on hand.
+</Callout>
+
+Two RPCs. `Attach` is one bidirectional stream for the lifetime of a
+connection: `AttachRequest`/`AttachResponse` are each a `oneof` over the worker
+frame protocol's frames — `hello` in, `hello_ack` out, then jobs out and
+results in until either side ends it. `Heartbeat` is a separate unary RPC,
+deliberately off the dispatch stream — a busy stream and a dead peer would
+otherwise be indistinguishable — and carries the session token the `Attach`
+response returned in the `flexiq-attach-session-bin` metadata, so an executor
+cannot shrink a peer's advertised capacity by naming itself.
+
+```bash
+FLEXIQ_DSN=/var/lib/flexiq/app.db \
+FLEXIQ_NAMESPACE=prod \
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
+FLEXIQ_LISTEN=127.0.0.1:7777 \
+flexiq-server
+```
+
+The `execute` scope opens this package, on the same token mechanism
+[the credential](#the-credential) already covers — mint one with
+`flexiq-server token create --scope execute` and present it the same way an
+attach connection presents `FLEXIQ_ATTACH_TOKEN`.
+
+<Callout type="warn" title="Raise your own message-size limit">
+  gRPC libraries default to 4 MiB in each direction. This door carries whatever
+  the worker frame protocol allows — job payloads up to 64 MiB, plus envelope
+  (`EXECUTOR_MAX_MESSAGE_BYTES`, 68 MiB total). A client that leaves the
+  default in place attaches fine and fails on its first large job, which is the
+  worst time to find out.
+</Callout>
+
+**The stream is bounded on purpose**, `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`
+seconds — 30 minutes by default. A gRPC stream cannot be load-balanced once it
+has started, so a stream-per-executor that never ended would pin every
+executor to whichever replica it first reached. Before ending one, the
+scheduler stops matching new work to it and waits for what it already holds,
+so rotation never costs a job in flight. A clean stream end means *reconnect*;
+a `shutdown` frame means *stop*. Both are ordinary outcomes, not failures — a
+client that treats a rotation as an error will reconnect anyway, but a log line
+that says so is one less incident to chase.
+
+What it does not have, on purpose: no HTTP binding — the JSON facade above
+serves `flexiq.v1` only, never this package — and no admin surface or producer
+surface, so an `execute`-scoped credential can run work and nothing else.
+
 ### Security
 
 Same posture as the attach listener:
