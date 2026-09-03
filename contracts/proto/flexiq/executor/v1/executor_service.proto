@@ -54,6 +54,12 @@ import "google/protobuf/timestamp.proto";
 //   * No registry fingerprint on the wire. `hello` carries `tasks` and the
 //     scheduler derives the fingerprint from it; a wire field would be a second
 //     copy of one fact, free to disagree with the first.
+//
+// One thing a client must do for itself: **raise its own message-size limits.**
+// gRPC libraries default to 4 MiB in each direction, and this door carries the
+// payloads the worker frame protocol allows — up to 64 MiB, plus envelope. An
+// executor that leaves the default in place attaches fine and then fails on its
+// first large job, which is the worst time to find out.
 service ExecutorService {
   // Attach for the lifetime of one stream: `hello` in, `hello_ack` out, then
   // jobs out and results in until either side ends it.
