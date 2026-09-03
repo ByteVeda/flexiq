@@ -265,6 +265,34 @@ macro_rules! impl_diesel_job_ops {
                 Self::insert_job_dependencies(conn, &job.id, depends_on)
             }
 
+            /// The active job (`Pending`/`Running`) carrying `unique_key` in
+            /// `namespace` — shared by `enqueue_unique_reporting`'s initial
+            /// check, its post-`UniqueViolation` race re-read, and
+            /// `enqueue_unique_batch_reporting`'s per-item check.
+            ///
+            /// `None` is a namespace of its own here, not "match anything": a
+            /// job in another namespace is a different job, not a duplicate,
+            /// so this follows `lock_debounce_candidates`'s
+            /// `Some(ns) => .eq(ns), None => .is_null()` scheme rather than
+            /// `job_in_namespace`'s "`None` = unscoped read" one.
+            fn find_active_by_unique_key(
+                conn: &mut $conn_type,
+                unique_key: &str,
+                namespace: Option<&str>,
+            ) -> diesel::result::QueryResult<Option<JobRow>> {
+                let mut query = jobs::table
+                    .filter(jobs::unique_key.eq(unique_key))
+                    .filter(
+                        jobs::status.eq_any([JobStatus::Pending as i32, JobStatus::Running as i32]),
+                    )
+                    .into_boxed();
+                query = match namespace {
+                    Some(ns) => query.filter(jobs::namespace.eq(ns)),
+                    None => query.filter(jobs::namespace.is_null()),
+                };
+                query.select(JobRow::as_select()).first(conn).optional()
+            }
+
             /// Insert a new job into the queue. Returns the job.
             pub fn enqueue(&self, new_job: NewJob) -> Result<Job> {
                 let depends_on = new_job.depends_on.clone();
@@ -507,18 +535,15 @@ macro_rules! impl_diesel_job_ops {
                 const MAX_ENQUEUE_ATTEMPTS: usize = 3;
                 for _ in 0..MAX_ENQUEUE_ATTEMPTS {
                     let result = self.write_transaction(|conn| {
-                        // Return any existing active job with the same unique_key.
+                        // Return any existing active job with the same
+                        // unique_key in the same namespace — a match in
+                        // another namespace is a different job, not a dup.
                         if let Some(ref uk) = job.unique_key {
-                            let existing: Option<JobRow> =
-                                jobs::table
-                                    .filter(jobs::unique_key.eq(uk))
-                                    .filter(jobs::status.eq_any([
-                                        JobStatus::Pending as i32,
-                                        JobStatus::Running as i32,
-                                    ]))
-                                    .select(JobRow::as_select())
-                                    .first(conn)
-                                    .optional()?;
+                            let existing = Self::find_active_by_unique_key(
+                                conn,
+                                uk,
+                                job.namespace.as_deref(),
+                            )?;
                             if let Some(row) = existing {
                                 return Ok((Job::from(row), true));
                             }
@@ -545,15 +570,11 @@ macro_rules! impl_diesel_job_ops {
                             // the in-memory test pool has a single connection.
                             if let Some(ref uk) = job.unique_key {
                                 let mut conn = self.conn()?;
-                                let existing: Option<JobRow> = jobs::table
-                                    .filter(jobs::unique_key.eq(uk))
-                                    .filter(jobs::status.eq_any([
-                                        JobStatus::Pending as i32,
-                                        JobStatus::Running as i32,
-                                    ]))
-                                    .select(JobRow::as_select())
-                                    .first(&mut conn)
-                                    .optional()?;
+                                let existing = Self::find_active_by_unique_key(
+                                    &mut conn,
+                                    uk,
+                                    job.namespace.as_deref(),
+                                )?;
                                 if let Some(row) = existing {
                                     return Ok((Job::from(row), true));
                                 }
@@ -614,17 +635,14 @@ macro_rules! impl_diesel_job_ops {
                     let result = self.write_transaction(|conn| {
                         let mut out = Vec::with_capacity(prepared.len());
                         for (job, depends_on) in &prepared {
-                            // Return any existing active job with the same key.
+                            // Return any existing active job with the same key
+                            // in the same namespace.
                             if let Some(ref uk) = job.unique_key {
-                                let existing: Option<JobRow> = jobs::table
-                                    .filter(jobs::unique_key.eq(uk))
-                                    .filter(jobs::status.eq_any([
-                                        JobStatus::Pending as i32,
-                                        JobStatus::Running as i32,
-                                    ]))
-                                    .select(JobRow::as_select())
-                                    .first(conn)
-                                    .optional()?;
+                                let existing = Self::find_active_by_unique_key(
+                                    conn,
+                                    uk,
+                                    job.namespace.as_deref(),
+                                )?;
                                 if let Some(row) = existing {
                                     out.push((Job::from(row), true));
                                     continue;
