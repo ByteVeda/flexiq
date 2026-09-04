@@ -6,6 +6,12 @@ use flexiq_core::scheduler::JobResult;
 
 use crate::py_worker_steps::PyWorkerSteps;
 
+/// Call the Python function registered for `job`, returning its serialized
+/// result — `None` when the task returned `None`.
+///
+/// `flexiq.context` is installed before the call and cleared after it whether
+/// the task returned or raised, so a failed attempt cannot leak its job id or
+/// step handle into the next one.
 pub fn execute_task(
     py: Python<'_>,
     task_registry: &Py<PyAny>,
@@ -112,6 +118,10 @@ pub fn execute_task(
     }
 }
 
+/// Render a raised Python exception as the error string stored on the job.
+///
+/// `flexiq.task_errors` owns the canonical JSON encoding; a failure to import
+/// or encode falls back to plain traceback text, which readers treat as legacy.
 pub fn format_python_error(py: Python<'_>, e: &PyErr) -> String {
     // Canonical structured error (BINDING_CONTRACT.md "Task errors") — the
     // Python module owns the encoding so every worker path emits one format.

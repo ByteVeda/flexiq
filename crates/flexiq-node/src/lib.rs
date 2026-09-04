@@ -4,6 +4,7 @@
 //! All scheduling and storage logic lives in `flexiq-core`; this crate only
 //! marshals between JS values and the core and (later) dispatches task
 //! execution back into JavaScript.
+#![deny(missing_docs)]
 
 mod attached_steps;
 mod backend;
