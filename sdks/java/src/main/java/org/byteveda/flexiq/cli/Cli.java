@@ -2,6 +2,7 @@ package org.byteveda.flexiq.cli;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -11,6 +12,9 @@ import org.byteveda.flexiq.model.DeadJob;
 import org.byteveda.flexiq.model.Job;
 import org.byteveda.flexiq.model.JobFilter;
 import org.byteveda.flexiq.model.JobStatus;
+import org.byteveda.flexiq.serialization.CborSerializer;
+import org.byteveda.flexiq.serialization.JsonSerializer;
+import org.byteveda.flexiq.serialization.Serializer;
 import org.jspecify.annotations.Nullable;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -305,8 +309,18 @@ public final class Cli {
         @Nullable
         String executorId;
 
+        @Option(
+                names = "--serializer",
+                description = "Payload wire format: json (default) or cbor, for cross-SDK payloads "
+                        + "(env: FLEXIQ_SERIALIZER).")
+        @Nullable
+        String serializer;
+
         @Override
         public Integer call() throws Exception {
+            // Resolved first: a bad value fails fast, before dialing anything.
+            Serializer configuredSerializer = resolveSerializer();
+
             String address = attach != null ? attach : System.getenv("FLEXIQ_ATTACH");
             if (address == null || address.isBlank()) {
                 System.err.println("--attach is required (or set FLEXIQ_ATTACH), e.g. --attach scheduler:7777");
@@ -324,6 +338,9 @@ public final class Cli {
                     // output and lands in shell history.
                     .token(envOrNull("FLEXIQ_ATTACH_TOKEN"))
                     .executorId(executorId);
+            if (configuredSerializer != null) {
+                builder.serializer(configuredSerializer);
+            }
 
             if (builder.tasks().isEmpty()) {
                 System.err.println("no handlers found on the classpath. Annotate methods with @TaskHandler and "
@@ -390,6 +407,27 @@ public final class Cli {
         private static @Nullable String envOrNull(String name) {
             String value = System.getenv(name);
             return value == null || value.isBlank() ? null : value;
+        }
+
+        /**
+         * The serializer from the flag, then the env, then {@code null} — meaning
+         * the {@link org.byteveda.flexiq.worker.Executor.Builder}'s own default
+         * (JSON) applies untouched.
+         */
+        private @Nullable Serializer resolveSerializer() {
+            String raw = serializer != null ? serializer : System.getenv("FLEXIQ_SERIALIZER");
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            switch (raw.trim().toLowerCase(Locale.ROOT)) {
+                case "json":
+                    return new JsonSerializer();
+                case "cbor":
+                    return new CborSerializer();
+                default:
+                    throw new CommandLine.ParameterException(
+                            spec.commandLine(), "--serializer must be 'json' or 'cbor', got '" + raw + "'");
+            }
         }
 
         /** Slots from the flag, then the env, then one. */
