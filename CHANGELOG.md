@@ -8,6 +8,124 @@ underlying Rust crates are released together, in lock-step.
 Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
 their entries below keep that name.
 
+## 1.1.0
+
+Two things a queue could not do before: checkpoint work *inside* a job, and be reached by a
+process that has no FlexiQ binding at all. No public API was removed or renamed in the Python,
+Node or Java SDKs; the one breaking change is a `Storage` trait method, and it reaches only an
+out-of-tree implementor. Seven migrations run on first start and one of them changes how
+`unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
+
+### Added
+
+- **Durable steps.** `ctx.step.run` / `ctx.step.sleep` in Python and Node, `ctx.step().run` /
+  `ctx.step().sleep` in Java, all backed by a `job_steps` table. A retried job replays the steps
+  that already committed instead of re-running them, which is what makes a task that charges a
+  card safe to retry.
+  Every write is fenced on `(owner, attempt, epoch)`: a step commit from a worker that has lost
+  its claim is refused rather than applied, because the alternative to failing closed here is a
+  second charge. `step.sleep` ends the attempt and reschedules rather than blocking a worker
+  slot. Steps work on an attached executor too, over the frame protocol and under the
+  in-memory harness.
+- **Server mode.** `FLEXIQ_GRPC_LISTEN` adds a fourth role to `flexiq-server`, serving two
+  independent doors: `flexiq.v1.ProducerService` — enqueue, batch, read, cancel, count, and
+  submit or read a workflow — and `flexiq.executor.v1.ExecutorService`, an attach stream that
+  reaches the same dispatcher a socket-attached executor does. The producer door is also served
+  as ordinary HTTP with proto3 JSON bodies on the same port, so a shell script can enqueue with
+  no protobuf toolchain and no CBOR library. The wire contract is `contracts/proto`, gated by
+  buf and **stable from this release**; `server-v*` releases carry it as an asset.
+- **Scoped API tokens** (`flexiq-server token create|list|revoke`, and a dashboard page). A
+  credential is minted per client, carries `produce` or `execute` and never both, expires, and
+  is revoked without restarting a pod or re-issuing to anyone else. A revoked token fails on its
+  next call: the check is not cached, because a cached allow is a revocation that never landed.
+- **Task discovery.** `@task` without a queue plus `Queue.autodiscover` in Python, async
+  discovery in Node, and a compile-time registry via the annotation processor in Java. The
+  scheduler now records each worker's registry and warns when one advertises a set no live peer
+  has — the safety net for a worker that imported half its task tree and would otherwise
+  dead-letter the rest in silence.
+- **Debounce and shedding on every SDK.** `debounce` options on the task decorator, builder and
+  registration API; `on_excess="drop"` for a queue that should shed rather than queue.
+- **A dispatch lease on every job.** The scheduler mints an opaque token when it wins an
+  execution claim and requires it back on every frame that settles or advances that attempt, so
+  a frame from a superseded attempt cannot record a result.
+- **Bounded middleware hooks.** Every `before` now pairs with exactly one `after` or `on_sleep`,
+  under a deadline, so a hook that hangs cannot hold a slot indefinitely.
+- **Documentation is restructured** around Guides, Modules, Operate and About, with a beginner
+  track that ends with something running, an API reference generated from the SDK declarations
+  and gated for coverage, and full-text search.
+
+### Changed
+
+- **The `.proto` files are stable.** They carried an `UNSTABLE` banner until the release that
+  first shipped the gRPC role. Field numbers, field names and RPC shapes are permanent from
+  here.
+- **The gRPC listener has keepalive, a request deadline and a per-connection concurrency cap**
+  (`FLEXIQ_GRPC_KEEPALIVE_INTERVAL`, `FLEXIQ_GRPC_REQUEST_TIMEOUT`,
+  `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS`). The deadline bounds a response *head*, so it closes no
+  long-lived stream; use `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` for an attach stream.
+- **`GET /metrics` is served on the gRPC listener**, so a release that enables only the gRPC
+  role has a scrape target. It carries the dashboard's storage gauges plus per-RPC call counts
+  and latencies.
+- **BREAKING (Rust core): `Storage` gained `enqueue_unique_reporting` and
+  `enqueue_unique_batch_reporting`**, both required. They return whether the enqueue
+  deduplicated, which the producer door has to answer on the wire and which is not computable
+  above the backend — the job's id is generated inside the insert, so a caller has no candidate
+  to compare against. The existing names stay as one-line wrappers, so a backend still has one
+  implementation. Only an out-of-tree implementor of the trait is affected; the Python, Node and
+  Java APIs are unchanged.
+
+### Fixed
+
+- **`unique_key` deduplicated across namespaces.** A tenant enqueueing a key another tenant had
+  already used got that tenant's job back and never created its own. The index is rebuilt over
+  `(namespace IS NULL, COALESCE(namespace, ''), unique_key)` by migration `m0017`, and the
+  lookups are scoped to match. The leading discriminator is not redundant: `COALESCE` alone
+  would fold an unnamespaced job and one in a namespace literally named `""` into the same
+  group. Debounce was already namespaced; `unique_key` was the outlier.
+- **A queue's admission cap was not applied inside a debounced enqueue**, so a debounce window
+  could admit work past a full queue.
+- **An empty debounce placeholder could key a window**, collapsing unrelated jobs into one.
+- **Shed dead-letter entries were picked up by auto-retry**, which retried work the queue had
+  deliberately dropped.
+- **One executor connection could be handed the same job id twice.**
+- **A degraded readiness probe answered 200.** It answers 503 now, so an orchestrator takes the
+  replica out of rotation.
+- **Dead-letter rows lost a run's origin and a job's metadata**, which are the two fields a
+  replay needs.
+- **A Python step session could be fenced against another worker's claim**, and a Node executor
+  could drop the wrong dispatch from its step registry.
+- **Deferred Python tasks were not claimed on every path that loads an app.**
+- **The dashboard compared worker registries across queue groups** rather than within one, so
+  unrelated workers were reported as divergent.
+
+### Upgrading to 1.1.0
+
+**Seven migrations run on first start**, `m0011` through `m0017`. All are expand-only — they add
+columns, tables and indexes and drop no data — so an older worker keeps running against a
+migrated database and a rollback needs no down-migration:
+
+| Migration | Adds |
+|---|---|
+| `m0011_dlq_shed` | A shed flag on dead-letter entries, so shed work is not auto-retried |
+| `m0012_worker_registry_fingerprint` | Each worker's task-registry fingerprint |
+| `m0013_job_steps` | The `job_steps` table durable steps commit into |
+| `m0014_dead_letter_origin` | The run a dead-lettered job belongs to |
+| `m0015_dead_letter_job_metadata` | The job's own metadata on a dead-letter row |
+| `m0016_claim_epoch` | The epoch an execution claim was won under, for the dispatch lease |
+| `m0017_unique_key_namespace` | `idx_jobs_unique_key`, rebuilt to be namespace-scoped |
+
+**One of them changes observable behaviour.** `m0017` drops and recreates `idx_jobs_unique_key`
+over `(namespace IS NULL, COALESCE(namespace, ''), unique_key)`, so a `unique_key` now
+deduplicates **within one namespace** instead of across all of them. That was a cross-tenant
+bug — a tenant enqueueing a key another tenant had used got that tenant's job back and never
+created its own — but a deployment that relied on the old reach has to key on something
+namespace-independent instead. A deployment with a single namespace, or none, sees no change.
+Recreating the index takes a table scan; on a large `jobs` table the first start pauses for it.
+
+Nothing else requires action. Payload markers, the worker frame protocol version and the
+`CONTRACT_VERSION` floor are all unchanged from 1.0.0, so 1.0.x and 1.1.0 workers may share a
+queue while you roll.
+
 ## 1.0.0
 
 The project is now **FlexiQ**. This is a rename, not a redesign — no API was added, removed, or

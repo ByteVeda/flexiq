@@ -177,4 +177,4 @@ try:
 except PackageNotFoundError:
     # Running from a source tree with no installed distribution. Kept in sync
     # with the root Cargo.toml by scripts/version.mjs — do not hand-edit.
-    __version__ = "1.0.0"
+    __version__ = "1.1.0"

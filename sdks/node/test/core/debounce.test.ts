@@ -25,11 +25,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// The budget is a failure deadline, not a delay: a passing test returns on the
+// first poll that satisfies the predicate, so a generous number costs nothing.
+// Five seconds was not generous enough — three tests here wait out a real 300ms
+// debounce window plus a worker poll, and on a loaded windows-latest runner
+// (this file alone takes ~150s there) that ran past the deadline while every
+// other platform passed the same commit. The rest of this suite already sits
+// between 10 and 25 seconds for the same reason.
 async function waitForStatus(
   queue: Queue,
   id: string,
   predicate: (status: string) => boolean,
-  timeoutMs = 5000,
+  timeoutMs = 20_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
