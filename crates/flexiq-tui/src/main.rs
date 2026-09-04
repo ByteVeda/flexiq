@@ -1,3 +1,13 @@
+//! `flexiq-tui` — a terminal dashboard for a FlexiQ queue.
+//!
+//! Reads the same storage the scheduler does and renders jobs, queues, workers
+//! and dead letters over ratatui. Read-mostly by design: the dead-letter
+//! actions it does offer — retry, delete, purge-all — go through the ordinary
+//! `Storage` calls and are confirmed first, so nothing here is a second way to
+//! mutate a queue.
+//!
+//! Not published — a binary, built from this repository.
+
 mod app;
 mod backend;
 mod cli;

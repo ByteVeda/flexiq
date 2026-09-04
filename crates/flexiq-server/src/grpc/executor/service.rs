@@ -1,7 +1,7 @@
 //! `flexiq.executor.v1.ExecutorService`: the executor door.
 //!
 //! Everything here is plumbing between a gRPC stream and a
-//! [`FrameTransport`](flexiq_core::worker::FrameTransport). The scheduler side
+//! [`flexiq_core::worker::FrameTransport`]. The scheduler side
 //! is [`RemoteDispatcher::attach`], unchanged and unaware — an executor that
 //! dialled in over gRPC is placed by the same rules as one on a socket, appears
 //! in the same registry, and is compared against it by the same registry
@@ -13,7 +13,7 @@
 //! * **Inbound** (async task): `AttachRequest` → [`ExecutorMessage`] →
 //!   the endpoint. Never blocks; the endpoint's scheduler-bound direction is
 //!   unbounded and the dispatcher's reader drains it continuously.
-//! * **Outbound** (OS thread): the endpoint → [`SchedulerMessage`] →
+//! * **Outbound** (OS thread): the endpoint → [`flexiq_core::SchedulerMessage`] →
 //!   `AttachResponse`. A thread rather than a task because `recv` blocks, the
 //!   same shape as the dispatcher's own reader thread.
 //! * **Lifecycle** (async task): runs the handshake off the runtime, starts the

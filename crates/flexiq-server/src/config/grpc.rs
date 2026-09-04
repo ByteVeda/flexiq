@@ -153,7 +153,9 @@ impl GrpcConfig {
     /// How long a keepalive ping has to be answered, or `None` when pings are
     /// off.
     ///
-    /// See [`KEEPALIVE_TIMEOUT_DIVISOR`] for why this is derived.
+    /// Derived rather than configured — see the note on the divisor constant:
+    /// two knobs that must stay in a ratio are one knob plus a way to get it
+    /// wrong.
     pub fn keepalive_timeout(&self) -> Option<Duration> {
         (!self.keepalive_interval.is_zero()).then(|| {
             (self.keepalive_interval / KEEPALIVE_TIMEOUT_DIVISOR).max(MIN_KEEPALIVE_TIMEOUT)
