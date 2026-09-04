@@ -2,9 +2,11 @@
 //!
 //! A missed direct ping escalates to `indirect_ping_count` peers before
 //! anything is suspected, so one bad link between two nodes does not evict a
-//! healthy worker. The suspicion timeout scales with cluster size
-//! (`suspicion_multiplier` over `log(N+1) * protocol_period`), because a
-//! refutation has further to travel in a larger mesh.
+//! healthy worker. The suspicion timeout scales with cluster size —
+//! `suspicion_multiplier * max(ln(N + 1), 1.0) * protocol_period` — because a
+//! refutation has further to travel in a larger mesh. The lower clamp is what
+//! keeps a two-node mesh from suspecting on a window shorter than one protocol
+//! period, where `ln(N + 1)` is still below 1.
 
 use std::collections::HashMap;
 use std::time::Instant;
