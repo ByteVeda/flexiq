@@ -108,6 +108,10 @@ impl<S: StepStore> StepSession<S> {
                 job.id
             )));
         }
+        // Checked once, at attempt start, and before the snapshot read: below
+        // the floor there may be a peer that cannot see `job_steps` at all, and
+        // the memo is worth nothing if the next attempt lands on it.
+        store.ensure_contract_allows_steps()?;
         let namespace = job.namespace.clone();
         let recorded = store.load_steps(&job.id, namespace.as_deref())?;
         let sequence = StepSequence::new(job.id.clone(), recorded)?;

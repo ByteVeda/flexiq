@@ -32,6 +32,21 @@ pub trait StepStore {
     /// "no memo recorded": a step store that fails open re-runs a charge.
     fn supports_steps(&self) -> bool;
 
+    /// Whether the *deployment* — not this process — may run steps at all.
+    ///
+    /// Separate from [`supports_steps`](Self::supports_steps), which answers
+    /// what this store can do: a store can be perfectly capable while an older
+    /// peer sharing the same queue cannot read what it writes. See
+    /// [`crate::contract::STEPS_CONTRACT_LEVEL`].
+    ///
+    /// Defaults to allowed, for a store with no storage behind it to read the
+    /// floor from. That is not a hole: an attached executor's store reaches the
+    /// scheduler, and the scheduler withholds the step capability entirely
+    /// below the floor, so the session is never opened in the first place.
+    fn ensure_contract_allows_steps(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Every committed step for a job, ordered by `seq`. Read **once** per
     /// attempt (§5.1).
     fn load_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>>;
@@ -72,6 +87,10 @@ pub trait StepStore {
 impl StepStore for Box<dyn StepStore + Send> {
     fn supports_steps(&self) -> bool {
         (**self).supports_steps()
+    }
+
+    fn ensure_contract_allows_steps(&self) -> Result<()> {
+        (**self).ensure_contract_allows_steps()
     }
 
     fn load_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
@@ -154,6 +173,16 @@ impl<S: Storage> StorageSteps<S> {
 impl<S: Storage> StepStore for StorageSteps<S> {
     fn supports_steps(&self) -> bool {
         self.storage.supports_steps()
+    }
+
+    /// One settings read per attempt that opens a session.
+    ///
+    /// §11.1 assumed the floor loaded at open would still be to hand here, but
+    /// nothing caches it and carrying it would mean threading a `u32` through
+    /// three FFI boundaries to save one indexed lookup — next to the snapshot
+    /// read and a write per step, it is not what an attempt costs.
+    fn ensure_contract_allows_steps(&self) -> Result<()> {
+        crate::contract::ensure_steps_allowed(&self.storage)
     }
 
     fn load_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {

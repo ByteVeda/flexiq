@@ -2194,6 +2194,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_a_step_commit_is_fenced_on_the_epoch(s);
     test_a_step_at_the_cap_round_trips_byte_for_byte(s);
     test_step_session_memoizes_across_attempts(s);
+    test_step_session_refuses_below_the_contract_floor(s);
     test_step_idempotency_key_survives_a_dlq_retry(s);
     test_step_idempotency_key_survives_a_budget_exhausted_dlq_retry(s);
     test_dlq_retry_restores_the_jobs_own_metadata(s);
@@ -2206,6 +2207,11 @@ fn run_storage_tests(s: &impl Storage) {
 
 /// Enqueue, dequeue and claim one job, ready for a step write.
 fn stepped_job(s: &impl Storage, queue: &str, owner: &str) -> flexiq_core::job::Job {
+    // What an operator does before steps run anywhere. A schema'd backend seeds
+    // this when its tables are created, but Redis is schemaless and has no
+    // "created" moment to seed at, so the suite states it for every backend
+    // rather than only the one that needs it.
+    flexiq_core::set_min_contract(s, flexiq_core::STEPS_CONTRACT_LEVEL).unwrap();
     let job = s.enqueue(make_job(queue, "stepped_task")).unwrap();
     s.dequeue(queue, now_millis() + 1000, None).unwrap();
     assert!(s.claim_execution(&job.id, owner).unwrap().is_some());
@@ -2768,6 +2774,33 @@ fn newest_dead_for(s: &impl Storage, original_job_id: &str) -> DeadJob {
         .into_iter()
         .find(|entry| entry.original_job_id == original_job_id)
         .expect("dead entry")
+}
+
+/// D12: a deployment that has not raised its floor may still hold a worker that
+/// cannot read `job_steps`, and a memo that worker cannot see is a charge run
+/// twice. The session refuses before it reads the snapshot.
+fn test_step_session_refuses_below_the_contract_floor(s: &impl Storage) {
+    // A permissive floor has to sit below the step level or this gate is dead.
+    const { assert!(flexiq_core::MIN_CONTRACT_VERSION < flexiq_core::STEPS_CONTRACT_LEVEL) };
+    let job = stepped_job(s, "q-step-floor", "w-floor");
+    let limits = StepLimits::default();
+
+    // Back to what an un-raised deployment reports.
+    flexiq_core::set_min_contract(s, flexiq_core::MIN_CONTRACT_VERSION).unwrap();
+    let Err(error) = StepSession::load(s.clone(), &job, "w-floor", limits) else {
+        panic!("a session below the floor must be refused");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("contract:min_sdk")
+            && message.contains(&flexiq_core::STEPS_CONTRACT_LEVEL.to_string()),
+        "the refusal must name the dial and the level: {message}"
+    );
+
+    // And it opens the moment the operator turns the dial — the refusal is the
+    // floor's, not something latched on the job.
+    flexiq_core::set_min_contract(s, flexiq_core::STEPS_CONTRACT_LEVEL).unwrap();
+    StepSession::load(s.clone(), &job, "w-floor", limits).expect("a raised floor opens a session");
 }
 
 /// A deploy that changed the step sequence fails the attempt before the closure
