@@ -85,6 +85,14 @@ jobs:
             exit 1
           fi
 
+      # The interpreter only — pyo3's build script queries it, and the rustdoc
+      # step below now reaches flexiq-python. The dev deps are not needed, so
+      # skip the sync.
+      - name: Set up Python (libpython only)
+        uses: ./.github/actions/setup-python
+        with:
+          sync: "false"
+
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
 
@@ -114,12 +122,13 @@ jobs:
           read -ra pkgs <<< "$PACKAGES"
           cargo "+$msrv" check --locked "${pkgs[@]}" --all-features
 
+      # --workspace, not the published four: an unpublished crate's rustdoc still
+      # rots, and a broken intra-doc link in flexiq-server is a link the docs
+      # site and every IDE hover follow. The per-pull-request job in ci-rust.yml
+      # runs the same command; this stays as the fail-closed re-check at the tag,
+      # where the tree being published is the one actually inspected.
       - name: Rustdoc is warning-free
-        env:
-          PACKAGES: -p flexiq -p flexiq-core -p flexiq-workflows -p flexiq-mesh
-        run: |
-          read -ra pkgs <<< "$PACKAGES"
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked "${pkgs[@]}" --no-deps --all-features
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
       # Re-running a release must be a no-op for versions already up, so the
       # upload set is whatever is genuinely missing. Probing the sparse index
