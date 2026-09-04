@@ -17,6 +17,11 @@ credential at all.
 | **Who can run tasks** | A worker in the same process, or an <SdkLink to="modules/executor">attached executor</SdkLink> over TCP/Unix | The same executors, reachable now over a gRPC stream too |
 | **Reach for it when** | The default — this is nearly always the right answer | A producer has no native binding to reach for, or the database credential must not live in every caller |
 
+Writing that caller is its own page, one per door:
+<SdkLink to="modules/clients">Clients without an SDK</SdkLink> for the producer
+side, <SdkLink to="modules/custom-executors">Custom executors</SdkLink> for the
+executor side.
+
 Nothing forces an all-or-nothing switch. A deployment can put only its producer
 on the network door and leave its workers opening storage directly, same as
 today — the "Try it" section below points at an example of exactly that
@@ -59,6 +64,7 @@ for the `Attach` stream.
   use. `flexiq.executor.v1` exists today for a custom executor written directly
   against the proto, in any language with a gRPC library, which is the same
   "no native binding" pitch the producer door makes.
+  <SdkLink to="modules/custom-executors">Custom executors</SdkLink> is how.
 </Callout>
 
 ## `raw` versus `structured`

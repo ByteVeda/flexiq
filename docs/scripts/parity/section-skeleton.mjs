@@ -123,6 +123,8 @@ export const SECTION_SKELETON = [
       "mesh",
       "executor",
       "server",
+      "clients",
+      "custom-executors",
       "autoscaling",
     ],
   },

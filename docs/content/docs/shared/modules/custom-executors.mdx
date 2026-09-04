@@ -1,0 +1,173 @@
+---
+title: Custom executors
+description: "Implement flexiq.executor.v1 from scratch: the handshake, the frames, capability negotiation, and the rules a stream has to keep."
+---
+
+Every SDK's `executor` CLI dials the attach protocol over TCP or a Unix socket.
+`flexiq.executor.v1` is the same protocol as a gRPC stream, and it is there so
+an executor can be written in a language no SDK covers — the mirror of what
+<SdkLink to="modules/clients">Clients without an SDK</SdkLink> does for
+producers. If your language *does* have an SDK, use
+<SdkLink to="modules/executor">Attached executors</SdkLink> instead; this page
+is the harder road, taken on purpose.
+
+Get the `.proto` the same three ways the producer page describes. The service is
+`flexiq.executor.v1.ExecutorService`, and it is a separate package from
+`flexiq.v1` deliberately: the audiences, credentials and exposure differ, so a
+client generated for one stays compilable and reviewable on its own.
+
+## What an executor is not allowed to do
+
+An attached executor holds **no database credential**. It never reads a job row,
+never writes a result, and never resolves its own namespace, owner or attempt —
+the scheduler applies every one of those from the dispatch it recorded. That is
+what makes this a door an application container may dial *out* through.
+
+It follows that **an executor cannot enqueue.** A task that fans out to a second
+stage has to go back through the producer door as an ordinary client, with a
+`produce`-scoped credential of its own. An `execute` token opens this package
+and nothing else.
+
+Nothing you send names a namespace, an owner, an attempt or a resource cap.
+Anything an executor could name is something an executor could forge.
+
+## The credential
+
+Mint a token with the `execute` scope and send it as `authorization: Bearer …`
+gRPC metadata, exactly like a producer call:
+
+```bash
+flexiq-server token create --name my-executor --scope execute
+```
+
+The token is checked before the stream is entered, by the same layer that gates
+every other RPC on this listener. `FLEXIQ_ATTACH_TOKEN` is a different
+credential for a different listener — the TCP/Unix attach port — and does
+nothing here.
+
+<Callout type="warn" title="Raise your own message-size limit">
+  gRPC libraries default to 4 MiB in each direction. This door carries what the
+  worker frame protocol allows: job payloads up to 64 MiB, plus envelope, for
+  68 MiB in total. An executor that leaves the default in place attaches
+  cleanly and then fails on its first large job, which is the worst time to
+  find out.
+</Callout>
+
+## The handshake
+
+`Attach` is one bidirectional stream for the lifetime of a connection.
+`AttachRequest` and `AttachResponse` are each a `oneof` over the frames below.
+
+1. Send `HelloFrame` **first**. It carries `executor_id`, `sdk`, `version`, the
+   `tasks` you have handlers for, your `slots`, `protocol_version` (currently
+   `1`) and the `capabilities` you implement. It carries no credential — the
+   bearer token already authorised the call.
+2. Wait for `HelloAckFrame`. No `job` will precede it.
+3. Both sides announce `protocol_version` and both reject a mismatch. A version
+   is never silently downgraded, and the ack is sent **even when the scheduler
+   is refusing**, so both ends can log both numbers.
+4. Read the session token from the response metadata, key
+   `flexiq-attach-session-bin`. You need it for `Heartbeat`.
+
+One live stream per `executor_id`; a second attach under an id already attached
+is refused. `tasks` is also what the scheduler fingerprints your registry from —
+it warns when one executor advertises a set no live peer has, which is the
+safety net for a worker that imported half its task tree. A mismatch is never a
+reason to refuse an attach.
+
+## The frames
+
+| Arm | Direction | Carries |
+|---|---|---|
+| `hello` | → scheduler | `executor_id`, `sdk`, `version`, `tasks[]`, `slots`, `protocol_version`, `capabilities[]` |
+| `hello_ack` | ← scheduler | `scheduler_id`, `protocol_version`, `capabilities[]` |
+| `job` | ← scheduler | id, task name, payload, retry counts, queue, timeout, namespace, disabled middleware, metadata, `lease` |
+| `job_steps` | ← scheduler | A durable-step snapshot, only if you claimed `steps` |
+| `step_ack` | ← scheduler | The answer to one `step_commit` |
+| `cancel` | ← scheduler | A job id to stop running |
+| `shutdown` | ← scheduler | Stop; do not reconnect |
+| `success` | → scheduler | Job id, result bytes, task name, wall time, `lease` |
+| `failure` | → scheduler | Job id, error, retry counts, wall time, `should_retry`, `timed_out`, `lease` |
+| `cancelled` | → scheduler | Job id, task name, wall time, `lease` |
+| `slept` | → scheduler | Job id, wake time, wall time, `lease` |
+| `progress` | → scheduler | Job id, 0–100, `lease` |
+| `task_log` | → scheduler | Job id, level, message, `lease` |
+| `step_commit` | → scheduler | One durable step's outcome, `lease` |
+
+`should_retry` is **your** decision — only the executor can see the exception,
+and the scheduler never inspects one. `progress` and `task_log` are
+fire-and-forget: they carry no reply, never settle a job, and one naming a job
+you are not running is dropped.
+
+**An unknown arm is skipped, not fatal.** A `oneof` you do not recognise decodes
+to no arm; log it once and read the next frame. The stream stays aligned and the
+session keeps its in-flight jobs. Do the same in both directions — this is how a
+newer scheduler and an older executor stay attached to each other.
+
+## Capabilities, not versions
+
+Optional behaviour is negotiated, never versioned. `hello_ack.capabilities` is
+what the scheduler will do on your behalf; `hello.capabilities` is what you
+implement. **Send no frame for a behaviour that was not advertised.**
+
+| Capability | Means |
+|---|---|
+| `side_channel` | The scheduler applies your `progress` and `task_log` frames to storage |
+| `steps` | It applies your `step_commit` frames, and will send you `job_steps` |
+| `lease` | It sends a `lease` on every dispatch and checks it on every frame about one |
+
+Adding a capability never bumps `protocol_version`, which is the whole point:
+scheduler and executors do not have to upgrade together. Missing capabilities
+degrade quietly — the calls become no-ops — with one exception. **`steps` fails
+rather than degrades**: a durable step that silently did not commit is a step
+that will re-run a charge.
+
+## The lease
+
+`lease` is an opaque byte string the scheduler mints when it wins a job's
+execution claim. It rides the `job` frame, and you **echo it back on every frame
+that settles or advances that attempt**: `success`, `failure`, `cancelled`,
+`slept`, `progress`, `task_log` and `step_commit`.
+
+Never inspect it, never construct one, never reuse one across attempts.
+`hello` and `heartbeat` carry none — they belong to the connection, not to any
+job. A frame that should carry a lease and does not is dropped, and what it was
+reporting is a job that ran without its result being recorded.
+
+## Heartbeat is a separate RPC
+
+`Heartbeat` is unary and deliberately off the dispatch stream: a busy stream and
+a dead peer would otherwise be indistinguishable. It carries `free_slots` and
+the `session` token the `Attach` response returned — not your `executor_id`,
+which is a name you picked and could therefore be another executor's.
+
+## The stream ends, and that is normal
+
+Streams are bounded on purpose, `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` seconds,
+30 minutes by default. A gRPC stream cannot be load-balanced once it has
+started, so one that never ended would pin every executor to whichever replica
+it first reached. Before ending one, the scheduler stops matching new work to it
+and waits for what it already holds, so a rotation never costs a job in flight.
+
+**A clean stream end means reconnect. A `shutdown` frame means stop.** Both are
+ordinary outcomes, not failures — but log the difference, because an executor
+that treats a rotation as an error will reconnect anyway and leave you an
+incident to chase.
+
+## Payloads and results
+
+A `job` frame's `payload` is the tagged wire envelope, and your `success`
+frame's result is one too. The tag table, the `[args, kwargs]` call body, the
+bare-value result body and the conformance vectors are all on
+<SdkLink to="modules/clients#the-payload-envelope">Clients without an SDK</SdkLink>.
+Decode what you are given; do not re-encode it.
+
+## Trade-offs
+
+| Cost | Mitigation |
+|---|---|
+| Everything an SDK's executor CLI does — reconnect, backoff, frame framing, capability handling — is yours to write | Take TCP/Unix attach with an SDK if one covers your language |
+| No CPU-parallelism story: a remote executor is a network hop from the scheduler | Colocate it with the scheduler when throughput matters more than isolation |
+| You cannot enqueue from here | Hold a second, `produce`-scoped credential and use the producer door |
+| A missed `lease` echo loses a job's result silently | Echo it structurally — attach it where you build the frame, not per call site |
+| TLS is not terminated by `flexiq-server` | Put a sidecar proxy or service mesh in front of the listener |

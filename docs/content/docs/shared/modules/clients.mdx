@@ -1,0 +1,206 @@
+---
+title: Clients without an SDK
+description: "Enqueue and read work from a language FlexiQ has no SDK for: get the contract, generate a client, and decode what comes back."
+---
+
+FlexiQ ships SDKs for three languages. This page is for the fourth — Go, Ruby,
+C#, PHP, Elixir, anything with a gRPC library — talking to the
+<SdkLink to="modules/server">producer door</SdkLink> of a running
+`flexiq-server`. You need no native binding, no database credential, and, if you
+use `structured` arguments, no CBOR library either.
+
+What you give up is worth naming up front. An SDK gives you task registration,
+middleware, retries expressed in your own code, and a worker. This door gives
+you four verbs — enqueue, read, cancel, count — against a queue somebody else's
+worker drains. If you also want to *run* the work in your language, that is a
+different door: <SdkLink to="modules/custom-executors">Custom executors</SdkLink>.
+
+## Getting the contract
+
+Three routes, cheapest first.
+
+| Route | Use it when | Cost |
+|---|---|---|
+| **Server reflection** | You have a running server and a reflection-capable tool | No files at all |
+| **The release asset** | You generate stubs in a build pipeline | One download, pinned to a version |
+| **The repository** | You are already vendoring FlexiQ, or want to read them | A checkout |
+
+**Reflection** is served off the same descriptor the CI gate builds, so it
+cannot describe a different contract from the one the server implements. It
+needs a credential like every other non-health call:
+
+```bash
+export FLEXIQ_TOKEN=…   # see "The credential" below
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 list
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 describe flexiq.v1.ProducerService
+```
+
+**The release asset** is attached to every `server-v*` release:
+
+```bash
+VERSION=1.0.0
+base="https://github.com/ByteVeda/flexiq/releases/download/server-v${VERSION}"
+curl -sSLO "${base}/flexiq-proto-${VERSION}.tar.gz"      # the .proto tree
+curl -sSLO "${base}/flexiq-descriptor-${VERSION}.binpb"  # the compiled descriptor
+```
+
+The tarball carries `proto/` with its own `buf.yaml` and `buf.lock`, so `buf`
+resolves the one external dependency — `buf.build/googleapis/googleapis`, for
+`google.rpc.Status` — without you declaring it. It also carries
+`wire-vectors.json`, which is the authority for the payload envelope below.
+
+**The repository** has the same tree at
+[`contracts/proto`](https://github.com/ByteVeda/flexiq/tree/master/contracts/proto).
+Read it at a tag, not at `master`.
+
+## Generating a client
+
+With `buf`, from the extracted tarball:
+
+```bash
+buf generate proto --template - <<'YAML'
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen
+YAML
+```
+
+With `protoc` and no buf, from the descriptor — no import paths to resolve,
+because a descriptor set is already self-contained:
+
+```bash
+protoc --descriptor_set_in="flexiq-descriptor-${VERSION}.binpb" \
+  --python_out=gen \
+  flexiq/v1/producer_service.proto flexiq/v1/job.proto flexiq/v1/workflow.proto
+```
+
+Either way you get `flexiq.v1.ProducerService` with eight RPCs: `Enqueue`,
+`EnqueueBatch`, `GetJob`, `ListJobs`, `CancelJob`, `QueueStats`,
+`SubmitWorkflow` and `GetWorkflowRun`.
+
+<Callout type="info" title="Version 1 is permanent">
+  Field numbers are never reused or renumbered, fields are deprecated in place,
+  and new RPCs, messages, fields and enum values are additive. Your generated
+  client keeps working across server upgrades. Read what you do not recognise —
+  unknown fields, unknown enum values, unknown `oneof` arms — as "not this
+  build", never as an error.
+</Callout>
+
+## The credential and the namespace
+
+Every call carries `authorization: Bearer <token>`, a scoped API token minted
+against the server's database. The producer door needs the `produce` scope, and
+a `produce` token cannot open the executor door. Mint, list, expire and revoke
+are covered in
+<SdkLink to="operate/deployment#the-credential">The credential</SdkLink>.
+
+**There is no namespace field on the wire.** The token carries it, and the
+server serves exactly one — so a job written with no namespace at all is
+invisible over this door. If enqueues succeed and nothing ever runs them, that
+is the first thing to check.
+
+## The payload envelope
+
+`Job.payload` and `Job.result` are `bytes`, and the `.proto` calls them opaque.
+This is what is inside them.
+
+A payload is **one tag byte, then the body that codec produced**:
+
+| Tag | Body | Cross-SDK | Notes |
+|---|---|---|---|
+| `0x00` | Language-native | **Never** | A language's own codec — Python's pickle, for instance. Reject it with an error that names the tag; do not attempt it. |
+| `0x01` | MessagePack | Optional | Legacy. Read it if you like; do not write it. |
+| `0x02` | CBOR ([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949.html)) | **Default** | The cross-SDK format. Write this. |
+| `0x03` | Reserved | — | Tagged JSON, unspecified. |
+| `0x04`+ | Reserved | — | Future codecs. |
+
+An **untagged** payload predates the envelope and is same-SDK legacy. Do not
+sniff for one: a raw CBOR or MessagePack body can begin with any byte.
+
+**A call body** is a two-element CBOR array, `[args, kwargs]` — `args` an array,
+`kwargs` a map, empty when your language has no keyword arguments. The array is
+always two elements; a language without keyword arguments still sends `{}`.
+Prefer a single object argument (`[[{…}], {}]`), which maps onto every
+language's handler binding.
+
+**A result body is a bare CBOR value** — no array wrapper. This is the one that
+catches people: a payload is `02` then an array, a result is `02` then whatever
+the task returned.
+
+```text
+# f(1, "a") with no kwargs        02 82 82 01 61 61 a0     →  [[1, "a"], {}]
+# a result of true                02 f5
+# a result of 2^53                02 1b 00 20 00 00 00 00 00 00
+```
+
+Two rules your encoder must follow, both because the SDKs' automatic
+idempotency key is a hash over these bytes:
+
+- **Definite-length containers only** — `a0` for an empty map, `80` for an empty
+  array, never the indefinite forms `bf … ff` / `9f … ff`. Readers accept both;
+  writers must not use them.
+- **Shortest-form integers.**
+
+The full vector set is `contracts/wire-vectors.json`, which every SDK asserts
+against. Assert against it too — it is the cheapest conformance test you will
+write. Background on why CBOR: [Serialization](/architecture/serialization).
+
+## Enqueueing without a codec
+
+If you would rather not build the envelope at all, `EnqueueRequest` has a second
+arm. `structured` takes ordinary JSON values and the server encodes them into
+the same envelope; `raw` takes the bytes you built. Neither is second-class —
+the row is identical.
+
+`structured` refuses what JSON cannot carry rather than rounding it: integers
+past ±9007199254740991 (`2^53 - 1`), non-finite numbers, byte strings and CBOR
+tags. It
+also encodes object keys in sorted order, which changes the bytes without
+changing the meaning. The consequences are set out in
+<SdkLink to="operate/deployment#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink>.
+
+## Errors, and what may be retried
+
+Every failure carries a `google.rpc.Code` and a `google.rpc.ErrorInfo` whose
+`domain` is `flexiq.byteveda.org`. **Branch on `reason`**, never on the message —
+the message is for humans and may be reworded in any release.
+
+Retryability is a property of the method, not only of the code. `UNAVAILABLE`
+does not promise the write did not land:
+
+| Method | Safe to retry blind? |
+|---|---|
+| `Enqueue`, `EnqueueBatch`, `SubmitWorkflow` | **No.** Set `unique_key` yourself and retry with the same value. |
+| `CancelJob` | Yes — it is idempotent. |
+| `GetJob`, `ListJobs`, `QueueStats`, `GetWorkflowRun` | Yes — they have no side effects. |
+
+`unique_key` dedupes against the **active** job, so once the original completes
+or dead-letters the key is released. Your total retry deadline has to be shorter
+than the job's own life.
+
+`EnqueueBatch` promises no atomicity: it returns a per-item result, and an item
+carries an `index` only where the failure is attributable to one.
+
+## If you have no gRPC library either
+
+The same eight RPCs are served as ordinary HTTP with JSON bodies, on the same
+port and the same credential — proto3 JSON, lowerCamelCase field names with the
+`snake_case` ones accepted too, 64-bit integers as strings. The route table is
+in
+<SdkLink to="operate/deployment#the-same-door-without-grpc">The same door, without gRPC</SdkLink>,
+and
+[`examples/polyglot/grpc_producer.sh`](https://github.com/ByteVeda/flexiq/blob/master/examples/polyglot/grpc_producer.sh)
+is a working producer in `bash`, `grpcurl` and `jq`.
+
+## Trade-offs
+
+| Cost | Mitigation |
+|---|---|
+| No task registration, middleware or worker — this is a producer, not an SDK | Run the workers in a language that has an SDK, or write a <SdkLink to="modules/custom-executors">custom executor</SdkLink> |
+| Nothing warns you that a task name is misspelled until the job dead-letters | Enqueue one job by hand against a running worker before wiring the client in |
+| `Job.result` is bytes your generated client will not decode for you | Assert your decoder against `wire-vectors.json` once, then forget it |
+| No completion notification — `v1` has no watch stream | Poll `GetJob`, or subscribe a webhook |
+| TLS is not terminated by `flexiq-server` | Put a sidecar proxy or service mesh in front of the listener |
