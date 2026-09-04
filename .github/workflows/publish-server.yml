@@ -283,11 +283,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "server-v${VERSION}" >/dev/null 2>&1; then
-            echo "::notice::Release server-v${VERSION} already exists — skipping"
+            echo "::notice::Release server-v${VERSION} already exists — not recreating it"
           else
             gh release create "server-v${VERSION}" \
               --title "flexiq-server v${VERSION}" \
-              --generate-notes \
-              "flexiq-proto-${VERSION}.tar.gz" \
-              "flexiq-descriptor-${VERSION}.binpb"
+              --generate-notes
           fi
+          # Uploaded outside the branch above, and with --clobber, because a
+          # release that already exists is exactly the case where an asset may
+          # be missing: a re-run after a failure between creating the release
+          # and attaching the contract to it. Skipping the upload there would
+          # leave that release permanently incomplete.
+          gh release upload "server-v${VERSION}" --clobber \
+            "flexiq-proto-${VERSION}.tar.gz" \
+            "flexiq-descriptor-${VERSION}.binpb"
