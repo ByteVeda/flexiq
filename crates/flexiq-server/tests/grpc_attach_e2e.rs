@@ -168,9 +168,15 @@ impl Harness {
         });
 
         let listener = Listener::bind(&GrpcConfig {
-            listen: ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
-            namespace: NAMESPACE.to_string(),
-            executor_stream_max_age: Duration::ZERO,
+            // A deadline far shorter than the jobs these tests run: an attach
+            // stream returns its response before it carries any of them, so
+            // nothing here may be bounded by it. Whichever test outlives this
+            // is the one that would catch a deadline applied to the body.
+            request_timeout: Duration::from_millis(250),
+            ..GrpcConfig::new(
+                ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+                NAMESPACE,
+            )
         })
         .await
         .expect("bind");

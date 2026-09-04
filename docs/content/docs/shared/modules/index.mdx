@@ -11,6 +11,8 @@ import {
   Network,
   PlugZap,
   Server,
+  FileCode,
+  Cable,
   Gauge,
 } from "lucide-react";
 
@@ -77,6 +79,18 @@ first and come back when you hit the problem a module solves.
     title="Server mode"
     to="modules/server"
     description="Put a producer and executor door on the network, for callers with no native binding to reach for."
+  />
+  <Card
+    icon={<FileCode />}
+    title="Clients without an SDK"
+    to="modules/clients"
+    description="Enqueue and read work from a language FlexiQ has no SDK for: get the contract, generate a client, decode what comes back."
+  />
+  <Card
+    icon={<Cable />}
+    title="Custom executors"
+    to="modules/custom-executors"
+    description="Implement the executor door from scratch: the handshake, the frames, capability negotiation, and the lease."
   />
 </Cards>
 

@@ -106,8 +106,22 @@ pub fn response(status: &Status) -> Response {
     let mut response = Response::new(axum::body::Body::from(bytes));
     *response.status_mut() = code;
     set_headers(response.headers_mut());
+    // The HTTP status is a lossy view of the code — 400 alone stands for
+    // INVALID_ARGUMENT, FAILED_PRECONDITION and OUT_OF_RANGE — and the exact
+    // one is in the body, which an outer layer cannot read. Carrying it in an
+    // extension lets the metrics layer label the answer exactly, without
+    // putting a `grpc-status` header on a plain JSON response.
+    response
+        .extensions_mut()
+        .insert(AnsweredCode(status.code()));
     response
 }
+
+/// The `google.rpc.Code` a facade response answered with.
+///
+/// Set on error responses only: a success has no code to disagree about.
+#[derive(Debug, Clone, Copy)]
+pub struct AnsweredCode(pub Code);
 
 /// A refusal this door raised itself, rendered for a JSON client.
 pub fn refuse(error: WireError) -> Response {
@@ -182,7 +196,7 @@ fn details(status: &tonic_types::pb::Status) -> Vec<Value> {
 /// Spelled out rather than derived from `Debug`, because it is a value clients
 /// branch on: `Code::InvalidArgument` debug-prints as `InvalidArgument`, and
 /// the contract's name for it is `INVALID_ARGUMENT`.
-fn code_name(code: Code) -> &'static str {
+pub fn code_name(code: Code) -> &'static str {
     match code {
         Code::Ok => "OK",
         Code::Cancelled => "CANCELLED",

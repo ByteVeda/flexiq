@@ -110,50 +110,14 @@ pub async fn metrics(
     .await?;
     let workers = on_storage(&state, |storage| storage.list_workers()).await?;
 
-    let mut body = String::new();
-    body.push_str("# HELP flexiq_jobs Jobs by queue and status.\n");
-    body.push_str("# TYPE flexiq_jobs gauge\n");
-    let mut queues: Vec<_> = per_queue.into_iter().collect();
-    queues.sort_by(|(left, _), (right, _)| left.cmp(right));
-    for (queue, stats) in queues {
-        for (status, count) in [
-            ("pending", stats.pending),
-            ("running", stats.running),
-            ("completed", stats.completed),
-            ("failed", stats.failed),
-            ("dead", stats.dead),
-            ("cancelled", stats.cancelled),
-        ] {
-            body.push_str(&format!(
-                "flexiq_jobs{{queue=\"{}\",status=\"{status}\"}} {count}\n",
-                escape_label(&queue)
-            ));
-        }
-    }
-
-    body.push_str("# HELP flexiq_workers Workers in the cluster registry.\n");
-    body.push_str("# TYPE flexiq_workers gauge\n");
-    body.push_str(&format!("flexiq_workers {}\n", workers.len()));
-
-    if let Some(dispatcher) = &state.dispatcher {
-        let capacity = dispatcher.capacity();
-        body.push_str("# HELP flexiq_executors Executors attached to this scheduler.\n");
-        body.push_str("# TYPE flexiq_executors gauge\n");
-        body.push_str(&format!("flexiq_executors {}\n", capacity.executors));
-        body.push_str("# HELP flexiq_executor_slots Execution slots advertised by executors.\n");
-        body.push_str("# TYPE flexiq_executor_slots gauge\n");
-        body.push_str(&format!(
-            "flexiq_executor_slots{{state=\"total\"}} {}\n",
-            capacity.total_slots
-        ));
-        body.push_str(&format!(
-            "flexiq_executor_slots{{state=\"free\"}} {}\n",
-            capacity.free_slots
-        ));
-    }
+    let body = crate::metrics::storage_gauges(
+        per_queue,
+        workers.len(),
+        state.dispatcher.as_ref().map(|d| d.capacity()),
+    );
 
     Ok((
-        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        [("content-type", crate::metrics::EXPOSITION_CONTENT_TYPE)],
         body,
     )
         .into_response())
@@ -184,15 +148,6 @@ fn require_probe_access(
         return Ok(());
     }
     Err(ApiError::Unauthenticated)
-}
-
-/// Escape a Prometheus label value: backslash, quote, and newline are the
-/// three characters the exposition format reserves.
-fn escape_label(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
 }
 
 /// Longest error detail echoed in a readiness body.

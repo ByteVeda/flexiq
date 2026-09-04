@@ -261,14 +261,39 @@ jobs:
           git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
             push origin "server-v${VERSION}"
 
+      # The wire contract, at a URL that names a version.
+      #
+      # A client in a language with no FlexiQ SDK generates its stubs from
+      # these, and the only other ways to get them are cloning the repository
+      # or reading them off server reflection — neither of which a build
+      # pipeline should have to do. The image carries the binary and nothing
+      # else, so it is not a source either.
+      - name: Package the wire contract
+        run: |
+          set -euo pipefail
+          # `proto/` carries its own buf.yaml and buf.lock, so a consumer can
+          # run `buf generate` against the tree unchanged. wire-vectors.json
+          # rides along because the payload envelope is the half of the contract
+          # the .proto calls opaque.
+          tar -czf "flexiq-proto-${VERSION}.tar.gz" -C contracts proto wire-vectors.json
+          cp contracts/descriptor.binpb "flexiq-descriptor-${VERSION}.binpb"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "server-v${VERSION}" >/dev/null 2>&1; then
-            echo "::notice::Release server-v${VERSION} already exists — skipping"
+            echo "::notice::Release server-v${VERSION} already exists — not recreating it"
           else
             gh release create "server-v${VERSION}" \
               --title "flexiq-server v${VERSION}" \
               --generate-notes
           fi
+          # Uploaded outside the branch above, and with --clobber, because a
+          # release that already exists is exactly the case where an asset may
+          # be missing: a re-run after a failure between creating the release
+          # and attaching the contract to it. Skipping the upload there would
+          # leave that release permanently incomplete.
+          gh release upload "server-v${VERSION}" --clobber \
+            "flexiq-proto-${VERSION}.tar.gz" \
+            "flexiq-descriptor-${VERSION}.binpb"

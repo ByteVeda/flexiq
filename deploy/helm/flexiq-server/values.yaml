@@ -104,6 +104,22 @@ grpc:
   # has to end for a replacement to land somewhere else; the drain is what makes
   # ending it free of dropped work. 0 never rotates.
   executorStreamMaxAge: 1800
+  # Seconds between HTTP/2 keepalive pings on an idle connection. An HTTP/2
+  # ping and not a TCP one: the server binds its own socket, so the TCP-level
+  # setting would be accepted and ignored. 0 sends none.
+  keepaliveInterval: 60
+  # Seconds a call may take to produce its response *head* before the listener
+  # answers DEADLINE_EXCEEDED. That is the whole call for every unary RPC —
+  # which is all of flexiq.v1 — but it does not bound a response body, so it
+  # closes no long-lived stream: Attach, grpc.health.v1/Watch and reflection
+  # all answer immediately and then stay open. Use executorStreamMaxAge to
+  # bound an attach stream. 0 is unbounded.
+  requestTimeout: 30
+  # Calls one connection may have in flight. The door answers out of a bounded
+  # storage pool, so more concurrency buys a queue in front of that pool rather
+  # than throughput. Per connection, so one noisy client cannot crowd out
+  # another's. 0 is unlimited.
+  maxConcurrentRequests: 256
   # There is no credential to set here. Callers present a scoped API token
   # stored in the database, which is why this chart no longer carries a gRPC
   # secret: a token is minted per client, expires, and is revoked on its own

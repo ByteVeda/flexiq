@@ -30,7 +30,7 @@ use crate::grpc::auth::{self, AuthLayer};
 use crate::grpc::executor::ExecutorDoor;
 use crate::grpc::limits::PRODUCER_MAX_MESSAGE_BYTES;
 use crate::grpc::producer::Producer;
-use crate::grpc::{facade, health, reflection};
+use crate::grpc::{facade, health, metrics, reflection};
 use crate::runtime::shutdown::Shutdown;
 
 /// How long the listener waits for open connections after shutdown before it
@@ -145,12 +145,24 @@ impl Listener {
         )
         .await;
 
-        // The facade's routes are the router the gRPC services are then added
-        // to, rather than a second listener or a service behind a proxy: an
-        // HTTP request reaches the same `Producer` through the same layer, in
-        // this process, with no loopback hop. It also owns the fallback, so an
-        // unrouted path is answered in the shape the caller asked in.
-        let mut routes = Routes::from(facade::router(producer.clone()))
+        let rpc_metrics = metrics::RpcMetrics::new();
+
+        // `/metrics` is merged into the facade's router rather than the other
+        // way round: `facade::router` owns the fallback that keeps an unrouted
+        // answer in the caller's shape, and `merge` tolerates exactly one.
+        let http = metrics::router(
+            storage.clone(),
+            self.config.namespace.clone(),
+            executor.clone(),
+            Arc::clone(&rpc_metrics),
+        )
+        .merge(facade::router(producer.clone()));
+
+        // That router is what the gRPC services are then added to, rather than
+        // a second listener or a service behind a proxy: an HTTP request
+        // reaches the same `Producer` through the same layer, in this process,
+        // with no loopback hop.
+        let mut routes = Routes::from(http)
             .add_service(producer.into_service())
             .add_service(health.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
             .add_service(reflection::v1()?.max_decoding_message_size(PRODUCER_MAX_MESSAGE_BYTES))
@@ -165,16 +177,45 @@ impl Listener {
             routes = routes.add_service(executor.into_service());
         }
 
+        let mut builder = Server::builder()
+            // `curl` speaks HTTP/1.1, and a facade only reachable over h2c
+            // prior knowledge would not be a facade. HTTP/2 is still detected
+            // by its preface, so a gRPC client notices nothing.
+            .accept_http1(true)
+            // An HTTP/2 ping, not a TCP keepalive: `tcp_keepalive` is applied
+            // to a socket tonic binds, and this listener hands it one it bound
+            // itself so it could resolve a `:0` port. Setting the TCP knob here
+            // would be accepted and ignored, which is the failure mode this
+            // whole module refuses elsewhere.
+            .http2_keepalive_interval(
+                (!self.config.keepalive_interval.is_zero())
+                    .then_some(self.config.keepalive_interval),
+            )
+            .http2_keepalive_timeout(self.config.keepalive_timeout());
+
+        // Both of these race the response *future*, not the response body, and
+        // release on the same event: an `Attach` stream returns its response as
+        // soon as it has spawned its workers, so neither one bounds how long it
+        // then lives. The same holds for `Health/Watch` and reflection.
+        if !self.config.request_timeout.is_zero() {
+            builder = builder.timeout(self.config.request_timeout);
+        }
+        if self.config.max_concurrent_requests > 0 {
+            builder = builder.concurrency_limit_per_connection(self.config.max_concurrent_requests);
+        }
+
         // One layer over the whole router, not one per service: `Server::layer`
         // takes `Layer<Routes>`, so every service registered above — and every
         // route added in future — is gated by this line and by nothing else. It
         // is also what supplies the namespace: the producer holds none of its
         // own and reads it off the request's principal.
-        let mut server = Server::builder()
-            // `curl` speaks HTTP/1.1, and a facade only reachable over h2c
-            // prior knowledge would not be a facade. HTTP/2 is still detected
-            // by its preface, so a gRPC client notices nothing.
-            .accept_http1(true)
+        // Order matters, and it is the reverse of how it reads: `Server::layer`
+        // makes each new layer the *inner* one, so the metrics layer is applied
+        // first to end up outermost. It has to be outermost, or a call refused
+        // for want of a credential would never reach it — and a refusal missing
+        // from the metrics is the one an operator most needs to see.
+        let mut server = builder
+            .layer(metrics::MetricsLayer::new(rpc_metrics))
             .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
                 storage.clone(),
                 self.config.namespace.as_str(),

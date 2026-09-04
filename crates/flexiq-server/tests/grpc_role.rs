@@ -30,11 +30,10 @@ const NAMESPACE: &str = "grpc-tests";
 
 fn config(listen: ListenAddress) -> GrpcConfig {
     GrpcConfig {
-        listen,
-        namespace: NAMESPACE.to_string(),
         // These tests drive the producer door; a rotating executor stream would
         // only add a timer to every one of them.
         executor_stream_max_age: std::time::Duration::ZERO,
+        ..GrpcConfig::new(listen, NAMESPACE)
     }
 }
 
