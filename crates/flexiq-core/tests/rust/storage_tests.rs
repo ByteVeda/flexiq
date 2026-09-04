@@ -372,6 +372,41 @@ fn test_unique_key_dedup_is_namespace_scoped(s: &impl Storage) {
     let (job_d2, dedup_d2) = s.enqueue_unique_reporting(d2).unwrap();
     assert!(dedup_d2, "default namespace must still dedupe");
     assert_eq!(job_d2.id, job_d1.id);
+
+    // The default namespace (None) and a named one must not collide either --
+    // catches an implementation that treats None as a wildcard.
+    let mut none_vs_named = make_job(q, "unique_task");
+    none_vs_named.unique_key = Some("none-vs-named-key".to_string());
+    let (job_none, dedup_none) = s.enqueue_unique_reporting(none_vs_named).unwrap();
+    assert!(!dedup_none);
+
+    let mut named = make_job(q, "unique_task");
+    named.unique_key = Some("none-vs-named-key".to_string());
+    named.namespace = Some("tenant-a".to_string());
+    let (job_named, dedup_named) = s.enqueue_unique_reporting(named).unwrap();
+    assert!(
+        !dedup_named,
+        "a named namespace must not dedupe onto None's job"
+    );
+    assert_ne!(job_none.id, job_named.id);
+
+    // None and Some("") must not collide either -- COALESCE(namespace, '')
+    // alone would fold both to the same index slot even though the query
+    // treats them as different namespaces (`is_null()` vs `.eq("")`).
+    let mut none_vs_empty = make_job(q, "unique_task");
+    none_vs_empty.unique_key = Some("none-vs-empty-key".to_string());
+    let (job_empty_none, dedup_empty_none) = s.enqueue_unique_reporting(none_vs_empty).unwrap();
+    assert!(!dedup_empty_none);
+
+    let mut empty = make_job(q, "unique_task");
+    empty.unique_key = Some("none-vs-empty-key".to_string());
+    empty.namespace = Some(String::new());
+    let (job_empty, dedup_empty) = s.enqueue_unique_reporting(empty).unwrap();
+    assert!(
+        !dedup_empty,
+        "the empty-string namespace must not dedupe onto None's job"
+    );
+    assert_ne!(job_empty_none.id, job_empty.id);
 }
 
 fn test_enqueue_batch(s: &impl Storage) {

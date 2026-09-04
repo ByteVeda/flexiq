@@ -6,16 +6,28 @@
 //! creating its own (#773). Every other id-addressed `Storage` member scopes
 //! by namespace; this was the one gap.
 //!
-//! Rebuilt as `(COALESCE(namespace, ''), unique_key)` rather than plain
-//! `(namespace, unique_key)` — `namespace` is nullable, and both SQLite and
-//! Postgres treat two NULLs as *distinct* inside a unique index, so the naive
-//! version would silently stop deduping the default namespace, which is the
-//! common case. `m0010_debounce` hit the identical NULL trap and sidestepped
-//! it by leaving that index non-unique; that option isn't available here
-//! because Postgres has no whole-database write lock serializing the
-//! read-then-write the way SQLite's `BEGIN IMMEDIATE` does — the DB-enforced
-//! constraint is what the existing `UniqueViolation`-then-retry logic in
-//! `enqueue_unique_reporting` is already built around.
+//! Rebuilt as `(namespace IS NULL, COALESCE(namespace, ''), unique_key)`
+//! rather than plain `(namespace, unique_key)` — `namespace` is nullable, and
+//! both SQLite and Postgres treat two NULLs as *distinct* inside a unique
+//! index, so the naive version would silently stop deduping the default
+//! namespace, which is the common case. `m0010_debounce` hit the identical
+//! NULL trap and sidestepped it by leaving that index non-unique; that option
+//! isn't available here because Postgres has no whole-database write lock
+//! serializing the read-then-write the way SQLite's `BEGIN IMMEDIATE` does —
+//! the DB-enforced constraint is what the existing
+//! `UniqueViolation`-then-retry logic in `enqueue_unique_reporting` is
+//! already built around.
+//!
+//! The leading `namespace IS NULL` discriminator exists because `COALESCE`
+//! alone over-collapses: `NewJob.namespace` is `Option<String>`, not
+//! validated against an empty string, so `None` and `Some(String::new())`
+//! both fold to `''` and would otherwise share one slot even though
+//! `find_active_by_unique_key`'s `Some(ns) => .eq(ns), None => .is_null()`
+//! already treats them as different namespaces — a caller in the empty-string
+//! namespace could then get a spurious "contended" error deduping against a
+//! default-namespace job it never should have raced. The discriminator sorts
+//! `NULL` and `''` into different groups before `COALESCE` ever runs, so the
+//! index agrees with the query.
 //!
 //! `sea_query`'s `Index` builder has no expression-column support, so the
 //! create side goes through the `raw_ddl` escape hatch — one literal, since
@@ -53,7 +65,7 @@ fn col(name: &str) -> ColumnDef {
 /// literals — a migration records the value that was correct when it was
 /// written, never the live enum).
 const CREATE_INDEX_SQL: &str = "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_unique_key \
-     ON jobs (COALESCE(namespace, ''), unique_key) \
+     ON jobs ((namespace IS NULL), COALESCE(namespace, ''), unique_key) \
      WHERE unique_key IS NOT NULL AND status IN (0, 1)";
 
 impl Migration for M0017UniqueKeyNamespace {
@@ -94,6 +106,7 @@ mod tests {
         assert!(rendered.contains("ADD COLUMN \"unique_key\""), "{rendered}");
         assert!(rendered.contains("DROP INDEX"), "{rendered}");
         assert!(rendered.contains("idx_jobs_unique_key"), "{rendered}");
+        assert!(rendered.contains("(namespace IS NULL)"), "{rendered}");
         assert!(
             rendered.contains("COALESCE(namespace, '')"),
             "{rendered}"
