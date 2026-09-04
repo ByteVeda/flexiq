@@ -1,49 +1,53 @@
-# #720 — the ExecutorService as a fourth Transport
+# #773 — storage: unique_key dedupes across namespaces
 
-Branch `feat/grpc-executor-transport`, off `master` at `cfb47e98`. Plan:
-`tasks/plans/2026-09-03-grpc-executor-transport.md`. **Not pushed.**
+Branch `fix/unique-key-namespace-scope`, off `master` at `dc5ceab3`. Plan:
+`tasks/plans/2026-09-04-unique-key-namespace.md`. **Not pushed.**
 
 ## Done
 
-- [x] `worker/transport.rs` — `Connection::new` (public, so a `Transport` can
-      live outside the core at all), `Transport::is_authenticated`, and the
-      channel generalized to a bounded direction with a write timeout.
-- [x] `worker/frame_transport.rs` — `FrameTransport` / `FrameEndpoint`: the
-      fourth `Transport`, byte-oriented for `RemoteDispatcher` and
-      frame-oriented for a door that speaks messages.
-- [x] `worker/remote.rs` — a vouched transport skips the frame credential;
-      `RemoteDispatcher::detach` drains one executor to `free == slots`, not to
-      an empty in-flight map, and `try_acquire` skips a draining peer while
-      still counting it as advertising.
-- [x] `lease.rs` — `Lease::as_bytes` / `from_wire`, for a transport that carries
-      the token as `bytes`.
-- [x] `contracts/proto/flexiq/executor/v1/executor_service.proto` + the
-      regenerated descriptor. `AttachRequest`/`AttachResponse`, not
-      `ExecutorFrame`/`SchedulerFrame` — `buf lint` STANDARD refuses those.
-- [x] `grpc/executor/{frames,session,service}.rs` — the conversions, the session
-      registry the unary heartbeat routes through, and the door itself.
-- [x] `grpc/listener.rs` registers it at `EXECUTOR_MAX_MESSAGE_BYTES`, and stops
-      waiting on open connections after its own grace period.
-- [x] `runtime/mod.rs` — the dispatcher exists when *either* door is configured,
-      and executors are drained while the listeners wind down rather than after.
-- [x] `config/grpc.rs` — `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`, `--help`, chart.
-- [x] `tests/grpc_attach_e2e.rs` — `attach_e2e.rs`'s scenarios over gRPC, plus
-      the killed stream, the rotated stream, the 64 MiB payload, the unknown
-      frame, the heartbeat and the mixed socket/gRPC pair.
+- [x] Add `test_unique_key_dedup_is_namespace_scoped` to
+      `crates/flexiq-core/tests/rust/storage_tests.rs`, confirm it fails on
+      SQLite pre-fix (reproduces #773).
+- [x] `crates/flexiq-core/migrations/m0017_unique_key_namespace.rs` — drop +
+      recreate `idx_jobs_unique_key` over `(COALESCE(namespace, ''), unique_key)`.
+- [x] `diesel_common/jobs.rs` — scope the 3 unique_key lookups (initial check,
+      race re-read, batch check) by namespace, via a shared
+      `find_active_by_unique_key` helper. SQLite contract test green.
+- [x] `redis_backend/jobs/{helpers.rs,enqueue.rs,state.rs}` — namespace the
+      `jobs:unique:*` pointer key, thread `namespace` through
+      `release_unique_key`, fix `redis_complete_preserves_reused_unique_key`'s
+      raw key. `cargo check`/`clippy --features redis` clean; no local
+      redis-server here, so `redis_storage_tests` compiles and skips (full
+      run happens in CI's Redis Cloud job).
+- [x] Confirm `cargo check --workspace --features postgres` is clean.
+- [x] `traits.rs` doc + `job.proto` / `producer_service.proto` — drop the
+      cross-namespace exception language now that it's fixed. Regenerated
+      `contracts/descriptor.binpb` via `./scripts/proto-check.sh --fix`.
+- [x] Final full check pass + review section below.
 
 ## Review
 
-Two bugs the tests found, both real and both in the shutdown path:
+Fixed on both backends that were affected — the Diesel `idx_jobs_unique_key`
+partial index and its three query sites (initial check, race re-read, batch
+check), and the Redis `jobs:unique:*` pointer key. Both now scope by
+namespace, `None` treated as its own namespace (not "match anything"), via
+the same encoding pattern each backend already used for the equivalent
+debounce case (`lock_debounce_candidates`'s `Some/None` filter match on
+Diesel, `debounce_index_key`'s length-prefixed segment on Redis).
 
-1. **The listener could not stop while an executor was attached.** An attach
-   stream is an in-flight gRPC request, a graceful listener waits for one, and
-   the stream only ended when the dispatcher closed it — which happened *after*
-   the roles were joined. Fixed by draining the scheduler concurrently with the
-   wind-down, and bounded by a grace period so an impolite client cannot hold
-   the process open either.
-2. **The lifecycle task held a second sender on the response stream.** It was
-   there to deliver a refusal, and keeping it past the handshake meant a
-   finished stream stayed open until the client hung up.
+`test_unique_key_dedup_is_namespace_scoped` reproduces #773 verbatim (two
+tenants sending the same key; confirmed red pre-fix, green post-fix on
+SQLite) and also covers the default-namespace NULL trap the issue calls out
+— a naive `(namespace, unique_key)` unique index would look correct in any
+test that sets a namespace and silently stop deduping the common case.
 
-Both were invisible to the unit tests and to `cargo check`. What found them was
-running the acceptance scenarios end to end.
+Verified: `cargo check --workspace` / `--features postgres` / `--features
+redis` all clean; `cargo clippy --features redis` clean; `cargo fmt` clean;
+sqlite contract suite green; redis/postgres contract suites compile and
+skip gracefully (no `FLEXIQ_REDIS_TEST_URL`/`FLEXIQ_POSTGRES_TEST_URL` or
+local redis-server in this sandbox — full three-backend run happens in
+CI's three Rust jobs, per project convention). `./scripts/proto-check.sh`
+clean after regenerating `contracts/descriptor.binpb`.
+
+Not pushed, per instruction. Four commits on `fix/unique-key-namespace-scope`,
+authored as the active gh account (pratyush618).

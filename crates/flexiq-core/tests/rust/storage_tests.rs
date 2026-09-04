@@ -323,6 +323,92 @@ fn test_enqueue_unique_validates_deps(s: &impl Storage) {
     ));
 }
 
+/// #773: `unique_key` dedup must not read across the namespace boundary
+/// `get_job`/`cancel_job`/debounce already keep — two namespaces sending the
+/// same key must each get their own job, and the default (unnamespaced) case
+/// must keep deduping, which is the NULL trap a naive `(namespace, key)`
+/// unique index falls into.
+fn test_unique_key_dedup_is_namespace_scoped(s: &impl Storage) {
+    let q = "q-unique-namespace";
+
+    // Two namespaces, same key: two jobs, neither reported as deduplicated.
+    let mut a = make_job(q, "unique_task");
+    a.unique_key = Some("ns-key".to_string());
+    a.namespace = Some("tenant-a".to_string());
+    let (job_a, dedup_a) = s.enqueue_unique_reporting(a).unwrap();
+    assert!(!dedup_a);
+
+    let mut b = make_job(q, "unique_task");
+    b.unique_key = Some("ns-key".to_string());
+    b.namespace = Some("tenant-b".to_string());
+    let (job_b, dedup_b) = s.enqueue_unique_reporting(b).unwrap();
+    assert!(!dedup_b, "tenant-b must get its own job, not tenant-a's");
+    assert_ne!(job_a.id, job_b.id);
+    assert_eq!(job_b.namespace.as_deref(), Some("tenant-b"));
+
+    // Same key, same namespace: the second call dedupes onto the first.
+    let mut a2 = make_job(q, "unique_task");
+    a2.unique_key = Some("ns-key".to_string());
+    a2.namespace = Some("tenant-a".to_string());
+    let (job_a2, dedup_a2) = s.enqueue_unique_reporting(a2).unwrap();
+    assert!(dedup_a2);
+    assert_eq!(job_a2.id, job_a.id);
+
+    // The default namespace (None) must still dedupe against itself -- the
+    // NULL trap a plain (namespace, unique_key) unique index falls into.
+    let d1 = {
+        let mut j = make_job(q, "unique_task");
+        j.unique_key = Some("default-ns-key".to_string());
+        j
+    };
+    let (job_d1, dedup_d1) = s.enqueue_unique_reporting(d1).unwrap();
+    assert!(!dedup_d1);
+
+    let d2 = {
+        let mut j = make_job(q, "unique_task");
+        j.unique_key = Some("default-ns-key".to_string());
+        j
+    };
+    let (job_d2, dedup_d2) = s.enqueue_unique_reporting(d2).unwrap();
+    assert!(dedup_d2, "default namespace must still dedupe");
+    assert_eq!(job_d2.id, job_d1.id);
+
+    // The default namespace (None) and a named one must not collide either --
+    // catches an implementation that treats None as a wildcard.
+    let mut none_vs_named = make_job(q, "unique_task");
+    none_vs_named.unique_key = Some("none-vs-named-key".to_string());
+    let (job_none, dedup_none) = s.enqueue_unique_reporting(none_vs_named).unwrap();
+    assert!(!dedup_none);
+
+    let mut named = make_job(q, "unique_task");
+    named.unique_key = Some("none-vs-named-key".to_string());
+    named.namespace = Some("tenant-a".to_string());
+    let (job_named, dedup_named) = s.enqueue_unique_reporting(named).unwrap();
+    assert!(
+        !dedup_named,
+        "a named namespace must not dedupe onto None's job"
+    );
+    assert_ne!(job_none.id, job_named.id);
+
+    // None and Some("") must not collide either -- COALESCE(namespace, '')
+    // alone would fold both to the same index slot even though the query
+    // treats them as different namespaces (`is_null()` vs `.eq("")`).
+    let mut none_vs_empty = make_job(q, "unique_task");
+    none_vs_empty.unique_key = Some("none-vs-empty-key".to_string());
+    let (job_empty_none, dedup_empty_none) = s.enqueue_unique_reporting(none_vs_empty).unwrap();
+    assert!(!dedup_empty_none);
+
+    let mut empty = make_job(q, "unique_task");
+    empty.unique_key = Some("none-vs-empty-key".to_string());
+    empty.namespace = Some(String::new());
+    let (job_empty, dedup_empty) = s.enqueue_unique_reporting(empty).unwrap();
+    assert!(
+        !dedup_empty,
+        "the empty-string namespace must not dedupe onto None's job"
+    );
+    assert_ne!(job_empty_none.id, job_empty.id);
+}
+
 fn test_enqueue_batch(s: &impl Storage) {
     let jobs: Vec<NewJob> = (0..5)
         .map(|i| {
@@ -2032,6 +2118,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_unique_key_dedup(s);
     test_unique_key_dedup_is_reported(s);
     test_enqueue_unique_validates_deps(s);
+    test_unique_key_dedup_is_namespace_scoped(s);
     test_enqueue_batch(s);
     test_enqueue_unique_batch(s);
     test_enqueue_batch_dedup(s);
@@ -3629,7 +3716,9 @@ fn redis_complete_preserves_reused_unique_key(s: &flexiq_core::RedisStorage) {
     s.dequeue(q, now_millis() + 1000, None).unwrap();
 
     let mut conn = s.conn().unwrap();
-    let ukey = rkey(s, &["jobs", "unique", shared]);
+    // `-` is the default-namespace segment `unique_key_key` writes (mirrors
+    // `debounce_index_key`'s scheme) — `a` was enqueued with no namespace.
+    let ukey = rkey(s, &["jobs", "unique", "-", shared]);
     let _: () = conn.set(&ukey, "other-live-job-id").unwrap();
 
     s.complete(&a.id, None, None).unwrap();

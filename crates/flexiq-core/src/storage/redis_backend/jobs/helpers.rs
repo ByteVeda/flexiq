@@ -20,24 +20,58 @@ const RELEASE_UNIQUE_IF_OWNER: &str = r#"
 "#;
 
 impl RedisStorage {
+    /// Injective encoding of an optional namespace for use as one segment of a
+    /// composite Redis key: `-` for the default namespace, `<len>:<ns>`
+    /// otherwise. Length-prefixing keeps it injective — without it a `:`
+    /// inside `ns` would let two different namespaces address the same key.
+    fn namespace_segment(namespace: Option<&str>) -> String {
+        match namespace {
+            Some(ns) => format!("{}:{ns}", ns.len()),
+            None => "-".to_string(),
+        }
+    }
+
     /// The debounce index of a `(namespace, debounce_key)` pair: a sorted set of
     /// the pending job ids carrying that key, scored by `created_at` so a scan
     /// reads them oldest-first. Redis drops a sorted set once its last member
     /// goes, so a key that falls out of use leaves nothing behind.
-    ///
-    /// The namespace segment is `-` for the default namespace and `<len>:<ns>`
-    /// otherwise. Length-prefixing it keeps the pair injective: without it a
-    /// `:` inside either half would let two different pairs address one key.
     pub(in crate::storage::redis_backend) fn debounce_index_key(
         &self,
         namespace: Option<&str>,
         debounce_key: &str,
     ) -> String {
-        let ns_segment = match namespace {
-            Some(ns) => format!("{}:{ns}", ns.len()),
-            None => "-".to_string(),
-        };
-        self.key(&["jobs", "debounce", &ns_segment, debounce_key])
+        self.key(&[
+            "jobs",
+            "debounce",
+            &Self::namespace_segment(namespace),
+            debounce_key,
+        ])
+    }
+
+    /// The `unique_key` dedup pointer for a `(namespace, unique_key)` pair — a
+    /// job in another namespace sending the same key is a different job, not
+    /// a duplicate (#773), so the namespace rides in the key rather than being
+    /// checked after the fact. See `namespace_segment` for the encoding.
+    ///
+    /// Upgrade note: this renames the pointer from the pre-#773 `jobs:unique:<key>`
+    /// (no namespace segment). Those old-format keys are orphaned, not
+    /// migrated: nothing reads or deletes a key in the old shape once every
+    /// caller reads and writes this one instead, and neither carries an
+    /// `EXPIRE`, so a pre-upgrade unique job leaves one small stale pointer
+    /// behind rather than being swept — bounded by however many distinct
+    /// `unique_key`s were live at upgrade time, and harmless (it names a job
+    /// id nothing looks up through it any more).
+    pub(in crate::storage::redis_backend) fn unique_key_key(
+        &self,
+        namespace: Option<&str>,
+        unique_key: &str,
+    ) -> String {
+        self.key(&[
+            "jobs",
+            "unique",
+            &Self::namespace_segment(namespace),
+            unique_key,
+        ])
     }
 
     /// [`debounce_index_key`](Self::debounce_index_key) for a job, or `None`
@@ -176,10 +210,11 @@ impl RedisStorage {
     pub(in crate::storage::redis_backend) fn release_unique_key(
         &self,
         conn: &mut redis::Connection,
+        namespace: Option<&str>,
         unique_key: &str,
         job_id: &str,
     ) -> Result<()> {
-        let key = self.key(&["jobs", "unique", unique_key]);
+        let key = self.unique_key_key(namespace, unique_key);
         redis::Script::new(RELEASE_UNIQUE_IF_OWNER)
             .key(&key)
             .arg(job_id)
@@ -323,7 +358,7 @@ impl RedisStorage {
         // a `enqueue_unique` that reused the key between a plain GET and DEL can't
         // have its lock clobbered.
         if let Some(ref uk) = job.unique_key {
-            self.release_unique_key(conn, uk, &job.id)?;
+            self.release_unique_key(conn, job.namespace.as_deref(), uk, &job.id)?;
         }
 
         Ok(())
