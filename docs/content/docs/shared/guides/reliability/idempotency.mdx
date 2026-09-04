@@ -158,6 +158,21 @@ a Node producer's key to collide with a Python or Java producer's.
 
 </SdkOnly>
 
+## A key is scoped to one namespace
+
+Two jobs collide on a key only when they share a namespace. An unnamespaced job
+is its own group, distinct from a job in a namespace called `""`. This makes a
+key a per-tenant fact rather than a global one, so two tenants using the same
+natural key — an order id, a customer id — do not suppress each other's work.
+
+<Callout type="warn" title="This changed in 1.1.0">
+  Before 1.1.0 the index was on the key alone, so a key reached across every
+  namespace: the second tenant to use it got the first tenant's job back and
+  never created its own. If you relied on that reach, key on something that is
+  namespace-independent instead. A deployment with a single namespace, or none,
+  is unaffected.
+</Callout>
+
 ## Precedence and per-call overrides
 
 <SdkOnly sdk="python">
