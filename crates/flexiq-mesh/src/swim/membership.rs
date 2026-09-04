@@ -25,6 +25,7 @@ const MAX_PENDING: usize = 64;
 const PIGGYBACK_LIMIT: usize = 8;
 
 impl Membership {
+    /// Start a view for `local_id` at incarnation 1, with nothing pending.
     pub fn new(local_id: String) -> Self {
         Self {
             local_id,
@@ -33,10 +34,14 @@ impl Membership {
         }
     }
 
+    /// Worker id this node answers to. An update naming it is news about
+    /// *us*, to be refuted rather than applied.
     pub fn local_id(&self) -> &str {
         &self.local_id
     }
 
+    /// The incarnation this node currently claims, stamped onto every update
+    /// it gossips about itself.
     pub fn local_incarnation(&self) -> u64 {
         self.local_incarnation
     }

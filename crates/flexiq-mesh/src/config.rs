@@ -14,6 +14,8 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
 
+/// Ports, seeds, SWIM timings, ring size and the prefetch/steal budgets — the
+/// whole tuning surface of a mesh node, fixed once the node is built.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshConfig {
     /// UDP port for SWIM gossip protocol.

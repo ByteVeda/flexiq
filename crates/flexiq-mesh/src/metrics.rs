@@ -16,13 +16,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Counters for mesh operations, exposed for observability.
 pub struct MeshMetrics {
+    /// Prefetch batches handed to the local deque. Rises with how often the
+    /// scheduler tops the buffer up, not with how much work it fetched.
     pub prefetch_count: AtomicU64,
+    /// Jobs those batches actually buffered. Falls short of what was offered
+    /// whenever `local_buffer_capacity` was already reached.
     pub prefetch_jobs: AtomicU64,
+    /// Jobs taken off the hot end to run here. The mesh's useful output — if
+    /// this stays flat while the steal counters climb, jobs are only moving.
     pub local_pops: AtomicU64,
+    /// Steal attempts started, counted before the connection is made, so
+    /// failures to connect, write, read or decode are all in here.
     pub steals_initiated: AtomicU64,
+    /// Attempts that came back with at least one job. A widening gap from
+    /// `steals_initiated` means attempts are not paying off.
     pub steals_succeeded: AtomicU64,
+    /// Jobs received from peers. Rises when this node is the idle one.
     pub jobs_stolen_in: AtomicU64,
+    /// Jobs surrendered to thieves off the cold end. Rises when this node is
+    /// the buffered-up one others are draining.
     pub jobs_stolen_out: AtomicU64,
+    /// Ring rebuilds. Reserved: no writer increments it, so it reads `0` —
+    /// membership changes rebuild the ring without passing through here.
     pub ring_recalculations: AtomicU64,
 }
 
@@ -42,6 +57,8 @@ impl Default for MeshMetrics {
 }
 
 impl MeshMetrics {
+    /// Read every counter into one [`MetricsSnapshot`] a scrape can carry
+    /// around.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             prefetch_count: self.prefetch_count.load(Ordering::Relaxed),
@@ -56,14 +73,24 @@ impl MeshMetrics {
     }
 }
 
+/// The counters as plain numbers, for serializing into an SDK's metrics
+/// output. Cumulative since process start, so a rate needs two of these.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MetricsSnapshot {
+    /// [`MeshMetrics::prefetch_count`] at scrape time.
     pub prefetch_count: u64,
+    /// [`MeshMetrics::prefetch_jobs`] at scrape time.
     pub prefetch_jobs: u64,
+    /// [`MeshMetrics::local_pops`] at scrape time.
     pub local_pops: u64,
+    /// [`MeshMetrics::steals_initiated`] at scrape time.
     pub steals_initiated: u64,
+    /// [`MeshMetrics::steals_succeeded`] at scrape time.
     pub steals_succeeded: u64,
+    /// [`MeshMetrics::jobs_stolen_in`] at scrape time.
     pub jobs_stolen_in: u64,
+    /// [`MeshMetrics::jobs_stolen_out`] at scrape time.
     pub jobs_stolen_out: u64,
+    /// [`MeshMetrics::ring_recalculations`] at scrape time, hence always `0`.
     pub ring_recalculations: u64,
 }

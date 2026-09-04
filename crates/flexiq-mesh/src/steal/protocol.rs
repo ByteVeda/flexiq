@@ -10,14 +10,23 @@ use flexiq_core::job::Job;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// What a thief sends: who is asking, and for how much.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StealRequest {
+    /// Worker id of the requester. The victim's rate limiter buckets by this
+    /// value, so it is a courtesy identifier and not an authenticated one.
     pub thief_id: String,
+    /// Most jobs the thief will accept — its `max_steal_batch`. The victim is
+    /// free to send fewer, including none.
     pub max_count: usize,
 }
 
+/// The victim's reply, sent once and then the connection is done with.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StealResponse {
+    /// Jobs handed over, already claimed by the victim, so the thief may run
+    /// them without going back to the database. Empty when the victim had
+    /// nothing at its cold end or rate-limited the request.
     pub jobs: Vec<Job>,
 }
 
