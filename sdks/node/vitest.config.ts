@@ -12,6 +12,10 @@ export default defineConfig({
     // dashboard hooks are the expensive ones: each opens a fresh SQLite queue
     // (migrating on open) and binds a server, and the authed suites also seed a
     // PBKDF2 session. 15s covered that until a windows runner missed it too.
+    // The per-file `waitFor` / `waitForStatus` helpers follow the same rule and
+    // are all at 20_000. They are copy-pasted rather than shared, so a new one
+    // should be copied from a neighbour rather than given a fresh number — six
+    // CI failures so far have been one of these sitting at 4s or 5s.
     testTimeout: 30_000,
     hookTimeout: 45_000,
   },

@@ -18,7 +18,7 @@ function newQueue(): Queue {
 /** Poll an async predicate. `waitFor` takes a sync one — a promise is always truthy there. */
 async function waitForAsync(
   predicate: () => Promise<boolean>,
-  timeoutMs = 10000,
+  timeoutMs = 20_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -30,7 +30,7 @@ async function waitForAsync(
   return false;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 10000): Promise<boolean> {
+async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {

@@ -23,7 +23,7 @@ it("enqueues, runs a task in a node worker, and reads the result back", async ()
   expect(result).toBe(5);
 });
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = 20_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = read();

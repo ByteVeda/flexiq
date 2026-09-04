@@ -22,7 +22,7 @@ function nodesByName<T extends { nodeName: string }>(handle: {
   return Object.fromEntries(handle.nodes().map((n) => [n.nodeName, n]));
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 6000): Promise<boolean> {
+async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {

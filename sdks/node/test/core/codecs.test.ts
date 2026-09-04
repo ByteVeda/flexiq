@@ -185,7 +185,7 @@ describe("Queue codec integration", () => {
     return join(mkdtempSync(join(tmpdir(), "flexiq-codecs-")), "queue.db");
   }
 
-  async function waitFor<T>(read: () => T | undefined, timeoutMs = 10_000): Promise<T> {
+  async function waitFor<T>(read: () => T | undefined, timeoutMs = 20_000): Promise<T> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const value = read();
