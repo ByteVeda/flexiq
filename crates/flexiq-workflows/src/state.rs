@@ -13,15 +13,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowState {
+    /// The run's rows are written but nothing has been admitted yet — the
+    /// state a submission holds only until its nodes are placed.
     Pending,
+    /// The run is in flight: at least one node is enqueued or executing.
     Running,
+    /// The run is held; no further node is admitted until it resumes.
     Paused,
+    /// Every node reached a successful terminal status.
     Completed,
     /// A `on_failure="continue"` run reached terminal with at least one failed
     /// node and at least one completed node. Distinct from `Completed` (all
     /// nodes succeeded) and `Failed` (a fail-fast step aborted the run).
     CompletedWithFailures,
+    /// A fail-fast node failed and aborted the run.
     Failed,
+    /// A caller cancelled the run before it could finish.
     Cancelled,
     /// A saga-mode run that has hit a forward failure and is rolling back
     /// previously-completed nodes via their compensation tasks.
@@ -33,6 +40,7 @@ pub enum WorkflowState {
 }
 
 impl WorkflowState {
+    /// The snake_case form written to the `state` column and to JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -48,6 +56,8 @@ impl WorkflowState {
         }
     }
 
+    /// Parse the stored `state` string back into a variant, or `None` if the
+    /// row holds a value this build doesn't know.
     pub fn from_str_val(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
@@ -64,6 +74,8 @@ impl WorkflowState {
         }
     }
 
+    /// Whether the run has settled: no further transition is expected out of
+    /// this state, except the saga path out of a failed or completed run.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,

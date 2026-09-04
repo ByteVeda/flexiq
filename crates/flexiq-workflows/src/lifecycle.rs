@@ -71,31 +71,55 @@ impl From<WorkflowError> for SubmitWorkflowError {
 /// `flexiq-python`'s existing dynamic-workflow callers (fan-out expansion,
 /// sub-workflow submission) still need them.
 pub struct SubmitStaticWorkflowRequest {
+    /// Definition name to submit under. Reused if `name` + `version` already
+    /// names the identical graph, refused if it names a different one.
     pub name: String,
+    /// Definition version, paired with `name`.
     pub version: i32,
+    /// The serialized `SerializableGraph` this run walks.
     pub dag_bytes: Vec<u8>,
+    /// Per-node task configuration. Every node that gets a job must appear.
     pub step_metadata: HashMap<String, StepMetadata>,
+    /// Node name → already-serialized job payload, so this function never
+    /// serializes a caller's arguments itself.
     pub node_payloads: HashMap<String, Vec<u8>>,
+    /// Queue for any node whose `StepMetadata` names none.
     pub queue_default: String,
+    /// Run parameters recorded on the [`WorkflowRun`] row, opaque here.
     pub params_json: Option<String>,
+    /// Nodes to create a row for but not enqueue — their jobs are placed later
+    /// by the caller's own tracker. A successor's `depends_on` skips them.
     pub deferred_node_names: HashSet<String>,
+    /// Node name → `result_hash` copied from an earlier run. Such a node is
+    /// written straight to `CacheHit` and never enqueued.
     pub cache_hit_nodes: HashMap<String, String>,
+    /// For a sub-workflow submission, the parent run that spawned this one.
     pub parent_run_id: Option<String>,
+    /// For a sub-workflow submission, the parent node awaiting this run.
     pub parent_node_name: Option<String>,
     /// A node with no `timeout_ms` of its own takes this. Milliseconds — the
     /// caller converts whatever unit it stores this in, once, at the call
     /// site, rather than this function guessing at one.
     pub default_timeout_ms: i64,
+    /// A node with no `priority` of its own takes this.
     pub default_priority: i32,
+    /// A node with no `max_retries` of its own takes this.
     pub default_max_retries: i32,
+    /// How long each step job's result is retained, passed through to every
+    /// enqueued job unchanged. `None` leaves the queue's own policy in charge.
     pub result_ttl_ms: Option<i64>,
+    /// Tenant the step jobs are enqueued into. The workflow rows are already
+    /// scoped by the storage handle, so this only reaches `NewJob`.
     pub namespace: Option<String>,
 }
 
 /// What a successful submission produced.
 #[derive(Debug)]
 pub struct WorkflowRunHandle {
+    /// Id of the [`WorkflowRun`] that was created — what a caller polls on.
     pub run_id: String,
+    /// Id of the definition the run walks, newly created or matched against an
+    /// existing name + version.
     pub definition_id: String,
 }
 

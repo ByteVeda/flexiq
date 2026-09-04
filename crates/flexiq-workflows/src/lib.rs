@@ -27,6 +27,7 @@
 //! see that moment.
 //!
 //! Reached from the `flexiq` facade behind its `workflows` feature.
+#![deny(missing_docs)]
 
 pub(crate) mod common;
 mod definition;
@@ -76,9 +77,13 @@ use flexiq_core::error::Result;
 /// All variants are cheap to clone — each holds a pool handle internally.
 #[derive(Clone)]
 pub enum WorkflowStorageBackend {
+    /// The default backend: workflow tables in the same SQLite file as the queue.
     Sqlite(WorkflowSqliteStorage),
+    /// PostgreSQL, present only when the `postgres` feature is enabled.
     #[cfg(feature = "postgres")]
     Postgres(WorkflowPostgresStorage),
+    /// Redis, present only when the `redis` feature is enabled. Schemaless, so
+    /// it has no migrations to apply.
     #[cfg(feature = "redis")]
     Redis(WorkflowRedisStorage),
 }

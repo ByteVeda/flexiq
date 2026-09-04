@@ -6,13 +6,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowNodeStatus {
+    /// The node exists but has not been picked up — it is either waiting on a
+    /// predecessor or waiting for a caller to create its job.
     Pending,
+    /// Every predecessor is `Completed`, so the node may run now.
     Ready,
+    /// The node's job (or its gate/sub-workflow equivalent) is in flight.
     Running,
+    /// The node's job finished successfully.
     Completed,
+    /// The node's job exhausted its retries or was dead-lettered.
     Failed,
+    /// The node's `condition` did not hold, so it was passed over without
+    /// running.
     Skipped,
+    /// An approval-gate node, parked until a caller resolves the gate or its
+    /// timeout fires.
     WaitingApproval,
+    /// A cacheable node whose `result_hash` was copied from an earlier run, so
+    /// no job was enqueued at all.
     CacheHit,
     /// Saga compensation is in flight for this node (the original forward
     /// execution had completed, then the workflow failed elsewhere).
@@ -26,6 +38,7 @@ pub enum WorkflowNodeStatus {
 }
 
 impl WorkflowNodeStatus {
+    /// The snake_case form written to the `status` column and to JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -42,6 +55,8 @@ impl WorkflowNodeStatus {
         }
     }
 
+    /// Parse the stored `status` string back into a variant, or `None` if the
+    /// row holds a value this build doesn't know.
     pub fn from_str_val(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
@@ -93,16 +108,32 @@ impl fmt::Display for WorkflowNodeStatus {
 /// A single node instance within a workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
+    /// UUIDv7 primary key (`workflow_nodes.id`).
     pub id: String,
+    /// The [`WorkflowRun`](crate::WorkflowRun) this node belongs to. Unique
+    /// together with `node_name`.
     pub run_id: String,
+    /// The node's name in the DAG. A fan-out child is named `parent[i]`.
     pub node_name: String,
+    /// The queue job carrying this node's work. `None` while the node is
+    /// deferred, a cache hit, or otherwise never enqueued.
     pub job_id: Option<String>,
+    /// Where the node is in its lifecycle.
     pub status: WorkflowNodeStatus,
+    /// SHA-256 of the job's result bytes, recorded on completion so a later
+    /// run can reuse the result instead of recomputing it. Best-effort — the
+    /// event can fire before the result is written, leaving this `None`.
     pub result_hash: Option<String>,
+    /// For a fan-out node, how many children it expanded into.
     pub fan_out_count: Option<i32>,
+    /// Serialized fan-in payload for the `fan_in_data` column, round-tripped
+    /// through every backend; no current writer sets it.
     pub fan_in_data: Option<String>,
+    /// Epoch-ms the node started executing.
     pub started_at: Option<i64>,
+    /// Epoch-ms the node reached a terminal status.
     pub completed_at: Option<i64>,
+    /// Failure message when the node's forward execution failed.
     pub error: Option<String>,
     /// Job ID of the running (or completed) compensation, when a saga has
     /// triggered rollback for this node. ``None`` outside of saga flow.

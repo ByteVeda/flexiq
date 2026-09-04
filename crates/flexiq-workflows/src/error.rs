@@ -2,6 +2,10 @@ use std::fmt;
 
 use crate::state::WorkflowState;
 
+/// What went wrong reading or advancing a workflow.
+///
+/// Crosses out of this crate as `flexiq_core::error::QueueError::Other`
+/// carrying the `Display` text, so the message is the interface a caller sees.
 #[derive(Debug)]
 pub enum WorkflowError {
     /// The requested workflow definition was not found.
@@ -9,16 +13,28 @@ pub enum WorkflowError {
     /// The requested workflow run was not found.
     RunNotFound(String),
     /// A node with this name was not found in the workflow.
-    NodeNotFound { run_id: String, node_name: String },
+    NodeNotFound {
+        /// The run that was searched.
+        run_id: String,
+        /// The node name that had no row in it.
+        node_name: String,
+    },
     /// Invalid state transition for a workflow run.
     InvalidTransition {
+        /// The run's current state.
         from: WorkflowState,
+        /// The state the caller asked to move to.
         to: WorkflowState,
     },
     /// The DAG is structurally invalid (e.g. cycle detected).
     InvalidDag(String),
     /// The workflow definition already exists (name + version conflict).
-    DuplicateDefinition { name: String, version: i32 },
+    DuplicateDefinition {
+        /// The definition name that collided.
+        name: String,
+        /// The version already registered under that name.
+        version: i32,
+    },
     /// `step_metadata` failed to parse, or a node is missing from it, from
     /// `node_payloads`, or from a predecessor's job id at submit time.
     InvalidStepMetadata(String),
