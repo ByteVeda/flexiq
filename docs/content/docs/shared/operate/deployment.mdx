@@ -1332,6 +1332,64 @@ how the Helm chart wires a gRPC-only release. The `grpc` probe field needs
 Kubernetes 1.24; on an older cluster set `grpc.healthProbe=false` and readiness
 falls back to a socket connect.
 
+### Scraping it
+
+`GET /metrics` is served on the gRPC listener, as ordinary HTTP on the same
+port, in the Prometheus text format. It exists because a release with
+`grpc.enabled=true` and `dashboard.enabled=false` has no other scrape target —
+the dashboard's `/metrics` is on the dashboard's listener, and a gRPC-only pod
+does not run one.
+
+```bash
+curl -H "authorization: Bearer $FLEXIQ_TOKEN" http://localhost:50051/metrics
+```
+
+It carries the same storage gauges the dashboard publishes — `flexiq_jobs`,
+`flexiq_workers`, and `flexiq_executors` / `flexiq_executor_slots` when this
+process is the one executors attach to — plus what only this door knows:
+
+| Series | Labels | Is |
+|---|---|---|
+| `flexiq_grpc_requests_total` | `method`, `door`, `code` | Calls answered, by RPC and `google.rpc.Code` |
+| `flexiq_grpc_request_duration_seconds_{sum,count}` | `method`, `door` | Time to the response head |
+
+`door` is `grpc` or `http`, because the JSON facade is the same service by
+another spelling and both are counted under the RPC they reached. A refused call
+is counted too — a client failing every call for want of a credential is
+precisely what you would scrape to discover.
+
+Two things the numbers do not say. The duration is time to the **response
+head**, which is the whole call for every unary RPC but only the time to *open*
+a stream for `Attach`, `Health/Watch` and reflection — and those three report
+`OK` whatever they end with, because their terminal status rides trailers.
+Watch `flexiq_executors` for stream health, not `flexiq_grpc_requests_total`.
+
+The scrape is credentialled like everything else on this listener, but by no
+particular scope: `produce` and `execute` both open it. A path that is not a
+method this build serves — including anything unrouted — is counted as `other`,
+so no caller can mint a series by inventing a URL.
+
+### Tuning the listener
+
+Four variables, all optional, all whole numbers of seconds except the last:
+
+| Variable | Default | Zero means |
+|---|---|---|
+| `FLEXIQ_GRPC_KEEPALIVE_INTERVAL` | `60` | Send no keepalive pings |
+| `FLEXIQ_GRPC_REQUEST_TIMEOUT` | `30` | Let a call run as long as it likes |
+| `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS` | `256` | Unlimited calls in flight per connection |
+| `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` | `1800` | Never rotate an executor's stream |
+
+The keepalive is an **HTTP/2 ping**, not a TCP one: this listener binds its own
+socket, and the TCP-level setting would be accepted and silently ignored. Its
+timeout is derived from the interval rather than configured separately — two
+knobs that must stay in a ratio are one knob plus a way to get it wrong.
+
+The request deadline does not bound a stream. It races the response *future*,
+and `Attach` returns its response as soon as it has accepted the connection, so
+an executor stream lives for its rotation period however short the deadline is.
+The same holds for `Health/Watch` and reflection.
+
 ### The executor door
 
 The same listener also serves `flexiq.executor.v1.ExecutorService` — a fourth
