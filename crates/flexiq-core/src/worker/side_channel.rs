@@ -250,8 +250,31 @@ impl SideChannel for StorageSideChannel {
         disabled
     }
 
+    /// Capable *and* permitted. An attached executor holds no storage, so it
+    /// has no floor of its own to read — this is where the deployment's floor
+    /// reaches it, by deciding whether `CAP_STEPS` is offered at all.
+    ///
+    /// Read once per attach rather than per job: the answer is a deployment's,
+    /// and an operator who raises the dial mid-flight gets it on the next
+    /// attach, which is also when a fleet finishes rolling.
+    ///
+    /// A floor that will not parse is `false`. The signature has nowhere to put
+    /// an error, and of the two ways to be wrong here, withholding steps from a
+    /// healthy deployment is the recoverable one.
     fn supports_steps(&self) -> bool {
-        self.storage.supports_steps()
+        if !self.storage.supports_steps() {
+            return false;
+        }
+        match crate::contract::ensure_steps_allowed(&self.storage) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!(
+                    "attach: not offering durable steps to executors — {error}; \
+                     jobs that call step.run will be refused"
+                );
+                false
+            }
+        }
     }
 
     fn job_steps(&self, job_id: &str, namespace: Option<&str>) -> Result<Vec<JobStep>> {
@@ -507,5 +530,41 @@ mod tests {
             crate::step::classify_step_failure(&steps_unsupported()),
             crate::step::StepFailure::Permanent
         );
+    }
+
+    /// D12 reaches an attached executor here, and nowhere else: it holds no
+    /// storage, so the only statement it ever gets about the deployment's floor
+    /// is whether the scheduler offered `CAP_STEPS` at all.
+    #[test]
+    fn the_capability_is_withheld_below_the_contract_floor() {
+        let channel = channel();
+        assert!(
+            channel.supports_steps(),
+            "a storage this build created seeds the floor, so steps start on"
+        );
+
+        crate::contract::set_min_contract(&channel.storage, crate::MIN_CONTRACT_VERSION)
+            .expect("lower the floor");
+        assert!(
+            !channel.supports_steps(),
+            "an un-raised deployment may hold a worker that cannot read job_steps"
+        );
+
+        crate::contract::set_min_contract(&channel.storage, crate::STEPS_CONTRACT_LEVEL)
+            .expect("raise the floor");
+        assert!(channel.supports_steps());
+    }
+
+    /// Fails closed: the signature has no room for an error, and withholding
+    /// steps from a healthy deployment is the recoverable way to be wrong.
+    #[test]
+    fn an_unreadable_floor_withholds_the_capability() {
+        let channel = channel();
+        channel
+            .storage
+            .set_setting(crate::contract::CONTRACT_FLOOR_SETTING, "not-a-level")
+            .expect("write");
+
+        assert!(!channel.supports_steps());
     }
 }

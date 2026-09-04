@@ -682,8 +682,10 @@ impl ExecutorSteps {
         if !self.shared.steps {
             return Err(QueueError::Other(format!(
                 "job {} uses durable steps, but the scheduler this executor is attached to \
-                 offers no step store",
-                job.id
+                 did not offer them: either its storage has no step store, or the \
+                 deployment's contract floor has not been raised to {}",
+                job.id,
+                crate::contract::STEPS_CONTRACT_LEVEL
             )));
         }
         let store = ExecutorStepStore {

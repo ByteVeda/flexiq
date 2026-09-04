@@ -2177,11 +2177,14 @@ fn a_scheduler_without_the_capability_refuses_every_step() {
         .expect("a session must not open without a step store");
     // The message names the scheduler, not "this storage backend": there is no
     // backend on this side, and that line would send an operator to the wrong
-    // process.
+    // process. It names both reasons the scheduler withholds the capability,
+    // since from here they are indistinguishable.
+    let message = error.to_string();
     assert!(
-        error.to_string().contains("offers no step store"),
-        "{error}"
+        message.contains("the scheduler this executor is attached to did not offer them"),
+        "{message}"
     );
+    assert!(message.contains("contract floor"), "{message}");
     assert_eq!(classify_step_failure(&error), StepFailure::Retryable);
     handle.shutdown();
 }
