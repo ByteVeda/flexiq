@@ -17,6 +17,9 @@ dependencies {
     runtimeOnly("org.byteveda:flexiq:1.0.0:linux-x86_64")
     // CborSerializer needs Jackson's CBOR dataformat, which the SDK leaves optional.
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.20.0")
+    // Compile-time @TaskHandler bindings — what makes notifyCustomer discoverable
+    // by `flexiq executor` via META-INF/services.
+    annotationProcessor("org.byteveda:flexiq-processor:1.0.0")
 }
 
 // No toolchain pin on purpose: the SDK's baseline is Java 17, so whatever JDK
@@ -28,5 +31,19 @@ application {
 }
 
 tasks.named<JavaExec>("run") {
+    standardInput = System.`in`
+}
+
+// A second entry point beside `run`: the SDK's own CLI, discovering
+// notifyCustomer via META-INF/services instead of running this module's
+// main(). Configuration (--attach/--slots/--serializer, the token) comes
+// entirely from the FLEXIQ_* env vars org.byteveda.flexiq.cli.Cli already
+// reads, so no Gradle --args plumbing is needed.
+tasks.register<JavaExec>("runExecutor") {
+    group = "application"
+    description = "Run as an attached executor (flexiq executor) instead of polling storage."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("org.byteveda.flexiq.cli.Cli")
+    args("executor")
     standardInput = System.`in`
 }
