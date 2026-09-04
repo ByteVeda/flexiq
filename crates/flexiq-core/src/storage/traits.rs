@@ -82,7 +82,7 @@ pub trait Storage: Send + Sync + Clone {
     /// a caller checking it beforehand would refuse a burst that adds no
     /// pending row, and checking it separately reopens the race this
     /// transaction closes. Over the cap, nothing is written and the call
-    /// reports [`QueueError::QueueFull`](crate::error::QueueError::QueueFull).
+    /// reports [`QueueError::QueueFull`].
     ///
     /// The Diesel backends get their atomicity from the transaction; the Redis
     /// backend has none, so it decides slide-vs-insert in a Lua script and
