@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use flexiq_server::config::{
     dashboard::scrub_bootstrap_password, listen::scrub_attach_token, Config,
 };
+use flexiq_server::contract::ContractCommand;
 use flexiq_server::runtime;
 use flexiq_server::tokens::cli::TokenCommand;
 
@@ -84,6 +85,9 @@ enum Command {
     /// Mint, list and revoke the API tokens the gRPC door accepts.
     #[command(subcommand_help_heading = "Tokens")]
     Token(TokenCommand),
+    /// Read or raise the contract level this deployment requires.
+    #[command(subcommand_help_heading = "Contract")]
+    Contract(ContractCommand),
 }
 
 fn main() -> Result<()> {
@@ -93,8 +97,10 @@ fn main() -> Result<()> {
 
     // An administrative action configures itself from the environment but runs
     // no role, so it never reaches `Config::from_env`, which requires one.
-    if let Some(Command::Token(command)) = Cli::parse().command {
-        return flexiq_server::tokens::cli::run(command);
+    match Cli::parse().command {
+        Some(Command::Token(command)) => return flexiq_server::tokens::cli::run(command),
+        Some(Command::Contract(command)) => return flexiq_server::contract::run(command),
+        None => {}
     }
 
     let config = Config::from_env()?;

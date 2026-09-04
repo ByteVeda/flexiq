@@ -8,6 +8,7 @@
 //! process does.
 
 pub mod config;
+pub mod contract;
 pub mod dashboard;
 #[cfg(feature = "grpc")]
 pub mod grpc;
