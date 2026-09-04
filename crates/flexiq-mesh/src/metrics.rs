@@ -1,3 +1,11 @@
+//! Free-running counters for what the mesh did.
+//!
+//! Plain atomics, never reset, read through
+//! [`MetricsSnapshot`] so a scrape sees one
+//! consistent set rather than eight independent loads. They answer whether
+//! stealing is earning its keep: `steals_initiated` far above
+//! `steals_succeeded` means peers are as empty as this node.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Counters for mesh operations, exposed for observability.

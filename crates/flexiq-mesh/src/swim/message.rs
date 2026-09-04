@@ -1,3 +1,10 @@
+//! The gossip datagrams, and the updates they carry for free.
+//!
+//! Every message has room for piggybacked [`MemberUpdate`]s, so membership
+//! news travels on traffic the failure detector was sending anyway. Sent over
+//! UDP and therefore assumed lossy — nothing here is retried, because the next
+//! period will carry the same update again.
+
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};

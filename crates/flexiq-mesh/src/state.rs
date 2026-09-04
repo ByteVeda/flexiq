@@ -1,3 +1,11 @@
+//! What this node believes about the cluster right now.
+//!
+//! One `RwLock`ed view holding every peer's last gossiped [`WorkerInfo`], its
+//! [`MemberState`], and the [`crate::ring::HashRing`] derived from the live
+//! ones. Beliefs, not facts: a peer marked dead here is a peer this
+//! node stopped hearing from, and the queue rows it was holding are the stuck-
+//! job reaper's problem, not this module's.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::RwLock;

@@ -1,3 +1,14 @@
+//! Work stealing over TCP: the wire, and the side that answers it.
+//!
+//! A node whose deque has fallen to `steal_threshold` picks a peer the gossip
+//! layer says is busier and asks for up to `max_steal_batch` jobs. The jobs it
+//! receives are already claimed by that peer — the transfer moves rows nobody
+//! else may run, which is why a steal needs no coordination with the database.
+//!
+//! [`protocol`] is the framing both ends share; [`server`] is the listener.
+//! The client half lives on [`MeshNode::try_steal`](crate::MeshNode::try_steal),
+//! because deciding *whether* to steal needs the node's own state.
+
 pub mod protocol;
 pub mod server;
 

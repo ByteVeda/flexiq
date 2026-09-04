@@ -1,3 +1,46 @@
+//! Peer-to-peer scheduling for FlexiQ workers.
+//!
+//! Workers that share a database already share work; this crate lets them
+//! share it *sooner*. Each node gossips its address, queues and load to its
+//! peers over UDP, places jobs on a consistent hash ring so the same key tends
+//! to reach the same worker, buffers a small prefetch locally, and steals from
+//! a busier peer over TCP when its own buffer runs dry.
+//!
+//! **The database stays the source of truth.** Nothing here claims, completes
+//! or retries a job — a stolen job is one already claimed by the peer that
+//! hands it over, and a node that dies loses only its prefetch buffer, which
+//! the ordinary stuck-job reaper returns to the queue. That is what makes the
+//! mesh safe to enable on some workers and not others.
+//!
+//! # Shape
+//!
+//! [`MeshNode`] owns the four pieces and is the only type an SDK holds:
+//!
+//! - [`swim`] — SWIM gossip: membership, failure detection, the wire messages.
+//! - [`ring`] — the consistent hash ring, for affinity rather than ownership.
+//! - [`local_deque`] — the bounded prefetch buffer a steal draws from.
+//! - [`steal`] — the TCP work-stealing client and server.
+//!
+//! # Using it
+//!
+//! An SDK constructs a node, spawns the two listeners, and then drives it
+//! alongside its own scheduler loop — [`MeshNode::should_prefetch`],
+//! [`MeshNode::prefetch`], [`MeshNode::pop_local`] and
+//! [`MeshNode::try_steal`]. The scheduler itself never learns the mesh exists,
+//! which is why enabling it changes no dispatch semantics.
+//!
+//! ```no_run
+//! use flexiq_mesh::{MeshConfig, MeshNode};
+//! use std::sync::Arc;
+//!
+//! let node = Arc::new(MeshNode::new("worker-1".to_string(), MeshConfig::default()));
+//! node.spawn_gossip(vec!["default".to_string()], 4);
+//! node.spawn_steal_server();
+//! ```
+//!
+//! Reached from the `flexiq` facade behind its `mesh` feature; nothing pays for
+//! a gossip mesh unasked.
+
 pub mod config;
 pub mod local_deque;
 pub mod metrics;
