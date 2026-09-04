@@ -1,3 +1,9 @@
+//! The victim's side of a steal.
+//!
+//! Accepts on `steal_port`, hands out from the cold end of the local deque,
+//! and refuses past `steal_rate_limit` per peer per second — a thief in a hot
+//! loop would otherwise turn one slow node into everyone's bottleneck.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

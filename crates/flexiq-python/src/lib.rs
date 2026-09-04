@@ -1,3 +1,13 @@
+//! Python (PyO3) bindings for the FlexiQ task-queue core.
+//!
+//! A thin binding shell — peer to the Node (`flexiq-node`) and Java
+//! (`flexiq-java`) shells. All scheduling and storage logic lives in
+//! `flexiq-core`; this crate only marshals between CPython and the core, and
+//! exports the `_flexiq` extension module the `flexiq` package imports.
+//!
+//! Not published to crates.io: it ships as a wheel, built by maturin against
+//! `sdks/python`.
+
 use pyo3::prelude::*;
 
 #[cfg(not(feature = "native-async"))]

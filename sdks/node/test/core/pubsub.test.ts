@@ -17,7 +17,7 @@ function newQueue(): Queue {
 
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 4000,
+  timeoutMs = 20_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

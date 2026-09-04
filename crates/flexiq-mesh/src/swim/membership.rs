@@ -1,3 +1,10 @@
+//! Who is alive, who is suspect, and whose word wins.
+//!
+//! Conflicts are settled by incarnation number, not by arrival order: a node
+//! refutes a suspicion about itself by incrementing its own, and every peer
+//! accepts the higher number. The pending-update queue is bounded, because an
+//! unbounded one on a flapping cluster grows faster than gossip drains it.
+
 use std::collections::HashMap;
 
 use crate::state::{Member, MemberState};

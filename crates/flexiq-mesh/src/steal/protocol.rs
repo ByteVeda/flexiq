@@ -1,3 +1,11 @@
+//! One request, one response, length-prefixed.
+//!
+//! Deliberately small: a thief names itself and a maximum, the victim answers
+//! with whatever it was willing to give up, possibly nothing. There is no
+//! acknowledgement — the jobs are in the response, so a dropped connection
+//! after the write costs the victim its own buffer entries and the reaper
+//! returns them.
+
 use flexiq_core::job::Job;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -1,3 +1,17 @@
+//! SWIM: how a node learns who its peers are and when one has gone.
+//!
+//! Each protocol period a node pings one peer directly; on silence it asks
+//! `indirect_ping_count` others to try, and only then suspects. Suspicion is a
+//! timer rather than a verdict, so a peer that was merely slow can refute it by
+//! raising its own incarnation number. Every message piggybacks pending
+//! membership updates, which is what spreads news without a broadcast.
+//!
+//! [`message`] is the wire, [`membership`] the state machine and incarnation
+//! rules, [`failure`] the probe and suspicion timers.
+//!
+//! Losing a peer here costs nothing but its prefetch buffer: the jobs it
+//! claimed are ordinary rows, returned by the ordinary reaper.
+
 pub mod failure;
 pub mod membership;
 pub mod message;

@@ -18,7 +18,7 @@
 //! shared secret the principal's namespace is the process's, from
 //! `FLEXIQ_GRPC_LISTEN`'s configuration; under a credential that carries one it
 //! is the credential's, and nothing in this module moves. The extraction
-//! happens in [`Producer::scope`], called once per RPC in the trait
+//! happens in `Producer::scope`, called once per RPC in the trait
 //! implementation below — the one place all six are joined, so a seventh is one
 //! line beside six identical ones.
 //!

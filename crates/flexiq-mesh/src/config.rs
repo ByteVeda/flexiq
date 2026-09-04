@@ -1,3 +1,15 @@
+//! Every knob the mesh has, in one struct.
+//!
+//! The defaults are the deployment this is built for — a handful of workers on
+//! a private network — so a node that sets nothing still gossips and steals.
+//!
+//! Three are worth reading before a multi-host rollout, and the first two are
+//! what make a default-configured node single-host: `seeds` is empty, so
+//! nothing is contacted and the cluster never forms; `advertise_addr` is unset
+//! and falls back to `bind_addr`, which a `0.0.0.0` bind makes useless as an
+//! address to dial. `encryption_key` is the third — it obscures gossip without
+//! being cryptography.
+
 use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};

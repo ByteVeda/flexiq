@@ -1,3 +1,10 @@
+//! The prefetch buffer, and the only place a stolen job comes from.
+//!
+//! Bounded by `local_buffer_capacity`: everything in it is already claimed in
+//! the database, so a node that dies holding a full buffer costs exactly that
+//! many jobs a reaper pass. Ends are assigned rather than incidental — the
+//! owner works the hot end, a thief takes the cold one.
+
 use std::collections::VecDeque;
 use std::sync::Mutex;
 

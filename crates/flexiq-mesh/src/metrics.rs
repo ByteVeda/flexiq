@@ -1,3 +1,17 @@
+//! Free-running counters for what the mesh did.
+//!
+//! Plain atomics, never reset, gathered into a single [`MetricsSnapshot`] so a
+//! scrape passes one struct around rather than eight counters. The loads are
+//! independent and `Relaxed`, so the fields may describe slightly different
+//! moments — a snapshot is a convenient bundle, not a point-in-time view.
+//!
+//! They answer whether stealing is earning its keep, with one caveat:
+//! `steals_initiated` counts every attempt, including ones lost to a
+//! connection, write, timeout or decode failure, and a target is chosen from
+//! gossiped load that may already be stale. A large gap from `steals_succeeded`
+//! therefore means "attempts are not paying off", not specifically "peers are
+//! empty".
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Counters for mesh operations, exposed for observability.

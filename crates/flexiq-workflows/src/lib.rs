@@ -1,3 +1,33 @@
+//! Persistence for FlexiQ workflows: a DAG of jobs, and the run that walks it.
+//!
+//! A workflow is a [`WorkflowDefinition`] — a graph plus one [`StepMetadata`]
+//! per node — and each execution of it is a [`WorkflowRun`] holding one
+//! [`WorkflowNode`] row per step. This crate owns those rows and the queries
+//! over them. It does not own the graph algebra, which is `dagron_core`
+//! (re-exported), and it does not run anything: a node becomes work by being
+//! enqueued as an ordinary job on the ordinary queue, so a workflow needs no
+//! special worker and inherits retries, timeouts and dead-lettering unchanged.
+//!
+//! # Shape
+//!
+//! - [`WorkflowStorage`] is the trait, with one implementation per backend —
+//!   [`WorkflowSqliteStorage`] plus Postgres and Redis behind their features.
+//!   Its handle carries the namespace, so no method takes one.
+//! - [`lifecycle`] holds the parts that are neither storage nor graph and would
+//!   otherwise be copied into every SDK. `submit_workflow` — validate the nodes
+//!   that need a payload, write the run, pre-enqueue each remaining node with
+//!   its `depends_on` so the queue gates it — lives there so the Python binding
+//!   and the gRPC producer share one path. A cache-hit or deferred node is
+//!   neither validated nor enqueued: the first already has its result and the
+//!   second is not this submission's to place.
+//! - [`topology`] answers what may run next.
+//!
+//! Marking a node's result stays with each SDK on purpose: it is driven by a
+//! worker reacting to its own job finishing, and nothing above the shell can
+//! see that moment.
+//!
+//! Reached from the `flexiq` facade behind its `workflows` feature.
+
 pub(crate) mod common;
 mod definition;
 pub(crate) mod diesel_common;

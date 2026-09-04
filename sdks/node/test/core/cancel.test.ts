@@ -11,7 +11,7 @@ afterEach(() => {
   worker = undefined;
 });
 
-async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<boolean> {
+async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {

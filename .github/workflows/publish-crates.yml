@@ -38,6 +38,9 @@ env:
   # cargo works out the upload order and the index waits itself. Every other
   # workspace member is `publish = false` — binding shells and binaries.
   CRATES: flexiq flexiq-core flexiq-workflows flexiq-mesh
+  # The one version whose semver gate is waived — see the step that reads it.
+  # Empty it, or move it forward, rather than deleting the check.
+  SEMVER_EXEMPT_VERSION: "1.1.0"
 
 jobs:
   publish:
@@ -196,11 +199,31 @@ jobs:
       # Only the crates being uploaded by this run are checked, and only those
       # already on crates.io: a first publish has no baseline, and a version
       # that went up earlier was gated when it did.
+      #
+      # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch. 1.1.0
+      # breaks the `flexiq-core` and `flexiq-workflows` public API under a minor
+      # bump — the breaks are the surface of durable steps, the dispatch lease
+      # and three other shipped features, and the crates have no third-party
+      # dependents to protect (one published version, three reverse
+      # dependencies, all of them this repository's own). Clearing the gate
+      # honestly would mean withdrawing those features. Naming the version
+      # rather than deleting the step is what makes 1.2.0 gated again without
+      # anyone having to remember to restore it.
       - name: Semver check the crates being published
-        if: steps.pending.outputs.baselined != ''
+        if: >-
+          steps.pending.outputs.baselined != ''
+          && steps.resolve.outputs.version != env.SEMVER_EXEMPT_VERSION
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
         with:
           package: ${{ steps.pending.outputs.baselined }}
+
+      # Loud rather than silent: a skipped gate that logs nothing reads exactly
+      # like a gate that passed.
+      - name: Semver check waived for this version
+        if: steps.resolve.outputs.version == env.SEMVER_EXEMPT_VERSION
+        run: |
+          echo "::warning::cargo-semver-checks is waived for ${SEMVER_EXEMPT_VERSION}; \
+          its breaking changes are listed in the CHANGELOG's Breaking section"
 
       # Packages each pending crate and builds it from its own tarball, resolving
       # their inter-dependencies through a temporary registry. This is what

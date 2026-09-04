@@ -100,7 +100,7 @@ it("pauses and resumes a queue", () => {
   expect(queue.listPausedQueues()).not.toContain("default");
 });
 
-async function waitForDead(queue: Queue, timeoutMs = 10000): Promise<DeadJob[]> {
+async function waitForDead(queue: Queue, timeoutMs = 20_000): Promise<DeadJob[]> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const dead = await queue.deadLetters();

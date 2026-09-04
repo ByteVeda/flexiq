@@ -83,7 +83,8 @@ pub fn classify_step_failure(error: &crate::error::QueueError) -> StepFailure {
 /// A missing verdict is [`StepFailure::Retryable`]: nothing was confirmed
 /// written, so a replay is safe and the job's own retry policy gets to decide.
 /// A `Superseded` refusal keeps only the job id, because
-/// [`QueueError::ClaimLost`] renders one itself and the attempt it names emits
+/// [`QueueError::ClaimLost`](crate::error::QueueError::ClaimLost) renders one
+/// itself and the attempt it names emits
 /// no result for anyone to read the message on.
 pub fn refusal_error(
     job_id: &str,

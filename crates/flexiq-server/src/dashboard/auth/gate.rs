@@ -50,8 +50,8 @@ pub fn is_state_changing(method: &str) -> bool {
 /// Whether a request needs the `admin` role.
 ///
 /// Every state-changing API route is admin-only; viewers keep read access and
-/// their own account endpoints — except under [`ADMIN_READ_PREFIXES`], where
-/// reading is itself privileged.
+/// their own account endpoints — except under the admin-read prefixes listed
+/// in this module, where reading is itself privileged.
 pub fn requires_admin(path: &str, method: &str) -> bool {
     if is_public_path(path) {
         return false;

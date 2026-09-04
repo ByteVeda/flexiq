@@ -4,7 +4,7 @@
 //! (`flexiq-node`) shells. All scheduling and storage logic lives in
 //! `flexiq-core`; this crate only marshals between the JVM and the core.
 //!
-//! Each JNI entry point lives in [`queue`] and is named
+//! Each JNI entry point lives in the private `queue` module and is named
 //! `Java_org_byteveda_flexiq_internal_NativeQueue_<method>` so the JVM links it
 //! to the matching `native` method on the `NativeQueue` Java class.
 

@@ -1,3 +1,16 @@
+//! What this node believes about the cluster right now.
+//!
+//! Every peer's last gossiped [`WorkerInfo`] and its [`MemberState`], plus the
+//! [`crate::ring::HashRing`] derived from the live ones. **Two `RwLock`s, not
+//! one** — the membership map and the ring are locked separately, so a reader
+//! that takes both sees two moments rather than one atomic view. Nothing here
+//! needs them to agree: the ring is an affinity hint, and a placement made
+//! against a member the map has since buried is still a valid placement.
+//!
+//! Beliefs, not facts: a peer marked dead here is a peer this node stopped
+//! hearing from, and the queue rows it was holding are the stuck-job reaper's
+//! problem, not this module's.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::RwLock;

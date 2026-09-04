@@ -1,3 +1,10 @@
+//! Consistent hashing, used for affinity and never for ownership.
+//!
+//! The ring answers "which worker would prefer this task", so a warm cache
+//! tends to be reused and a peer joining or leaving moves only its share of
+//! the keyspace. It is advisory throughout: any worker may run any job, and
+//! `affinity_weight` decides how much notice the scheduler takes.
+
 use std::collections::BTreeMap;
 
 use xxhash_rust::xxh3::xxh3_64;

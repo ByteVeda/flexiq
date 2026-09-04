@@ -7,7 +7,7 @@
 //! shape it takes is fixed:
 //!
 //! * a [`Code`], for a generic client or a middlebox deciding whether to retry;
-//! * an `ErrorInfo` whose [`reason`](reason) is the stable identifier;
+//! * an `ErrorInfo` whose [`reason`] is the stable identifier;
 //! * typed metadata wherever a client needs a number, so nothing is ever parsed
 //!   back out of a message.
 //!
@@ -16,7 +16,7 @@
 //! Two invariants are pinned by the tests at the bottom of this file: the match
 //! over `QueueError` is **exhaustive**, so a new variant fails the build rather
 //! than reaching the wire as `UNKNOWN`; and it agrees with
-//! [`classify_step_failure`] on every arm that function names.
+//! [`flexiq_core::classify_step_failure`] on every arm that function names.
 
 pub mod reason;
 

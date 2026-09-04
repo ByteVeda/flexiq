@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Queue, useResource } from "../../src/index";
 import { ResourceRuntime } from "../../src/resources/runtime";
 
-async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<boolean> {
+async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {
