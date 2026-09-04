@@ -29,6 +29,12 @@ if (producerUrl && !producerToken) {
   throw new Error("FLEXIQ_PRODUCER_URL needs FLEXIQ_TOKEN — a produce-scoped token for that door");
 }
 
+// Node's `fetch` has no default timeout, and this call is awaited inside a task
+// body — so a producer door that accepts the connection and never answers would
+// hold an executor slot until the job's own timeout expired. Bound it well
+// inside that.
+const PRODUCER_TIMEOUT_MS = 10_000;
+
 // Each SDK's own default serializer is same-language-only. CBOR is the
 // cross-SDK format, and every runtime here opts into it explicitly.
 //
@@ -67,6 +73,7 @@ async function enqueueNotify(order) {
       structured: { args: [order] },
       options: { queue: "notify" },
     }),
+    signal: AbortSignal.timeout(PRODUCER_TIMEOUT_MS),
   });
 
   // Thrown rather than logged: a hand-off that failed has to fail the job with
