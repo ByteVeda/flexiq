@@ -1,6 +1,6 @@
-// UNSTABLE. Until the release that first ships the gRPC role, these files may
-// change under the `proto-breaking` label (§2.2 of
-// tasks/specs/2026-09-01-flexiq-v1-proto-design.md). After that release the
+// STABLE as of 1.1.0, the release that first shipped the gRPC role. Field
+// numbers, field names and RPC shapes are permanent from here (§2.2 of
+// tasks/specs/2026-09-01-flexiq-v1-proto-design.md): the `proto-breaking`
 // label is for reverting a mistake made in the same release train, never for
 // changing a shipped shape.
 //
