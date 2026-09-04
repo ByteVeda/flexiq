@@ -99,10 +99,10 @@ language.
 
 This variant swaps the **producer** for one that doesn't need a binding at
 all — a shell script, talking to a running `flexiq-server` over its gRPC
-producer door instead of opening the file. The Node worker can move off the
-file too, as an attached executor — see [below](#the-node-worker-as-an-attached-executor).
-The Java worker still opens `flexiq.db` directly, same as above; doing the same
-for it is filed as [#797](https://github.com/ByteVeda/flexiq/issues/797).
+producer door instead of opening the file. Either worker can move off the file
+too, as an attached executor — see
+[the Node section](#the-node-worker-as-an-attached-executor) and
+[the Java section](#the-java-worker-as-an-attached-executor) below.
 
 Reach for the original example when every stage is a process that can hold a
 database credential. Reach for this one when the producer is a script, a
@@ -195,6 +195,46 @@ same producer door `grpc_producer.sh` uses — `POST /v1/jobs` over plain HTTP o
 the gRPC listener, `structured` args, no CBOR encoder anywhere in the worker.
 Executing and producing stay two doors with two credentials, which is exactly
 what lets the executor run with no database access at all.
+
+### The Java worker as an attached executor
+
+`orders.notify` is the last stage in the pipeline — `NotifyWorker` enqueues
+nothing downstream, so there's no producer-door hand-off to wire up here,
+unlike the Node worker above. `flexiq executor` discovers `notifyCustomer`
+through `META-INF/services`, generated at compile time by the `@TaskHandler`
+annotation on it — no `main` runs to register it.
+
+```bash
+# 1. flexiq-server again — step 1 of the gRPC variant above, with the attach
+#    door open beside the gRPC one.
+#    FLEXIQ_QUEUES is what the scheduler claims. Leave `process` out: the
+#    Node worker is still polling storage for those jobs itself, and a job
+#    claimed here that no attached executor advertises would just wait for a
+#    placement that never comes.
+export FLEXIQ_ATTACH_TOKEN=$(openssl rand -hex 32)
+docker run --rm -p 50051:50051 -p 7777:7777 -v "$PWD:/data" \
+  -e FLEXIQ_DSN=/data/flexiq.db \
+  -e FLEXIQ_NAMESPACE=polyglot \
+  -e FLEXIQ_QUEUES=notify \
+  -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+  -e FLEXIQ_LISTEN=0.0.0.0:7777 \
+  -e FLEXIQ_ATTACH_TOKEN \
+  ghcr.io/byteveda/flexiq-server:1.0.0
+
+# 2. The worker, attached instead of polling. The Node worker and
+#    ./grpc_producer.sh are unchanged from the gRPC variant above.
+#    FLEXIQ_SERIALIZER=cbor matches the CBOR wire format orders.notify was
+#    enqueued with — the executor has no application main to set this on a
+#    Queue the way the Node and Python executors do, so the CLI needs it
+#    directly.
+(cd java-worker \
+  && FLEXIQ_ATTACH=localhost:7777 FLEXIQ_ATTACH_TOKEN=$FLEXIQ_ATTACH_TOKEN \
+     FLEXIQ_SERIALIZER=cbor \
+     ./gradlew runExecutor)
+```
+
+`FLEXIQ_DB` and `FLEXIQ_NAMESPACE` are absent on purpose, same reason as the
+Node executor: this process opens no storage of its own.
 
 ## Running against a local build
 
