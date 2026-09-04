@@ -1026,7 +1026,11 @@ than conditionally absent.
 ### What it serves
 
 `flexiq.v1.ProducerService` — `Enqueue`, `EnqueueBatch`, `GetJob`, `ListJobs`,
-`CancelJob`, `QueueStats` — beside `grpc.health.v1` and reflection.
+`CancelJob`, `QueueStats`, `SubmitWorkflow` and `GetWorkflowRun` — beside
+`grpc.health.v1` and reflection.
+
+Writing a client against it, in a language with no FlexiQ SDK, is
+<SdkLink to="modules/clients">its own page</SdkLink>.
 
 ```bash
 # $FLEXIQ_TOKEN is a token you minted — see "The credential" below. Exported
@@ -1253,6 +1257,8 @@ process.
 | `POST` | `/v1/jobs/{job_id}:cancel` | `CancelJob` |
 | `GET` | `/v1/queues/{queue}/stats` | `QueueStats` for one queue |
 | `GET` | `/v1/stats` | `QueueStats` for the namespace |
+| `POST` | `/v1/workflows` | `SubmitWorkflow` |
+| `GET` | `/v1/workflows/{run_id}` | `GetWorkflowRun` |
 
 ```bash
 curl -X POST http://localhost:50051/v1/jobs \
@@ -1344,6 +1350,8 @@ dead-lettering changes because the executor that ran it dialled in over gRPC.
   "no native binding required" story the producer door tells. Reflection
   serves this package too, off the same embedded descriptor, so a client
   needs no `.proto` on hand.
+  <SdkLink to="modules/custom-executors">Custom executors</SdkLink> is the
+  page that walks through writing one.
 </Callout>
 
 Two RPCs. `Attach` is one bidirectional stream for the lifetime of a
