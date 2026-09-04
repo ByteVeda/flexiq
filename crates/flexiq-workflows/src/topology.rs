@@ -1,3 +1,12 @@
+//! Reading a stored graph back into an order something can be run in.
+//!
+//! [`topological_order`] is the seam between `dagron_core`'s graph algebra and
+//! the rows this crate persists: it decodes a definition's
+//! [`SerializableGraph`] and returns each node with its dependencies attached,
+//! which is what both submission (what may be enqueued now) and completion
+//! (what this node unblocked) ask of it. A cycle is refused here rather than
+//! discovered by a run that never finishes.
+
 use std::collections::HashMap;
 
 use flexiq_core::error::{QueueError, Result};

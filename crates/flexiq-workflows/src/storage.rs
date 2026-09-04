@@ -1,3 +1,10 @@
+//! The persistence trait every backend implements.
+//!
+//! Mirrors `flexiq_core::Storage` in shape with one deliberate difference: no
+//! method takes a namespace. The value is bound into the handle at
+//! construction, so a workflow store is already scoped to one tenant and
+//! cannot be asked about another.
+
 use flexiq_core::error::Result;
 
 use crate::{WorkflowDefinition, WorkflowNode, WorkflowNodeStatus, WorkflowRun, WorkflowState};
