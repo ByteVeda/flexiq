@@ -78,8 +78,10 @@ out-of-tree implementor. Seven migrations run on first start and one of them cha
 
 - **`unique_key` deduplicated across namespaces.** A tenant enqueueing a key another tenant had
   already used got that tenant's job back and never created its own. The index is rebuilt over
-  `(COALESCE(namespace, ''), unique_key)` by migration `m0017`, and the lookups are scoped to
-  match. Debounce was already namespaced; `unique_key` was the outlier.
+  `(namespace IS NULL, COALESCE(namespace, ''), unique_key)` by migration `m0017`, and the
+  lookups are scoped to match. The leading discriminator is not redundant: `COALESCE` alone
+  would fold an unnamespaced job and one in a namespace literally named `""` into the same
+  group. Debounce was already namespaced; `unique_key` was the outlier.
 - **A queue's admission cap was not applied inside a debounced enqueue**, so a debounce window
   could admit work past a full queue.
 - **An empty debounce placeholder could key a window**, collapsing unrelated jobs into one.
