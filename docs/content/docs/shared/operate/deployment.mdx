@@ -2318,9 +2318,11 @@ contract never described.
 
 <SdkSwap python={<code>queue.min_contract()</code>} node={<code>queue.minContract()</code>} java={<code>flexiq.minContract()</code>} />
 
-The floor starts permissive and is an operator's dial, not an automatic one —
-one that rose on its own would lock out the peers still mid-rollout. Raise it
-only once every process is upgraded:
+On an existing database the floor stays where it is and is an operator's dial,
+not an automatic one — one that rose on its own would lock out the peers still
+mid-rollout. There is one exception: a database created from nothing records the
+level of the build that created it, because it has no older peer to lock out.
+Raise it yourself only once every process is upgraded:
 
 <SdkSwap python={<code>queue.set_min_contract(2)</code>} node={<code>queue.setMinContract(2)</code>} java={<code>flexiq.setMinContract(2)</code>} />
 
@@ -2328,6 +2330,15 @@ A level the calling build cannot itself speak is rejected, since that write woul
 lock the operator out of their own storage. An attached executor has no storage
 of its own, so it has no floor to check — the scheduler it attaches to was
 already held to one.
+
+A deployment that runs no SDK process turns the same dial from a shell, with
+`flexiq-server contract show` and `flexiq-server contract set-floor 2`.
+
+**<SdkLink to="modules/steps">Durable steps</SdkLink> require level 2**, and are
+refused below it: a build that cannot read the step table would claim a job whose
+steps already committed and run every one of them again. A database an earlier
+release created starts below the level, and so does any Redis deployment — a
+schemaless backend has no creation moment to record one at.
 
 ## Checklist
 
