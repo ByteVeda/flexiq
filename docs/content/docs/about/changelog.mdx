@@ -18,15 +18,17 @@ their entries below keep that name.
 ## 1.1.0
 
 Two things a queue could not do before: checkpoint work *inside* a job, and be reached by a
-process that has no FlexiQ binding at all. Everything here is additive — no public API was
-removed or renamed in any SDK — but seven migrations run on first start and one of them changes
-how `unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
+process that has no FlexiQ binding at all. No public API was removed or renamed in the Python,
+Node or Java SDKs; the one breaking change is a `Storage` trait method, and it reaches only an
+out-of-tree implementor. Seven migrations run on first start and one of them changes how
+`unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
 
 ### Added
 
-- **Durable steps.** `ctx.step.run(key, fn)` and `ctx.step.sleep(key, duration)` in all three
-  SDKs, backed by a `job_steps` table. A retried job replays the steps that already committed
-  instead of re-running them, which is what makes a task that charges a card safe to retry.
+- **Durable steps.** `ctx.step.run` / `ctx.step.sleep` in Python and Node, `ctx.step().run` /
+  `ctx.step().sleep` in Java, all backed by a `job_steps` table. A retried job replays the steps
+  that already committed instead of re-running them, which is what makes a task that charges a
+  card safe to retry.
   Every write is fenced on `(owner, attempt, epoch)`: a step commit from a worker that has lost
   its claim is refused rather than applied, because the alternative to failing closed here is a
   second charge. `step.sleep` ends the attempt and reschedules rather than blocking a worker
@@ -71,10 +73,13 @@ how `unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
 - **`GET /metrics` is served on the gRPC listener**, so a release that enables only the gRPC
   role has a scrape target. It carries the dashboard's storage gauges plus per-RPC call counts
   and latencies.
-- **`Storage` gained `enqueue_unique_reporting` and `enqueue_unique_batch_reporting`**, which
-  return whether the enqueue deduplicated — the producer door has to answer that on the wire,
-  and it is not computable above the backend. The existing names stay as wrappers. Only direct
-  users of the `flexiq-core` crate are affected.
+- **BREAKING (Rust core): `Storage` gained `enqueue_unique_reporting` and
+  `enqueue_unique_batch_reporting`**, both required. They return whether the enqueue
+  deduplicated, which the producer door has to answer on the wire and which is not computable
+  above the backend — the job's id is generated inside the insert, so a caller has no candidate
+  to compare against. The existing names stay as one-line wrappers, so a backend still has one
+  implementation. Only an out-of-tree implementor of the trait is affected; the Python, Node and
+  Java APIs are unchanged.
 
 ### Fixed
 
