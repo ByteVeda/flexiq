@@ -25,6 +25,8 @@ unsafe impl Send for LocalDeque {}
 unsafe impl Sync for LocalDeque {}
 
 impl LocalDeque {
+    /// Create an empty buffer holding at most `capacity` jobs — the ceiling on
+    /// how much claimed work this node can lose by dying.
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -61,15 +63,20 @@ impl LocalDeque {
         stolen
     }
 
+    /// Jobs buffered right now, counting both ends. Gossiped to peers as
+    /// `local_buffer_len`, which is what makes this node a steal target.
     pub fn len(&self) -> usize {
         let deque = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         deque.len()
     }
 
+    /// Whether there is nothing left to pop or steal.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// The bound this deque was built with. Pushes past it are refused rather
+    /// than growing the buffer.
     pub fn capacity(&self) -> usize {
         self.capacity
     }

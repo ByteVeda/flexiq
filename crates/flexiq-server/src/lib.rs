@@ -6,6 +6,7 @@
 //! identical for every SDK. The binary in `main.rs` is a thin shell over these
 //! modules; they are public so integration tests can drive the same wiring the
 //! process does.
+#![deny(missing_docs)]
 
 pub mod config;
 pub mod dashboard;

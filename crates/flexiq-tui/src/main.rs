@@ -7,6 +7,7 @@
 //! mutate a queue.
 //!
 //! Not published — a binary, built from this repository.
+#![deny(missing_docs)]
 
 mod app;
 mod backend;

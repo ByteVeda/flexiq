@@ -22,31 +22,56 @@ use crate::ring::HashRing;
 /// Load and identity information gossipped between mesh peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerInfo {
+    /// Worker id, unique in the cluster and the key every peer files this
+    /// member under.
     pub worker_id: String,
+    /// UDP address peers send gossip to.
     pub gossip_addr: SocketAddr,
+    /// TCP address a thief connects to for a steal.
     pub steal_addr: SocketAddr,
+    /// Queues this worker polls.
     pub queues: Vec<String>,
+    /// Worker thread count, gossiped as a rough measure of the node's size.
     pub threads: u16,
+    /// Jobs currently executing on this worker.
     pub current_load: u16,
+    /// Jobs sitting in this worker's prefetch buffer. What a thief ranks
+    /// peers by, since only buffered jobs can be handed over.
     pub local_buffer_len: u16,
+    /// How much work this node can hold, used to size each peer's share of an
+    /// adaptive prefetch.
     pub capacity: u16,
+    /// Unix-millisecond time this snapshot was taken by its owner. A peer's
+    /// view of it is always at least one gossip period old.
     pub updated_at: i64,
 }
 
 /// Member state in the SWIM protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemberState {
+    /// Answering probes. Only these members are on the ring and eligible as
+    /// steal targets.
     Alive,
+    /// Missed its probes and is running out a suspicion timer. Still a member
+    /// — it can refute by gossiping a higher incarnation.
     Suspect,
+    /// Suspicion expired with no refutation. Off the ring; the jobs it held
+    /// are left to the ordinary stuck-job reaper.
     Dead,
+    /// Announced its own departure on shutdown, so no suspicion timer was
+    /// needed to reach the same conclusion.
     Left,
 }
 
 /// A member entry with state tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Member {
+    /// The peer's last gossiped identity and load.
     pub info: WorkerInfo,
+    /// What this node currently believes about the peer's liveness.
     pub state: MemberState,
+    /// Incarnation the belief was formed at. Updates carrying a lower one are
+    /// stale news and get discarded.
     pub incarnation: u64,
 }
 
@@ -61,6 +86,8 @@ pub struct MeshState {
 }
 
 impl MeshState {
+    /// Build the state for a node that knows no peers yet. The local worker is
+    /// placed on the ring immediately, so affinity works before any gossip.
     pub fn new(worker_id: String, virtual_nodes: usize) -> Self {
         let mut ring = HashRing::new(virtual_nodes);
         ring.add_worker(&worker_id);
@@ -71,6 +98,7 @@ impl MeshState {
         }
     }
 
+    /// Id of the worker this state belongs to. Every peer query excludes it.
     pub fn local_worker_id(&self) -> &str {
         &self.local_worker_id
     }

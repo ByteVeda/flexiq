@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 
 // The whole crate is a re-export: `flexiq::X` and `flexiq_core::X` are the
 // same item, so there is exactly one definition and one set of docs to keep

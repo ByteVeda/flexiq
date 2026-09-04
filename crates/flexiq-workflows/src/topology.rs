@@ -16,7 +16,10 @@ use dagron_core::{SerializableGraph, DAG};
 /// A node in a workflow DAG, returned in topological order.
 #[derive(Debug, Clone)]
 pub struct TopologicalNode {
+    /// The node's name in the DAG, matching its `step_metadata` key.
     pub name: String,
+    /// Names of the node's direct predecessors — the edges a submission turns
+    /// into the job's `depends_on`.
     pub predecessors: Vec<String>,
 }
 

@@ -56,6 +56,9 @@ pub struct SwimNode {
 }
 
 impl SwimNode {
+    /// Assemble the gossip node. The ping timeout is derived as half the
+    /// configured protocol period, so a probe has answered or escalated
+    /// before the next tick. No socket is bound until [`SwimNode::run`].
     pub fn new(
         config: MeshConfig,
         state: Arc<MeshState>,

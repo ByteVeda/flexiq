@@ -16,26 +16,41 @@ use crate::{WorkflowDefinition, WorkflowNode, WorkflowNodeStatus, WorkflowRun, W
 pub trait WorkflowStorage: Send + Sync {
     // ── Definitions ────────────────────────────────────────────────
 
+    /// Insert a definition row. The caller supplies the id; `name` + `version`
+    /// is unique, so re-registering an existing pair is a conflict.
     fn create_workflow_definition(&self, def: &WorkflowDefinition) -> Result<()>;
+    /// Look a definition up by name — at `version` when given, otherwise the
+    /// highest version registered under that name.
     fn get_workflow_definition(
         &self,
         name: &str,
         version: Option<i32>,
     ) -> Result<Option<WorkflowDefinition>>;
+    /// Look a definition up by primary key — the `definition_id` a run stores.
     fn get_workflow_definition_by_id(&self, id: &str) -> Result<Option<WorkflowDefinition>>;
 
     // ── Runs ───────────────────────────────────────────────────────
 
+    /// Insert a run row against an already-stored definition.
     fn create_workflow_run(&self, run: &WorkflowRun) -> Result<()>;
+    /// Fetch one run, or `None` when no such run exists in this namespace.
     fn get_workflow_run(&self, run_id: &str) -> Result<Option<WorkflowRun>>;
+    /// Write a run's `state` and `error` together. The transition is not
+    /// validated here — callers gate on `WorkflowState::can_transition_to`.
     fn update_workflow_run_state(
         &self,
         run_id: &str,
         state: WorkflowState,
         error: Option<&str>,
     ) -> Result<()>;
+    /// Move a run to `Running` and stamp `started_at`.
     fn set_workflow_run_started(&self, run_id: &str, started_at: i64) -> Result<()>;
+    /// Stamp a run's `completed_at`. Which terminal state accompanies it
+    /// depends on the nodes, so that is written separately.
     fn set_workflow_run_completed(&self, run_id: &str, completed_at: i64) -> Result<()>;
+    /// Offset-paginated run listing, newest first, optionally narrowed to one
+    /// definition name and/or state. Deep pages should use
+    /// [`list_workflow_runs_after`](Self::list_workflow_runs_after) instead.
     fn list_workflow_runs(
         &self,
         definition_name: Option<&str>,
@@ -64,23 +79,41 @@ pub trait WorkflowStorage: Send + Sync {
 
     // ── Nodes ──────────────────────────────────────────────────────
 
+    /// Insert one node row. A `run_id` outside this handle's namespace is
+    /// refused as if the run did not exist.
     fn create_workflow_node(&self, node: &WorkflowNode) -> Result<()>;
+    /// Insert many node rows in a single transaction — the submission path's
+    /// bulk write. Every distinct `run_id` in the batch is scope-checked, so a
+    /// foreign node cannot ride along with an in-scope one.
     fn create_workflow_nodes_batch(&self, nodes: &[WorkflowNode]) -> Result<()>;
+    /// Fetch one node of a run by name.
     fn get_workflow_node(&self, run_id: &str, node_name: &str) -> Result<Option<WorkflowNode>>;
+    /// Fetch every node of a run — what a status view or the tracker's own
+    /// bookkeeping reads.
     fn get_workflow_nodes(&self, run_id: &str) -> Result<Vec<WorkflowNode>>;
+    /// Set a node's status outright, for a transition carrying no timestamp of
+    /// its own (`Skipped`, `WaitingApproval`).
+    ///
+    /// Like every other node mutator here, matching no row is a
+    /// `WorkflowError::NodeNotFound` rather than a silent no-op.
     fn update_workflow_node_status(
         &self,
         run_id: &str,
         node_name: &str,
         status: WorkflowNodeStatus,
     ) -> Result<()>;
+    /// Record the queue job carrying this node's work, for a node whose job is
+    /// created after the run was submitted (deferred, fan-out child).
     fn set_workflow_node_job(&self, run_id: &str, node_name: &str, job_id: &str) -> Result<()>;
+    /// Move a node to `Running` and stamp `started_at`.
     fn set_workflow_node_started(
         &self,
         run_id: &str,
         node_name: &str,
         started_at: i64,
     ) -> Result<()>;
+    /// Move a node to `Completed`, stamping `completed_at` and the
+    /// `result_hash` a later run may reuse as a cache hit.
     fn set_workflow_node_completed(
         &self,
         run_id: &str,
@@ -88,6 +121,7 @@ pub trait WorkflowStorage: Send + Sync {
         completed_at: i64,
         result_hash: Option<&str>,
     ) -> Result<()>;
+    /// Move a node to `Failed`, recording why on the `error` column.
     fn set_workflow_node_error(&self, run_id: &str, node_name: &str, error: &str) -> Result<()>;
 
     /// Return nodes whose status is `Pending` and all DAG predecessors are `Completed`.

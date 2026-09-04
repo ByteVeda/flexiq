@@ -19,6 +19,9 @@ pub struct HashRing {
 }
 
 impl HashRing {
+    /// Create an empty ring that gives each worker `virtual_nodes` points.
+    /// More points spread the keyspace more evenly at the cost of a larger
+    /// `BTreeMap` to walk.
     pub fn new(virtual_nodes: usize) -> Self {
         Self {
             ring: BTreeMap::new(),
@@ -69,6 +72,8 @@ impl HashRing {
         seen.len()
     }
 
+    /// Whether no worker is placed. Every lookup on an empty ring yields
+    /// `None`, which callers read as "no affinity preference".
     pub fn is_empty(&self) -> bool {
         self.ring.is_empty()
     }

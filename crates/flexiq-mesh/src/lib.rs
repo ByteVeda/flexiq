@@ -54,6 +54,7 @@
 //!
 //! Reached from the `flexiq` facade behind its `mesh` feature; nothing pays for
 //! a gossip mesh unasked.
+#![deny(missing_docs)]
 
 pub mod config;
 pub mod local_deque;
@@ -78,11 +79,20 @@ pub use state::{MemberState, MeshState, WorkerInfo};
 /// Snapshot of mesh cluster state for observability.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ClusterInfo {
+    /// Alive peers this node currently believes in, not counting itself.
     pub peer_count: usize,
+    /// Buffer capacity summed over those peers. Excludes this node, so it is
+    /// the room the *rest* of the mesh has.
     pub total_capacity: u16,
+    /// Jobs executing across the peers right now, as of their last gossip.
     pub total_load: u16,
+    /// Jobs sitting in the peers' prefetch buffers — the pool a steal can
+    /// draw from, since nothing else is transferable.
     pub total_buffered: u16,
+    /// This node's own deque length, the one number here that is exact.
     pub local_buffer_len: u16,
+    /// How many jobs this node would fetch on the next top-up, from
+    /// [`MeshNode::adaptive_prefetch_size`].
     pub adaptive_prefetch: u16,
 }
 
@@ -96,6 +106,9 @@ pub struct MeshNode {
 }
 
 impl MeshNode {
+    /// Build a node under `worker_id`, the identity peers will know it by.
+    /// Nothing is bound or contacted yet — [`MeshNode::spawn_gossip`] and
+    /// [`MeshNode::spawn_steal_server`] bring it onto the network.
     pub fn new(worker_id: String, config: MeshConfig) -> Self {
         let state = Arc::new(MeshState::new(worker_id, config.virtual_nodes));
         let deque = LocalDeque::new(config.local_buffer_capacity);
@@ -181,14 +194,19 @@ impl MeshNode {
         self.shutdown.notify_one();
     }
 
+    /// The configuration this node was built with. Fixed for its lifetime.
     pub fn config(&self) -> &MeshConfig {
         &self.config
     }
 
+    /// The shared membership map and hash ring, for a caller that needs the
+    /// peer list itself rather than the summary in
+    /// [`MeshNode::cluster_info`].
     pub fn state(&self) -> &Arc<MeshState> {
         &self.state
     }
 
+    /// Read the mesh counters for a metrics scrape.
     pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
     }

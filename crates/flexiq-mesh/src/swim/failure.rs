@@ -29,6 +29,9 @@ pub struct FailureDetector {
 }
 
 impl FailureDetector {
+    /// Create a detector with no probes outstanding and nobody suspected.
+    /// `ping_timeout_ms` bounds a direct probe before it escalates; the
+    /// suspicion window is derived from the other two and the member count.
     pub fn new(ping_timeout_ms: u64, suspicion_multiplier: u32, protocol_period_ms: u64) -> Self {
         Self {
             pending_pings: HashMap::new(),

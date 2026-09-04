@@ -7,6 +7,7 @@
 //!
 //! Not published to crates.io: it ships as a wheel, built by maturin against
 //! `sdks/python`.
+#![deny(missing_docs)]
 
 use pyo3::prelude::*;
 
@@ -21,6 +22,9 @@ mod py_config;
 mod py_job;
 mod py_queue;
 mod py_step;
+/// Running one task attempt in CPython: the call itself, and how a raised
+/// exception becomes a `JobResult`. Public because every worker pool — native,
+/// prefork, async, executor — goes through it.
 pub mod py_worker;
 mod py_worker_steps;
 #[cfg(feature = "workflows")]
