@@ -1,6 +1,7 @@
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import org.byteveda.flexiq.FlexiQ;
+import org.byteveda.flexiq.annotation.TaskHandler;
 import org.byteveda.flexiq.serialization.CborSerializer;
 import org.byteveda.flexiq.worker.Worker;
 
@@ -9,8 +10,26 @@ import org.byteveda.flexiq.worker.Worker;
  *
  * <p>Nothing here is aware of the producer or the upstream worker. The task name
  * and the CBOR wire format are the entire contract between the three runtimes.
+ *
+ * <p>Two deployments share this one class. {@code ./gradlew run} polls the
+ * database itself, via {@code main()} below. {@code flexiq executor} discovers
+ * {@link #notifyCustomer} through {@code META-INF/services} instead — the
+ * {@code @TaskHandler} processor generates that registration, so nothing here
+ * has to run for it to be found.
  */
 public final class NotifyWorker {
+
+    @TaskHandler("orders.notify")
+    Map<String, Object> notifyCustomer(Map<String, Object> notification) {
+        System.out.printf(
+                "[java] notifying %s about %s — %s %s (processed by %s)%n",
+                notification.get("customer"),
+                notification.get("order_id"),
+                notification.get("total"),
+                notification.get("currency"),
+                notification.get("processed_by"));
+        return Map.of("order_id", String.valueOf(notification.get("order_id")), "notified", true);
+    }
 
     public static void main(String[] args) throws Exception {
         String db = System.getenv().getOrDefault("FLEXIQ_DB", "../flexiq.db");
@@ -43,7 +62,7 @@ public final class NotifyWorker {
         }
         try (FlexiQ flexiq = builder.open();
                 Worker worker = flexiq.worker()
-                        .handle("orders.notify", Map.class, NotifyWorker::notifyCustomer)
+                        .apply(b -> NotifyWorkerTasks.bind(b, new NotifyWorker()))
                         // Poll only this stage's queue. A worker claims whatever is in
                         // the queues it polls, so sharing one queue would let this
                         // process pick up jobs it has no handler for.
@@ -57,16 +76,5 @@ public final class NotifyWorker {
         } finally {
             closed.countDown();
         }
-    }
-
-    private static Map<String, Object> notifyCustomer(Map<?, ?> notification) {
-        System.out.printf(
-                "[java] notifying %s about %s — %s %s (processed by %s)%n",
-                notification.get("customer"),
-                notification.get("order_id"),
-                notification.get("total"),
-                notification.get("currency"),
-                notification.get("processed_by"));
-        return Map.of("order_id", String.valueOf(notification.get("order_id")), "notified", true);
     }
 }
