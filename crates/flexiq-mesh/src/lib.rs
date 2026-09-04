@@ -4,7 +4,8 @@
 //! share it *sooner*. Each node gossips its address, queues and load to its
 //! peers over UDP, places jobs on a consistent hash ring so the same key tends
 //! to reach the same worker, buffers a small prefetch locally, and steals from
-//! a busier peer over TCP when its own buffer runs dry.
+//! a busier peer over TCP when its own buffer falls to `steal_threshold` —
+//! which defaults above zero, so a steal starts before the node is idle.
 //!
 //! **The database stays the source of truth.** Nothing here claims, completes
 //! or retries a job — a stolen job is one already claimed by the peer that
@@ -29,11 +30,24 @@
 //! [`MeshNode::try_steal`]. The scheduler itself never learns the mesh exists,
 //! which is why enabling it changes no dispatch semantics.
 //!
+//! [`MeshConfig::default`] carries no `seeds` and no `advertise_addr`, so a
+//! node built from it gossips to nobody and advertises its bind address. That
+//! is the single-host shape; a second host needs both fields, or the two nodes
+//! never find each other:
+//!
 //! ```no_run
 //! use flexiq_mesh::{MeshConfig, MeshNode};
 //! use std::sync::Arc;
 //!
-//! let node = Arc::new(MeshNode::new("worker-1".to_string(), MeshConfig::default()));
+//! let config = MeshConfig {
+//!     // Where peers should reach this node — a `0.0.0.0` bind makes it
+//!     // mandatory, since that is not an address anyone can dial.
+//!     advertise_addr: Some("10.0.0.7:7946".to_string()),
+//!     // Any live member is enough; membership propagates from there.
+//!     seeds: vec!["10.0.0.6:7946".to_string()],
+//!     ..MeshConfig::default()
+//! };
+//! let node = Arc::new(MeshNode::new("worker-1".to_string(), config));
 //! node.spawn_gossip(vec!["default".to_string()], 4);
 //! node.spawn_steal_server();
 //! ```
