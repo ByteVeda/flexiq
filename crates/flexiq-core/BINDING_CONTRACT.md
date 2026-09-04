@@ -560,6 +560,27 @@ level a process may speak and still join it.
 - Raising the floor is an operator's act (`set_min_contract`), done once every
   process is upgraded. A level the writing build cannot itself speak is
   rejected, since that write would lock the operator out of their own storage.
+- **One exception to "the floor is never raised automatically": a migration run
+  that *creates* the schema records this build's level.** A database that had no
+  tables a moment ago has no older process reading it, so there is nobody to
+  lock out. A schemaless backend has no such moment and is never seeded, so a
+  Redis deployment raises its floor by hand.
+
+### Durable steps require level 2
+`job_steps` is additive at the schema level, but a build below level 2 cannot
+read it: it claims a job whose steps already committed, finds none, and runs
+every one of them again. So the level alone is not enough — what matters is what
+the *other* processes speak.
+
+- The inline-step API checks the deployment's floor at attempt start and refuses
+  below `STEPS_CONTRACT_LEVEL` with an error naming `contract:min_sdk`. A shell
+  gets this for free: the check lives in `StepSession::open`, which every
+  storage-backed session goes through.
+- A scheduler below the floor **withholds `CAP_STEPS` from the handshake**
+  entirely, so an attached executor is told before it runs anything. That is the
+  only route by which the floor reaches a process holding no storage.
+- The rollout order is: upgrade every process, raise the floor, then deploy
+  tasks that call `step.run`.
 
 ## Applying the schema (cross-SDK)
 Opening applies pending migrations by default. A shell MUST also expose the

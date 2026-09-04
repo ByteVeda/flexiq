@@ -71,6 +71,65 @@ public String checkout(String orderId) throws Exception {
 Retry that job after the receipt fails and the card is **not** charged a second
 time: `charge` is a memo hit, and only `receipt` runs.
 
+## Every process has to be new enough
+
+Steps are memoized in a `job_steps` table that arrived in 1.1.0. A worker built
+before it cannot read that table, so if one is still sharing your queue it will
+claim a job whose steps already committed, find none, and charge the card a
+second time. The memo only holds if *every* process can see it.
+
+The deployment records that as a floor, and the step API refuses below it:
+
+```
+config error: inline steps require every worker at contract >= 2, and this
+deployment's floor is 1; raise contract:min_sdk to 2 once every process is upgraded
+```
+
+**A database created by 1.1.0 or later is already at 2** — it had no older
+process to protect — so a new project never sees this. You raise the floor
+yourself in two cases: a database an earlier release created, and any Redis
+deployment, which has no "created" moment to record.
+
+Upgrade every process first, then raise it, then deploy tasks that call
+`step.run`. Raising it while an older process is still running refuses that
+process the next time it opens the database.
+
+<CodeTabs>
+  <Tab sdk="python">
+
+```python
+queue.set_min_contract(2)
+```
+
+  </Tab>
+  <Tab sdk="node">
+
+```ts
+queue.setMinContract(2);
+```
+
+  </Tab>
+  <Tab sdk="java">
+
+```java
+queue.setMinContract(2);
+```
+
+  </Tab>
+</CodeTabs>
+
+A deployment that runs no SDK process — a gRPC server with attached executors —
+turns the same dial from a shell:
+
+```bash
+flexiq-server contract show
+flexiq-server contract set-floor 2
+```
+
+A scheduler below the floor withholds durable steps from attached executors in
+the handshake, so an executor is told before it runs anything rather than
+failing mid-task.
+
 ## Steps or a workflow?
 
 Both are durable multi-step execution, and they are not redundant. The

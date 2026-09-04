@@ -66,6 +66,12 @@ out-of-tree implementor. Seven migrations run on first start and one of them cha
 - **The `.proto` files are stable.** They carried an `UNSTABLE` banner until the release that
   first shipped the gRPC role. Field numbers, field names and RPC shapes are permanent from
   here.
+- **`CONTRACT_VERSION` is 2, and durable steps require the deployment's floor to match.** A 1.0.x
+  build cannot read `job_steps`, so a queue it still shares would re-run every committed step of a
+  job it claims. A new database records the level when its schema is created; an existing one
+  keeps its permissive floor and refuses steps until an operator raises `contract:min_sdk` — see
+  [Upgrading](#upgrading-to-110). `flexiq-server contract show` / `set-floor` expose the dial to a
+  deployment that runs no SDK process.
 - **The gRPC listener has keepalive, a request deadline and a per-connection concurrency cap**
   (`FLEXIQ_GRPC_KEEPALIVE_INTERVAL`, `FLEXIQ_GRPC_REQUEST_TIMEOUT`,
   `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS`). The deadline bounds a response *head*, so it closes no
@@ -129,9 +135,29 @@ created its own — but a deployment that relied on the old reach has to key on 
 namespace-independent instead. A deployment with a single namespace, or none, sees no change.
 Recreating the index takes a table scan; on a large `jobs` table the first start pauses for it.
 
-Nothing else requires action. Payload markers, the worker frame protocol version and the
-`CONTRACT_VERSION` floor are all unchanged from 1.0.0, so 1.0.x and 1.1.0 workers may share a
-queue while you roll.
+**Durable steps need the contract floor raised, and an existing deployment starts below it.**
+`CONTRACT_VERSION` moves to 2 in this release, because a 1.0.x build cannot read `job_steps`: it
+would claim a job whose steps already committed, find none, and run every one of them a second
+time — the double charge the memo exists to prevent. So the step API refuses until the deployment
+says every process is new enough:
+
+- A **new database** is already there. A migration run that creates the schema records level 2,
+  since a database that did not exist a moment ago has no older process to lock out. Steps work
+  with no action.
+- An **existing database** keeps its permissive floor, so 1.0.x and 1.1.0 workers may still share
+  a queue while you roll. `ctx.step.run` refuses with a message naming `contract:min_sdk`, and a
+  scheduler below the floor does not offer steps to attached executors at all. Once every process
+  is upgraded, raise it once — `queue.set_min_contract(2)` in Python, `setMinContract(2)` in Node
+  and Java, or `flexiq-server contract set-floor 2` for a gRPC-only deployment.
+- **Redis is never seeded**, because a schemaless backend has no "created" moment to tell a new
+  keyspace from a live one. Raise the floor by hand there even on a fresh deployment.
+
+Do it in that order — upgrade every process, then raise the floor, then deploy tasks that call
+`step.run`. Raising it while a 1.0.x process is still running refuses that process on its next
+open.
+
+Nothing else requires action: payload markers and the worker frame protocol version are unchanged
+from 1.0.0.
 
 ## 1.0.0
 
