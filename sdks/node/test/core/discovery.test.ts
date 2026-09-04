@@ -60,7 +60,10 @@ async function waitForStatus(
   queue: Queue,
   id: string,
   predicate: (status: string) => boolean,
-  timeoutMs = 5000,
+  // A failure deadline, not a delay: the loop returns on the first satisfying
+  // poll, so a generous budget costs a passing run nothing and is what keeps a
+  // slow windows-latest runner from reading as a broken assertion.
+  timeoutMs = 20_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
