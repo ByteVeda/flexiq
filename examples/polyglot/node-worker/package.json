@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node worker.mjs"
+    "start": "node worker.mjs",
+    "executor": "flexiq executor worker.mjs"
   },
   "dependencies": {
     "@byteveda/flexiq": "1.0.0"

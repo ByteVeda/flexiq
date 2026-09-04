@@ -75,9 +75,11 @@ non-finite numbers, and anything JSON has no syntax for. See <SdkLink to="operat
 
 [`examples/polyglot`](https://github.com/ByteVeda/flexiq/tree/master/examples/polyglot)
 has a gRPC-speaking variant beside the original shared-database one: a producer
-that enqueues over the gRPC door with `grpcurl`, no SDK installed at all. The
-workers still open the database file directly in that variant — only the
-producer moved to the network door.
+that enqueues over the gRPC door with `grpcurl`, no SDK installed at all, and a
+Node worker that attaches to the scheduler rather than opening the file. That
+worker also shows what an executor gives up — it fans out to a second stage,
+and with no storage to write the follow-up job into, it sends it back through
+the same producer door. The Java worker still opens the database file directly.
 
 ## Trade-offs
 

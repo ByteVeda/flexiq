@@ -99,11 +99,10 @@ language.
 
 This variant swaps the **producer** for one that doesn't need a binding at
 all — a shell script, talking to a running `flexiq-server` over its gRPC
-producer door instead of opening the file. The workers are unchanged: they
-still open `flexiq.db` directly, same as above. (Turning them into attached
-executors too — so nothing but `flexiq-server` touches the file — is filed as
-follow-up work: [#796](https://github.com/ByteVeda/flexiq/issues/796) for the
-Node worker, [#797](https://github.com/ByteVeda/flexiq/issues/797) for Java.)
+producer door instead of opening the file. The Node worker can move off the
+file too, as an attached executor — see [below](#the-node-worker-as-an-attached-executor).
+The Java worker still opens `flexiq.db` directly, same as above; doing the same
+for it is filed as [#797](https://github.com/ByteVeda/flexiq/issues/797).
 
 Reach for the original example when every stage is a process that can hold a
 database credential. Reach for this one when the producer is a script, a
@@ -138,22 +137,85 @@ FLEXIQ_TOKEN=$FLEXIQ_TOKEN ./grpc_producer.sh 3
 `grpc_producer.sh` needs [`grpcurl`](https://github.com/fullstorydev/grpcurl)
 and `jq` — nothing else, which is the whole point.
 
+### The Node worker as an attached executor
+
+The producer above stopped opening `flexiq.db`. The Node worker can stop too:
+`flexiq executor` dials the scheduler, announces the tasks it can run, and runs
+whatever it is sent. That process holds no database credential and opens no
+port of its own.
+
+`worker.mjs` serves both deployments from one module — running the file starts
+a worker, importing it only registers tasks — so the handler is the same code
+either way.
+
+```bash
+# 1. flexiq-server again — step 1 above, with the attach door open beside the
+#    gRPC one.
+#    FLEXIQ_QUEUES is what the scheduler claims. Leave `notify` out: the Java
+#    worker is still polling storage for those jobs itself, and a job claimed
+#    here that no attached executor advertises would just wait for a placement
+#    that never comes.
+#    A non-loopback FLEXIQ_LISTEN refuses to start without FLEXIQ_ATTACH_TOKEN;
+#    the attach port dispatches code.
+export FLEXIQ_ATTACH_TOKEN=$(openssl rand -hex 32)
+docker run --rm -p 50051:50051 -p 7777:7777 -v "$PWD:/data" \
+  -e FLEXIQ_DSN=/data/flexiq.db \
+  -e FLEXIQ_NAMESPACE=polyglot \
+  -e FLEXIQ_QUEUES=process \
+  -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
+  -e FLEXIQ_LISTEN=0.0.0.0:7777 \
+  -e FLEXIQ_ATTACH_TOKEN \
+  ghcr.io/byteveda/flexiq-server:1.0.0
+
+# 2. A second produce-scoped token, for the worker's own hand-off. Its own
+#    rather than the script's: a token is named, scoped and revocable on its
+#    own, which only buys anything if each client holds one.
+docker run --rm -v "$PWD:/data" \
+  -e FLEXIQ_DSN=/data/flexiq.db -e FLEXIQ_NAMESPACE=polyglot \
+  ghcr.io/byteveda/flexiq-server:1.0.0 \
+  token create --name polyglot-node-chain --scope produce
+export FLEXIQ_NODE_TOKEN=fqt_...   # printed by the command above
+
+# 3. The worker, attached instead of polling. The Java worker and
+#    ./grpc_producer.sh are unchanged from the block above.
+(cd node-worker \
+  && FLEXIQ_ATTACH=localhost:7777 FLEXIQ_ATTACH_TOKEN=$FLEXIQ_ATTACH_TOKEN \
+     FLEXIQ_PRODUCER_URL=http://localhost:50051 FLEXIQ_TOKEN=$FLEXIQ_NODE_TOKEN \
+     npm run executor -- --slots 2)
+```
+
+`FLEXIQ_DB` and `FLEXIQ_NAMESPACE` are absent on purpose. An executor opens no
+storage, so both are the scheduler's to decide, and the queue the module builds
+is a stand-in that never connects to anything.
+
+**An executor runs work; it cannot enqueue.** It has no database, and the SDK
+raises rather than letting a job vanish. `orders.process` fans out to
+`orders.notify`, so `FLEXIQ_PRODUCER_URL` sends that hand-off back through the
+same producer door `grpc_producer.sh` uses — `POST /v1/jobs` over plain HTTP on
+the gRPC listener, `structured` args, no CBOR encoder anywhere in the worker.
+Executing and producing stay two doors with two credentials, which is exactly
+what lets the executor run with no database access at all.
+
 ## Running against a local build
 
 The commands above use published packages. To run against this repository
 instead:
 
 Each command runs from this directory, so the subshells leave you where you
-started. The symlink target is relative to the directory holding the link —
-`node_modules/@byteveda` — which is five levels below the repository root.
+started. A symlink target is relative to the directory holding the link, not to
+this one: `node_modules/@byteveda`, five levels below the repository root, and
+`node_modules/.bin` for the CLI.
 
 ```bash
 # Python
 (cd ../../sdks/python && uv run maturin develop)
 
-# Node — link the workspace SDK into the example
-(cd node-worker && mkdir -p node_modules/@byteveda \
-  && ln -s ../../../../../sdks/node node_modules/@byteveda/flexiq)
+# Node — build the workspace SDK, then link it into the example. The second
+# link is the CLI `npm run executor` resolves from node_modules/.bin.
+(cd ../../sdks/node && pnpm build)
+(cd node-worker && mkdir -p node_modules/@byteveda node_modules/.bin \
+  && ln -s ../../../../../sdks/node node_modules/@byteveda/flexiq \
+  && ln -s ../@byteveda/flexiq/dist/cli.js node_modules/.bin/flexiq)
 
 # Java — publish locally, then Gradle resolves it from mavenLocal()
 (cd ../../sdks/java && ./gradlew publishToMavenLocal)
