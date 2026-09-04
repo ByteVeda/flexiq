@@ -261,6 +261,23 @@ jobs:
           git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
             push origin "server-v${VERSION}"
 
+      # The wire contract, at a URL that names a version.
+      #
+      # A client in a language with no FlexiQ SDK generates its stubs from
+      # these, and the only other ways to get them are cloning the repository
+      # or reading them off server reflection — neither of which a build
+      # pipeline should have to do. The image carries the binary and nothing
+      # else, so it is not a source either.
+      - name: Package the wire contract
+        run: |
+          set -euo pipefail
+          # `proto/` carries its own buf.yaml and buf.lock, so a consumer can
+          # run `buf generate` against the tree unchanged. wire-vectors.json
+          # rides along because the payload envelope is the half of the contract
+          # the .proto calls opaque.
+          tar -czf "flexiq-proto-${VERSION}.tar.gz" -C contracts proto wire-vectors.json
+          cp contracts/descriptor.binpb "flexiq-descriptor-${VERSION}.binpb"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -270,5 +287,7 @@ jobs:
           else
             gh release create "server-v${VERSION}" \
               --title "flexiq-server v${VERSION}" \
-              --generate-notes
+              --generate-notes \
+              "flexiq-proto-${VERSION}.tar.gz" \
+              "flexiq-descriptor-${VERSION}.binpb"
           fi
