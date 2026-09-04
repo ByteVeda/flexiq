@@ -60,11 +60,10 @@ impl Harness {
     async fn start_on(label: &str, spec: &str) -> Self {
         let storage = temp_storage(label);
         let shutdown = Shutdown::default();
-        let listener = Listener::bind(&GrpcConfig {
-            listen: ListenAddress::Tcp(spec.parse().expect("valid address")),
-            namespace: NAMESPACE.to_string(),
-            executor_stream_max_age: std::time::Duration::ZERO,
-        })
+        let listener = Listener::bind(&GrpcConfig::new(
+            ListenAddress::Tcp(spec.parse().expect("valid address")),
+            NAMESPACE,
+        ))
         .await
         .expect("bind");
         let addr = listener

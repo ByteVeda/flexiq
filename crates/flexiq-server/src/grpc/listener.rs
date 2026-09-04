@@ -165,20 +165,42 @@ impl Listener {
             routes = routes.add_service(executor.into_service());
         }
 
+        let mut builder = Server::builder()
+            // `curl` speaks HTTP/1.1, and a facade only reachable over h2c
+            // prior knowledge would not be a facade. HTTP/2 is still detected
+            // by its preface, so a gRPC client notices nothing.
+            .accept_http1(true)
+            // An HTTP/2 ping, not a TCP keepalive: `tcp_keepalive` is applied
+            // to a socket tonic binds, and this listener hands it one it bound
+            // itself so it could resolve a `:0` port. Setting the TCP knob here
+            // would be accepted and ignored, which is the failure mode this
+            // whole module refuses elsewhere.
+            .http2_keepalive_interval(
+                (!self.config.keepalive_interval.is_zero())
+                    .then_some(self.config.keepalive_interval),
+            )
+            .http2_keepalive_timeout(self.config.keepalive_timeout());
+
+        // Both of these race the response *future*, not the response body, and
+        // release on the same event: an `Attach` stream returns its response as
+        // soon as it has spawned its workers, so neither one bounds how long it
+        // then lives. The same holds for `Health/Watch` and reflection.
+        if !self.config.request_timeout.is_zero() {
+            builder = builder.timeout(self.config.request_timeout);
+        }
+        if self.config.max_concurrent_requests > 0 {
+            builder = builder.concurrency_limit_per_connection(self.config.max_concurrent_requests);
+        }
+
         // One layer over the whole router, not one per service: `Server::layer`
         // takes `Layer<Routes>`, so every service registered above — and every
         // route added in future — is gated by this line and by nothing else. It
         // is also what supplies the namespace: the producer holds none of its
         // own and reads it off the request's principal.
-        let mut server = Server::builder()
-            // `curl` speaks HTTP/1.1, and a facade only reachable over h2c
-            // prior knowledge would not be a facade. HTTP/2 is still detected
-            // by its preface, so a gRPC client notices nothing.
-            .accept_http1(true)
-            .layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
-                storage.clone(),
-                self.config.namespace.as_str(),
-            ))));
+        let mut server = builder.layer(AuthLayer::new(Arc::new(auth::TokenStore::new(
+            storage.clone(),
+            self.config.namespace.as_str(),
+        ))));
         let router = server.add_routes(routes);
 
         let listen = self.config.listen.clone();

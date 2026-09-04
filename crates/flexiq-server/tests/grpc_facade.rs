@@ -74,11 +74,10 @@ impl Harness {
         let storage = temp_storage(label);
         let token = mint_token(&storage, NAMESPACE, scopes);
         let shutdown = Shutdown::default();
-        let listener = Listener::bind(&GrpcConfig {
-            listen: ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
-            namespace: NAMESPACE.to_string(),
-            executor_stream_max_age: std::time::Duration::ZERO,
-        })
+        let listener = Listener::bind(&GrpcConfig::new(
+            ListenAddress::Tcp("127.0.0.1:0".parse().expect("valid address")),
+            NAMESPACE,
+        ))
         .await
         .expect("bind");
         let addr = listener

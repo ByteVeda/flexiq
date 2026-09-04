@@ -48,6 +48,13 @@ Configuration (environment only):
                                  before the scheduler drains it and closes it,
                                  so the executor reconnects and can be placed
                                  elsewhere (default: 1800; 0 never rotates)
+  FLEXIQ_GRPC_KEEPALIVE_INTERVAL  seconds between HTTP/2 keepalive pings on an
+                                 idle connection (default: 60; 0 sends none)
+  FLEXIQ_GRPC_REQUEST_TIMEOUT   seconds one call may take before the listener
+                                 answers DEADLINE_EXCEEDED; does not bound an
+                                 attach stream (default: 30; 0 is unbounded)
+  FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS  calls one connection may have in flight
+                                 (default: 256; 0 is unlimited)
 
 At least one of FLEXIQ_LISTEN, FLEXIQ_DASHBOARD, FLEXIQ_WEBHOOK_LISTEN or
 FLEXIQ_GRPC_LISTEN must be set. FLEXIQ_DSN is required for all but a
