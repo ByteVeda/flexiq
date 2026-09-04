@@ -53,11 +53,14 @@ New public fields, which break an exhaustive struct literal:
 - `lease` on `ExecutorMessage::{Progress, TaskLog, Success, Failure, Cancelled}` and on
   `SchedulerMessage::Job`.
 
-Newly `#[non_exhaustive]` — a `match` now needs a `_` arm, and a literal no longer constructs:
+Newly `#[non_exhaustive]`. The consequence differs by what was marked:
 
-- Enums `ExecutorMessage`, `SchedulerMessage`, `JobResult`, `ResultOutcome`.
-- Structs `AttachedExecutor`, `WorkerInfo`, `WorkerRegistration`.
-- Variant `ExecutorMessage::Hello`.
+- **Enums** `ExecutorMessage`, `SchedulerMessage`, `JobResult`, `ResultOutcome` — a `match` on
+  one now needs a `_` arm.
+- **Structs** `AttachedExecutor`, `WorkerInfo`, `WorkerRegistration` — no longer constructible
+  with a struct literal outside the crate, and destructuring one needs a trailing `..`.
+- **Variant** `ExecutorMessage::Hello` — same two rules as a struct, applied to that variant
+  alone; the other variants still construct and destructure as they did.
 
 New variants on enums that were exhaustive in 1.0.0:
 
