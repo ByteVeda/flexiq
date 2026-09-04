@@ -76,6 +76,18 @@ pub enum Rpc {
 }
 
 impl Rpc {
+    /// Every RPC, so a caller that needs the closed set does not restate it.
+    pub const ALL: [Self; 8] = [
+        Self::Enqueue,
+        Self::EnqueueBatch,
+        Self::GetJob,
+        Self::ListJobs,
+        Self::CancelJob,
+        Self::QueueStats,
+        Self::SubmitWorkflow,
+        Self::GetWorkflowRun,
+    ];
+
     /// The method name, exactly as the `.proto` spells it.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -208,6 +220,55 @@ pub const ROUTES: &[Binding] = &[
     Binding::SubmitWorkflow,
     Binding::GetWorkflowRun,
 ];
+
+/// Which binding a concrete request path and method reach, if any.
+///
+/// axum answers this during routing, but the answer lands in the request's
+/// extensions where only a handler can see it — and the thing that needs it is
+/// the metrics layer, which runs outside the router so that a refused call is
+/// still counted. So it is answered here instead, against the same table axum
+/// is built from.
+///
+/// The match is exact on literal segments and permissive on `{param}` ones,
+/// including the one segment that carries a suffix after its parameter
+/// (`{job_id}:cancel`).
+pub fn resolve(method: &http::Method, path: &str) -> Option<Binding> {
+    ROUTES.iter().copied().find(|binding| {
+        let wanted = match binding.verb() {
+            Verb::Get => http::Method::GET,
+            Verb::Post => http::Method::POST,
+        };
+        method == wanted && path_matches(binding.path(), path)
+    })
+}
+
+/// Whether `actual` is an instance of the `{param}`-carrying `template`.
+fn path_matches(template: &str, actual: &str) -> bool {
+    let mut wanted = template.split('/');
+    let mut given = actual.split('/');
+    loop {
+        match (wanted.next(), given.next()) {
+            (None, None) => return true,
+            (Some(want), Some(give)) if segment_matches(want, give) => {}
+            _ => return false,
+        }
+    }
+}
+
+/// One path segment, which is either a literal, a bare `{param}`, or a
+/// `{param}` followed by a literal suffix.
+fn segment_matches(template: &str, actual: &str) -> bool {
+    let Some(rest) = template.strip_prefix('{') else {
+        return template == actual;
+    };
+    let Some((_, suffix)) = rest.split_once('}') else {
+        // An unterminated brace is not a parameter; compare it literally rather
+        // than treating a malformed template as a wildcard.
+        return template == actual;
+    };
+    // A parameter never matches nothing: `/v1/jobs/` is not `/v1/jobs/{job_id}`.
+    actual.len() > suffix.len() && actual.ends_with(suffix)
+}
 
 /// The facade's routes, built from [`ROUTES`].
 ///

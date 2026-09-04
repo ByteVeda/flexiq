@@ -27,6 +27,7 @@ pub mod facade;
 pub mod health;
 pub mod limits;
 pub mod listener;
+pub mod metrics;
 pub mod pb;
 pub mod producer;
 pub mod reflection;

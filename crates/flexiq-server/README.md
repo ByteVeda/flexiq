@@ -62,6 +62,19 @@ grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
 ```
 
+### Scraping it
+
+`GET /metrics` is served on this listener too, as plain HTTP, in the Prometheus
+text format — because a release that enables only the gRPC role has no dashboard
+listener to scrape. It carries the same storage gauges the dashboard publishes
+plus `flexiq_grpc_requests_total` and `flexiq_grpc_request_duration_seconds`,
+labelled by RPC and by which door carried the call. Any valid token opens it;
+neither scope is required over the other.
+
+```bash
+curl -H "authorization: Bearer $FLEXIQ_TOKEN" http://localhost:50051/metrics
+```
+
 ### The same RPCs over plain HTTP
 
 The producer service is also served as JSON on that same listener, so a client

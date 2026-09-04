@@ -76,7 +76,11 @@ pub fn requirement(path: &str) -> Requirement {
     } else if path.starts_with(EXECUTOR) {
         Requirement::Scoped(Scope::Execute)
     } else {
-        // Reflection lands here, as does anything unrouted.
+        // Reflection lands here, as does `/metrics` and anything unrouted.
+        // `/metrics` wants exactly this and not a scope: an operational read is
+        // not a data door, but it is still a read of one tenant's state, and a
+        // scraper is as likely to hold an `execute` credential as a `produce`
+        // one.
         Requirement::Authenticated
     }
 }
@@ -113,6 +117,16 @@ mod tests {
                 "path: {path}"
             );
         }
+    }
+
+    /// A scraper reads one tenant's state, so it presents a credential — but
+    /// no particular one, because a scrape is not a produce and not an execute.
+    #[test]
+    fn the_metrics_path_needs_a_credential_of_either_scope() {
+        assert_eq!(
+            requirement(crate::grpc::metrics::METRICS_PATH),
+            Requirement::Authenticated
+        );
     }
 
     #[test]

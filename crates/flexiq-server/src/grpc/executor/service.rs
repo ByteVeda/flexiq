@@ -132,6 +132,15 @@ impl ExecutorDoor {
             .max_encoding_message_size(EXECUTOR_MAX_MESSAGE_BYTES)
     }
 
+    /// What the attached executors advertise, for the `/metrics` gauges.
+    ///
+    /// The door is where the dispatcher reaches this listener at all — nothing
+    /// else on it holds one — so the gauges the dashboard publishes are only
+    /// reachable here.
+    pub fn capacity(&self) -> flexiq_core::Capacity {
+        self.dispatcher.capacity()
+    }
+
     /// The live sessions, for tests and for a leak check.
     pub fn sessions(&self) -> &Arc<SessionRegistry> {
         &self.sessions
