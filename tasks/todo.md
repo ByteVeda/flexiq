@@ -6,8 +6,8 @@ Branch `fix/unique-key-namespace-scope`, off `master` at `dc5ceab3`. Plan:
 ## Done
 
 - [x] Add `test_unique_key_dedup_is_namespace_scoped` to
-      `tests/rust/storage_tests.rs`, confirm it fails on SQLite pre-fix
-      (reproduces #773).
+      `crates/flexiq-core/tests/rust/storage_tests.rs`, confirm it fails on
+      SQLite pre-fix (reproduces #773).
 - [x] `crates/flexiq-core/migrations/m0017_unique_key_namespace.rs` — drop +
       recreate `idx_jobs_unique_key` over `(COALESCE(namespace, ''), unique_key)`.
 - [x] `diesel_common/jobs.rs` — scope the 3 unique_key lookups (initial check,
