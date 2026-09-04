@@ -33,10 +33,21 @@ function openQueue(): { queue: Queue; dbPath: string } {
 }
 
 describe("contract floor", () => {
-  it("leaves an unraised floor unwritten", () => {
-    // Opening never writes, so a deployment that leaves the dial alone carries
-    // no row for it.
+  it("records the level that created the database", () => {
+    // Creating the schema is the one moment the floor moves on its own: a
+    // database that did not exist has no older process to lock out, and this
+    // is what lets durable steps work without an operator finding the dial.
     const { queue } = openQueue();
+    expect(queue.getSetting(CONTRACT_FLOOR_SETTING)).not.toBeNull();
+    expect(queue.minContract()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("leaves an unraised floor unwritten", () => {
+    // A database an earlier release created carries no row, and opening never
+    // adds one — the dial stays the operator's on an existing deployment.
+    const { queue } = openQueue();
+    queue.deleteSetting(CONTRACT_FLOOR_SETTING);
+
     expect(queue.getSetting(CONTRACT_FLOOR_SETTING)).toBeNull();
     expect(queue.minContract()).toBeGreaterThanOrEqual(1);
   });
