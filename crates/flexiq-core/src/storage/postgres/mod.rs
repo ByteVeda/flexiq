@@ -133,12 +133,18 @@ impl PostgresStorage {
         ))
         .execute(&mut conn)?;
 
-        let applied = crate::storage::migrate::run_postgres(
-            &mut conn,
-            "schema_migrations",
-            &crate::storage::migrations::all(),
-        )?;
+        let migrations = crate::storage::migrations::all();
+        let applied =
+            crate::storage::migrate::run_postgres(&mut conn, "schema_migrations", &migrations)?;
         drop(conn);
+
+        // A schema that did not exist before this call has no older process
+        // reading it, so recording this build's level locks nobody out — and it
+        // is what lets durable steps work for a new deployment without an
+        // operator first discovering the dial.
+        if crate::storage::migrate::created_the_schema(&applied, &migrations) {
+            crate::contract::seed_floor_for_new_deployment(self)?;
+        }
 
         // Drain any pre-existing terminal jobs left in `jobs` by older
         // versions into `archived_jobs`. Terminal jobs now live there from the

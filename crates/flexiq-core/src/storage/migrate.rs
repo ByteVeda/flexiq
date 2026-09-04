@@ -341,6 +341,29 @@ pub fn run_postgres(
     run_generic(conn, Backend::Postgres, tracking_table, migrations)
 }
 
+/// Whether this run is the one that created the schema, rather than one that
+/// caught an existing database up.
+///
+/// Migrations apply in ascending `version()` order and each is recorded, so a
+/// run whose first applied version is the registry's earliest is a run that
+/// found an empty ledger — which is a database nothing was reading a moment
+/// ago. That distinction is what lets a fresh deployment seed its contract
+/// floor without ever raising one over a live peer's head; see
+/// [`crate::contract::seed_floor_for_new_deployment`].
+pub fn created_the_schema(applied: &[String], migrations: &[Box<dyn Migration>]) -> bool {
+    let Some(first_applied) = applied.first() else {
+        return false;
+    };
+    // The registry arrives in discovery order, not version order — the
+    // migrator sorts it for itself, so this asks for the minimum rather than
+    // trusting position.
+    migrations
+        .iter()
+        .map(|migration| migration.version())
+        .min()
+        .is_some_and(|earliest| first_applied == earliest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +377,41 @@ mod tests {
     fn applied(conn: &mut SqliteConnection) -> Vec<String> {
         conn.load_versions(&select_versions_sql("schema_migrations", Backend::Sqlite))
             .expect("read ledger")
+    }
+
+    /// A registry entry that only has to answer `version()`.
+    struct Named(&'static str);
+
+    impl Migration for Named {
+        fn version(&self) -> &'static str {
+            self.0
+        }
+
+        fn up(&self, _backend: Backend) -> Vec<Stmt> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn only_a_run_starting_at_the_earliest_migration_created_the_schema() {
+        // Discovery order, deliberately not version order: `build.rs` makes no
+        // promise about it and the migrator sorts for itself.
+        let registry: Vec<Box<dyn Migration>> = vec![
+            Box::new(Named("0003_c")),
+            Box::new(Named("0001_a")),
+            Box::new(Named("0002_b")),
+        ];
+        let version = |v: &str| v.to_string();
+
+        assert!(created_the_schema(
+            &[version("0001_a"), version("0002_b"), version("0003_c")],
+            &registry
+        ));
+        // An existing database being caught up — the case that must never seed
+        // a floor, because a live peer may be reading it.
+        assert!(!created_the_schema(&[version("0003_c")], &registry));
+        // Already current: nothing applied, nothing created.
+        assert!(!created_the_schema(&[], &registry));
     }
 
     #[test]

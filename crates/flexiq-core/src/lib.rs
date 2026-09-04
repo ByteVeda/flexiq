@@ -39,8 +39,8 @@ pub mod worker;
 pub use diesel;
 
 pub use contract::{
-    ensure_contract_supported, min_contract, set_min_contract, CONTRACT_VERSION,
-    MIN_CONTRACT_VERSION,
+    ensure_contract_supported, ensure_steps_allowed, min_contract, seed_floor_for_new_deployment,
+    set_min_contract, CONTRACT_VERSION, MIN_CONTRACT_VERSION, STEPS_CONTRACT_LEVEL,
 };
 pub use error::{QueueError, Result, StepDivergence};
 pub use job::{now_millis, Job, JobCompletion, JobStatus, NewJob};

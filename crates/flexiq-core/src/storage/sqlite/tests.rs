@@ -1545,10 +1545,14 @@ fn test_setting_delete() {
 #[test]
 fn test_setting_list_returns_all() {
     let storage = test_storage();
+    // A migrated storage already carries the contract floor its creation
+    // seeded, so the count is taken against that rather than against zero —
+    // this asserts the listing filters nothing, not that the table was empty.
+    let seeded = storage.list_settings().unwrap().len();
     storage.set_setting("a", "1").unwrap();
     storage.set_setting("b", "2").unwrap();
     let all = storage.list_settings().unwrap();
-    assert_eq!(all.len(), 2);
+    assert_eq!(all.len(), seeded + 2);
     assert_eq!(all.get("a"), Some(&"1".to_string()));
     assert_eq!(all.get("b"), Some(&"2".to_string()));
 }
