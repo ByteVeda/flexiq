@@ -7,9 +7,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowNodeStatus {
     /// The node exists but has not been picked up — it is either waiting on a
-    /// predecessor or waiting for a caller to create its job.
+    /// predecessor or waiting for a caller to create its job. A node that *is*
+    /// runnable is still `Pending`: readiness is a predicate over the DAG, not a
+    /// stored status, and `get_ready_workflow_nodes` selects on this variant.
     Pending,
-    /// Every predecessor is `Completed`, so the node may run now.
+    /// Reserved, and never written. No code path persists it, so a runnable node
+    /// stays `Pending`; readers that match on status group this with `Pending`.
     Ready,
     /// The node's job (or its gate/sub-workflow equivalent) is in flight.
     Running,
