@@ -7,6 +7,6 @@
     "executor": "flexiq executor worker.mjs"
   },
   "dependencies": {
-    "@byteveda/flexiq": "1.0.0"
+    "@byteveda/flexiq": "1.1.0"
   }
 }

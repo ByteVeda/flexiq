@@ -20,9 +20,9 @@ your platform (`linux-x86_64`, `linux-aarch64`, `osx-x86_64`, `osx-aarch64`,
 
 ```kotlin
 // Gradle
-implementation("org.byteveda:flexiq:1.0.0")
-runtimeOnly("org.byteveda:flexiq:1.0.0:linux-x86_64") // native library for your platform
-annotationProcessor("org.byteveda:flexiq-processor:1.0.0") // compile-time TaskHandler bindings
+implementation("org.byteveda:flexiq:1.1.0")
+runtimeOnly("org.byteveda:flexiq:1.1.0:linux-x86_64") // native library for your platform
+annotationProcessor("org.byteveda:flexiq-processor:1.1.0") // compile-time TaskHandler bindings
 ```
 
 To pick the classifier automatically, use the
@@ -32,7 +32,7 @@ To pick the classifier automatically, use the
 plugins { id("com.google.osdetector") version "1.7.3" }
 
 dependencies {
-    runtimeOnly("org.byteveda:flexiq:1.0.0:${osdetector.classifier}")
+    runtimeOnly("org.byteveda:flexiq:1.1.0:${osdetector.classifier}")
 }
 ```
 
@@ -51,12 +51,12 @@ dependencies {
 <dependency>
   <groupId>org.byteveda</groupId>
   <artifactId>flexiq</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
 </dependency>
 <dependency>
   <groupId>org.byteveda</groupId>
   <artifactId>flexiq</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <classifier>${os.detected.classifier}</classifier>
   <scope>runtime</scope>
 </dependency>
@@ -81,7 +81,7 @@ than loading a binary built for a different one.
       <path>
         <groupId>org.byteveda</groupId>
         <artifactId>flexiq-processor</artifactId>
-        <version>1.0.0</version>
+        <version>1.1.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>
