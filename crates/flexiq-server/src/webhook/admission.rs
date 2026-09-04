@@ -14,9 +14,13 @@ use serde_json::Value;
 /// An `AdmissionReview` arriving from the API server.
 #[derive(Debug, Deserialize)]
 pub struct AdmissionReview {
+    /// Envelope version, kept so the response can echo the one that was sent.
     #[serde(rename = "apiVersion")]
     pub api_version: Option<String>,
+    /// Envelope kind, echoed for the same reason as `api_version`.
     pub kind: Option<String>,
+    /// The request being reviewed; absent on a review the API server sends
+    /// with no work in it.
     pub request: Option<AdmissionRequest>,
 }
 
@@ -36,22 +40,29 @@ pub struct AdmissionRequest {
 /// The response half.
 #[derive(Debug, Serialize)]
 pub struct AdmissionReviewResponse {
+    /// Envelope version copied from the request, or `admission.k8s.io/v1`.
     #[serde(rename = "apiVersion")]
     pub api_version: String,
+    /// Envelope kind copied from the request, or `AdmissionReview`.
     pub kind: String,
+    /// The verdict itself.
     pub response: AdmissionResponse,
 }
 
 /// The verdict for one request.
 #[derive(Debug, Serialize)]
 pub struct AdmissionResponse {
+    /// The `uid` of the request being answered, which the API server matches on.
     pub uid: String,
+    /// Whether the pod is admitted.
     pub allowed: bool,
+    /// Encoding of `patch`; always `"JSONPatch"`, and set only when there is one.
     #[serde(rename = "patchType", skip_serializing_if = "Option::is_none")]
     pub patch_type: Option<String>,
     /// Base64 of the RFC 6902 patch, which is how the API expects it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch: Option<String>,
+    /// Why the pod was refused; set only on a denial.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AdmissionStatus>,
 }
@@ -60,7 +71,9 @@ pub struct AdmissionResponse {
 /// the only place an operator learns a annotation was wrong.
 #[derive(Debug, Serialize)]
 pub struct AdmissionStatus {
+    /// HTTP status the API server reports the refusal under.
     pub code: u16,
+    /// The reason, in the words the operator will read.
     pub message: String,
 }
 

@@ -29,6 +29,8 @@ use crate::grpc::pb;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Enqueue {
+    /// The registered task to run, `taskName` on the wire. Whether it names a
+    /// task the workers know is the shared handler's question, not this one's.
     #[serde(default, alias = "task_name")]
     pub task_name: String,
     /// The `raw` arm of `body`: the payload envelope, base64.
@@ -37,6 +39,8 @@ pub struct Enqueue {
     /// The `structured` arm of `body`.
     #[serde(default)]
     pub structured: Option<Structured>,
+    /// The producer-settable knobs on the job. Omitting the block takes the
+    /// server's default for every one of them.
     #[serde(default)]
     pub options: Option<Options>,
 }
@@ -73,6 +77,8 @@ impl Enqueue {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EnqueueBatch {
+    /// The jobs to enqueue, each the shape a single `POST /v1/jobs` body takes.
+    /// Omitting the key is a batch of nothing rather than an error.
     #[serde(default)]
     pub items: Vec<Enqueue>,
 }
@@ -94,8 +100,11 @@ impl EnqueueBatch {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Structured {
+    /// The positional arguments, in order. Omitting the key sends none.
     #[serde(default)]
     pub args: Vec<JsonValue>,
+    /// The keyword arguments, by name. A `BTreeMap` because the protobuf map
+    /// behind it is unordered anyway — key order does not survive this door.
     #[serde(default)]
     pub kwargs: BTreeMap<String, JsonValue>,
 }
@@ -117,28 +126,50 @@ impl Structured {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Options {
+    /// The queue to enqueue on. Empty — which is also what omitting it means —
+    /// selects the server's default queue.
     #[serde(default)]
     pub queue: String,
+    /// Dispatch priority; higher runs first. Omitting it enqueues at `0`.
     #[serde(default)]
     pub priority: i32,
+    /// Attempts after the first, `maxRetries` on the wire. Omitting it is `0`:
+    /// the job is not retried.
     #[serde(default, alias = "max_retries")]
     pub max_retries: i32,
+    /// When the job becomes eligible to run, RFC 3339 under `scheduledAt`.
+    /// Omitting it runs the job as soon as a worker takes it.
     #[serde(default, alias = "scheduled_at")]
     pub scheduled_at: Option<JsonTimestamp>,
+    /// How long one attempt may run before the scheduler reclaims the job, a
+    /// duration such as `"30s"`. Omitting it takes the server's default.
     #[serde(default)]
     pub timeout: Option<JsonDuration>,
+    /// Dedupe key against the caller's own still-active jobs, `uniqueKey` on
+    /// the wire. Omitting it enqueues unconditionally.
     #[serde(default, alias = "unique_key")]
     pub unique_key: Option<String>,
+    /// Opaque JSON text carried on the job, byte-preserved rather than
+    /// re-encoded. Omitting it attaches none.
     #[serde(default)]
     pub metadata: Option<String>,
+    /// Free prose stored alongside the job for whoever reads it later.
     #[serde(default)]
     pub notes: Option<String>,
+    /// Ids of the jobs this one waits on, `dependsOn` on the wire. An empty
+    /// list makes the job eligible straight away.
     #[serde(default, alias = "depends_on")]
     pub depends_on: Vec<String>,
+    /// The instant after which the job is cancelled instead of dispatched,
+    /// `expiresAt`. Omitting it lets the job wait indefinitely.
     #[serde(default, alias = "expires_at")]
     pub expires_at: Option<JsonTimestamp>,
+    /// How long the result is kept after the job completes, `resultTtl`.
+    /// Omitting it falls back to the deployment's retention policy.
     #[serde(default, alias = "result_ttl")]
     pub result_ttl: Option<JsonDuration>,
+    /// Collapse a burst of enqueues sharing one key into a single run. Omitting
+    /// the block enqueues every call.
     #[serde(default)]
     pub debounce: Option<Debounce>,
 }
@@ -166,14 +197,25 @@ impl Options {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Debounce {
+    /// The key the burst shares; enqueues carrying it share one window.
     #[serde(default)]
     pub key: String,
+    /// How far ahead of now each enqueue pushes the pending run. Optional only
+    /// to the parser — a block without one is refused downstream.
     #[serde(default)]
     pub window: Option<JsonDuration>,
+    /// The ceiling on total delay, measured from the pending job's creation,
+    /// `maxWait` on the wire. Without it a producer that never stops enqueuing
+    /// starves the job, so the shared handler requires it too.
     #[serde(default, alias = "max_wait")]
     pub max_wait: Option<JsonDuration>,
+    /// Overwrite the pending job's body with this call's, `replacePayload`.
+    /// Omitting it keeps the payload the window opened with.
     #[serde(default, alias = "replace_payload")]
     pub replace_payload: bool,
+    /// The producer's own admission cap for the target queue, `maxPending`. An
+    /// `int64`, so a string is accepted as well as a number; omitting it counts
+    /// nothing.
     #[serde(default, alias = "max_pending")]
     pub max_pending: Option<JsonInt64>,
 }
@@ -194,8 +236,12 @@ impl Debounce {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetJob {
+    /// Send the job's payload back, `includePayload=true`. Off by default: a
+    /// payload is the largest thing a job carries and most readers skip it.
     #[serde(default, alias = "include_payload")]
     pub include_payload: bool,
+    /// Send the job's return value back, `includeResult=true`. Off by default
+    /// for the same reason the payload switch is.
     #[serde(default, alias = "include_result")]
     pub include_result: bool,
 }
@@ -218,12 +264,19 @@ pub struct ListJobs {
     /// The `JobStatus` name, as it is spelled in the enum.
     #[serde(default)]
     pub status: Option<String>,
+    /// Keep only the jobs on this queue; omitting it lists every queue.
     #[serde(default)]
     pub queue: Option<String>,
+    /// Keep only the jobs running this task, `taskName=`; omitting it lists
+    /// every task.
     #[serde(default, alias = "task_name")]
     pub task_name: Option<String>,
+    /// Rows per page, `pageSize=`. Omitting it takes the server's default, and
+    /// the server may return fewer rows or cap a large value.
     #[serde(default, alias = "page_size")]
     pub page_size: Option<i32>,
+    /// The `nextPageToken` from the previous response, `pageToken=`. Opaque —
+    /// pass it back and read nothing out of it; omitting it starts at page one.
     #[serde(default, alias = "page_token")]
     pub page_token: Option<String>,
 }
@@ -246,14 +299,21 @@ impl ListJobs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SubmitWorkflow {
+    /// The workflow's name. Every submission is version 1 of it, so resending a
+    /// name with a graph that differs from the stored one is refused.
     #[serde(default)]
     pub name: String,
+    /// The graph to run. The one required key on this body: a submission with
+    /// no `graph` is refused by the parser rather than submitted empty.
     pub graph: Graph,
+    /// Opaque JSON text attached to the run, `paramsJson`, byte-preserved. Data
+    /// the run carries, never a call a task receives.
     #[serde(default, alias = "params_json")]
     pub params_json: Option<String>,
 }
 
 impl SubmitWorkflow {
+    /// The request message, or the reason a node in the graph could not be read.
     pub fn into_message(self) -> Result<pb::SubmitWorkflowRequest, String> {
         Ok(pb::SubmitWorkflowRequest {
             name: self.name,
@@ -267,10 +327,16 @@ impl SubmitWorkflow {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Graph {
+    /// The steps the workflow has, by name only; what each one runs lives in
+    /// the matching `nodeConfigs` entry.
     #[serde(default)]
     pub nodes: Vec<GraphNode>,
+    /// The dependencies between those steps. No edges is a graph whose nodes
+    /// are all immediately eligible.
     #[serde(default)]
     pub edges: Vec<GraphEdge>,
+    /// One configuration per non-empty node, `nodeConfigs` on the wire and
+    /// matched to a node by name. A node left without one is refused downstream.
     #[serde(default, alias = "node_configs")]
     pub node_configs: Vec<NodeConfig>,
 }
@@ -304,6 +370,7 @@ impl Graph {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GraphNode {
+    /// The name the edges and the node's own configuration refer to it by.
     #[serde(default)]
     pub name: String,
 }
@@ -312,8 +379,10 @@ pub struct GraphNode {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GraphEdge {
+    /// The node that has to complete before the edge is satisfied.
     #[serde(default)]
     pub from: String,
+    /// The node this edge makes eligible once `from` completes.
     #[serde(default)]
     pub to: String,
 }
@@ -322,34 +391,60 @@ pub struct GraphEdge {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct NodeConfig {
+    /// The node this configures, matching a `nodes` entry in the same graph.
     #[serde(default)]
     pub name: String,
+    /// The registered task the node runs, `taskName` on the wire.
     #[serde(default, alias = "task_name")]
     pub task_name: String,
+    /// The queue the node's job is enqueued on. Omitting it, like sending an
+    /// empty string, takes the default queue.
     #[serde(default)]
     pub queue: Option<String>,
+    /// The `raw` arm of the node's `body`: the payload envelope, base64.
     #[serde(default)]
     pub raw: Option<JsonBytes>,
+    /// The `structured` arm of the node's `body`.
     #[serde(default)]
     pub structured: Option<Structured>,
+    /// Attempts after the first for this node's job, `maxRetries`. Omitting it
+    /// leaves the retry count to the server.
     #[serde(default, alias = "max_retries")]
     pub max_retries: Option<i32>,
+    /// How long one attempt of this node may run. Omitting it takes the
+    /// server's default timeout.
     #[serde(default)]
     pub timeout: Option<JsonDuration>,
+    /// Dispatch priority for this node's job; higher runs first. Omitting it
+    /// leaves the priority unset.
     #[serde(default)]
     pub priority: Option<i32>,
+    /// The `EdgeCondition` gating this node, by enum name — for instance
+    /// `EDGE_CONDITION_ON_SUCCESS`. Omitting it reads as "always".
     #[serde(default)]
     pub condition: Option<String>,
+    /// A pause for an external decision before the node runs. Setting it at all
+    /// is refused: nothing behind the producer door drives a gate yet.
     #[serde(default)]
     pub gate: Option<Gate>,
+    /// Memoization of the node's result across submissions. Refused for the
+    /// same reason `gate` is — no cache hit is resolvable from this door.
     #[serde(default)]
     pub cache: Option<Cache>,
+    /// Runtime expansion into one job per item, `fanOut`. Refused: expanding a
+    /// node at runtime needs the live tracker this door does not have.
     #[serde(default, alias = "fan_out")]
     pub fan_out: Option<FanOut>,
+    /// Collection of a fan-out's expanded results, `fanIn`. Refused alongside
+    /// the fan-out it would collect.
     #[serde(default, alias = "fan_in")]
     pub fan_in: Option<FanIn>,
+    /// A child workflow run as part of this node, `subWorkflow`. Refused for
+    /// the same reason the other four runtime features are.
     #[serde(default, alias = "sub_workflow")]
     pub sub_workflow: Option<SubWorkflow>,
+    /// The task to run if a saga rolls this node back — a task name, never
+    /// JSON. Omitting it leaves the node with no compensation.
     #[serde(default)]
     pub compensate: Option<String>,
 }
@@ -401,10 +496,14 @@ impl NodeConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Gate {
+    /// How long the gate waits for a decision. Omitting it waits indefinitely.
     #[serde(default)]
     pub timeout: Option<JsonDuration>,
+    /// What the gate does when that wait elapses, by `OnTimeout` enum name —
+    /// `ON_TIMEOUT_APPROVE` or `ON_TIMEOUT_REJECT`, `onTimeout` on the wire.
     #[serde(default, alias = "on_timeout")]
     pub on_timeout: Option<String>,
+    /// Prose shown to whoever decides the gate.
     #[serde(default)]
     pub message: Option<String>,
 }
@@ -429,6 +528,7 @@ impl Gate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Cache {
+    /// How long the memoized result stays usable. Omitting it caches forever.
     #[serde(default)]
     pub ttl: Option<JsonDuration>,
 }
@@ -445,6 +545,8 @@ impl Cache {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FanOut {
+    /// The node whose result supplies the items to expand over, `itemsFrom`.
+    /// Omitting it infers the single predecessor structurally.
     #[serde(default, alias = "items_from")]
     pub items_from: Option<String>,
 }
@@ -461,6 +563,7 @@ impl FanOut {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FanIn {
+    /// The fan-out node whose expanded results this node collects.
     #[serde(default)]
     pub from: String,
 }
@@ -475,11 +578,17 @@ impl FanIn {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SubWorkflow {
+    /// The child workflow's name.
     #[serde(default)]
     pub name: String,
+    /// Which version of that child definition to run.
     #[serde(default)]
     pub version: i32,
+    /// The child's own graph, recursively the same shape as the parent's. The
+    /// one required key here, as it is on a top-level submission.
     pub graph: Graph,
+    /// Nodes of `graph` whose job is not pre-enqueued at submission,
+    /// `deferredNodeNames`; a tracker creates each one once its gate resolves.
     #[serde(default, alias = "deferred_node_names")]
     pub deferred_node_names: Vec<String>,
 }
