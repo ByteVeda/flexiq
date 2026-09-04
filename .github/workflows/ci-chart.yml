@@ -128,9 +128,15 @@ jobs:
                   continue
               container = doc["spec"]["template"]["spec"]["containers"][0]
               env = {e["name"] for e in container.get("env", [])}
+              tunables = {
+                  "FLEXIQ_GRPC_KEEPALIVE_INTERVAL",
+                  "FLEXIQ_GRPC_REQUEST_TIMEOUT",
+                  "FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS",
+              }
               print(sorted(container["livenessProbe"]),
                     sorted(container["readinessProbe"]),
-                    "FLEXIQ_GRPC_TOKEN" in env)
+                    "FLEXIQ_GRPC_TOKEN" in env,
+                    tunables <= env)
           '
           }
           modern="$(grpc_only)"
@@ -138,10 +144,12 @@ jobs:
           echo "1.24+: $modern"
           echo "pre-1.24: $legacy"
           # The `False` is the point: tokens live in the database now, so the
-          # pod must carry no gRPC credential in its environment at all.
-          [ "$modern" = "['tcpSocket'] ['grpc'] False" ] \
-            || { echo "::error::readiness must use the grpc probe and liveness the socket, with no token in env"; exit 1; }
-          [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False" ] \
+          # pod must carry no gRPC credential in its environment at all. The
+          # trailing `True` is the listener tunables — a chart value nothing
+          # emits is a knob an operator turns with no effect.
+          [ "$modern" = "['tcpSocket'] ['grpc'] False True" ] \
+            || { echo "::error::readiness must use the grpc probe and liveness the socket, with no token in env and the listener tunables set"; exit 1; }
+          [ "$legacy" = "['tcpSocket'] ['tcpSocket'] False True" ] \
             || { echo "::error::grpc.healthProbe=false must fall readiness back to the socket"; exit 1; }
 
       # The regression this exists for: `genCA` is random, so a helper called
