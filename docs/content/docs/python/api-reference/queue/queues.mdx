@@ -351,4 +351,7 @@ rows its contract never described.
   the failure surfaces at its next restart — an old worker looks healthy right
   up to the deploy that replaces it. A level this build does not itself speak is
   rejected, since writing it would lock the caller out of its own storage.
+
+  **Durable steps require level 2** and are refused below it. A database this
+  release created is already there; one an earlier release created is not.
 </Callout>
