@@ -19,9 +19,57 @@ their entries below keep that name.
 
 Two things a queue could not do before: checkpoint work *inside* a job, and be reached by a
 process that has no FlexiQ binding at all. No public API was removed or renamed in the Python,
-Node or Java SDKs; the one breaking change is a `Storage` trait method, and it reaches only an
-out-of-tree implementor. Seven migrations run on first start and one of them changes how
-`unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
+Node or Java SDKs. The Rust crates are a different matter — `flexiq-core` and `flexiq-workflows`
+carry source-breaking changes under a minor version, enumerated under
+[Breaking (Rust crates)](#breaking-rust-crates). Seven migrations run on first start and one of
+them changes how `unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
+
+### Breaking (Rust crates)
+
+Only `flexiq-core` and `flexiq-workflows` are affected, and only a Rust program that depends on
+either directly. The Python, Node and Java APIs are unchanged, and so is every wire format —
+frames are keyed by name, not by position or discriminant.
+
+**The version number does not announce this.** These crates go out as 1.1.0 rather than 2.0.0
+because they have no third-party dependents on crates.io, and the alternative was withdrawing
+durable steps, the dispatch lease and the debounce cap to keep the 1.0.0 surface. If you depend
+on either crate, pin the exact version rather than a `1.0` range.
+
+`Storage` trait:
+
+- `enqueue_unique_reporting` and `enqueue_unique_batch_reporting` are new required methods. They
+  return whether the enqueue deduplicated, which the producer door has to answer on the wire and
+  which is not computable above the backend — the job's id is generated inside the insert, so a
+  caller has no candidate to compare against. The existing names stay as one-line wrappers, so a
+  backend still has one implementation.
+- `reschedule` gained a third parameter, `namespace: Option<&str>`. A step sleep reschedules with
+  an id that reached the queue through task code, so the call had to become scoped.
+
+New public fields, which break an exhaustive struct literal:
+
+- `Dispatch.lease`, `DeadJob.origin_job_id`, `DebounceOptions.max_pending`,
+  `ExecutorConfig.capabilities`, `ExecutorConfig.step_ack_timeout`, `RemoteConfig.step_workers`,
+  `RemoteConfig.step_capacity`.
+- `lease` on `ExecutorMessage::{Progress, TaskLog, Success, Failure, Cancelled}` and on
+  `SchedulerMessage::Job`.
+
+Newly `#[non_exhaustive]` — a `match` now needs a `_` arm, and a literal no longer constructs:
+
+- Enums `ExecutorMessage`, `SchedulerMessage`, `JobResult`, `ResultOutcome`.
+- Structs `AttachedExecutor`, `WorkerInfo`, `WorkerRegistration`.
+- Variant `ExecutorMessage::Hello`.
+
+New variants on enums that were exhaustive in 1.0.0:
+
+- `QueueError::{QueueFull, ClaimLost, StepDiverged, StepSequenceDiverged, StepLimitExceeded,
+  StepRefused}`.
+- `WorkflowError::InvalidStepMetadata`, split out so a malformed step payload from a caller no
+  longer reports as a storage fault.
+
+Changed discriminants, which reach only a numeric cast:
+
+- `SchedulerMessage::Cancel` 2 → 4 and `SchedulerMessage::Shutdown` 3 → 5, from two variants
+  landing mid-enum.
 
 ### Added
 
@@ -73,14 +121,6 @@ out-of-tree implementor. Seven migrations run on first start and one of them cha
 - **`GET /metrics` is served on the gRPC listener**, so a release that enables only the gRPC
   role has a scrape target. It carries the dashboard's storage gauges plus per-RPC call counts
   and latencies.
-- **BREAKING (Rust core): `Storage` gained `enqueue_unique_reporting` and
-  `enqueue_unique_batch_reporting`**, both required. They return whether the enqueue
-  deduplicated, which the producer door has to answer on the wire and which is not computable
-  above the backend — the job's id is generated inside the insert, so a caller has no candidate
-  to compare against. The existing names stay as one-line wrappers, so a backend still has one
-  implementation. Only an out-of-tree implementor of the trait is affected; the Python, Node and
-  Java APIs are unchanged.
-
 ### Fixed
 
 - **`unique_key` deduplicated across namespaces.** A tenant enqueueing a key another tenant had
