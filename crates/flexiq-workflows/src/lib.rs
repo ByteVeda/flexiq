@@ -14,9 +14,12 @@
 //!   [`WorkflowSqliteStorage`] plus Postgres and Redis behind their features.
 //!   Its handle carries the namespace, so no method takes one.
 //! - [`lifecycle`] holds the parts that are neither storage nor graph and would
-//!   otherwise be copied into every SDK. `submit_workflow` — validate every
-//!   node, write the run, pre-enqueue what has no unmet dependency — lives
-//!   there so the Python binding and the gRPC producer share one path.
+//!   otherwise be copied into every SDK. `submit_workflow` — validate the nodes
+//!   that need a payload, write the run, pre-enqueue each remaining node with
+//!   its `depends_on` so the queue gates it — lives there so the Python binding
+//!   and the gRPC producer share one path. A cache-hit or deferred node is
+//!   neither validated nor enqueued: the first already has its result and the
+//!   second is not this submission's to place.
 //! - [`topology`] answers what may run next.
 //!
 //! Marking a node's result stays with each SDK on purpose: it is driven by a
