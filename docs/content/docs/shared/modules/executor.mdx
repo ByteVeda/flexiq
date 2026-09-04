@@ -93,7 +93,10 @@ job that never reaches it.
 Java's `--serializer` (or `FLEXIQ_SERIALIZER`) picks the payload wire format:
 `json` (default) or `cbor` for a task produced or consumed by another SDK — it
 has no application `main` to set this the way a Python or Node executor's
-imported module can.
+imported module can. `cbor` needs
+`com.fasterxml.jackson.dataformat:jackson-dataformat-cbor` on the executor's
+runtime classpath, the same optional dependency `CborSerializer` needs
+anywhere else it's used.
 
 A job an executor is **already running** is never sent to it a second time. Every
 frame an executor sends back names a job by id and nothing else, so two attempts
