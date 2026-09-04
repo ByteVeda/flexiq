@@ -24,15 +24,28 @@
 //! `sea_query` statement.
 //!
 //! Idempotent: `.if_exists()` on the drop, `IF NOT EXISTS` on the raw create.
+//!
+//! A `COALESCE(namespace, …)` index term isn't a bare column reference, so
+//! (unlike `idx_jobs_unique_key`'s original, all-bare-column form) SQLite
+//! resolves every term in the index — including the bare `unique_key` one —
+//! eagerly at `CREATE INDEX` time rather than deferring. `unique_key` has
+//! been part of the schema since `m0001`, so no real database can lack it,
+//! but the `ADD COLUMN` below costs nothing on one that does and one line to
+//! avoid depending on which SQLite index-validation path a caller's schema
+//! happens to hit.
 
-use sea_query::{Alias, Index};
+use sea_query::{Alias, ColumnDef, Index};
 
-use crate::storage::migrate::{ddl, raw_ddl, Backend, Migration, Stmt};
+use crate::storage::migrate::{add_column, ddl, raw_ddl, Backend, Migration, Stmt};
 
 pub struct M0017UniqueKeyNamespace;
 
 fn t(name: &str) -> Alias {
     Alias::new(name)
+}
+
+fn col(name: &str) -> ColumnDef {
+    ColumnDef::new(Alias::new(name))
 }
 
 /// Same partial predicate as `m0001`'s original index
@@ -50,6 +63,7 @@ impl Migration for M0017UniqueKeyNamespace {
 
     fn up(&self, b: Backend) -> Vec<Stmt> {
         vec![
+            add_column(b, "jobs", col("unique_key").text()),
             ddl(
                 b,
                 &Index::drop()
@@ -77,6 +91,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
+        assert!(rendered.contains("ADD COLUMN \"unique_key\""), "{rendered}");
         assert!(rendered.contains("DROP INDEX"), "{rendered}");
         assert!(rendered.contains("idx_jobs_unique_key"), "{rendered}");
         assert!(
