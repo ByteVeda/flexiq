@@ -16,9 +16,19 @@ from flexiq._flexiq import reserved_setting_prefixes
 CONTRACT_FLOOR_SETTING = "contract:min_sdk"
 
 
+def test_a_new_database_records_the_level_that_created_it(queue: Queue) -> None:
+    # Creating the schema is the one moment the floor moves on its own: a
+    # database that did not exist has no older process to lock out, and this is
+    # what lets durable steps work without an operator first finding the dial.
+    assert queue.get_setting(CONTRACT_FLOOR_SETTING) is not None
+    assert queue.min_contract() >= 1
+
+
 def test_an_unraised_floor_is_the_permissive_default(queue: Queue) -> None:
-    # Opening never writes, so a deployment that leaves the dial alone carries
-    # no row for it.
+    # A database an earlier release created carries no row, and opening never
+    # adds one — the dial stays the operator's on an existing deployment.
+    queue.delete_setting(CONTRACT_FLOOR_SETTING)
+
     assert queue.get_setting(CONTRACT_FLOOR_SETTING) is None
     assert queue.min_contract() >= 1
 

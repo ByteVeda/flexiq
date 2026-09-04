@@ -52,10 +52,15 @@ def test_delete_setting(queue: Queue) -> None:
 
 
 def test_list_settings_returns_all(queue: Queue) -> None:
+    # The raw surface is unrestricted, so it also carries the contract floor a
+    # new database records at creation. Asserted as a superset rather than an
+    # exact dict: this is about the listing filtering nothing, and the
+    # dashboard's own handler is what hides the reserved keys.
+    seeded = queue.list_settings()
     queue.set_setting("a", "1")
     queue.set_setting("b", "2")
     snapshot = queue.list_settings()
-    assert snapshot == {"a": "1", "b": "2"}
+    assert snapshot == {**seeded, "a": "1", "b": "2"}
 
 
 def test_setting_preserves_unicode(queue: Queue) -> None:
@@ -169,6 +174,30 @@ def test_settings_api_hides_published_retention(
 
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         client.put("/api/settings/retention:effective:default", {"value": "{}"})
+    assert exc_info.value.code == 400
+
+
+def test_settings_api_hides_the_contract_floor(
+    dashboard_server: tuple[AuthedClient, Queue],
+) -> None:
+    """``contract:`` decides which builds may join, so it is not a dashboard row.
+
+    It now exists on every database this release creates rather than only on one
+    an operator has raised, which is what makes the filter worth pinning: a floor
+    editable through the generic KV surface is one a browser session can lower.
+    """
+    client, queue = dashboard_server
+    assert queue.get_setting("contract:min_sdk") is not None
+
+    snapshot = client.get("/api/settings")
+    assert not any(k.startswith("contract:") for k in snapshot)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        client.get("/api/settings/contract:min_sdk")
+    assert exc_info.value.code == 404
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        client.put("/api/settings/contract:min_sdk", {"value": "1"})
     assert exc_info.value.code == 400
 
 
