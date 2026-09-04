@@ -7,6 +7,7 @@
 //! Each JNI entry point lives in the private `queue` module and is named
 //! `Java_org_byteveda_flexiq_internal_NativeQueue_<method>` so the JVM links it
 //! to the matching `native` method on the `NativeQueue` Java class.
+#![deny(missing_docs)]
 
 mod attached_steps;
 mod backend;

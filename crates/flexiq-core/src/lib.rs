@@ -1,5 +1,8 @@
 #![doc = include_str!("../README.md")]
-#![warn(missing_docs)]
+// `deny`, not `warn`: rustdoc's own lints are gated in CI, but `missing_docs` is
+// a rustc lint no CI flag turns on, so the crate has to gate itself or the
+// coverage silently rots back down.
+#![deny(missing_docs)]
 
 /// The contract level a deployment requires, and the floor that enforces it.
 pub mod contract;
