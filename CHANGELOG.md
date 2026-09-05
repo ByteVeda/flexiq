@@ -8,6 +8,66 @@ underlying Rust crates are released together, in lock-step.
 Releases up to and including 0.23.0 were published under the project's former name, Taskito, and
 their entries below keep that name.
 
+## 2.0.0
+
+Removes two public items in `flexiq-workflows` that were documented, exported, and dead. Both were
+kept in 1.1.0 because removing either is breaking; this is the major release that does it.
+
+**1.1.0 was prepared but never tagged.** Everything under [1.1.0](#110) below ships as part of this
+release — durable steps, the gRPC server role, debounced enqueue and the rest — and its
+[Upgrading](#upgrading-to-110) notes still apply. Read them alongside
+[Upgrading](#upgrading-to-200).
+
+### Removed
+
+- **`WorkflowNode::fan_in_data`**, and the `workflow_nodes.fan_in_data` column behind it. Nothing
+  ever wrote either: collected fan-in results reach the fan-in job as its *arguments*, so the
+  payload travels with the job rather than through a node row. Unrelated to `StepMetadata::fan_in`,
+  the definition-time `{from}` marker, which is unaffected.
+- **`WorkflowNodeStatus::Ready`**, and the `READY` member mirroring it in the Python and Java
+  `NodeStatus` enums, the dashboard's `WorkflowNodeStatus` union, and the documented node-status
+  tables. No build persisted it — a runnable node stays `pending`, because readiness is a predicate
+  over the DAG evaluated by `get_ready_workflow_nodes`, not a stored status. Code that grouped
+  `ready` with `pending` (the only correct reading) needs no change; code that matched `ready`
+  alone was already dead.
+
+### Added
+
+- `flexiq_core::storage::migrate::drop_column`, the mirror of `add_column`: `DROP COLUMN IF EXISTS`
+  on Postgres, and a plain `DROP COLUMN` on SQLite whose missing-column error is tolerated.
+
+### Changed
+
+- `CONTRACT_VERSION` and `MIN_CONTRACT_VERSION` are both **2**. Level 1 was every schema change up
+  to now, all of them expand-only; dropping a column is the first that is not, so level 1 is no
+  longer a level this build interoperates with rather than merely an older one.
+  `set_min_contract(1)` is refused for that reason.
+
+### Upgrading to 2.0.0
+
+One migration runs on first start: `m0004_workflow_drop_fan_in_data` drops
+`workflow_nodes.fan_in_data`. It is fast — no table rewrite on either backend, and the column
+carries no index — but it is **one-way, and not backwards compatible**. A 1.x process still names
+the column in every workflow-node `SELECT`, so once a database has been migrated a 1.x worker fails
+on *every* read of `workflow_nodes`, not only on rows the new build wrote.
+
+So, unlike 1.1.0, do not run 1.x and 2.0.0 workers against the same database. Upgrade every
+process, then write the floor so a stray old one refuses to start rather than failing mid-read. A
+1.x build reads the key, sees a level it does not speak, and exits; leaving the key unset means it
+starts and fails on its first node read instead.
+
+```python
+queue.set_min_contract(2)
+```
+
+Redis deployments are unaffected by the migration — the backend is schemaless, and a stale
+`fan_in_data` hash field on an existing node key is simply ignored.
+
+If you consume the crates directly: `WorkflowNode` has one fewer field, so struct literals over it
+need one fewer initializer, and a `match` over `WorkflowNodeStatus` needs one fewer arm.
+`WorkflowNodeStatus::from_str_val("ready")` now returns `None`, which the storage layer already
+resolves to `Pending`.
+
 ## 1.1.0
 
 Two things a queue could not do before: checkpoint work *inside* a job, and be reached by a
