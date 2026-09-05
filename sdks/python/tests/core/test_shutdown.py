@@ -2,6 +2,7 @@
 
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from conftest import join_worker
@@ -77,5 +78,60 @@ def test_shutdown_stops_worker(queue: Queue, poll_until: PollUntil) -> None:
 
 
 def test_shutdown_without_worker_is_noop(queue: Queue) -> None:
-    """shutdown() on a queue with no running worker does nothing."""
+    """shutdown() on a queue with no running worker affects nothing running."""
     queue.shutdown()  # must not raise
+
+
+def test_shutdown_requested_before_the_loop_starts_is_not_lost(tmp_path: Path) -> None:
+    """A stop that lands during startup must survive into the run.
+
+    ``run_worker`` used to clear the flag as its first act, so a request made
+    while its Python half was still registering schedules and building the
+    registry was erased — and the worker then ignored it and never returned,
+    which no join budget can bound. Requesting the stop before the thread even
+    exists is the same window, made deterministic.
+    """
+    queue = Queue(db_path=str(tmp_path / "early.db"), workers=1)
+
+    @queue.task(name="noop")
+    def noop() -> None: ...
+
+    queue.shutdown()
+
+    worker_thread = threading.Thread(target=queue.run_worker, daemon=True)
+    worker_thread.start()
+    join_worker(worker_thread, message="a stop requested during startup was discarded")
+
+
+def test_one_shutdown_stops_every_worker_on_the_queue(
+    tmp_path: Path, poll_until: PollUntil
+) -> None:
+    """Sibling runs share the flag, so the first one out must not disarm the rest.
+
+    One ``Queue`` can run several ``run_worker`` calls at once, each over its
+    own queue list. They share a single shutdown flag, so a worker that clears
+    it on its way out leaves any sibling that had not yet polled it running with
+    no request to find.
+    """
+    queue = Queue(db_path=str(tmp_path / "siblings.db"), workers=1)
+
+    @queue.task(name="on_alpha", queue="alpha")
+    def on_alpha() -> None: ...
+
+    @queue.task(name="on_beta", queue="beta")
+    def on_beta() -> None: ...
+
+    threads = [
+        threading.Thread(target=queue.run_worker, kwargs={"queues": [q]}, daemon=True)
+        for q in ("alpha", "beta")
+    ]
+    for thread in threads:
+        thread.start()
+    poll_until(
+        lambda: len(queue.workers()) == 2, timeout=30, message="both workers never registered"
+    )
+
+    queue.shutdown()
+
+    for thread in threads:
+        join_worker(thread, message="a sibling worker was disarmed by the first one out")
