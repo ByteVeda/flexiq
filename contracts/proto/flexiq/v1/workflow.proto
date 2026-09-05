@@ -225,12 +225,21 @@ message WorkflowRun {
 
 // Status of one node within a run.
 //
-// One-to-one with `WorkflowNodeStatus` in crates/flexiq-workflows/src/node.rs,
-// offset by one the same way WorkflowState is.
+// One-to-one with `WorkflowNodeStatus` in crates/flexiq-workflows/src/node.rs.
+// The numbers were the core's discriminants offset by one until READY was
+// removed in 2.0.0; they are wire values now, so the mapping is the explicit
+// table in grpc/producer/convert.rs and nothing may be renumbered to restore
+// the arithmetic.
 enum WorkflowNodeStatus {
+  // 2 was WORKFLOW_NODE_STATUS_READY, removed in 2.0.0. No server ever emitted
+  // it: a runnable node reports PENDING, because readiness is a predicate over
+  // the DAG rather than a stored status.
+  reserved 2;
+
+  reserved "WORKFLOW_NODE_STATUS_READY";
+
   WORKFLOW_NODE_STATUS_UNSPECIFIED = 0;
   WORKFLOW_NODE_STATUS_PENDING = 1;
-  WORKFLOW_NODE_STATUS_READY = 2;
   WORKFLOW_NODE_STATUS_RUNNING = 3;
   WORKFLOW_NODE_STATUS_COMPLETED = 4;
   WORKFLOW_NODE_STATUS_FAILED = 5;

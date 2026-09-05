@@ -263,7 +263,6 @@ export type WorkflowState =
 
 export type WorkflowNodeStatus =
   | "pending"
-  | "ready"
   | "running"
   | "completed"
   | "failed"

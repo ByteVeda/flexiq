@@ -11,9 +11,6 @@ pub enum WorkflowNodeStatus {
     /// runnable is still `Pending`: readiness is a predicate over the DAG, not a
     /// stored status, and `get_ready_workflow_nodes` selects on this variant.
     Pending,
-    /// Reserved, and never written. No code path persists it, so a runnable node
-    /// stays `Pending`; readers that match on status group this with `Pending`.
-    Ready,
     /// The node's job (or its gate/sub-workflow equivalent) is in flight.
     Running,
     /// The node's job finished successfully.
@@ -45,7 +42,6 @@ impl WorkflowNodeStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
-            Self::Ready => "ready",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -63,7 +59,6 @@ impl WorkflowNodeStatus {
     pub fn from_str_val(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
-            "ready" => Some(Self::Ready),
             "running" => Some(Self::Running),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),

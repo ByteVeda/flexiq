@@ -954,10 +954,7 @@ fn cascade_skip_pending(
     namespace: Option<&str>,
 ) {
     for node in nodes {
-        if !matches!(
-            node.status,
-            WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready
-        ) {
+        if !matches!(node.status, WorkflowNodeStatus::Pending) {
             continue;
         }
         if let Some(job_id) = &node.job_id {

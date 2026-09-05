@@ -525,7 +525,7 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeWorkflows_cancelW
         let wf = queue.workflow_store()?;
         for node in &wf.get_workflow_nodes(&run_id)? {
             match node.status {
-                WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready => {
+                WorkflowNodeStatus::Pending => {
                     if let Some(job_id) = &node.job_id {
                         let _ = queue.storage.cancel_job(job_id, queue.namespace.as_deref());
                     }
@@ -1391,10 +1391,7 @@ fn cascade_skip_pending(
     nodes: &[WorkflowNode],
 ) {
     for node in nodes {
-        if !matches!(
-            node.status,
-            WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready
-        ) {
+        if !matches!(node.status, WorkflowNodeStatus::Pending) {
             continue;
         }
         if let Some(job_id) = &node.job_id {

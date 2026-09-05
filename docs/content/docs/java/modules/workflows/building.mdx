@@ -80,17 +80,16 @@ an immutable `Step`.
 ## Node status lifecycle
 
 Every step's `NodeStatus` moves through this lifecycle. Most steps only ever
-see `PENDING → READY → RUNNING → COMPLETED`/`FAILED`; gates, fan-out, cached,
+see `PENDING → RUNNING → COMPLETED`/`FAILED`; gates, fan-out, cached,
 and saga-compensated steps take the other branches.
 
 <Mermaid
   chart={`stateDiagram-v2
     [*] --> PENDING
-    PENDING --> READY: predecessors settle
     PENDING --> SKIPPED: condition unmet / predecessor skipped
-    READY --> RUNNING: worker claims the job
-    READY --> WAITING_APPROVAL: gate node parks
-    READY --> CACHE_HIT: cache hit (task not re-run)
+    PENDING --> RUNNING: worker claims the job
+    PENDING --> WAITING_APPROVAL: gate node parks
+    PENDING --> CACHE_HIT: cache hit (task not re-run)
     RUNNING --> COMPLETED: handler succeeds
     RUNNING --> FAILED: retries exhausted
     WAITING_APPROVAL --> COMPLETED: approveGate
@@ -108,8 +107,7 @@ and saga-compensated steps take the other branches.
 
 | Status | Terminal | Meaning |
 |---|---|---|
-| `PENDING` | No | Waiting on predecessors (or, for an entry step, immediately eligible). |
-| `READY` | No | Predecessors settled; the step's job exists but no worker has claimed it yet. |
+| `PENDING` | No | Waiting on predecessors, or runnable but not yet claimed. Readiness is computed from the DAG, so a runnable step is still `PENDING`. |
 | `RUNNING` | No | A worker claimed the job and is executing the handler. |
 | `COMPLETED` | Yes | The task succeeded. |
 | `FAILED` | Yes | The task failed after retries were exhausted, a gate was rejected, or a sub-workflow's child run failed. |

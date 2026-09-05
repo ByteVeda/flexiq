@@ -103,11 +103,10 @@ purely static.
 <Mermaid
   chart={`stateDiagram-v2
     [*] --> pending
-    pending --> ready: predecessors settle
     pending --> skipped: condition unmet / predecessor skipped
-    ready --> running: worker claims the job
-    ready --> waiting_approval: gate node parks
-    ready --> cache_hit: cache hit (task not re-run)
+    pending --> running: worker claims the job
+    pending --> waiting_approval: gate node parks
+    pending --> cache_hit: cache hit (task not re-run)
     running --> completed: handler succeeds
     running --> failed: retries exhausted
     waiting_approval --> completed: approveGate
@@ -125,8 +124,7 @@ purely static.
 
 | Status | Terminal | Meaning |
 |---|:---:|---|
-| `pending` | No | Waiting on predecessors. |
-| `ready` | No | Predecessors settled; the job exists but no worker has claimed it. |
+| `pending` | No | Waiting on predecessors, or runnable but not yet claimed. Readiness is computed from the DAG, so a runnable node is still `pending`. |
 | `running` | No | A worker claimed the job and is executing the handler. |
 | `completed` | Yes | The task succeeded. |
 | `failed` | Yes | Retries were exhausted, a gate was rejected, or a child run failed. |

@@ -6,10 +6,12 @@ import java.util.Locale;
 
 /** Status of a single node within a workflow run. Wire form is the lowercase name. */
 public enum NodeStatus {
-    /** Waiting on a predecessor. */
+    /**
+     * The node has not been picked up yet — waiting on a predecessor, or waiting for its job to be
+     * created. A node that is runnable is still {@code PENDING}: readiness is a predicate over the
+     * DAG, not a stored status.
+     */
     PENDING,
-    /** Predecessors settled; the node's job is enqueued. */
-    READY,
     /** A worker is running the node's job. */
     RUNNING,
     /** The node finished successfully. */

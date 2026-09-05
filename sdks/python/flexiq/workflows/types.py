@@ -78,7 +78,6 @@ class NodeStatus(str, enum.Enum):
     """Status of a single workflow node (step)."""
 
     PENDING = "pending"
-    READY = "ready"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"

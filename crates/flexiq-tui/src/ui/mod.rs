@@ -234,7 +234,7 @@ pub(crate) fn wf_node_style(status: WorkflowNodeStatus) -> Style {
         WorkflowNodeStatus::Skipped => Color::DarkGray,
         WorkflowNodeStatus::Compensated => Color::Magenta,
         WorkflowNodeStatus::WaitingApproval => Color::Yellow,
-        WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready => Color::Gray,
+        WorkflowNodeStatus::Pending => Color::Gray,
     };
     Style::default().fg(color)
 }

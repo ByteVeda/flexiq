@@ -12,7 +12,6 @@ _STATUS_COLORS_MERMAID = {
     "pending": "#D3D3D3",
     "skipped": "#F5F5F5",
     "waiting_approval": "#FFFACD",
-    "ready": "#E0E0E0",
 }
 
 _STATUS_COLORS_DOT = {
@@ -22,7 +21,6 @@ _STATUS_COLORS_DOT = {
     "pending": "lightgray",
     "skipped": "whitesmoke",
     "waiting_approval": "lightyellow",
-    "ready": "gainsboro",
 }
 
 _STATUS_SYMBOLS = {
