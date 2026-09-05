@@ -107,10 +107,47 @@ pnpm --dir docs dev
 Then open http://localhost:3000. To validate before opening a PR:
 
 ```bash
-pnpm --dir docs types:check
+pnpm --dir docs typecheck
 pnpm --dir docs lint
 pnpm --dir docs build
 ```
+
+## Releasing
+
+All SDKs ship in lock-step off one version, held in `[workspace.package]` of the root
+`Cargo.toml`. Never hand-edit a version literal — `node scripts/version.mjs --set X.Y.Z` rewrites
+the source and every mirror, and `--check` gates CI.
+
+Publishing is driven entirely by tags. There are five namespaces, one per registry, each with its
+own workflow:
+
+| Registry | Tag | Workflow |
+| --- | --- | --- |
+| PyPI | `X.Y.Z` | `publish-py.yml` |
+| crates.io | `crates-vX.Y.Z` | `publish-crates.yml` |
+| npm | `node-vX.Y.Z` | `publish-node.yml` |
+| Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
+| GHCR (server image) | `server-vX.Y.Z` | `publish-server.yml` |
+
+```bash
+git tag X.Y.Z crates-vX.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z
+git push origin --tags
+```
+
+Four things are easy to get wrong:
+
+- **The tag patterns are exact-match globs.** A near miss like `crates-X.Y.Z` matches no workflow
+  and fails silently — no run, no error, nothing published.
+- **`publish-py.yml` also matches `vX.Y.Z`**, but every historical Python tag is bare. Keep it bare.
+- **A crates.io version can be yanked but never replaced**, and PyPI is the same. Cut `crates-v*`
+  first, while the registries that can be redone are still ahead of you. A bad `X.Y.Z` becomes
+  `X.Y.Z+1`; there is no re-push.
+- **Creating the GitHub Release by hand first is fine.** Each workflow guards its own
+  `gh release create` behind a `gh release view` check and skips when one exists, and its
+  `Create git tag` step only runs for `workflow_dispatch`.
+
+Each workflow re-verifies the tag against `scripts/version.mjs --current` in preflight, so a
+mistagged release fails before it builds rather than shipping something wrong.
 
 ## Questions?
 
