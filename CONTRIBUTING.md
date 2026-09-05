@@ -107,10 +107,67 @@ pnpm --dir docs dev
 Then open http://localhost:3000. To validate before opening a PR:
 
 ```bash
-pnpm --dir docs types:check
+pnpm --dir docs typecheck
 pnpm --dir docs lint
 pnpm --dir docs build
 ```
+
+## Releasing
+
+All SDKs ship in lock-step off one version, held in `[workspace.package]` of the root
+`Cargo.toml`. Never hand-edit a version literal — `node scripts/version.mjs --set X.Y.Z` rewrites
+the source and every mirror, and `--check` gates CI.
+
+The standard publishing path is tag-driven: five tag namespaces, one per registry, each with its
+own workflow. Every one of them also accepts `workflow_dispatch` with a `version` input, which is
+the fallback when a tag has already been cut or a single registry needs a retry — crates.io 1.0.0
+went up that way.
+
+| Registry | Tag | Workflow |
+| --- | --- | --- |
+| PyPI | `X.Y.Z` | `publish-py.yml` |
+| crates.io | `crates-vX.Y.Z` | `publish-crates.yml` |
+| npm | `node-vX.Y.Z` | `publish-node.yml` |
+| Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
+| GHCR (server image) | `server-vX.Y.Z` | `publish-server.yml` |
+
+One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
+once is `fatal: too many arguments` and creates none of them:
+
+```bash
+git tag X.Y.Z
+git tag crates-vX.Y.Z
+git tag node-vX.Y.Z
+git tag java-vX.Y.Z
+git tag server-vX.Y.Z
+git tag -l          # all five there? a failed tag is silent otherwise
+```
+
+Push them by name, and push `crates-v*` on its own first. `git push origin --tags` is the wrong
+instrument twice over: it sends every local tag, including any stale one that never belonged to
+this release, and it starts all five workflows at once — which throws away the crates.io-first
+ordering below.
+
+```bash
+git push origin crates-vX.Y.Z
+# wait for publish-crates.yml to go green
+git push origin X.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z
+```
+
+Four things are easy to get wrong:
+
+- **The tag patterns are exact-match globs.** A near miss like `crates-X.Y.Z` matches no workflow
+  and fails silently — no run, no error, nothing published.
+- **`publish-py.yml` also matches `vX.Y.Z`**, but every historical Python tag is bare. Keep it bare.
+- **A crates.io version can be yanked but never replaced**, and PyPI is the same. That is why
+  `crates-v*` goes first and alone: if it fails, the registries that can still be redone are ahead
+  of you rather than behind. A bad `X.Y.Z` becomes `X.Y.Z+1`; there is no re-push.
+- **Creating the GitHub Release by hand first is fine.** Each workflow guards its own
+  `gh release create` behind a `gh release view` check and skips when one exists, and its
+  `Create git tag` step only runs for `workflow_dispatch`.
+
+Each workflow re-verifies the tag against `scripts/version.mjs --current` in preflight, so a
+mistagged release fails before it builds rather than shipping something wrong.
 
 ## Questions?
 
