@@ -2,10 +2,15 @@
 //!
 //! Every peer's last gossiped [`WorkerInfo`] and its [`MemberState`], plus the
 //! [`crate::ring::HashRing`] derived from the live ones. **Two `RwLock`s, not
-//! one** — the membership map and the ring are locked separately, so a reader
-//! that takes both sees two moments rather than one atomic view. Nothing here
-//! needs them to agree: the ring is an affinity hint, and a placement made
-//! against a member the map has since buried is still a valid placement.
+//! one** — a *reader* takes only what it needs, so one that consults both sees
+//! two moments rather than one atomic view. Nothing here needs them to agree:
+//! the ring is an affinity hint, and a placement made against a member the map
+//! has since buried is still a valid placement.
+//!
+//! A *writer* is held to more than that. Every one takes `members` first and
+//! keeps it while it writes the ring, so no two membership transitions can
+//! interleave and strand a non-alive member on the ring. Nothing acquires them
+//! the other way round, which is what makes that order safe to require.
 //!
 //! Beliefs, not facts: a peer marked dead here is a peer this node stopped
 //! hearing from, and the queue rows it was holding are the stuck-job reaper's
@@ -137,18 +142,27 @@ impl MeshState {
         let was_alive = previous
             .map(|m| m.state == MemberState::Alive)
             .unwrap_or(false);
-        drop(members);
 
+        // `members` stays held across the ring write, so the map and the ring
+        // cannot disagree about a transition that is still in progress. Dropping
+        // it first would let a concurrent `demote` remove the worker between the
+        // two, and this call would then add it back — leaving a non-alive member
+        // on the ring with nothing left to take it off.
+        //
         // Guarded, so the routine case — a peer refreshing its load every
         // protocol period — neither rewrites the ring nor counts as churn.
-        if was_alive != is_alive {
+        let changed = was_alive != is_alive;
+        if changed {
             let mut ring = self.ring.write().unwrap_or_else(|p| p.into_inner());
             if is_alive {
                 ring.add_worker(&worker_id);
             } else {
                 ring.remove_worker(&worker_id);
             }
-            drop(ring);
+        }
+        drop(members);
+
+        if changed {
             self.count_ring_change();
         }
         is_new
