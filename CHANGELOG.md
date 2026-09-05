@@ -10,90 +10,35 @@ their entries below keep that name.
 
 ## 2.0.0
 
-Removes two public items in `flexiq-workflows` that were documented, exported, and dead. Both were
-kept in 1.1.0 because removing either is breaking; this is the major release that does it.
+Three things a queue could not do before: checkpoint work *inside* a job, be reached by a process
+that has no FlexiQ binding at all, and shed or debounce work it should not queue. Plus the removal
+of two public items in `flexiq-workflows` that were documented, exported, and dead.
 
-**1.1.0 was prepared but never tagged.** Everything under [1.1.0](#110) below ships as part of this
-release — durable steps, the gRPC server role, debounced enqueue and the rest — and its
-[Upgrading](#upgrading-to-110) notes still apply. Read them alongside
-[Upgrading](#upgrading-to-200).
+This is the first release since 1.0.0. There is no 1.1.0 on any registry — one was prepared and
+merged, but the version was never tagged and everything in it ships here instead. Read
+[Upgrading](#upgrading-to-200) before rolling: eight migrations run on first start, one changes how
+`unique_key` deduplicates, and one drops a column, which is what makes this a major rather than a
+minor.
 
-### Removed
+### Breaking
 
-- **`WorkflowNode::fan_in_data`**, and the `workflow_nodes.fan_in_data` column behind it. Nothing
-  ever wrote either: collected fan-in results reach the fan-in job as its *arguments*, so the
-  payload travels with the job rather than through a node row. Unrelated to `StepMetadata::fan_in`,
-  the definition-time `{from}` marker, which is unaffected.
-- **`WorkflowNodeStatus::Ready`**, and the `READY` member mirroring it in the Python and Java
-  `NodeStatus` enums, the dashboard's `WorkflowNodeStatus` union, and the documented node-status
-  tables. No build persisted it — a runnable node stays `pending`, because readiness is a predicate
-  over the DAG evaluated by `get_ready_workflow_nodes`, not a stored status. Code that grouped
-  `ready` with `pending` (the only correct reading) needs no change; code that matched `ready`
-  alone was already dead.
+Most of this reaches only a Rust program depending on `flexiq-core` or `flexiq-workflows` directly.
+Two items do not, and they are why the version number moves: the Python and Java `NodeStatus` enums
+lose a member, and the wire loses an enum value.
 
-### Added
+**SDKs and the wire:**
 
-- `flexiq_core::storage::migrate::drop_column`, the mirror of `add_column`: `DROP COLUMN IF EXISTS`
-  on Postgres, and a plain `DROP COLUMN` on SQLite whose missing-column error is tolerated.
+- `NodeStatus.READY` is gone from the Python and Java enums, and `"ready"` from the dashboard's
+  `WorkflowNodeStatus` union. See [Removed](#removed) for why it never meant anything.
+- `WORKFLOW_NODE_STATUS_READY` is gone from `flexiq.v1.WorkflowNodeStatus`. Number `2` is
+  `reserved` rather than reused, so nothing a client already holds changes meaning — but a proto3
+  JSON client that sends that name by hand now gets a parse error. No server ever emitted it.
+- `workflow_nodes.fan_in_data` is dropped by a migration. A 1.x process cannot read the table
+  afterwards; see [Upgrading](#upgrading-to-200).
+- `CONTRACT_VERSION` and `MIN_CONTRACT_VERSION` are both **2**, so `set_min_contract(1)` is now
+  refused.
 
-### Changed
-
-- `CONTRACT_VERSION` and `MIN_CONTRACT_VERSION` are both **2**. Level 1 was every schema change up
-  to now, all of them expand-only; dropping a column is the first that is not, so level 1 is no
-  longer a level this build interoperates with rather than merely an older one.
-  `set_min_contract(1)` is refused for that reason.
-
-### Upgrading to 2.0.0
-
-One migration runs on first start: `m0004_workflow_drop_fan_in_data` drops
-`workflow_nodes.fan_in_data`. What that costs depends on the backend. Postgres only marks the
-column dropped in the catalog, so it returns at once, though it takes an `ACCESS EXCLUSIVE` lock on
-`workflow_nodes` while it does. SQLite has no such shortcut: its `DROP COLUMN` rewrites the table's
-content row by row, so on a large `workflow_nodes` the first start pauses for as long as that
-takes. Neither backend has an index on the column to rebuild.
-
-It is also **one-way, and not backwards compatible**. A 1.x process still names the column in every
-workflow-node `SELECT`, so once a database has been migrated a 1.x worker fails on *every* read of
-`workflow_nodes`, not only on rows the new build wrote.
-
-So, unlike 1.1.0, do not run 1.x and 2.0.0 workers against the same database. Upgrade every
-process, then write the floor so a stray old one refuses to start rather than failing mid-read. A
-1.x build reads the key, sees a level it does not speak, and exits; leaving the key unset means it
-starts and fails on its first node read instead.
-
-```python
-queue.set_min_contract(2)
-```
-
-Redis deployments are unaffected by the migration — the backend is schemaless, and a stale
-`fan_in_data` hash field on an existing node key is simply ignored.
-
-If you consume the crates directly: `WorkflowNode` has one fewer field, so struct literals over it
-need one fewer initializer, and a `match` over `WorkflowNodeStatus` needs one fewer arm.
-`WorkflowNodeStatus::from_str_val("ready")` now returns `None`, which the storage layer already
-resolves to `Pending`.
-
-## 1.1.0
-
-Two things a queue could not do before: checkpoint work *inside* a job, and be reached by a
-process that has no FlexiQ binding at all. No public API was removed or renamed in the Python,
-Node or Java SDKs. The Rust crates are a different matter — `flexiq-core` and `flexiq-workflows`
-carry source-breaking changes under a minor version, enumerated under
-[Breaking (Rust crates)](#breaking-rust-crates). Seven migrations run on first start and one of
-them changes how `unique_key` deduplicates, so read [Upgrading](#upgrading-to-110) first.
-
-### Breaking (Rust crates)
-
-Only `flexiq-core` and `flexiq-workflows` are affected, and only a Rust program that depends on
-either directly. The Python, Node and Java APIs are unchanged, and so is every wire format —
-frames are keyed by name, not by position or discriminant.
-
-**The version number does not announce this.** These crates go out as 1.1.0 rather than 2.0.0
-because they have no third-party dependents on crates.io, and the alternative was withdrawing
-durable steps, the dispatch lease and the debounce cap to keep the 1.0.0 surface. If you depend
-on either crate, pin the exact version rather than a `1.0` range.
-
-`Storage` trait:
+**`Storage` trait:**
 
 - `enqueue_unique_reporting` and `enqueue_unique_batch_reporting` are new required methods. They
   return whether the enqueue deduplicated, which the producer door has to answer on the wire and
@@ -132,8 +77,23 @@ Changed discriminants, which reach only a numeric cast:
 - `SchedulerMessage::Cancel` 2 → 4 and `SchedulerMessage::Shutdown` 3 → 5, from two variants
   landing mid-enum.
 
+### Removed
+
+- **`WorkflowNode::fan_in_data`**, and the `workflow_nodes.fan_in_data` column behind it. Nothing
+  ever wrote either: collected fan-in results reach the fan-in job as its *arguments*, so the
+  payload travels with the job rather than through a node row. Unrelated to `StepMetadata::fan_in`,
+  the definition-time `{from}` marker, which is unaffected.
+- **`WorkflowNodeStatus::Ready`**, and the `READY` member mirroring it in the Python and Java
+  `NodeStatus` enums, the dashboard's `WorkflowNodeStatus` union, and the documented node-status
+  tables. No build persisted it — a runnable node stays `pending`, because readiness is a predicate
+  over the DAG evaluated by `get_ready_workflow_nodes`, not a stored status. Code that grouped
+  `ready` with `pending` (the only correct reading) needs no change; code that matched `ready`
+  alone was already dead.
+
 ### Added
 
+- `flexiq_core::storage::migrate::drop_column`, the mirror of `add_column`: `DROP COLUMN IF EXISTS`
+  on Postgres, and a plain `DROP COLUMN` on SQLite whose missing-column error is tolerated.
 - **Durable steps.** `ctx.step.run` / `ctx.step.sleep` in Python and Node, `ctx.step().run` /
   `ctx.step().sleep` in Java, all backed by a `job_steps` table. A retried job replays the steps
   that already committed instead of re-running them, which is what makes a task that charges a
@@ -172,6 +132,11 @@ Changed discriminants, which reach only a numeric cast:
 
 ### Changed
 
+- **The contract level is 2**, for both `CONTRACT_VERSION` and `MIN_CONTRACT_VERSION`. Level 1 was
+  every schema change up to now, all of them expand-only; dropping a column is the first that is
+  not, so level 1 is no longer a level this build interoperates with rather than merely an older
+  one. Both constants move together — the floor a fresh deployment reports has to be a level the
+  build actually speaks.
 - **The `.proto` files are stable.** They carried an `UNSTABLE` banner until the release that
   first shipped the gRPC role. Field numbers, field names and RPC shapes are permanent from
   here.
@@ -182,6 +147,7 @@ Changed discriminants, which reach only a numeric cast:
 - **`GET /metrics` is served on the gRPC listener**, so a release that enables only the gRPC
   role has a scrape target. It carries the dashboard's storage gauges plus per-RPC call counts
   and latencies.
+
 ### Fixed
 
 - **`unique_key` deduplicated across namespaces.** A tenant enqueueing a key another tenant had
@@ -206,33 +172,59 @@ Changed discriminants, which reach only a numeric cast:
 - **The dashboard compared worker registries across queue groups** rather than within one, so
   unrelated workers were reported as divergent.
 
-### Upgrading to 1.1.0
+### Upgrading to 2.0.0
 
-**Seven migrations run on first start**, `m0011` through `m0017`. All are expand-only — they add
-columns, tables and indexes and drop no data — so an older worker keeps running against a
-migrated database and a rollback needs no down-migration:
+**Eight migrations run on first start**, across the two ledgers. Seven are core schema (`m0011`
+through `m0017`, tracked in `schema_migrations`); the eighth is workflow schema (`m0004`, tracked
+in `workflow_schema_migrations`):
 
-| Migration | Adds |
+| Migration | Does |
 |---|---|
-| `m0011_dlq_shed` | A shed flag on dead-letter entries, so shed work is not auto-retried |
-| `m0012_worker_registry_fingerprint` | Each worker's task-registry fingerprint |
-| `m0013_job_steps` | The `job_steps` table durable steps commit into |
-| `m0014_dead_letter_origin` | The run a dead-lettered job belongs to |
-| `m0015_dead_letter_job_metadata` | The job's own metadata on a dead-letter row |
-| `m0016_claim_epoch` | The epoch an execution claim was won under, for the dispatch lease |
-| `m0017_unique_key_namespace` | `idx_jobs_unique_key`, rebuilt to be namespace-scoped |
+| `m0011_dlq_shed` | Adds a shed flag on dead-letter entries, so shed work is not auto-retried |
+| `m0012_worker_registry_fingerprint` | Adds each worker's task-registry fingerprint |
+| `m0013_job_steps` | Adds the `job_steps` table durable steps commit into |
+| `m0014_dead_letter_origin` | Adds the run a dead-lettered job belongs to |
+| `m0015_dead_letter_job_metadata` | Adds the job's own metadata on a dead-letter row |
+| `m0016_claim_epoch` | Adds the epoch an execution claim was won under, for the dispatch lease |
+| `m0017_unique_key_namespace` | Rebuilds `idx_jobs_unique_key` to be namespace-scoped |
+| `m0004_workflow_drop_fan_in_data` | **Drops** `workflow_nodes.fan_in_data` |
 
-**One of them changes observable behaviour.** `m0017` drops and recreates `idx_jobs_unique_key`
-over `(namespace IS NULL, COALESCE(namespace, ''), unique_key)`, so a `unique_key` now
-deduplicates **within one namespace** instead of across all of them. That was a cross-tenant
-bug — a tenant enqueueing a key another tenant had used got that tenant's job back and never
-created its own — but a deployment that relied on the old reach has to key on something
-namespace-independent instead. A deployment with a single namespace, or none, sees no change.
-Recreating the index takes a table scan; on a large `jobs` table the first start pauses for it.
+The first seven are expand-only — they add columns, tables and indexes and drop no data. The
+eighth is not, and it is the one that decides your rollout order.
 
-Nothing else requires action. Payload markers, the worker frame protocol version and the
-`CONTRACT_VERSION` floor are all unchanged from 1.0.0, so 1.0.x and 1.1.0 workers may share a
-queue while you roll.
+**`m0004` is one-way and not backwards compatible.** A 1.x process names `fan_in_data` in every
+workflow-node `SELECT`, so once a database has been migrated a 1.x worker fails on *every* read of
+`workflow_nodes`, not only on rows the new build wrote. Do not run 1.x and 2.0.0 workers against
+the same database. Upgrade every process, then write the floor, so a stray old one refuses to start
+rather than failing mid-read — it reads the key, sees a level it does not speak, and exits, whereas
+leaving the key unset means it starts and fails on its first node read:
+
+```python
+queue.set_min_contract(2)
+```
+
+What the drop itself costs depends on the backend. Postgres only marks the column dropped in the
+catalog, so it returns at once, though it takes an `ACCESS EXCLUSIVE` lock on `workflow_nodes`
+while it does. SQLite has no such shortcut: its `DROP COLUMN` rewrites the table's content row by
+row, so on a large `workflow_nodes` the first start pauses for as long as that takes. Neither
+backend has an index on the column to rebuild. Redis is schemaless and runs nothing — a stale
+`fan_in_data` hash field on an existing node key is simply ignored.
+
+**`m0017` changes observable behaviour.** It drops and recreates `idx_jobs_unique_key` over
+`(namespace IS NULL, COALESCE(namespace, ''), unique_key)`, so a `unique_key` now deduplicates
+**within one namespace** instead of across all of them. That was a cross-tenant bug — a tenant
+enqueueing a key another tenant had used got that tenant's job back and never created its own — but
+a deployment that relied on the old reach has to key on something namespace-independent instead. A
+deployment with a single namespace, or none, sees no change. Recreating the index takes a table
+scan; on a large `jobs` table the first start pauses for it.
+
+Payload markers and the worker frame protocol version are unchanged from 1.0.0. The contract floor
+is not: it moves to 2, which is the mechanism above.
+
+If you consume the crates directly: `WorkflowNode` has one fewer field, so struct literals over it
+need one fewer initializer, and a `match` over `WorkflowNodeStatus` needs one fewer arm.
+`WorkflowNodeStatus::from_str_val("ready")` now returns `None`, which the storage layer already
+resolves to `Pending`. Pin the exact version rather than a `1.0` range.
 
 ## 1.0.0
 
