@@ -129,10 +129,20 @@ own workflow:
 | Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
 | GHCR (server image) | `server-vX.Y.Z` | `publish-server.yml` |
 
+One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
+once is `fatal: too many arguments` and creates none of them:
+
 ```bash
-git tag X.Y.Z crates-vX.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z
+git tag X.Y.Z
+git tag crates-vX.Y.Z
+git tag node-vX.Y.Z
+git tag java-vX.Y.Z
+git tag server-vX.Y.Z
 git push origin --tags
 ```
+
+Check the tags exist before pushing — `git tag -l` — because the push that follows a failed tag
+still succeeds, having nothing to send.
 
 Four things are easy to get wrong:
 
