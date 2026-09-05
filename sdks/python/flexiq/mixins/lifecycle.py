@@ -114,7 +114,10 @@ class QueueLifecycleMixin:
         Programmatic equivalent of SIGINT/SIGTERM: the scheduler stops
         dispatching and :meth:`run_worker` returns once running tasks finish,
         bounded by the drain timeout. Non-blocking and safe to call from any
-        thread; a no-op when no worker is running.
+        thread, including before :meth:`run_worker` has finished starting — the
+        request is held until a run consumes it rather than discarded, so a
+        worker started immediately after a ``shutdown()`` stops instead of
+        running on. The flag clears when that run ends.
         """
         self._inner.request_shutdown()
 

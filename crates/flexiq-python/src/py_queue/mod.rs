@@ -8,7 +8,7 @@ mod worker;
 #[cfg(feature = "workflows")]
 mod workflow_ops;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
@@ -40,6 +40,10 @@ pub struct PyQueue {
     pub(crate) default_timeout: i64,
     pub(crate) default_priority: i32,
     pub(crate) shutdown_flag: Arc<AtomicBool>,
+    /// How many `run_worker` calls are live on this queue. One `Queue` can run
+    /// several at once (each over its own queue list), and they share
+    /// `shutdown_flag` — so only the last one out may clear a stop request.
+    pub(crate) active_runs: Arc<AtomicUsize>,
     pub(crate) result_ttl_ms: Option<i64>,
     pub(crate) retention: Option<RetentionConfig>,
     pub(crate) scheduler_poll_interval_ms: u64,
@@ -281,6 +285,7 @@ impl PyQueue {
             default_timeout,
             default_priority,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            active_runs: Arc::new(AtomicUsize::new(0)),
             result_ttl_ms,
             scheduler_poll_interval_ms,
             scheduler_reap_interval,
