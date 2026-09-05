@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Inject, MockResource, Queue
 from flexiq.exceptions import (
     ProxyReconstructionError,
@@ -322,7 +323,7 @@ class TestResourceScopes:
 
         t = threading.Thread(target=worker)
         t.start()
-        t.join()
+        join_worker(t, message="thread-local store thread never finished")
         assert results[0] != v1  # Different thread → different instance
         store.teardown_all()
 

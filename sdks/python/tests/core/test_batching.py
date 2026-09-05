@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.batching import BatchConfig, BatchedJobResult
 
@@ -144,7 +145,7 @@ def test_concurrent_adds_no_loss(
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        join_worker(t, message="producer thread never finished enqueueing")
 
     poll_until(lambda: len(received) >= 50, timeout=5)
     queue.close()
