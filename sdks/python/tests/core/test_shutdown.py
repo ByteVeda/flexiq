@@ -135,3 +135,36 @@ def test_one_shutdown_stops_every_worker_on_the_queue(
 
     for thread in threads:
         join_worker(thread, message="a sibling worker was disarmed by the first one out")
+
+
+def test_a_run_still_starting_is_not_disarmed_by_a_sibling(
+    tmp_path: Path, poll_until: PollUntil
+) -> None:
+    """A run counted but not yet looping still owns the request.
+
+    ``run_worker`` registers its run from its Python entry, before the schedules
+    and registry it sets up, so a sibling that finishes first does not get to
+    clear the request as the apparent last run and leave the starting one with
+    nothing to find. ``begin_run`` stands in for that startup phase here, which
+    is otherwise only reachable by winning a race.
+    """
+    queue = Queue(db_path=str(tmp_path / "staggered.db"), workers=1)
+
+    @queue.task(name="noop")
+    def noop() -> None: ...
+
+    queue._inner.begin_run()
+    try:
+        live = threading.Thread(target=queue.run_worker, daemon=True)
+        live.start()
+        poll_until(lambda: bool(queue.workers()), timeout=30, message="worker never registered")
+
+        queue.shutdown()
+        join_worker(live)
+
+        # The stand-in run is still live, so the request outlives the sibling.
+        late = threading.Thread(target=queue.run_worker, daemon=True)
+        late.start()
+        join_worker(late, message="a sibling that exited first cleared the request")
+    finally:
+        queue._inner.end_run()
