@@ -20,11 +20,20 @@ use crate::storage::Storage;
 /// Bump it in the same change that makes an older build unable to read what a
 /// newer one writes. Additive changes — a new column, a new optional field —
 /// keep the level, because the expand-only rule keeps them readable by both.
-pub const CONTRACT_VERSION: u32 = 1;
+///
+/// Level 2 is the first schema change that is not expand-only: `m0004` drops
+/// `workflow_nodes.fan_in_data`, and a level-1 build still names that column in
+/// every workflow-node `SELECT`, so it fails on reads of rows it did not write.
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// The oldest contract level any build still interoperates with, and therefore
 /// the floor a fresh deployment starts at.
-pub const MIN_CONTRACT_VERSION: u32 = 1;
+///
+/// It moves with [`CONTRACT_VERSION`] whenever a level stops being readable
+/// rather than merely stale. 2.0.0 dropped `workflow_nodes.fan_in_data`, so a
+/// level-1 build shares no readable schema with this one and admitting it would
+/// only obscure the dial.
+pub const MIN_CONTRACT_VERSION: u32 = 2;
 
 /// Settings key holding the deployment's floor. Under the reserved `contract:`
 /// prefix, so a dashboard's generic settings surface can neither read nor spoof

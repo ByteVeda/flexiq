@@ -112,7 +112,6 @@ impl PyQueue {
                     status: WorkflowNodeStatus::Pending,
                     result_hash: None,
                     fan_out_count: None,
-                    fan_in_data: None,
                     started_at: None,
                     completed_at: None,
                     error: None,

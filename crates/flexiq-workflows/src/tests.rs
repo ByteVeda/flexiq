@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use diesel::RunQueryDsl;
 use flexiq_core::job::now_millis;
 use flexiq_core::storage::sqlite::SqliteStorage;
 
@@ -24,7 +25,6 @@ fn make_node(run_id: &str, name: &str) -> WorkflowNode {
         status: WorkflowNodeStatus::Pending,
         result_hash: None,
         fan_out_count: None,
-        fan_in_data: None,
         started_at: None,
         completed_at: None,
         error: None,
@@ -174,4 +174,25 @@ fn test_get_ready_nodes_diamond_dag() {
     let ready = storage.get_ready_workflow_nodes(&run_id, &dag_str).unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].node_name, "d");
+}
+
+/// `m0004` really removes the column, rather than the code merely no longer
+/// reading it. The contract suite covers the other direction — a `SELECT` list
+/// that still named `fan_in_data` would fail every node round-trip — but
+/// nothing there would notice a migration that silently did nothing.
+#[test]
+fn fan_in_data_column_is_dropped_by_the_workflow_migrations() {
+    let base = SqliteStorage::in_memory().unwrap();
+    let storage = WorkflowSqliteStorage::new(base, None).unwrap();
+    let mut conn = storage.inner.conn().unwrap();
+
+    // A sibling column proves the query form is sound, so the failure below is
+    // the missing column and not a typo in the table name.
+    diesel::sql_query("SELECT fan_out_count FROM workflow_nodes")
+        .execute(&mut *conn)
+        .expect("fan_out_count still exists");
+    let err = diesel::sql_query("SELECT fan_in_data FROM workflow_nodes")
+        .execute(&mut *conn)
+        .expect_err("fan_in_data must be gone");
+    assert!(err.to_string().contains("no such column"), "{err}");
 }

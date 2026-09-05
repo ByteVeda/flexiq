@@ -883,7 +883,6 @@ fn new_workflow_node(run_id: &str, node_name: &str, job_id: Option<String>) -> W
         status: WorkflowNodeStatus::Pending,
         result_hash: None,
         fan_out_count: None,
-        fan_in_data: None,
         started_at: None,
         completed_at: None,
         error: None,

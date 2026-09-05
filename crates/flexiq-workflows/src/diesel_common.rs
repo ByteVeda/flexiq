@@ -151,8 +151,6 @@ pub(crate) struct NodeRow {
     pub result_hash: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
     pub fan_out_count: Option<i32>,
-    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
-    pub fan_in_data: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::BigInt>)]
     pub started_at: Option<i64>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::BigInt>)]
@@ -209,7 +207,6 @@ pub(crate) fn node_from_row(row: NodeRow) -> WorkflowNode {
             .unwrap_or(WorkflowNodeStatus::Pending),
         result_hash: row.result_hash,
         fan_out_count: row.fan_out_count,
-        fan_in_data: row.fan_in_data,
         started_at: row.started_at,
         completed_at: row.completed_at,
         error: row.error,
@@ -623,10 +620,10 @@ macro_rules! impl_workflow_diesel_ops {
                 ::diesel::sql_query(
                     &$prep_sql("INSERT INTO workflow_nodes
                         (id, run_id, node_name, job_id, status, result_hash,
-                         fan_out_count, fan_in_data, started_at, completed_at, error,
+                         fan_out_count, started_at, completed_at, error,
                          compensation_job_id, compensation_started_at,
                          compensation_completed_at, compensation_error)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
                 )
                 .bind::<::diesel::sql_types::Text, _>(&node.id)
                 .bind::<::diesel::sql_types::Text, _>(&node.run_id)
@@ -635,7 +632,6 @@ macro_rules! impl_workflow_diesel_ops {
                 .bind::<::diesel::sql_types::Text, _>(node.status.as_str())
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.result_hash)
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Integer>, _>(node.fan_out_count)
-                .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.fan_in_data)
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::BigInt>, _>(node.started_at)
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::BigInt>, _>(node.completed_at)
                 .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.error)
@@ -671,10 +667,10 @@ macro_rules! impl_workflow_diesel_ops {
                         ::diesel::sql_query(
                             &$prep_sql("INSERT INTO workflow_nodes
                                 (id, run_id, node_name, job_id, status, result_hash,
-                                 fan_out_count, fan_in_data, started_at, completed_at, error,
+                                 fan_out_count, started_at, completed_at, error,
                                  compensation_job_id, compensation_started_at,
                                  compensation_completed_at, compensation_error)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
                         )
                         .bind::<::diesel::sql_types::Text, _>(&node.id)
                         .bind::<::diesel::sql_types::Text, _>(&node.run_id)
@@ -683,7 +679,6 @@ macro_rules! impl_workflow_diesel_ops {
                         .bind::<::diesel::sql_types::Text, _>(node.status.as_str())
                         .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.result_hash)
                         .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Integer>, _>(node.fan_out_count)
-                        .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.fan_in_data)
                         .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::BigInt>, _>(node.started_at)
                         .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::BigInt>, _>(node.completed_at)
                         .bind::<::diesel::sql_types::Nullable<::diesel::sql_types::Text>, _>(&node.error)
@@ -708,7 +703,7 @@ macro_rules! impl_workflow_diesel_ops {
                 let mut conn = self.inner.conn()?;
                 let rows: Vec<$crate::diesel_common::NodeRow> = ::diesel::sql_query(
                     &$prep_sql("SELECT id, run_id, node_name, job_id, status, result_hash,
-                            fan_out_count, fan_in_data, started_at, completed_at, error,
+                            fan_out_count, started_at, completed_at, error,
                             compensation_job_id, compensation_started_at,
                             compensation_completed_at, compensation_error
                      FROM workflow_nodes WHERE run_id = ? AND node_name = ?"),
@@ -733,7 +728,7 @@ macro_rules! impl_workflow_diesel_ops {
                 let mut conn = self.inner.conn()?;
                 let rows: Vec<$crate::diesel_common::NodeRow> = ::diesel::sql_query(
                     &$prep_sql("SELECT id, run_id, node_name, job_id, status, result_hash,
-                            fan_out_count, fan_in_data, started_at, completed_at, error,
+                            fan_out_count, started_at, completed_at, error,
                             compensation_job_id, compensation_started_at,
                             compensation_completed_at, compensation_error
                      FROM workflow_nodes WHERE run_id = ?"),
@@ -944,7 +939,7 @@ macro_rules! impl_workflow_diesel_ops {
                 let pattern = format!("{prefix}%");
                 let rows: Vec<$crate::diesel_common::NodeRow> = ::diesel::sql_query(
                     &$prep_sql("SELECT id, run_id, node_name, job_id, status, result_hash,
-                            fan_out_count, fan_in_data, started_at, completed_at, error,
+                            fan_out_count, started_at, completed_at, error,
                             compensation_job_id, compensation_started_at,
                             compensation_completed_at, compensation_error
                      FROM workflow_nodes WHERE run_id = ? AND node_name LIKE ?"),
