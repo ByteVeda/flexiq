@@ -84,9 +84,10 @@ To trigger the same drain from code:
 queue.shutdown()
 ```
 
-`shutdown()` is non-blocking, safe from any thread, and a no-op when no worker
-is running — it is the programmatic equivalent of the signal, useful from a
-health endpoint or a supervisor thread.
+`shutdown()` is non-blocking and safe from any thread — it is the programmatic
+equivalent of the signal, useful from a health endpoint or a supervisor thread.
+It is also safe to call while a worker is still starting: the request is held
+until the runs it was aimed at have finished, rather than discarded.
 
 <Callout type="warning">
   Set `drain_timeout` above your longest task's `timeout`, or shutdown stops

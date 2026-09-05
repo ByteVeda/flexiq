@@ -115,9 +115,14 @@ class QueueLifecycleMixin:
         dispatching and :meth:`run_worker` returns once running tasks finish,
         bounded by the drain timeout. Non-blocking and safe to call from any
         thread, including before :meth:`run_worker` has finished starting — the
-        request is held until a run consumes it rather than discarded, so a
-        worker started immediately after a ``shutdown()`` stops instead of
-        running on. The flag clears when that run ends.
+        request is held until the runs it was aimed at have finished, rather
+        than discarded, so a worker started immediately after a ``shutdown()``
+        stops instead of running on.
+
+        One queue can run several workers at once, each over its own queue
+        list. One call stops all of them, and the request clears only once the
+        last of them has exited — never when the first does, which would leave
+        its siblings running with nothing left to find.
         """
         self._inner.request_shutdown()
 
@@ -154,187 +159,199 @@ class QueueLifecycleMixin:
                 raise ValueError("app= is required when pool='prefork' (e.g. app='myapp:queue')")
         queue_list = list(queues) if queues else None
 
-        # A worker entrypoint that imported its task modules directly never has
-        # to call ``autodiscover``. Idempotent, so it costs nothing when it did.
-        self._drain_pending_tasks()
-
-        # Make queue accessible from job context (for current_job.update_progress())
-        _set_queue_ref(self)
-
-        # Register periodic tasks with Rust scheduler
-        for pc in self._periodic_configs:
-            self._inner.register_periodic(
-                name=pc["name"],
-                task_name=pc["task_name"],
-                cron_expr=pc["cron_expr"],
-                args=pc["payload"],
-                queue=pc["queue"],
-                timezone=pc.get("timezone"),
-            )
-
-        configure_logging()
-
-        worker_queues = queue_list or ["default"]
-        self._print_banner(worker_queues)
-
-        # Initialize worker resources (before Rust dispatches tasks)
-        health_checker = None
-        if self._resource_definitions:
-            self._resource_runtime = ResourceRuntime(self._resource_definitions)
-            self._resource_runtime.initialize()
-            logger.info(
-                "Initialized %d resource(s): %s",
-                len(self._resource_definitions),
-                ", ".join(self._resource_runtime._init_order),
-            )
-            health_checker = HealthChecker(self._resource_runtime)
-            health_checker.start()
-
-        # Set up signal handlers for graceful shutdown (only in main thread)
-        is_main = threading.current_thread() is threading.main_thread()
-        original_sigint = None
-        original_sigterm = None
-
-        if is_main:
-            original_sigint = signal.getsignal(signal.SIGINT)
-            original_sigterm = signal.getsignal(signal.SIGTERM)
-
-            def shutdown_handler(signum: int, frame: Any) -> None:
-                logger.info("Warm shutdown (waiting for running tasks to finish)...")
-                # Subprocesses spawned by user tasks (e.g. Playwright browsers)
-                # receive the same SIGINT via the foreground process group; the
-                # resulting broken-pipe spam from asyncio would otherwise drown
-                # out the drain window. Suppressed only for the drain — the
-                # filter is removed in the finally block below.
-                silence_asyncio_pipe_noise()
-                with contextlib.suppress(Exception):
-                    self._inner.set_worker_status(worker_id, "draining")
-                self._inner.request_shutdown()
-                # Restore original handlers so a second signal force-kills
-                signal.signal(signal.SIGINT, original_sigint)
-                signal.signal(signal.SIGTERM, original_sigterm)
-
-            signal.signal(signal.SIGINT, shutdown_handler)
-            signal.signal(signal.SIGTERM, shutdown_handler)
-
-            # SIGHUP handler for hot-reloading resources (Unix only)
-            if hasattr(signal, "SIGHUP"):
-
-                def sighup_handler(signum: int, frame: Any) -> None:
-                    logger.info("SIGHUP received — reloading reloadable resources")
-                    if self._resource_runtime is not None:
-                        results = self._resource_runtime.reload()
-                        for rname, success in results.items():
-                            logger.info(
-                                "Reload %s: %s",
-                                rname,
-                                "OK" if success else "FAILED",
-                            )
-
-                signal.signal(signal.SIGHUP, sighup_handler)
-
-        # Serialize resource names for worker advertisement
-        resources_json: str | None = None
-        if self._resource_definitions:
-            resources_json = json.dumps(sorted(self._resource_definitions.keys()))
-
-        # Generate worker ID and start Python-side heartbeat thread
-        worker_id = str(uuid.uuid4())
-
-        # Flush topic subscriptions now that the ephemeral ones have an owner.
-        self._declare_worker_subscriptions(worker_id)  # type: ignore[attr-defined]
-
-        # Managed log-topic consumers: daemon threads that pull, invoke, and ack.
-        stop_log_consumers = threading.Event()
-        log_consumer_threads = self._build_log_consumer_threads(stop_log_consumers)  # type: ignore[attr-defined]
-        for consumer in log_consumer_threads:
-            consumer.start()
-
-        stop_heartbeat = threading.Event()
-        heartbeat_thread = threading.Thread(
-            target=self._run_heartbeat,
-            args=(worker_id, stop_heartbeat),
-            daemon=True,
-            name="flexiq-heartbeat",
-        )
-        heartbeat_thread.start()
-
-        self._emit_event(  # type: ignore[attr-defined]
-            EventType.WORKER_STARTED,
-            {"worker_id": worker_id, "queues": worker_queues},
-        )
-        self._emit_event(  # type: ignore[attr-defined]
-            EventType.WORKER_ONLINE,
-            {"worker_id": worker_id, "queues": worker_queues, "pool": pool},
-        )
-
+        # Count this run from here, not from the loop below: everything that
+        # follows runs before the loop exists, and a stop requested in that
+        # window must not look like it arrived when no worker was live.
+        self._inner.begin_run()
         try:
-            overrides = OverridesStore(self)  # type: ignore[arg-type]
-            # Mutate the in-memory PyTaskConfig list so the Rust scheduler
-            # sees the override values; merge queue-level overrides into
-            # the JSON blob passed to run_worker. Paused tasks/queues get
-            # their pause state propagated to the existing paused_queues
-            # mechanism for tasks-by-queue, but per-task pause is left to
-            # the application-level guard in enqueue (out of scope here).
-            paused_tasks = overrides.apply_task_overrides(self._task_configs)
-            if paused_tasks:
-                logger.info("Paused task overrides in effect: %s", paused_tasks)
-            merged_queue_configs = overrides.apply_queue_overrides(self._queue_configs)
-            for queue_name, slot in merged_queue_configs.items():
-                if slot.get("paused"):
-                    try:
-                        self.pause(queue_name)  # type: ignore[attr-defined]
-                    except Exception:
-                        logger.exception("Failed to apply paused state for queue %s", queue_name)
-            queue_configs_json = json.dumps(merged_queue_configs) if merged_queue_configs else None
-            mesh_config_json = mesh.to_json() if mesh is not None else None
-            self._inner.run_worker(
-                task_registry=self._task_registry,
-                task_configs=self._task_configs,
-                queues=queue_list,
-                drain_timeout_secs=self._drain_timeout,
-                tags=",".join(tags) if tags else None,
-                worker_id=worker_id,
-                resources=resources_json,
-                threads=self._workers,
-                async_concurrency=self._async_concurrency,
-                queue_configs=queue_configs_json,
-                pool=pool if pool != "thread" else None,
-                app_path=app,
-                mesh_config=mesh_config_json,
-            )
-        except KeyboardInterrupt:
-            logger.info("Cold shutdown (terminating immediately)")
-        finally:
-            self._emit_event(  # type: ignore[attr-defined]
-                EventType.WORKER_STOPPED,
-                {"worker_id": worker_id},
-            )
-            # Stop the consumer poll loops before waiting on anything else: their
-            # per-interval reads otherwise keep contending for the storage lock
-            # while the heartbeat makes its final round trip.
-            stop_log_consumers.set()
-            stop_heartbeat.set()
-            heartbeat_thread.join(timeout=6)
-            # Join managed log consumers before tearing down resources a handler
-            # might still hold: give them a shared deadline (the worker drain
-            # timeout) to finish their in-flight message, not a fixed slice each.
-            consumer_deadline = time.monotonic() + self._drain_timeout
-            for consumer in log_consumer_threads:
-                consumer.join(timeout=max(0.0, consumer_deadline - time.monotonic()))
-            # Tear down resources before stopping async loop
-            if health_checker is not None:
-                health_checker.stop()
-            if self._resource_runtime is not None:
-                self._resource_runtime.teardown()
-                self._resource_runtime = None
-            restore_asyncio_pipe_noise()
-            logger.info("Worker stopped.")
+            # A worker entrypoint that imported its task modules directly never has
+            # to call ``autodiscover``. Idempotent, so it costs nothing when it did.
+            self._drain_pending_tasks()
+
+            # Make queue accessible from job context (for current_job.update_progress())
+            _set_queue_ref(self)
+
+            # Register periodic tasks with Rust scheduler
+            for pc in self._periodic_configs:
+                self._inner.register_periodic(
+                    name=pc["name"],
+                    task_name=pc["task_name"],
+                    cron_expr=pc["cron_expr"],
+                    args=pc["payload"],
+                    queue=pc["queue"],
+                    timezone=pc.get("timezone"),
+                )
+
+            configure_logging()
+
+            worker_queues = queue_list or ["default"]
+            self._print_banner(worker_queues)
+
+            # Initialize worker resources (before Rust dispatches tasks)
+            health_checker = None
+            if self._resource_definitions:
+                self._resource_runtime = ResourceRuntime(self._resource_definitions)
+                self._resource_runtime.initialize()
+                logger.info(
+                    "Initialized %d resource(s): %s",
+                    len(self._resource_definitions),
+                    ", ".join(self._resource_runtime._init_order),
+                )
+                health_checker = HealthChecker(self._resource_runtime)
+                health_checker.start()
+
+            # Set up signal handlers for graceful shutdown (only in main thread)
+            is_main = threading.current_thread() is threading.main_thread()
+            original_sigint = None
+            original_sigterm = None
+
             if is_main:
-                if original_sigint is not None:
+                original_sigint = signal.getsignal(signal.SIGINT)
+                original_sigterm = signal.getsignal(signal.SIGTERM)
+
+                def shutdown_handler(signum: int, frame: Any) -> None:
+                    logger.info("Warm shutdown (waiting for running tasks to finish)...")
+                    # Subprocesses spawned by user tasks (e.g. Playwright browsers)
+                    # receive the same SIGINT via the foreground process group; the
+                    # resulting broken-pipe spam from asyncio would otherwise drown
+                    # out the drain window. Suppressed only for the drain — the
+                    # filter is removed in the finally block below.
+                    silence_asyncio_pipe_noise()
+                    with contextlib.suppress(Exception):
+                        self._inner.set_worker_status(worker_id, "draining")
+                    self._inner.request_shutdown()
+                    # Restore original handlers so a second signal force-kills
                     signal.signal(signal.SIGINT, original_sigint)
-                if original_sigterm is not None:
                     signal.signal(signal.SIGTERM, original_sigterm)
+
+                signal.signal(signal.SIGINT, shutdown_handler)
+                signal.signal(signal.SIGTERM, shutdown_handler)
+
+                # SIGHUP handler for hot-reloading resources (Unix only)
+                if hasattr(signal, "SIGHUP"):
+
+                    def sighup_handler(signum: int, frame: Any) -> None:
+                        logger.info("SIGHUP received — reloading reloadable resources")
+                        if self._resource_runtime is not None:
+                            results = self._resource_runtime.reload()
+                            for rname, success in results.items():
+                                logger.info(
+                                    "Reload %s: %s",
+                                    rname,
+                                    "OK" if success else "FAILED",
+                                )
+
+                    signal.signal(signal.SIGHUP, sighup_handler)
+
+            # Serialize resource names for worker advertisement
+            resources_json: str | None = None
+            if self._resource_definitions:
+                resources_json = json.dumps(sorted(self._resource_definitions.keys()))
+
+            # Generate worker ID and start Python-side heartbeat thread
+            worker_id = str(uuid.uuid4())
+
+            # Flush topic subscriptions now that the ephemeral ones have an owner.
+            self._declare_worker_subscriptions(worker_id)  # type: ignore[attr-defined]
+
+            # Managed log-topic consumers: daemon threads that pull, invoke, and ack.
+            stop_log_consumers = threading.Event()
+            log_consumer_threads = self._build_log_consumer_threads(stop_log_consumers)  # type: ignore[attr-defined]
+            for consumer in log_consumer_threads:
+                consumer.start()
+
+            stop_heartbeat = threading.Event()
+            heartbeat_thread = threading.Thread(
+                target=self._run_heartbeat,
+                args=(worker_id, stop_heartbeat),
+                daemon=True,
+                name="flexiq-heartbeat",
+            )
+            heartbeat_thread.start()
+
+            self._emit_event(  # type: ignore[attr-defined]
+                EventType.WORKER_STARTED,
+                {"worker_id": worker_id, "queues": worker_queues},
+            )
+            self._emit_event(  # type: ignore[attr-defined]
+                EventType.WORKER_ONLINE,
+                {"worker_id": worker_id, "queues": worker_queues, "pool": pool},
+            )
+
+            try:
+                overrides = OverridesStore(self)  # type: ignore[arg-type]
+                # Mutate the in-memory PyTaskConfig list so the Rust scheduler
+                # sees the override values; merge queue-level overrides into
+                # the JSON blob passed to run_worker. Paused tasks/queues get
+                # their pause state propagated to the existing paused_queues
+                # mechanism for tasks-by-queue, but per-task pause is left to
+                # the application-level guard in enqueue (out of scope here).
+                paused_tasks = overrides.apply_task_overrides(self._task_configs)
+                if paused_tasks:
+                    logger.info("Paused task overrides in effect: %s", paused_tasks)
+                merged_queue_configs = overrides.apply_queue_overrides(self._queue_configs)
+                for queue_name, slot in merged_queue_configs.items():
+                    if slot.get("paused"):
+                        try:
+                            self.pause(queue_name)  # type: ignore[attr-defined]
+                        except Exception:
+                            logger.exception(
+                                "Failed to apply paused state for queue %s", queue_name
+                            )
+                queue_configs_json = (
+                    json.dumps(merged_queue_configs) if merged_queue_configs else None
+                )
+                mesh_config_json = mesh.to_json() if mesh is not None else None
+                self._inner.run_worker(
+                    task_registry=self._task_registry,
+                    task_configs=self._task_configs,
+                    queues=queue_list,
+                    drain_timeout_secs=self._drain_timeout,
+                    tags=",".join(tags) if tags else None,
+                    worker_id=worker_id,
+                    resources=resources_json,
+                    threads=self._workers,
+                    async_concurrency=self._async_concurrency,
+                    queue_configs=queue_configs_json,
+                    pool=pool if pool != "thread" else None,
+                    app_path=app,
+                    mesh_config=mesh_config_json,
+                )
+            except KeyboardInterrupt:
+                logger.info("Cold shutdown (terminating immediately)")
+            finally:
+                self._emit_event(  # type: ignore[attr-defined]
+                    EventType.WORKER_STOPPED,
+                    {"worker_id": worker_id},
+                )
+                # Stop the consumer poll loops before waiting on anything else: their
+                # per-interval reads otherwise keep contending for the storage lock
+                # while the heartbeat makes its final round trip.
+                stop_log_consumers.set()
+                stop_heartbeat.set()
+                heartbeat_thread.join(timeout=6)
+                # Join managed log consumers before tearing down resources a handler
+                # might still hold: give them a shared deadline (the worker drain
+                # timeout) to finish their in-flight message, not a fixed slice each.
+                consumer_deadline = time.monotonic() + self._drain_timeout
+                for consumer in log_consumer_threads:
+                    consumer.join(timeout=max(0.0, consumer_deadline - time.monotonic()))
+                # Tear down resources before stopping async loop
+                if health_checker is not None:
+                    health_checker.stop()
+                if self._resource_runtime is not None:
+                    self._resource_runtime.teardown()
+                    self._resource_runtime = None
+                restore_asyncio_pipe_noise()
+                logger.info("Worker stopped.")
+                if is_main:
+                    if original_sigint is not None:
+                        signal.signal(signal.SIGINT, original_sigint)
+                    if original_sigterm is not None:
+                        signal.signal(signal.SIGTERM, original_sigterm)
+
+        finally:
+            self._inner.end_run()
 
     def _build_resource_health_json(self) -> str | None:
         """Snapshot current resource health as JSON for heartbeat."""

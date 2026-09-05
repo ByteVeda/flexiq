@@ -8,7 +8,6 @@ mod worker;
 #[cfg(feature = "workflows")]
 mod workflow_ops;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
@@ -30,6 +29,33 @@ use crate::py_job::PyJob;
 
 pub(crate) use flexiq_core::storage::cursor::next_cursor;
 
+/// Stop-request state shared by every `run_worker` call on one queue.
+///
+/// The request and the count of live runs live under one lock because they only
+/// mean anything together. A `Queue` can run several workers at once, each over
+/// its own queue list, so a run that cleared the request on its own way out
+/// would disarm the siblings that had not polled it yet; and a clear that raced
+/// [`PyQueue::request_shutdown`] would drop a request no run had acted on. One
+/// lock over both gives those a defined order.
+#[derive(Default)]
+pub(crate) struct ShutdownState {
+    /// A stop has been asked for and the runs it was aimed at are still live.
+    requested: bool,
+    /// Live `run_worker` calls, counted from Python entry — see
+    /// [`PyQueue::begin_run`].
+    active: usize,
+}
+
+/// Whether a stop has been requested of the runs currently live on a queue.
+///
+/// Takes the state directly so the worker loop can poll it with the GIL
+/// released, where `&PyQueue` cannot travel.
+pub(crate) fn stop_requested(shutdown: &Mutex<ShutdownState>) -> bool {
+    // Two plain fields with no invariant a panic can break, so recovering from
+    // poisoning beats dropping a stop request on the floor.
+    shutdown.lock().unwrap_or_else(|e| e.into_inner()).requested
+}
+
 /// The core queue engine exposed to Python.
 #[pyclass]
 pub struct PyQueue {
@@ -39,11 +65,7 @@ pub struct PyQueue {
     pub(crate) default_retry: i32,
     pub(crate) default_timeout: i64,
     pub(crate) default_priority: i32,
-    pub(crate) shutdown_flag: Arc<AtomicBool>,
-    /// How many `run_worker` calls are live on this queue. One `Queue` can run
-    /// several at once (each over its own queue list), and they share
-    /// `shutdown_flag` — so only the last one out may clear a stop request.
-    pub(crate) active_runs: Arc<AtomicUsize>,
+    pub(crate) shutdown: Arc<Mutex<ShutdownState>>,
     pub(crate) result_ttl_ms: Option<i64>,
     pub(crate) retention: Option<RetentionConfig>,
     pub(crate) scheduler_poll_interval_ms: u64,
@@ -284,8 +306,7 @@ impl PyQueue {
             default_retry,
             default_timeout,
             default_priority,
-            shutdown_flag: Arc::new(AtomicBool::new(false)),
-            active_runs: Arc::new(AtomicUsize::new(0)),
+            shutdown: Arc::new(Mutex::new(ShutdownState::default())),
             result_ttl_ms,
             scheduler_poll_interval_ms,
             scheduler_reap_interval,
@@ -304,8 +325,36 @@ impl PyQueue {
     }
 
     /// Signal the worker to shut down gracefully.
+    ///
+    /// Held until the runs it was aimed at have finished, so it is safe to call
+    /// at any point in a worker's life — including while one is still starting,
+    /// which is a window callers reach easily (the Python half registers
+    /// periodic schedules and builds the registry before the loop exists).
     pub fn request_shutdown(&self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
+        self.shutdown_state().requested = true;
+    }
+
+    /// Register a `run_worker` call as live.
+    ///
+    /// Called from Python at the top of `run_worker`, not from the loop below:
+    /// a run still in its Python startup must not be invisible here, or a
+    /// sibling could finish, clear the request as the apparent last run, and
+    /// leave the starting one with nothing to find.
+    pub fn begin_run(&self) {
+        self.shutdown_state().active += 1;
+    }
+
+    /// Retire a `run_worker` call, clearing the request once the last one ends.
+    ///
+    /// Only the last run out clears it: while siblings are still live the
+    /// request is still theirs to act on. Clearing it then also means the next
+    /// `run_worker` starts unstopped.
+    pub fn end_run(&self) {
+        let mut state = self.shutdown_state();
+        state.active = state.active.saturating_sub(1);
+        if state.active == 0 {
+            state.requested = false;
+        }
     }
 
     /// Enqueue a job.
@@ -1017,6 +1066,12 @@ impl PyQueue {
 }
 
 impl PyQueue {
+    /// Lock the shared stop-request state, recovering from a poisoned lock —
+    /// see [`stop_requested`] for why that is the safe direction here.
+    pub(crate) fn shutdown_state(&self) -> std::sync::MutexGuard<'_, ShutdownState> {
+        self.shutdown.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Install the active worker dispatcher. Called by `run_worker` before
     /// the dispatch loop starts so `request_cancel` can deliver out-of-band
     /// cancel signals to the running pool. Pass `None` on shutdown.

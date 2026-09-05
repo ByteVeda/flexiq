@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -33,45 +32,6 @@ fn parse_codel(cfg: &serde_json::Value) -> Option<flexiq_core::scheduler::codel:
         target_ms,
         interval_ms,
     })
-}
-
-/// Clears the shutdown flag when the last worker run on a queue ends, so the
-/// next `run_worker` starts unstopped.
-///
-/// Clearing on exit rather than on entry is what makes a stop request safe to
-/// issue at any time. The Python half of `run_worker` registers periodic
-/// schedules, builds the task registry and starts the heartbeat *before*
-/// calling in here, and a caller that observes any of that work can reasonably
-/// conclude the worker is up and ask it to stop. An entry reset erases such a
-/// request, and the worker then ignores it and never returns.
-///
-/// The count is what keeps that safe for a queue running several `run_worker`
-/// calls at once, each over its own queue list: they share one flag, so a
-/// first-one-out reset would disarm the siblings that had not polled it yet.
-struct ShutdownReset {
-    flag: Arc<std::sync::atomic::AtomicBool>,
-    active: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl ShutdownReset {
-    /// Registers a live run. Pair with the guard's `Drop`, never call alone.
-    fn enter(
-        flag: Arc<std::sync::atomic::AtomicBool>,
-        active: Arc<std::sync::atomic::AtomicUsize>,
-    ) -> Self {
-        active.fetch_add(1, Ordering::SeqCst);
-        Self { flag, active }
-    }
-}
-
-impl Drop for ShutdownReset {
-    fn drop(&mut self) {
-        // `fetch_sub` returns the *previous* count, so 1 means this was the
-        // last live run and the request has been consumed by all of them.
-        if self.active.fetch_sub(1, Ordering::SeqCst) == 1 {
-            self.flag.store(false, Ordering::SeqCst);
-        }
-    }
 }
 
 /// Mesh-aware scheduler bridge: receives jobs from the scheduler's
@@ -405,12 +365,6 @@ impl PyQueue {
         app_path: Option<String>,
         #[allow(unused_variables)] mesh_config: Option<String>,
     ) -> PyResult<()> {
-        // Clear the shutdown flag when this run *ends*, never on entry: a stop
-        // requested while this method was still starting up would otherwise be
-        // erased here, leaving a worker that ignores it and never returns.
-        let _shutdown_reset =
-            ShutdownReset::enter(self.shutdown_flag.clone(), self.active_runs.clone());
-
         let queues = queues.unwrap_or_else(|| vec!["default".to_string()]);
         let queues_str = queues.join(",");
 
@@ -793,7 +747,7 @@ impl PyQueue {
         });
 
         let scheduler_for_results = scheduler_arc.clone();
-        let flag = self.shutdown_flag.clone();
+        let shutdown_state = self.shutdown.clone();
 
         // Poll action enum for communicating between GIL-released and
         // GIL-held sections of the result loop.
@@ -826,7 +780,7 @@ impl PyQueue {
         loop {
             // Release GIL for one iteration of result polling
             let action = py.detach(|| {
-                if flag.load(Ordering::SeqCst) {
+                if super::stop_requested(&shutdown_state) {
                     return PollAction::Shutdown;
                 }
                 match result_rx.recv_timeout(std::time::Duration::from_millis(100)) {

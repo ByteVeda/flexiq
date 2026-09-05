@@ -36,9 +36,12 @@ queue.shutdown() -> None
 
 Request graceful worker shutdown — the programmatic equivalent of
 SIGINT/SIGTERM. The scheduler stops dispatching and `run_worker()` returns
-once running tasks finish (bounded by `drain_timeout`). Non-blocking, safe
-from any thread; a no-op when no worker is running. Declared as
-`request_shutdown`.
+once running tasks finish (bounded by `drain_timeout`). Non-blocking and safe
+from any thread, including while a worker is still starting — the request is
+held until the runs it was aimed at have finished, rather than discarded.
+One queue can run several workers at once, each over its own queue list; one
+call stops all of them, and the request clears only once the last has exited.
+Declared as `request_shutdown`.
 
 A signal does one thing more than this method: the handler first flips the
 worker's registry row to `"draining"` (declared as `set_worker_status`), so
