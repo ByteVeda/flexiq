@@ -53,10 +53,15 @@ release — durable steps, the gRPC server role, debounced enqueue and the rest 
 ### Upgrading to 2.0.0
 
 One migration runs on first start: `m0004_workflow_drop_fan_in_data` drops
-`workflow_nodes.fan_in_data`. It is fast — no table rewrite on either backend, and the column
-carries no index — but it is **one-way, and not backwards compatible**. A 1.x process still names
-the column in every workflow-node `SELECT`, so once a database has been migrated a 1.x worker fails
-on *every* read of `workflow_nodes`, not only on rows the new build wrote.
+`workflow_nodes.fan_in_data`. What that costs depends on the backend. Postgres only marks the
+column dropped in the catalog, so it returns at once, though it takes an `ACCESS EXCLUSIVE` lock on
+`workflow_nodes` while it does. SQLite has no such shortcut: its `DROP COLUMN` rewrites the table's
+content row by row, so on a large `workflow_nodes` the first start pauses for as long as that
+takes. Neither backend has an index on the column to rebuild.
+
+It is also **one-way, and not backwards compatible**. A 1.x process still names the column in every
+workflow-node `SELECT`, so once a database has been migrated a 1.x worker fails on *every* read of
+`workflow_nodes`, not only on rows the new build wrote.
 
 So, unlike 1.1.0, do not run 1.x and 2.0.0 workers against the same database. Upgrade every
 process, then write the floor so a stray old one refuses to start rather than failing mid-read. A
