@@ -40,7 +40,7 @@ env:
   CRATES: flexiq flexiq-core flexiq-workflows flexiq-mesh
   # The one version whose semver gate is waived — see the step that reads it.
   # Empty it, or move it forward, rather than deleting the check.
-  SEMVER_EXEMPT_VERSION: "1.1.0"
+  SEMVER_EXEMPT_VERSION: ""
 
 jobs:
   publish:
@@ -218,15 +218,11 @@ jobs:
       # already on crates.io: a first publish has no baseline, and a version
       # that went up earlier was gated when it did.
       #
-      # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch. 1.1.0
-      # breaks the `flexiq-core` and `flexiq-workflows` public API under a minor
-      # bump — the breaks are the surface of durable steps, the dispatch lease
-      # and three other shipped features, and the crates have no third-party
-      # dependents to protect (one published version, three reverse
-      # dependencies, all of them this repository's own). Clearing the gate
-      # honestly would mean withdrawing those features. Naming the version
-      # rather than deleting the step is what makes 1.2.0 gated again without
-      # anyone having to remember to restore it.
+      # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch, and it is
+      # currently empty: the waiver named 1.1.0, which was never tagged — its
+      # breaking changes went out under 2.0.0 instead, where a major bump makes
+      # them legal and the gate passes on its own merits. Set it again only to
+      # name another single version, never to disable the check.
       - name: Semver check the crates being published
         if: >-
           steps.pending.outputs.baselined != ''
