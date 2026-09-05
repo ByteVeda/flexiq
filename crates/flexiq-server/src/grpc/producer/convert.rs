@@ -179,12 +179,15 @@ pub fn workflow_state_to_wire(state: WorkflowState) -> pb::WorkflowState {
     }
 }
 
-/// The core's `WorkflowNodeStatus` discriminant as the wire's enum. Same
-/// rationale as [`workflow_state_to_wire`].
+/// The core's `WorkflowNodeStatus` as the wire's enum.
+///
+/// Unlike [`workflow_state_to_wire`] this is no longer a `+ 1` offset: 2.0.0
+/// removed the core's never-written `Ready`, and the wire kept `2` reserved
+/// rather than renumbering values clients already hold. The table below is the
+/// mapping — there is no arithmetic left to rely on.
 pub fn workflow_node_status_to_wire(status: WorkflowNodeStatus) -> pb::WorkflowNodeStatus {
     match status {
         WorkflowNodeStatus::Pending => pb::WorkflowNodeStatus::Pending,
-        WorkflowNodeStatus::Ready => pb::WorkflowNodeStatus::Ready,
         WorkflowNodeStatus::Running => pb::WorkflowNodeStatus::Running,
         WorkflowNodeStatus::Completed => pb::WorkflowNodeStatus::Completed,
         WorkflowNodeStatus::Failed => pb::WorkflowNodeStatus::Failed,
@@ -363,23 +366,26 @@ mod tests {
     }
 
     #[test]
-    fn workflow_node_status_is_offset_by_exactly_one() {
-        for status in [
-            WorkflowNodeStatus::Pending,
-            WorkflowNodeStatus::Ready,
-            WorkflowNodeStatus::Running,
-            WorkflowNodeStatus::Completed,
-            WorkflowNodeStatus::Failed,
-            WorkflowNodeStatus::Skipped,
-            WorkflowNodeStatus::WaitingApproval,
-            WorkflowNodeStatus::CacheHit,
-            WorkflowNodeStatus::Compensating,
-            WorkflowNodeStatus::Compensated,
-            WorkflowNodeStatus::CompensationFailed,
+    fn workflow_node_status_maps_onto_the_reserved_wire_numbers() {
+        // Spelled out rather than computed: `2` is reserved for the removed
+        // `READY`, so the wire numbers skip it and a `+ 1` assertion would pass
+        // only by re-deriving the bug it is meant to catch.
+        for (status, wire) in [
+            (WorkflowNodeStatus::Pending, 1),
+            (WorkflowNodeStatus::Running, 3),
+            (WorkflowNodeStatus::Completed, 4),
+            (WorkflowNodeStatus::Failed, 5),
+            (WorkflowNodeStatus::Skipped, 6),
+            (WorkflowNodeStatus::WaitingApproval, 7),
+            (WorkflowNodeStatus::CacheHit, 8),
+            (WorkflowNodeStatus::Compensating, 9),
+            (WorkflowNodeStatus::Compensated, 10),
+            (WorkflowNodeStatus::CompensationFailed, 11),
         ] {
             assert_eq!(
                 workflow_node_status_to_wire(status) as i32,
-                status as i32 + 1
+                wire,
+                "{status}"
             );
         }
     }

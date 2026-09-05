@@ -132,10 +132,7 @@ pub(super) fn cascade_skip_pending_nodes(
     namespace: Option<&str>,
 ) -> CoreResult<()> {
     for node in nodes {
-        if !matches!(
-            node.status,
-            WorkflowNodeStatus::Pending | WorkflowNodeStatus::Ready
-        ) {
+        if !matches!(node.status, WorkflowNodeStatus::Pending) {
             continue;
         }
         if let Some(job_id) = &node.job_id {
@@ -185,11 +182,10 @@ mod tests {
     }
 
     #[test]
-    fn cascade_skip_skips_pending_and_ready_only() {
+    fn cascade_skip_skips_pending_only() {
         let (storage, wf_storage) = make_storages();
         let run_id = seed_run(&wf_storage);
         seed_node(&wf_storage, &run_id, "p", WorkflowNodeStatus::Pending, None);
-        seed_node(&wf_storage, &run_id, "r", WorkflowNodeStatus::Ready, None);
         seed_node(
             &wf_storage,
             &run_id,
@@ -210,10 +206,6 @@ mod tests {
 
         assert_eq!(
             fetch_node(&wf_storage, &run_id, "p").status,
-            WorkflowNodeStatus::Skipped,
-        );
-        assert_eq!(
-            fetch_node(&wf_storage, &run_id, "r").status,
             WorkflowNodeStatus::Skipped,
         );
         assert_eq!(

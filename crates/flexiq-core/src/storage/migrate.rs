@@ -37,13 +37,38 @@ pub enum Backend {
     Postgres,
 }
 
-/// One rendered statement plus whether a SQLite "duplicate column" error should
-/// be swallowed. SQLite has no `ADD COLUMN IF NOT EXISTS`, so an already-present
-/// column is signalled by that error and treated as success — mirroring the
-/// backend's historical `migration_alter` behaviour.
+/// The one SQLite error a statement is allowed to treat as success.
+///
+/// SQLite has neither `ADD COLUMN IF NOT EXISTS` nor `DROP COLUMN IF EXISTS`,
+/// so it signals the already-done case with an error where Postgres renders the
+/// `IF …EXISTS` clause and succeeds. Swallowing exactly one message per
+/// statement kind keeps an idempotent alter idempotent on both backends without
+/// widening into "ignore ALTER failures".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tolerate {
+    /// Every error is genuine.
+    Nothing,
+    /// `ADD COLUMN` on a column that is already there.
+    DuplicateColumn,
+    /// `DROP COLUMN` on a column that is already gone.
+    MissingColumn,
+}
+
+impl Tolerate {
+    /// Whether this SQLite error is the already-done case this statement expects.
+    fn absorbs(self, error: &str) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::DuplicateColumn => error.contains("duplicate column"),
+            Self::MissingColumn => error.contains("no such column"),
+        }
+    }
+}
+
+/// One rendered statement plus the SQLite error it tolerates, if any.
 pub struct Stmt {
     sql: String,
-    swallow_dup_column: bool,
+    tolerate: Tolerate,
 }
 
 impl Stmt {
@@ -69,7 +94,7 @@ pub trait Migration {
 pub fn ddl<S: SchemaStatementBuilder>(backend: Backend, stmt: &S) -> Stmt {
     Stmt {
         sql: render_schema(stmt, backend),
-        swallow_dup_column: false,
+        tolerate: Tolerate::Nothing,
     }
 }
 
@@ -85,7 +110,27 @@ pub fn add_column(backend: Backend, table: &str, column: &mut ColumnDef) -> Stmt
     };
     Stmt {
         sql: render_schema(&alter, backend),
-        swallow_dup_column: true,
+        tolerate: Tolerate::DuplicateColumn,
+    }
+}
+
+/// Render an `ALTER TABLE … DROP COLUMN` that must be idempotent. Postgres emits
+/// `DROP COLUMN IF EXISTS`; SQLite has no such clause, so sea-query renders a
+/// plain `DROP COLUMN` there and the missing-column error is swallowed at
+/// execution time.
+///
+/// Dropping a column is one-way and invisible to older readers — a build whose
+/// `SELECT` still names it fails on every read of the table — so a migration
+/// that calls this belongs with a [`CONTRACT_VERSION`](crate::CONTRACT_VERSION)
+/// bump.
+pub fn drop_column(backend: Backend, table: &str, column: &str) -> Stmt {
+    let mut alter = Table::alter();
+    alter
+        .table(Alias::new(table))
+        .drop_column_if_exists(Alias::new(column));
+    Stmt {
+        sql: render_schema(&alter, backend),
+        tolerate: Tolerate::MissingColumn,
     }
 }
 
@@ -97,7 +142,7 @@ pub fn add_column(backend: Backend, table: &str, column: &mut ColumnDef) -> Stmt
 pub fn raw_ddl(sql: impl Into<String>) -> Stmt {
     Stmt {
         sql: sql.into(),
-        swallow_dup_column: false,
+        tolerate: Tolerate::Nothing,
     }
 }
 
@@ -112,7 +157,7 @@ pub fn dml(backend: Backend, stmt: &sea_query::UpdateStatement) -> Stmt {
             #[cfg(not(feature = "postgres"))]
             Backend::Postgres => unreachable!("Postgres migrations require the `postgres` feature"),
         },
-        swallow_dup_column: false,
+        tolerate: Tolerate::Nothing,
     }
 }
 
@@ -199,15 +244,15 @@ struct VersionRow {
 /// Connection operations the migrator needs, abstracted over the two Diesel
 /// backends so the driver-generic runner stays one code path.
 trait MigrationConn {
-    fn exec(&mut self, sql: &str, swallow_dup_column: bool) -> Result<()>;
+    fn exec(&mut self, sql: &str, tolerate: Tolerate) -> Result<()>;
     fn load_versions(&mut self, select_sql: &str) -> Result<Vec<String>>;
 }
 
 impl MigrationConn for SqliteConnection {
-    fn exec(&mut self, sql: &str, swallow_dup_column: bool) -> Result<()> {
+    fn exec(&mut self, sql: &str, tolerate: Tolerate) -> Result<()> {
         match diesel::sql_query(sql).execute(self) {
             Ok(_) => Ok(()),
-            Err(e) if swallow_dup_column && e.to_string().contains("duplicate column") => Ok(()),
+            Err(e) if tolerate.absorbs(&e.to_string()) => Ok(()),
             Err(e) => Err(QueueError::Storage(e)),
         }
     }
@@ -220,9 +265,9 @@ impl MigrationConn for SqliteConnection {
 
 #[cfg(feature = "postgres")]
 impl MigrationConn for PgConnection {
-    fn exec(&mut self, sql: &str, _swallow_dup_column: bool) -> Result<()> {
-        // Postgres alters use `ADD COLUMN IF NOT EXISTS`, so nothing to swallow —
-        // every error here is genuine and must propagate.
+    fn exec(&mut self, sql: &str, _tolerate: Tolerate) -> Result<()> {
+        // Postgres alters render `IF NOT EXISTS`/`IF EXISTS`, so nothing to
+        // swallow — every error here is genuine and must propagate.
         diesel::sql_query(sql).execute(self)?;
         Ok(())
     }
@@ -239,7 +284,10 @@ fn run_generic<C: MigrationConn + Connection>(
     tracking_table: &str,
     migrations: &[Box<dyn Migration>],
 ) -> Result<Vec<String>> {
-    conn.exec(&create_ledger_sql(tracking_table, backend), false)?;
+    conn.exec(
+        &create_ledger_sql(tracking_table, backend),
+        Tolerate::Nothing,
+    )?;
     let applied: HashSet<String> = conn
         .load_versions(&select_versions_sql(tracking_table, backend))?
         .into_iter()
@@ -272,11 +320,11 @@ fn run_generic<C: MigrationConn + Connection>(
         // idempotent baseline, but not for later one-shot DDL.
         conn.transaction::<_, QueueError, _>(|conn| {
             for stmt in migration.up(backend) {
-                conn.exec(&stmt.sql, stmt.swallow_dup_column)?;
+                conn.exec(&stmt.sql, stmt.tolerate)?;
             }
             conn.exec(
                 &record_version_sql(tracking_table, migration.version(), now_millis(), backend),
-                false,
+                Tolerate::Nothing,
             )
         })?;
         newly_applied.push(migration.version().to_string());
@@ -362,7 +410,49 @@ mod tests {
         // the caller has already made dialect-correct.
         let stmt = raw_ddl("ALTER TABLE jobs SET (fillfactor = 85)");
         assert_eq!(stmt.sql, "ALTER TABLE jobs SET (fillfactor = 85)");
-        assert!(!stmt.swallow_dup_column);
+        assert_eq!(stmt.tolerate, Tolerate::Nothing);
+    }
+
+    #[test]
+    fn drop_column_renders_the_dialect_each_backend_accepts() {
+        // SQLite has no `DROP COLUMN IF EXISTS` — emitting one would be a syntax
+        // error, so there the idempotence has to come from the swallow instead.
+        let sqlite = drop_column(Backend::Sqlite, "workflow_nodes", "fan_in_data");
+        assert!(sqlite.sql.contains("DROP COLUMN"), "{}", sqlite.sql);
+        assert!(!sqlite.sql.contains("IF EXISTS"), "{}", sqlite.sql);
+        assert_eq!(sqlite.tolerate, Tolerate::MissingColumn);
+
+        #[cfg(feature = "postgres")]
+        {
+            let pg = drop_column(Backend::Postgres, "workflow_nodes", "fan_in_data");
+            assert!(pg.sql.contains("DROP COLUMN IF EXISTS"), "{}", pg.sql);
+        }
+    }
+
+    #[test]
+    fn drop_column_is_a_no_op_when_the_column_is_already_gone() {
+        // Re-dropping must not fail: a database that never had the column (or
+        // that a partial run already widened) still has to reach the ledger row.
+        let mut conn = mem();
+        let table = Table::create()
+            .table(Alias::new("widget"))
+            .col(ColumnDef::new(Alias::new("id")).text().not_null())
+            .col(ColumnDef::new(Alias::new("scrap")).text())
+            .to_owned();
+        conn.exec(&table.to_string(SqliteQueryBuilder), Tolerate::Nothing)
+            .expect("seed table");
+
+        let stmt = drop_column(Backend::Sqlite, "widget", "scrap");
+        conn.exec(&stmt.sql, stmt.tolerate).expect("first drop");
+        conn.exec(&stmt.sql, stmt.tolerate)
+            .expect("second drop is tolerated");
+
+        // The tolerance is scoped to the missing column, not to ALTER failures
+        // at large: a bad table name must still surface.
+        let missing_table = drop_column(Backend::Sqlite, "no_such_table", "scrap");
+        assert!(conn
+            .exec(&missing_table.sql, missing_table.tolerate)
+            .is_err());
     }
 
     #[test]
@@ -553,7 +643,7 @@ mod tests {
                     .not_null(),
             )
             .to_owned();
-        conn.exec(&old_jobs.to_string(SqliteQueryBuilder), false)
+        conn.exec(&old_jobs.to_string(SqliteQueryBuilder), Tolerate::Nothing)
             .expect("seed old jobs table");
 
         // The baseline's CREATE TABLE IF NOT EXISTS is a no-op here, but its

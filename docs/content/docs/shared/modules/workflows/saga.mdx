@@ -138,7 +138,7 @@ try (Worker worker = queue.worker()
 
 1. A step's forward execution fails with its retries exhausted.
 2. flexiq collects every step that **completed** and declared a
-   compensator — steps that are pending, ready, or skipped never ran, and a
+   compensator — steps that are pending or skipped never ran, and a
    step that itself failed has nothing to undo, so all three are left
    alone.
 3. Those steps are grouped into **reverse-topological waves** — the most

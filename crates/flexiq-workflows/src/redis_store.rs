@@ -341,7 +341,6 @@ fn map_to_node(map: HashMap<String, Value>) -> Result<WorkflowNode> {
         Some(v) if !matches!(v, Value::Nil) => Some(parse_i32(&val_to_string(v)?)?),
         _ => None,
     };
-    let fan_in_data = val_to_opt_string(map.get("fan_in_data").unwrap_or(&Value::Nil))?;
     let started_at = match map.get("started_at") {
         Some(v) if !matches!(v, Value::Nil) => Some(parse_i64(&val_to_string(v)?)?),
         _ => None,
@@ -371,7 +370,6 @@ fn map_to_node(map: HashMap<String, Value>) -> Result<WorkflowNode> {
         status,
         result_hash,
         fan_out_count,
-        fan_in_data,
         started_at,
         completed_at,
         error,
@@ -774,9 +772,6 @@ impl WorkflowStorage for WorkflowRedisStorage {
             if let Some(c) = node.fan_out_count {
                 pipe.hset(&key, "fan_out_count", c);
             }
-            if let Some(f) = &node.fan_in_data {
-                pipe.hset(&key, "fan_in_data", f);
-            }
             if let Some(s) = opt_i64(node.started_at) {
                 pipe.hset(&key, "started_at", s);
             }
@@ -1061,9 +1056,6 @@ fn write_node_pipeline(
     }
     if let Some(c) = node.fan_out_count {
         pipe.hset(&key, "fan_out_count", c);
-    }
-    if let Some(f) = &node.fan_in_data {
-        pipe.hset(&key, "fan_in_data", f);
     }
     if let Some(s) = opt_i64(node.started_at) {
         pipe.hset(&key, "started_at", s);

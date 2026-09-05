@@ -14,15 +14,15 @@ per-platform classifier artifact next to a native-free main jar — add both.
 plugins { id("com.google.osdetector") version "1.7.3" }
 
 dependencies {
-    implementation("org.byteveda:flexiq:1.1.0")
-    runtimeOnly("org.byteveda:flexiq:1.1.0:${osdetector.classifier}") // native library
-    annotationProcessor("org.byteveda:flexiq-processor:1.1.0") // compile-time TaskHandler bindings
+    implementation("org.byteveda:flexiq:2.0.0")
+    runtimeOnly("org.byteveda:flexiq:2.0.0:${osdetector.classifier}") // native library
+    annotationProcessor("org.byteveda:flexiq-processor:2.0.0") // compile-time TaskHandler bindings
 }
 ```
 
 The [osdetector](https://github.com/google/osdetector-gradle-plugin) plugin
 resolves your platform's classifier; you can also write it literally, e.g.
-`runtimeOnly("org.byteveda:flexiq:1.1.0:linux-x86_64")`.
+`runtimeOnly("org.byteveda:flexiq:2.0.0:linux-x86_64")`.
 
   </Tab>
   <Tab value="Maven">
@@ -42,12 +42,12 @@ resolves your platform's classifier; you can also write it literally, e.g.
 <dependency>
   <groupId>org.byteveda</groupId>
   <artifactId>flexiq</artifactId>
-  <version>1.1.0</version>
+  <version>2.0.0</version>
 </dependency>
 <dependency>
   <groupId>org.byteveda</groupId>
   <artifactId>flexiq</artifactId>
-  <version>1.1.0</version>
+  <version>2.0.0</version>
   <classifier>${os.detected.classifier}</classifier>
   <scope>runtime</scope>
 </dependency>
@@ -63,7 +63,7 @@ resolves your platform's classifier; you can also write it literally, e.g.
       <path>
         <groupId>org.byteveda</groupId>
         <artifactId>flexiq-processor</artifactId>
-        <version>1.1.0</version>
+        <version>2.0.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>

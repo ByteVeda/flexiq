@@ -76,7 +76,6 @@ export const WORKFLOW_STATE_LABEL: Record<WorkflowState, string> = {
 
 export const WORKFLOW_NODE_TONE: Record<WorkflowNodeStatus, Tone> = {
   pending: "neutral",
-  ready: "neutral",
   running: "info",
   completed: "success",
   failed: "danger",
@@ -90,7 +89,6 @@ export const WORKFLOW_NODE_TONE: Record<WorkflowNodeStatus, Tone> = {
 
 export const WORKFLOW_NODE_LABEL: Record<WorkflowNodeStatus, string> = {
   pending: "Pending",
-  ready: "Ready",
   running: "Running",
   completed: "Completed",
   failed: "Failed",
