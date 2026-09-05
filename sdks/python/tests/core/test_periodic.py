@@ -19,7 +19,7 @@ def queue(tmp_path: Path) -> Queue:
 
 @pytest.fixture
 def registered(queue: Queue, poll_until: Any) -> Generator[Queue]:
-    """A queue whose declared schedules have reached storage.
+    """A queue whose declared schedules have reached storage, on a live worker.
 
     ``@queue.periodic()`` only records a declaration; ``run_worker()`` is what
     writes it to the catalog, so the catalog methods need a started worker to
@@ -38,6 +38,17 @@ def registered(queue: Queue, poll_until: Any) -> Generator[Queue]:
     worker = threading.Thread(target=queue.run_worker, daemon=True)
     worker.start()
     try:
+        # The catalog is written by ``register_periodic`` during worker startup,
+        # before the worker loop exists, so it is not on its own proof of a
+        # running worker. Teardown asks this worker to stop, and a stop
+        # requested during startup is discarded — the worker then never exits
+        # and no join budget can bound it (#814). Wait for the registration the
+        # loop itself performs before handing the queue out.
+        poll_until(
+            lambda: bool(queue.workers()),
+            timeout=30,
+            message="worker never registered",
+        )
         poll_until(
             lambda: len(queue.list_periodic()) == 2,
             timeout=30,
