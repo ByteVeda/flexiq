@@ -11,7 +11,6 @@
 //!   sends to `submit_workflow`.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -49,7 +48,7 @@ pub(crate) fn make_test_pyqueue() -> PyQueue {
         default_retry: 3,
         default_timeout: 300,
         default_priority: 0,
-        shutdown_flag: Arc::new(AtomicBool::new(false)),
+        shutdown: Arc::new(Mutex::new(Default::default())),
         result_ttl_ms: None,
         retention: None,
         scheduler_poll_interval_ms: 50,

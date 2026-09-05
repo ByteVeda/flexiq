@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
@@ -366,9 +365,6 @@ impl PyQueue {
         app_path: Option<String>,
         #[allow(unused_variables)] mesh_config: Option<String>,
     ) -> PyResult<()> {
-        // Reset shutdown flag for this run
-        self.shutdown_flag.store(false, Ordering::SeqCst);
-
         let queues = queues.unwrap_or_else(|| vec!["default".to_string()]);
         let queues_str = queues.join(",");
 
@@ -751,7 +747,7 @@ impl PyQueue {
         });
 
         let scheduler_for_results = scheduler_arc.clone();
-        let flag = self.shutdown_flag.clone();
+        let shutdown_state = self.shutdown.clone();
 
         // Poll action enum for communicating between GIL-released and
         // GIL-held sections of the result loop.
@@ -784,7 +780,7 @@ impl PyQueue {
         loop {
             // Release GIL for one iteration of result polling
             let action = py.detach(|| {
-                if flag.load(Ordering::SeqCst) {
+                if super::stop_requested(&shutdown_state) {
                     return PollAction::Shutdown;
                 }
                 match result_rx.recv_timeout(std::time::Duration::from_millis(100)) {

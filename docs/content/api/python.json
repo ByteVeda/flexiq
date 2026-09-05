@@ -382,6 +382,14 @@
     },
     {
       "owner": "PyQueue",
+      "name": "begin_run",
+      "kind": "method",
+      "signature": "begin_run() -> None",
+      "params": [],
+      "returns": "None"
+    },
+    {
+      "owner": "PyQueue",
       "name": "cancel_job",
       "kind": "method",
       "signature": "cancel_job(job_id: str) -> bool",
@@ -639,6 +647,14 @@
       "signature": "effective_retention() -> str | None",
       "params": [],
       "returns": "str | None"
+    },
+    {
+      "owner": "PyQueue",
+      "name": "end_run",
+      "kind": "method",
+      "signature": "end_run() -> None",
+      "params": [],
+      "returns": "None"
     },
     {
       "owner": "PyQueue",

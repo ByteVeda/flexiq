@@ -76,6 +76,12 @@ queue.acquire_lock(
 queue.archive_old_jobs(older_than_seconds: int) -> int
 ```
 
+### `queue.begin_run()`
+
+```python
+queue.begin_run() -> None
+```
+
 ### `queue.cancel_job()`
 
 ```python
@@ -184,6 +190,12 @@ queue.dry_run_retention(retention: dict[str, int] | None = None) -> str
 
 ```python
 queue.effective_retention() -> str | None
+```
+
+### `queue.end_run()`
+
+```python
+queue.end_run() -> None
 ```
 
 ### `queue.enqueue()`
