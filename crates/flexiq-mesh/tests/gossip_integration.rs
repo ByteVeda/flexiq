@@ -343,3 +343,57 @@ async fn abrupt_death_is_detected() {
     let _ = ha.await;
     let _ = hb.await;
 }
+
+/// The node that raises a suspicion must act on it, not just announce it.
+///
+/// Two nodes, so there is nobody to relay the `Suspect` update back and no
+/// intermediary to probe through — the surviving node's own view is the only
+/// thing that can drop the peer. The suspicion multiplier is set so high that
+/// the `Dead` timer cannot expire inside the wait budget, which is what rules
+/// out the survivor merely waiting the peer out.
+#[tokio::test]
+async fn a_suspicion_leaves_the_suspecting_node_s_own_view() {
+    let port_a = 19600;
+    let port_b = 19601;
+
+    let mut config_a = make_config(port_a, vec![]);
+    config_a.suspicion_multiplier = 600;
+    let mut config_b = make_config(port_b, vec![format!("127.0.0.1:{port_a}")]);
+    config_b.suspicion_multiplier = 600;
+
+    let state_a = Arc::new(MeshState::new("node-a".to_string(), 10));
+    let state_b = Arc::new(MeshState::new("node-b".to_string(), 10));
+    let shutdown_a = Arc::new(Notify::new());
+    let shutdown_b = Arc::new(Notify::new());
+
+    let swim_a = SwimNode::new(
+        config_a,
+        state_a.clone(),
+        make_info("node-a", port_a),
+        shutdown_a.clone(),
+    );
+    let swim_b = SwimNode::new(
+        config_b,
+        state_b.clone(),
+        make_info("node-b", port_b),
+        shutdown_b.clone(),
+    );
+
+    let ha = tokio::spawn(async move { swim_a.run().await });
+    let hb = tokio::spawn(async move { swim_b.run().await });
+
+    wait_until("the two nodes to find each other", || {
+        state_a.alive_count() == 1
+    })
+    .await;
+
+    hb.abort();
+
+    wait_until("node-a to drop node-b from its own alive set", || {
+        state_a.alive_count() == 0
+    })
+    .await;
+
+    shutdown_a.notify_one();
+    let _ = ha.await;
+}

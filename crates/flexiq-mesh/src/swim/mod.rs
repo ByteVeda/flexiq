@@ -244,17 +244,30 @@ impl SwimNode {
         }
     }
 
-    /// Raise a suspicion: record the timer and queue the news for gossip.
+    /// Raise a suspicion: record the timer, demote the peer in this node's own
+    /// view, and queue the news for gossip.
+    ///
+    /// The local demotion is the part that is easy to leave out. A node that
+    /// only gossips `Suspect` keeps the peer `Alive` on its own ring and goes
+    /// on routing and stealing to it, while every peer that hears the update
+    /// evicts it — so the node that noticed is the last one still using it. In
+    /// a two-node mesh there is nobody to gossip to at all, and the belief
+    /// would sit uncorrected until the suspicion timer expired.
     fn suspect_member(&mut self, target_id: &str, reason: &str) {
         if !self.failure_detector.suspect(target_id) {
             return;
         }
         info!("[mesh] member {target_id} suspected ({reason})");
-        // No entry means nothing truthful to say about it; the suspicion timer
-        // is still running, which is what escalates.
+        // No entry means nothing to demote and nothing truthful to say about
+        // it; the suspicion timer is still running, which is what escalates.
         let Some(member) = self.state.get_member(target_id) else {
             return;
         };
+        self.state.upsert_member(Member {
+            info: member.info.clone(),
+            state: MemberState::Suspect,
+            incarnation: member.incarnation,
+        });
         self.membership.queue_update(MemberUpdate {
             member_id: target_id.to_string(),
             state: MemberState::Suspect,
