@@ -36,8 +36,10 @@ pub struct MeshMetrics {
     /// Jobs surrendered to thieves off the cold end. Rises when this node is
     /// the buffered-up one others are draining.
     pub jobs_stolen_out: AtomicU64,
-    /// Ring rebuilds. Reserved: no writer increments it, so it reads `0` —
-    /// membership changes rebuild the ring without passing through here.
+    /// Ring rebuilds — a peer joining, or leaving by any route. Counts changes
+    /// to the ring's contents, not writes attempted against it, so a load
+    /// refresh from a peer that is still alive does not move it. A fast climb
+    /// means placements keep moving, which is affinity thrashing.
     pub ring_recalculations: AtomicU64,
 }
 
@@ -91,6 +93,6 @@ pub struct MetricsSnapshot {
     pub jobs_stolen_in: u64,
     /// [`MeshMetrics::jobs_stolen_out`] at scrape time.
     pub jobs_stolen_out: u64,
-    /// [`MeshMetrics::ring_recalculations`] at scrape time, hence always `0`.
+    /// [`MeshMetrics::ring_recalculations`] at scrape time.
     pub ring_recalculations: u64,
 }

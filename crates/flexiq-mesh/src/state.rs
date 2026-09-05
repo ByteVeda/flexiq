@@ -13,10 +13,12 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::RwLock;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::metrics::MeshMetrics;
 use crate::ring::HashRing;
 
 /// Load and identity information gossipped between mesh peers.
@@ -83,18 +85,34 @@ pub struct MeshState {
     members: RwLock<HashMap<String, Member>>,
     ring: RwLock<HashRing>,
     local_worker_id: String,
+    metrics: Arc<MeshMetrics>,
 }
 
 impl MeshState {
     /// Build the state for a node that knows no peers yet. The local worker is
     /// placed on the ring immediately, so affinity works before any gossip.
+    ///
+    /// Counts ring churn into a private [`MeshMetrics`] nobody can read. Use
+    /// [`MeshState::with_metrics`] to share the node's own.
     pub fn new(worker_id: String, virtual_nodes: usize) -> Self {
+        Self::with_metrics(worker_id, virtual_nodes, Arc::new(MeshMetrics::default()))
+    }
+
+    /// As [`MeshState::new`], but reporting ring churn into `metrics` — the
+    /// same counters [`crate::MeshNode::metrics`] hands out, so
+    /// `ring_recalculations` reflects what membership actually did.
+    pub fn with_metrics(
+        worker_id: String,
+        virtual_nodes: usize,
+        metrics: Arc<MeshMetrics>,
+    ) -> Self {
         let mut ring = HashRing::new(virtual_nodes);
         ring.add_worker(&worker_id);
         Self {
             members: RwLock::new(HashMap::new()),
             ring: RwLock::new(ring),
             local_worker_id: worker_id,
+            metrics,
         }
     }
 
@@ -121,6 +139,8 @@ impl MeshState {
             .unwrap_or(false);
         drop(members);
 
+        // Guarded, so the routine case — a peer refreshing its load every
+        // protocol period — neither rewrites the ring nor counts as churn.
         if was_alive != is_alive {
             let mut ring = self.ring.write().unwrap_or_else(|p| p.into_inner());
             if is_alive {
@@ -128,28 +148,51 @@ impl MeshState {
             } else {
                 ring.remove_worker(&worker_id);
             }
+            drop(ring);
+            self.count_ring_change();
         }
         is_new
     }
 
     /// Mark a member as dead and remove from ring.
     pub fn mark_dead(&self, worker_id: &str) {
-        let mut members = self.members.write().unwrap_or_else(|p| p.into_inner());
-        if let Some(m) = members.get_mut(worker_id) {
-            m.state = MemberState::Dead;
-        }
-        let mut ring = self.ring.write().unwrap_or_else(|p| p.into_inner());
-        ring.remove_worker(worker_id);
+        self.demote(worker_id, MemberState::Dead);
     }
 
     /// Mark a member as gracefully left and remove from ring.
     pub fn mark_left(&self, worker_id: &str) {
+        self.demote(worker_id, MemberState::Left);
+    }
+
+    /// Move a member to a non-alive `state` and take it off the ring.
+    ///
+    /// The removal is unconditional — it is a no-op for a member already off —
+    /// but the counter only moves when the member was `Alive`, so
+    /// `ring_recalculations` measures churn in the ring's contents rather than
+    /// writes attempted against it.
+    fn demote(&self, worker_id: &str, state: MemberState) {
         let mut members = self.members.write().unwrap_or_else(|p| p.into_inner());
+        let was_alive = members
+            .get(worker_id)
+            .is_some_and(|m| m.state == MemberState::Alive);
         if let Some(m) = members.get_mut(worker_id) {
-            m.state = MemberState::Left;
+            m.state = state;
         }
         let mut ring = self.ring.write().unwrap_or_else(|p| p.into_inner());
         ring.remove_worker(worker_id);
+        drop(ring);
+        drop(members);
+        if was_alive {
+            self.count_ring_change();
+        }
+    }
+
+    /// Record one rebuild of the hash ring. Rises with membership churn, which
+    /// is what makes affinity placements move.
+    fn count_ring_change(&self) {
+        self.metrics
+            .ring_recalculations
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get all alive members sorted by local_buffer_len descending (busiest first).
@@ -229,6 +272,45 @@ mod tests {
         assert!(state.upsert_member(make_member("peer-a", 5)));
         assert!(!state.upsert_member(make_member("peer-a", 10))); // update, not new
         assert_eq!(state.alive_count(), 1);
+    }
+
+    #[test]
+    fn ring_recalculations_counts_membership_churn() {
+        let metrics = Arc::new(MeshMetrics::default());
+        let state = MeshState::with_metrics("local".to_string(), 150, Arc::clone(&metrics));
+        let count = || metrics.ring_recalculations.load(Ordering::Relaxed);
+
+        // Placing the local worker at construction is not churn.
+        assert_eq!(count(), 0);
+
+        state.upsert_member(make_member("peer-a", 5));
+        assert_eq!(count(), 1, "a peer joining the ring is one recalculation");
+
+        // A load refresh from a peer that is still alive leaves the ring alone.
+        state.upsert_member(make_member("peer-a", 12));
+        assert_eq!(count(), 1);
+
+        state.mark_dead("peer-a");
+        assert_eq!(count(), 2, "an alive → dead transition rebuilds the ring");
+
+        // Already off the ring: the removal is a no-op and must not be counted.
+        state.mark_dead("peer-a");
+        state.mark_dead("never-heard-of-it");
+        assert_eq!(count(), 2);
+    }
+
+    #[test]
+    fn suspect_takes_a_peer_off_the_ring() {
+        let metrics = Arc::new(MeshMetrics::default());
+        let state = MeshState::with_metrics("local".to_string(), 150, Arc::clone(&metrics));
+        state.upsert_member(make_member("peer-a", 5));
+
+        let mut suspected = make_member("peer-a", 5);
+        suspected.state = MemberState::Suspect;
+        state.upsert_member(suspected);
+
+        assert_eq!(state.alive_count(), 0);
+        assert_eq!(metrics.ring_recalculations.load(Ordering::Relaxed), 2);
     }
 
     #[test]
