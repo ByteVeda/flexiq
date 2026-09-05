@@ -1,5 +1,6 @@
 """Shared fixtures for flexiq tests."""
 
+import inspect
 import os
 import sys
 import threading
@@ -19,6 +20,38 @@ from flexiq import Queue, registry
 WorkflowWorkerFactory = Callable[[], AbstractContextManager[threading.Thread]]
 
 PollUntil = Callable[..., None]
+
+# Seconds ``Queue.shutdown()`` is allowed to drain in-flight work. Read off the
+# constructor rather than repeated as a literal, so this cannot drift from the
+# timeout it exists to bound.
+_DRAIN_TIMEOUT = int(inspect.signature(Queue.__init__).parameters["drain_timeout"].default)
+
+# The drain, plus room to watch the thread unwind after it returns. A join
+# budget is a failure deadline, not a delay: a passing run never spends it, so a
+# generous number costs a green suite nothing and only changes how long a
+# genuinely stuck one takes to report. Anything *under* the drain timeout fails
+# runs the library still considers healthy — SQLite alone is opened with
+# ``PRAGMA busy_timeout = 5000``, so one contended query inside the drain can
+# burn 5s on its own. That is how a 5s budget copy-pasted across this suite
+# surfaced as an unrelated-looking flake on whichever runner happened to be slow
+# (#809). Raise this one number rather than a per-file literal.
+WORKER_JOIN_TIMEOUT = _DRAIN_TIMEOUT + 15
+
+
+def join_worker(
+    thread: threading.Thread,
+    *,
+    timeout: float = WORKER_JOIN_TIMEOUT,
+    message: str = "worker did not finish its drain",
+) -> None:
+    """Join a flexiq background thread that has already been asked to stop.
+
+    Returning quietly on a still-live thread is how a shutdown regression hides:
+    the thread keeps its SQLite handle open for the rest of the session, and on
+    Windows that blocks the ``tmp_path`` cleanup of every later test.
+    """
+    thread.join(timeout=timeout)
+    assert not thread.is_alive(), f"{message} (join budget {timeout}s)"
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +117,7 @@ def run_worker(queue: Queue) -> Generator[threading.Thread]:
     thread.start()
     yield thread
     queue.shutdown()
-    thread.join(timeout=5)
+    join_worker(thread)
 
 
 @pytest.fixture
@@ -105,7 +138,7 @@ def workflow_worker(queue: Queue) -> WorkflowWorkerFactory:
             yield thread
         finally:
             queue.shutdown()
-            thread.join(timeout=5)
+            join_worker(thread)
 
     return _ctx
 

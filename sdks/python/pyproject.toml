@@ -95,7 +95,10 @@ select = [
 "flexiq/dashboard.py" = ["E501"]  # embedded HTML/JS strings
 
 [tool.ruff.lint.isort]
-known-first-party = ["flexiq"]
+# ``conftest`` is the test suite's own shared-helper module, imported by test
+# files under pytest's prepend import mode — group it with the package, not with
+# third-party dependencies.
+known-first-party = ["flexiq", "conftest"]
 
 # -- Mypy --
 
