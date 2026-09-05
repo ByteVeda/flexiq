@@ -26,8 +26,9 @@ pub enum GossipMessage {
         seq: u64,
         /// Worker id of the prober.
         from: MemberId,
-        /// Where to send the ack. Carried explicitly because the datagram's
-        /// source port is not the peer's advertised gossip address.
+        /// The prober's advertised gossip address. Informational: the ack goes
+        /// back to the datagram's source, so nothing reads this today. It stays
+        /// because it is on the wire between mesh nodes.
         from_addr: SocketAddr,
     },
     /// Reply to a `Ping`. Its arrival clears any suspicion the prober held.
@@ -41,8 +42,10 @@ pub enum GossipMessage {
     /// after a direct ping went unanswered — one bad link between two nodes
     /// must not be enough to evict a healthy worker.
     PingReq {
-        /// Probe number of the sender's stalled direct ping. The intermediary
-        /// mints its own for the relayed ping.
+        /// Probe number the requester registered this indirect probe under —
+        /// freshly minted, not the stalled direct ping's. The intermediary
+        /// mints a separate one for the relayed `Ping` and echoes this one back
+        /// in the [`GossipMessage::AckRelay`].
         seq: u64,
         /// Worker id of the requester, which the relayed ack goes back to.
         from: MemberId,
@@ -55,7 +58,9 @@ pub enum GossipMessage {
     /// Sent by an intermediary that got an ack out of a `PingReq` target:
     /// evidence for the requester that the peer it could not reach is alive.
     AckRelay {
-        /// Probe number the relayed ack arrived under.
+        /// The **requester's** probe number, copied from the `PingReq`, not the
+        /// seq the intermediary minted for the relayed ping. Counters are per
+        /// node, so anything else is unmatchable at the requester.
         seq: u64,
         /// Worker id of the target that answered.
         original_from: MemberId,

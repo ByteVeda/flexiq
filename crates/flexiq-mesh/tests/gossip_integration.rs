@@ -184,3 +184,80 @@ async fn graceful_leave_removes_from_peers() {
     shutdown_a.notify_one();
     let _ = ha.await;
 }
+
+/// The relayed ack has to come back under the *requester's* probe number.
+///
+/// Seq counters are per node, so an `AckRelay` carrying the intermediary's own
+/// relay seq is unmatchable at the requester — and worse than unmatchable, since
+/// it can collide with an unrelated pending direct ping and resolve that one
+/// instead. Driven with raw sockets: one real node as the intermediary, and
+/// fake requester/target sockets so the seq under test is one we chose.
+#[tokio::test]
+async fn ping_req_relay_echoes_the_requester_seq() {
+    use flexiq_mesh::swim::message::GossipMessage;
+    use tokio::net::UdpSocket;
+
+    let port_i = 19400;
+    let requester = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = target.local_addr().unwrap();
+    let intermediary_addr: SocketAddr = format!("127.0.0.1:{port_i}").parse().unwrap();
+
+    let shutdown = Arc::new(Notify::new());
+    let swim = SwimNode::new(
+        make_config(port_i, vec![]),
+        Arc::new(MeshState::new("node-i".to_string(), 10)),
+        make_info("node-i", port_i),
+        shutdown.clone(),
+    );
+    let handle = tokio::spawn(async move { swim.run().await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // A number the intermediary's own counter will not reach on its own.
+    const REQUESTER_SEQ: u64 = 4242;
+    let ping_req = GossipMessage::PingReq {
+        seq: REQUESTER_SEQ,
+        from: "node-req".to_string(),
+        target: "node-tgt".to_string(),
+        target_addr,
+    };
+    requester
+        .send_to(&ping_req.encode().unwrap(), intermediary_addr)
+        .await
+        .unwrap();
+
+    // The intermediary forwards a Ping under a seq of its own; answer that one.
+    let mut buf = [0u8; 2048];
+    let (n, from) = tokio::time::timeout(Duration::from_millis(20_000), target.recv_from(&mut buf))
+        .await
+        .expect("intermediary never relayed the ping")
+        .unwrap();
+    let relay_seq = match GossipMessage::decode(&buf[..n]).unwrap() {
+        GossipMessage::Ping { seq, .. } => seq,
+        other => panic!("expected a relayed Ping, got {other:?}"),
+    };
+    assert_ne!(
+        relay_seq, REQUESTER_SEQ,
+        "the intermediary must mint its own seq, or this test proves nothing"
+    );
+    let ack = GossipMessage::Ack {
+        seq: relay_seq,
+        from: "node-tgt".to_string(),
+    };
+    target.send_to(&ack.encode().unwrap(), from).await.unwrap();
+
+    let (n, _) = tokio::time::timeout(Duration::from_millis(20_000), requester.recv_from(&mut buf))
+        .await
+        .expect("intermediary never relayed the ack back")
+        .unwrap();
+    match GossipMessage::decode(&buf[..n]).unwrap() {
+        GossipMessage::AckRelay { seq, .. } => assert_eq!(
+            seq, REQUESTER_SEQ,
+            "AckRelay must echo the requester's seq, not the relay seq"
+        ),
+        other => panic!("expected an AckRelay, got {other:?}"),
+    }
+
+    shutdown.notify_one();
+    let _ = handle.await;
+}

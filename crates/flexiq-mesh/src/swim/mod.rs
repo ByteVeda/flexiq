@@ -49,10 +49,23 @@ pub struct SwimNode {
     seq: u64,
     shutdown: Arc<Notify>,
     encryption_key: Option<Vec<u8>>,
-    /// Tracks PingReq relays: seq → (requester_id, requester_addr).
-    /// When an ACK arrives for a relayed seq, we forward AckRelay
-    /// back to the original requester.
-    pending_relays: HashMap<u64, (String, SocketAddr)>,
+    /// Relays this node is carrying, keyed by the seq it minted for the
+    /// forwarded `Ping`. When the target acks that seq, the entry says who to
+    /// answer and under which probe number.
+    pending_relays: HashMap<u64, PendingRelay>,
+}
+
+/// One `PingReq` this node agreed to relay.
+struct PendingRelay {
+    /// Worker id of the node that asked, for logging.
+    requester_id: String,
+    /// Where to send the `AckRelay`.
+    requester_addr: SocketAddr,
+    /// The requester's own probe number. The `AckRelay` must carry this and
+    /// not the seq we minted: seq counters are per node, and the requester
+    /// registered the probe under its own. (SWIM §4.1 — the intermediary
+    /// forwards the target's ack into the requester's protocol period.)
+    requester_seq: u64,
 }
 
 impl SwimNode {
@@ -322,14 +335,18 @@ impl SwimNode {
                 debug!("[mesh] ack sent to {sender} at {from}");
             }
             GossipMessage::Ack { seq, from: sender } => {
-                if let Some((requester_id, requester_addr)) = self.pending_relays.remove(&seq) {
-                    let relay = GossipMessage::AckRelay {
-                        seq,
+                if let Some(relay) = self.pending_relays.remove(&seq) {
+                    let ack_relay = GossipMessage::AckRelay {
+                        seq: relay.requester_seq,
                         original_from: sender.clone(),
                         via: self.local_info.worker_id.clone(),
                     };
-                    self.send_msg(socket, &relay, requester_addr).await;
-                    debug!("[mesh] relayed ack from {sender} back to {requester_id}");
+                    self.send_msg(socket, &ack_relay, relay.requester_addr)
+                        .await;
+                    debug!(
+                        "[mesh] relayed ack from {sender} back to {} (seq={})",
+                        relay.requester_id, relay.requester_seq
+                    );
                 }
                 if let Some(resolved) = self.failure_detector.ack_received(seq) {
                     debug!("[mesh] ack from {sender} resolved probe for {resolved}");
@@ -347,8 +364,14 @@ impl SwimNode {
                     from: self.local_info.worker_id.clone(),
                     from_addr: self.local_info.gossip_addr,
                 };
-                self.pending_relays
-                    .insert(relay_seq, (requester.clone(), from));
+                self.pending_relays.insert(
+                    relay_seq,
+                    PendingRelay {
+                        requester_id: requester.clone(),
+                        requester_addr: from,
+                        requester_seq: seq,
+                    },
+                );
                 self.send_msg(socket, &ping, target_addr).await;
                 debug!("[mesh] relayed ping-req from {requester} to {target} (relay_seq={relay_seq}, orig_seq={seq})");
             }
