@@ -123,6 +123,12 @@ class QueueLifecycleMixin:
         list. One call stops all of them, and the request clears only once the
         last of them has exited — never when the first does, which would leave
         its siblings running with nothing left to find.
+
+        The other side of holding a request is that one made while *nothing* is
+        running stays armed: the next :meth:`run_worker` on this queue returns
+        without processing anything, which reads like a worker that silently
+        refuses to start. Shut a queue down while a worker is running on it, or
+        build a fresh one for the next run.
         """
         self._inner.request_shutdown()
 

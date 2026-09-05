@@ -87,7 +87,9 @@ queue.shutdown()
 `shutdown()` is non-blocking and safe from any thread — it is the programmatic
 equivalent of the signal, useful from a health endpoint or a supervisor thread.
 It is also safe to call while a worker is still starting: the request is held
-until the runs it was aimed at have finished, rather than discarded.
+until the runs it was aimed at have finished, rather than discarded. The other
+side of that is a call made while nothing is running — the request stays armed,
+and the next `run_worker()` on that queue returns without processing anything.
 
 <Callout type="warning">
   Set `drain_timeout` above your longest task's `timeout`, or shutdown stops
