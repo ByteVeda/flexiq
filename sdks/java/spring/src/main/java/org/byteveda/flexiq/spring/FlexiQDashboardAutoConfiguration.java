@@ -22,6 +22,17 @@ import org.springframework.context.annotation.Bean;
 @EnableConfigurationProperties(FlexiQProperties.class)
 public class FlexiQDashboardAutoConfiguration {
 
+    /** Constructs the auto-configuration; Spring Boot instantiates it. */
+    public FlexiQDashboardAutoConfiguration() {}
+
+    /**
+     * Starts the dashboard server over the {@link FlexiQ} bean.
+     *
+     * @param flexiq the queue the dashboard reads
+     * @param properties the bound {@code flexiq.dashboard.*} configuration
+     * @return the running server, stopped with the application context
+     * @throws IOException if the port cannot be bound or the static assets cannot be read
+     */
     @Bean(destroyMethod = "close")
     @ConditionalOnBean(FlexiQ.class)
     @ConditionalOnMissingBean

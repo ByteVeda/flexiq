@@ -19,6 +19,15 @@ import org.byteveda.flexiq.annotation.TaskHandler;
  */
 public class Counter {
 
+    /** Constructs a handler instance; the generated provider calls this reflectively. */
+    public Counter() {}
+
+    /**
+     * Sums the payload, the handler the generated companion registers.
+     *
+     * @param numbers the task payload
+     * @return the sum of the payload
+     */
     @TaskHandler("discovered")
     public Integer total(List<Integer> numbers) {
         return numbers.stream().mapToInt(Integer::intValue).sum();

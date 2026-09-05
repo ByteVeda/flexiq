@@ -39,6 +39,10 @@ import org.jspecify.annotations.Nullable;
  */
 @SupportedAnnotationTypes(TaskHandlerProcessor.ANNOTATION)
 public final class TaskHandlerProcessor extends AbstractProcessor {
+
+    /** Constructs the processor; {@code javac} instantiates it via {@link java.util.ServiceLoader}. */
+    public TaskHandlerProcessor() {}
+
     static final String ANNOTATION = "org.byteveda.flexiq.annotation.TaskHandler";
 
     /** Service the generated providers are registered under, for {@link java.util.ServiceLoader}. */
