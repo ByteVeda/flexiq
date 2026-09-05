@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -36,7 +37,7 @@ def test_graceful_shutdown_completes_inflight(queue: Queue, poll_until: PollUnti
     queue.shutdown()
 
     # Worker should finish the in-flight task
-    worker_thread.join(timeout=10)
+    join_worker(worker_thread)
 
     assert completed.is_set()
     fetched = queue.get_job(job.id)
@@ -72,8 +73,7 @@ def test_shutdown_stops_worker(queue: Queue, poll_until: PollUntil) -> None:
     )
     queue.shutdown()
 
-    worker_thread.join(timeout=30)
-    assert not worker_thread.is_alive()
+    join_worker(worker_thread)
 
 
 def test_shutdown_without_worker_is_noop(queue: Queue) -> None:

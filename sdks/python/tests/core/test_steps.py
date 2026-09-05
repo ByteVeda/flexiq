@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, _flexiq
 from flexiq._active_context import _ActiveContext
 from flexiq.codecs import GzipCodec
@@ -59,7 +60,7 @@ def start_worker() -> Generator[WorkerFactory]:
 
     for queue, thread in started:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
 
 # Runs in its own interpreter — see ``_query``. Emits JSON so blobs survive the

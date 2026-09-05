@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.pagination import Page
 
@@ -174,7 +175,7 @@ def test_dead_letters_after(tmp_path: Path, poll_until: PollUntil) -> None:
         )
     finally:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
     seen: list[str] = []
     cursor: str | None = None
@@ -212,7 +213,7 @@ def test_list_archived_after(tmp_path: Path, poll_until: PollUntil) -> None:
         )
     finally:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
     seen: list[str] = []
     cursor: str | None = None

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.middleware import TaskMiddleware
 
@@ -84,4 +85,4 @@ def test_expired_job_never_executes(queue: Queue, poll_until: Callable[..., None
     poll_until(job_expired, message="expired job never archived as cancelled")
     assert not ran.is_set()
     queue.shutdown()
-    worker_thread.join(timeout=5)
+    join_worker(worker_thread)

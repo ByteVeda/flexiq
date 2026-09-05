@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -42,7 +43,7 @@ def test_worker_does_not_claim_more_than_it_can_run(tmp_path: Path) -> None:
             time.sleep(0.02)
     finally:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
     assert queue.stats().get("completed", 0) == job_count
     # The failure mode guarded here is the whole backlog going Running at once

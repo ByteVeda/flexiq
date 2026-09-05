@@ -30,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import BatchItemResult, MaxRetriesExceededError, Queue
 from flexiq.context import current_job
 from flexiq.events import EventType
@@ -63,15 +64,9 @@ def _start_worker(queue: Queue) -> threading.Thread:
 
 
 def _stop_worker(queue: Queue, thread: threading.Thread) -> None:
-    """Stop the worker, and fail if it does not actually stop.
-
-    Returning quietly on a live thread is how a shutdown regression hides: the
-    assertions have already passed by this point, so the test still goes green
-    and only the wall clock shows anything is wrong.
-    """
+    """Shut the queue down and join the worker thread."""
     queue._inner.request_shutdown()
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "worker did not stop within 10s"
+    join_worker(thread)
 
 
 def _wait_for(predicate: Any, message: str) -> None:
@@ -547,10 +542,9 @@ def test_failed_task_does_not_stall_shutdown(tmp_path: Path, is_async: bool) -> 
 
         started = time.monotonic()
         q._inner.request_shutdown()
-        thread.join(timeout=30)
+        join_worker(thread, message="worker did not stop after a failed task")
         elapsed = time.monotonic() - started
 
-        assert not thread.is_alive(), "worker did not stop after a failed task"
         # Prompt is ~0.2s; the leak shows up as the multi-second drain timeout.
         assert elapsed < 5, f"shutdown after a failed task took {elapsed:.1f}s — sender leaked?"
     finally:

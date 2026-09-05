@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, _flexiq
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -34,9 +35,8 @@ def test_async_task_runs_on_native_executor(tmp_path: Path, poll_until: PollUnti
         poll_until(lambda: len(seen) == 1, timeout=15, message="task never ran")
     finally:
         queue.shutdown()
-        thread.join(timeout=10)
+        join_worker(thread)
 
-    assert not thread.is_alive(), "worker did not shut down"
     assert seen == ["flexiq-async-executor"]
 
 
@@ -68,10 +68,9 @@ def test_failed_async_task_does_not_stall_shutdown(tmp_path: Path, poll_until: P
     finally:
         queue.shutdown()
         start = time.monotonic()
-        thread.join(timeout=20)
+        join_worker(thread, message="the drain is waiting on the retained exception")
         elapsed = time.monotonic() - start
 
-    assert not thread.is_alive(), "worker never shut down"
     assert elapsed < 5, (
         f"shutdown took {elapsed:.2f}s — the drain is waiting on the retained exception"
     )

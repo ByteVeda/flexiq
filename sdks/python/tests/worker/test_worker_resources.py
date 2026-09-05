@@ -6,6 +6,7 @@ import json
 import threading
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 # ---------------------------------------------------------------------------
@@ -124,7 +125,7 @@ class TestWorkerResourceIntegration:
             assert health.get("db") == "healthy"
         finally:
             queue._inner.request_shutdown()
-            thread.join(timeout=10)
+            join_worker(thread)
 
     def test_worker_no_resources(self, tmp_path: Any, poll_until: Any) -> None:
         """Worker without resources stores None for resource fields."""
@@ -148,7 +149,7 @@ class TestWorkerResourceIntegration:
             assert w["resource_health"] is None
         finally:
             queue._inner.request_shutdown()
-            thread.join(timeout=10)
+            join_worker(thread)
 
     def test_heartbeat_updates_health(self, tmp_path: Any, poll_until: Any) -> None:
         """Heartbeat thread updates resource_health in storage."""
@@ -178,4 +179,4 @@ class TestWorkerResourceIntegration:
             assert "db" in health
         finally:
             queue._inner.request_shutdown()
-            thread.join(timeout=10)
+            join_worker(thread)

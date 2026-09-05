@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, Retention, RetentionPreview
 
 
@@ -118,7 +119,7 @@ def test_dry_run_counts_purgeable_rows_without_deleting(tmp_path: Path) -> None:
         assert queue.get_job(job.id) is not None
     finally:
         queue.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 def test_dry_run_previews_candidate_windows(tmp_path: Path) -> None:
@@ -153,7 +154,7 @@ def test_dry_run_previews_candidate_windows(tmp_path: Path) -> None:
         assert queue.get_job(job.id) is not None
     finally:
         queue.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 def test_dry_run_reports_disabled_for_an_empty_config(tmp_path: Path) -> None:

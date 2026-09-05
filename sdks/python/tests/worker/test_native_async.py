@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import cloudpickle
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, TaskCancelledError, current_job
 from flexiq.async_support.context import (
     clear_async_context,
@@ -249,9 +250,8 @@ def test_stop_before_loop_runs_still_stops_the_thread() -> None:
     # its loop check against a not-yet-running loop.
     assert checked.wait(timeout=10), "stop() never reached its join"
     entered.set()
-    stopper.join(timeout=10)
+    join_worker(stopper, message="stop() never returned")
 
-    assert not stopper.is_alive(), "stop() never returned"
     assert not executor._thread.is_alive(), "loop thread kept running forever"
     assert executor._sender is None
 

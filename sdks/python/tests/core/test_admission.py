@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, QueueFullError
 
 
@@ -147,8 +148,7 @@ def test_cap_frees_after_drain(tmp_path: Path) -> None:
     finally:
         gate.set()
         q.shutdown()
-        worker.join(timeout=5)
-        assert not worker.is_alive(), "worker did not stop during cleanup"
+        join_worker(worker, message="worker did not stop during cleanup")
 
 
 def _register_debounced(queue: Queue) -> None:

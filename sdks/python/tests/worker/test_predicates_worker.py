@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq.app import Queue
 from flexiq.exceptions import PredicateRejectedError
 from flexiq.predicates import (
@@ -49,7 +50,7 @@ def _start_worker(queue: Queue) -> threading.Thread:
 
 def _stop_worker(queue: Queue, thread: threading.Thread) -> None:
     queue._inner.request_shutdown()
-    thread.join(timeout=5)
+    join_worker(thread)
 
 
 def _wait_for_status(queue: Queue, job_id: str, statuses: set[str], timeout: float = 8.0) -> str:

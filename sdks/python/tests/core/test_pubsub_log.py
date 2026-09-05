@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue, TopicMessage
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -154,7 +155,7 @@ class TestManagedConsumer:
             poll_until(lambda: sorted(skip) == [0, 1, 2], timeout=30, message="skip past poison")
         finally:
             queue.shutdown()
-            thread.join(timeout=5)
+            join_worker(thread)
 
         assert retry.count(0) == 1  # acked before the failure, never redelivered
         assert skip.count(1) == 1  # poison attempted once, then acked past
@@ -177,11 +178,7 @@ class TestManagedConsumer:
             lambda: handled == [1], timeout=30, message="consumer should run before shutdown"
         )
         queue.shutdown()
-        # SQLite is opened with ``busy_timeout = 5000``, so one contended query
-        # during the drain can block for 5s on its own — a 5s budget can't bound
-        # a shutdown. Wait past that, well under the 30s drain timeout.
-        thread.join(timeout=20)
-        assert not thread.is_alive()
+        join_worker(thread)
 
 
 class TestLogStats:

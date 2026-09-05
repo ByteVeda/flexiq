@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 
 
@@ -61,7 +62,7 @@ def test_codel_sheds_stale_jobs_under_overload(tmp_path: Path) -> None:
         codel_dead = [d for d in dead if str(d.get("error", "")).startswith("codel:")]
     finally:
         q.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
     assert len(codel_dead) >= 1, "sustained overload should shed at least one stale job"
     # Every shed job is a CoDel drop (the task never fails on its own).
@@ -101,7 +102,7 @@ def test_codel_drops_are_not_auto_retried(tmp_path: Path) -> None:
         time.sleep(1.0)
     finally:
         q.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
     dead = q.dead_letters(limit=100)
     codel_dead = [d for d in dead if str(d.get("error", "")).startswith("codel:")]

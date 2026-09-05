@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import MaxRetriesExceededError, Queue, TaskFailedError, chain, chord, group
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -31,7 +32,7 @@ def queue(tmp_path: Path) -> Generator[Queue]:
         yield q
     finally:
         q._inner.request_shutdown()
-        t.join(timeout=10)
+        join_worker(t)
 
 
 # ── Construction / API validation ─────────────────────────────────────────

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import (
     AesGcmCodec,
     CodecSerializer,
@@ -182,7 +183,7 @@ class TestQueueCodecIntegration:
                 yield
             finally:
                 queue._inner.request_shutdown()
-                thread.join(timeout=5)
+                join_worker(thread)
 
         return _ctx()
 

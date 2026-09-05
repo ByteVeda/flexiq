@@ -13,6 +13,7 @@ from pathlib import Path
 import cloudpickle
 import pytest
 
+from conftest import join_worker
 from flexiq import JsonSerializer, Queue, SmartSerializer
 
 
@@ -27,7 +28,7 @@ def run_json_worker(json_queue: Queue) -> Generator[threading.Thread]:
     thread.start()
     yield thread
     json_queue._inner.request_shutdown()
-    thread.join(timeout=5)
+    join_worker(thread)
 
 
 def test_result_round_trips_with_json_serializer(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 # The value `crates/flexiq-core/BINDING_CONTRACT.md` pins for this task set.
@@ -42,7 +43,7 @@ def test_worker_reports_its_task_registry_fingerprint(tmp_path: Any, poll_until:
         assert worker["registry_fingerprint"] == INVOICES_AND_REPORTS
     finally:
         queue._inner.request_shutdown()
-        thread.join(timeout=10)
+        join_worker(thread)
 
 
 def test_registration_order_does_not_change_the_fingerprint(
@@ -73,4 +74,4 @@ def test_registration_order_does_not_change_the_fingerprint(
         assert queue.workers()[0]["registry_fingerprint"] == INVOICES_AND_REPORTS
     finally:
         queue._inner.request_shutdown()
-        thread.join(timeout=10)
+        join_worker(thread)
