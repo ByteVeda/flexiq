@@ -50,7 +50,16 @@ jobs:
       # item is documented at all is `missing_docs`, a rustc lint no flag here
       # turns on — each crate denies it in its own root instead.
       - name: Rustdoc is warning-free
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+        env:
+          # -D warnings escalates lints that are already firing; it turns none
+          # on, so rustdoc's allow-by-default lints have to be named. Keep this
+          # list identical to publish-crates.yml's copy.
+          RUSTDOCFLAGS: >-
+            -D warnings
+            -D rustdoc::unescaped_backticks
+            -D rustdoc::missing_crate_level_docs
+            -D rustdoc::private_doc_tests
+        run: cargo doc --workspace --no-deps --all-features
 
       - name: Generic crates stay binding-free
         # The engine crates (core/workflows/mesh) must remain binding-agnostic so
