@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.context import JobContext
 from flexiq.dashboard import _make_handler
@@ -250,7 +251,7 @@ def test_disabled_middleware_does_not_fire(
         poll_until(lambda: alpha_name in rec.invocations, message="task didn't run")
     finally:
         queue._inner.request_shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
     assert alpha_name in rec.invocations  # global fired
     assert alpha_name not in other.invocations  # disabled for this task

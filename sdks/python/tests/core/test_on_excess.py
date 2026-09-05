@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import OnExcess, Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -31,7 +32,7 @@ def _drain(q: Queue, worker: threading.Thread, poll_until: PollUntil) -> None:
         )
     finally:
         q.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 def test_on_excess_rejects_an_unknown_value() -> None:
@@ -87,7 +88,7 @@ def test_on_excess_defer_keeps_the_excess_pending(tmp_path: Path, poll_until: Po
         time.sleep(1.0)
     finally:
         q.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
     assert q.dead_letters(limit=100) == [], "deferral must never dead-letter"
     assert q.stats()["pending"] == 4, "the excess jobs wait for tokens"

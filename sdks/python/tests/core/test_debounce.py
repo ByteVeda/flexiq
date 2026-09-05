@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.debounce import parse_duration_ms
 from flexiq.result import JobResult
@@ -214,7 +215,7 @@ def test_debounced_job_runs_once(queue: Queue) -> None:
         assert queue.stats()["pending"] == 0
     finally:
         queue.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 # ── Key template resolution ───────────────────────────────────────────

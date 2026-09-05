@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.dashboard import _make_handler
 
@@ -163,7 +164,7 @@ def seeded_queue(tmp_path: Path) -> tuple[Queue, str]:
             pytest.fail("the seeded failure never reached a terminal state")
     finally:
         queue.shutdown()
-        worker.join(timeout=10)
+        join_worker(worker)
 
     queue._inner.write_task_log(jobs[1].id, "parity.alpha", "info", "seeded log", None)
     queue.set_setting("dashboard:branding", json.dumps({"title": "Parity"}))

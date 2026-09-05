@@ -3,6 +3,7 @@
 import threading
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -114,7 +115,7 @@ def test_retry_budget_dead_letters_a_retry_storm(queue: Queue, poll_until: PollU
         )
     finally:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
     dead = queue.dead_letters(limit=10)
     budget_killed = [d for d in dead if d.get("metadata") == "retry_budget_exhausted"]
@@ -138,7 +139,7 @@ def test_retry_budget_rejects_an_unparseable_rate(queue: Queue) -> None:
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    thread.join(timeout=10)
+    join_worker(thread, message="worker never exited after rejecting the retry budget")
     queue.shutdown()
 
     assert thread_error, "an invalid retry_budget must be rejected, not ignored"

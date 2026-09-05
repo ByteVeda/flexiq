@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 
 
@@ -42,7 +43,7 @@ def _run_and_record(queue: Queue, total: int) -> list[int]:
             time.sleep(0.05)
     finally:
         queue.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
     with lock:
         return list(order)

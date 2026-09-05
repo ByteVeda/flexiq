@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -67,7 +68,7 @@ def test_rate_limit_throttles(queue: Queue, poll_until: PollUntil) -> None:
         # A worker left running holds this test's SQLite file open for the rest
         # of the session, which on Windows blocks the tmp_path cleanup.
         queue.shutdown()
-        worker_thread.join(timeout=5)
+        join_worker(worker_thread)
 
 
 def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
@@ -87,7 +88,7 @@ def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    thread.join(timeout=10)
+    join_worker(thread, message="worker never exited after rejecting the rate")
     queue.shutdown()
 
     assert thread_error, "an invalid rate_limit must be rejected, not ignored"

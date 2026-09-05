@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import PeriodicInfo, Queue
 
 
@@ -47,7 +48,7 @@ def registered(queue: Queue, poll_until: Any) -> Generator[Queue]:
         # Also covers a failed poll_until, which would otherwise strand the
         # worker and its database handle for every later test.
         queue.shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 def _find(schedules: list[PeriodicInfo], name: str) -> PeriodicInfo:
@@ -103,7 +104,7 @@ def test_periodic_task_triggers(queue: Queue, poll_until: Any) -> None:
         # A once-a-second schedule left running keeps firing for the rest of the
         # session, and its lifecycle logs land in every later test's `caplog`.
         queue.shutdown()
-        worker_thread.join(timeout=5)
+        join_worker(worker_thread)
 
 
 def test_list_periodic_reports_every_field(registered: Queue) -> None:

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue, Retention
 from flexiq.dashboard._testing import AuthedClient, seed_admin_and_session
 
@@ -64,7 +65,7 @@ def _worker_that_published(queue: Queue, poll_until: PollUntil) -> Generator[Non
         yield
     finally:
         queue.shutdown()
-        thread.join(timeout=5)
+        join_worker(thread)
 
 
 # ── Python API ──────────────────────────────────────────

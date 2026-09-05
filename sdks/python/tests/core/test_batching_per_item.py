@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import join_worker
 from flexiq import (
     BatchItemResult,
     BatchPartialFailureError,
@@ -54,7 +55,7 @@ def started_worker(q: Queue) -> Generator[threading.Thread]:
         yield thread
     finally:
         q._inner.request_shutdown()
-        thread.join(timeout=10)
+        join_worker(thread)
 
 
 _RegisterTaskFn = Callable[[], None]
