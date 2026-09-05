@@ -219,10 +219,11 @@ jobs:
       # that went up earlier was gated when it did.
       #
       # `SEMVER_EXEMPT_VERSION` is one release's waiver, not a switch, and it is
-      # currently empty: the waiver named 1.1.0, which was never tagged — its
-      # breaking changes went out under 2.0.0 instead, where a major bump makes
-      # them legal and the gate passes on its own merits. Set it again only to
-      # name another single version, never to disable the check.
+      # currently empty. It once named a minor that would have carried breaking
+      # changes; that version was never tagged, and the breaks went out under
+      # 2.0.0 instead, where the major bump makes them legal and the gate passes
+      # on its own merits. Set it again only to name another single version,
+      # never to disable the check.
       - name: Semver check the crates being published
         if: >-
           steps.pending.outputs.baselined != ''
