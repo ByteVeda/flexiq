@@ -64,12 +64,9 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// This module's javadoc is warning-free, so it is held there: -Xwerror fails the
-// build on a regression rather than letting one accumulate the way the runtime's
-// did. The runtime is not ready for this yet.
-tasks.withType<Javadoc>().configureEach {
-    (options as StandardJavadocDocletOptions).addStringOption("Xwerror", "-quiet")
-}
+// -Xwerror and the raised warning cap now come from the root build's
+// `allprojects` block, which covers every module rather than the ones that
+// remembered to opt in.
 
 spotless {
     java {

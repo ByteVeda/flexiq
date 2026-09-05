@@ -101,13 +101,21 @@ mavenPublishing {
 // a few thousand read as "104" for as long as anyone had looked. Raise the cap so
 // the number the build prints is the real one.
 //
-// -Xwerror holds the runtime at zero, the way `flexiq-test` is held: the backlog
-// that cap was hiding is cleared, and an undocumented parameter is now a build
-// failure rather than a line nobody reads.
-tasks.withType<Javadoc>().configureEach {
-    (options as StandardJavadocDocletOptions).apply {
-        addStringOption("Xmaxwarns", "100000")
-        addStringOption("Xwerror", "-quiet")
+// -Xwerror holds the runtime at zero: the backlog that cap was hiding is
+// cleared, and an undocumented parameter is now a build failure rather than a
+// line nobody reads.
+//
+// Applied to every subproject too, not just this one. Holding only the modules
+// that happened to opt in is what let `spring`, `processor` and `graalvm-smoke`
+// reach 29 warnings — they published as annotations on the release run, where
+// GitHub caps the list at 10, so even the count was wrong. A new subproject
+// inherits the gate rather than having to remember it.
+allprojects {
+    tasks.withType<Javadoc>().configureEach {
+        (options as StandardJavadocDocletOptions).apply {
+            addStringOption("Xmaxwarns", "100000")
+            addStringOption("Xwerror", "-quiet")
+        }
     }
 }
 

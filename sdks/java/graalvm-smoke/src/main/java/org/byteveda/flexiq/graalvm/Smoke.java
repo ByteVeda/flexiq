@@ -26,6 +26,12 @@ public final class Smoke {
 
     private Smoke() {}
 
+    /**
+     * Runs the smoke checks, exiting non-zero on the first failure.
+     *
+     * @param args ignored
+     * @throws Exception if any check fails, which fails the native-image job
+     */
     public static void main(String[] args) throws Exception {
         Path dir = Files.createTempDirectory("flexiq-graalvm-smoke");
         Task<String> echo = Task.of("echo", String.class);

@@ -17,6 +17,15 @@ import org.springframework.context.annotation.Bean;
 @EnableConfigurationProperties(FlexiQProperties.class)
 public class FlexiQAutoConfiguration {
 
+    /** Constructs the auto-configuration; Spring Boot instantiates it. */
+    public FlexiQAutoConfiguration() {}
+
+    /**
+     * Builds the {@link FlexiQ} bean, applying only the properties that are set.
+     *
+     * @param properties the bound {@code flexiq.*} configuration
+     * @return the queue handle, closed with the application context
+     */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     public FlexiQ flexiq(FlexiQProperties properties) {
