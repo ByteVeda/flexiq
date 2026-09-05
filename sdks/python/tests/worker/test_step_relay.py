@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Any
 
+from conftest import join_worker
 from flexiq.prefork.steps import _ACK_BACKSTOP_S, StepRelay
 
 
@@ -49,7 +50,7 @@ def test_a_commit_frames_its_result_and_waits_for_the_ack() -> None:
     assert "owner" not in header
 
     relay.deliver({"type": "step_ack", "job_id": "job-1", "seq": 0, "ok": True})
-    thread.join(timeout=5)
+    join_worker(thread, message="a commit was never released by its ack")
     assert answered == [{"type": "step_ack", "job_id": "job-1", "seq": 0, "ok": True}]
 
 
@@ -66,8 +67,7 @@ def test_a_commit_in_flight_when_the_stream_ends_is_released() -> None:
     time.sleep(0.05)
     relay.abandon()
 
-    thread.join(timeout=5)
-    assert not thread.is_alive(), "abandon must release a parked commit"
+    join_worker(thread, message="abandon must release a parked commit")
     assert answered[0]["ok"] is False
     assert answered[0]["failure"] == "retryable", "nothing confirmed the write landed"
 

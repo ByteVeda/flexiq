@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from conftest import join_worker
 from flexiq import Queue
 from flexiq.hook_deadline import _Entry, _HookWatchdog, hook_deadline
 from flexiq.middleware import TaskMiddleware
@@ -165,8 +166,7 @@ def test_a_blocking_before_is_reported_and_the_task_still_runs(
             assert job.result(timeout=_TIMEOUT) == 42
         finally:
             queue._inner.request_shutdown()
-            thread.join(timeout=10)
-            assert not thread.is_alive(), "worker did not stop within 10s"
+            join_worker(thread)
     finally:
         queue.close()
 

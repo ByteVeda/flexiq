@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue
 
 PollUntil = Any  # the conftest fixture's runtime type
@@ -39,7 +40,7 @@ def test_batch_dequeue_processes_burst(tmp_path: Path, poll_until: PollUntil) ->
         assert results == {i: i * i for i in range(20)}
     finally:
         queue._inner.request_shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)
 
 
 def test_batch_dequeue_default_is_one(tmp_path: Path) -> None:
@@ -59,4 +60,4 @@ def test_batch_dequeue_default_is_one(tmp_path: Path) -> None:
         assert job.result(timeout=10) == "hello"
     finally:
         queue._inner.request_shutdown()
-        worker.join(timeout=5)
+        join_worker(worker)

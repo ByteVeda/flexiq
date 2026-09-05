@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from conftest import join_worker
 from flexiq import Queue, __version__
 
 
@@ -32,4 +33,4 @@ def test_worker_reports_its_sdk_and_version(tmp_path: Any, poll_until: Any) -> N
         assert worker["sdk_version"] == __version__
     finally:
         queue._inner.request_shutdown()
-        thread.join(timeout=10)
+        join_worker(thread)
