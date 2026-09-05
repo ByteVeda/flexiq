@@ -199,6 +199,18 @@ impl SwimNode {
             self.initiate_indirect_probe(&target_id, socket).await;
         }
 
+        // The second half of the escalation, and the one a peer's death
+        // actually goes through: a direct ping that times out only asks others
+        // to try, so if nothing sweeps the indirect probes on a deadline, a
+        // target with intermediaries to relay through is never suspected. The
+        // sweep runs after gc_stale_probes for the same reason the direct one
+        // does — the probe timeout is half a protocol period and gc's window is
+        // two, so entries are always still here when this looks.
+        let unanswered = self.failure_detector.check_ping_req_timeouts();
+        for target_id in unanswered {
+            self.suspect_member(&target_id, "indirect probe unanswered");
+        }
+
         let member_count = self.state.alive_count() + 1;
         let newly_dead = self.failure_detector.check_suspicion_timeouts(member_count);
         for dead_id in newly_dead {
@@ -232,6 +244,25 @@ impl SwimNode {
         }
     }
 
+    /// Raise a suspicion: record the timer and queue the news for gossip.
+    fn suspect_member(&mut self, target_id: &str, reason: &str) {
+        if !self.failure_detector.suspect(target_id) {
+            return;
+        }
+        info!("[mesh] member {target_id} suspected ({reason})");
+        // No entry means nothing truthful to say about it; the suspicion timer
+        // is still running, which is what escalates.
+        let Some(member) = self.state.get_member(target_id) else {
+            return;
+        };
+        self.membership.queue_update(MemberUpdate {
+            member_id: target_id.to_string(),
+            state: MemberState::Suspect,
+            incarnation: member.incarnation,
+            info: member.info,
+        });
+    }
+
     /// Send PingReq to random peers asking them to probe the target.
     async fn initiate_indirect_probe(&mut self, target_id: &str, socket: &UdpSocket) {
         let peers = self.state.alive_peers();
@@ -242,20 +273,7 @@ impl SwimNode {
             .collect();
 
         if intermediaries.is_empty() {
-            if self.failure_detector.suspect(target_id) {
-                info!("[mesh] member {target_id} suspected (no intermediaries)");
-                let (incarnation, info) = self
-                    .state
-                    .get_member(target_id)
-                    .map(|m| (m.incarnation, m.info))
-                    .unwrap_or((0, self.local_info.clone()));
-                self.membership.queue_update(MemberUpdate {
-                    member_id: target_id.to_string(),
-                    state: MemberState::Suspect,
-                    incarnation,
-                    info,
-                });
-            }
+            self.suspect_member(target_id, "no intermediaries");
             return;
         }
 
@@ -279,8 +297,8 @@ impl SwimNode {
             }
             self.failure_detector
                 .ping_req_sent(seq, target_id.to_string());
-        } else if self.failure_detector.suspect(target_id) {
-            info!("[mesh] member {target_id} suspected (no addr found)");
+        } else {
+            self.suspect_member(target_id, "no addr found");
         }
     }
 

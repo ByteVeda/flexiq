@@ -261,3 +261,85 @@ async fn ping_req_relay_echoes_the_requester_seq() {
     shutdown.notify_one();
     let _ = handle.await;
 }
+
+/// Poll until `cond` holds. The budget is a failure deadline, not a delay — the
+/// assertions below settle in well under a second, so a generous ceiling costs
+/// nothing on a green run and keeps a slow CI box from reading as a bug.
+async fn wait_until(label: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_millis(20_000);
+    while std::time::Instant::now() < deadline {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("timed out waiting for {label}");
+}
+
+/// A node that dies without announcing it must still be evicted.
+///
+/// Three nodes, so the direct probe escalates to a real `PingReq` rather than
+/// taking the two-node "no intermediaries" shortcut. That escalation is the
+/// path where an unanswered indirect probe used to be dropped on the floor,
+/// leaving a dead peer `Alive` on every survivor's ring forever.
+#[tokio::test]
+async fn abrupt_death_is_detected() {
+    let port_a = 19500;
+    let port_b = 19501;
+    let port_c = 19502;
+
+    let state_a = Arc::new(MeshState::new("node-a".to_string(), 10));
+    let state_b = Arc::new(MeshState::new("node-b".to_string(), 10));
+    let state_c = Arc::new(MeshState::new("node-c".to_string(), 10));
+
+    let shutdown_a = Arc::new(Notify::new());
+    let shutdown_b = Arc::new(Notify::new());
+    let shutdown_c = Arc::new(Notify::new());
+
+    let seed = vec![format!("127.0.0.1:{port_a}")];
+    let swim_a = SwimNode::new(
+        make_config(port_a, vec![]),
+        state_a.clone(),
+        make_info("node-a", port_a),
+        shutdown_a.clone(),
+    );
+    let swim_b = SwimNode::new(
+        make_config(port_b, seed.clone()),
+        state_b.clone(),
+        make_info("node-b", port_b),
+        shutdown_b.clone(),
+    );
+    let swim_c = SwimNode::new(
+        make_config(port_c, seed),
+        state_c.clone(),
+        make_info("node-c", port_c),
+        shutdown_c.clone(),
+    );
+
+    let ha = tokio::spawn(async move { swim_a.run().await });
+    let hb = tokio::spawn(async move { swim_b.run().await });
+    let hc = tokio::spawn(async move { swim_c.run().await });
+
+    wait_until("all three nodes to find each other", || {
+        state_a.alive_count() == 2 && state_b.alive_count() == 2
+    })
+    .await;
+
+    // Abort rather than notify: a graceful shutdown broadcasts `Left`, which is
+    // the path that already worked and would hide the bug under test.
+    hc.abort();
+
+    wait_until("node-a to stop counting node-c as alive", || {
+        state_a.alive_count() == 1
+    })
+    .await;
+    wait_until("node-b to stop counting node-c as alive", || {
+        state_b.alive_count() == 1
+    })
+    .await;
+
+    shutdown_a.notify_one();
+    shutdown_b.notify_one();
+    let _ = ha.await;
+    let _ = hb.await;
+}
