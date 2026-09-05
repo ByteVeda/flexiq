@@ -19,11 +19,19 @@ import org.byteveda.flexiq.annotation.TaskHandler;
  */
 public class Counter {
 
-    /** Constructs a handler instance; the generated provider calls this reflectively. */
+    /**
+     * Constructs a handler instance.
+     *
+     * <p>The generated {@code Provider.registry()} calls this directly, as
+     * {@code new Counter()}. Only the provider itself is loaded reflectively, by
+     * {@link java.util.ServiceLoader} — which is the distinction that matters here,
+     * because a direct {@code new} needs no reflection entry in the native-image
+     * metadata this module exists to check.
+     */
     public Counter() {}
 
     /**
-     * Sums the payload, the handler the generated companion registers.
+     * Sums the payload. This is the handler the generated companion registers.
      *
      * @param numbers the task payload
      * @return the sum of the payload
