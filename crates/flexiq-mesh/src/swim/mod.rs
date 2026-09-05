@@ -49,10 +49,23 @@ pub struct SwimNode {
     seq: u64,
     shutdown: Arc<Notify>,
     encryption_key: Option<Vec<u8>>,
-    /// Tracks PingReq relays: seq → (requester_id, requester_addr).
-    /// When an ACK arrives for a relayed seq, we forward AckRelay
-    /// back to the original requester.
-    pending_relays: HashMap<u64, (String, SocketAddr)>,
+    /// Relays this node is carrying, keyed by the seq it minted for the
+    /// forwarded `Ping`. When the target acks that seq, the entry says who to
+    /// answer and under which probe number.
+    pending_relays: HashMap<u64, PendingRelay>,
+}
+
+/// One `PingReq` this node agreed to relay.
+struct PendingRelay {
+    /// Worker id of the node that asked, for logging.
+    requester_id: String,
+    /// Where to send the `AckRelay`.
+    requester_addr: SocketAddr,
+    /// The requester's own probe number. The `AckRelay` must carry this and
+    /// not the seq we minted: seq counters are per node, and the requester
+    /// registered the probe under its own. (SWIM §4.1 — the intermediary
+    /// forwards the target's ack into the requester's protocol period.)
+    requester_seq: u64,
 }
 
 impl SwimNode {
@@ -186,6 +199,18 @@ impl SwimNode {
             self.initiate_indirect_probe(&target_id, socket).await;
         }
 
+        // The second half of the escalation, and the one a peer's death
+        // actually goes through: a direct ping that times out only asks others
+        // to try, so if nothing sweeps the indirect probes on a deadline, a
+        // target with intermediaries to relay through is never suspected. The
+        // sweep runs after gc_stale_probes for the same reason the direct one
+        // does — the probe timeout is half a protocol period and gc's window is
+        // two, so entries are always still here when this looks.
+        let unanswered = self.failure_detector.check_ping_req_timeouts();
+        for target_id in unanswered {
+            self.suspect_member(&target_id, "indirect probe unanswered");
+        }
+
         let member_count = self.state.alive_count() + 1;
         let newly_dead = self.failure_detector.check_suspicion_timeouts(member_count);
         for dead_id in newly_dead {
@@ -219,6 +244,38 @@ impl SwimNode {
         }
     }
 
+    /// Raise a suspicion: record the timer, demote the peer in this node's own
+    /// view, and queue the news for gossip.
+    ///
+    /// The local demotion is the part that is easy to leave out. A node that
+    /// only gossips `Suspect` keeps the peer `Alive` on its own ring and goes
+    /// on routing and stealing to it, while every peer that hears the update
+    /// evicts it — so the node that noticed is the last one still using it. In
+    /// a two-node mesh there is nobody to gossip to at all, and the belief
+    /// would sit uncorrected until the suspicion timer expired.
+    fn suspect_member(&mut self, target_id: &str, reason: &str) {
+        if !self.failure_detector.suspect(target_id) {
+            return;
+        }
+        info!("[mesh] member {target_id} suspected ({reason})");
+        // No entry means nothing to demote and nothing truthful to say about
+        // it; the suspicion timer is still running, which is what escalates.
+        let Some(member) = self.state.get_member(target_id) else {
+            return;
+        };
+        self.state.upsert_member(Member {
+            info: member.info.clone(),
+            state: MemberState::Suspect,
+            incarnation: member.incarnation,
+        });
+        self.membership.queue_update(MemberUpdate {
+            member_id: target_id.to_string(),
+            state: MemberState::Suspect,
+            incarnation: member.incarnation,
+            info: member.info,
+        });
+    }
+
     /// Send PingReq to random peers asking them to probe the target.
     async fn initiate_indirect_probe(&mut self, target_id: &str, socket: &UdpSocket) {
         let peers = self.state.alive_peers();
@@ -229,20 +286,7 @@ impl SwimNode {
             .collect();
 
         if intermediaries.is_empty() {
-            if self.failure_detector.suspect(target_id) {
-                info!("[mesh] member {target_id} suspected (no intermediaries)");
-                let (incarnation, info) = self
-                    .state
-                    .get_member(target_id)
-                    .map(|m| (m.incarnation, m.info))
-                    .unwrap_or((0, self.local_info.clone()));
-                self.membership.queue_update(MemberUpdate {
-                    member_id: target_id.to_string(),
-                    state: MemberState::Suspect,
-                    incarnation,
-                    info,
-                });
-            }
+            self.suspect_member(target_id, "no intermediaries");
             return;
         }
 
@@ -266,8 +310,8 @@ impl SwimNode {
             }
             self.failure_detector
                 .ping_req_sent(seq, target_id.to_string());
-        } else if self.failure_detector.suspect(target_id) {
-            info!("[mesh] member {target_id} suspected (no addr found)");
+        } else {
+            self.suspect_member(target_id, "no addr found");
         }
     }
 
@@ -322,14 +366,18 @@ impl SwimNode {
                 debug!("[mesh] ack sent to {sender} at {from}");
             }
             GossipMessage::Ack { seq, from: sender } => {
-                if let Some((requester_id, requester_addr)) = self.pending_relays.remove(&seq) {
-                    let relay = GossipMessage::AckRelay {
-                        seq,
+                if let Some(relay) = self.pending_relays.remove(&seq) {
+                    let ack_relay = GossipMessage::AckRelay {
+                        seq: relay.requester_seq,
                         original_from: sender.clone(),
                         via: self.local_info.worker_id.clone(),
                     };
-                    self.send_msg(socket, &relay, requester_addr).await;
-                    debug!("[mesh] relayed ack from {sender} back to {requester_id}");
+                    self.send_msg(socket, &ack_relay, relay.requester_addr)
+                        .await;
+                    debug!(
+                        "[mesh] relayed ack from {sender} back to {} (seq={})",
+                        relay.requester_id, relay.requester_seq
+                    );
                 }
                 if let Some(resolved) = self.failure_detector.ack_received(seq) {
                     debug!("[mesh] ack from {sender} resolved probe for {resolved}");
@@ -347,8 +395,14 @@ impl SwimNode {
                     from: self.local_info.worker_id.clone(),
                     from_addr: self.local_info.gossip_addr,
                 };
-                self.pending_relays
-                    .insert(relay_seq, (requester.clone(), from));
+                self.pending_relays.insert(
+                    relay_seq,
+                    PendingRelay {
+                        requester_id: requester.clone(),
+                        requester_addr: from,
+                        requester_seq: seq,
+                    },
+                );
                 self.send_msg(socket, &ping, target_addr).await;
                 debug!("[mesh] relayed ping-req from {requester} to {target} (relay_seq={relay_seq}, orig_seq={seq})");
             }

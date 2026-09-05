@@ -129,8 +129,18 @@ pub struct WorkflowNode {
     pub result_hash: Option<String>,
     /// For a fan-out node, how many children it expanded into.
     pub fan_out_count: Option<i32>,
-    /// Serialized fan-in payload for the `fan_in_data` column, round-tripped
-    /// through every backend; no current writer sets it.
+    /// Reserved, and always `None`. Nothing writes the `fan_in_data` column.
+    ///
+    /// Collected fan-in results do not live here: when the last fan-out child
+    /// settles, the SDK tracker reads each child job's result bytes and passes
+    /// them as the fan-in job's *arguments*, so the payload travels with the
+    /// job. Note this is unrelated to `StepMetadata::fan_in`, which is the
+    /// definition-time `{from}` marker and very much live.
+    ///
+    /// Kept rather than dropped because removing a public field of a published
+    /// struct is a breaking change, and because three backends name the column
+    /// in their `SELECT` lists — dropping it would fail every node read from an
+    /// older worker sharing the same database.
     pub fan_in_data: Option<String>,
     /// Epoch-ms the node started executing.
     pub started_at: Option<i64>,

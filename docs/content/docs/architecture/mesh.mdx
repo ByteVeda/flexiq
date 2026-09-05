@@ -139,8 +139,10 @@ The ring's properties are validated by unit tests in
 - **Deterministic**: same ring state → same placement across all nodes,
   verified by inserting/removing/re-inserting workers
 
-The ring recalculates on every membership change (join, leave, death). The
-`ring_recalculations` metric tracks frequency.
+The ring recalculates whenever a peer enters or leaves the alive set — a join,
+a graceful leave, a suspicion, or a death. A peer that is merely gossiping fresh
+load numbers does not move it. The `ring_recalculations` metric counts those
+changes, so a fast climb means placements keep moving under you.
 
 ## Local deque
 
@@ -279,7 +281,7 @@ dispatcher as before.
 | `steals_succeeded` | Steal attempts that returned ≥1 job |
 | `jobs_stolen_in` | Jobs received via stealing |
 | `jobs_stolen_out` | Jobs given away to thieves |
-| `ring_recalculations` | Hash ring rebuilds on membership change |
+| `ring_recalculations` | Hash ring rebuilds — a peer entering or leaving the alive set |
 
 Access via `MeshNode::metrics()` which returns a `MetricsSnapshot` (all
 values cloned atomically).

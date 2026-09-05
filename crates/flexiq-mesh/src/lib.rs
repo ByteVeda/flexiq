@@ -110,13 +110,21 @@ impl MeshNode {
     /// Nothing is bound or contacted yet — [`MeshNode::spawn_gossip`] and
     /// [`MeshNode::spawn_steal_server`] bring it onto the network.
     pub fn new(worker_id: String, config: MeshConfig) -> Self {
-        let state = Arc::new(MeshState::new(worker_id, config.virtual_nodes));
+        // The state shares the node's counters rather than owning its own, so
+        // ring churn lands in the same snapshot as the steal and prefetch
+        // numbers it has to be read against.
+        let metrics = Arc::new(MeshMetrics::default());
+        let state = Arc::new(MeshState::with_metrics(
+            worker_id,
+            config.virtual_nodes,
+            Arc::clone(&metrics),
+        ));
         let deque = LocalDeque::new(config.local_buffer_capacity);
         Self {
             config,
             state,
             deque,
-            metrics: Arc::new(MeshMetrics::default()),
+            metrics,
             shutdown: Arc::new(Notify::new()),
         }
     }

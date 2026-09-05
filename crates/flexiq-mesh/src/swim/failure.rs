@@ -84,6 +84,31 @@ impl FailureDetector {
         timed_out
     }
 
+    /// Check for timed-out indirect probes. Returns members that should now be
+    /// suspected.
+    ///
+    /// The mirror of [`FailureDetector::check_ping_timeouts`] over the indirect
+    /// map, and the only thing that ever drains it on a deadline. Without it an
+    /// unanswered `PingReq` just ages out in
+    /// [`FailureDetector::gc_stale_probes`], so a target that has intermediaries
+    /// to relay through is never suspected at all.
+    pub fn check_ping_req_timeouts(&mut self) -> Vec<MemberId> {
+        let timeout = std::time::Duration::from_millis(self.ping_timeout_ms);
+        let now = Instant::now();
+        let mut timed_out = Vec::new();
+
+        self.pending_ping_reqs.retain(|_, (target, sent_at)| {
+            if now.duration_since(*sent_at) > timeout {
+                timed_out.push(target.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        timed_out
+    }
+
     /// Mark a member as suspect. Returns true if newly suspected.
     pub fn suspect(&mut self, member_id: &str) -> bool {
         if self.suspects.contains_key(member_id) {
@@ -184,5 +209,33 @@ mod tests {
         fd.suspect("peer-a");
         fd.ack_received(1);
         assert_eq!(fd.suspect_count(), 0);
+    }
+
+    // The detector's half of the indirect probe. It already held up — the seq
+    // the requester registers is the seq it must be acked with, which is why
+    // the AckRelay has to echo it rather than the intermediary's relay seq.
+    #[test]
+    fn ping_req_ack_resolves() {
+        let mut fd = FailureDetector::new(200, 4, 500);
+        fd.ping_req_sent(7, "peer-a".to_string());
+        assert_eq!(fd.ack_received(7), Some("peer-a".to_string()));
+    }
+
+    #[test]
+    fn ping_req_timeout_yields_the_target() {
+        let mut fd = FailureDetector::new(1, 4, 500);
+        fd.ping_req_sent(7, "peer-a".to_string());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(fd.check_ping_req_timeouts(), vec!["peer-a".to_string()]);
+        // Drained, so a second sweep does not suspect the same peer twice.
+        assert!(fd.check_ping_req_timeouts().is_empty());
+    }
+
+    #[test]
+    fn ping_req_answered_in_time_never_times_out() {
+        let mut fd = FailureDetector::new(10_000, 4, 500);
+        fd.ping_req_sent(7, "peer-a".to_string());
+        fd.ack_received(7);
+        assert!(fd.check_ping_req_timeouts().is_empty());
     }
 }
