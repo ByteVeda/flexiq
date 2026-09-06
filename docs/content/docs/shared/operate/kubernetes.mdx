@@ -16,16 +16,17 @@ repository and install from the local path:
 ```bash
 git clone https://github.com/ByteVeda/flexiq.git
 cd flexiq
-git checkout <release-tag>
+git checkout server-v2.0.0
 
 helm install flexiq ./deploy/helm/flexiq-server \
   --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
   --set attach.token="$(openssl rand -base64 32)"
 ```
 
-Pin `release-tag` to the FlexiQ version you deploy so a later clone does not
-silently change the chart. The chart and server image versions move together;
-the image tag defaults to the chart's `appVersion`.
+Check out the `server-vX.Y.Z` tag for the FlexiQ version you deploy so a later
+clone does not silently change the chart — that is the namespace the server
+image and its chart are released under. The chart and server image versions
+move together; the image tag defaults to the chart's `appVersion`.
 
 For production, keep credentials out of command history and values files. Put
 the DSN and attach token in Kubernetes Secrets, then use
@@ -175,10 +176,11 @@ into a literal probe header. `/metrics` remains protected.
 The generated Secret is hashed into the pod template, so changing a chart-owned
 attach token or admin password triggers a rollout. Helm cannot hash an external
 Secret during template rendering; after rotating an `existingSecret`, restart
-the Deployment explicitly:
+the Deployment explicitly. The chart names it `<release>-flexiq-server`, so the
+`flexiq` release installed above renders as `flexiq-flexiq-server`:
 
 ```bash
-kubectl rollout restart deploy/<release>-flexiq-server
+kubectl rollout restart deploy/flexiq-flexiq-server
 ```
 
 For the process model, raw Kubernetes manifests, gRPC topology, storage,
