@@ -9,24 +9,19 @@ probes, and optional sidecar injector by hand.
 
 ## Install the chart
 
-The chart is currently distributed as a directory in the FlexiQ repository. It
-is not published in a Helm repository or as an OCI artifact, so clone the
-repository and install from the local path:
+Each server release publishes the chart to GHCR as a versioned OCI artifact.
+Install the chart version that matches the server version you want to run:
 
 ```bash
-git clone https://github.com/ByteVeda/flexiq.git
-cd flexiq
-git checkout server-v2.0.0
-
-helm install flexiq ./deploy/helm/flexiq-server \
+helm install flexiq oci://ghcr.io/byteveda/charts/flexiq-server \
+  --version 2.0.0 \
   --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
   --set attach.token="$(openssl rand -base64 32)"
 ```
 
-Check out the `server-vX.Y.Z` tag for the FlexiQ version you deploy so a later
-clone does not silently change the chart — that is the namespace the server
-image and its chart are released under. The chart and server image versions
-move together; the image tag defaults to the chart's `appVersion`.
+The chart and server image versions move together; the image tag defaults to
+the chart's `appVersion`. Pin `--version` so a later release does not change a
+new installation unexpectedly.
 
 For production, keep credentials out of command history and values files. Put
 the DSN and attach token in Kubernetes Secrets, then use
@@ -34,11 +29,17 @@ the DSN and attach token in Kubernetes Secrets, then use
 [`values.yaml`](https://github.com/ByteVeda/flexiq/blob/master/deploy/helm/flexiq-server/values.yaml)
 for every value and its source-level comments.
 
-Upgrade from the same checked-out source:
+Upgrade by selecting the new chart version explicitly:
 
 ```bash
-helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values
+helm upgrade flexiq oci://ghcr.io/byteveda/charts/flexiq-server \
+  --version 2.0.0 \
+  --reuse-values
 ```
+
+To inspect or modify the chart before installing it, check out the matching
+`server-vX.Y.Z` repository tag and use `./deploy/helm/flexiq-server` as the chart
+path instead.
 
 ## Choose the server roles
 
