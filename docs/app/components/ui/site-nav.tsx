@@ -194,9 +194,7 @@ export function SiteNav({
           alt=""
           aria-hidden="true"
         />
-        <span>
-          Flexi<span className="bto">Q</span>
-        </span>
+        <span>FlexiQ</span>
       </Link>
       <div className="navlinks">
         {LINKS.map((l) => (
