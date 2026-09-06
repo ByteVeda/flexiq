@@ -60,6 +60,13 @@ It works from any process sharing the storage, and a late consumer still reads
 every value already published. Each `TaskLog` carries `jobId`, `taskName`,
 `level`, `message`, `extra`, and `loggedAt` (Unix ms).
 
+## Watch partial results arrive
+
+The consumer sees each chunk as the task publishes it, rather than waiting for
+the whole job to finish.
+
+<ProgressDemo />
+
 <Callout type="info">
   Partials are stored as task-log rows, so they survive until the log is
   purged. Pipe the poll loop straight to an SSE / WebSocket endpoint to push

@@ -378,6 +378,14 @@ the retry-budget check.
 
 </SdkOnly>
 
+### Watch a job spend its retries
+
+Each attempt draws its delay from the Full Jitter curve above, so the gaps
+widen as the outage continues. Raise the failure rate and the job runs out of
+budget and lands in the dead-letter queue.
+
+<RecoveryDemo />
+
 ## Timeouts count as retries
 
 A task that exceeds its timeout is treated as a failure by the same

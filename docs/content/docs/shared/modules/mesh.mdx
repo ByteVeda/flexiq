@@ -588,6 +588,14 @@ on the same worker, its open connections, warm caches, and worker-scoped
 <SdkLink to="modules/injection/dependency-injection">resources</SdkLink> stay
 hot instead of being rebuilt everywhere.
 
+### Watch a routing key pick its pool
+
+Each job carries a key that decides which pool of workers is built to run it.
+Drop a machine and its work reroutes across the rest of that pool rather than
+stalling.
+
+<TaskAffinityDemo />
+
 <SdkOnly sdk="python">
 
 The `affinity_weight` parameter controls how aggressively the ring biases

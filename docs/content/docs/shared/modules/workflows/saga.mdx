@@ -153,6 +153,13 @@ try (Worker worker = queue.worker()
    own undo — and the run ends `CompensationFailed` instead of
    `Compensated`.
 
+### Watch a saga roll back
+
+Fail a step and the completed ones undo in reverse-topological order. Steps
+that never ran, and the failed step itself, are left alone.
+
+<SagaDemo />
+
 <SdkOnly sdk="java">
 
 <Callout type="info">

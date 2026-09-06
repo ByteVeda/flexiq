@@ -52,6 +52,13 @@ late consumer still drains every value already published.
   (`queue.runWorker()`) before or right after enqueuing.
 </Callout>
 
+## Watch partial results arrive
+
+The consumer sees each chunk as the task publishes it, rather than waiting for
+the whole job to finish.
+
+<ProgressDemo />
+
 ## Raw logs
 
 `queue.taskLogs(jobId)` returns the raw log entries (published partials have

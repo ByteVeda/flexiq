@@ -25,6 +25,13 @@ queue.configureQueue("emails", { rateLimit: "50/s" });
 Queue-level limits are evaluated before per-task limits. Rate-limited jobs stay
 `pending` and retry on the next tick — they do not consume the retry budget.
 
+## Watch the bucket refill
+
+Flood the limit and the excess waits its turn instead of being dropped. The
+bucket paces dispatch; the queue behind it does not shrink.
+
+<RateLimitDemo />
+
 ## Shedding instead of deferring
 
 Deferral is the right default: the job keeps its place and runs once tokens are
