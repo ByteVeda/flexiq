@@ -529,6 +529,28 @@ An executor removes both: the process is already running and already warm, and
 the only new image is the scheduler's — a static binary on distroless, identical
 for every deployment.
 
+### Published scheduler image
+
+The scheduler image is `ghcr.io/byteveda/flexiq-server`. Every release publishes
+an exact-version tag, such as `:0.21.0`, and the mutable `:latest` tag
+as manifest lists for `linux/amd64` and `linux/arm64`. FlexiQ does not currently
+publish moving major or minor tags, or commit-SHA tags. Pin an exact version for
+controlled deployments; pin the manifest digest when byte-for-byte image
+identity is required. Avoid `:latest` where reproducible deployment or rollback
+matters.
+
+The image runs as a non-root user on distroless and contains no shell, package
+manager, or language runtime. Use logs, health endpoints, or a separate
+ephemeral debug container instead of expecting `docker exec ... sh` to work.
+The <SdkLink to="modules/server">server module reference</SdkLink> lists its
+runtime configuration.
+
+The release workflow verifies the server version, OCI labels, and both
+architectures. It currently publishes no BuildKit provenance or SBOM
+attestation and does not sign the image, so digest pinning is the available
+integrity control; there is no FlexiQ-produced signature or attestation to
+verify yet.
+
 If your app image is small, keep the in-process worker. The split buys nothing
 and costs you a second moving part.
 
