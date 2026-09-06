@@ -540,8 +540,10 @@ identity is required. Avoid `:latest` where reproducible deployment or rollback
 matters.
 
 The image runs as a non-root user on distroless and contains no shell, package
-manager, or language runtime. Use logs, health endpoints, or a separate
-ephemeral debug container instead of expecting `docker exec ... sh` to work.
+manager, or language runtime. Use logs, health endpoints, or `kubectl debug`,
+which runs its own tooling image as a separate ephemeral container sharing the
+pod's namespaces and leaves the distroless target unchanged, instead of
+expecting `docker exec ... sh` to work.
 The <SdkLink to="modules/server">server module reference</SdkLink> lists its
 runtime configuration.
 
