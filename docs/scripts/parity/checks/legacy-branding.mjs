@@ -38,7 +38,12 @@ export function checkLegacyBranding() {
 
   for (const root of SEARCH_ROOTS) {
     for (const absolute of walk(path.join(DOCS_ROOT, root))) {
-      const relative = path.relative(DOCS_ROOT, absolute);
+      // Normalize to POSIX separators so the historical allowlist below
+      // still matches on Windows, where path.relative yields backslashes.
+      const relative = path
+        .relative(DOCS_ROOT, absolute)
+        .split(path.sep)
+        .join("/");
       if (HISTORICAL_PATHS.has(relative)) continue;
       scanned += 1;
 
