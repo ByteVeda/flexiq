@@ -108,3 +108,16 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+      # Rebuilds docs.byteveda.org/flexiq/ now instead of at the portal's next
+      # cron. The run id is passed because this run is still in progress here, so
+      # the portal cannot find it as the latest successful docs.yml run — it would
+      # mirror the build before this one.
+      - name: Notify docs portal
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/ByteVeda/byteveda.site/dispatches \
+            -f event_type=tool-docs-published \
+            -f "client_payload[slug]=flexiq" \
+            -f "client_payload[run_id]=${{ github.run_id }}"
