@@ -6,6 +6,11 @@ FlexiQ publishes the scheduler image at
 
 ```bash
 docker pull ghcr.io/byteveda/flexiq-server:0.21.0
+
+# A non-loopback attach port dispatches code, so the server refuses to start
+# without a token of at least 16 characters.
+export ATTACH_TOKEN=$(openssl rand -base64 32)
+
 docker run --rm -p 7777:7777 \
   -e FLEXIQ_DSN=postgres://user:pass@host/db \
   -e FLEXIQ_LISTEN=0.0.0.0:7777 \
