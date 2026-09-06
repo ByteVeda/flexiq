@@ -103,7 +103,10 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   return (
     <main className="error-page">
       <h1>{message}</h1>
-      <a href="/">Back to the docs</a>
+      {/* Raw anchor, not <Link> — the router may be the thing that failed. So
+          the base prefix has to be applied by hand, or this lands on the domain
+          root instead of the site root under DOCS_BASE_PATH. */}
+      <a href={import.meta.env.BASE_URL}>Back to the docs</a>
     </main>
   );
 }
