@@ -1,4 +1,4 @@
-/** The interactive demos the homepage scenario finder can open. */
+/** The interactive demos the scenario finder and the docs pages can render. */
 export type DemoId =
   | "ratelimit"
   | "recovery"
@@ -6,8 +6,7 @@ export type DemoId =
   | "progress"
   | "workflow"
   | "mesh"
-  | "saga"
-  | "worksteal";
+  | "saga";
 
 /** Props every demo component receives from {@link DemoModal}. */
 export interface DemoProps {
