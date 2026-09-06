@@ -46,9 +46,11 @@ The runtime image is based on `gcr.io/distroless/static-debian12:nonroot`. It
 runs as a non-root user and contains the static server binary, but no shell,
 package manager, or language runtime. Commands such as
 `docker exec <container> sh` therefore do not work. Use the server's health and
-diagnostic endpoints, container logs, or — on Kubernetes — `kubectl debug`,
-which runs its own tooling image as a separate ephemeral container sharing the
-pod's namespaces. It adds no shell or package manager to the distroless target.
+diagnostic endpoints, container logs, or — on Kubernetes —
+`kubectl debug -it <pod> --image=<tools> --target=<container>`, which runs the
+tooling image as a separate ephemeral container. `--target` is what joins the
+server's process namespace; without it the debug shell sees no `flexiq-server`
+process. Either way the distroless target gains no shell or package manager.
 
 The image entrypoint is `/usr/local/bin/flexiq-server`. It exposes the attach
 listener on port 7777, the dashboard on port 8080, and gRPC on port 50051;
