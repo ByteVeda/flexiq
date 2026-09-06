@@ -113,6 +113,9 @@ jobs:
       # cron. The run id is passed because this run is still in progress here, so
       # the portal cannot find it as the latest successful docs.yml run — it would
       # mirror the build before this one.
+      # Pages is already published by the step above, so a failed ping costs
+      # freshness, not the release — the portal's daily cron still catches up.
+      # Annotate instead of failing the deploy.
       - name: Notify docs portal
         env:
           GH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
@@ -120,4 +123,5 @@ jobs:
           gh api repos/ByteVeda/byteveda.site/dispatches \
             -f event_type=tool-docs-published \
             -f "client_payload[slug]=flexiq" \
-            -f "client_payload[run_id]=${{ github.run_id }}"
+            -f "client_payload[run_id]=${{ github.run_id }}" ||
+            echo "::error::docs portal dispatch failed — docs.byteveda.org/flexiq/ refreshes on the portal's daily cron instead"
