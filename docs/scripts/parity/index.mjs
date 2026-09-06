@@ -3,6 +3,7 @@ import { checkApiCoverage } from "./checks/api-coverage.mjs";
 import { checkCodeTabs } from "./checks/code-tabs.mjs";
 import { checkCollisions } from "./checks/collisions.mjs";
 import { checkDrift } from "./checks/drift.mjs";
+import { checkLegacyBranding } from "./checks/legacy-branding.mjs";
 import { checkLinks } from "./checks/links.mjs";
 import { checkRedirectShadowing } from "./checks/redirect-shadowing.mjs";
 import { checkSectionShape } from "./checks/section-shape.mjs";
@@ -21,6 +22,7 @@ const results = [
   checkRedirectShadowing(collisions.slugs),
   checkSectionShape(files),
   checkLinks(files),
+  checkLegacyBranding(),
   checkApiCoverage(files),
   checkDrift(files),
 ];

@@ -73,13 +73,11 @@ export function Footer() {
               alt=""
               aria-hidden="true"
             />
-            <span className="brand-word">
-              taski<span className="bto">to</span>
-            </span>
+            <span className="brand-word">FlexiQ</span>
           </span>
           <p>
-            A Rust-powered task queue with native SDKs. One engine, no broker
-            required — just SQLite, Postgres, or Redis.
+            One Rust core with first-class Python, Node, and Java SDKs — no
+            message broker required.
           </p>
         </div>
         {COLS.map((col) => (

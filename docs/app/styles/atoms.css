@@ -206,9 +206,6 @@
 .logo-mark rect {
   fill: var(--indigo);
 }
-.brand .bto {
-  color: var(--indigo-br);
-}
 .navlinks {
   display: flex;
   gap: 22px;
