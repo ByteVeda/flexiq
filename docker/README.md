@@ -6,8 +6,9 @@ FlexiQ publishes the scheduler image at
 
 ```bash
 docker pull ghcr.io/byteveda/flexiq-server:0.21.0
-docker run --rm \
+docker run --rm -p 7777:7777 \
   -e FLEXIQ_DSN=postgres://user:pass@host/db \
+  -e FLEXIQ_LISTEN=0.0.0.0:7777 \
   -e FLEXIQ_ATTACH_TOKEN="$ATTACH_TOKEN" \
   ghcr.io/byteveda/flexiq-server:0.21.0
 ```
