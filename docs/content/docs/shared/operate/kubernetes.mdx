@@ -1,0 +1,193 @@
+---
+title: Kubernetes
+description: "Install the Helm chart, choose server roles, assign maintenance, and add KEDA autoscaling."
+---
+
+The repository includes a Helm chart for running `flexiq-server` on Kubernetes.
+Start with the chart instead of assembling the scheduler, dashboard, Services,
+probes, and optional sidecar injector by hand.
+
+## Install the chart
+
+The chart is currently distributed as a directory in the FlexiQ repository. It
+is not published in a Helm repository or as an OCI artifact, so clone the
+repository and install from the local path:
+
+```bash
+git clone https://github.com/ByteVeda/flexiq.git
+cd flexiq
+git checkout server-v2.0.0
+
+helm install flexiq ./deploy/helm/flexiq-server \
+  --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
+  --set attach.token="$(openssl rand -base64 32)"
+```
+
+Check out the `server-vX.Y.Z` tag for the FlexiQ version you deploy so a later
+clone does not silently change the chart — that is the namespace the server
+image and its chart are released under. The chart and server image versions
+move together; the image tag defaults to the chart's `appVersion`.
+
+For production, keep credentials out of command history and values files. Put
+the DSN and attach token in Kubernetes Secrets, then use
+`storage.existingSecret` and `attach.existingSecret`. See
+[`values.yaml`](https://github.com/ByteVeda/flexiq/blob/master/deploy/helm/flexiq-server/values.yaml)
+for every value and its source-level comments.
+
+Upgrade from the same checked-out source:
+
+```bash
+helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values
+```
+
+## Choose the server roles
+
+One release can enable any combination of four listener roles:
+
+| Value | Default | What it runs |
+|---|---|---|
+| `attach.enabled` | `true` | The attach listener and scheduler for connected executors |
+| `dashboard.enabled` | `true` | The dashboard SPA, JSON API, health routes, and metrics |
+| `webhook.enabled` | `false` | The admission webhook that injects executor sidecars |
+| `grpc.enabled` | `false` | The gRPC producer door on a separate Service |
+
+At least one role must be enabled. `storage.dsn` is required unless the release
+runs only the webhook, which rewrites pod specs and does not read jobs. The
+chart supports Postgres and Redis; it rejects SQLite because replicas cannot
+share a pod-local database file safely.
+
+The attach listener requires a strong token when it binds beyond loopback. The
+gRPC role instead authenticates scoped API tokens stored in the database and
+requires `namespace` to name the tenant it serves. Enable only the listeners
+that the release needs:
+
+```yaml
+attach:
+  enabled: true
+dashboard:
+  enabled: true
+webhook:
+  enabled: false
+grpc:
+  enabled: false
+```
+
+The chart validates unsafe combinations during `helm template` and `helm
+install`, before they can become crash-looping pods.
+
+## Assign maintenance to one replica
+
+Every server can schedule and claim jobs through shared storage, but only one
+replica needs to run retention, rescue, and other maintenance sweeps. The chart
+maps its `maintenance` value to `FLEXIQ_MAINTENANCE`, which renders as the
+string `on` or `off` rather than a boolean:
+
+```yaml
+replicaCount: 1
+maintenance: true
+```
+
+A value belongs to the whole Deployment, so `replicaCount: 3` cannot turn
+maintenance on for only one of its three identical pods. Use one single-replica
+release as the maintenance owner and set `maintenance: false` on any additional
+replicated releases:
+
+```bash
+# The one maintenance owner
+helm install flexiq-primary ./deploy/helm/flexiq-server \
+  --values primary-values.yaml \
+  --set replicaCount=1 \
+  --set maintenance=true
+
+# Extra replicas sharing the same Postgres or Redis store
+helm install flexiq-workers ./deploy/helm/flexiq-server \
+  --values workers-values.yaml \
+  --set replicaCount=3 \
+  --set maintenance=false
+```
+
+Only the maintenance owner's pod gets `FLEXIQ_MAINTENANCE=on`. Every pod in the
+replicated release gets `FLEXIQ_MAINTENANCE=off` and runs no sweeps, so the work
+is never duplicated across replicas.
+
+Use distinct release names and expose only the Services clients should reach.
+All releases must use the same storage and namespace when they cooperate on the
+same queues.
+
+## Inject executor sidecars
+
+With `webhook.enabled=true`, the chart installs an admission webhook that adds
+an executor to an opted-in workload. The injected container reuses the
+workload's own image, so it can import the same task handlers:
+
+```bash
+helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values \
+  --set webhook.enabled=true
+```
+
+```yaml
+metadata:
+  annotations:
+    flexiq.dev/inject: "true"
+    flexiq.dev/attach: "flexiq-flexiq-server-attach.default.svc:7777"
+    flexiq.dev/command: "flexiq executor --app myapp:queue"
+    flexiq.dev/slots: "4"
+    flexiq.dev/token-secret: "flexiq-flexiq-server-config"
+    flexiq.dev/token-key: "attach-token"
+```
+
+`flexiq.dev/command` is SDK-specific. Use the executor command for your
+application image; the full manual deployment shapes are in
+<SdkLink to="operate/deployment">Deployment</SdkLink>.
+
+The webhook defaults to `failurePolicy: Ignore`, so an unavailable injector
+does not block pod creation cluster-wide. Change it to `Fail` after workloads
+depend on injection and the webhook is monitored.
+
+## Add KEDA autoscaling
+
+The Helm chart installs `flexiq-server`; it does not install KEDA or create a
+KEDA scaling object. The repository provides three starting manifests under
+[`deploy/keda/`](https://github.com/ByteVeda/flexiq/tree/master/deploy/keda):
+
+| Manifest | Use it when |
+|---|---|
+| `scaled-object.yaml` | KEDA should scale a long-running worker Deployment from FlexiQ's HTTP scaler endpoint |
+| `scaled-object-prometheus.yaml` | Prometheus already scrapes FlexiQ queue depth and worker utilization |
+| `scaled-job.yaml` | Each batch of pending work should create a short-lived Kubernetes Job |
+
+Copy the appropriate manifest, then replace its example Deployment name,
+namespace, scaler or Prometheus address, queue, thresholds, and image before
+applying it:
+
+```bash
+cp deploy/keda/scaled-object.yaml my-flexiq-scaled-object.yaml
+$EDITOR my-flexiq-scaled-object.yaml
+kubectl apply -f my-flexiq-scaled-object.yaml
+```
+
+The HTTP examples require a reachable `flexiq scaler` Service; the Prometheus
+example requires the matching metrics collector and scrape configuration.
+<SdkLink to="modules/autoscaling/keda">KEDA autoscaling</SdkLink> documents the
+scaler commands, endpoints, trigger fields, and security boundary for each SDK.
+
+## Probes and secret rotation
+
+With the dashboard enabled, liveness uses `/health` and readiness uses
+`/readiness`. The chart enables `dashboard.publicReadiness` by default so the
+kubelet can reach the storage-aware readiness route without copying a secret
+into a literal probe header. `/metrics` remains protected.
+
+The generated Secret is hashed into the pod template, so changing a chart-owned
+attach token or admin password triggers a rollout. Helm cannot hash an external
+Secret during template rendering; after rotating an `existingSecret`, restart
+the Deployment explicitly. The chart names it `<release>-flexiq-server`, so the
+`flexiq` release installed above renders as `flexiq-flexiq-server`:
+
+```bash
+kubectl rollout restart deploy/flexiq-flexiq-server
+```
+
+For the process model, raw Kubernetes manifests, gRPC topology, storage,
+backups, and production sizing, continue with
+<SdkLink to="operate/deployment">Deployment</SdkLink>.

@@ -176,6 +176,7 @@ export const SECTION_SKELETON = [
       "inspection",
       "cli",
       "deployment",
+      "kubernetes",
       "security",
       "troubleshooting",
       "migration",
