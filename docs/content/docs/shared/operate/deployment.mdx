@@ -838,7 +838,9 @@ helm install flexiq ./deploy/helm/flexiq-server \
 The chart refuses to render the mistakes this page warns about — an attach
 listener with no token, a guessable one, an unauthenticated dashboard — and the
 error names the value to change rather than leaving you a `CrashLoopBackOff` to
-diagnose. See the chart's README for every value.
+diagnose. The <SdkLink to="operate/kubernetes">Kubernetes guide</SdkLink> covers
+local chart consumption, role selection, maintenance ownership across replicas,
+sidecar injection, and KEDA.
 
 #### Injecting the sidecar automatically
 

@@ -7,6 +7,7 @@
     "inspection",
     "cli",
     "deployment",
+    "kubernetes",
     "security",
     "troubleshooting",
     "migration",
