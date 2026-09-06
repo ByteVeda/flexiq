@@ -1,0 +1,34 @@
+name: Documentation issue
+description: Report missing, unclear, or incorrect documentation
+title: "docs: "
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page or file
+      description: Link the documentation page or name the source file.
+      placeholder: https://docs.byteveda.org/flexiq/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong?
+      description: Explain what is missing, incorrect, or hard to understand.
+    validations:
+      required: true
+
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+      description: Optional wording, example, or source that would make the page accurate.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission check
+      options:
+        - label: I checked the current documentation and open pull requests for an existing fix.
+          required: true

@@ -1,0 +1,42 @@
+name: Feature request
+description: Describe a problem that FlexiQ could solve
+title: "feat: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the limitation or user need without prescribing an API.
+      placeholder: I need to... because...
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-approach
+    attributes:
+      label: What do you do today?
+      description: Describe the workaround, alternate tool, or manual process you use now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Explain what success would look like for users.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples or constraints that clarify the request.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission check
+      options:
+        - label: I searched existing issues and pull requests for the same request.
+          required: true
