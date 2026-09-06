@@ -1,28 +1,38 @@
 import { useEffect, useState } from "react";
 import { SearchModal } from "@/components/docs";
 import {
-  Comparison,
-  CTA,
-  Features,
   Footer,
   Hero,
   HowItWorks,
-  Integrations,
   ScenarioFinder,
-  UseCases,
+  SectionGrid,
   useReveal,
 } from "@/components/landing";
 import { SiteNav } from "@/components/ui";
 import { useActiveSdk } from "@/hooks";
 import type { Route } from "./+types/home";
 
+/**
+ * The documentation index, not a product page.
+ *
+ * flexiq.byteveda.org is the marketing surface; a second pitch here competed
+ * with it for the same readers and restated `about/comparison` and
+ * `about/capabilities` besides. What is left answers the questions a docs root
+ * should: what this is (hero), how it fits together (how it works), which page
+ * solves the problem I actually have (the scenario finder), and what else is
+ * here (the section grid).
+ *
+ * The route itself has to stay. `"/"` is hardcoded in the prerender list, and
+ * with no index route the `*` splat under `docs-layout` claims it and ships a
+ * "Page not found" at the site root — silently, with the build still green.
+ */
 export function meta(_: Route.MetaArgs) {
   return [
-    { title: "FlexiQ — background jobs without a broker" },
+    { title: "FlexiQ documentation" },
     {
       name: "description",
       content:
-        "Keep your app fast — run slow work in the background. A Rust-powered task queue with no message broker, for Python, Node, and Java.",
+        "Guides, API reference and architecture for FlexiQ — the Rust-powered task queue for Python, Node and Java. Start with a quickstart or find the guide for the problem you have.",
     },
   ];
 }
@@ -57,11 +67,7 @@ export default function Home() {
         <Hero />
         <HowItWorks />
         <ScenarioFinder />
-        <Features />
-        <UseCases />
-        <Comparison />
-        <Integrations />
-        <CTA />
+        <SectionGrid />
       </main>
       <Footer />
       <SearchModal
