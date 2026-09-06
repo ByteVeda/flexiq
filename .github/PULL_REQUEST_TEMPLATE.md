@@ -6,6 +6,8 @@
 
 Check the suites you ran locally, or explain why they do not apply.
 
+- [ ] Rust lint: `cargo fmt --all --check && cargo clippy --all-targets --all-features -- -D warnings`
+- [ ] Python lint: `cd sdks/python && uv run ruff check flexiq/ tests/ && uv run mypy flexiq/ tests/ --no-incremental`
 - [ ] Rust / SQLite: `cargo test --workspace`
 - [ ] Rust / PostgreSQL: `cargo test --workspace --exclude flexiq-python --features postgres,workflows`
 - [ ] Rust / Redis: `cargo test --workspace --features redis,workflows`
