@@ -328,39 +328,6 @@ saga.<span class="def">delay</span>()   <span class="cmt"># any failure → comp
     },
     guide: { to: "/python/modules/workflows/saga", label: "Read the guide" },
   },
-  {
-    id: "worksteal",
-    q: "One region is swamped while another sits idle",
-    tag: "Work-stealing",
-    icon: (
-      <>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
-      </>
-    ),
-    title: "Idle regions steal the backlog from busy ones — over HTTP",
-    blurb:
-      "Run flexiq in several regions and they gossip queue depth peer-to-peer. When one region's backlog spikes, an idle peer pulls a batch of jobs over HTTP and runs them. Load self-balances across the mesh — still with no central broker to stand up.",
-    bullets: [
-      { k: "Gossip mesh", v: "regions share queue depth peer-to-peer" },
-      {
-        k: "Steal over HTTP",
-        v: "an idle region pulls a batch from the busiest peer",
-      },
-      { k: "Self-balancing", v: "load evens out without a coordinator" },
-    ],
-    code: `queue = <span class="def">Queue</span>(db_path=<span class="str">"tasks.db"</span>, region=<span class="str">"eu-west"</span>)
-queue.<span class="def">mesh</span>(peers=[<span class="str">"us-west-2"</span>, <span class="str">"ap-south-1"</span>], steal=<span class="kw">True</span>)
-
-<span class="cmt"># idle workers pull from the busiest peer over HTTP</span>
-<span class="cmt"># $ flexiq worker --mesh --steal-threshold 8</span>`,
-    demo: {
-      id: "worksteal",
-      title: "Work-stealing — balance load across regions",
-      label: "Watch regions steal work",
-    },
-    guide: { to: "/python/modules/mesh", label: "Read the guide" },
-  },
 ];
 
 /** Wraps a scenario's inner SVG paths in the shared 24×24 stroke frame. */

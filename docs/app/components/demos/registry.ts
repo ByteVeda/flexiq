@@ -16,7 +16,6 @@ export const DEMO_COMPONENTS: Record<DemoId, LazyDemo> = {
   scaling: lazy(() => import("./scaling-demo")),
   saga: lazy(() => import("./saga-demo")),
   workflow: lazy(() => import("./workflow-demo")),
-  worksteal: lazy(() => import("./worksteal-demo")),
 };
 
 /** The React port for `id`, or `undefined` for an unknown demo id. */

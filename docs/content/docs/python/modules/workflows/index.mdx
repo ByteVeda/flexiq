@@ -70,6 +70,13 @@ in `wf.step(...)`. To pass a value between steps, use fan-out / fan-in or read
   no extra install is needed.
 </Callout>
 
+## Watch a workflow run
+
+Steps settle in topological order — a step starts only once everything it
+declared in `after` has finished. Select a node to see what it is waiting on.
+
+<WorkflowDemo />
+
 ## Section overview
 
 <Cards>

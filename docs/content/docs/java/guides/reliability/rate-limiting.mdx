@@ -59,6 +59,13 @@ reserved `rate_limit:` reason — see
 [flow control](/java/guides/reliability/flow-control) for what that looks like
 in the dashboard, and for how throttling relates to debouncing and coalescing.
 
+## Watch the bucket refill
+
+Flood the limit and the excess waits its turn instead of being dropped. The
+bucket paces dispatch; the queue behind it does not shrink.
+
+<RateLimitDemo />
+
 ## Bounding execution
 
 Gates shape how fast jobs *enter* the queue; to bound how many run at once,

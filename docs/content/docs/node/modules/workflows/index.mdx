@@ -51,6 +51,13 @@ Requires the addon built with the `workflows` cargo feature (enabled by
   those.
 </Callout>
 
+## Watch a workflow run
+
+Steps settle in topological order — a step starts only once everything it
+declared in `after` has finished. Select a node to see what it is waiting on.
+
+<WorkflowDemo />
+
 <Cards>
   <Card
     title="Building Workflows"

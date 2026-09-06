@@ -312,6 +312,13 @@ CPU-bound sizing guidance.
 
 </SdkOnly>
 
+### Watch concurrency move throughput
+
+More workers raise throughput until something else is the bottleneck, and
+latency is what tells you which side of that point you are on.
+
+<ScalingDemo />
+
 ## Heartbeats and worker discovery
 
 Every worker registers itself in storage on startup and heartbeats while it

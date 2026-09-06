@@ -181,6 +181,24 @@
   letter-spacing: -0.02em;
   font-size: 17px;
 }
+/* The Q in the wordmark. Beside `.brand` because it belongs to the mark, not to
+   whichever heading happens to render it. */
+.bto {
+  color: var(--indigo-br);
+}
+/* "Home" sits in the brand slot but is a link label, not the wordmark — so it
+   opts out of `.brand`'s mono/700/17px and matches `.navlinks a` instead. */
+.brand .home {
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: normal;
+  color: var(--mut);
+  transition: color 0.15s;
+}
+.brand:hover .home {
+  color: var(--txt);
+}
 .logo {
   /* Wider than tall (770×513), so size on height and let the width follow —
      a square box would crop the flanking queue arrows. */

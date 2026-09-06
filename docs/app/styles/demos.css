@@ -9,6 +9,16 @@
   background: var(--bg);
 }
 
+/* Same stage embedded in a doc page instead of the modal dialog. The dialog
+   drew the frame and bounded the scroll; in an article the stage has to do
+   both itself. */
+.dm-stage.doc-demo {
+  margin: 22px 0 26px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  max-height: 640px;
+}
+
 .dm-stage .demo-bar {
   display: flex;
   align-items: center;

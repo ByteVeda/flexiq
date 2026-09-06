@@ -152,12 +152,17 @@ function SdkSelect() {
 
 // `sdk` links are SDK-relative (prefixed with the active /python|/node); the rest
 // are shared, SDK-neutral pages.
+/**
+ * Deliberately short. The sidebar already lists every top-level section on the
+ * same screen, so the bar carries only what a reader reaches for out of order:
+ * the one concept page worth reading before anything else, the two references
+ * you jump to mid-task, and what changed. `sdk` entries resolve to the active
+ * SDK; the rest are SDK-neutral.
+ */
 const LINKS: { label: string; href: string; sdk?: boolean }[] = [
-  { label: "Start here", href: "getting-started", sdk: true },
-  { label: "Guides", href: "guides", sdk: true },
-  { label: "Modules", href: "modules", sdk: true },
-  { label: "Architecture", href: "/architecture" },
+  { label: "Concepts", href: "getting-started/concepts", sdk: true },
   { label: "API", href: "api-reference", sdk: true },
+  { label: "Examples", href: "more/examples", sdk: true },
   { label: "Changelog", href: "/about/changelog" },
 ];
 
@@ -175,6 +180,8 @@ export function SiteNav({
   showSdkSelect?: boolean;
 }) {
   const sdk = useActiveSdk();
+  // Basename-relative, so this stays `/` under DOCS_BASE_PATH too.
+  const atRoot = useLocation().pathname === "/";
   return (
     <nav className="nav">
       {onMenu ? (
@@ -187,14 +194,22 @@ export function SiteNav({
           <Menu size={18} />
         </button>
       ) : null}
-      <Link to="/" className="brand">
+      {/* The mark alone on the index — the hero right beneath it already says
+          FlexiQ. On every other page the brand is the way back, so it says so.
+          The label carries the accessible name either way; the image is
+          decorative. */}
+      <Link
+        to="/"
+        className="brand"
+        aria-label={atRoot ? "FlexiQ documentation" : "Home"}
+      >
         <img
           className="logo"
           src={`${import.meta.env.BASE_URL}logo.png`}
           alt=""
           aria-hidden="true"
         />
-        <span>FlexiQ</span>
+        {atRoot ? null : <span className="home">Home</span>}
       </Link>
       <div className="navlinks">
         {LINKS.map((l) => (

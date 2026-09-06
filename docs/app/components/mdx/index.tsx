@@ -1,6 +1,7 @@
 import type { MDXComponents } from "mdx/types";
 import type { ComponentProps } from "react";
 import { Link } from "react-router";
+import * as Demos from "@/components/demos/mdx";
 import * as Diagrams from "@/components/diagrams";
 import { SdkBinding, SdkLang, SdkName, SdkSwap } from "@/components/sdk-text";
 import { Callout } from "./callout";
@@ -51,4 +52,5 @@ export const mdxComponents: MDXComponents = {
   Card,
   Cards,
   ...Diagrams,
+  ...Demos,
 };

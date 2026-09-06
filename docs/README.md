@@ -33,10 +33,11 @@ Set `DOCS_BASE_PATH=/flexiq` to build under the GitHub Pages base path (CI does 
 content/docs/**/*.mdx     the documentation source (+ meta.json nav)
 app/
   root.tsx                document shell, fonts, no-flash theme
-  routes.ts               route config (landing, llms.txt, docs catch-all)
+  routes.ts               route config (docs index, llms.txt, docs catch-all)
   routes/                 home, docs-layout, docs.$ (MDX page), llms[.txt]
   components/
-    landing/              polyglot landing sections
+    landing/              docs-index sections (hero, how-it-works, scenario finder, section grid)
+    demos/                interactive demos — embedded in MDX via demos/mdx.tsx, and in the finder's modal
     docs/                 sidebar, SDK switch, TOC, prev/next, search modal
     mdx/                  Callout/Tabs/Card shims + MDX component map
     ui/                   nav, theme toggle, RawHtml

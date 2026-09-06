@@ -97,21 +97,28 @@ The scheduler computes each retry's delay from the task's base delay `B` and
 cap `M`:
 
 ```
-delay = min(M, B * 2^retry_count) + jitter
+delay = uniform(0, min(M, B * 2^retry_count))
 ```
 
-`jitter` is a random value uniform between `0` and `B`, so a burst of
-identical failures doesn't retry in lockstep. With defaults (`B` = 1s, `M` =
-5 minutes) and a task configured with a 2-second base delay, the schedule
-looks like:
+This is AWS's **Full Jitter**. The exponential curve sets the *ceiling*, and the
+delay is drawn uniformly from zero up to it — not a fixed backoff with a wobble
+added on top. That distinction is the whole point: the window widens as the
+outage continues, so a burst of identical failures spreads further apart with
+every attempt instead of staying bunched in one narrow band.
 
-| Attempt | Delay |
-|---|---|
-| 1st retry | ~2s |
-| 2nd retry | ~4s |
-| 3rd retry | ~8s |
-| 4th retry | ~16s |
-| 5th retry | ~32s |
+With a 2-second base delay and the default 5-minute cap, the ceiling doubles per
+attempt and each delay lands somewhere beneath it:
+
+| Attempt | Ceiling | Delay drawn from |
+|---|---|---|
+| 1st retry | 2s | 0–2s |
+| 2nd retry | 4s | 0–4s |
+| 3rd retry | 8s | 0–8s |
+| 4th retry | 16s | 0–16s |
+| 5th retry | 32s | 0–32s |
+
+The implementation is `next_retry_at` in
+`crates/flexiq-core/src/resilience/retry.rs`.
 
 ## Custom delay schedules
 
@@ -377,6 +384,14 @@ The "Exception passes filter?" step is answered by `RetryableException` /
 the retry-budget check.
 
 </SdkOnly>
+
+### Watch a job spend its retries
+
+Each attempt draws its delay from the Full Jitter curve above, so the gaps
+widen as the outage continues. Raise the failure rate and the job runs out of
+budget and lands in the dead-letter queue.
+
+<RecoveryDemo />
 
 ## Timeouts count as retries
 

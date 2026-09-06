@@ -43,33 +43,22 @@ export function Hero() {
     <section className="hero">
       <div className="left">
         <h1>
-          Keep your app fast —{" "}
-          <span className="grad">run slow work in the background.</span>
+          Flexi<span className="bto">Q</span>{" "}
+          <span className="grad">documentation</span>
         </h1>
         <p className="sub">
-          A task queue with <b>no message broker</b>. Your app hands slow work —
-          sending email, processing uploads, running pipelines — to a background
-          worker and gets the result later; the queue, results, and schedules
-          all live in{" "}
-          <b>
-            one <code>SQLite</code> file
-          </b>{" "}
-          (scale to <code>Postgres</code>). First-class{" "}
-          <b>Python, Node, and Java</b> over one Rust core.
+          Guides, API reference and architecture for the task queue. Pick your
+          language — the snippet, the links and the sidebar all follow it.
         </p>
         <div className="btns">
           <Link className="btn pri" to={active.docHref}>
             Quickstart →
           </Link>
-          <a className="btn gho" href="https://github.com/ByteVeda/flexiq">
-            GitHub ↗
-          </a>
-        </div>
-        <div className="metarow">
-          <span>No broker</span>
-          <span>Rust core</span>
-          <span>MIT licensed</span>
-          <span>Python · Node · Java</span>
+          {/* GitHub already sits in the nav; the second slot is better spent on
+              the section a reader lands here for after the quickstart. */}
+          <Link className="btn gho" to={`/${sdk}/modules`}>
+            Read Modules →
+          </Link>
         </div>
       </div>
 

@@ -65,6 +65,13 @@ supply payloads at submit time via
   retries — once, and the tracker walks the graph instead of your code.
 </Callout>
 
+## Watch a workflow run
+
+Steps settle in topological order — a step starts only once everything it
+declared in `after` has finished. Select a node to see what it is waiting on.
+
+<WorkflowDemo />
+
 <Cards>
   <Card
     title="Building Workflows"

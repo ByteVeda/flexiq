@@ -48,6 +48,13 @@ The token bucket algorithm:
   queue database (SQLite or Postgres). This means rate limits survive worker restarts.
 </Callout>
 
+## Watch the bucket refill
+
+Flood the limit and the excess waits its turn instead of being dropped. The
+bucket paces dispatch; the queue behind it does not shrink.
+
+<RateLimitDemo />
+
 ## Shedding instead of deferring
 
 Deferral is the right default: the job keeps its place and runs once tokens are

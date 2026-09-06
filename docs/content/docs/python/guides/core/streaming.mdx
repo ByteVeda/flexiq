@@ -54,6 +54,13 @@ cancelled).
 | `timeout` | `float` | `60.0` | Maximum seconds to wait |
 | `poll_interval` | `float` | `0.5` | Seconds between polls |
 
+## Watch partial results arrive
+
+The consumer sees each chunk as the task publishes it, rather than waiting for
+the whole job to finish.
+
+<ProgressDemo />
+
 ## Async streaming
 
 Use `astream()` in async contexts:
