@@ -23,6 +23,7 @@ use crate::dashboard::error::{ApiError, ApiResult};
 use crate::dashboard::query::Params;
 use crate::dashboard::state::SharedState;
 use crate::dashboard::stores::url_safety::is_safe_redirect;
+use crate::log_safe;
 
 /// Where the browser lands when a login cannot complete. The SPA reads the
 /// `error` parameter and explains what happened.
@@ -81,8 +82,9 @@ pub async fn start(
         .await
         .map_err(|error| {
             log::warn!(
-                "building the authorize URL for '{}' failed: {error}",
-                row.slot
+                "building the authorize URL for '{}' failed: {}",
+                row.slot,
+                log_safe::escape(&error.to_string())
             );
             ApiError::BadRequest("oauth_unavailable".into())
         })?;
@@ -114,7 +116,13 @@ pub async fn callback(
     let clear = cookies::cleared_oauth_state(state.config.secure_cookies);
 
     if let Some(error) = params.get("error") {
-        log::warn!("provider '{slot}' returned an error at callback: {error}");
+        // `provider.slot` rather than `slot`: the two are equal by the lookup
+        // above, but only one of them came out of the request.
+        log::warn!(
+            "provider '{}' returned an error at callback: {}",
+            provider.slot,
+            log_safe::escape(error)
+        );
         return Ok(redirect_to(LOGIN_FAILED, clear));
     }
     let (Some(code), Some(token)) = (params.get("code"), params.get("state")) else {
@@ -124,7 +132,10 @@ pub async fn callback(
     // This is the login-CSRF check: the browser finishing the flow must be the
     // one that started it, which only its own cookie can show.
     if oauth_state_cookie(&headers).as_deref() != Some(token) {
-        log::warn!("provider callback on '{slot}' arrived without the browser's own state cookie");
+        log::warn!(
+            "provider callback on '{}' arrived without the browser's own state cookie",
+            provider.slot
+        );
         return Ok(redirect_to(LOGIN_STATE_INVALID, clear));
     }
 
@@ -155,7 +166,13 @@ pub async fn callback(
         Ok(identity) => identity,
         Err(error) => {
             // The reason is for the operator's log; the user gets a category.
-            log::warn!("provider login on '{slot}' failed: {error}");
+            // It quotes the provider's own response, so it is escaped like any
+            // other value this process did not write.
+            log::warn!(
+                "provider login on '{}' failed: {}",
+                provider.slot,
+                log_safe::escape(&error.to_string())
+            );
             let destination = match error {
                 OAuthError::Denied(_) => LOGIN_DENIED,
                 OAuthError::StateInvalid => LOGIN_STATE_INVALID,
