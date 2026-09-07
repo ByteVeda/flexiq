@@ -90,6 +90,43 @@ jobs:
             exit 1
           fi
 
+      # GHCR creates organization packages private, and the chart probe that
+      # closes the `manifest` job only runs once the image, tag, release and
+      # wire-contract assets have already shipped — so a private registry is
+      # discovered half a release in, on the one step whose fix is a console
+      # action no rerun can perform. Probing the image package here fails the
+      # run before anything is published, and in dry-run too.
+      #
+      # The image is the only package checkable this early: the chart does not
+      # exist until the first `helm push`, and to an anonymous puller a missing
+      # package is indistinguishable from a private one — both answer
+      # `unauthorized`. `:latest` is the reference because it survives every
+      # release; a version tag would not exist yet on the run that publishes it.
+      - name: Verify the image package is anonymously readable
+        run: |
+          set -euo pipefail
+          # The empty config is what makes this anonymous. The runner's default
+          # DOCKER_CONFIG — and any credential a future step in this job leaves
+          # there — would authenticate the probe and pass it against a private
+          # package, which is precisely the case it exists to catch.
+          anonymous_docker_config="$(mktemp -d)"
+          printf '{}\n' >"${anonymous_docker_config}/config.json"
+          if ! probe="$(DOCKER_CONFIG="$anonymous_docker_config" \
+            docker manifest inspect "${IMAGE}:latest" 2>&1)"; then
+            # A public package with no such tag answers `manifest unknown`,
+            # a private one `unauthorized` — reporting the visibility fix for
+            # both would send an owner to the wrong console page.
+            case "$probe" in
+              *unauthorized* | *denied*)
+                echo "::error::${IMAGE} is not anonymously readable. Make the GHCR package public (see CONTRIBUTING.md) and rerun."
+                ;;
+              *)
+                echo "::error::Anonymous probe of ${IMAGE}:latest failed: ${probe}"
+                ;;
+            esac
+            exit 1
+          fi
+
       # An existing tag at the current commit means a previous manual run got
       # past the tag push but failed later — treat it as a rerun. A tag pointing
       # elsewhere is a real conflict.

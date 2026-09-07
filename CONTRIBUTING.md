@@ -133,10 +133,29 @@ went up that way.
 
 The server workflow packages the Helm chart during preflight, then publishes it
 after the image, tag, release, and wire-contract assets succeed. On the first
-chart release, an organization owner must make both GHCR packages public. The
-workflow verifies anonymous chart access and fails with a named error until the
-chart package is public. OCI chart tags are mutable on a workflow rerun, so
-verify the published chart version as part of the release check.
+chart release, an organization owner must make both GHCR packages public.
+
+Both halves are gated, and neither gate can be satisfied from CI — GitHub
+exposes no API for package visibility, so a failure here is a console action:
+
+- Preflight probes `ghcr.io/byteveda/flexiq-server:latest` anonymously and stops
+  the run before anything is published, in dry runs too.
+- The chart publish probes its own package immediately after `helm push`. The
+  chart cannot be checked in preflight because it does not exist until that
+  push, and an anonymous probe cannot tell a missing package from a private one.
+
+To clear either failure, open the package under
+[the organization's packages](https://github.com/orgs/ByteVeda/packages), then
+**Package settings → Change visibility → Public**, and rerun. Verify from a
+machine with no GHCR credentials:
+
+```bash
+docker manifest inspect ghcr.io/byteveda/flexiq-server:X.Y.Z
+helm show chart oci://ghcr.io/byteveda/charts/flexiq-server --version X.Y.Z
+```
+
+OCI chart tags are mutable on a workflow rerun, so verify the published chart
+version as part of the release check.
 
 One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
 once is `fatal: too many arguments` and creates none of them:
