@@ -101,6 +101,7 @@ jobs:
               - 'crates/flexiq-server/**'
               - 'dashboard/**'
               - 'docker/**'
+              - '!docker/**.md'
               # Embedded into the binary for gRPC reflection, so a regenerated
               # descriptor changes what the image serves.
               - 'contracts/descriptor.binpb'

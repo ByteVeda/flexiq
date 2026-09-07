@@ -115,12 +115,12 @@ docker run --rm -p 50051:50051 -v "$PWD:/data" \
   -e FLEXIQ_DSN=/data/flexiq.db \
   -e FLEXIQ_NAMESPACE=polyglot \
   -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
-  ghcr.io/byteveda/flexiq-server:1.0.0
+  ghcr.io/byteveda/flexiq-server:2.0.0
 
 # 2. Mint a producer token (any shell that can reach the same file):
 docker run --rm -v "$PWD:/data" \
   -e FLEXIQ_DSN=/data/flexiq.db -e FLEXIQ_NAMESPACE=polyglot \
-  ghcr.io/byteveda/flexiq-server:1.0.0 \
+  ghcr.io/byteveda/flexiq-server:2.0.0 \
   token create --name polyglot-producer --scope produce
 export FLEXIQ_TOKEN=fqt_...   # printed by the command above
 
@@ -165,14 +165,14 @@ docker run --rm -p 50051:50051 -p 7777:7777 -v "$PWD:/data" \
   -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
   -e FLEXIQ_LISTEN=0.0.0.0:7777 \
   -e FLEXIQ_ATTACH_TOKEN \
-  ghcr.io/byteveda/flexiq-server:1.0.0
+  ghcr.io/byteveda/flexiq-server:2.0.0
 
 # 2. A second produce-scoped token, for the worker's own hand-off. Its own
 #    rather than the script's: a token is named, scoped and revocable on its
 #    own, which only buys anything if each client holds one.
 docker run --rm -v "$PWD:/data" \
   -e FLEXIQ_DSN=/data/flexiq.db -e FLEXIQ_NAMESPACE=polyglot \
-  ghcr.io/byteveda/flexiq-server:1.0.0 \
+  ghcr.io/byteveda/flexiq-server:2.0.0 \
   token create --name polyglot-node-chain --scope produce
 export FLEXIQ_NODE_TOKEN=fqt_...   # printed by the command above
 
@@ -219,7 +219,7 @@ docker run --rm -p 50051:50051 -p 7777:7777 -v "$PWD:/data" \
   -e FLEXIQ_GRPC_LISTEN=0.0.0.0:50051 \
   -e FLEXIQ_LISTEN=0.0.0.0:7777 \
   -e FLEXIQ_ATTACH_TOKEN \
-  ghcr.io/byteveda/flexiq-server:1.0.0
+  ghcr.io/byteveda/flexiq-server:2.0.0
 
 # 2. The worker, attached instead of polling. The Node worker and
 #    ./grpc_producer.sh are unchanged from the gRPC variant above.

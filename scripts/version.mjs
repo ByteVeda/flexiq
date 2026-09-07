@@ -89,6 +89,8 @@ const SNIPPET_PATTERNS = [
   /("@byteveda\/flexiq[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
   // pip: flexiq==0.21.0
   /(\bflexiq[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // GHCR: ghcr.io/byteveda/flexiq-server:0.21.0
+  /(ghcr\.io\/byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
@@ -105,6 +107,8 @@ const SNIPPETS = [
   "examples/polyglot/README.md",
   "examples/polyglot/node-worker/package.json",
   "examples/polyglot/java-worker/build.gradle.kts",
+  "docker/README.md",
+  "docs/content/docs/shared/operate/deployment.mdx",
 ];
 
 // Checked, never written: release notes are authored by hand, but shipping a
