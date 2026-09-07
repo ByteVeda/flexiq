@@ -9,19 +9,23 @@ probes, and optional sidecar injector by hand.
 
 ## Install the chart
 
-Each server release publishes the chart to GHCR as a versioned OCI artifact.
-Install the chart version that matches the server version you want to run:
+The chart source is available in the repository today. OCI publishing begins
+with the first server release after this workflow change; until that release is
+publicly visible in GHCR, install from a matching server tag:
 
 ```bash
-helm install flexiq oci://ghcr.io/byteveda/charts/flexiq-server \
-  --version 2.0.0 \
+git clone https://github.com/ByteVeda/flexiq.git
+cd flexiq
+git checkout server-v2.0.0
+helm install flexiq ./deploy/helm/flexiq-server \
   --set storage.dsn='postgres://flexiq:secret@postgres:5432/myapp' \
   --set attach.token="$(openssl rand -base64 32)"
 ```
 
-The chart and server image versions move together; the image tag defaults to
-the chart's `appVersion`. Pin `--version` so a later release does not change a
-new installation unexpectedly.
+After a chart release is published and made public, install its matching OCI
+version with `helm install flexiq oci://ghcr.io/byteveda/charts/flexiq-server
+--version <released-version> ...`. The chart and server image versions move
+together; the image tag defaults to the chart's `appVersion`.
 
 For production, keep credentials out of command history and values files. Put
 the DSN and attach token in Kubernetes Secrets, then use
@@ -33,8 +37,8 @@ Upgrade by selecting the new chart version explicitly:
 
 ```bash
 helm upgrade flexiq oci://ghcr.io/byteveda/charts/flexiq-server \
-  --version 2.0.0 \
-  --reuse-values
+  --version <released-version> \
+  --reset-then-reuse-values
 ```
 
 To inspect or modify the chart before installing it, check out the matching
@@ -122,7 +126,7 @@ an executor to an opted-in workload. The injected container reuses the
 workload's own image, so it can import the same task handlers:
 
 ```bash
-helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values \
+helm upgrade flexiq ./deploy/helm/flexiq-server --reset-then-reuse-values \
   --set webhook.enabled=true
 ```
 
