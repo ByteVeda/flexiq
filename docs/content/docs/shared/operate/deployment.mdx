@@ -529,6 +529,9 @@ An executor removes both: the process is already running and already warm, and
 the only new image is the scheduler's — a static binary on distroless, identical
 for every deployment.
 
+If your app image is small, keep the in-process worker. The split buys nothing
+and costs you a second moving part.
+
 ### Published scheduler image
 
 The scheduler image is `ghcr.io/byteveda/flexiq-server`. Every release publishes
@@ -553,8 +556,6 @@ attestation and does not sign the image, so digest pinning is the available
 integrity control; there is no FlexiQ-produced signature or attestation to
 verify yet.
 
-If your app image is small, keep the in-process worker. The split buys nothing
-and costs you a second moving part.
 
 ### Compose
 
@@ -564,7 +565,7 @@ schedules for any app:
 ```yaml
 services:
   scheduler:
-    image: ghcr.io/byteveda/flexiq-server:0.21.0
+    image: ghcr.io/byteveda/flexiq-server:2.0.0
     environment:
       FLEXIQ_DSN: postgresql://flexiq:secret@postgres:5432/myapp
       FLEXIQ_LISTEN: 0.0.0.0:7777
@@ -678,7 +679,7 @@ spec:
         # A native sidecar (Kubernetes 1.29+): starts before the app containers,
         # keeps running beside them, and restarts on its own.
         - name: scheduler
-          image: ghcr.io/byteveda/flexiq-server:0.21.0
+          image: ghcr.io/byteveda/flexiq-server:2.0.0
           restartPolicy: Always
           env:
             - name: FLEXIQ_DSN
@@ -778,7 +779,7 @@ spec:
     spec:
       containers:
         - name: scheduler
-          image: ghcr.io/byteveda/flexiq-server:0.21.0
+          image: ghcr.io/byteveda/flexiq-server:2.0.0
           env:
             - name: FLEXIQ_DSN
               valueFrom:
