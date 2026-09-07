@@ -1,0 +1,38 @@
+name: Cache budget
+
+# Past 10 GB, GitHub evicts least-recently-used entries silently: CI stays
+# green and gets slower. This is the alarm, plus the invariant behind the
+# layout — a Cargo cache on master and nowhere else.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  budget:
+    name: Cache budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Measure cache usage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Hard limit is 10 GB; fail early enough to fix the cause first.
+          LIMIT_GB: "10"
+          BUDGET_GB: "8.5"
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/caches?per_page=100" --paginate \
+            --jq '.actions_caches[] | {size: .size_in_bytes, ref: .ref, key: .key}' \
+            | jq -s '.' > caches.json
+          python3 scripts/cache_budget.py caches.json \
+            --limit-gb "$LIMIT_GB" \
+            --budget-gb "$BUDGET_GB" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

@@ -29,9 +29,11 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
-          # Sole dev-cache writer, and only on master: a PR-ref cache can't be
-          # read by other PRs anyway, so saving on PRs just mints throwaway
-          # entries against the 10 GB quota. PRs restore master's cache instead.
+          # Sole writer of the dev-profile namespace, and only on master: a
+          # PR-ref cache can't be read by other PRs anyway, so saving on PRs
+          # just mints throwaway entries against the 10 GB quota. Every other
+          # dev-profile job restores this one entry by name.
+          shared-key: dev
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Check Rust formatting
@@ -87,7 +89,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: ./.github/actions/rust-prelude
+
+      # Rust tests link the PyO3 extension against libpython; the interpreter is
+      # needed at runtime but the dev deps are not, so skip the uv sync.
+      - name: Set up Python (libpython only)
+        uses: ./.github/actions/setup-python
+        with:
+          sync: "false"
+
+      # Read-only restore of the dev namespace the lint job writes on master.
+      # Called straight from the job, never through a wrapper action — see the
+      # `save-if` input's description in setup-rust for why that matters.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: dev
+          save-if: "false"
 
       # $pythonLocation is exported to the job env by setup-python at runtime.
       - name: Run Rust test suite
@@ -135,7 +152,22 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: ./.github/actions/rust-prelude
+
+      # Rust tests link the PyO3 extension against libpython; the interpreter is
+      # needed at runtime but the dev deps are not, so skip the uv sync.
+      - name: Set up Python (libpython only)
+        uses: ./.github/actions/setup-python
+        with:
+          sync: "false"
+
+      # Read-only restore of the dev namespace the lint job writes on master.
+      # Called straight from the job, never through a wrapper action — see the
+      # `save-if` input's description in setup-rust for why that matters.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: dev
+          save-if: "false"
 
       - name: Run Rust test suite (PostgreSQL backend)
         # Drop LD_LIBRARY_PATH + exclude flexiq-python: Python's OpenSSL (on that
@@ -160,7 +192,22 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: ./.github/actions/rust-prelude
+
+      # Rust tests link the PyO3 extension against libpython; the interpreter is
+      # needed at runtime but the dev deps are not, so skip the uv sync.
+      - name: Set up Python (libpython only)
+        uses: ./.github/actions/setup-python
+        with:
+          sync: "false"
+
+      # Read-only restore of the dev namespace the lint job writes on master.
+      # Called straight from the job, never through a wrapper action — see the
+      # `save-if` input's description in setup-rust for why that matters.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          shared-key: dev
+          save-if: "false"
 
       - name: Run Rust test suite (Redis backend)
         run: LD_LIBRARY_PATH="$pythonLocation/lib" cargo test --workspace --features redis,workflows

@@ -194,7 +194,14 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ env.TAG }}
           load: true
           cache-from: type=gha,scope=server-image-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=server-image-${{ matrix.arch }}
+          # Same master-only rule as ci-server-image.yml. A release runs on a
+          # tag, and a cache written on a tag ref is readable from nowhere else
+          # — so `mode=max` there only mints blobs that evict the master
+          # entries this build restores from. Reads still hit master's cache.
+          cache-to: >-
+            ${{ github.ref == 'refs/heads/master'
+                && format('type=gha,mode=max,scope=server-image-{0}', matrix.arch)
+                || '' }}
 
       # The binary derives its version from the workspace Cargo.toml, so this
       # catches an image built from the wrong commit as well as a bad --build-arg.

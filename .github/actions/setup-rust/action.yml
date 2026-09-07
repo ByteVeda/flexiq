@@ -13,6 +13,11 @@ inputs:
     description: >-
       Whether this job may save the Cargo cache (only one job should — usually
       lint). Pass 'true' for the cache-writer, leave 'false' elsewhere.
+
+      Call this action directly from a job, never from another composite: two
+      levels deep, rust-cache's post step reads this input as empty and its
+      `|| "true"` fallback saves anyway. cache-budget.yml enforces the result —
+      a Cargo cache on master and nowhere else.
     required: false
     default: "false"
   shared-key:
