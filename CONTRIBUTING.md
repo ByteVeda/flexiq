@@ -2,6 +2,12 @@
 
 Thanks for your interest in contributing! flexiq is a hybrid Rust + Python project, so the dev setup involves both ecosystems.
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Taking part in the issue
+tracker, pull requests, or any other project space means agreeing to it. Report unacceptable
+behaviour to conduct@byteveda.org.
+
 ## Development Setup
 
 ### Prerequisites
