@@ -77,10 +77,12 @@ Hardening a deployment is a documentation question rather than a report — see
 
 ## Disclosure
 
-Disclosure is coordinated. The default embargo is 90 days from acknowledgement or the day a fix
-ships, whichever comes first, and it shortens if a vulnerability is being exploited. The advisory
-is published on GitHub when the fix is released, with a CVE requested through GitHub where one is
-warranted. If you want to publish earlier, ask on the thread.
+Disclosure is coordinated. The embargo ends the day the fix ships or 90 days after
+acknowledgement, whichever comes first, and it shortens if a vulnerability is being exploited. The
+advisory is published on GitHub at that point either way: a report still unfixed at 90 days is
+published with what is known and whatever mitigation exists, because an embargo with no end is how
+a finding gets buried rather than fixed. A CVE is requested through GitHub where one is warranted.
+If you want to publish earlier, ask on the thread.
 
 ## Credit
 
