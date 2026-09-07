@@ -18,6 +18,13 @@ docker run --rm -p 7777:7777 \
   ghcr.io/byteveda/flexiq-server:2.0.0
 ```
 
+`-p 7777:7777` is for a local trial. The attach port dispatches code, and the
+token is a bearer credential rather than transport security — `flexiq-server`
+does not terminate TLS, and setting `FLEXIQ_LISTEN_TLS_CERT` /
+`FLEXIQ_LISTEN_TLS_KEY` fails at startup instead of being ignored. In a real
+deployment keep 7777 on the pod or compose network and publish nothing, or put
+an mTLS proxy in front of it.
+
 See the [server configuration](../crates/flexiq-server/README.md) for the
 runtime environment variables and the
 [deployment guide](https://docs.byteveda.org/flexiq)
