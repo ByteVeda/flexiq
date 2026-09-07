@@ -89,6 +89,14 @@ const SNIPPET_PATTERNS = [
   /("@byteveda\/flexiq[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
   // pip: flexiq==0.21.0
   /(\bflexiq[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // Container image: ghcr.io/byteveda/flexiq-server:0.21.0 — matched on the
+  // repository coordinate rather than the registry host, which is the part
+  // that identifies the image and the part a mirror would keep. A host in the
+  // pattern would be an unanchored URL match, and would say nothing extra:
+  // `byteveda/flexiq-server` is ours wherever it is served from. The lookbehind
+  // sits outside the capture so `anotherbyteveda/flexiq-server` cannot match
+  // while `rewriteSnippet` still sees the same three groups.
+  /(?<![\w.-])(byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
@@ -105,6 +113,8 @@ const SNIPPETS = [
   "examples/polyglot/README.md",
   "examples/polyglot/node-worker/package.json",
   "examples/polyglot/java-worker/build.gradle.kts",
+  "docker/README.md",
+  "docs/content/docs/shared/operate/deployment.mdx",
 ];
 
 // Checked, never written: release notes are authored by hand, but shipping a

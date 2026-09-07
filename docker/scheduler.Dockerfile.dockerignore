@@ -11,6 +11,7 @@ target/
 **/.venv/
 dashboard/dist/
 docs/
+docker/*.md
 junk/
 sdks/java/
 sdks/node/
