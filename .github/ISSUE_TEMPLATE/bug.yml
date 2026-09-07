@@ -1,0 +1,97 @@
+name: Bug report
+description: Report reproducible incorrect behavior in FlexiQ
+title: "bug: "
+labels: [bug]
+body:
+  - type: input
+    id: flexiq-version
+    attributes:
+      label: FlexiQ version
+      description: Use the workspace version shown by your installed package or release.
+      placeholder: 2.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sdk
+    attributes:
+      label: SDK or interface
+      options:
+        - Python
+        - Node.js
+        - Java
+        - Rust
+        - flexiq-server
+        - Other or unknown
+    validations:
+      required: true
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK runtime version
+      description: Include the Python, Node.js, Java, or Rust version when applicable.
+      placeholder: Python 3.13
+    validations:
+      required: true
+
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage backend
+      options:
+        - SQLite
+        - PostgreSQL
+        - Redis
+        - Other or unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - Embedded
+        - Server
+        - Both or unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code or commands that reproduce the problem. Use a fenced code block when helpful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add relevant logs, operating system details, or configuration with secrets removed.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and pull requests for the same problem.
+          required: true
+        - label: I removed credentials and other sensitive data from this report.
+          required: true
