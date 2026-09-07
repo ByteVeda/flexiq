@@ -57,7 +57,6 @@ jobs:
               - '.github/workflows/ci.yml'
             rust:
               - *shared
-              - '.github/actions/rust-prelude/**'
               - '.github/actions/setup-python/**'
               - 'rust-toolchain.toml'
               # flexiq-server's build.rs generates the flexiq.v1 types from the
