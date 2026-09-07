@@ -338,7 +338,14 @@ jobs:
             --username "$GITHUB_ACTOR" --password-stdin
           helm push "$archive" "$CHART_REGISTRY"
           helm registry logout ghcr.io
-          if ! HELM_REGISTRY_CONFIG="${RUNNER_TEMP}/helm-anonymous.json" \
+          # helm falls back to Docker's credential store when its own config
+          # has no entry, and docker/login-action wrote GHCR credentials there
+          # earlier in this job — so an empty HELM_REGISTRY_CONFIG alone would
+          # still authenticate and pass the probe on a private package.
+          anonymous_docker_config="$(mktemp -d)"
+          printf '{}\n' >"${anonymous_docker_config}/config.json"
+          if ! DOCKER_CONFIG="$anonymous_docker_config" \
+            HELM_REGISTRY_CONFIG="${RUNNER_TEMP}/helm-anonymous.json" \
             helm show chart "${CHART_REGISTRY}/flexiq-server" --version "$VERSION" >/dev/null; then
             echo "::error::Published chart is not anonymously readable. Make the GHCR package public and rerun."
             exit 1
