@@ -89,9 +89,12 @@ const SNIPPET_PATTERNS = [
   /("@byteveda\/flexiq[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
   // pip: flexiq==0.21.0
   /(\bflexiq[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
-  // GHCR: ghcr.io/byteveda/flexiq-server:0.21.0 — the lookbehind anchors the
-  // host so a lookalike registry ending in `ghcr.io` cannot match.
-  /(?<![\w.-])(ghcr\.io\/byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // Container image: ghcr.io/byteveda/flexiq-server:0.21.0 — matched on the
+  // repository coordinate rather than the registry host, which is the part
+  // that identifies the image and the part a mirror would keep. A host in the
+  // pattern would be an unanchored URL match, and would say nothing extra:
+  // `byteveda/flexiq-server` is ours wherever it is served from.
+  /(byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
