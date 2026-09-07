@@ -61,7 +61,13 @@ sha2 = "0.10"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 hmac = "0.12"
 thiserror = { workspace = true }
-jsonwebtoken = "9"
+# 10.x makes the crypto backend an explicit choice and drops the ring one. The
+# pure-Rust provider is the portable pick: the server image builds for more
+# than one architecture, and aws-lc-rs would put cmake and a C toolchain on
+# that path. No PEM anywhere — issuer keys arrive as JWK components.
+jsonwebtoken = { version = "10.3", default-features = false, features = [
+  "rust_crypto",
+] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Same parser reqwest uses, so the SSRF guard and the request agree on the host.
 url = "2"
@@ -113,3 +119,10 @@ prost-types = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# The stub issuer signs its fixtures from a PEM key. Naming `use_pem` here
+# rather than above keeps the PEM parser out of the shipped binary, which only
+# ever reads JWK components.
+jsonwebtoken = { version = "10.3", default-features = false, features = [
+  "rust_crypto",
+  "use_pem",
+] }
