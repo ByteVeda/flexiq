@@ -1,6 +1,7 @@
 name: Question
 description: Ask about using FlexiQ or discuss an idea before implementation
 title: "question: "
+labels: [question]
 body:
   - type: textarea
     id: question
