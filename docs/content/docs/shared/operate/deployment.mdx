@@ -535,7 +535,7 @@ and costs you a second moving part.
 ### Published scheduler image
 
 The scheduler image is `ghcr.io/byteveda/flexiq-server`. Every release publishes
-an exact-version tag, such as `:0.21.0`, and the mutable `:latest` tag
+an exact-version tag and the mutable `:latest` tag
 as manifest lists for `linux/amd64` and `linux/arm64`. FlexiQ does not currently
 publish moving major or minor tags, or commit-SHA tags. Pin an exact version for
 controlled deployments; pin the manifest digest when byte-for-byte image
@@ -555,7 +555,6 @@ architectures. It currently publishes no BuildKit provenance or SBOM
 attestation and does not sign the image, so digest pinning is the available
 integrity control; there is no FlexiQ-produced signature or attestation to
 verify yet.
-
 
 ### Compose
 
