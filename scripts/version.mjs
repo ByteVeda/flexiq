@@ -93,8 +93,10 @@ const SNIPPET_PATTERNS = [
   // repository coordinate rather than the registry host, which is the part
   // that identifies the image and the part a mirror would keep. A host in the
   // pattern would be an unanchored URL match, and would say nothing extra:
-  // `byteveda/flexiq-server` is ours wherever it is served from.
-  /(byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // `byteveda/flexiq-server` is ours wherever it is served from. The lookbehind
+  // sits outside the capture so `anotherbyteveda/flexiq-server` cannot match
+  // while `rewriteSnippet` still sees the same three groups.
+  /(?<![\w.-])(byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
