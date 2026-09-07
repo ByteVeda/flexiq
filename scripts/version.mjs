@@ -89,8 +89,9 @@ const SNIPPET_PATTERNS = [
   /("@byteveda\/flexiq[\w-]*": ")(\d+\.\d+\.\d+[\w.-]*)(")/g,
   // pip: flexiq==0.21.0
   /(\bflexiq[\w-]*==)(\d+\.\d+\.\d+[\w.-]*)()/g,
-  // GHCR: ghcr.io/byteveda/flexiq-server:0.21.0
-  /(ghcr\.io\/byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
+  // GHCR: ghcr.io/byteveda/flexiq-server:0.21.0 — the lookbehind anchors the
+  // host so a lookalike registry ending in `ghcr.io` cannot match.
+  /(?<![\w.-])(ghcr\.io\/byteveda\/flexiq-server:)(\d+\.\d+\.\d+[\w.-]*)()/g,
 ];
 
 const SNIPPETS = [
