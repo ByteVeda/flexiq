@@ -243,6 +243,10 @@ async fn a_forged_or_stale_id_token_is_refused() {
             "signature does not match the payload",
             Box::new(|token: NextToken| token.tampered()),
         ),
+        (
+            "signed with HMAC over the issuer's published modulus",
+            Box::new(|token: NextToken| token.signed_with_hmac_over_the_public_key()),
+        ),
     ];
 
     for (description, forge) in cases {

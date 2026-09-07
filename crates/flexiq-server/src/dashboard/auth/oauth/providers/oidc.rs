@@ -3,10 +3,11 @@
 //! The identity comes from a signed `id_token`, verified against the issuer's
 //! published JWKS. Signature, issuer, audience, expiry, and nonce are all
 //! checked — dropping any one of them turns the token into an unauthenticated
-//! claim anyone could mint.
+//! claim anyone could mint. So is the signature *algorithm*, which comes from
+//! the published key rather than from the token asking to be verified.
 
-use jsonwebtoken::jwk::JwkSet;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet, KeyAlgorithm, PublicKeyUse};
+use jsonwebtoken::{decode, decode_header, Algorithm, AlgorithmFamily, DecodingKey, Validation};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -171,16 +172,90 @@ async fn verify_id_token(
     })?;
     let key = DecodingKey::from_jwk(jwk)
         .map_err(|error| OAuthError::IdentityFetch(format!("unusable signing key: {error}")))?;
+    let algorithms = permitted_algorithms(jwk)?;
 
-    let mut validation = Validation::new(header.alg);
+    let mut validation = Validation::new(algorithms[0]);
+    validation.algorithms = algorithms;
     validation.set_audience(&[&provider.client_id]);
     validation.set_issuer(&[&discovery.issuer]);
+    // OIDC Core makes all four REQUIRED of an id_token, and naming them is also
+    // what turns a malformed claim into a rejection: a claim that fails to
+    // parse is indistinguishable from an absent one to the checks below, so
+    // `validate_exp` alone would wave through an `exp` sent as a string.
+    validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
     validation.leeway = CLOCK_SKEW_SECONDS;
     validation.validate_exp = true;
+    validation.validate_nbf = true;
 
     decode::<Claims>(id_token, &key, &validation)
         .map(|data| data.claims)
         .map_err(|error| OAuthError::IdentityFetch(format!("id_token validation failed: {error}")))
+}
+
+/// The algorithms `jwk` may verify an `id_token` with.
+///
+/// Deliberately not the algorithm named in the token's own header: that header
+/// is written by whoever presents the token, so a validator built from it can
+/// only ever agree with itself. The issuer pins the algorithm when it publishes
+/// one on the key; failing that the key type narrows it to a family.
+fn permitted_algorithms(jwk: &Jwk) -> Result<Vec<Algorithm>, OAuthError> {
+    if jwk.common.public_key_use == Some(PublicKeyUse::Encryption) {
+        return Err(OAuthError::IdentityFetch(
+            "the id_token's signing key is published for encryption, not signatures".into(),
+        ));
+    }
+
+    if let Some(declared) = jwk.common.key_algorithm {
+        return signing_algorithm(declared)
+            .map(|algorithm| vec![algorithm])
+            .ok_or_else(|| {
+                OAuthError::IdentityFetch(
+                    "the id_token's signing key declares an 'alg' that cannot verify a signature"
+                        .into(),
+                )
+            });
+    }
+
+    let family = match &jwk.algorithm {
+        AlgorithmParameters::RSA(_) => AlgorithmFamily::Rsa,
+        AlgorithmParameters::EllipticCurve(_) => AlgorithmFamily::Ec,
+        AlgorithmParameters::OctetKeyPair(_) => AlgorithmFamily::Ed,
+        // A JWKS publishes public halves. A symmetric key has none — the whole
+        // key is the signing secret — so anyone who can read the set could
+        // mint tokens with it.
+        AlgorithmParameters::OctetKey(_) => {
+            return Err(OAuthError::IdentityFetch(
+                "the id_token's signing key is symmetric, which a JWKS must never publish".into(),
+            ))
+        }
+    };
+    Ok(family.algorithms().to_vec())
+}
+
+/// The signature algorithm a key's `alg` names, if it names one at all.
+///
+/// `None` covers both halves of what must never reach the verifier: HMAC, where
+/// the published key doubles as the signing secret, and the RSA encryption
+/// algorithms, which do not sign at all.
+fn signing_algorithm(declared: KeyAlgorithm) -> Option<Algorithm> {
+    match declared {
+        KeyAlgorithm::ES256 => Some(Algorithm::ES256),
+        KeyAlgorithm::ES384 => Some(Algorithm::ES384),
+        KeyAlgorithm::RS256 => Some(Algorithm::RS256),
+        KeyAlgorithm::RS384 => Some(Algorithm::RS384),
+        KeyAlgorithm::RS512 => Some(Algorithm::RS512),
+        KeyAlgorithm::PS256 => Some(Algorithm::PS256),
+        KeyAlgorithm::PS384 => Some(Algorithm::PS384),
+        KeyAlgorithm::PS512 => Some(Algorithm::PS512),
+        KeyAlgorithm::EdDSA => Some(Algorithm::EdDSA),
+        KeyAlgorithm::HS256
+        | KeyAlgorithm::HS384
+        | KeyAlgorithm::HS512
+        | KeyAlgorithm::RSA1_5
+        | KeyAlgorithm::RSA_OAEP
+        | KeyAlgorithm::RSA_OAEP_256
+        | KeyAlgorithm::UNKNOWN_ALGORITHM => None,
+    }
 }
 
 /// The provider's discovery document, cached after the first fetch.
@@ -267,6 +342,91 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JWK is only ever built here from a literal, so a bad one is a bug in
+    /// the test rather than a case the code must handle.
+    fn jwk(json: serde_json::Value) -> Jwk {
+        serde_json::from_value(json).expect("a well-formed JWK")
+    }
+
+    /// The modulus and exponent are never used — nothing in these tests
+    /// verifies a signature, only decides which algorithms may attempt one.
+    fn rsa_key(extra: serde_json::Value) -> Jwk {
+        let mut json = serde_json::json!({
+            "kty": "RSA",
+            "kid": "test",
+            "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM64",
+            "e": "AQAB",
+        });
+        let (Some(base), Some(extra)) = (json.as_object_mut(), extra.as_object()) else {
+            panic!("both literals are objects");
+        };
+        base.extend(extra.clone());
+        jwk(json)
+    }
+
+    #[test]
+    fn an_rsa_key_verifies_with_rsa_algorithms_only() {
+        let allowed = permitted_algorithms(&rsa_key(serde_json::json!({}))).expect("allowed");
+
+        assert!(allowed.contains(&Algorithm::RS256));
+        // The whole point: the token cannot talk the verifier into HMAC, where
+        // the published modulus would serve as the shared secret.
+        for symmetric in [Algorithm::HS256, Algorithm::HS384, Algorithm::HS512] {
+            assert!(
+                !allowed.contains(&symmetric),
+                "must not allow {symmetric:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_that_pins_its_algorithm_allows_exactly_that_one() {
+        let allowed =
+            permitted_algorithms(&rsa_key(serde_json::json!({ "alg": "RS256" }))).expect("allowed");
+        assert_eq!(allowed, vec![Algorithm::RS256]);
+    }
+
+    #[test]
+    fn a_key_pinned_to_hmac_verifies_nothing() {
+        let error = permitted_algorithms(&rsa_key(serde_json::json!({ "alg": "HS256" })))
+            .expect_err("rejected");
+        assert!(matches!(error, OAuthError::IdentityFetch(_)));
+    }
+
+    #[test]
+    fn a_key_pinned_to_an_encryption_algorithm_verifies_nothing() {
+        assert!(permitted_algorithms(&rsa_key(serde_json::json!({ "alg": "RSA-OAEP" }))).is_err());
+    }
+
+    #[test]
+    fn a_key_published_for_encryption_verifies_nothing() {
+        assert!(permitted_algorithms(&rsa_key(serde_json::json!({ "use": "enc" }))).is_err());
+    }
+
+    #[test]
+    fn a_symmetric_key_in_a_jwks_verifies_nothing() {
+        let symmetric = jwk(serde_json::json!({
+            "kty": "oct",
+            "kid": "test",
+            "k": "c2VjcmV0",
+        }));
+        assert!(permitted_algorithms(&symmetric).is_err());
+    }
+
+    #[test]
+    fn an_ec_key_verifies_with_ecdsa_algorithms_only() {
+        let allowed = permitted_algorithms(&jwk(serde_json::json!({
+            "kty": "EC",
+            "kid": "test",
+            "crv": "P-256",
+            "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+            "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        })))
+        .expect("allowed");
+
+        assert_eq!(allowed, vec![Algorithm::ES256, Algorithm::ES384]);
+    }
 
     #[test]
     fn email_verified_accepts_both_shapes_issuers_send() {

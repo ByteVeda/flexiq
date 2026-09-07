@@ -39,6 +39,8 @@ pub struct NextToken {
     pub rotated: bool,
     /// Corrupt the signature after signing, to prove verification is real.
     pub tamper: bool,
+    /// Sign with HMAC over the issuer's published modulus instead of RSA.
+    pub hmac_over_public_key: bool,
 }
 
 impl NextToken {
@@ -63,6 +65,7 @@ impl NextToken {
             key_id: Some(KEY_ID.to_string()),
             rotated: false,
             tamper: false,
+            hmac_over_public_key: false,
         }
     }
 
@@ -88,6 +91,17 @@ impl NextToken {
     pub fn signed_with_rotated_key(mut self) -> Self {
         self.rotated = true;
         self.key_id = Some(ROTATED_KEY_ID.to_string());
+        self
+    }
+
+    /// The algorithm-confusion forgery: `alg: HS256`, signed with the issuer's
+    /// *published* RSA modulus as the shared secret.
+    ///
+    /// A JWKS is public, so this token costs an attacker nothing to build. It
+    /// must be refused for naming an algorithm the key was never published
+    /// for — not merely because some other secret would have been used.
+    pub fn signed_with_hmac_over_the_public_key(mut self) -> Self {
+        self.hmac_over_public_key = true;
         self
     }
 }
@@ -229,14 +243,27 @@ async fn token(State(issuer): State<Arc<Issuer>>) -> Json<Value> {
         .take()
         .expect("a test armed the stub before triggering the exchange");
 
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = armed.key_id.clone();
-    let pem = if armed.rotated {
-        ROTATED_KEY_PEM
+    let algorithm = if armed.hmac_over_public_key {
+        Algorithm::HS256
     } else {
-        SIGNING_KEY_PEM
+        Algorithm::RS256
     };
-    let key = EncodingKey::from_rsa_pem(pem).expect("the fixture key parses");
+    let mut header = Header::new(algorithm);
+    header.kid = armed.key_id.clone();
+    let key = if armed.hmac_over_public_key {
+        let jwks: Value = serde_json::from_str(JWKS).expect("the fixture set parses");
+        let modulus = jwks["keys"][0]["n"]
+            .as_str()
+            .expect("the fixture key publishes a modulus");
+        EncodingKey::from_urlsafe_base64_secret(modulus).expect("the modulus is base64url")
+    } else {
+        let pem = if armed.rotated {
+            ROTATED_KEY_PEM
+        } else {
+            SIGNING_KEY_PEM
+        };
+        EncodingKey::from_rsa_pem(pem).expect("the fixture key parses")
+    };
     let mut id_token = jsonwebtoken::encode(&header, &armed.claims, &key).expect("sign the token");
 
     if armed.tamper {
