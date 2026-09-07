@@ -1,0 +1,76 @@
+# flexiq-server container image
+
+FlexiQ publishes the scheduler image at
+`ghcr.io/byteveda/flexiq-server`. The image contains the standalone
+`flexiq-server` binary and can serve executors from any supported SDK.
+
+```bash
+docker pull ghcr.io/byteveda/flexiq-server:2.0.0
+
+# A non-loopback attach port dispatches code, so the server refuses to start
+# without a token of at least 16 characters.
+export ATTACH_TOKEN=$(openssl rand -base64 32)
+
+docker run --rm -p 7777:7777 \
+  -e FLEXIQ_DSN=postgres://user:pass@host/db \
+  -e FLEXIQ_LISTEN=0.0.0.0:7777 \
+  -e FLEXIQ_ATTACH_TOKEN="$ATTACH_TOKEN" \
+  ghcr.io/byteveda/flexiq-server:2.0.0
+```
+
+See the [server configuration](../crates/flexiq-server/README.md) for the
+runtime environment variables and the
+[deployment guide](https://docs.byteveda.org/flexiq)
+for complete Docker, Compose, and Kubernetes examples.
+
+## Published tags and platforms
+
+Each server release publishes two multi-architecture pull references:
+
+| Reference | Meaning |
+| --- | --- |
+| `:<version>` (for example, `:2.0.0`) | A version-specific release reference. Use this for controlled deployments. |
+| `:latest` | The most recently published release. This tag moves on every publish, including a republish of an older version, so avoid it where reproducible deployment or rollback matters. |
+
+Both references are manifest lists for `linux/amd64` and `linux/arm64`; Docker
+selects the matching image automatically. FlexiQ does not currently publish
+moving major tags such as `:0`, moving minor tags such as `:0.21`, or commit
+tags such as `:sha-...`.
+
+The workflow also leaves `:<version>-amd64` and `:<version>-arm64` tags as
+implementation details used to assemble each manifest list. Do not deploy
+those architecture-specific tags to mixed-architecture clusters.
+
+For the strongest reproducibility, resolve the versioned manifest to its digest
+and deploy the digest reference:
+
+```bash
+docker buildx imagetools inspect ghcr.io/byteveda/flexiq-server:2.0.0
+docker pull ghcr.io/byteveda/flexiq-server@sha256:<manifest-digest>
+```
+
+## Distroless runtime
+
+The runtime image is based on `gcr.io/distroless/static-debian12:nonroot`. It
+runs as a non-root user and contains the static server binary, but no shell,
+package manager, or language runtime. Commands such as
+`docker exec <container> sh` therefore do not work. Use container logs or — on Kubernetes —
+`kubectl debug -it <pod> --image=<tools> --target=<container>`, which runs the
+tooling image as a separate ephemeral container. `--target` is what joins the
+server's process namespace; without it the debug shell sees no `flexiq-server`
+process. Either way the distroless target gains no shell or package manager.
+
+The image entrypoint is `/usr/local/bin/flexiq-server`. Its metadata declares
+ports 7777, 8080, and 50051, but nothing listens until `FLEXIQ_LISTEN`,
+`FLEXIQ_DASHBOARD`, or `FLEXIQ_GRPC_LISTEN` enables the corresponding service.
+The configured address chooses the actual port, and declared ports are not
+published on the host automatically.
+
+## Integrity and provenance
+
+The release workflow smoke-tests the server version, publishes OCI image
+labels, and verifies that the multi-architecture manifest contains both
+supported platforms. It currently disables BuildKit provenance and SBOM
+attestations, and the repository does not sign the published image. As a
+result, consumers can pin and compare registry digests, but cannot yet verify a
+FlexiQ-produced signature or build attestation.

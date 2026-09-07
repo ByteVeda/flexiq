@@ -165,7 +165,9 @@ docker run --rm -p 7777:7777 \
 ```
 
 Releases publish the same build as a multiarch manifest at
-`ghcr.io/byteveda/flexiq-server:<version>`.
+`ghcr.io/byteveda/flexiq-server:<version>`. The
+[container image guide](../../docker/README.md) documents the supported tags,
+platforms, distroless runtime, and current provenance guarantees.
 
 ## Behaviour worth knowing
 
