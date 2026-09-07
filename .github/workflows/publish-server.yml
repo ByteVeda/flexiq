@@ -32,6 +32,7 @@ permissions:
 env:
   # GHCR requires a lowercase path, and `github.repository_owner` is `ByteVeda`.
   IMAGE: ghcr.io/byteveda/flexiq-server
+  CHART_REGISTRY: oci://ghcr.io/byteveda/charts
 
 jobs:
   preflight:
@@ -70,6 +71,22 @@ jobs:
           repo_version="$(node scripts/version.mjs --current)"
           if [ "$repo_version" != "$VERSION" ]; then
             echo "::error::Resolved ${VERSION} but the repo declares ${repo_version}"
+            exit 1
+          fi
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+
+      - name: Validate Helm chart package
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/flexiq-server-${VERSION}.tgz"
+          helm package deploy/helm/flexiq-server --destination "$RUNNER_TEMP"
+          if [ ! -f "$archive" ]; then
+            echo "::error::Helm package did not create expected archive ${archive}"
             exit 1
           fi
 
@@ -198,10 +215,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: azure/setup-helm@v5
-        with:
-          version: v3.16.4
-
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -256,22 +269,6 @@ jobs:
             exit 1
           fi
 
-      # The chart and image versions are gated against the same workspace
-      # version in preflight. Publishing only after manifest verification keeps
-      # the chart from pointing at an absent or incomplete server image.
-      - name: Publish Helm chart to GHCR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json
-        run: |
-          set -euo pipefail
-          archive="${RUNNER_TEMP}/flexiq-server-${VERSION}.tgz"
-          helm package deploy/helm/flexiq-server --destination "$RUNNER_TEMP"
-          test -f "$archive"
-          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io \
-            --username "$GITHUB_ACTOR" --password-stdin
-          helm push "$archive" oci://ghcr.io/byteveda/charts
-
       - name: Create git tag
         if: github.event_name != 'push' && env.TAG_EXISTS != 'true'
         env:
@@ -317,3 +314,32 @@ jobs:
           gh release upload "server-v${VERSION}" --clobber \
             "flexiq-proto-${VERSION}.tar.gz" \
             "flexiq-descriptor-${VERSION}.binpb"
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+
+      # The dry-run preflight already packaged this chart. Publishing stays
+      # after the image, tag, release, and wire-contract checks so a chart
+      # registry failure cannot leave the server release half-created.
+      - name: Publish Helm chart to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/flexiq-server-${VERSION}.tgz"
+          helm package deploy/helm/flexiq-server --destination "$RUNNER_TEMP"
+          if [ ! -f "$archive" ]; then
+            echo "::error::Helm package did not create expected archive ${archive}"
+            exit 1
+          fi
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+          helm push "$archive" "$CHART_REGISTRY"
+          helm registry logout ghcr.io
+          if ! HELM_REGISTRY_CONFIG="${RUNNER_TEMP}/helm-anonymous.json" \
+            helm show chart "${CHART_REGISTRY}/flexiq-server" --version "$VERSION" >/dev/null; then
+            echo "::error::Published chart is not anonymously readable. Make the GHCR package public and rerun."
+            exit 1
+          fi

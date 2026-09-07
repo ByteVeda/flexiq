@@ -129,7 +129,14 @@ went up that way.
 | crates.io | `crates-vX.Y.Z` | `publish-crates.yml` |
 | npm | `node-vX.Y.Z` | `publish-node.yml` |
 | Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
-| GHCR (server image) | `server-vX.Y.Z` | `publish-server.yml` |
+| GHCR (server image and Helm chart) | `server-vX.Y.Z` | `publish-server.yml` |
+
+The server workflow packages the Helm chart during preflight, then publishes it
+after the image, tag, release, and wire-contract assets succeed. On the first
+chart release, an organization owner must make both GHCR packages public. The
+workflow verifies anonymous chart access and fails with a named error until the
+chart package is public. OCI chart tags are mutable on a workflow rerun, so
+verify the published chart version as part of the release check.
 
 One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
 once is `fatal: too many arguments` and creates none of them:

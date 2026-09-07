@@ -839,8 +839,8 @@ The chart refuses to render the mistakes this page warns about — an attach
 listener with no token, a guessable one, an unauthenticated dashboard — and the
 error names the value to change rather than leaving you a `CrashLoopBackOff` to
 diagnose. The <SdkLink to="operate/kubernetes">Kubernetes guide</SdkLink> covers
-local chart consumption, role selection, maintenance ownership across replicas,
-sidecar injection, and KEDA.
+current local chart installation, the OCI publication boundary, role selection,
+maintenance ownership across replicas, sidecar injection, and KEDA.
 
 #### Injecting the sidecar automatically
 
@@ -849,7 +849,7 @@ The chart's admission webhook turns both into annotations, so a workload opts in
 without a manifest change beyond its own metadata:
 
 ```bash
-helm upgrade flexiq ./deploy/helm/flexiq-server --reuse-values \
+helm upgrade flexiq ./deploy/helm/flexiq-server --reset-then-reuse-values \
   --set webhook.enabled=true
 ```
 
