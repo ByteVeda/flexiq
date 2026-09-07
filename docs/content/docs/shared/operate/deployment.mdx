@@ -545,9 +545,10 @@ matters.
 The image runs as a non-root user on distroless and contains no shell, package
 manager, or language runtime. Use logs, the health endpoints where
 `FLEXIQ_DASHBOARD` is set — a listener-only server has no HTTP port — or
-`kubectl debug --target=<container>`, which runs a tooling image as a separate
-ephemeral container joined to the server's process namespace and leaves the
-distroless target unchanged, instead of expecting `docker exec ... sh` to work.
+`kubectl debug -it <pod> --image=<tools> --target=<container>`, which runs the
+tooling image as a separate ephemeral container joined to the server's process
+namespace and leaves the distroless target unchanged, instead of expecting
+`docker exec ... sh` to work.
 The <SdkLink to="modules/server">server module reference</SdkLink> lists its
 runtime configuration.
 
