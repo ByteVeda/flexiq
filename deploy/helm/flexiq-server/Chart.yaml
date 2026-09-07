@@ -7,7 +7,7 @@ type: application
 # enforces that in CI.
 version: 2.0.0
 appVersion: "2.0.0"
-home: https://flexiq.grigori.in
+home: https://docs.byteveda.org/flexiq
 sources:
   - https://github.com/ByteVeda/flexiq
 keywords:

@@ -146,16 +146,37 @@ exposes no API for package visibility, so a failure here is a console action:
 
 To clear either failure, open the package under
 [the organization's packages](https://github.com/orgs/ByteVeda/packages), then
-**Package settings → Change visibility → Public**, and rerun. Verify from a
-machine with no GHCR credentials:
+**Package settings → Change visibility → Public**, and rerun. If *Public* and
+*Internal* are greyed out with "Setting is disabled by organization
+administrators", the block is the organization policy rather than the package:
+an owner enables public packages under **Organization settings → Packages →
+Package creation** first. Neither setting is exposed in the REST API.
+
+Verify from a machine with no GHCR credentials:
 
 ```bash
 docker manifest inspect ghcr.io/byteveda/flexiq-server:X.Y.Z
 helm show chart oci://ghcr.io/byteveda/charts/flexiq-server --version X.Y.Z
 ```
 
-OCI chart tags are mutable on a workflow rerun, so verify the published chart
-version as part of the release check.
+**The first chart release fails once, by construction.** The chart package does
+not exist until `helm push` creates it, so it cannot be made public in advance,
+and the probe that follows the push is what creates the failure. Expect:
+
+1. Tag `server-vX.Y.Z`. The image, git tag, GitHub release and wire-contract
+   assets all publish; the chart pushes; the anonymous probe fails.
+2. Make `charts/flexiq-server` public, as above.
+3. Rerun the failed job.
+
+A rerun replays the whole `manifest` job, not just the failed step, so every
+step in it is written to be repeatable: `imagetools create` rebuilds `:VERSION`
+and `:latest` from the per-architecture tags still in the registry, the git tag
+is skipped on a tag push and otherwise re-pushed at the same commit, the release
+is created only if `gh release view` misses and its assets upload with
+`--clobber`, and the chart is packaged and pushed again. OCI chart tags are
+mutable, so that last push replaces the version already there — which is also
+why the published chart version is worth verifying as part of the release check
+rather than assumed from a green run.
 
 One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
 once is `fatal: too many arguments` and creates none of them:
