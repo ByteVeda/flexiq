@@ -33,17 +33,19 @@ the DSN and attach token in Kubernetes Secrets, then use
 [`values.yaml`](https://github.com/ByteVeda/flexiq/blob/master/deploy/helm/flexiq-server/values.yaml)
 for every value and its source-level comments.
 
-Upgrade by selecting the new chart version explicitly:
+Upgrade from the same source you installed from — check out the new
+`server-vX.Y.Z` tag first, so the chart moves with the version you are moving to:
 
 ```bash
-helm upgrade flexiq oci://ghcr.io/byteveda/charts/flexiq-server \
-  --version <released-version> \
-  --reset-then-reuse-values
+helm upgrade flexiq ./deploy/helm/flexiq-server --reset-then-reuse-values
 ```
 
-To inspect or modify the chart before installing it, check out the matching
-`server-vX.Y.Z` repository tag and use `./deploy/helm/flexiq-server` as the chart
-path instead.
+Once the chart is published, the OCI form is `helm upgrade flexiq
+oci://ghcr.io/byteveda/charts/flexiq-server --version <released-version>
+--reset-then-reuse-values`. Either way, prefer `--reset-then-reuse-values` over
+`--reuse-values` when the chart version changes: the latter reuses the previous
+release's computed values, so a default introduced by the new chart is never
+applied.
 
 ## Choose the server roles
 
