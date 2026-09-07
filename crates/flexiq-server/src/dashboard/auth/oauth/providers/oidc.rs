@@ -124,11 +124,22 @@ pub async fn exchange_code(
     })
 }
 
-/// Claims the flow reads. Signature, `iss`, `aud`, and `exp` are enforced by
-/// the decoder itself.
+/// Claims the flow reads. Signature, `iss`, and `exp` are enforced by the
+/// decoder itself; `aud`, `azp` and `iat` are re-read here because the decoder
+/// does not enforce them the way OIDC Core requires. See [`check_audience`].
 #[derive(Debug, Deserialize)]
 struct Claims {
     sub: Option<String>,
+    #[serde(default)]
+    aud: Option<Audience>,
+    /// Authorized party. Present when the token was minted for a client other
+    /// than the one that is meant to use it.
+    #[serde(default)]
+    azp: Option<String>,
+    /// Issued-at. REQUIRED of an id_token, and not something
+    /// `required_spec_claims` can ask for — see [`check_audience`]'s caller.
+    #[serde(default)]
+    iat: Option<u64>,
     #[serde(default)]
     email: Option<String>,
     // Some issuers send this as the string "true" rather than a boolean.
@@ -138,6 +149,23 @@ struct Claims {
     name: Option<String>,
     #[serde(default)]
     nonce: Option<String>,
+}
+
+/// `aud` is one string or an array of them; both shapes are legal.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Audience {
+    fn values(&self) -> &[String] {
+        match self {
+            Audience::One(one) => std::slice::from_ref(one),
+            Audience::Many(many) => many,
+        }
+    }
 }
 
 fn truthy(value: &Value) -> bool {
@@ -187,9 +215,47 @@ async fn verify_id_token(
     validation.validate_exp = true;
     validation.validate_nbf = true;
 
-    decode::<Claims>(id_token, &key, &validation)
+    let claims = decode::<Claims>(id_token, &key, &validation)
         .map(|data| data.claims)
-        .map_err(|error| OAuthError::IdentityFetch(format!("id_token validation failed: {error}")))
+        .map_err(|error| {
+            OAuthError::IdentityFetch(format!("id_token validation failed: {error}"))
+        })?;
+
+    // `iat` is REQUIRED of an id_token, and `set_required_spec_claims` cannot
+    // ask for it: the decoder recognises only exp/nbf/aud/iss/sub and skips
+    // every other name silently, so this is the check.
+    if claims.iat.is_none() {
+        return Err(OAuthError::IdentityFetch(
+            "id_token has no 'iat' claim".into(),
+        ));
+    }
+    check_audience(&claims, &provider.client_id)?;
+
+    Ok(claims)
+}
+
+/// Reject a token that names an audience this client does not trust.
+///
+/// The decoder's own `aud` check is satisfied by an *intersection*, so a token
+/// carrying `["this-client", "someone-else"]` passes it. OIDC Core requires the
+/// opposite: every audience must be one the client trusts, and this deployment
+/// trusts exactly one — its own `client_id`. `azp` names the party a
+/// multi-audience token was actually minted for, so where it is present it has
+/// to be us as well.
+fn check_audience(claims: &Claims, client_id: &str) -> Result<(), OAuthError> {
+    let audiences = claims.aud.as_ref().map(Audience::values).unwrap_or(&[]);
+    if let Some(untrusted) = audiences.iter().find(|audience| *audience != client_id) {
+        return Err(OAuthError::IdentityFetch(format!(
+            "id_token names an untrusted audience: {untrusted}"
+        )));
+    }
+
+    match claims.azp.as_deref() {
+        Some(azp) if azp != client_id => Err(OAuthError::IdentityFetch(format!(
+            "id_token was authorized for another party: {azp}"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// The algorithms `jwk` may verify an `id_token` with.
@@ -426,6 +492,58 @@ mod tests {
         .expect("allowed");
 
         assert_eq!(allowed, vec![Algorithm::ES256, Algorithm::ES384]);
+    }
+
+    /// Claims carrying only what [`check_audience`] reads.
+    fn claims(json: serde_json::Value) -> Claims {
+        serde_json::from_value(json).expect("well-formed claims")
+    }
+
+    #[test]
+    fn the_only_trusted_audience_is_this_client() {
+        assert!(check_audience(&claims(serde_json::json!({ "aud": "me" })), "me").is_ok());
+        assert!(check_audience(&claims(serde_json::json!({ "aud": ["me"] })), "me").is_ok());
+    }
+
+    #[test]
+    fn an_extra_audience_is_refused_even_though_this_client_is_named() {
+        // The decoder is satisfied by an intersection, so this is the token
+        // that would otherwise walk straight through.
+        let error = check_audience(
+            &claims(serde_json::json!({ "aud": ["me", "someone-else"] })),
+            "me",
+        )
+        .expect_err("rejected");
+
+        assert!(matches!(error, OAuthError::IdentityFetch(_)));
+    }
+
+    #[test]
+    fn an_audience_that_is_not_this_client_is_refused() {
+        assert!(
+            check_audience(&claims(serde_json::json!({ "aud": "someone-else" })), "me").is_err()
+        );
+    }
+
+    #[test]
+    fn an_authorized_party_must_be_this_client_when_present() {
+        assert!(check_audience(
+            &claims(serde_json::json!({ "aud": "me", "azp": "me" })),
+            "me"
+        )
+        .is_ok());
+        assert!(check_audience(
+            &claims(serde_json::json!({ "aud": "me", "azp": "someone-else" })),
+            "me"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_missing_authorized_party_is_not_itself_a_failure() {
+        // `azp` is only required of a multi-audience token, and one of those
+        // is already refused above.
+        assert!(check_audience(&claims(serde_json::json!({ "aud": "me" })), "me").is_ok());
     }
 
     #[test]
