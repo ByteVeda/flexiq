@@ -1,6 +1,7 @@
 name: Feature request
 description: Describe a problem that FlexiQ could solve
 title: "feat: "
+labels: [enhancement]
 body:
   - type: textarea
     id: problem

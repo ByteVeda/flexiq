@@ -1,6 +1,7 @@
 name: Documentation issue
 description: Report missing, unclear, or incorrect documentation
 title: "docs: "
+labels: [documentation]
 body:
   - type: input
     id: page
