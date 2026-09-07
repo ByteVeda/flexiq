@@ -1,53 +1,69 @@
-# #773 — storage: unique_key dedupes across namespaces
+# Security alert cleanup — `fix/security-alerts`
 
-Branch `fix/unique-key-namespace-scope`, off `master` at `dc5ceab3`. Plan:
-`tasks/plans/2026-09-04-unique-key-namespace.md`. **Not pushed.**
+Branch off `master` at `e3264d4f`. Closes the open Dependabot + CodeQL alerts:
+16 Dependabot, 49 CodeQL.
 
-## Done
+## Findings after verifying against library sources
 
-- [x] Add `test_unique_key_dedup_is_namespace_scoped` to
-      `crates/flexiq-core/tests/rust/storage_tests.rs`, confirm it fails on
-      SQLite pre-fix (reproduces #773).
-- [x] `crates/flexiq-core/migrations/m0017_unique_key_namespace.rs` — drop +
-      recreate `idx_jobs_unique_key` over `(COALESCE(namespace, ''), unique_key)`.
-- [x] `diesel_common/jobs.rs` — scope the 3 unique_key lookups (initial check,
-      race re-read, batch check) by namespace, via a shared
-      `find_active_by_unique_key` helper. SQLite contract test green.
-- [x] `redis_backend/jobs/{helpers.rs,enqueue.rs,state.rs}` — namespace the
-      `jobs:unique:*` pointer key, thread `namespace` through
-      `release_unique_key`, fix `redis_complete_preserves_reused_unique_key`'s
-      raw key. `cargo check`/`clippy --features redis` clean; no local
-      redis-server here, so `redis_storage_tests` compiles and skips (full
-      run happens in CI's Redis Cloud job).
-- [x] Confirm `cargo check --workspace --features postgres` is clean.
-- [x] `traits.rs` doc + `job.proto` / `producer_service.proto` — drop the
-      cross-namespace exception language now that it's fixed. Regenerated
-      `contracts/descriptor.binpb` via `./scripts/proto-check.sh --fix`.
-- [x] Final full check pass + review section below.
+Both scanner headlines turned out to be weaker than they read, and the thing
+worth fixing was not flagged as severe by either.
+
+- [x] **CVE-2026-25537 (`jsonwebtoken` < 10.3.0) is NOT exploitable here.** The
+      advisory is `exp`/`nbf` type confusion: a claim sent with the wrong JSON
+      type parses to `FailedToParse`, which `validate()` treats as absent. The
+      gate is `required_spec_claims` — and `Validation::new` seeds it with
+      `exp`, which `oidc.rs` never overrode. Bumped anyway: real CVE, runtime
+      dependency, and an alert nobody can action rots.
+- [x] **No OIDC algorithm-confusion bypass either.** `jsonwebtoken` 9.3.1's
+      `verify_signature` already rejected `key.family != alg.family()`, so an
+      `HS256` token forged against a published RSA JWK could not verify. But
+      the algorithm still came out of the token's own header, which is one
+      library refactor away from mattering — now pinned to the key.
+- [x] **31/31 `rust/hard-coded-cryptographic-value` (critical) are test-only.**
+      All sit past the `#[cfg(test)]` line of their file, or in `tests/`.
+- [x] **`rust/cleartext-logging` ×4 and `rust/access-invalid-pointer` ×4 are
+      false positives.** The former log a username or a `job_id`; the latter all
+      land on a `#[napi] pub struct` line, i.e. napi-rs macro output.
+- [x] **Real: log injection ×4** — 3 in `oauth/mod.rs`, 1 in `scaler.py`.
+
+## Tasks
+
+- [x] 1. `jsonwebtoken` 9 → 10.3, `rust_crypto` provider (pure Rust, so the
+      multi-arch server image needs no C toolchain). `use_pem` moved to
+      dev-dependencies — the stub issuer signs from PEM, the binary never does.
+- [x] 2. Pin `id_token` verification to the key's algorithm, require
+      `exp`/`iss`/`aud`/`sub`, validate `nbf`. Unit tests for the JWK→algorithm
+      rules, plus an end-to-end forgery case in `oidc_login.rs`.
+- [x] 3. `log_safe::escape` + the four OAuth log sites; the two that logged a
+      request-supplied `slot` now log the config-owned `provider.slot`.
+- [x] 4. `_log_safe` in `scaler.py` + 4 tests in `test_keda.py`.
+- [x] 5. Lockfile bumps: `fast-uri`, `postcss`, `browserslist`,
+      `brace-expansion`, `js-yaml` in range; `toml` and `esbuild` needed
+      `pnpm.overrides` (both cross a major/0.x boundary).
+- [x] 6. CodeQL `paths-ignore` for test trees. The 29 in-`src` `#[cfg(test)]`
+      alerts cannot be matched by path and need dismissing alert-by-alert.
+- [x] 7. Verify.
+- [ ] 8. Open the PR.
+
+One compile job at a time — 13 GB RAM, no concurrent cargo processes.
 
 ## Review
 
-Fixed on both backends that were affected — the Diesel `idx_jobs_unique_key`
-partial index and its three query sites (initial check, race re-read, batch
-check), and the Redis `jobs:unique:*` pointer key. Both now scope by
-namespace, `None` treated as its own namespace (not "match anything"), via
-the same encoding pattern each backend already used for the equivalent
-debounce case (`lock_debounce_candidates`'s `Some/None` filter match on
-Diesel, `debounce_index_key`'s length-prefixed segment on Redis).
+Verification run, all green:
 
-`test_unique_key_dedup_is_namespace_scoped` reproduces #773 verbatim (two
-tenants sending the same key; confirmed red pre-fix, green post-fix on
-SQLite) and also covers the default-namespace NULL trap the issue calls out
-— a naive `(namespace, unique_key)` unique index would look correct in any
-test that sets a namespace and silently stop deduping the common case.
+| Gate | Result |
+|------|--------|
+| `cargo test -p flexiq-server` | 350 passed, 20 binaries, exit 0 |
+| `cargo clippy -p flexiq-server --all-targets -- -D warnings` | clean |
+| `cargo fmt --all --check` | clean |
+| `pytest tests/` (python) | see below |
+| `ruff check` + `ruff format` (flexiq/ + tests/) | 346 files clean |
+| `mypy flexiq/ tests/` | 346 files, no issues |
+| node `build:ts` + `vitest` | 779 passed, 6 skipped |
+| node `biome ci` + `tsc --noEmit` | clean |
+| dashboard `pnpm ci` | 161 passed + build |
+| docs `typecheck` + `build` | clean, prerender OK |
 
-Verified: `cargo check --workspace` / `--features postgres` / `--features
-redis` all clean; `cargo clippy --features redis` clean; `cargo fmt` clean;
-sqlite contract suite green; redis/postgres contract suites compile and
-skip gracefully (no `FLEXIQ_REDIS_TEST_URL`/`FLEXIQ_POSTGRES_TEST_URL` or
-local redis-server in this sandbox — full three-backend run happens in
-CI's three Rust jobs, per project convention). `./scripts/proto-check.sh`
-clean after regenerating `contracts/descriptor.binpb`.
-
-Not pushed, per instruction. Four commits on `fix/unique-key-namespace-scope`,
-authored as the active gh account (pratyush618).
+The npm overrides are the part worth re-reading at review time: `toml@4.3.0`
+and `esbuild@0.28.2` are both forced past a boundary their parents did not ask
+for, so the builds passing is the only thing standing behind them.
