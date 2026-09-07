@@ -168,10 +168,15 @@ and the probe that follows the push is what creates the failure. Expect:
 2. Make `charts/flexiq-server` public, as above.
 3. Rerun the failed job.
 
-Only the chart step is left to redo, and OCI chart tags are mutable on a rerun,
-so the re-push replaces the version that is already there. That mutability is
-also why the published chart version is worth verifying as part of the release
-check rather than assumed from a green run.
+A rerun replays the whole `manifest` job, not just the failed step, so every
+step in it is written to be repeatable: `imagetools create` rebuilds `:VERSION`
+and `:latest` from the per-architecture tags still in the registry, the git tag
+is skipped on a tag push and otherwise re-pushed at the same commit, the release
+is created only if `gh release view` misses and its assets upload with
+`--clobber`, and the chart is packaged and pushed again. OCI chart tags are
+mutable, so that last push replaces the version already there — which is also
+why the published chart version is worth verifying as part of the release check
+rather than assumed from a green run.
 
 One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
 once is `fatal: too many arguments` and creates none of them:
