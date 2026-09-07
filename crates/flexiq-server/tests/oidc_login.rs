@@ -243,6 +243,24 @@ async fn a_forged_or_stale_id_token_is_refused() {
             "signature does not match the payload",
             Box::new(|token: NextToken| token.tampered()),
         ),
+        (
+            "signed with HMAC over the issuer's published modulus",
+            Box::new(|token: NextToken| token.signed_with_hmac_over_the_public_key()),
+        ),
+        (
+            "issued-at claim is missing",
+            Box::new(|token: NextToken| token.with_claim("iat", Value::Null)),
+        ),
+        (
+            "audience names another client alongside this one",
+            Box::new(|token: NextToken| {
+                token.with_claim("aud", json!([CLIENT_ID, "other-client"]))
+            }),
+        ),
+        (
+            "authorized party is another client",
+            Box::new(|token: NextToken| token.with_claim("azp", json!("other-client"))),
+        ),
     ];
 
     for (description, forge) in cases {

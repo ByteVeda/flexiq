@@ -154,5 +154,10 @@
     "reflect-metadata": {
       "optional": true
     }
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "^0.28.1"
+    }
   }
 }

@@ -12,6 +12,7 @@ pub mod config;
 pub mod dashboard;
 #[cfg(feature = "grpc")]
 pub mod grpc;
+pub mod log_safe;
 pub mod metrics;
 pub mod runtime;
 pub mod tokens;

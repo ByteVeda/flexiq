@@ -1,0 +1,21 @@
+name: FlexiQ CodeQL config
+
+# `security-extended` stays on — the exclusions below are about *where* it
+# looks, never which rules run.
+#
+# Test code produces alerts that are true by construction and false in
+# substance: a fixture password is a hard-coded credential, a stub issuer's
+# signing key is a hard-coded key, and a test that logs the request it just
+# made is a log-injection sink. None of it ships. Leaving it in buries the
+# handful of findings an operator should act on — the last scan of `master`
+# was 49 alerts, 37 of them test code.
+#
+# Only whole test trees are excluded. A `#[cfg(test)] mod tests` inside a `src`
+# file cannot be matched by path and is dismissed alert-by-alert instead.
+paths-ignore:
+  - "**/tests/**"
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/conftest.py"
