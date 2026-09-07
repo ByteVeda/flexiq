@@ -1,0 +1,25 @@
+name: Question
+description: Ask about using FlexiQ or discuss an idea before implementation
+title: "question: "
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Explain what you are trying to do and where you are blocked.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Add relevant code, logs, or links with secrets removed.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and documentation for an answer.
+          required: true
