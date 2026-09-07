@@ -21,5 +21,9 @@ The PostgreSQL and Redis suites skip unless `FLEXIQ_POSTGRES_TEST_URL` and `FLEX
 
 <!-- If crates/ changed, rebuild each shell's native artifact and rerun the Python, Node.js, and Java suites. Gitignored native artifacts survive branch switches. -->
 
+## Notes
+
+<!-- Anything ticked "not applicable" above, and why. -->
+
 PR titles use a conventional lowercase prefix such as `feat:`, `fix:`, `docs:`,
 `test:`, `refactor:`, `perf:`, `chore:`, `ci:`, `build:`, `style:`, or `revert:`.
