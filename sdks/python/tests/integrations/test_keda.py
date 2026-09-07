@@ -11,6 +11,7 @@ import pytest
 
 from flexiq import Queue
 from flexiq.dashboard import build_scaler_response
+from flexiq.scaler import _LOG_SAFE_MAX_CHARS, _log_safe
 
 
 @pytest.fixture()
@@ -151,3 +152,28 @@ class TestScalerHTTP:
             pytest.fail("Expected HTTPError")
         except urllib.error.HTTPError as e:
             assert e.code == 404
+
+
+# ─── Unit tests: log escaping ───
+
+
+class TestLogSafe:
+    """The scaler logs the request path, which the caller writes."""
+
+    def test_ordinary_path_is_readable(self) -> None:
+        assert "/api/scaler" in _log_safe("/api/scaler")
+
+    def test_newline_cannot_forge_a_second_entry(self) -> None:
+        escaped = _log_safe("/api/scaler\nERROR:flexiq.scaler:scaled to 0")
+
+        assert "\n" not in escaped
+        assert "\\n" in escaped
+
+    def test_escape_byte_cannot_repaint_the_terminal(self) -> None:
+        assert "\x1b" not in _log_safe("/\x1b[2J")
+
+    def test_an_oversized_path_is_truncated(self) -> None:
+        escaped = _log_safe("/" + "x" * (_LOG_SAFE_MAX_CHARS * 2))
+
+        # Two quotes are added by ``ascii``; the payload itself is capped.
+        assert len(escaped) <= _LOG_SAFE_MAX_CHARS + 2

@@ -28,6 +28,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("flexiq.scaler")
 
+#: How much of an untrusted value is worth keeping in a log line.
+_LOG_SAFE_MAX_CHARS = 200
+
+
+def _log_safe(value: str) -> str:
+    """Render an untrusted value as a single printable log fragment.
+
+    A newline in a request path lets whoever sent it forge what reads as a
+    second log entry, and an escape byte lets them repaint the terminal of
+    whoever tails the log. ``ascii`` spells both out; the cap keeps one
+    request from burying the lines around it.
+    """
+    return ascii(value[:_LOG_SAFE_MAX_CHARS])
+
 
 def serve_scaler(
     queue: Queue,
@@ -68,7 +82,7 @@ def _make_scaler_handler(queue: Queue, target_queue_depth: int) -> type:
             except BrokenPipeError:
                 pass
             except Exception:
-                logger.exception("Error handling GET %s", self.path)
+                logger.exception("Error handling GET %s", _log_safe(self.path))
                 self._json_response({"error": "Internal server error"}, status=500)
 
         def _route(self) -> None:
