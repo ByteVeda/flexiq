@@ -25,5 +25,6 @@ The PostgreSQL and Redis suites skip unless `FLEXIQ_POSTGRES_TEST_URL` and `FLEX
 
 <!-- Anything ticked "not applicable" above, and why. -->
 
-PR titles use a conventional lowercase prefix such as `feat:`, `fix:`, `docs:`,
-`test:`, `refactor:`, `perf:`, `chore:`, `ci:`, `build:`, `style:`, or `revert:`.
+<!-- PR titles use a conventional lowercase prefix such as `feat:`, `fix:`, `docs:`,
+`test:`, `refactor:`, `perf:`, `chore:`, `ci:`, `build:`, `style:`, or `revert:`,
+and the subject after it must start lowercase — "feat: add foo", not "feat: Add foo". -->
