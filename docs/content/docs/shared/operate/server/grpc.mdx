@@ -15,9 +15,11 @@ FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \
 flexiq-server
 ```
 
-That listener refuses every call until a token exists, loopback included. Mint
-one first — <SdkLink to="operate/server/tokens">API tokens</SdkLink> is the whole
-lifecycle, and the rest of this page assumes `$FLEXIQ_TOKEN` holds one.
+That listener refuses every call until a token exists, loopback included —
+`grpc.health.v1` excepted, so a readiness probe answers on an unprovisioned
+door. Mint one first —
+<SdkLink to="operate/server/tokens">API tokens</SdkLink> is the whole lifecycle,
+and the rest of this page assumes `$FLEXIQ_TOKEN` holds one.
 
 The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
 (which binds loopback, the safe reading), or `unix:/run/flexiq-grpc.sock`. A
@@ -386,6 +388,8 @@ Same posture as the attach listener:
 - **There is no anonymous path and no fallback credential.** A door with no token
   minted refuses every call, loopback included, because a listener with no
   credential provisioned is a misconfiguration rather than a permission grant.
+  `grpc.health.v1` `Check` and `Watch` are the one exception, by name — see
+  [Health, and which probe it belongs in](#health-and-which-probe-it-belongs-in).
 - **Nothing on this door is an admin surface.** Pausing queues, settings,
   dead-letter operations and webhook secrets stay behind the dashboard's session
   and role check. A token that leaks costs you an enqueue path, not a tenant.
