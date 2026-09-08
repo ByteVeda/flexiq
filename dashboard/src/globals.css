@@ -31,7 +31,10 @@
   --surface-3: oklch(0.935 0.011 82);
   --fg: oklch(0.275 0.016 62);
   --fg-muted: oklch(0.475 0.015 62);
-  --fg-subtle: oklch(0.6 0.013 64);
+  /* 0.52, not 0.6: at 0.6 this missed 4.5:1 on every light surface (3.26:1 on
+     --surface-3, 3.76:1 on --bg), and it carries real table text, not just
+     decoration. */
+  --fg-subtle: oklch(0.52 0.013 64);
   --border: oklch(0.9 0.011 80);
   --border-strong: oklch(0.83 0.015 76);
   --shadow-tint: 28 25% 12%;
