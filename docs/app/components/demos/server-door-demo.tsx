@@ -296,6 +296,7 @@ export default function ServerDoorDemo(_props: DemoProps) {
   const nextT = idx + 1 < stages.length ? stages[idx + 1].t : DUR;
   const within = (play - stage.t) / Math.max(1, nextT - stage.t);
   const hopPct = Math.min(1, within / 0.7);
+  const wire = hopWire(stage.hop);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const step = DUR / 40;
@@ -386,9 +387,9 @@ export default function ServerDoorDemo(_props: DemoProps) {
             lane={lane}
             active={stage.lane === lane.id}
             tone={stage.tone}
-            hop={stage.hop?.from === lane.id ? stage.hop : undefined}
+            hop={wire.index === i ? stage.hop : undefined}
             hopPct={hopPct}
-            back={stage.hop?.from === lane.id && i > laneIndex(stage.hop.to)}
+            back={wire.back}
             last={i === LANES.length - 1}
           >
             {lane.id === "client" ? (
@@ -511,6 +512,27 @@ export default function ServerDoorDemo(_props: DemoProps) {
 
 function laneIndex(lane: Lane): number {
   return LANES.findIndex((l) => l.id === lane);
+}
+
+/**
+ * Which wire a hop is drawn on, and which way the packet runs.
+ *
+ * A `Box` renders the wire that *follows* its own lane, so wire `n` joins lanes
+ * `n` and `n + 1` — the pair's **lower** index owns it, whichever direction the
+ * hop runs. Keying on `hop.from` instead put every reverse hop a wire too far
+ * right, and dropped the `worker → jobs` one entirely, since the last lane
+ * renders no wire at all.
+ */
+function hopWire(hop?: { from: Lane; to: Lane }): {
+  index: number;
+  back: boolean;
+} {
+  if (!hop) {
+    return { index: -1, back: false };
+  }
+  const from = laneIndex(hop.from);
+  const to = laneIndex(hop.to);
+  return { index: Math.min(from, to), back: to < from };
 }
 
 /** One labelled box, plus the wire leaving it and any packet on that wire. */
