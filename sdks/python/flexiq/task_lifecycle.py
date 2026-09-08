@@ -323,13 +323,16 @@ async def run_lifecycle(
         if swallowed is not None:
             error = swallowed
             slept = swallowed
+            # `repr(exc)` rather than the exception itself, for the reason the
+            # failure arm below gives: a handler that retains records would hold
+            # every frame the traceback names for as long as the record lives.
             logger.error(
                 "Task %s[%s] caught the step.sleep that ended its attempt and then raised "
-                "%r. The job sleeps until %d either way; everything the body did after the "
+                "%s. The job sleeps until %d either way; everything the body did after the "
                 "sleep ran with no execution claim and runs again on wake.",
                 task_name,
                 job_id,
-                exc,
+                repr(exc),
                 swallowed.wake_at,
             )
             raise swallowed from exc
