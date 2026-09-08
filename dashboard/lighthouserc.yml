@@ -1,0 +1,32 @@
+# Lighthouse budgets for the dashboard SPA.
+#
+# Run `pnpm build` first. The path below is vite.config.ts's own outDir, so this
+# audits exactly the bundle the Python wheel, the npm package and the server
+# image embed — not a separate build made only for measuring.
+ci:
+  collect:
+    staticDistDir: ../sdks/python/flexiq/static/dashboard
+    # Everything past the sign-in screen needs a running backend, so that
+    # screen is the whole of what a static audit can reach.
+    url:
+      - http://localhost/index.html
+    isSinglePageApplication: true
+    # The reported score is the median of the runs, so an unlucky one on a
+    # noisy runner does not fail the job on its own.
+    numberOfRuns: 3
+    settings:
+      preset: desktop
+  assert:
+    assertions:
+      # Measured 1.0. The gap is headroom for a slower CI runner; the two below
+      # are deterministic, measure 1.0 today, and so are held there.
+      categories:performance: ["error", { "minScore": 0.9 }]
+      categories:accessibility: ["error", { "minScore": 1 }]
+      categories:best-practices: ["error", { "minScore": 1 }]
+      # Measured 0.82, and staying there: the console is behind auth and
+      # deliberately not indexable, so it has no meta description or canonical
+      # URL to give. Collected for the report, not gated.
+      categories:seo: "off"
+  upload:
+    target: filesystem
+    outputDir: .lighthouseci

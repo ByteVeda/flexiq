@@ -1,0 +1,110 @@
+name: Lighthouse
+
+# Both sites are static, so each job builds the real production bundle and
+# audits that — no dev server, no preview deploy. Floors and the URL list live
+# in each project's `lighthouserc.yml`, next to the code they measure.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "dashboard/**"
+      - ".github/workflows/lighthouse.yml"
+      - ".github/scripts/lighthouse-summary.mjs"
+      - ".github/actions/dashboard-build/**"
+  pull_request:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "dashboard/**"
+      - ".github/workflows/lighthouse.yml"
+      - ".github/scripts/lighthouse-summary.mjs"
+      - ".github/actions/dashboard-build/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: docs/.nvmrc
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Deliberately without DOCS_BASE_PATH. The Pages build sets it to /flexiq,
+      # which rewrites every asset URL to /flexiq/... — correct once Pages
+      # serves them there, but unservable by a static server rooted at /.
+      - name: Build
+        run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+
+      - name: Lighthouse
+        run: pnpm lighthouse
+
+      - name: Score summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: node .github/scripts/lighthouse-summary.mjs docs docs/.lighthouseci
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lighthouse-docs
+          path: docs/.lighthouseci/
+          retention-days: 7
+          if-no-files-found: error
+
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Builds to vite.config.ts's own outDir, which is what the dashboard's
+      # lighthouserc.yml points at — the same bundle the wheel and image ship.
+      - uses: ./.github/actions/dashboard-build
+
+      - name: Lighthouse
+        run: pnpm lighthouse
+
+      - name: Score summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: node .github/scripts/lighthouse-summary.mjs dashboard dashboard/.lighthouseci
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lighthouse-dashboard
+          path: dashboard/.lighthouseci/
+          retention-days: 7
+          if-no-files-found: error

@@ -1,106 +1,142 @@
-# An operate section for flexiq-server — `docs/server-operate-section`
+# Dark-theme parity, Node 24, Lighthouse
 
-Closes #826. Branch off `master` at `8bce1713`.
+Three asks, two PRs off `master` at `49728c2b`. The theme fix is independent.
+Node 24 and Lighthouse ship together because the Lighthouse workflow reads the
+`.nvmrc` the Node commit introduces, and both touch the same two `package.json`
+files and lockfiles — separating them would only create a merge-order trap.
 
-## What the issue asked for, against what already exists
+## 1. Dark theme: the dashboard adopts the docs' midnight palette
 
-The issue was filed on 2026-09-06 against a tree that had already moved. Verified
-before planning:
+`fix/dashboard-dark-theme-matches-docs` — one file, `dashboard/src/globals.css`.
 
-- `shared/operate/` has **three** pages, not two — #853 added `kubernetes.mdx`,
-  which already covers the chart, the four listener roles, maintenance ownership
-  across replicas, sidecar injection, probes and the KEDA manifests.
-- `shared/operate/deployment.mdx` already carries ~540 lines of gRPC door, token
-  lifecycle, scopes, expiry, revocation, the JSON facade and the TLS refusal —
-  landed by #721 and #803, both after the issue's premise was written.
+The two apps keep hand-synced palettes with no shared source; the only token
+name they share is `--bg`. Light mode was already paired on purpose
+(`tokens.css` says "matches the FlexiQ console"), dark mode never was:
 
-So the gap is not that the content does not exist. It is that the server's
-operator content is buried in a 2378-line page whose first half is `myapp.py`,
-systemd units and SQLite file permissions, and that the crate README is still
-the only place naming `FLEXIQ_WORKERS`, `FLEXIQ_AUTO_MIGRATE` or what
-`FLEXIQ_MAINTENANCE=off` actually turns off. Two of the five bullets — scaling a
-server deployment, and backup/restore per backend — have no page at all.
+| role | dashboard was | docs |
+|---|---|---|
+| page bg | `#16120f` L .185 **h58 warm** | `#08080c` L .137 **h285 cool** |
+| panel | `#211b17` L .227 | `#0f0f17` L .172 |
+| body text | `#f2f0eb` h82 | `#ececf4` h286 |
+| brand green | `#5eca91` L .76 | `#1f9d54` L .61 |
 
-## Shape
+Docs is the reference: its dark palette also drives `mermaid-theme.ts` (hexes
+mirrored by hand), `shiki.css` and the landing gradients, so moving docs would
+cost four files and a re-tune. The dashboard's dark block is one file, and no
+component uses a Tailwind `dark:` utility — everything reads `var()`.
 
-A `Server` group under `Operate`, plus one top-level `backup` page. The group is
-what #825 lifts into the fourth server tier later; `backup` stays where it is,
-because an embedded SQLite reader needs it as much as a server operator does.
+The three docs greens map onto the three accent roles by how each is consumed,
+which is not what their names suggest:
 
-- [ ] `operate/server/index` — the four roles and their four listeners, the full
-      environment table, which roles are cargo-gated, what `FLEXIQ_MAINTENANCE`
-      does and does not disable. Absorbs the operator half of the crate README.
-- [ ] `operate/server/tokens` — mint, list, rotate, revoke; `produce` vs
-      `execute`; expiry warnings. Moved out of `deployment.mdx`.
-- [ ] `operate/server/grpc` — bind, the namespace requirement, reflection,
-      `raw`/`structured`, the JSON facade, tuning, `/metrics`, the executor
-      door, and the TLS gap (#838). Moved out of `deployment.mdx`.
-- [ ] `operate/server/scaling` — what to scale on, per role; why the maintenance
-      owner is a separate release; that `flexiq scaler` is an SDK command and
-      not part of `flexiq-server` (#850).
-- [ ] `operate/backup` — SQLite, Postgres and Redis; and what a restore does to
-      in-flight leases and durable-step memos.
+- `--accent-strong` fills the primary button (`ui/button.tsx`) → `--indigo-dk`
+  `#15803d`, with `--accent-fg` white, the pairing docs' own `.btn.pri` uses.
+- `--accent-ink` is accent *text* → `--indigo-br` `#3bbf72`.
+- `--accent` is borders, tints and the ring → `--indigo` `#1f9d54`.
 
-## Gates this touches
+- [x] Retune `html.dark` to the docs ladder, each value naming its source token
+- [x] Keep `--info` blue — docs has no blue, and its `--cyan` reads as the
+      success green; the existing blue already sits in the docs' status band
+- [x] Rename `--shadow-warm` → `--shadow-tint`; nothing outside this file used it
+- [x] Verify every text pair against WCAG AA
 
-- [ ] `section-skeleton.mjs` — a page the skeleton does not list is an error even
-      when the MDX exists, so `server`, `backup` and the new group land there
-      first, for all three trees at once.
-- [ ] `pnpm check:parity` — section shape, internal links (no link may point at a
-      REDIRECTS key), CodeTabs SDK coverage on every shared page.
-- [ ] `node scripts/version.mjs --check` — `deployment.mdx` is in the hardcoded
-      SNIPPETS list; any new page pinning an image tag joins it.
-- [ ] `pnpm typecheck`, `pnpm lint`, `pnpm check:search`, `pnpm build`
-      (`NODE_OPTIONS=--max-old-space-size=8192`).
+Verified in the built CSS, not just the source: `#08080c`, `#0f0f17`, `#ececf4`,
+`#15803d`, `#ffb86b`, `#ff6b6b` come out byte-identical to the docs tokens; the
+rest land within one unit of the oklch round-trip.
 
-No page is deleted, so no REDIRECTS entry is owed. Five inbound `#anchor` links
-in `modules/{server,clients}.mdx` and `python/operate/backends.mdx` do move.
+| pair | before | after |
+|---|---|---|
+| `--fg` on `--bg` | 16.35:1 | 17.01:1 |
+| `--fg-muted` on `--surface` | 7.38:1 | 10.89:1 |
+| `--fg-subtle` on `--bg` | 4.71:1 | 6.09:1 |
+| `--accent-fg` on `--accent-strong` (button) | 5.27:1 | 4.96:1 |
+| `--accent-ink` on `--surface` | 9.60:1 | 8.07:1 |
+| focus ring on `--bg` | 2.76:1 ✗ | 3.63:1 ✓ |
 
-## Commits
+The button and accent-text pairs give back a little headroom because they now
+sit on the docs' exact greens; both still clear AA, and the ring crosses 3:1 for
+the first time. Lighthouse scores the result 100 on accessibility.
 
-Two, not three. The backup page was going to be its own commit, but it shares
-nine files with the server section — the skeleton, three `operate/meta.json`,
-three `operate/index.mdx`, `deployment.mdx` and `server/index.mdx` — and every
-one of those edits is additive to the same list. Splitting them would produce
-two commits that each half-configure the same nav, which is the opposite of what
-one self-contained change per commit is for. The README repointing does touch
-disjoint files, so it is its own.
+Not in scope: docs defaults to dark with no `prefers-color-scheme` fallback and
+offers no "system" option, where the dashboard has all three. That is a
+behaviour difference, not a palette one.
 
-1. `docs: add an operate section for flexiq-server`
-2. `docs: point the server README at the docs site`
+## 2. Node 24 for the docs and dashboard toolchain
+
+`chore/node-24-and-lighthouse`, first commit.
+
+- [x] `.github/actions/dashboard-build/action.yml` `"22"` → `dashboard/.nvmrc`
+- [x] `.github/actions/setup-node/action.yml` default `"22"` → `"24"`
+- [x] `docker/scheduler.Dockerfile` `node:22-alpine` → `node:24-alpine`
+- [x] `docs.yml` `node-version: 24` → `node-version-file: docs/.nvmrc`
+- [x] New `docs/.nvmrc`, `dashboard/.nvmrc`
+- [x] `engines.node: ">=24"` on both `package.json`s
+- [x] `docs/package.json` `@types/node` `^25` → `^26`, matching the dashboard
+- [x] Drop `ci-node.yml`'s second Node install — it existed only to reach 24 for
+      the docs API-sync script while the job ran on 22
+
+Deliberately untouched, because they are the Node SDK's *library support floor*
+and not the build toolchain: `sdks/node/package.json` `engines.node: ">=20"`,
+and the `[20, 22, 24]` matrices in `ci-node.yml` and `ci-polyglot.yml`.
+
+**`engine-strict` was tried and reverted.** pnpm only warns on `engines` by
+default, so making the floor bite needs `engine-strict=true` — but that also
+enforces every *transitive* dependency's range, and `jsdom@30.0.1` wants
+`^24.15.0`. On Node 24.12 the docs install hard-fails locally while CI, which
+gets the latest 24.x, passes. A gate that breaks developers and not CI is worse
+than none. The `.nvmrc` files are the real pin: CI installs from them, so the
+toolchain is fixed regardless.
+
+## 3. Lighthouse for both
+
+`chore/node-24-and-lighthouse`, second commit. Nothing measured performance,
+accessibility or anything Lighthouse-shaped anywhere in the repo before this.
+
+- [x] `@lhci/cli` + `lighthouserc.yml` + a `lighthouse` script per project
+- [x] Audit the real production builds, not a dev server
+- [x] `.github/workflows/lighthouse.yml`, path-filtered, two jobs
+- [x] Floors calibrated to measured medians, so the gate starts green
+- [x] Upload the HTML reports and write a score table to the step summary
+
+Measured (median of 3 runs, desktop preset):
+
+| | perf | a11y | best-practices | seo |
+|---|---:|---:|---:|---:|
+| dashboard `/` | 100 | 100 | 100 | 82 |
+| docs `/` | 98 | 97 | 100 | 100 |
+| docs `/python/getting-started/quickstart` | 99 | 94 | 96 | 90 |
+| docs `/architecture` | 99 | 94 | 96 | 90 |
+
+Performance asserts at 0.90 against measured 98-100, which absorbs a slower
+runner. The other three are deterministic and pinned at what they measure, so
+any drop fails. The dashboard's SEO is ungated: the console is behind auth and
+deliberately not indexable, so it has no meta description to give.
+
+YAML rather than JSON for the rc files so the calibration can carry the comment
+explaining what would raise each floor. Biome does not read `.gitignore` here,
+so `.lighthouseci` needed an explicit exclude in `docs/biome.json` alongside the
+existing `!build`.
 
 ## Review
 
-Done. `shared/operate/` went from 3 pages to 8: a `server` group (index, tokens,
-grpc, scaling) plus `backup`, and `deployment.mdx` lost 598 lines to the move.
+### Found on the way, not fixed
 
-Four things the move corrected rather than relocated:
+Three pre-existing docs issues surfaced by the first Lighthouse run. All predate
+this work; none are caused by it, and each is someone's decision to make:
 
-- **`FLEXIQ_MAINTENANCE=off` does not disable "rescue".** `kubernetes.mdx` said
-  it did. `runtime/scheduler.rs` only empties the retention config; dead-worker
-  reaping and `recover_orphaned_jobs` stay on in every process, deliberately —
-  tying in-flight recovery to the maintenance flag would lose it everywhere but
-  on one pod. Fixed in `kubernetes.mdx` and stated in `server/index.mdx`.
-- **`deploy/keda/scaled-object-prometheus.yaml` does not work against the
-  server.** Its queries name `flexiq_queue_depth` and `flexiq_worker_utilization`,
-  which come from an SDK's Prometheus collector; `crates/flexiq-server/src/metrics.rs`
-  publishes `flexiq_jobs{queue,status}` and `flexiq_executor_slots{state}`.
-  Applied unedited it yields no data, which KEDA reports as a healthy zero.
-  `server/scaling.mdx` gives the queries that do match.
-- **`flexiq scaler` is not part of `flexiq-server`.** The binary has exactly one
-  subcommand, `token`, so the two `metrics-api` manifests need an SDK process
-  the deployment may not have. Said plainly on the scaling page.
-- **A restore brings revoked tokens back.** Tokens live in the settings KV, which
-  is what makes revocation take effect with no restart — and what makes a restore
-  predating one restore a working credential. `backup.mdx` treats a restore as a
-  credential event.
+- **Every contrast failure is one token.** `--dim: #5c5c70` at 2.92-3.06:1, on
+  sidebar group labels, footer headings, the search placeholder, the SDK label
+  and the copyright line — 10 to 17 nodes per page. Lifting that single value
+  clears the category and lets the a11y floor go to 1.0.
+- **React error #418** on doc pages but not the landing page: a hydration
+  mismatch under the docs layout. It is what holds best-practices at 0.96.
+- **No meta description** on doc pages, holding SEO at 0.90.
 
-Verified: `pnpm check:parity` (15 sections × 3 SDKs, 1810 links), `check:search`,
-`check:diagrams`, `lint`, `typecheck`, `build` (all five new pages — the four
-under `operate/server` plus `operate/backup` — prerender in all three trees),
-and `node scripts/version.mjs --check` with the new page added to SNIPPETS for
-its pinned image tag.
+### Worth knowing
 
-Left for #825, deliberately: the `operate/server` group is where the server tier
-will lift from, not a substitute for it. Nothing here claims to be the fourth
-peer beside the three SDKs.
+- The root cause behind item 1 is untouched: two palettes, hand-synced, sharing
+  exactly one token name. They will drift again. A shared token source needs a
+  pnpm workspace, and there isn't one — `docs/` and `dashboard/` are separate
+  projects with separate lockfiles.
+- `docker/scheduler.Dockerfile` is the one change not verified locally: building
+  the image needs docker, which this machine does not use. It is a one-line base
+  image bump on a stage that only runs `pnpm install` and `vite build`.

@@ -1,0 +1,41 @@
+# Lighthouse budgets for the docs site.
+#
+# Run `pnpm build` first, without DOCS_BASE_PATH. The Pages build sets it to
+# /flexiq, which rewrites every asset URL to /flexiq/... while `buildEnd` moves
+# the files back to the client root — correct once Pages serves them under that
+# prefix, but unservable by a static server rooted at /.
+ci:
+  collect:
+    staticDistDir: ./build/client
+    # Three shapes rather than all ~200 prerendered pages: the landing page is
+    # the heaviest (hero, code panes, fonts), a guide is the ordinary case with
+    # syntax-highlighted blocks, and architecture renders Mermaid on the client.
+    url:
+      - http://localhost/index.html
+      - http://localhost/python/getting-started/quickstart/index.html
+      - http://localhost/architecture/index.html
+    # The reported score is the median of the runs, so an unlucky one on a
+    # noisy runner does not fail the job on its own.
+    numberOfRuns: 3
+    settings:
+      preset: desktop
+  # Every floor is the worst median measured across the three URLs above, so
+  # the gate starts green and only moves on a regression. Raise a floor the
+  # moment the matching fix lands — none of these are aspirational targets.
+  assert:
+    assertions:
+      # Measured 0.98-0.99. The gap is headroom for a slower CI runner; the
+      # other three are deterministic and so are pinned at what they measure.
+      categories:performance: ["error", { "minScore": 0.9 }]
+      # 0.94. Every failing node is one token: --dim (#5c5c70) at 2.92-3.06:1
+      # on sidebar group labels, footer headings, the search placeholder and
+      # the copyright line. Lifting that one value clears the category.
+      categories:accessibility: ["error", { "minScore": 0.94 }]
+      # 0.96 on doc pages, 1.0 on the landing page: React error #418, a
+      # hydration mismatch that only fires under the docs layout.
+      categories:best-practices: ["error", { "minScore": 0.96 }]
+      # 0.90 on doc pages, 1.0 on the landing page: no meta description.
+      categories:seo: ["error", { "minScore": 0.9 }]
+  upload:
+    target: filesystem
+    outputDir: .lighthouseci
