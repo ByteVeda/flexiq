@@ -1441,12 +1441,21 @@ body {
 }
 
 /* ---------- React port additions (nested nav, link-group headers, prev/next blocks) ---------- */
-.gt.gt-link {
-  color: var(--dim);
+/* Group header linking to its section index. Sits inside `.gt` and inherits its
+   type, so this only resets the anchor and matches `.gt-toggle`'s hit area —
+   the caret beside it is what expands the section. */
+.gt-link {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
   transition: color 0.15s;
 }
-.gt.gt-link:hover {
+.gt-link:hover {
   color: var(--txt);
+}
+.gt-link.active {
+  color: var(--indigo-br);
 }
 /* Group header with no index page: the label toggles the section (clickable). */
 .gt-toggle {
