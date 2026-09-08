@@ -2,6 +2,12 @@
 
 Thanks for your interest in contributing! flexiq is a hybrid Rust + Python project, so the dev setup involves both ecosystems.
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Taking part in the issue
+tracker, pull requests, or any other project space means agreeing to it. Report unacceptable
+behaviour to conduct@byteveda.org.
+
 ## Development Setup
 
 ### Prerequisites
@@ -219,3 +225,6 @@ mistagged release fails before it builds rather than shipping something wrong.
 ## Questions?
 
 Open an issue on GitHub if you have questions or want to discuss a feature before implementing it.
+
+One exception: a suspected vulnerability never goes in an issue. [`SECURITY.md`](SECURITY.md) has
+the private channel, the supported versions, and what is in scope.
