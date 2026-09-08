@@ -48,3 +48,8 @@ export function SagaDemo() {
 export function TaskAffinityDemo() {
   return <DocDemo id="mesh" />;
 }
+
+/** One request walked through `flexiq-server`'s producer door, stage by stage. */
+export function ServerDoorDemo() {
+  return <DocDemo id="serverdoor" />;
+}
