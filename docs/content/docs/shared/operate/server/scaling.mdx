@@ -43,7 +43,7 @@ exactly one process should. `FLEXIQ_MAINTENANCE` is per process and therefore
 per Deployment — a three-replica Deployment cannot enable it on one of its three
 identical pods — so the maintenance owner is a separate single-replica release
 and everything else sets it off. <SdkLink to="operate/kubernetes">Kubernetes</SdkLink>
-has the two Helm releases that expresses.
+has the two Helm releases that express it.
 
 Turning it off does **not** turn off dead-worker reaping or in-flight recovery.
 Those run in every replica on purpose: a job whose worker died is rescued in
