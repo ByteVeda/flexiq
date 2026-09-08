@@ -3,9 +3,10 @@
 /*
   flexiq — "Friendly ops" design tokens.
 
-  Warm paper neutrals (not cold blue-gray), emerald as the healthy-queue
-  signal, IBM Plex (sans for UI, mono for numbers/IDs, serif for titles),
-  structured-but-soft surfaces. Light + dark paired; theme flips `html.dark`.
+  Emerald as the healthy-queue signal, IBM Plex (sans for UI, mono for
+  numbers/IDs, serif for titles), structured-but-soft surfaces. Light and dark
+  are paired but not mirrored: light is warm paper, dark is midnight. Both sides
+  match the docs site token for token; theme flips `html.dark`.
 
   The "warm" vibe and "regular" density are baked in directly — every value
   the prototype exposed behind a switcher is hard-coded here as its default.
@@ -33,7 +34,7 @@
   --fg-subtle: oklch(0.6 0.013 64);
   --border: oklch(0.9 0.011 80);
   --border-strong: oklch(0.83 0.015 76);
-  --shadow-warm: 28 25% 12%;
+  --shadow-tint: 28 25% 12%;
 
   /* accent — emerald, the brand / healthy signal */
   --accent: oklch(0.6 0.13 158);
@@ -54,35 +55,55 @@
   --info-dim: oklch(0.56 0.12 236 / 0.12);
 }
 
-/* ---- Dark : warm espresso ---------------------------------------------- */
-html.dark {
-  --bg: oklch(0.185 0.009 58);
-  --bg-subtle: oklch(0.21 0.01 58);
-  --surface: oklch(0.227 0.012 58);
-  --surface-2: oklch(0.262 0.013 58);
-  --surface-3: oklch(0.3 0.014 58);
-  --fg: oklch(0.955 0.007 82);
-  --fg-muted: oklch(0.74 0.012 76);
-  --fg-subtle: oklch(0.6 0.012 70);
-  --border: oklch(0.36 0.01 60 / 0.6);
-  --border-strong: oklch(0.45 0.012 60 / 0.85);
-  --shadow-warm: 30 30% 2%;
+/* ---- Dark : midnight, mirroring the docs site -------------------------- */
+/*
+  Every value here is the docs site's dark token, named in the trailing
+  comment, so the console and the docs read as one product. The source is
+  `docs/app/styles/tokens.css` — its unqualified `:root` block is the dark
+  palette. Light mode was already matched the other way round (that file's
+  `[data-theme="light"]` says "matches the FlexiQ console"), so it is untouched.
 
-  /* accent lightness rises in dark for legibility */
-  --accent: oklch(0.76 0.13 158);
-  --accent-strong: oklch(0.66 0.15 158);
-  --accent-ink: oklch(0.8 0.13 158);
-  --accent-dim: oklch(0.76 0.13 158 / 0.2);
-  --accent-fg: oklch(0.17 0.03 158);
-  --ring: oklch(0.76 0.13 158 / 0.45);
+  There is no shared token file to import from: the two apps are separate pnpm
+  projects with separate lockfiles, so this pairing is maintained by hand and
+  the comments are what keeps it honest.
+*/
+html.dark {
+  --bg: oklch(0.137 0.009 285); /* docs --bg      #08080c */
+  --bg-subtle: oklch(0.158 0.015 285); /* docs --bg-soft #0c0c13 */
+  --surface: oklch(0.172 0.017 285); /* docs --panel   #0f0f17 */
+  --surface-2: oklch(0.192 0.02 284); /* docs --panel2  #13131d */
+  --surface-3: oklch(0.215 0.024 284); /* docs --panel3  #181824 */
+  --fg: oklch(0.945 0.011 286); /* docs --txt     #ececf4 */
+  --fg-muted: oklch(0.82 0.025 288); /* docs --txt2    #c3c2d4 */
+  --fg-subtle: oklch(0.648 0.034 285); /* docs --mut     #8c8ca3 */
+  --border: oklch(1 0 0 / 0.13); /* docs --line2 */
+  --border-strong: oklch(1 0 0 / 0.2); /* docs --line3 */
+  --shadow-tint: 285 20% 2%;
+
+  /*
+    The docs' three greens map onto the three accent roles by how each is
+    actually consumed, not by name: `--accent-strong` fills the primary button
+    (ui/button.tsx), `--accent-ink` is accent text, `--accent` is borders and
+    tints. White on `--accent-strong` is 4.96:1 — the same pairing the docs'
+    own `.btn.pri` uses.
+  */
+  --accent: oklch(0.614 0.151 152); /* docs --indigo    #1f9d54 */
+  --accent-strong: oklch(0.527 0.137 150); /* docs --indigo-dk #15803d */
+  --accent-ink: oklch(0.715 0.16 153); /* docs --indigo-br #3bbf72 */
+  --accent-dim: oklch(0.614 0.151 152 / 0.2);
+  --accent-fg: oklch(0.99 0.01 158);
+  /* 0.6, not the light mode's 0.45: below that the ring misses 3:1 on --bg. */
+  --ring: oklch(0.715 0.16 153 / 0.6);
 
   /* status — dark lightness, tint alpha 0.2 */
-  --success: oklch(0.76 0.13 158);
-  --success-dim: oklch(0.76 0.13 158 / 0.2);
-  --warning: oklch(0.78 0.14 72);
-  --warning-dim: oklch(0.78 0.14 72 / 0.2);
-  --danger: oklch(0.7 0.18 28);
-  --danger-dim: oklch(0.7 0.18 28 / 0.2);
+  --success: oklch(0.75 0.148 156); /* docs --grn   #4ec985 */
+  --success-dim: oklch(0.75 0.148 156 / 0.2);
+  --warning: oklch(0.834 0.125 67); /* docs --amber #ffb86b */
+  --warning-dim: oklch(0.834 0.125 67 / 0.2);
+  --danger: oklch(0.712 0.181 23); /* docs --red   #ff6b6b */
+  --danger-dim: oklch(0.712 0.181 23 / 0.2);
+  /* No docs counterpart: its --cyan is a teal that would read as the success
+     green. Keep the blue, which already sits in the docs' status band. */
   --info: oklch(0.72 0.12 236);
   --info-dim: oklch(0.72 0.12 236 / 0.2);
 }
@@ -90,10 +111,10 @@ html.dark {
 /* ---- Surfaces / shape / density (baked: warm vibe, regular density) ---- */
 :root {
   --card-radius: var(--radius-lg);
-  --card-shadow: 0 1px 1px hsl(var(--shadow-warm) / 0.05),
-    0 10px 26px -18px hsl(var(--shadow-warm) / 0.5);
-  --card-hover-shadow: 0 1px 1px hsl(var(--shadow-warm) / 0.06),
-    0 16px 34px -18px hsl(var(--shadow-warm) / 0.6);
+  --card-shadow: 0 1px 1px hsl(var(--shadow-tint) / 0.05),
+    0 10px 26px -18px hsl(var(--shadow-tint) / 0.5);
+  --card-hover-shadow: 0 1px 1px hsl(var(--shadow-tint) / 0.06),
+    0 16px 34px -18px hsl(var(--shadow-tint) / 0.6);
   --chip-radius: 999px;
   --btn-radius: 0.625rem;
 
