@@ -665,13 +665,26 @@ main {
    that prove it, reusing the hero's terminal parts (.term/.tbar/.code/.out). No
    band behind it: `.how` above already has one, and two adjacent bordered bands
    read as a single long box. */
-.srv .diagram {
+/* The demo brings its own frame (`.dm-stage.doc-demo`), sized for an article's
+   measure; the landing has the full `.wrap`, and four boxes on a wire need it. */
+.srv-demo {
   margin-bottom: 44px;
 }
-/* The bypass lane's label is a sentence, not `.how`'s four words; the narrower
-   shared box would break it across three lines. */
-.srv .diaglane {
-  max-width: 680px;
+.srv-demo .dm-stage.doc-demo {
+  margin: 0;
+  max-height: none;
+}
+.srv-caption {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.srv-caption code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--mut);
 }
 .srv-panes {
   display: grid;
