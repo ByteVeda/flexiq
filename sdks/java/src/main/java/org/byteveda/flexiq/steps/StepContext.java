@@ -428,12 +428,13 @@ public final class StepContext {
         try {
             return body.get();
         } catch (StepControlSignal signal) {
-            latch.latch();
+            latch.latch(signal);
             throw signal;
         } catch (RuntimeException e) {
-            latch.latch();
             String reason = e.getMessage() == null ? e.toString() : e.getMessage();
-            throw new StepError(reason, true);
+            StepError failure = new StepError(reason, true);
+            latch.latch(failure);
+            throw failure;
         }
     }
 
@@ -446,13 +447,15 @@ public final class StepContext {
      * caught this and returned would report a result it never computed.
      */
     private StepError refuse(String message) {
-        latch.latch();
-        return new StepError(message, false);
+        StepError refusal = new StepError(message, false);
+        latch.latch(refusal);
+        return refusal;
     }
 
     private StepUnavailableError refuseUnavailable(String message) {
-        latch.latch();
-        return new StepUnavailableError(message);
+        StepUnavailableError refusal = new StepUnavailableError(message);
+        latch.latch(refusal);
+        return refusal;
     }
 
     /** Milliseconds for a sleep duration, refusing anything unusable. */
@@ -522,7 +525,8 @@ public final class StepContext {
         if (outcome.elapsed()) {
             return;
         }
-        latch.latch();
-        throw new StepSleepSignal(outcome.stepKey(), outcome.wakeAt());
+        StepSleepSignal sleeping = new StepSleepSignal(outcome.stepKey(), outcome.wakeAt());
+        latch.latch(sleeping);
+        throw sleeping;
     }
 }

@@ -2,6 +2,7 @@ package org.byteveda.flexiq.worker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -392,6 +393,79 @@ class StepsTest {
                 assertEquals(1, afters.get(), "only the attempt that produced a result got after()");
                 assertEquals(1, sleeps.size(), "the sleeping attempt got onSleep() instead");
                 assertTrue(sleeps.get(0) > 0, "onSleep carries the deadline the job was rescheduled to");
+            }
+        }
+    }
+
+    /**
+     * A swallowed sleep is reported as the sleep it is, never as a failure.
+     *
+     * <p>The sleep committed before the signal was ever thrown — the row is on
+     * disk, the claim revoked, the job {@code Pending} at its deadline — so
+     * failing the attempt reports on a claim it no longer holds. And a sleep
+     * leaves {@code retry_count} alone, so the woken attempt reuses the same
+     * {@code (owner, attempt)}: the scheduler's fence cannot tell the stale
+     * failure from the live claim, authorizes it, and dead-letters a job that is
+     * sleeping correctly.
+     *
+     * <p>{@code onSleep} on the swallowing pass is what proves it. It is the
+     * worker's own verdict, so it does not depend on which write won a race.
+     */
+    @Test
+    @Timeout(30)
+    void swallowingASleepStillReportsTheSleep(@TempDir Path dir) throws Exception {
+        Task<String> naps = Task.of("naps", String.class).maxRetries(0);
+
+        AtomicInteger afters = new AtomicInteger();
+        List<Long> sleeps = new CopyOnWriteArrayList<>();
+        AtomicInteger bodies = new AtomicInteger();
+
+        try (FlexiQ queue = open(dir)) {
+            queue.use(new Middleware() {
+                @Override
+                public void before(TaskContext context) {}
+
+                @Override
+                public void after(TaskContext context, Object result) {
+                    afters.incrementAndGet();
+                }
+
+                @Override
+                public void onSleep(TaskContext context, long wakeAt) {
+                    sleeps.add(wakeAt);
+                }
+            });
+            queue.enqueue(naps, "go");
+
+            CountDownLatch done = new CountDownLatch(1);
+            AtomicReference<String> dead = new AtomicReference<>();
+            Worker worker = queue.worker()
+                    .handle(naps, (String payload) -> {
+                        int pass = bodies.incrementAndGet();
+                        try {
+                            JobContext.current().step().sleep(Duration.ofMillis(300));
+                        } catch (Throwable swallowed) {
+                            // A control signal is an Error, so only this catches
+                            // it — and the worker has to notice afterwards.
+                        }
+                        // The first pass also fails, which is the sharper case:
+                        // that failure is about an attempt the sleep already
+                        // ended, so the committed sleep has to outrank it.
+                        if (pass == 1) {
+                            throw new IllegalStateException("failed after swallowing its own sleep");
+                        }
+                        return "ok";
+                    })
+                    .on(EventName.SUCCESS, event -> done.countDown())
+                    .on(EventName.DEAD, event -> dead.set(event.error))
+                    .start();
+            try (worker) {
+                assertTrue(done.await(25, TimeUnit.SECONDS), "the job should wake and finish");
+
+                assertEquals(2, bodies.get(), "the swallowing pass, then the one that woke");
+                assertEquals(1, sleeps.size(), "the swallowing attempt is reported as a sleep");
+                assertEquals(1, afters.get(), "only the woken attempt produced a result");
+                assertNull(dead.get(), "a swallowed sleep must not dead-letter the job: " + dead.get());
             }
         }
     }

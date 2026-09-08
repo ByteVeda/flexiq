@@ -1,13 +1,18 @@
 package org.byteveda.flexiq.steps;
 
 /**
- * The task body caught a step control signal and returned anyway.
+ * The task body caught a step <i>failure</i> signal and returned anyway.
  *
  * <p>{@link StepControlSignal} extends {@link Error} so an ordinary
  * {@code catch (Exception e)} cannot do this — but {@code catch (Throwable t)}
  * can, and some frameworks do it on the application's behalf. Whatever the body
- * went on to do then ran without an execution claim, or on a memo answering a
- * different question, so the attempt cannot be trusted and is failed here.
+ * went on to do then ran on a memo answering a different question, so the
+ * attempt cannot be trusted and is failed here — while it still holds the claim
+ * that makes failing it mean something.
+ *
+ * <p>A swallowed <b>sleep</b> never reaches this: that attempt released its
+ * claim when the sleep committed, so it is reported as the sleep it took. See
+ * {@link StepLatch#check()}.
  *
  * <p>Raised by the worker after the handler returns, never by the step API.
  */
