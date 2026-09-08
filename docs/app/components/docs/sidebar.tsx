@@ -58,10 +58,12 @@ function NavLink({ node, current }: { node: NavNode; current: string }) {
 }
 
 /** A subsection with children — collapsible at any depth, auto-opens around the
- *  active page. The label itself toggles (same behaviour as a top-level group),
- *  so a subsection-of-a-subsection expands/collapses on click just like its parent. */
+ *  active page. A subsection with an index page links to it and leaves toggling
+ *  to the caret; one without has no destination, so its label toggles instead. */
 function NavSection({ node, current }: { node: NavNode; current: string }) {
-  const active = node.children?.some((c) => containsHref(c, current)) ?? false;
+  // Includes `node.href === current`, so landing on a subsection's own index
+  // page opens it rather than showing a collapsed group you are already inside.
+  const active = containsHref(node, current);
   const [open, setOpen] = useState(active);
   useEffect(() => {
     if (active) {
@@ -69,19 +71,26 @@ function NavSection({ node, current }: { node: NavNode; current: string }) {
     }
   }, [active]);
   const toggle = () => setOpen((o) => !o);
+  const label = `nav-item nav-sub-toggle ${
+    node.href === current ? "active" : ""
+  }`.trim();
   return (
     <div className="nav-subsection">
       <div className="nav-sub-head">
-        <button
-          type="button"
-          className={`nav-item nav-sub-toggle ${
-            node.href === current ? "active" : ""
-          }`.trim()}
-          aria-expanded={open}
-          onClick={toggle}
-        >
-          {node.title}
-        </button>
+        {node.href ? (
+          <Link to={node.href} className={label}>
+            {node.title}
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className={label}
+            aria-expanded={open}
+            onClick={toggle}
+          >
+            {node.title}
+          </button>
+        )}
         <Caret open={open} onToggle={toggle} title={node.title} />
       </div>
       {open ? <NavTree nodes={node.children ?? []} current={current} /> : null}
@@ -107,7 +116,12 @@ function NavTree({ nodes, current }: { nodes: NavNode[]; current: string }) {
   );
 }
 
-/** Top-level group — collapsible, default-open for the section holding the page. */
+/** Top-level group — collapsible, default-open for the section holding the page.
+ *
+ *  The header links to the section's own index page when there is one, and the
+ *  caret beside it does the expanding. Every section but `about` has an index,
+ *  and while the header was a toggle those pages were reachable from the section
+ *  grid and prev/next but from nowhere in the sidebar. */
 function NavGroup({ group, current }: { group: NavNode; current: string }) {
   const active = containsHref(group, current);
   const [open, setOpen] = useState(active);
@@ -120,7 +134,14 @@ function NavGroup({ group, current }: { group: NavNode; current: string }) {
   return (
     <div className="nav-group">
       <div className="gt">
-        {hasChildren ? (
+        {group.href ? (
+          <Link
+            to={group.href}
+            className={`gt-link ${group.href === current ? "active" : ""}`.trim()}
+          >
+            {group.title}
+          </Link>
+        ) : hasChildren ? (
           <button
             type="button"
             className="gt-toggle"
@@ -129,10 +150,6 @@ function NavGroup({ group, current }: { group: NavNode; current: string }) {
           >
             {group.title}
           </button>
-        ) : group.href ? (
-          <Link to={group.href} className="gt-link">
-            {group.title}
-          </Link>
         ) : (
           <span>{group.title}</span>
         )}

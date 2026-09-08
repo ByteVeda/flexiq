@@ -53,9 +53,10 @@ two names:
 A `produce` token cannot open an executor stream, and an `execute` token cannot
 enqueue — they are not a hierarchy, and a credential scoped to one package
 never opens the other. See
-<SdkLink to="operate/deployment#the-grpc-door">the gRPC door</SdkLink> for the
-producer RPCs and the token lifecycle, and
-<SdkLink to="operate/deployment#the-executor-door">the executor door</SdkLink>
+<SdkLink to="operate/server/grpc">the gRPC door</SdkLink> for the producer RPCs,
+<SdkLink to="operate/server/tokens">API tokens</SdkLink> for the credential's
+lifecycle, and
+<SdkLink to="operate/server/grpc#the-executor-door">the executor door</SdkLink>
 for the `Attach` stream.
 
 <Callout type="info" title="No SDK dials the executor door yet">
@@ -74,7 +75,7 @@ an SDK already builds, byte for byte — nothing lost, but it needs a CBOR
 library. `structured` takes ordinary JSON values and lets the server build that
 same envelope, so a shell script can enqueue with no codec at all. What it
 cannot carry, it refuses rather than rounds: integers past `2^53 - 1`,
-non-finite numbers, and anything JSON has no syntax for. See <SdkLink to="operate/deployment#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink> for the one thing it silently normalises instead
+non-finite numbers, and anything JSON has no syntax for. See <SdkLink to="operate/server/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink> for the one thing it silently normalises instead
 — object key order — and what that costs an `auto:` idempotency key.
 
 ## Try it

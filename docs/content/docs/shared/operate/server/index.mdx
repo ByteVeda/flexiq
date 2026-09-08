@@ -1,0 +1,246 @@
+---
+title: Server
+description: "One binary, four listener roles: what flexiq-server runs, every variable that configures it, and how the roles are laid out across replicas."
+---
+
+`flexiq-server` is the scheduler, the executor attach listener, the dashboard,
+the sidecar-injecting admission webhook and the gRPC door in one binary, with no
+language runtime inside it. Task bodies stay in your own container — executors
+dial in and run them there — so the image is small and identical whichever SDK
+wrote the tasks.
+
+It is additive, not a replacement:
+<SdkLink to="modules/server">Server mode</SdkLink> is the page about *whether*
+you want it. This section is about running it once you do.
+
+```bash
+FLEXIQ_DSN=/var/lib/flexiq/app.db \
+FLEXIQ_LISTEN=127.0.0.1:7777 \
+FLEXIQ_DASHBOARD=127.0.0.1:8080 \
+flexiq-server
+```
+
+## Four roles, four listeners
+
+One process runs any combination of four roles, each turned on by naming an
+address for it. Nothing else turns a role on, and nothing turns one on
+implicitly:
+
+| Role | Turned on by | Serves | Needs `FLEXIQ_DSN` |
+| --- | --- | --- | --- |
+| Executor attach | `FLEXIQ_LISTEN` | The worker frame protocol over TCP or a Unix socket | Yes |
+| Dashboard | `FLEXIQ_DASHBOARD` | The SPA, its JSON API, `/health`, `/readiness`, `/metrics` | Yes |
+| gRPC door | `FLEXIQ_GRPC_LISTEN` | `flexiq.v1`, `flexiq.executor.v1`, the JSON facade, `/metrics` | Yes |
+| Admission webhook | `FLEXIQ_WEBHOOK_LISTEN` | The mutating webhook that injects executor sidecars | **No** |
+
+**At least one address must be set.** A process with no listener has no work to
+do, and it says so at boot rather than idling as a healthy-looking pod that
+serves nothing.
+
+**The webhook is the one role that runs without a database.** It rewrites pod
+specs and never reads a job, so it is exempt; every other role fails at boot
+without a DSN rather than starting and failing each request.
+
+**The scheduler is not a fifth role.** It starts on the first executor attach —
+over either door — because with nothing attached there is nowhere to dispatch to,
+and claiming jobs anyway would fail them retryably once placement timed out. A
+server with `FLEXIQ_GRPC_LISTEN` and no `FLEXIQ_LISTEN` still schedules, as soon
+as something opens an executor stream.
+
+## Configuration
+
+Environment only. The binary takes no flags beyond `--help` and `--version`, so
+one image is configured entirely by the deployment that runs it. An empty value
+reads as unset, which is what makes `FOO=` in a Compose file mean "off".
+
+### Storage and scheduling
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_DSN` | — | Storage connection string. Required by every role but the webhook |
+| `FLEXIQ_BACKEND` | From the DSN scheme | `sqlite`, `postgres` or `redis`, when the scheme is not enough |
+| `FLEXIQ_NAMESPACE` | Unset | The tenant namespace this process schedules. Required by the gRPC role |
+| `FLEXIQ_QUEUES` | `default` | Comma-separated queues to consume |
+| `FLEXIQ_WORKERS` | The attached slot count | Dispatch concurrency. Must be a positive integer |
+| `FLEXIQ_MAINTENANCE` | `on` | Whether this process runs retention sweeps |
+| `FLEXIQ_AUTO_MIGRATE` | `on` | Whether opening storage applies pending schema changes |
+
+`FLEXIQ_WORKERS` defaults to the capacity attached executors advertise, which is
+the number you want unless you have measured otherwise: `max_in_flight` derives
+from it, and a value above the advertised slots claims work no executor has room
+to run.
+
+Turn `FLEXIQ_AUTO_MIGRATE` off when the database credential the server holds is
+not allowed to run DDL. The schema then has to be applied out of band before the
+server starts — see <SdkLink to="operate/backends">Backends</SdkLink> — and a
+server that starts against an unmigrated database refuses rather than serving
+half a schema.
+
+### Executor attach
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_LISTEN` | Unset | `host:port`, `:port` (loopback), or `unix:/run/flexiq.sock` |
+| `FLEXIQ_ATTACH_TOKEN` | Unset | Bearer credential an executor presents in its `hello`. Minimum 16 characters |
+
+An attach connection receives jobs, which makes it a code-dispatch path rather
+than a data one. **A non-loopback TCP bind refuses to start without a token** —
+bind loopback, use a Unix socket, or set one. A Unix socket is exempt because
+the filesystem is already the boundary. The token is read once and then removed
+from the process environment, so a crash dump cannot hand it back.
+
+`FLEXIQ_LISTEN_TLS_CERT` and `FLEXIQ_LISTEN_TLS_KEY` are **rejected at boot**,
+not ignored: this listener terminates no TLS, and a variable that looks like it
+encrypts a connection and does not is worse than no variable at all. Terminate
+mTLS in a proxy in front of it and keep the token as the second factor.
+
+### Dashboard
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_DASHBOARD` | Unset | Bind address for the SPA and its API |
+| `FLEXIQ_DASHBOARD_AUTH` | `off` | `off` or `session` |
+| `FLEXIQ_DASHBOARD_ADMIN_USER` / `_PASSWORD` | Unset | Bootstrap the first admin. Only read with `session` |
+| `FLEXIQ_DASHBOARD_ASSETS` | The embedded SPA | Serve the SPA from a directory instead |
+| `FLEXIQ_DASHBOARD_METRICS_TOKEN` | Unset | Bearer token for `/metrics`, for a scraper with no session |
+| `FLEXIQ_DASHBOARD_PUBLIC_READINESS` | `off` | Answer `/readiness` without a credential |
+| `FLEXIQ_DASHBOARD_INSECURE_COOKIES` | `off` | Drop the `Secure` cookie flag, for plain HTTP in development |
+| `FLEXIQ_ALLOW_INSECURE` | `off` | Permit an unauthenticated dashboard on an off-host bind |
+
+An unauthenticated dashboard exposes every operator action — cancel, replay,
+pause, settings — so a bind reachable off-host with `FLEXIQ_DASHBOARD_AUTH=off`
+fails at boot unless `FLEXIQ_ALLOW_INSECURE=1` says the network already
+restricts access. The admin password is scrubbed from the environment once read,
+like the attach token.
+
+Turn `FLEXIQ_DASHBOARD_PUBLIC_READINESS` on for an orchestrator probe. An
+`httpGet` probe can carry an `Authorization` header — but `HTTPHeader.value` is
+a plain string, with no `secretKeyRef` and no `$(VAR)` expansion, so the only
+way to send one is to write the token literally into the Pod template. This
+variable is the alternative to that. It publishes one bit — whether storage answers — to something that has already
+reached the port. `/metrics` stays gated either way. The rest of the dashboard's
+auth surface, including SSO, is
+<SdkLink to="modules/dashboard">its own section</SdkLink>.
+
+### Admission webhook
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_WEBHOOK_LISTEN` | Unset | Bind address for the HTTPS admission server |
+| `FLEXIQ_WEBHOOK_TLS_CERT` / `_TLS_KEY` | — | PEM chain and key. **Both required** when the webhook is enabled |
+
+Kubernetes calls a mutating webhook over HTTPS and no other way, so unlike the
+dashboard there is no plaintext mode to fall back to: a bind without a readable
+key pair is refused rather than served in the clear. The pair is re-read when
+the files change on disk, because cert-manager renews a Secret in place — the
+pod keeps running and the mounted files are swapped underneath it, and a server
+that read them once would serve an expired certificate until something
+restarted it.
+
+### gRPC door
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FLEXIQ_GRPC_LISTEN` | Unset | `host:port`, `:port` (loopback), or `unix:/run/flexiq-grpc.sock` |
+| `FLEXIQ_GRPC_KEEPALIVE_INTERVAL` | `60` | HTTP/2 ping interval, seconds. `0` sends none |
+| `FLEXIQ_GRPC_REQUEST_TIMEOUT` | `30` | Per-call deadline, seconds. `0` is unbounded |
+| `FLEXIQ_GRPC_MAX_CONCURRENT_REQUESTS` | `256` | Calls in flight per connection. `0` is unlimited |
+| `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` | `1800` | Executor stream rotation, seconds. `0` never rotates |
+
+There is no token variable: callers present a
+<SdkLink to="operate/server/tokens">scoped API token</SdkLink> stored in the
+database. `FLEXIQ_GRPC_TOKEN` was the shared secret an earlier build accepted
+and is now **refused at boot** rather than ignored, because a leftover value is
+a credential the operator believes is in force. The door itself, and what those
+four numbers actually bound, are on
+<SdkLink to="operate/server/grpc">The gRPC door</SdkLink>.
+
+## What `FLEXIQ_MAINTENANCE=off` does not turn off
+
+It turns off **retention** — the sweeps that delete archived jobs, dead letters,
+task logs, task metrics and job errors on their configured windows. That is a
+job for exactly one replica, because every replica would otherwise run the same
+deletes against the same rows.
+
+It does **not** turn off dead-worker reaping or in-flight recovery. Those stay on
+in every process, deliberately: recovering a job whose worker died is what keeps
+it from sitting `Running` until its full timeout, and a deployment that switched
+it off with maintenance would lose that everywhere except on one pod.
+
+<Callout type="info" title="A value belongs to the whole Deployment">
+`FLEXIQ_MAINTENANCE` is a per-process variable, so a three-replica Deployment
+cannot set it on for one of its three identical pods. Run the maintenance owner
+as its own single-replica release and set `FLEXIQ_MAINTENANCE=off` on the
+replicated one — <SdkLink to="operate/kubernetes">Kubernetes</SdkLink> shows the
+two Helm releases that express it.
+</Callout>
+
+Retention is on by default, and a queue that has set no windows gets the
+recommended ones and a warning naming each cutoff — history is deleted on a
+policy nobody chose, so the log says which one.
+
+## Feature-gated builds
+
+Postgres, Redis and gRPC are cargo features. The published image has all three
+compiled in, so the DSN picks the backend at runtime and nothing has to be
+rebuilt to enable the door:
+
+```bash
+cargo build -p flexiq-server --features postgres
+cargo build -p flexiq-server --features redis
+cargo build -p flexiq-server --features grpc
+```
+
+A binary you built yourself without `--features grpc` **rejects
+`FLEXIQ_GRPC_LISTEN` at boot** rather than ignoring it. A deployment that looks
+configured and serves nothing on the port its clients dial is the worse failure.
+
+## The image
+
+Releases publish a distroless multiarch image at
+`ghcr.io/byteveda/flexiq-server` for `linux/amd64` and `linux/arm64`. Distroless
+means no shell and no package manager, so `docker exec` and `kubectl debug`
+behave differently than they do on a Debian-based image. The
+[container image README](https://github.com/ByteVeda/flexiq/blob/master/docker/README.md)
+documents the tag policy and what is deliberately not published.
+
+```bash
+# An attach port dispatches code, so a non-loopback bind refuses to start
+# without a token.
+export ATTACH_TOKEN=$(openssl rand -base64 32)
+
+docker run --rm -p 7777:7777 \
+  -e FLEXIQ_DSN=postgres://user:pass@host/db \
+  -e FLEXIQ_LISTEN=0.0.0.0:7777 \
+  -e FLEXIQ_ATTACH_TOKEN="$ATTACH_TOKEN" \
+  ghcr.io/byteveda/flexiq-server:2.0.0
+```
+
+On Kubernetes, start from the chart rather than from that command —
+<SdkLink to="operate/kubernetes">Kubernetes</SdkLink> covers installing it,
+choosing roles, assigning maintenance, probes and secret rotation.
+
+## Where to go next
+
+<Cards>
+  <Card
+    to="operate/server/tokens"
+    title="API tokens"
+    description="Mint, scope, rotate and revoke the credential the gRPC door requires"
+  />
+  <Card
+    to="operate/server/grpc"
+    title="The gRPC door"
+    description="The producer and executor doors, the JSON facade, reflection, and the TLS gap"
+  />
+  <Card
+    to="operate/server/scaling"
+    title="Scaling"
+    description="What to scale on, per role, and where the maintenance owner sits"
+  />
+  <Card
+    to="operate/backup"
+    title="Backup and restore"
+    description="Per backend, and what a restore does to work that was in flight"
+  />
+</Cards>

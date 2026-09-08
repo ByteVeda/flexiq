@@ -267,7 +267,7 @@ psql -h localhost -U flexiq -d myapp < backup.sql
 ```
 
 For continuous backups, use PostgreSQL's built-in WAL (write-ahead logging —
-see [WAL mode and backups](/python/operate/deployment#wal-mode-and-backups)
-for what WAL means in the SQLite backend; Postgres uses WAL primarily for
-crash recovery and replication rather than reader/writer concurrency)
+see [Backup and restore](/python/operate/backup) for what WAL means in the
+SQLite backend; Postgres uses WAL primarily for crash recovery and replication
+rather than reader/writer concurrency)
 archiving, or a tool like [pgBackRest](https://pgbackrest.org/).

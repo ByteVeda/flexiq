@@ -85,9 +85,10 @@ install`, before they can become crash-looping pods.
 ## Assign maintenance to one replica
 
 Every server can schedule and claim jobs through shared storage, but only one
-replica needs to run retention, rescue, and other maintenance sweeps. The chart
-maps its `maintenance` value to `FLEXIQ_MAINTENANCE`, which renders as the
-string `on` or `off` rather than a boolean:
+replica needs to run the retention sweeps — every replica running them would be
+every replica issuing the same deletes. The chart maps its `maintenance` value
+to `FLEXIQ_MAINTENANCE`, which renders as the string `on` or `off` rather than a
+boolean:
 
 ```yaml
 replicaCount: 1
@@ -114,8 +115,10 @@ helm install flexiq-workers ./deploy/helm/flexiq-server \
 ```
 
 Only the maintenance owner's pod gets `FLEXIQ_MAINTENANCE=on`. Every pod in the
-replicated release gets `FLEXIQ_MAINTENANCE=off` and runs no sweeps, so the work
-is never duplicated across replicas.
+replicated release gets `FLEXIQ_MAINTENANCE=off` and runs no retention sweeps,
+so the deletes are never duplicated across replicas. What `off` does *not* turn
+off is dead-worker reaping and in-flight recovery — those stay on everywhere, on
+purpose. See <SdkLink to="operate/server">Server</SdkLink>.
 
 Use distinct release names and expose only the Services clients should reach.
 All releases must use the same storage and namespace when they cooperate on the

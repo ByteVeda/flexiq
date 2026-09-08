@@ -95,7 +95,7 @@ Every call carries `authorization: Bearer <token>`, a scoped API token minted
 against the server's database. The producer door needs the `produce` scope, and
 a `produce` token cannot open the executor door. Mint, list, expire and revoke
 are covered in
-<SdkLink to="operate/deployment#the-credential">The credential</SdkLink>.
+<SdkLink to="operate/server/tokens">API tokens</SdkLink>.
 
 **There is no namespace field on the wire.** The token carries it, and the
 server serves exactly one — so a job written with no namespace at all is
@@ -160,7 +160,7 @@ past ±9007199254740991 (`2^53 - 1`), non-finite numbers, byte strings and CBOR
 tags. It
 also encodes object keys in sorted order, which changes the bytes without
 changing the meaning. The consequences are set out in
-<SdkLink to="operate/deployment#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink>.
+<SdkLink to="operate/server/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink>.
 
 ## Errors, and what may be retried
 
@@ -190,7 +190,7 @@ The same eight RPCs are served as ordinary HTTP with JSON bodies, on the same
 port and the same credential — proto3 JSON, lowerCamelCase field names with the
 `snake_case` ones accepted too, 64-bit integers as strings. The route table is
 in
-<SdkLink to="operate/deployment#the-same-door-without-grpc">The same door, without gRPC</SdkLink>,
+<SdkLink to="operate/server/grpc#the-same-door-without-grpc">The same door, without gRPC</SdkLink>,
 and
 [`examples/polyglot/grpc_producer.sh`](https://github.com/ByteVeda/flexiq/blob/master/examples/polyglot/grpc_producer.sh)
 is a working producer in `bash`, `grpcurl` and `jq`.

@@ -25,9 +25,9 @@ does not terminate TLS, and setting `FLEXIQ_LISTEN_TLS_CERT` /
 deployment keep 7777 on the pod or compose network and publish nothing, or put
 an mTLS proxy in front of it.
 
-See the [server configuration](../crates/flexiq-server/README.md) for the
-runtime environment variables and the
-[deployment guide](https://docs.byteveda.org/flexiq)
+See [Server](https://docs.byteveda.org/flexiq/python/operate/server) for every
+runtime environment variable and the four listener roles, and the
+[deployment guide](https://docs.byteveda.org/flexiq/python/operate/deployment)
 for complete Docker, Compose, and Kubernetes examples.
 
 ## Published tags and platforms
