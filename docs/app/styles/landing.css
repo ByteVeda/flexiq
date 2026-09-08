@@ -638,7 +638,7 @@ main {
     opacity: 0;
   }
 }
-.returnlane {
+.diaglane {
   margin-top: 18px;
   display: flex;
   align-items: center;
@@ -654,7 +654,7 @@ main {
   margin-right: auto;
   overflow: hidden;
 }
-.returnlane .rlabel {
+.diaglane .rlabel {
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--cyan);

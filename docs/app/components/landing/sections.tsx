@@ -1,3 +1,5 @@
+import { type DiagramStation, FlowDiagram } from "./flow-diagram";
+
 export function SectionHead({
   kicker,
   title,
@@ -15,32 +17,6 @@ export function SectionHead({
     </div>
   );
 }
-
-/** Inner SVG paths for each station's icon (matches the prototype's flow diagram). */
-function DiagramIcon({ children }: { children: React.ReactNode }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {children}
-    </svg>
-  );
-}
-
-type DiagramStation = {
-  label: string;
-  title: string;
-  hint: string;
-  accent?: boolean;
-  pool?: boolean;
-  icon?: React.ReactNode;
-};
 
 const STATIONS: DiagramStation[] = [
   {
@@ -111,65 +87,12 @@ export function HowItWorks() {
           lead="Your application code enqueues a job. The Rust scheduler hands it to a worker. The result lands back in the shared store — same core, same queue, no broker in the middle, whichever SDK you called it from."
         />
         <div className="diagram reveal">
-          <div className="flowdiag">
-            {STATIONS.map((s, i) => (
-              <Station
-                key={s.label}
-                station={s}
-                last={i === STATIONS.length - 1}
-                index={i}
-              />
-            ))}
-          </div>
-          <div className="returnlane">
+          <FlowDiagram stations={STATIONS} />
+          <div className="diaglane">
             <span className="rlabel">result written back to the store</span>
           </div>
         </div>
       </div>
     </section>
-  );
-}
-
-function Station({
-  station,
-  last,
-  index,
-}: {
-  station: (typeof STATIONS)[number];
-  last: boolean;
-  index: number;
-}) {
-  return (
-    <>
-      <div className={`station ${station.accent ? "accent" : ""}`.trim()}>
-        <div className="srow">
-          {station.pool ? (
-            <div className="dpool">
-              {Array.from({ length: 6 }).map((_, k) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: fixed decorative dot row
-                <span key={k} style={{ "--k": k } as React.CSSProperties} />
-              ))}
-            </div>
-          ) : (
-            <div className="dicon">
-              <DiagramIcon>{station.icon}</DiagramIcon>
-            </div>
-          )}
-          <div className="smeta">
-            <span className="slabel">{station.label}</span>
-            <span className="stitle">{station.title}</span>
-            <span className="shint">{station.hint}</span>
-          </div>
-        </div>
-      </div>
-      {last ? null : (
-        <div
-          className="wire"
-          style={{ "--wd": `${index * 0.5}s` } as React.CSSProperties}
-        >
-          <span className="spark" />
-        </div>
-      )}
-    </>
   );
 }
