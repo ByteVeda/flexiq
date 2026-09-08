@@ -96,9 +96,10 @@ Four things the move corrected rather than relocated:
   credential event.
 
 Verified: `pnpm check:parity` (15 sections × 3 SDKs, 1810 links), `check:search`,
-`check:diagrams`, `lint`, `typecheck`, `build` (all four new pages prerender in
-all three trees), and `node scripts/version.mjs --check` with the new page added
-to SNIPPETS for its pinned image tag.
+`check:diagrams`, `lint`, `typecheck`, `build` (all five new pages — the four
+under `operate/server` plus `operate/backup` — prerender in all three trees),
+and `node scripts/version.mjs --check` with the new page added to SNIPPETS for
+its pinned image tag.
 
 Left for #825, deliberately: the `operate/server` group is where the server tier
 will lift from, not a substitute for it. Nothing here claims to be the fourth
