@@ -545,8 +545,18 @@ question.
 So they are not ordinary errors.
 <SdkSwap python={<>Every one descends from <code>BaseException</code>, the way <code>KeyboardInterrupt</code> does, so a bare <code>except Exception</code> in a task body misses them.</>} node={<>JavaScript has no uncatchable tier — a <code>catch</code> sees everything — so the class hierarchy is documentation and the latch below is the enforcement.</>} java={<>Every one extends <code>java.lang.Error</code>, so an ordinary <code>catch (Exception e)</code> does not see them — only <code>catch (Throwable t)</code> does.</>} />
 And because that alone cannot stop a determined catch-everything handler, the
-worker also latches: a body that swallowed a signal and returned anyway fails the
-attempt regardless, naming what it swallowed.
+worker also latches, and refuses to report whatever the body did after the
+signal. What it reports instead depends on which signal was caught:
+
+- A swallowed **sleep** is reported as the sleep it is. The row, the claim
+  revocation and the reschedule were committed before the signal was ever
+  raised, so the attempt is over either way — and a failure would speak for a
+  claim it no longer holds. On wake the sleep is a memo hit and the body runs
+  again from the top, which is why everything it did after swallowing the signal
+  happens twice.
+- A swallowed **failure** — a divergence, a cap, a refusal — fails the attempt,
+  naming what it swallowed. That body still holds its claim, and nothing
+  downstream would question the value it goes on to return.
 
 | Raised when | Retried? |
 |---|---|
@@ -556,7 +566,7 @@ attempt regardless, naming what it swallowed.
 | `StepError` — a step name, sleep duration or wake deadline the API rejects | No. The same call is written in the code, so it is rejected identically next attempt |
 | `StepUnavailableError` — no worker able to commit | Yes. The next attempt may land somewhere that can |
 | `StepSupersededError` — the claim was lost | Reported, then dropped by the scheduler's fence |
-| `StepSwallowedError` — the body caught a signal and returned | No. The attempt ran unclaimed and cannot be trusted |
+| `StepSwallowedError` — the body caught a step *failure* and returned | No. The attempt ran on a memo answering a different question and cannot be trusted |
 
 Whether a step failure retries is decided by the core's classification, not by a
 task's <SdkLink to="guides/reliability/retries">retry filters</SdkLink> — every
