@@ -1,6 +1,6 @@
-// Copy + code for the hero on the docs index. The marketing sections this file
-// used to feed live on flexiq.byteveda.org now; what is left is the one snippet
-// the root still shows.
+// Copy + code for the hero and the server fold on the docs index. The marketing
+// sections this file used to feed live on flexiq.byteveda.org now; what is left
+// is the snippets the root still shows.
 
 import type { Sdk } from "./sdk-registry";
 
@@ -130,5 +130,68 @@ try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
     ],
     docHref: "/java/getting-started/quickstart",
     docLabel: "Read the Java quickstart",
+  },
+];
+
+/** One terminal card in the server fold: a shell snippet and what running it printed. */
+export interface ServerPane {
+  /** Filename slot in the card's title bar. */
+  filename: string;
+  /** Right-hand tag in the title bar, describing what the card is. */
+  tag: string;
+  code: string;
+  output: OutLine[];
+}
+
+/**
+ * The server fold — the docs index's one mention of the network door.
+ *
+ * Both snippets are transcripts, not compositions. They were run against a
+ * `flexiq-server` built with the `grpc` feature, and the output lines are the
+ * log line and the response fields that run produced. That matters more here
+ * than anywhere else on the site: `POST /v1/jobs` takes `taskName` and
+ * `structured.args` and *refuses* an unknown field, so a body guessed from the
+ * proto — `{"task": …, "args": […]}` — comes back 400, and a reader who copies
+ * it concludes the door does not work.
+ */
+export const SERVER_PANES: ServerPane[] = [
+  {
+    filename: "flexiq-server",
+    tag: "holds the credential",
+    code: `FLEXIQ_DSN=sqlite:///tmp/flexiq.db \\
+FLEXIQ_NAMESPACE=default \\
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \\
+flexiq-server`,
+    output: [
+      {
+        glyph: "→",
+        glyphKind: "p",
+        text: "[flexiq] gRPC listener on tcp://127.0.0.1:50051",
+      },
+    ],
+  },
+  {
+    filename: "any client",
+    tag: "no SDK · no CBOR",
+    code: `curl -X POST http://localhost:50051/v1/jobs \\
+  -H "authorization: Bearer $FLEXIQ_TOKEN" \\
+  -H "content-type: application/json" \\
+  -d '{"taskName": "send_email",
+       "structured": {"args": [{"to": "ada@example.com"}]}}'`,
+    output: [
+      { glyph: "→", glyphKind: "p", text: "HTTP/1.1 200 OK" },
+      {
+        glyph: "✓",
+        glyphKind: "g",
+        text: "job.id",
+        value: "01a08003-3a94-74d0-89b7-f1d5d0ca829e",
+      },
+      {
+        glyph: "✓",
+        glyphKind: "g",
+        text: "job.status",
+        value: "JOB_STATUS_PENDING",
+      },
+    ],
   },
 ];
