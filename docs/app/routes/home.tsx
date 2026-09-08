@@ -6,6 +6,7 @@ import {
   HowItWorks,
   ScenarioFinder,
   SectionGrid,
+  ServerFold,
   useReveal,
 } from "@/components/landing";
 import { SiteNav } from "@/components/ui";
@@ -18,9 +19,10 @@ import type { Route } from "./+types/home";
  * flexiq.byteveda.org is the marketing surface; a second pitch here competed
  * with it for the same readers and restated `about/comparison` and
  * `about/capabilities` besides. What is left answers the questions a docs root
- * should: what this is (hero), how it fits together (how it works), which page
- * solves the problem I actually have (the scenario finder), and what else is
- * here (the section grid).
+ * should: what this is (hero), how it fits together (how it works), that it is
+ * reachable without an SDK at all (the server fold — everything above it reads
+ * as an embedded library), which page solves the problem I actually have (the
+ * scenario finder), and what else is here (the section grid).
  *
  * The route itself has to stay. `"/"` is hardcoded in the prerender list, and
  * with no index route the `*` splat under `docs-layout` claims it and ships a
@@ -66,6 +68,7 @@ export default function Home() {
       <main>
         <Hero />
         <HowItWorks />
+        <ServerFold />
         <ScenarioFinder />
         <SectionGrid />
       </main>

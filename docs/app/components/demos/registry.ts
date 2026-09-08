@@ -15,6 +15,7 @@ export const DEMO_COMPONENTS: Record<DemoId, LazyDemo> = {
   recovery: lazy(() => import("./recovery-demo")),
   scaling: lazy(() => import("./scaling-demo")),
   saga: lazy(() => import("./saga-demo")),
+  serverdoor: lazy(() => import("./server-door-demo")),
   workflow: lazy(() => import("./workflow-demo")),
 };
 

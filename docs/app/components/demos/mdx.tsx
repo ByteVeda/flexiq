@@ -1,48 +1,12 @@
-import { Suspense } from "react";
-import { useThemeMode } from "@/lib/theme";
-import { demoComponent } from "./registry";
-import type { DemoId } from "./types";
+import { DocDemo } from "./doc-demo";
 
 /**
  * The interactive demos as MDX components, one barrel in the shape of
  * `@/components/diagrams` so a page can write the bare tag with no import.
  *
- * Two things the modal used to supply and MDX does not:
- *
- * - **`theme`.** MDX passes no props, so each demo's `DemoProps` comes from
- *   {@link useThemeMode}, which reads `<html data-theme>` directly and needs no
- *   provider above it.
- * - **`.dm-stage`.** Every rule in `demos.css` is scoped under that class on
- *   purpose — the demos use generic names (`.stage`, `.ctl`, `.seg`, `.legend`)
- *   that would collide with the docs stylesheet unscoped. The wrapper keeps the
- *   scope; `.doc-demo` re-adds the frame the dialog used to draw.
- *
- * The `lazy()` split in {@link demoComponent} is kept: `mdxComponents` is loaded
- * by every doc page, so an eager barrel would put all seven demos on all of
- * them. Prerender resolves the chunk through `Suspense`, so the static HTML
- * still carries the demo.
+ * The frame itself is {@link DocDemo}, which the landing page also renders —
+ * this file is only the name each demo answers to inside MDX.
  */
-function DocDemo({ id }: { id: DemoId }) {
-  const theme = useThemeMode();
-  const Demo = demoComponent(id);
-  if (!Demo) {
-    return null;
-  }
-  return (
-    <div className="dm-stage doc-demo">
-      <Suspense
-        fallback={
-          <div className="dm-loading">
-            <span className="dm-spin" />
-            Loading demo…
-          </div>
-        }
-      >
-        <Demo theme={theme} />
-      </Suspense>
-    </div>
-  );
-}
 
 /** Chunked upload streaming progress back to the caller. */
 export function ProgressDemo() {
@@ -83,4 +47,9 @@ export function SagaDemo() {
  */
 export function TaskAffinityDemo() {
   return <DocDemo id="mesh" />;
+}
+
+/** One request walked through `flexiq-server`'s producer door, stage by stage. */
+export function ServerDoorDemo() {
+  return <DocDemo id="serverdoor" />;
 }

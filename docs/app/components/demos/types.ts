@@ -6,7 +6,8 @@ export type DemoId =
   | "progress"
   | "workflow"
   | "mesh"
-  | "saga";
+  | "saga"
+  | "serverdoor";
 
 /** Props every demo component receives from {@link DemoModal}. */
 export interface DemoProps {

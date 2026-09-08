@@ -878,3 +878,545 @@
     animation: none;
   }
 }
+
+/* ============================================================
+   Server-door demo (.sd-*) — one request walked through the producer
+   door. Four boxes on a wire above a scrubber, then the current stage
+   beside the stage log. The scrubber and log deliberately mirror the
+   recovery demo's `.fr-*`: same gesture, same keyboard map, so the two
+   are one control a reader learns once.
+   ============================================================ */
+.dm-stage .sd-lanes {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 22px 20px 6px;
+}
+.dm-stage .sd-box {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line2);
+  border-radius: 13px;
+  background: var(--panel);
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  transition:
+    border-color 0.25s,
+    box-shadow 0.25s,
+    background 0.25s;
+}
+/* The lit box is the one the current stage is happening in — colour comes
+   from the stage's tone, so a refusal reads red without a second rule. */
+.dm-stage .sd-box.on {
+  border-color: color-mix(in oklch, var(--c) 55%, transparent);
+  background: color-mix(in oklch, var(--c) 7%, var(--panel));
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--c) 22%, transparent);
+}
+.dm-stage .sd-boxhd {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dm-stage .sd-boxhd b {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.dm-stage .sd-boxhd span {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+}
+.dm-stage .sd-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.dm-stage .sd-body code {
+  font-family: var(--code);
+  font-size: 10.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dm-stage .sd-verb {
+  color: var(--indigo-br);
+  font-weight: 600;
+}
+.dm-stage .sd-dim {
+  color: var(--dim);
+}
+.dm-stage .sd-status {
+  color: var(--c, var(--grn));
+  font-weight: 600;
+}
+
+/* The wire between two boxes, and the packet that crosses it. `--p` is the
+   packet's progress along the wire; `.back` runs the same wire right to
+   left, which is what a 200 or a 403 coming home is. */
+.dm-stage .sd-wire {
+  flex: 0 0 44px;
+  align-self: center;
+  position: relative;
+  height: 2px;
+  background-image: linear-gradient(
+    90deg,
+    var(--line3) 0 5px,
+    transparent 5px 12px
+  );
+  background-size: 12px 2px;
+}
+.dm-stage .sd-packet {
+  position: absolute;
+  top: 50%;
+  left: var(--p, 0%);
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--indigo);
+  box-shadow: 0 0 10px var(--indigo);
+}
+.dm-stage .sd-packet.back {
+  left: auto;
+  right: var(--p, 0%);
+  margin: -4px -4px 0 0;
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan);
+}
+.dm-stage .sd-hoplbl {
+  position: absolute;
+  left: 50%;
+  top: -18px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--mut);
+  white-space: nowrap;
+}
+
+/* Door box: the two protocols, then the three things the door does. */
+.dm-stage .sd-protos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+.dm-stage .sd-protos span {
+  border: 1px solid var(--indigo-line);
+  background: var(--indigo-soft);
+  color: var(--indigo-br);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.dm-stage .sd-protos em {
+  color: var(--dim);
+  font-style: normal;
+}
+.dm-stage .sd-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dm-stage .sd-steps li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--dim);
+  transition: color 0.25s;
+}
+.dm-stage .sd-steps li.on,
+.dm-stage .sd-steps li.bad {
+  color: var(--txt);
+}
+.dm-stage .sd-steps .n {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  border: 1px solid var(--line2);
+  color: var(--dim);
+}
+.dm-stage .sd-steps li.on .n {
+  border-color: color-mix(in oklch, var(--c) 50%, transparent);
+  background: color-mix(in oklch, var(--c) 16%, transparent);
+  color: var(--c);
+}
+.dm-stage .sd-steps li.bad .n {
+  border-color: color-mix(in oklch, var(--red) 50%, transparent);
+  background: color-mix(in oklch, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+/* Store box: the row filling in field by field. */
+.dm-stage .sd-row {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--code);
+  font-size: 10px;
+  table-layout: fixed;
+}
+.dm-stage .sd-row th,
+.dm-stage .sd-row td {
+  text-align: left;
+  font-weight: 400;
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dm-stage .sd-row th {
+  color: var(--dim);
+  width: 38%;
+  padding-right: 6px;
+}
+.dm-stage .sd-row td {
+  color: var(--dim);
+  transition: color 0.25s;
+}
+.dm-stage .sd-row tr.on td {
+  color: var(--cyan);
+}
+
+/* ---- the machines themselves (server-door-figures.tsx) ----
+   Each figure is a 120x78 SVG that scales to its box. Motion is here rather
+   than inline so one reduced-motion query switches all of it off. */
+.dm-stage .sdfig {
+  display: block;
+  width: 100%;
+  max-width: 168px;
+  height: auto;
+  margin: 0 auto 2px;
+}
+/* The caret only blinks while the client is still composing. */
+.dm-stage .sdfig-caret {
+  animation: sdcaret 0.9s steps(1) infinite;
+}
+@keyframes sdcaret {
+  50% {
+    opacity: 0;
+  }
+}
+/* A lit rack LED gets the glow; an unlit one must not, or every unit reads
+   as active at a glance. */
+.dm-stage .sdfig-led.on {
+  filter: drop-shadow(0 0 3px currentColor);
+}
+.dm-stage .sdfig-fan.spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sdfan 1.6s linear infinite;
+}
+@keyframes sdfan {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dm-stage .sdfig-core {
+  opacity: 0.35;
+  transition: fill 0.25s;
+}
+/* Its own keyframes rather than landing.css's `wkpulse`: both stylesheets are
+   global so borrowing it would work, and would break silently the day the
+   landing page stops needing it. */
+.dm-stage .sdfig-core.busy {
+  opacity: 1;
+  animation: sdcore 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--k) * 0.18s);
+}
+@keyframes sdcore {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Scrubber — same geometry and gesture as the recovery demo's. */
+.dm-stage .sd-scrubwrap {
+  padding: 6px 20px 20px;
+}
+.dm-stage .sd-track {
+  position: relative;
+  height: 34px;
+  margin: 6px 0 2px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.dm-stage .sd-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 8px;
+  transform: translateY(-50%);
+  border-radius: 6px;
+  background: var(--panel3);
+  border: 1px solid var(--line);
+}
+.dm-stage .sd-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 8px;
+  transform: translateY(-50%);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--indigo) 55%, transparent);
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--indigo-line);
+}
+.dm-stage .sd-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 18px;
+  transform: translate(-1px, -50%);
+  border-radius: 2px;
+}
+.dm-stage .sd-handle {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--txt);
+  border: 3px solid var(--bg);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 0 0 1px var(--line3);
+  pointer-events: none;
+  z-index: 3;
+}
+.dm-stage .sd-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--indigo-br);
+}
+.dm-stage .sd-axis {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  margin-top: 7px;
+}
+
+/* Current stage beside the stage log. */
+.dm-stage .sd-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  border-top: 1px solid var(--line);
+}
+.dm-stage .sd-now {
+  padding: 22px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.dm-stage .sd-pill {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--c);
+  background: color-mix(in oklch, var(--c) 13%, transparent);
+  border: 1px solid color-mix(in oklch, var(--c) 42%, transparent);
+}
+.dm-stage .sd-pill .pd {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.dm-stage .sd-now .big {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--mut);
+}
+.dm-stage .sd-now .big b {
+  color: var(--txt);
+}
+.dm-stage .sd-now .big code {
+  font-family: var(--code);
+  font-size: 0.88em;
+  color: var(--txt);
+  background: var(--panel3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 4px;
+}
+.dm-stage .sd-req {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel2);
+  overflow: hidden;
+}
+.dm-stage .sd-reqhd {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.dm-stage .sd-req pre {
+  margin: 0;
+  padding: 11px;
+  font-family: var(--code);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--txt2);
+  overflow-x: auto;
+}
+.dm-stage .sd-log {
+  padding: 14px 6px 14px 0;
+  max-height: 300px;
+  overflow: auto;
+}
+.dm-stage .sd-ev {
+  display: flex;
+  gap: 12px;
+  padding: 8px 18px;
+  align-items: flex-start;
+  opacity: 0.38;
+  transition:
+    opacity 0.25s,
+    background 0.25s;
+}
+.dm-stage .sd-ev.on {
+  opacity: 1;
+}
+.dm-stage .sd-ev.cur {
+  background: var(--indigo-soft);
+}
+.dm-stage .sd-ev .dotcol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: none;
+  padding-top: 3px;
+}
+.dm-stage .sd-ev .ed {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dim);
+  z-index: 1;
+}
+.dm-stage .sd-ev.on .ed {
+  background: var(--c, var(--indigo));
+}
+.dm-stage .sd-ev .eline {
+  width: 2px;
+  flex: 1;
+  background: var(--line2);
+  margin: 3px 0 -11px;
+}
+.dm-stage .sd-ev:last-child .eline {
+  display: none;
+}
+.dm-stage .sd-ev .etxt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dm-stage .sd-ev .et {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--txt2);
+}
+.dm-stage .sd-ev.on .et {
+  color: var(--txt);
+}
+.dm-stage .sd-ev .ed2 {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--mut);
+}
+.dm-stage .sd-ev .ets {
+  margin-left: auto;
+  font-family: var(--code);
+  font-size: 11px;
+  color: var(--dim);
+  flex: none;
+  padding-left: 10px;
+}
+
+/* Four boxes on a wire need width. Below it the row stacks and the wires
+   become the vertical connectors the flow diagram already uses at 720px. */
+@media (max-width: 900px) {
+  .dm-stage .sd-lanes {
+    flex-direction: column;
+  }
+  .dm-stage .sd-wire {
+    flex: 0 0 26px;
+    width: 2px;
+    height: 26px;
+    align-self: center;
+    background-image: linear-gradient(
+      180deg,
+      var(--line3) 0 5px,
+      transparent 5px 12px
+    );
+    background-size: 2px 12px;
+  }
+  .dm-stage .sd-packet {
+    left: 50%;
+    top: var(--p, 0%);
+  }
+  .dm-stage .sd-packet.back {
+    right: auto;
+    left: 50%;
+    top: auto;
+    bottom: var(--p, 0%);
+    margin: 0 0 -4px -4px;
+  }
+  .dm-stage .sd-hoplbl {
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .dm-stage .sd-grid {
+    grid-template-columns: 1fr;
+  }
+  .dm-stage .sd-now {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dm-stage .sdfig-caret,
+  .dm-stage .sdfig-fan.spin,
+  .dm-stage .sdfig-core.busy {
+    animation: none;
+  }
+}
