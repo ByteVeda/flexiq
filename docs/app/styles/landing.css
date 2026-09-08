@@ -820,6 +820,22 @@ main {
   }
 }
 
+/* The page carries two flow diagrams now, so its ambient motion is a spark on
+   each of six wires, twelve pulsing worker dots and a blinking run indicator —
+   all of it decorative, none of it carrying information the static frame does
+   not. `useReveal` already honours this query; the loops did not. */
+@media (prefers-reduced-motion: reduce) {
+  .spark,
+  .dpool span,
+  .runtag .ld,
+  .bgfx .glow {
+    animation: none;
+  }
+  .dpool span {
+    opacity: 0.6;
+  }
+}
+
 .twk-panel {
   position: fixed;
   right: 16px;
