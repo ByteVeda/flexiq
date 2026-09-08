@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from flexiq._flexiq import AttachedSteps, WorkerSteps
+    from flexiq.steps.errors import StepControlSignal
 
 
 class _ActiveContext:
@@ -25,7 +26,7 @@ class _ActiveContext:
         "soft_timeout",
         "started_mono",
         "step_context",
-        "step_control_raised",
+        "step_control_signal",
         "task_name",
         "worker_steps",
     )
@@ -55,7 +56,9 @@ class _ActiveContext:
         # Durable steps, opened on first use: the session costs a job read and
         # a snapshot read, and most tasks never take one.
         self.step_context: Any = None
-        # Set when ``ctx.step`` raises a control signal out of the task body.
-        # The runner fails an attempt that returns normally with it set — the
-        # second of the two layers that keep a sleep from being swallowed.
-        self.step_control_raised: bool = False
+        # The first control signal ``ctx.step`` raised out of the task body, if
+        # any. The runner refuses to report what the body did after one — the
+        # second of the two layers that keep a sleep from being swallowed. The
+        # signal itself rather than a flag: a swallowed sleep is reported as the
+        # sleep it is, a swallowed failure fails the attempt.
+        self.step_control_signal: StepControlSignal | None = None

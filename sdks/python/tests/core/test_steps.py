@@ -432,17 +432,50 @@ def test_swallowing_a_divergence_fails_the_attempt(
     assert len(attempts) == 2, "a swallowed divergence must not be retried"
 
 
-def test_swallowing_a_sleep_loses_the_attempt_but_not_the_job(
-    queue: Queue, start_worker: WorkerFactory
-) -> None:
-    """A swallowed sleep costs the attempt; the job still wakes and finishes.
+class _SleepHooks(TaskMiddleware):
+    """Records which of ``after`` / ``on_sleep`` the runner paired each pass with.
 
-    The latch fails the attempt, but by then the sleep has committed and
-    released the claim — so the scheduler's own ``(owner, attempt)`` fence sees
-    a job that has moved on and drops the failure rather than dead-lettering a
-    job that is sleeping correctly. On wake the sleep is a memo hit, no signal
-    is raised, and the body completes under a claim it actually holds.
+    Which one fires *is* the assertion for the two tests below: it is decided by
+    the runner, in process, so it holds whatever the scheduler and the poller
+    happen to be doing at the time.
     """
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__()
+        self._events = events
+
+    def before(self, ctx: Any) -> None:
+        self._events.append("before")
+
+    def after(self, ctx: Any, result: Any, error: Exception | None) -> None:
+        self._events.append("after" if error is None else f"after:{type(error).__name__}")
+
+    def on_sleep(self, ctx: Any, wake_at: int) -> None:
+        self._events.append("on_sleep")
+
+
+def test_swallowing_a_sleep_still_reports_the_sleep(
+    tmp_path: Path, start_worker: WorkerFactory
+) -> None:
+    """A swallowed sleep is reported as the sleep it is, never as a failure.
+
+    The sleep committed before the signal was ever raised — the row is on disk,
+    the claim revoked, the job ``Pending`` at its deadline — so failing the
+    attempt reports on a claim it no longer holds. And a sleep leaves
+    ``retry_count`` alone, so the woken attempt reuses the same
+    ``(owner, attempt)``: the scheduler's fence cannot tell the stale failure
+    from the live claim, authorizes it, and dead-letters a job that is sleeping
+    correctly (#890).
+
+    ``on_sleep`` on the swallowing pass is what proves the fix. It is the
+    runner's own verdict, so it does not depend on which write won a race.
+    """
+    events: list[str] = []
+    queue = Queue(
+        db_path=str(tmp_path / "swallowed_sleep.db"),
+        workers=1,
+        middleware=[_SleepHooks(events)],
+    )
     bodies: list[int] = []
 
     @queue.task(max_retries=0)
@@ -456,6 +489,43 @@ def test_swallowing_a_sleep_loses_the_attempt_but_not_the_job(
     start_worker(queue)
 
     assert job.result(timeout=30) == "finished on pass 2"
+    assert events == ["before", "on_sleep", "before", "after"]
+    assert queue.job_errors(job.id) == [], "a swallowed sleep is not a failed attempt"
+    assert queue.dead_letters() == []
+
+
+def test_swallowing_a_sleep_and_then_raising_still_reports_the_sleep(
+    tmp_path: Path, start_worker: WorkerFactory
+) -> None:
+    """The same rule when the body goes on to fail rather than to return.
+
+    That failure is about an attempt that ended when the sleep committed, so
+    reporting it is the dead-letter above with one more step in front of it. The
+    committed sleep outranks it, and the job wakes and finishes.
+    """
+    events: list[str] = []
+    queue = Queue(
+        db_path=str(tmp_path / "swallowed_sleep_raised.db"),
+        workers=1,
+        middleware=[_SleepHooks(events)],
+    )
+    bodies: list[int] = []
+
+    @queue.task(max_retries=0)
+    def swallows_then_raises() -> str:
+        bodies.append(1)
+        with contextlib.suppress(BaseException):
+            current_job.step.sleep("150ms", name="nap")
+        if len(bodies) == 1:
+            raise ValueError("the body failed after swallowing its own sleep")
+        return "finished on the woken pass"
+
+    job = swallows_then_raises.delay()
+    start_worker(queue)
+
+    assert job.result(timeout=30) == "finished on the woken pass"
+    assert events == ["before", "on_sleep", "before", "after"]
+    assert queue.job_errors(job.id) == [], "the sleep outranks what the body raised after it"
     assert queue.dead_letters() == []
 
 

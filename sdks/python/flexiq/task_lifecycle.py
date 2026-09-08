@@ -312,6 +312,27 @@ async def run_lifecycle(
         )
         raise
     except (Exception, StepError) as exc:
+        # A committed sleep outranks whatever the body raised after swallowing
+        # it. `sleep_job` revoked the claim before the signal was ever raised,
+        # so this failure speaks for an attempt that is already over — and since
+        # a sleep leaves `retry_count` alone, the woken attempt reuses the same
+        # `(owner, attempt)` and the scheduler's fence cannot tell the two
+        # apart. It authorizes the stale failure against the live claim and
+        # dead-letters a job that is sleeping correctly (#890).
+        swallowed = current_job._committed_sleep()
+        if swallowed is not None:
+            error = swallowed
+            slept = swallowed
+            logger.error(
+                "Task %s[%s] caught the step.sleep that ended its attempt and then raised "
+                "%r. The job sleeps until %d either way; everything the body did after the "
+                "sleep ran with no execution claim and runs again on wake.",
+                task_name,
+                job_id,
+                exc,
+                swallowed.wake_at,
+            )
+            raise swallowed from exc
         error = exc
         elapsed = time.perf_counter() - started_at
         # Format the exception into the message rather than passing it as an

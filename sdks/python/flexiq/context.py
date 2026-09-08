@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any
 from flexiq._active_context import _ActiveContext
 from flexiq.async_support.context import get_async_context
 from flexiq.exceptions import SoftTimeoutError, TaskCancelledError
-from flexiq.steps import StepContext, StepSwallowedError, was_swallowed
+from flexiq.steps import (
+    StepContext,
+    StepSleepSignal,
+    StepSwallowedError,
+    latched_sleep,
+    was_swallowed,
+)
 
 logger = logging.getLogger("flexiq.context")
 
@@ -206,22 +212,55 @@ class JobContext:
                 )
 
     def _check_step_control(self) -> None:
-        """Fail the attempt if the body caught a step control signal and returned.
+        """Refuse what the body did after it caught a step control signal.
 
         The second of the two swallow layers. A sleep or a divergence that the
         task body catches away leaves the rest of the body running with no
         execution claim, so every side effect it has after that point happens
         again on the next attempt.
 
+        What that costs depends on which signal it was. A swallowed **sleep** is
+        re-raised: the sleep committed before it was ever raised, so the attempt
+        is over either way and the only correct report is the sleep. Failing it
+        instead reports on a claim this attempt no longer holds, and because a
+        sleep leaves ``retry_count`` alone, the woken attempt reuses the same
+        ``(owner, attempt)`` — the scheduler's fence cannot tell the two apart
+        and dead-letters a job that is sleeping correctly. Anything else fails
+        the attempt, which is where the latch has to bite: that body still holds
+        its claim and is about to return a value nothing downstream questions.
+
         Raises:
-            StepSwallowedError: A control signal was raised and never left the body.
+            StepSleepSignal: The body swallowed a sleep this attempt committed.
+            StepSwallowedError: Any other control signal was raised and never
+                left the body.
         """
-        if was_swallowed(self._active_context()):
+        ctx = self._active_context()
+        sleep = self._committed_sleep()
+        if sleep is not None:
+            logger.error(
+                "job %s caught the step.sleep that ended its attempt and carried on. "
+                "Everything it did after that ran with no execution claim and runs "
+                "again on wake. Let StepControlSignal propagate — narrow the except "
+                "clause, or re-raise it.",
+                self.id,
+            )
+            raise sleep
+        if was_swallowed(ctx):
             raise StepSwallowedError(
                 "step control flow was swallowed by the task body: a step raised to end "
                 "this attempt and the task caught it. Let StepControlSignal propagate — "
                 "narrow the except clause, or re-raise it."
             )
+
+    def _committed_sleep(self) -> StepSleepSignal | None:
+        """The sleep that ended this attempt, if one committed.
+
+        Set the moment ``step.sleep`` raises — and it raises only after the row,
+        the claim revocation and the reschedule are on disk — so a body that
+        caught the signal cannot hide that its attempt is over. The runner asks
+        before it reports anything else.
+        """
+        return latched_sleep(self._active_context())
 
     def _finish_steps(self) -> None:
         """Close out this attempt's steps, if it took any. Never raises."""
