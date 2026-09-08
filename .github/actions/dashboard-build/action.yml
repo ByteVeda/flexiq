@@ -24,7 +24,7 @@ runs:
     - name: Set up Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: "22"
+        node-version-file: dashboard/.nvmrc
         cache: pnpm
         cache-dependency-path: dashboard/pnpm-lock.yaml
 

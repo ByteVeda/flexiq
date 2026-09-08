@@ -14,7 +14,8 @@
 # --- dashboard ---------------------------------------------------------------
 # The SPA is embedded into the binary at compile time
 # (crates/flexiq-server/build.rs), so it has to exist before cargo runs.
-FROM node:22-alpine AS dashboard
+# Keep in step with dashboard/.nvmrc — Docker cannot read it from here.
+FROM node:24-alpine AS dashboard
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /src/dashboard
 # Manifest first: dependency installs then survive every source-only edit.

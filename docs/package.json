@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "sync:api": "node scripts/api/sync.mjs",
     "sync:changelog": "node ../scripts/sync-changelog.mjs",
@@ -36,7 +39,7 @@
     "@shikijs/rehype": "^3.13.0",
     "@tailwindcss/vite": "^4.2.4",
     "@types/mdx": "^2.0.13",
-    "@types/node": "^25.6.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "jsdom": "^30.0.1",
