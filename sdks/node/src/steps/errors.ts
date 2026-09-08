@@ -5,8 +5,8 @@
  * `except Exception` in a task body misses them. JavaScript has no such tier:
  * `catch` catches everything, and a control signal is an ordinary `Error`. So
  * this layer is documentation, not enforcement — the enforcement is the latch
- * (see {@link StepLatch}), which fails the attempt when a body catches one of
- * these and returns anyway.
+ * (see {@link StepLatch}), which refuses to report whatever a body did after
+ * catching one of these.
  *
  * That is not a weaker guarantee, only a later one. A swallowed divergence
  * still never lets the attempt report a result.
@@ -123,11 +123,16 @@ export class StepSupersededError extends StepError {
 }
 
 /**
- * The task body caught a step control signal and returned anyway.
+ * The task body caught a step *failure* signal and returned anyway.
  *
  * In a language where `catch` catches everything, this is the whole defence.
- * Whatever the body went on to do ran without a claim, or on a memoized answer
- * to a different question, so the attempt cannot be trusted and is failed here.
+ * Whatever the body went on to do ran on a memoized answer to a different
+ * question, so the attempt cannot be trusted and is failed here — while it
+ * still holds the claim that makes failing it mean something.
+ *
+ * A swallowed **sleep** never reaches this: that attempt released its claim
+ * when the sleep committed, so it is reported as the sleep it took. See
+ * {@link StepLatch.check}.
  */
 export class StepSwallowedError extends StepError {
   constructor(message: string) {

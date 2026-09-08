@@ -236,8 +236,9 @@ export class StepContext {
    * that caught this and returned would report a result it never computed.
    */
   private refuse(message: string): StepError {
-    this.latch.latch();
-    return new StepError(message, false);
+    const refusal = new StepError(message, false);
+    this.latch.latch(refusal);
+    return refusal;
   }
 
   /** Read a local validation, turning its failure into a permanent refusal. */
@@ -260,8 +261,9 @@ export class StepContext {
     try {
       return await body();
     } catch (error) {
-      this.latch.latch();
-      throw stepErrorFrom(error);
+      const failure = stepErrorFrom(error);
+      this.latch.latch(failure);
+      throw failure;
     }
   }
 
@@ -325,7 +327,8 @@ export class StepContext {
     if (outcome.elapsed) {
       return;
     }
-    this.latch.latch();
-    throw new StepSleepSignal(outcome.stepKey, outcome.wakeAt);
+    const sleeping = new StepSleepSignal(outcome.stepKey, outcome.wakeAt);
+    this.latch.latch(sleeping);
+    throw sleeping;
   }
 }
