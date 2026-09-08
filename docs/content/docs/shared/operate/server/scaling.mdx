@@ -115,14 +115,22 @@ triggers:
       metricName: flexiq_pending
       query: sum(flexiq_jobs{queue="default",status="pending"})
       threshold: "10"
-  # Capacity: scale up as free slots approach zero.
+  # Capacity: scale up as busy slots rise toward the total.
   - type: prometheus
     metadata:
       serverAddress: "http://prometheus:9090"
-      metricName: flexiq_free_slots
-      query: sum(flexiq_executor_slots{state="free"})
-      threshold: "1"
+      metricName: flexiq_busy_slots
+      query: sum(flexiq_executor_slots{state="total"}) - sum(flexiq_executor_slots{state="free"})
+      threshold: "8"
 ```
+
+Both triggers count something that **rises** under load, which is not a style
+choice. `threshold` is an `AverageValue` target, so the HPA asks for
+`ceil(metric / threshold)` replicas — a query that falls as the queue fills
+scales *in* at exactly the moment it should scale out. Free slots are that
+query; busy slots are its inverse. Set the second threshold to the slot count
+one executor advertises, so a fully-occupied replica is the point at which
+another is asked for.
 
 Scaling on the **executor** Deployment, not the server one, is almost always
 what you want: the server is the thing holding the slots, and the slots are what
