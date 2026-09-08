@@ -77,6 +77,10 @@ jobs:
           path: docs/.lighthouseci/
           retention-days: 7
           if-no-files-found: error
+          # The directory is dot-prefixed, and upload-artifact skips hidden
+          # paths by default — without this it uploads nothing and then fails
+          # its own if-no-files-found check.
+          include-hidden-files: true
 
   dashboard:
     name: dashboard
@@ -108,3 +112,5 @@ jobs:
           path: dashboard/.lighthouseci/
           retention-days: 7
           if-no-files-found: error
+          # See the docs job: dot-prefixed path, hidden by default.
+          include-hidden-files: true

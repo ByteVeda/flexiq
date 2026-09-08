@@ -49,6 +49,46 @@ for (const run of runs) {
 
 lines.push("", "_Median of 3 runs, desktop preset. Floors live in `lighthouserc.yml`._", "");
 
+// A score alone cannot be acted on, and a runner does not always agree with a
+// laptop. Name the audits that cost points, and the elements they fired on, so
+// a failure is diagnosable from the log without downloading the report.
+const shortfalls = [];
+for (const run of runs) {
+  const lhr = JSON.parse(readFileSync(run.jsonPath, "utf8"));
+  for (const cat of CATEGORIES) {
+    const category = lhr.categories[cat];
+    if (!category || category.score === null || category.score === 1) continue;
+    for (const ref of category.auditRefs) {
+      const audit = lhr.audits[ref.id];
+      if (!audit || audit.score === null || audit.score === 1) continue;
+      if (audit.scoreDisplayMode === "notApplicable" || audit.scoreDisplayMode === "informative") continue;
+      if (ref.weight === 0) continue;
+      // Timing metrics rarely land on exactly 1.0; only surface a real shortfall.
+      if (audit.score >= 0.9) continue;
+      shortfalls.push({
+        url: new URL(run.url).pathname,
+        cat,
+        id: ref.id,
+        weight: ref.weight,
+        title: audit.title,
+        nodes: (audit.details?.items ?? [])
+          .map((i) => i.node?.selector)
+          .filter(Boolean)
+          .slice(0, 5),
+      });
+    }
+  }
+}
+
+if (shortfalls.length) {
+  lines.push("<details><summary>Audits below full marks</summary>", "");
+  for (const s of shortfalls) {
+    lines.push(`- \`${s.url}\` **${s.cat}** · \`${s.id}\` (weight ${s.weight}) — ${s.title}`);
+    for (const n of s.nodes) lines.push(`  - \`${n}\``);
+  }
+  lines.push("", "</details>", "");
+}
+
 const out = lines.join("\n");
 console.log(out);
 
