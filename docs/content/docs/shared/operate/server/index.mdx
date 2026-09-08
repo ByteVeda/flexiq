@@ -113,10 +113,11 @@ fails at boot unless `FLEXIQ_ALLOW_INSECURE=1` says the network already
 restricts access. The admin password is scrubbed from the environment once read,
 like the attach token.
 
-Turn `FLEXIQ_DASHBOARD_PUBLIC_READINESS` on for an orchestrator probe: a kubelet
-carries no credential and cannot be given one, and the alternative is either no
-readiness probe or a token written literally into a Deployment spec. It
-publishes one bit — whether storage answers — to something that has already
+Turn `FLEXIQ_DASHBOARD_PUBLIC_READINESS` on for an orchestrator probe. An
+`httpGet` probe can carry an `Authorization` header — but `HTTPHeader.value` is
+a plain string, with no `secretKeyRef` and no `$(VAR)` expansion, so the only
+way to send one is to write the token literally into the Pod template. This
+variable is the alternative to that. It publishes one bit — whether storage answers — to something that has already
 reached the port. `/metrics` stays gated either way. The rest of the dashboard's
 auth surface, including SSO, is
 <SdkLink to="modules/dashboard">its own section</SdkLink>.
