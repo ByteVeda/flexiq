@@ -2,6 +2,7 @@ package org.byteveda.flexiq.steps;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -148,5 +149,38 @@ class StepRefusalTest {
         StepSwallowedError swallowed = assertThrows(StepSwallowedError.class, latch::check);
         assertFalse(swallowed.shouldRetry());
         assertEquals("StepSwallowedError", swallowed.getClass().getSimpleName());
+    }
+
+    @Test
+    void aSwallowedSleepIsReportedAsTheSleep() {
+        // Not a failure, however the body treated it: the row, the claim
+        // revocation and the reschedule were committed before the signal was
+        // thrown, so the attempt is over and only the sleep describes where the
+        // job went. Failing it instead lands on the woken attempt's claim —
+        // a sleep does not move `retry_count`, so the fence sees the same
+        // `(owner, attempt)` — and dead-letters a job that is sleeping.
+        StepLatch latch = new StepLatch();
+        StepSleepSignal sleeping = new StepSleepSignal("nap#0", 1_700_000_000_000L);
+
+        latch.latch(sleeping);
+
+        assertTrue(latch.swallowed());
+        assertSame(sleeping, latch.sleep());
+        assertSame(sleeping, assertThrows(StepSleepSignal.class, latch::check));
+    }
+
+    @Test
+    void aSleepIsNotOverwrittenByWhateverTheBodyTriggersNext() {
+        // A swallowed sleep leaves the body running unclaimed, so the next step
+        // it touches raises in its turn. Latching that would lose the fact that
+        // the attempt is already asleep — and reporting it would be the
+        // dead-letter above.
+        StepLatch latch = new StepLatch();
+        StepSleepSignal sleeping = new StepSleepSignal("nap#0", 1_700_000_000_000L);
+
+        latch.latch(sleeping);
+        latch.latch(new StepError("the claim is gone", false));
+
+        assertSame(sleeping, assertThrows(StepSleepSignal.class, latch::check));
     }
 }

@@ -11,10 +11,10 @@ package org.byteveda.flexiq.steps;
  * the Python shell spells the same idea {@code BaseException}.
  *
  * <p>{@code catch (Throwable t)} still sees one, so there is a second layer:
- * the worker latches whenever one of these is thrown and fails the attempt if
- * the body returns normally anyway (see {@link StepSwallowedError}). Catching
- * one therefore buys nothing and costs a clear error message — let it
- * propagate.
+ * the worker latches whenever one of these is thrown and refuses to report
+ * whatever the body did afterwards — the committed sleep, or
+ * {@link StepSwallowedError} (see {@link StepLatch}). Catching one therefore
+ * buys nothing and costs a clear error message — let it propagate.
  */
 public abstract class StepControlSignal extends Error {
     private static final long serialVersionUID = 1L;

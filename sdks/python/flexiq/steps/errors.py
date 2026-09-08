@@ -92,10 +92,16 @@ class StepSupersededError(StepError):
 
 
 class StepSwallowedError(StepError):
-    """The task body caught a step control signal and returned anyway.
+    """The task body caught a step failure signal and returned anyway.
 
-    The second of the two swallow layers. Whatever the body went on to do ran
-    without a claim, so the attempt cannot be trusted and is failed here.
+    The second of the two swallow layers. Whatever the body went on to do ran on
+    a memo answering a different question, so the attempt cannot be trusted and
+    is failed here — while it still holds the claim that makes failing it mean
+    something.
+
+    A swallowed **sleep** never reaches this: that attempt released its claim
+    when the sleep committed, so it is reported as the sleep it took. See
+    :mod:`flexiq.steps.latch`.
     """
 
 
