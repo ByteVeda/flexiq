@@ -4,7 +4,59 @@ import { useActiveSdk } from "@/hooks";
 import { highlightShell } from "@/lib/highlight-lite";
 import { SERVER_PANES, type ServerPane } from "@/lib/landing-content";
 import { CopyButton } from "./copy-button";
+import { type DiagramStation, FlowDiagram } from "./flow-diagram";
 import { SectionHead } from "./sections";
+
+/**
+ * The same row `HowItWorks` draws, entered through the door instead of through
+ * an SDK — deliberately the same parts from the store rightwards, because the
+ * claim is that this is one queue with two front ends, not a second product.
+ * Only the door is accented; it is the one station the page has not shown yet.
+ */
+const STATIONS: DiagramStation[] = [
+  {
+    label: "ANY LANGUAGE",
+    title: "curl",
+    hint: "no SDK, no codec",
+    icon: (
+      <>
+        <polyline points="4 17 10 11 4 5" />
+        <path d="M12 19h8" />
+      </>
+    ),
+  },
+  {
+    label: "SERVER",
+    title: "the door",
+    hint: ":50051 · /v1/jobs",
+    accent: true,
+    icon: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18" />
+      </>
+    ),
+  },
+  {
+    label: "QUEUE",
+    title: "store",
+    hint: "the same jobs",
+    icon: (
+      <>
+        <ellipse cx="12" cy="5" rx="9" ry="3" />
+        <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+        <path d="M3 12a9 3 0 0 0 18 0" />
+      </>
+    ),
+  },
+  {
+    label: "WORKERS",
+    title: "execute",
+    hint: "your SDK, unchanged",
+    pool: true,
+  },
+];
 
 /**
  * The one place on the docs index that says FlexiQ has a network door.
@@ -40,6 +92,16 @@ export function ServerFold() {
           }
           lead="flexiq-server puts the producer API on the network: gRPC, and the same calls as plain HTTP with JSON bodies on the same listener. A shell script enqueues onto the queue your workers already drain — no binding to install, and no database credential of its own."
         />
+
+        <div className="diagram reveal">
+          <FlowDiagram stations={STATIONS} />
+          <div className="diaglane">
+            <span className="rlabel">
+              an SDK in-process opens the store directly — the door is for
+              callers that cannot
+            </span>
+          </div>
+        </div>
 
         <div className="srv-panes">
           {SERVER_PANES.map((pane) => (

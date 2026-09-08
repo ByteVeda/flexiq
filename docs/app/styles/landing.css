@@ -661,9 +661,18 @@ main {
 }
 
 /* ===== server fold ===== */
-/* Two transcripts side by side, server then client, reusing the hero's terminal
-   parts (.term/.tbar/.code/.out). No band behind it: `.how` above already has
-   one, and two adjacent bordered bands read as a single long box. */
+/* The `.how` flow diagram re-entered through the door, then the two transcripts
+   that prove it, reusing the hero's terminal parts (.term/.tbar/.code/.out). No
+   band behind it: `.how` above already has one, and two adjacent bordered bands
+   read as a single long box. */
+.srv .diagram {
+  margin-bottom: 44px;
+}
+/* The bypass lane's label is a sentence, not `.how`'s four words; the narrower
+   shared box would break it across three lines. */
+.srv .diaglane {
+  max-width: 680px;
+}
 .srv-panes {
   display: grid;
   grid-template-columns: 1fr 1fr;
