@@ -48,6 +48,8 @@ export function FlowDiagram({ stations }: { stations: DiagramStation[] }) {
   );
 }
 
+/** One box plus the wire that leaves it — the last station has no wire, so the
+ *  row ends on a box rather than an arrow pointing at nothing. */
 function Station({
   station,
   last,

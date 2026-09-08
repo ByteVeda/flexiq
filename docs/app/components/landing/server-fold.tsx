@@ -161,6 +161,8 @@ function Pane({ pane }: { pane: ServerPane }) {
   );
 }
 
+/** The `.doclink` chevron. Decorative — the link text carries the meaning, so it
+ *  is `aria-hidden` and has no title. */
 function Arrow() {
   return (
     <svg
