@@ -1025,7 +1025,7 @@ namespace it refuses to start without, a TLS gap, and its own scrape:
 
 ## Backups
 
-flexiq opens SQLite in WAL mode, so committed data may be in the `-wal` sibling
+FlexiQ opens SQLite in WAL mode, so committed data may be in the `-wal` sibling
 rather than in the `.db` file at any instant, and `cp` is not a backup. The safe
 methods for each backend — and what a restore does to jobs that were in flight,
 to durable-step memos and to revoked credentials — are on
