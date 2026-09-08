@@ -177,12 +177,24 @@ export const SECTION_SKELETON = [
       "cli",
       "deployment",
       "kubernetes",
+      "server",
+      "backup",
       "security",
       "troubleshooting",
       "migration",
       "upgrading-0.15",
       "graalvm",
     ],
+  },
+  {
+    // #826. `flexiq-server` is one binary with four listener roles, and every
+    // one of them is an operator concern the three SDK trees share verbatim —
+    // so it is a group under `operate` rather than a page, and every page in it
+    // is shared. #825 lifts this group into the server tier when that tier
+    // exists; until then `operate` is where someone running the binary looks.
+    dir: "operate/server",
+    title: "Server",
+    pages: ["index", "tokens", "grpc", "scaling"],
   },
   {
     dir: "api-reference",

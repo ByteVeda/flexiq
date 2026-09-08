@@ -1,0 +1,158 @@
+---
+title: Scaling
+description: "What to scale on for each server role, which metric answers which question, and where autoscaling actually attaches."
+---
+
+`flexiq-server` holds no state of its own. Every replica reads and writes the
+same database, and the database is the coordination point — so adding a replica
+is safe by construction, and it is also, on its own, frequently useless. This
+page is about which number tells you which of those two it is.
+
+<Callout type="info" title="Two different things scale here">
+A server replica **dispatches** work; an executor **runs** it. Scaling the
+server when executor slots are the ceiling buys nothing at all: the extra
+replicas claim from the same queue, place onto the same slots, and the backlog
+does not move. Read the utilisation gauge before adding a replica.
+</Callout>
+
+## What each role is bounded by
+
+| Role | Scales with | Bounded by | Safe to replicate |
+| --- | --- | --- | --- |
+| Attach + scheduler | Executor slots attached to it | Dispatch throughput, then storage | Yes |
+| gRPC door | Producer call volume | Storage pool, then CPU | Yes, with one caveat |
+| Dashboard | Operator and scraper traffic | Storage reads | Yes |
+| Admission webhook | Pod creation rate | Nothing you will reach | Yes, and it should be |
+
+The caveat on the gRPC door is the executor stream: a gRPC stream cannot be
+load-balanced once it has started, so an executor stays on whichever replica it
+first reached until the stream rotates. That is why it rotates —
+`FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`, 30 minutes by default. Adding a replica
+does not rebalance the executors already attached; it takes up to one rotation
+period. See <SdkLink to="operate/server/grpc">The gRPC door</SdkLink>.
+
+The webhook is the one role worth running at two replicas for availability
+rather than throughput: it sits in the pod-creation path, and its default
+`failurePolicy: Ignore` means an outage silently stops injecting sidecars rather
+than failing loudly.
+
+## Exactly one maintenance owner
+
+Retention sweeps delete the same rows on every replica that runs them, so
+exactly one process should. `FLEXIQ_MAINTENANCE` is per process and therefore
+per Deployment — a three-replica Deployment cannot enable it on one of its three
+identical pods — so the maintenance owner is a separate single-replica release
+and everything else sets it off. <SdkLink to="operate/kubernetes">Kubernetes</SdkLink>
+has the two Helm releases that expresses.
+
+Turning it off does **not** turn off dead-worker reaping or in-flight recovery.
+Those run in every replica on purpose: a job whose worker died is rescued in
+about 30 seconds instead of waiting out its full timeout, and a deployment that
+tied that to the maintenance flag would lose it everywhere but on one pod.
+
+## The numbers to scale on
+
+Both `/metrics` endpoints — the dashboard's and the gRPC door's — publish the
+same storage gauges. Four series answer four different questions:
+
+| Series | Answers |
+| --- | --- |
+| `flexiq_jobs{queue,status="pending"}` | Is there a backlog, and on which queue |
+| `flexiq_executor_slots{state="free"}` vs `{state="total"}` | Is the backlog waiting on capacity |
+| `flexiq_executors` | How many executors this replica is holding |
+| `flexiq_grpc_request_duration_seconds` | Is the *door* the slow part |
+
+Read them in that order, because they diagnose in that order:
+
+- **Pending is flat and free slots are non-zero.** The backlog is not a capacity
+  problem. Look at what the jobs are waiting on — a rate limit, a per-task
+  concurrency cap, a lock, a paused queue — before scaling anything.
+- **Pending is rising and free slots are at zero.** Add executors. This is the
+  common case, and it is the only one where adding replicas of the *worker*
+  helps.
+- **Free slots are non-zero, pending is rising, and dispatch is not keeping up.**
+  Now a second server replica is the answer — or a larger `FLEXIQ_WORKERS`, if
+  the slots are attached to one replica that is not using them.
+- **`flexiq_grpc_request_duration_seconds` is climbing while queue depth is
+  flat.** The producer door is the bottleneck, not the queue. That is a storage
+  pool or a CPU limit, and it scales with gRPC replicas rather than executors.
+
+`flexiq_executors` and `flexiq_executor_slots` are **absent**, not zero, on a
+process no executor attaches to — "none attached" and "not the attach point" are
+different answers, and a dashboard reading zero could not tell them apart. A
+recording rule that sums them across replicas has to tolerate the absence.
+
+## Autoscaling with KEDA
+
+The Helm chart installs `flexiq-server`; it does not install KEDA or create a
+scaling object. Three starting manifests live under
+[`deploy/keda/`](https://github.com/ByteVeda/flexiq/tree/master/deploy/keda) —
+<SdkLink to="operate/kubernetes">Kubernetes</SdkLink> covers which to copy, and
+<SdkLink to="modules/autoscaling/keda">KEDA autoscaling</SdkLink> covers the
+trigger fields.
+
+Two things about them that matter to a server deployment specifically:
+
+**`flexiq scaler` is an SDK command, not part of `flexiq-server`.** The binary
+has exactly one subcommand, `token`. So `scaled-object.yaml` and
+`scaled-job.yaml`, which point a `metrics-api` trigger at a `flexiq scaler`
+Service, require an SDK process to run that endpoint. A deployment whose only
+FlexiQ process is the server has no such endpoint and should use the Prometheus
+trigger instead.
+
+**The Prometheus manifest's queries name SDK metrics.** `flexiq_queue_depth` and
+`flexiq_worker_utilization` come from an SDK's Prometheus collector; the server
+publishes `flexiq_jobs` and `flexiq_executor_slots`. Scraping `flexiq-server`
+and applying that manifest unedited yields no data and therefore no scaling,
+which KEDA reports as a healthy zero. Against a server scrape, the queries are:
+
+```yaml
+triggers:
+  # Backlog on one queue.
+  - type: prometheus
+    metadata:
+      serverAddress: "http://prometheus:9090"
+      metricName: flexiq_pending
+      query: sum(flexiq_jobs{queue="default",status="pending"})
+      threshold: "10"
+  # Capacity: scale up as free slots approach zero.
+  - type: prometheus
+    metadata:
+      serverAddress: "http://prometheus:9090"
+      metricName: flexiq_free_slots
+      query: sum(flexiq_executor_slots{state="free"})
+      threshold: "1"
+```
+
+Scaling on the **executor** Deployment, not the server one, is almost always
+what you want: the server is the thing holding the slots, and the slots are what
+the backlog is waiting for.
+
+<Callout type="info" title="Scale to zero has a floor">
+The scheduler starts on the first executor attach, so a server with no executors
+is alive and idle rather than busy — that part scales to zero cleanly. What does
+not is the maintenance owner: retention, the dead-worker reaper and periodic
+task scheduling all need a process running. Keep that one replica up.
+</Callout>
+
+A real KEDA external scaler — `IsActive`, `GetMetricSpec`, `GetMetrics` over
+gRPC, with push-based wake-up instead of a 15-second poll — is tracked as
+[#850](https://github.com/ByteVeda/flexiq/issues/850).
+
+## The storage ceiling
+
+Every replica shares one database, so past a certain point the database is what
+you are scaling, not the server.
+
+- **SQLite does not replicate.** One writer, one file, no network. The Helm
+  chart refuses a SQLite DSN outright, because replicas cannot share a pod-local
+  file safely. Its throughput limits are covered under
+  <SdkLink to="operate/deployment">Deployment</SdkLink>.
+- **Postgres** is the default answer for a replicated deployment. Watch the
+  connection count: every replica opens a pool, and the pools multiply by the
+  replica count long before the query load becomes interesting.
+- **Redis** is single-threaded for command execution, so the ceiling is
+  commands per second rather than connections.
+
+<SdkLink to="operate/backends">Backends</SdkLink> covers choosing between them
+and what each one costs.

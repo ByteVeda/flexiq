@@ -1,69 +1,105 @@
-# Security alert cleanup — `fix/security-alerts`
+# An operate section for flexiq-server — `docs/server-operate-section`
 
-Branch off `master` at `e3264d4f`. Closes the open Dependabot + CodeQL alerts:
-16 Dependabot, 49 CodeQL.
+Closes #826. Branch off `master` at `8bce1713`.
 
-## Findings after verifying against library sources
+## What the issue asked for, against what already exists
 
-Both scanner headlines turned out to be weaker than they read, and the thing
-worth fixing was not flagged as severe by either.
+The issue was filed on 2026-09-06 against a tree that had already moved. Verified
+before planning:
 
-- [x] **CVE-2026-25537 (`jsonwebtoken` < 10.3.0) is NOT exploitable here.** The
-      advisory is `exp`/`nbf` type confusion: a claim sent with the wrong JSON
-      type parses to `FailedToParse`, which `validate()` treats as absent. The
-      gate is `required_spec_claims` — and `Validation::new` seeds it with
-      `exp`, which `oidc.rs` never overrode. Bumped anyway: real CVE, runtime
-      dependency, and an alert nobody can action rots.
-- [x] **No OIDC algorithm-confusion bypass either.** `jsonwebtoken` 9.3.1's
-      `verify_signature` already rejected `key.family != alg.family()`, so an
-      `HS256` token forged against a published RSA JWK could not verify. But
-      the algorithm still came out of the token's own header, which is one
-      library refactor away from mattering — now pinned to the key.
-- [x] **31/31 `rust/hard-coded-cryptographic-value` (critical) are test-only.**
-      All sit past the `#[cfg(test)]` line of their file, or in `tests/`.
-- [x] **`rust/cleartext-logging` ×4 and `rust/access-invalid-pointer` ×4 are
-      false positives.** The former log a username or a `job_id`; the latter all
-      land on a `#[napi] pub struct` line, i.e. napi-rs macro output.
-- [x] **Real: log injection ×4** — 3 in `oauth/mod.rs`, 1 in `scaler.py`.
+- `shared/operate/` has **three** pages, not two — #853 added `kubernetes.mdx`,
+  which already covers the chart, the four listener roles, maintenance ownership
+  across replicas, sidecar injection, probes and the KEDA manifests.
+- `shared/operate/deployment.mdx` already carries ~540 lines of gRPC door, token
+  lifecycle, scopes, expiry, revocation, the JSON facade and the TLS refusal —
+  landed by #721 and #803, both after the issue's premise was written.
 
-## Tasks
+So the gap is not that the content does not exist. It is that the server's
+operator content is buried in a 2378-line page whose first half is `myapp.py`,
+systemd units and SQLite file permissions, and that the crate README is still
+the only place naming `FLEXIQ_WORKERS`, `FLEXIQ_AUTO_MIGRATE` or what
+`FLEXIQ_MAINTENANCE=off` actually turns off. Two of the five bullets — scaling a
+server deployment, and backup/restore per backend — have no page at all.
 
-- [x] 1. `jsonwebtoken` 9 → 10.3, `rust_crypto` provider (pure Rust, so the
-      multi-arch server image needs no C toolchain). `use_pem` moved to
-      dev-dependencies — the stub issuer signs from PEM, the binary never does.
-- [x] 2. Pin `id_token` verification to the key's algorithm, require
-      `exp`/`iss`/`aud`/`sub`, validate `nbf`. Unit tests for the JWK→algorithm
-      rules, plus an end-to-end forgery case in `oidc_login.rs`.
-- [x] 3. `log_safe::escape` + the four OAuth log sites; the two that logged a
-      request-supplied `slot` now log the config-owned `provider.slot`.
-- [x] 4. `_log_safe` in `scaler.py` + 4 tests in `test_keda.py`.
-- [x] 5. Lockfile bumps: `fast-uri`, `postcss`, `browserslist`,
-      `brace-expansion`, `js-yaml` in range; `toml` and `esbuild` needed
-      `pnpm.overrides` (both cross a major/0.x boundary).
-- [x] 6. CodeQL `paths-ignore` for test trees. The 29 in-`src` `#[cfg(test)]`
-      alerts cannot be matched by path and need dismissing alert-by-alert.
-- [x] 7. Verify.
-- [ ] 8. Open the PR.
+## Shape
 
-One compile job at a time — 13 GB RAM, no concurrent cargo processes.
+A `Server` group under `Operate`, plus one top-level `backup` page. The group is
+what #825 lifts into the fourth server tier later; `backup` stays where it is,
+because an embedded SQLite reader needs it as much as a server operator does.
+
+- [ ] `operate/server/index` — the four roles and their four listeners, the full
+      environment table, which roles are cargo-gated, what `FLEXIQ_MAINTENANCE`
+      does and does not disable. Absorbs the operator half of the crate README.
+- [ ] `operate/server/tokens` — mint, list, rotate, revoke; `produce` vs
+      `execute`; expiry warnings. Moved out of `deployment.mdx`.
+- [ ] `operate/server/grpc` — bind, the namespace requirement, reflection,
+      `raw`/`structured`, the JSON facade, tuning, `/metrics`, the executor
+      door, and the TLS gap (#838). Moved out of `deployment.mdx`.
+- [ ] `operate/server/scaling` — what to scale on, per role; why the maintenance
+      owner is a separate release; that `flexiq scaler` is an SDK command and
+      not part of `flexiq-server` (#850).
+- [ ] `operate/backup` — SQLite, Postgres and Redis; and what a restore does to
+      in-flight leases and durable-step memos.
+
+## Gates this touches
+
+- [ ] `section-skeleton.mjs` — a page the skeleton does not list is an error even
+      when the MDX exists, so `server`, `backup` and the new group land there
+      first, for all three trees at once.
+- [ ] `pnpm check:parity` — section shape, internal links (no link may point at a
+      REDIRECTS key), CodeTabs SDK coverage on every shared page.
+- [ ] `node scripts/version.mjs --check` — `deployment.mdx` is in the hardcoded
+      SNIPPETS list; any new page pinning an image tag joins it.
+- [ ] `pnpm typecheck`, `pnpm lint`, `pnpm check:search`, `pnpm build`
+      (`NODE_OPTIONS=--max-old-space-size=8192`).
+
+No page is deleted, so no REDIRECTS entry is owed. Five inbound `#anchor` links
+in `modules/{server,clients}.mdx` and `python/operate/backends.mdx` do move.
+
+## Commits
+
+Two, not three. The backup page was going to be its own commit, but it shares
+nine files with the server section — the skeleton, three `operate/meta.json`,
+three `operate/index.mdx`, `deployment.mdx` and `server/index.mdx` — and every
+one of those edits is additive to the same list. Splitting them would produce
+two commits that each half-configure the same nav, which is the opposite of what
+one self-contained change per commit is for. The README repointing does touch
+disjoint files, so it is its own.
+
+1. `docs: add an operate section for flexiq-server`
+2. `docs: point the server README at the docs site`
 
 ## Review
 
-Verification run, all green:
+Done. `shared/operate/` went from 3 pages to 8: a `server` group (index, tokens,
+grpc, scaling) plus `backup`, and `deployment.mdx` lost 598 lines to the move.
 
-| Gate | Result |
-|------|--------|
-| `cargo test -p flexiq-server` | 350 passed, 20 binaries, exit 0 |
-| `cargo clippy -p flexiq-server --all-targets -- -D warnings` | clean |
-| `cargo fmt --all --check` | clean |
-| `pytest tests/` (python) | see below |
-| `ruff check` + `ruff format` (flexiq/ + tests/) | 346 files clean |
-| `mypy flexiq/ tests/` | 346 files, no issues |
-| node `build:ts` + `vitest` | 779 passed, 6 skipped |
-| node `biome ci` + `tsc --noEmit` | clean |
-| dashboard `pnpm ci` | 161 passed + build |
-| docs `typecheck` + `build` | clean, prerender OK |
+Four things the move corrected rather than relocated:
 
-The npm overrides are the part worth re-reading at review time: `toml@4.3.0`
-and `esbuild@0.28.2` are both forced past a boundary their parents did not ask
-for, so the builds passing is the only thing standing behind them.
+- **`FLEXIQ_MAINTENANCE=off` does not disable "rescue".** `kubernetes.mdx` said
+  it did. `runtime/scheduler.rs` only empties the retention config; dead-worker
+  reaping and `recover_orphaned_jobs` stay on in every process, deliberately —
+  tying in-flight recovery to the maintenance flag would lose it everywhere but
+  on one pod. Fixed in `kubernetes.mdx` and stated in `server/index.mdx`.
+- **`deploy/keda/scaled-object-prometheus.yaml` does not work against the
+  server.** Its queries name `flexiq_queue_depth` and `flexiq_worker_utilization`,
+  which come from an SDK's Prometheus collector; `crates/flexiq-server/src/metrics.rs`
+  publishes `flexiq_jobs{queue,status}` and `flexiq_executor_slots{state}`.
+  Applied unedited it yields no data, which KEDA reports as a healthy zero.
+  `server/scaling.mdx` gives the queries that do match.
+- **`flexiq scaler` is not part of `flexiq-server`.** The binary has exactly one
+  subcommand, `token`, so the two `metrics-api` manifests need an SDK process
+  the deployment may not have. Said plainly on the scaling page.
+- **A restore brings revoked tokens back.** Tokens live in the settings KV, which
+  is what makes revocation take effect with no restart — and what makes a restore
+  predating one restore a working credential. `backup.mdx` treats a restore as a
+  credential event.
+
+Verified: `pnpm check:parity` (15 sections × 3 SDKs, 1810 links), `check:search`,
+`check:diagrams`, `lint`, `typecheck`, `build` (all four new pages prerender in
+all three trees), and `node scripts/version.mjs --check` with the new page added
+to SNIPPETS for its pinned image tag.
+
+Left for #825, deliberately: the `operate/server` group is where the server tier
+will lift from, not a substitute for it. Nothing here claims to be the fourth
+peer beside the three SDKs.

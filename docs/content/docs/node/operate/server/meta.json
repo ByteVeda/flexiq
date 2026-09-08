@@ -1,0 +1,9 @@
+{
+  "title": "Server",
+  "pages": [
+    "index",
+    "tokens",
+    "grpc",
+    "scaling"
+  ]
+}

@@ -115,6 +115,7 @@ const SNIPPETS = [
   "examples/polyglot/java-worker/build.gradle.kts",
   "docker/README.md",
   "docs/content/docs/shared/operate/deployment.mdx",
+  "docs/content/docs/shared/operate/server/index.mdx",
 ];
 
 // Checked, never written: release notes are authored by hand, but shipping a

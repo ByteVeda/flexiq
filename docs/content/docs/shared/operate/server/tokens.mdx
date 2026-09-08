@@ -1,0 +1,198 @@
+---
+title: API tokens
+description: "Mint, scope, rotate and revoke the scoped API tokens the gRPC door requires — from a shell or from the dashboard."
+---
+
+The gRPC door authenticates every caller with a **scoped API token**, presented
+as an `authorization: Bearer <token>` metadata entry or HTTP header. Tokens live
+in the database rather than in the environment, which is what makes each of the
+next three sentences true: one can be revoked without touching any other, one
+can be granted less than the whole surface, and one carries a record of when it
+was last used.
+
+<Callout type="warn" title="There is no fallback credential">
+An unprovisioned door serves **nothing**. Loopback and Unix-socket binds are not
+exempt: a listener with no token minted refuses every call, because a door with
+no credential configured is a misconfiguration rather than a permission grant.
+Earlier releases accepted a `FLEXIQ_GRPC_TOKEN` shared secret and let a loopback
+bind through anonymously; both are gone, and the variable is refused at boot.
+</Callout>
+
+## Minting the first one
+
+Mint it wherever the server can reach its database. No listener has to be
+running — provisioning a credential is not a role, so the command configures
+itself from `FLEXIQ_DSN`, `FLEXIQ_BACKEND` and `FLEXIQ_NAMESPACE` alone:
+
+```bash
+export FLEXIQ_DSN=postgres://user:pass@host/db
+export FLEXIQ_NAMESPACE=prod
+
+flexiq-server token create --name my-producer --scope produce
+```
+
+It prints the token to stdout, once:
+
+```text
+fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
+```
+
+That is the only time it is shown. What the server stores is a SHA-256 digest of
+the secret half, so the token is not recoverable from the row, from a database
+dump, or by anyone with admin access. If it is lost, revoke it and mint another.
+
+The token is the *only* thing on stdout — the confirmation, which carries the
+id, goes to stderr — so a command substitution captures the credential and
+nothing else:
+
+```bash
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
+```
+
+Point it at the same database the server reads. A token minted against another
+one is minted somewhere nothing checks it, and the door it was meant for will
+refuse every call made with it.
+
+On Kubernetes, the same command through the running release:
+
+```bash
+kubectl exec deploy/flexiq-flexiq-server -- \
+  flexiq-server token create --name my-producer --scope produce
+```
+
+The dashboard does the same three things under **Configuration → gRPC tokens**,
+behind its existing admin role — minting is an operator action, and a producer
+credential must never be able to mint itself a wider one.
+
+## Scopes
+
+A token grants one scope per proto package, and the two are deliberately not a
+hierarchy:
+
+| Scope | Package | What it opens |
+| --- | --- | --- |
+| `produce` | `flexiq.v1` | Submit, read and cancel work |
+| `execute` | `flexiq.executor.v1` | Claim work and report on it |
+
+A producer and an executor need opposite permissions, so **a token that can poll
+for work cannot enqueue it**, and a `produce` token asked for an executor RPC is
+refused with `PERMISSION_DENIED` and the reason `SCOPE_DENIED`, carrying the
+scope it lacked in the error metadata. Repeat `--scope` to grant both, and grant
+both only to something that genuinely does both.
+
+Neither scope is an admin surface. Pausing queues, settings, dead-letter
+operations and webhook secrets stay behind the dashboard's session and role
+check, so a token that leaks costs you an enqueue path rather than a tenant.
+
+## One namespace, fixed at mint time
+
+A token is bound to the namespace the minting process itself serves, and it is
+refused by a listener serving another. There is no namespace field on the wire
+in any RPC, in either package: the namespace comes from the credential and
+nowhere else.
+
+That is why `flexiq-server token create` reads `FLEXIQ_NAMESPACE` and takes no
+`--namespace` argument. A credential for a namespace this deployment does not
+schedule would accept enqueues that nothing ever dequeues — a success response,
+and no work.
+
+## Listing
+
+```bash
+flexiq-server token list
+```
+
+```text
+ID                 NAME                     STATUS     NAMESPACE        EXPIRES    SCOPES
+9f2c1ab74e05d366   my-producer              active     prod             87d        produce
+b1d0e7c4a3f29855   ci-executor              active     prod             12d        execute
+```
+
+The id is public — it is what a listing shows, what `revoke` takes, and the part
+of the token before the dot — so it is safe in a log or a ticket. `STATUS` is
+`active`, `expired` or `revoked`; a revoked row is kept, because it is the
+record that the credential existed, who minted it and when it was last used.
+
+`--all-namespaces` widens the listing past the one this process serves. Without
+it, a token belonging to another namespace reads as absent rather than as a
+refusal — the same answer `revoke` gives, so neither command can be used to
+probe for the existence of another tenant's credentials.
+
+## Expiry
+
+Every token expires. The default is 90 days and the maximum is 365 — a
+credential with no end date is a permanent one with extra steps — and a request
+for longer is refused rather than quietly clamped:
+
+```bash
+flexiq-server token create --name nightly-batch --scope produce --expires-in-days 30
+```
+
+Once a token is inside 30, 20 and 10 days of expiry, the server logs a warning
+the first time it is *used* at each threshold. Warning on use rather than on a
+timer means the credentials that get a reminder are the ones actually carrying
+traffic, and one that expires unnoticed was one nothing was calling with.
+
+## Rotating
+
+There is no rotate command, because rotation is two commands and an interval you
+choose:
+
+```bash
+# 1. Mint the replacement, alongside the one still in use.
+flexiq-server token create --name my-producer-2026-09 --scope produce
+
+# 2. Roll your clients onto it. Both work for as long as this takes.
+# 3. Revoke the old one.
+flexiq-server token revoke 9f2c1ab74e05d366
+```
+
+Nothing restarts at any point. The door reads the row per call rather than
+caching a verdict, so both a new token and a revocation take effect on the next
+call, everywhere, including on replicas you did not touch.
+
+**Check `last_used_at` before step 3, not after.** The dashboard's token table
+has the column; it is the only thing that tells you whether a client you forgot
+is still presenting the credential you are about to revoke. It is written at
+most once per token per minute, so treat it as "used recently", not as a precise
+timestamp.
+
+<Callout type="info" title="Rotating this credential needs no rollout">
+Unlike the attach token or the dashboard admin password, a gRPC token is not a
+chart value and not an environment variable. A `secretKeyRef` is resolved into a
+container's environment once at pod start, so rotating one needs a restart; a
+token is read from the database on every call, so it does not.
+</Callout>
+
+## Revoking
+
+```bash
+flexiq-server token revoke 9f2c1ab74e05d366
+```
+
+**A revoked token fails on its next call, with no restart.** A revocation from
+the dashboard, from another pod, or from a shell takes effect immediately
+everywhere, because there is no cache to invalidate — a cached allow would be a
+revocation that never takes effect.
+
+## What a refusal tells a caller
+
+Nothing it does not already know. A missing token, a wrong one, a well-formed
+token for an id that was never minted, one under the wrong scheme, an expired
+one, a revoked one, one minted for another namespace, and a call to an RPC that
+does not exist all answer `UNAUTHENTICATED` with the reason `UNAUTHENTICATED`
+and the same message.
+
+That is deliberate on both counts: a distinguishable answer tells a client
+guessing tokens which guess was closer, and a path answered before
+authentication tells it which services the build carries. The two
+`grpc.health.v1` RPCs are the only exception — see
+<SdkLink to="operate/server/grpc">The gRPC door</SdkLink> for why a probe cannot
+carry a credential.
+
+<Callout type="warn" title="A bearer token is one factor">
+It proves the peer holds a string. It does not encrypt the connection, and
+`flexiq-server` terminates no TLS on either door — so on anything but a loopback
+bind, put a sidecar proxy or a service mesh in front of it. Tracking:
+[#838](https://github.com/ByteVeda/flexiq/issues/838).
+</Callout>

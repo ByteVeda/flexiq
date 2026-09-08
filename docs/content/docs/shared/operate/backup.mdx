@@ -1,0 +1,212 @@
+---
+title: Backup and restore
+description: "Taking a consistent backup on each backend, and what restoring one does to jobs that were in flight, to durable steps, and to revoked credentials."
+---
+
+A FlexiQ queue is entirely in its database. There is no sidecar state, no local
+spool and nothing on a worker's disk that a restore has to match — so backing
+FlexiQ up is backing up one database, and the interesting half of this page is
+not the backup, it is what the restore does.
+
+<Callout type="warn" title="A restore rewinds the queue, and work is replayed">
+Every job that completed after the backup point comes back as unfinished work
+and runs again. FlexiQ's at-least-once guarantee is about *delivery*, not about
+recovery: a restore turns "ran once" into "ran twice" for the whole window
+between the backup and the failure. Read
+[What a restore does to work in flight](#what-a-restore-does-to-work-in-flight)
+before you need it.
+</Callout>
+
+## SQLite
+
+FlexiQ opens SQLite in WAL mode, so committed data may be in `app.db-wal`
+rather than in `app.db` at any instant.
+
+**Do not copy the `.db` file while anything is running.** A copy taken
+mid-transaction, or one that leaves the WAL behind, is a corrupt backup that
+looks like a file. Both of these are safe online, and both produce a single
+self-contained file:
+
+```bash
+# Option 1: the backup API, through the CLI. Copies pages under a read lock.
+sqlite3 /var/lib/myapp/flexiq.db ".backup /backups/flexiq-$(date +%Y%m%d).db"
+
+# Option 2: VACUUM INTO. Same guarantee, and it compacts as it goes.
+sqlite3 /var/lib/myapp/flexiq.db "VACUUM INTO '/backups/flexiq-$(date +%Y%m%d).db';"
+```
+
+To restore, stop every process holding the database first — a worker, the
+server, the dashboard, an open `sqlite3` shell — then put the file back:
+
+```bash
+systemctl stop myapp-worker
+
+# The siblings belong to the database being replaced, not to the backup.
+rm -f /var/lib/myapp/flexiq.db-wal /var/lib/myapp/flexiq.db-shm
+cp /backups/flexiq-20260908.db /var/lib/myapp/flexiq.db
+
+systemctl start myapp-worker
+```
+
+Leaving a stale `-wal` beside a restored `.db` is the one way to turn a good
+backup into a bad database: SQLite will try to replay a write-ahead log that
+belongs to a different file.
+
+## Postgres
+
+FlexiQ creates its tables in the `flexiq` schema, so a queue backup is a schema
+dump and does not have to drag the rest of your application's data with it:
+
+```bash
+# Dump the flexiq schema
+pg_dump -h localhost -U flexiq -d myapp -n flexiq > backup.sql
+
+# Restore
+psql -h localhost -U flexiq -d myapp < backup.sql
+```
+
+Restoring over a schema that still exists layers one dump on top of another
+database's rows. Drop it first, or dump with `--clean --if-exists` so the
+restore does it for you:
+
+```bash
+psql -h localhost -U flexiq -d myapp -c 'DROP SCHEMA flexiq CASCADE'
+psql -h localhost -U flexiq -d myapp < backup.sql
+```
+
+A managed provider's point-in-time recovery is the better tool where it exists:
+it recovers the whole database to a chosen instant, which is exactly the
+granularity the "work is replayed" problem below is measured in.
+
+## Redis
+
+Redis persistence is **per instance**, not per key range. An RDB snapshot or an
+AOF replay restores everything the instance held, so a restore rolls your
+application's other Redis keys back to the same instant it rolls the queue back
+to.
+
+<Callout type="info" title="Give FlexiQ its own Redis instance or database">
+Every key FlexiQ writes is prefixed `flexiq:`, so it is easy to *see* which keys
+are the queue's — and impossible to restore only those, because Redis has no
+partial restore. A dedicated instance, or at least a dedicated logical database,
+is what makes "restore the queue" a thing you can do without a decision about
+everything else living there.
+</Callout>
+
+```bash
+# Snapshot now, without blocking the server.
+redis-cli BGSAVE
+
+# Or pull a copy from a client, which also works against a managed provider.
+redis-cli --rdb /backups/flexiq-$(date +%Y%m%d).rdb
+```
+
+To restore, stop Redis, put the RDB in place of `dump.rdb` in its data
+directory, and start it. With `appendonly yes` the AOF wins over the RDB on
+startup, so a restore also means removing or replacing the AOF, not just the
+snapshot.
+
+Know which durability setting you are running before you size your recovery
+window. The default `appendfsync everysec` can lose up to a second of
+acknowledged writes on an unclean stop — jobs that were enqueued successfully
+and are simply not there afterwards. There is no FlexiQ-side record of them: the
+enqueue *was* the write.
+
+## What a restore does to work in flight
+
+A restore returns the database to the instant the backup was taken. Four things
+follow, in the order you will meet them.
+
+### Completed work runs again
+
+Anything that finished after the backup point is restored as unfinished. The
+scheduler has no way to know it already ran — the record that it ran is exactly
+what was rolled back — so it dispatches it again.
+
+Where a second run is not acceptable, that is what `unique_key` and
+`idempotent=True` are for, and both are only as good as their window: a
+`unique_key` dedupes against the *active* job, so it does not stop a job that
+already completed from being enqueued again. Genuine protection against replay
+lives in the task body, not in the queue.
+
+### Jobs that were `Running` are rescued, not stuck
+
+A job that was executing at the backup point comes back `Running`, with its
+execution claim, owned by a worker that no longer exists — or that restarted
+under a new id. Nothing is holding it, and nothing has to be restarted to
+notice:
+
+1. The maintenance sweep lists live workers, meaning those with a heartbeat
+   inside the last **30 seconds**.
+2. Any `Running` job whose claim owner is not in that list is an orphan.
+3. The sweep reclaims the claim atomically — exactly one process wins, so
+   concurrent servers cannot double-retry it — and routes the job through the
+   normal retry path, with `worker … died; recovering in-flight job` as the
+   error.
+
+So the recovery window is the heartbeat threshold plus one sweep, not the job's
+full timeout. **This does not depend on `FLEXIQ_MAINTENANCE`** — reaping and
+recovery run in every process, and only the retention sweeps are the maintenance
+owner's job. See <SdkLink to="operate/server">Server</SdkLink>.
+
+Two edges worth knowing. A worker that comes back with the **same** id and a
+fresh heartbeat is *live*, so its restored claims are not orphans; those jobs
+wait out their full `timeout_ms` and are then reaped as timed out. And execution
+claims older than an hour are purged outright, so a backup older than that
+restores claims that are cleaned up rather than reclaimed.
+
+Distributed locks need no attention: a restored lease has an expiry in the past
+and is reaped on the next sweep.
+
+### Durable step memos are the sharpest edge
+
+If your tasks use <SdkLink to="modules/steps">durable steps</SdkLink>, the
+`job_steps` rows *are* the record of which side effects already happened. A
+restore that predates a step's memo restores a job that will re-run that step —
+and a step that charged a card charges it again.
+
+That makes your effective recovery point objective, for anything using steps,
+the window in which a step may re-run: back up at least as often as your
+longest-running job takes to finish, or accept that a restore can repeat one
+step's worth of external effect per job in flight.
+
+### Revoked credentials come back
+
+API tokens live in the database, which is what makes revoking one take effect
+everywhere with no restart. It also means a restore that predates a revocation
+**restores the revoked token in working order**.
+
+Re-revoke after any restore, before the door is reachable:
+
+```bash
+flexiq-server token list
+flexiq-server token revoke <id>
+```
+
+The same applies to dashboard users and sessions, which are stored the same way:
+a removed user comes back, and a password changed after the backup point reverts
+to the old one. Treat a restore as a credential event, not just a data event.
+<SdkLink to="operate/server/tokens">API tokens</SdkLink> has the rest of the
+lifecycle.
+
+## Restoring into a newer version
+
+Opening a restored database with a newer server applies any pending schema
+changes on the spot, as long as `FLEXIQ_AUTO_MIGRATE` is on — which it is by
+default. With it off, the schema has to be migrated out of band before the
+server starts, and it refuses to serve against an unmigrated database rather
+than half-working.
+
+Going the other way — restoring a *newer* dump under an older binary — is not
+supported. Migrations move forward only.
+
+## A checklist
+
+- [ ] The backup is taken with a tool that produces a consistent copy, not `cp`.
+- [ ] It is restored somewhere, on a schedule. A backup nobody has restored is a
+      hypothesis.
+- [ ] The restore runbook names the processes to stop, and stops them.
+- [ ] Revoked tokens and removed dashboard users are re-revoked and re-removed
+      afterwards.
+- [ ] The interval between backups is smaller than the replay you can afford —
+      measured against your longest job, not your average one.
