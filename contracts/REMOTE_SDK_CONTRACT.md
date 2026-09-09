@@ -104,9 +104,14 @@ one the server implements. **The repository** has the same tree at
 A client that passes has established exactly this, and **SHOULD NOT** be
 described as having established more:
 
-1. Its encoder and decoder agree with every other FlexiQ runtime about bytes.
-2. Its `auto:` idempotency keys will match theirs, because that key is a hash
-   over these bytes.
+1. Its encoder and decoder agree with every other FlexiQ runtime about the bytes
+   this contract pins.
+2. Its `auto:` idempotency keys will match theirs **for those payloads**, that
+   key being a hash over the same bytes. **A float argument is the exception**:
+   its width is not pinned, so two conforming clients can derive different keys
+   for the same call and each enqueue its own active job. A client whose
+   payloads carry floats **SHOULD** set `unique_key` rather than rely on
+   `auto:`.
 3. Nothing about its RPC behaviour. Retry discipline, error branching and
    capability honesty are not vector-testable, and they are the rest of this
    document.
