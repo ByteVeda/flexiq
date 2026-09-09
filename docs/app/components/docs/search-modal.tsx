@@ -73,11 +73,11 @@ function groupBySection(hits: SearchHit[]): Group[] {
 export function SearchModal({
   open,
   onClose,
-  tier,
+  tiers,
 }: {
   open: boolean;
   onClose: () => void;
-  tier?: Tier;
+  tiers?: readonly Tier[];
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -86,7 +86,7 @@ export function SearchModal({
 
   // Browsing is synchronous (it reads the manifest already in memory); a real
   // query awaits the code-split full-text index, so results arrive as state.
-  const [hits, setHits] = useState<SearchHit[]>(() => browseDocs(tier));
+  const [hits, setHits] = useState<SearchHit[]>(() => browseDocs(tiers));
   const [pending, setPending] = useState(false);
   const groups = useMemo(() => groupBySection(hits), [hits]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -101,12 +101,12 @@ export function SearchModal({
   useEffect(() => {
     if (!query.trim()) {
       setPending(false);
-      setHits(browseDocs(tier));
+      setHits(browseDocs(tiers));
       return;
     }
     let current = true;
     setPending(true);
-    searchDocs(query, tier).then(
+    searchDocs(query, tiers).then(
       (results) => {
         if (current) {
           setHits(results);
@@ -124,7 +124,7 @@ export function SearchModal({
     return () => {
       current = false;
     };
-  }, [query, tier]);
+  }, [query, tiers]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection as results change
   useEffect(() => {

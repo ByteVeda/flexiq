@@ -285,3 +285,33 @@ pair resized whenever a different scenario was picked.
       lines and that spread was most of the resizing. `lh` is the block's own
       line box, so it follows the font rather than restating it; confirmed it
       survives Lightning CSS into the shipped bundle
+
+---
+
+# Follow-up 6 — the landing search reaches the server tier
+
+Tier scoping is symmetric, so an SDK tier's palette does not offer `/server/*`.
+Correct on a docs page, where the sidebar is the contract — wrong at `/`, which
+has no sidebar, and where a reader has not picked a door at all. The one door
+that needs no SDK is exactly the one they cannot know to search for.
+
+- [x] the scope parameter becomes `tiers: readonly Tier[]`, `tiers[0]` the one a
+      fan-out page mounts under, so a shared hit still lands in the language the
+      hero is showing
+- [x] `landingTiers(tier)` = `[...new Set([tier, SERVER_TIER])]` — no branch,
+      and it collapses to one entry when the hero is already on the server tab,
+      which keeps "server selected → server content only" true
+- [x] docs pages pass `[tier]` and are unchanged
+- [x] both callers memoise the array: it is a dependency of the palette's query
+      effect, and a fresh array per render would re-run it every render
+
+## Verify
+
+- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
+- [x] replayed the predicate over all prerendered mounts:
+
+```
+docs page   python 246 · node 201 · java 199 · server 30      (unchanged)
+landing     hero=python 255 = 225 python + 9 server + 21 neutral
+            hero=node   210 · hero=java 208 · hero=server 30  (no double count)
+```
