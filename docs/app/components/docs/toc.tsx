@@ -93,7 +93,9 @@ export function Toc() {
 
   return (
     <aside className="toc">
-      <h4>On this page</h4>
+      {/* h2, not h4: this sits after the article's headings in document order,
+          so anything below the last content level reads as a skipped level. */}
+      <h2>On this page</h2>
       <div id="toc-list">
         {headings.map((h) => (
           <a
