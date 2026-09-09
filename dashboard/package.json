@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.11.0",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,6 +18,7 @@
     "format:check": "biome format src/",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lighthouse": "lhci autorun",
     "ci": "biome ci src/ && pnpm run typecheck && vitest run && vite build"
   },
   "dependencies": {
@@ -47,6 +51,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
+    "@lhci/cli": "^0.15.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/router-cli": "^1.167.33",
     "@tanstack/router-plugin": "^1.168.35",

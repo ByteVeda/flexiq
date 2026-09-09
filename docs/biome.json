@@ -12,6 +12,7 @@
       "!node_modules",
       "!build",
       "!.react-router",
+      "!.lighthouseci",
       "!content",
       "!public/demos"
     ]
