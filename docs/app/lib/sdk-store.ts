@@ -1,5 +1,7 @@
-// Global active-SDK store. Single source of truth shared by the no-flash boot
-// script (root.tsx), the sidebar switcher, inline `<CodeTabs>`, and `<SdkOnly>`.
+// Global active-SDK store, read by the sidebar switcher, inline `<CodeTabs>`
+// and `<SdkOnly>`. The no-flash boot script in root.tsx cannot import from
+// here — it runs before the bundle — so it carries its own inline copy of the
+// `?sdk=` > localStorage > default precedence. Change one, change both.
 // Kept as a tiny external store so `useSyncExternalStore` can hand React an
 // explicit server snapshot — the SSG-safe way to read a browser-only value
 // without a hydration mismatch. The live value lives on `<html data-sdk>`; CSS
@@ -13,27 +15,6 @@ const KEY = "flexiq-sdk";
 const DEFAULT = DEFAULT_SDK;
 
 const listeners = new Set<() => void>();
-
-/** Resolve the active SDK: `?sdk=` query > localStorage > default. Used by the
- *  no-flash bootstrap in root.tsx and as the first client read. */
-export function readSdk(): Sdk {
-  if (typeof document === "undefined") {
-    return DEFAULT;
-  }
-  try {
-    const param = new URLSearchParams(window.location.search).get("sdk");
-    if (isSdk(param)) {
-      return param;
-    }
-    const stored = localStorage.getItem(KEY);
-    if (isSdk(stored)) {
-      return stored;
-    }
-  } catch {
-    // ignore storage/URL access failures (private mode etc.)
-  }
-  return DEFAULT;
-}
 
 function currentSdk(): Sdk {
   const attr = document.documentElement.dataset.sdk;
