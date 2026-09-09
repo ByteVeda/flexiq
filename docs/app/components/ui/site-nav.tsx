@@ -2,13 +2,14 @@ import { Check, ChevronDown, Menu, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { useActiveTier, useSdk } from "@/hooks";
+import { useActiveTier } from "@/hooks";
 import {
   isSdk,
   SERVER_TIER,
   type Tier,
   tierForPath,
   tierLabels,
+  tierStore,
   tierSwitchTarget,
 } from "@/lib";
 
@@ -87,13 +88,12 @@ const TIER_ICONS: Record<Tier, React.ReactNode> = {
   ),
 };
 
-/** Global tier dropdown ("Docs for"). Picking a language sets the shared store
- *  (which flips inline variants and the docs nav); picking the server tier only
- *  navigates, because that value has no meaning to `<html data-sdk>` and would
- *  blank every `<SdkOnly>` on the page. A custom listbox so each option can
- *  carry its glyph. */
+/** Global tier dropdown ("Docs for"). The choice goes to `tierStore`, which
+ *  routes a language to the SDK store (flipping inline variants and the docs
+ *  nav) and holds anything else itself — `<html data-sdk>` has no meaning for a
+ *  tier that is not a language and would blank every `<SdkOnly>` on the page. A
+ *  custom listbox so each option can carry its glyph. */
 function TierSelect() {
-  const { setSdk } = useSdk();
   const tier = useActiveTier();
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -128,9 +128,7 @@ function TierSelect() {
     if (target === tier) {
       return;
     }
-    if (isSdk(target)) {
-      setSdk(target);
-    }
+    tierStore.set(target);
     // A page in no tier (`/architecture/*`, `/about/*`) stays put when the
     // choice is a language — the page is the same one either way. The server
     // tier is the exception: it is a destination, not a variant of this page.
