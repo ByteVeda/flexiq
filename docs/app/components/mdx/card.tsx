@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { useSdk } from "@/hooks";
+import { useActiveSdk } from "@/hooks";
 
 /** Design-matched replacement for `fumadocs-ui/components/card` (aliased in vite). */
 export function Cards({ children }: { children: ReactNode }) {
@@ -26,7 +26,10 @@ export function Card({
   description?: ReactNode;
   children?: ReactNode;
 }) {
-  const { sdk } = useSdk();
+  // useActiveSdk, not useSdk: on a /python/* URL the store can still hold the
+  // default until an effect syncs it, and a `to=` card would point at the
+  // wrong SDK's mount. Every other SDK-relative link resolves the same way.
+  const sdk = useActiveSdk();
   const body = (
     <>
       <span className="nt">
