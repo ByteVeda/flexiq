@@ -2,7 +2,7 @@
 // sections this file used to feed live on flexiq.byteveda.org now; what is left
 // is the snippets the root still shows.
 
-import type { Tier } from "./tier-registry";
+import { SERVER_TIER, type Tier } from "./tier-registry";
 
 /** A worker-output line: glyph + text, optionally a result value + timing. */
 export interface OutLine {
@@ -26,8 +26,11 @@ export interface HeroPane {
    *  `hero.tsx` for why the tab strip is not simply the SDK switcher. */
   tier: Tier;
   /** Highlighter dialect for the snippet. */
-  lang: "py" | "ts" | "java";
+  lang: "py" | "ts" | "java" | "sh";
   filename: string;
+  /** Right-hand tag in the terminal title bar. Per pane because not every tab
+   *  starts a worker — the server one starts a door and nothing else. */
+  runtag: string;
   code: string;
   output: OutLine[];
   /** Both hrefs are absolute and come off the pane rather than the active SDK:
@@ -40,11 +43,24 @@ export interface HeroPane {
 /** Tiers shown in the hero tab strip as "Soon" (no pane yet). */
 export const HERO_COMING_SOON: string[] = [];
 
+/**
+ * The one invocation that opens the network door.
+ *
+ * Written once because the page shows it twice — the hero's server tab and the
+ * first card of the server fold are the same command, and a second copy is a
+ * second thing to keep true. It is a transcript: see `SERVER_PANES` below.
+ */
+const SERVER_START = `FLEXIQ_DSN=sqlite:///tmp/flexiq.db \\
+FLEXIQ_NAMESPACE=default \\
+FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \\
+flexiq-server`;
+
 export const HERO_PANES: HeroPane[] = [
   {
     tier: "python",
     lang: "py",
     filename: "tasks.py",
+    runtag: "worker · live",
     code: `from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
@@ -80,6 +96,7 @@ print(job.result())   # → 5`,
     tier: "node",
     lang: "ts",
     filename: "tasks.ts",
+    runtag: "worker · live",
     code: `import { Queue } from "flexiq";
 
 const queue = new Queue({ dbPath: "flexiq.db" });
@@ -110,6 +127,7 @@ console.log(await queue.result(id)); // → 5`,
     tier: "java",
     lang: "java",
     filename: "Tasks.java",
+    runtag: "worker · live",
     code: `import org.byteveda.flexiq.*;
 import org.byteveda.flexiq.task.Task;
 import org.byteveda.flexiq.worker.Worker;
@@ -142,6 +160,57 @@ try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
     primary: { href: "/java/getting-started/quickstart", label: "Quickstart" },
     secondary: { href: "/java/modules", label: "Read Modules" },
   },
+  // The fourth tab is not a language, so its snippet is not one either: the
+  // process that holds the credential, then a producer with no binding at all
+  // enqueuing the same `add(2, 3)` the three tabs above define.
+  //
+  // `grpcurl` and not `curl` on purpose — the server fold further down this page
+  // is the same door's HTTP/JSON binding, and printing one request twice teaches
+  // less than printing both doors once.
+  //
+  // Where each line comes from: the invocation is `SERVER_START`, and the call
+  // is the shape `examples/polyglot/grpc_producer.sh` sends — the working bash
+  // producer `/server/clients` points a reader at. Bare `2` and `3` are legal
+  // where that example passes an object: a structured argument is a
+  // `google.protobuf.Value`, and the server refuses only an integer past 2^53.
+  // The response fields are the fold's transcript, unchanged — both bindings
+  // answer with the same `EnqueueResponse`.
+  {
+    tier: SERVER_TIER,
+    lang: "sh",
+    filename: "flexiq-server",
+    // Not "worker · live": nothing in this snippet starts one. The door is what
+    // is live, and whose worker drains the job is deliberately not its business.
+    runtag: "door · live",
+    code: `# 1 · the door — the one process holding the DSN
+${SERVER_START}
+
+# 2 · any producer — no binding, no CBOR library
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \\
+  -d '{"task_name": "add", "structured": {"args": [2, 3]}}' \\
+  localhost:50051 flexiq.v1.ProducerService/Enqueue`,
+    output: [
+      {
+        glyph: "→",
+        glyphKind: "p",
+        text: "[flexiq] gRPC listener on tcp://127.0.0.1:50051",
+      },
+      {
+        glyph: "✓",
+        glyphKind: "g",
+        text: "job.id",
+        value: "01a08003-3a94-74d0-89b7-f1d5d0ca829e",
+      },
+      {
+        glyph: "✓",
+        glyphKind: "g",
+        text: "job.status",
+        value: "JOB_STATUS_PENDING",
+      },
+    ],
+    primary: { href: "/server", label: "When to use it" },
+    secondary: { href: "/server/clients", label: "Write a client" },
+  },
 ];
 
 /** One terminal card in the server fold: a shell snippet and what running it printed. */
@@ -169,10 +238,7 @@ export const SERVER_PANES: ServerPane[] = [
   {
     filename: "flexiq-server",
     tag: "holds the credential",
-    code: `FLEXIQ_DSN=sqlite:///tmp/flexiq.db \\
-FLEXIQ_NAMESPACE=default \\
-FLEXIQ_GRPC_LISTEN=127.0.0.1:50051 \\
-flexiq-server`,
+    code: SERVER_START,
     output: [
       {
         glyph: "→",

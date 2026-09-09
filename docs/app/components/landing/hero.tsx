@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router";
 import { RawHtml } from "@/components/ui";
 import { useSdk } from "@/hooks";
@@ -5,6 +6,7 @@ import { isSdk, type Tier, tierProfile } from "@/lib";
 import {
   highlightJava,
   highlightPython,
+  highlightShell,
   highlightTs,
 } from "@/lib/highlight-lite";
 import {
@@ -20,22 +22,32 @@ const HIGHLIGHT: Record<HeroPane["lang"], (code: string) => string> = {
   py: highlightPython,
   ts: highlightTs,
   java: highlightJava,
+  sh: highlightShell,
 };
 
 export function Hero() {
   const { sdk, setSdk } = useSdk();
-  // A tab is a *tier*, not a language: today every one of them happens to be an
-  // SDK, and clicking one sets the global SDK so the hero copy, the docs links
-  // and the sidebar all follow.
-  const active = HERO_PANES.find((p) => p.tier === sdk) ?? HERO_PANES[0];
+  // A tab is a *tier*, and only three of the four are languages. Picking a
+  // language sets the global SDK, so the docs links and the sidebar follow it.
+  // The server tier cannot go there: the store's value is also the
+  // `<html data-sdk>` one, where CSS uses it to pick which `<SdkOnly>` variant
+  // to show, and a value that is no language matches none of them. So it is
+  // pinned to this component instead, and the SDK the rest of the site reads
+  // stays whatever it was.
+  const [pinnedTier, setPinnedTier] = useState<Tier | null>(null);
+  const tier = pinnedTier ?? sdk;
+  const active = HERO_PANES.find((p) => p.tier === tier) ?? HERO_PANES[0];
   const codeHtml = HIGHLIGHT[active.lang](active.code);
 
-  // Routed on `isSdk` rather than on the tier's name: only a language belongs in
-  // the SDK store, which is also the `<html data-sdk>` value.
-  function select(tier: Tier) {
-    if (isSdk(tier)) {
-      setSdk(tier);
+  // Routed on `isSdk` rather than on the tier's name, so a second non-language
+  // tier needs no second branch here.
+  function select(next: Tier) {
+    if (isSdk(next)) {
+      setSdk(next);
+      setPinnedTier(null);
+      return;
     }
+    setPinnedTier(next);
   }
 
   return (
@@ -47,7 +59,8 @@ export function Hero() {
         </h1>
         <p className="sub">
           Guides, API reference and architecture for the task queue. Pick your
-          language — the snippet, the links and the sidebar all follow it.
+          language and the snippet, the links and the sidebar all follow it — or
+          pick the server, if the process enqueuing has no binding at all.
         </p>
         <div className="btns">
           <Link className="btn pri" to={active.primary.href}>
@@ -76,7 +89,7 @@ export function Hero() {
             </div>
             <div className="runtag">
               <span className="ld" />
-              worker · live
+              {active.runtag}
             </div>
           </div>
           <div className="langtabs">
@@ -84,8 +97,8 @@ export function Hero() {
               <button
                 key={p.tier}
                 type="button"
-                aria-pressed={p.tier === sdk}
-                className={`langtab ${p.tier === sdk ? "active" : ""}`.trim()}
+                aria-pressed={p.tier === tier}
+                className={`langtab ${p.tier === tier ? "active" : ""}`.trim()}
                 onClick={() => select(p.tier)}
               >
                 {tierProfile(p.tier).label}
