@@ -335,8 +335,12 @@ jobs:
           # `proto/` carries its own buf.yaml and buf.lock, so a consumer can
           # run `buf generate` against the tree unchanged. wire-vectors.json
           # rides along because the payload envelope is the half of the contract
-          # the .proto calls opaque.
-          tar -czf "flexiq-proto-${VERSION}.tar.gz" -C contracts proto wire-vectors.json
+          # the .proto calls opaque, and REMOTE_SDK_CONTRACT.md because a client
+          # author who has to read a website to learn which RPCs are mandatory,
+          # or that passing those vectors is the bar, has an artifact that does
+          # not specify itself.
+          tar -czf "flexiq-proto-${VERSION}.tar.gz" \
+            -C contracts proto wire-vectors.json REMOTE_SDK_CONTRACT.md
           cp contracts/descriptor.binpb "flexiq-descriptor-${VERSION}.binpb"
 
       - name: Create GitHub release
