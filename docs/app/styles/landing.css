@@ -932,7 +932,13 @@ main {
    resting state too, so switching them off loses nothing the static frame does
    not already say. `useReveal` already honours this query; the loops did not. */
 @media (prefers-reduced-motion: reduce) {
+  /* `.hiw-spark.hiw-back` is spelled out beside `.hiw-spark`, and has to be: a
+     media query adds no specificity, so the return rail's two-class base rule
+     outranks a one-class override here and it kept sliding. The figure
+     selectors need no such pairing — their base rules are one class too, so
+     these win on source order. */
   .hiw-spark,
+  .hiw-spark.hiw-back,
   .hiwfig-caret,
   .hiwfig-batch,
   .hiwfig-core,
@@ -940,7 +946,8 @@ main {
   .bgfx .glow {
     animation: none;
   }
-  .hiw-spark {
+  .hiw-spark,
+  .hiw-spark.hiw-back {
     opacity: 0;
   }
   .hiwfig-batch,
