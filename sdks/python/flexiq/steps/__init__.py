@@ -29,7 +29,7 @@ from flexiq.steps.errors import (
     StepUnavailableError,
 )
 from flexiq.steps.failure import step_retry_decision
-from flexiq.steps.latch import was_swallowed
+from flexiq.steps.latch import latched_sleep, was_swallowed
 
 __all__ = [
     "SleepDeadline",
@@ -43,6 +43,7 @@ __all__ = [
     "StepSupersededError",
     "StepSwallowedError",
     "StepUnavailableError",
+    "latched_sleep",
     "step_retry_decision",
     "was_swallowed",
 ]

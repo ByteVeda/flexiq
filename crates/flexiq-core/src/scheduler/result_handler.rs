@@ -64,10 +64,15 @@ impl Scheduler {
             // completion while the job itself had moved on to another owner,
             // another attempt, or another claim. The result is dropped, but the
             // duplicate execution behind it already happened.
+            // The fence's own inputs go in the message. A dispatch record is
+            // keyed by job id, so a job dispatched again before its previous
+            // attempt reported has already overwritten it — the epoch is what
+            // says which claim this verdict was actually reached against, and
+            // without it the line reads as if it were the reporting attempt's.
             error!(
-                "dropping superseded result for job {job_id} from attempt {}: \
-                 the job is proceeding under another claim",
-                record.attempt
+                "dropping superseded result for job {job_id} from attempt {} \
+                 (owner {}, epoch {:?}): the job is proceeding under another claim",
+                record.attempt, record.owner, record.epoch
             );
             return Ok(false);
         }

@@ -215,9 +215,26 @@ export function createTaskCallback(
       // committed, the claim released and the job already Pending at its
       // deadline. It pairs `before` with `onSleep` rather than `after`, runs
       // no `onError`, and emits `job.sleeping` instead of `job.failed`.
-      if (error instanceof StepSleepSignal) {
+      //
+      // A committed sleep outranks whatever the body threw after swallowing it.
+      // That failure speaks for an attempt whose claim went with the sleep's own
+      // transaction, and since a sleep leaves `retry_count` alone the woken
+      // attempt reuses the same `(owner, attempt)` — the scheduler's fence
+      // authorizes the stale failure against the live claim and dead-letters a
+      // job that is sleeping correctly.
+      const sleeping = error instanceof StepSleepSignal ? error : latch.sleep;
+      if (sleeping) {
+        if (sleeping !== error) {
+          log.error(
+            () =>
+              `job ${invocation.id} caught the step.sleep that ended its attempt and then ` +
+              `failed. It sleeps until ${sleeping.wakeAt} either way; everything the body ` +
+              "did after the sleep ran with no execution claim and runs again on wake.",
+            error,
+          );
+        }
         warnUnpairedMiddleware(chain);
-        const { wakeAt } = error;
+        const { wakeAt } = sleeping;
         for (const [index, mw] of chain.entries()) {
           if (!mw.onSleep) {
             continue;
@@ -235,11 +252,11 @@ export function createTaskCallback(
           jobId: invocation.id,
           taskName: invocation.taskName,
           queue: invocation.queue,
-          wakeAt: error.wakeAt,
-          stepKey: error.stepKey,
+          wakeAt: sleeping.wakeAt,
+          stepKey: sleeping.stepKey,
           durationMs: performance.now() - startedAt,
         });
-        return { sleptUntil: error.wakeAt };
+        return { sleptUntil: sleeping.wakeAt };
       }
       for (const [index, mw] of chain.entries()) {
         if (!mw.onError) {

@@ -118,6 +118,29 @@ existing `!build`.
 
 ## Review
 
+### What the gate caught on its first run
+
+Not a flake, and not something either laptop run had reached: the dashboard
+scored accessibility 0.95 in CI against 1.00 locally, three runs out of three.
+`upload-artifact` skips dot-prefixed paths unless told otherwise, so
+`.lighthouseci/` had uploaded nothing and there was no report to read — fixed
+with `include-hidden-files`, and the summary now names the audits costing points
+and the elements they fired on, so a failure explains itself in the log.
+
+With the report in hand: the sign-in screen's Refresh control put `--fg-subtle`
+`#867f78` on `--bg` `#fcf9f5` at 3.76:1, against 4.5:1 required at 12px. The
+element was incidental — that token missed AA on *every* light surface
+(3.26:1 on `--surface-3` through 3.92:1 on `--surface`) while carrying table
+text, timestamps and counts across about ten components. Lowering it to L 0.52
+(`#6e6761`) gives 5.30:1 on `--bg` and 4.59:1 at worst. Fixed in #892, which
+owns `globals.css`; this floor went to 0.95 for one commit and back to 1 once
+that merged.
+
+Worth recording that the first hypothesis was wrong: CI headless Chrome
+resolving `prefers-color-scheme: dark` would have explained the gap neatly, and
+forcing dark locally still scored 1.00. The report was the only thing that
+settled it.
+
 ### Found on the way, not fixed
 
 Three pre-existing docs issues surfaced by the first Lighthouse run. All predate

@@ -190,6 +190,23 @@ final class WorkerDispatchBridge implements WorkerBridge {
             // runs no onError, and emits job.sleeping instead of job.failed.
             reportSleep(bound, token, context, chain, sleeping, startedAtNanos);
         } catch (Throwable t) {
+            // A committed sleep outranks whatever the body threw after
+            // swallowing it. That failure speaks for an attempt whose claim went
+            // with the sleep's own transaction, and since a sleep leaves
+            // retry_count alone the woken attempt reuses the same
+            // (owner, attempt) — the scheduler's fence authorizes the stale
+            // failure against the live claim and dead-letters a job that is
+            // sleeping correctly.
+            StepSleepSignal swallowed = latch.sleep();
+            if (swallowed != null) {
+                LOG.error(
+                        "job " + jobId + " caught the step.sleep that ended its attempt and then failed. It sleeps "
+                                + "until " + swallowed.wakeAt() + " either way; everything the body did after the "
+                                + "sleep ran with no execution claim and runs again on wake",
+                        t);
+                reportSleep(bound, token, context, chain, swallowed, startedAtNanos);
+                return;
+            }
             for (Middleware m : chain) {
                 try {
                     HookDeadline.run(

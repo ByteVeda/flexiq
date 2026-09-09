@@ -410,16 +410,23 @@ it("fails an attempt whose body swallowed a divergence", async () => {
   expect(String(dead[0]?.error)).toContain("caught a step control signal");
 });
 
-it("still wakes a job whose body swallowed its sleep", async () => {
-  // The latch fires here too, and the scheduler then drops the failure: the
-  // sleep row is committed and the claim released, so `(owner, attempt)` reads
-  // the attempt as superseded. One attempt is wasted; nothing is broken. A
-  // test that used a sleep to "prove the latch" would be proving nothing.
+it("reports the sleep a body swallowed, rather than a failure", async () => {
+  // The latch does not bite here. `sleepFor` committed the row, revoked the
+  // claim and moved the job to `Pending` before it ever threw, so the attempt
+  // is over either way and a failure would speak for a claim it no longer
+  // holds. And a sleep leaves `retryCount` alone, so the woken attempt reuses
+  // the same `(owner, attempt)`: the scheduler's fence cannot tell the stale
+  // failure from the live claim, authorizes it, and dead-letters a job that is
+  // sleeping correctly.
   const queue = newQueue();
   const completed: OutcomeEvent[] = [];
+  const slept: SleepEvent[] = [];
+  const failed: OutcomeEvent[] = [];
   let past = 0;
 
   queue.on("job.completed", (event) => completed.push(event));
+  queue.on("job.sleeping", (event) => slept.push(event));
+  queue.on("job.failed", (event) => failed.push(event));
   queue.task("checkout", async () => {
     try {
       await step().sleep("200ms", { name: "settle" });
@@ -437,6 +444,43 @@ it("still wakes a job whose body swallowed its sleep", async () => {
   // Twice: the swallowing attempt, then the one that woke and finished.
   expect(past).toBe(2);
   expect(queue.getJob(jobId)?.retryCount).toBe(0);
+  // The runner's own verdict, so it holds whatever the scheduler was doing.
+  expect(slept).toHaveLength(1);
+  expect(failed).toHaveLength(0);
+});
+
+it("reports the sleep even when the body fails after swallowing it", async () => {
+  // The same rule when the body goes on to throw rather than to return: that
+  // failure is about an attempt that ended when the sleep committed.
+  const queue = newQueue();
+  const completed: OutcomeEvent[] = [];
+  const slept: SleepEvent[] = [];
+  const failed: OutcomeEvent[] = [];
+  let past = 0;
+
+  queue.on("job.completed", (event) => completed.push(event));
+  queue.on("job.sleeping", (event) => slept.push(event));
+  queue.on("job.failed", (event) => failed.push(event));
+  queue.task("checkout", async () => {
+    try {
+      await step().sleep("200ms", { name: "settle" });
+    } catch {
+      // swallowed
+    }
+    past += 1;
+    if (past === 1) {
+      throw new Error("the body failed after swallowing its own sleep");
+    }
+    return "done";
+  });
+
+  queue.enqueue("checkout");
+  worker = queue.runWorker();
+
+  expect(await waitFor(() => completed.length > 0)).toBe(true);
+  expect(past).toBe(2);
+  expect(slept).toHaveLength(1);
+  expect(failed).toHaveLength(0);
 });
 
 it("pairs a middleware's before with onSleep rather than after", async () => {

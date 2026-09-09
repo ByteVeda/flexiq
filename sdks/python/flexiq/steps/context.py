@@ -496,9 +496,14 @@ class _ControlScope:
     def __enter__(self) -> None:
         return None
 
-    def __exit__(self, exc_type: type[BaseException] | None, *_: object) -> None:
-        if exc_type is not None and issubclass(exc_type, StepControlSignal):
-            latch(self._ctx)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        if isinstance(exc, StepControlSignal):
+            latch(self._ctx, exc)
 
 
 async def _resolve(value: Any) -> Any:
