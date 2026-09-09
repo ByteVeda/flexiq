@@ -77,6 +77,11 @@ jobs:
             java:
               - *shared
               - '.github/actions/setup-java/**'
+              # Every Java job provisions Gradle through it, so a change here
+              # reaches all three. The polyglot filter has watched it since it
+              # was written; this one had not, which left the action's own
+              # callers unable to test a change to it.
+              - '.github/actions/provision-gradle/**'
               - 'sdks/java/**'
               - '.github/workflows/ci-java.yml'
             # The cross-SDK suite: any SDK, the example itself, or its driver can
