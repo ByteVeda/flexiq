@@ -2,7 +2,7 @@
 // sections this file used to feed live on flexiq.byteveda.org now; what is left
 // is the snippets the root still shows.
 
-import type { Sdk } from "./sdk-registry";
+import type { Tier } from "./tier-registry";
 
 /** A worker-output line: glyph + text, optionally a result value + timing. */
 export interface OutLine {
@@ -13,28 +13,38 @@ export interface OutLine {
   timing?: string;
 }
 
-export interface LangPane {
-  /** Which SDK this snippet is for — selecting it sets the global SDK. */
-  sdk: Sdk;
+/** One of the two buttons beside the hero snippet. */
+export interface HeroCta {
+  href: string;
+  label: string;
+}
+
+/** One tab in the hero terminal: a tier, the snippet that opens it, and where
+ *  its reader goes next. */
+export interface HeroPane {
+  /** Which tier this tab is. A language tab also sets the global SDK; see
+   *  `hero.tsx` for why the tab strip is not simply the SDK switcher. */
+  tier: Tier;
   /** Highlighter dialect for the snippet. */
   lang: "py" | "ts" | "java";
   filename: string;
-  install: string;
   code: string;
   output: OutLine[];
-  docHref: string;
-  docLabel: string;
+  /** Both hrefs are absolute and come off the pane rather than the active SDK:
+   *  a tier that is not a language has no `/<sdk>/…` page under it, and building
+   *  one from the SDK store is the prefix corruption the tier split prevents. */
+  primary: HeroCta;
+  secondary: HeroCta;
 }
 
-/** SDKs shown in the hero tab strip as "Soon" (no pane yet). */
+/** Tiers shown in the hero tab strip as "Soon" (no pane yet). */
 export const HERO_COMING_SOON: string[] = [];
 
-export const HERO_PANES: LangPane[] = [
+export const HERO_PANES: HeroPane[] = [
   {
-    sdk: "python",
+    tier: "python",
     lang: "py",
     filename: "tasks.py",
-    install: "pip install flexiq",
     code: `from flexiq import Queue
 
 queue = Queue(db_path="tasks.db")
@@ -60,14 +70,16 @@ print(job.result())   # → 5`,
         timing: "12 ms",
       },
     ],
-    docHref: "/python/getting-started/quickstart",
-    docLabel: "Read the Python quickstart",
+    primary: {
+      href: "/python/getting-started/quickstart",
+      label: "Quickstart",
+    },
+    secondary: { href: "/python/modules", label: "Read Modules" },
   },
   {
-    sdk: "node",
+    tier: "node",
     lang: "ts",
     filename: "tasks.ts",
-    install: "pnpm add flexiq",
     code: `import { Queue } from "flexiq";
 
 const queue = new Queue({ dbPath: "flexiq.db" });
@@ -91,14 +103,13 @@ console.log(await queue.result(id)); // → 5`,
         timing: "9 ms",
       },
     ],
-    docHref: "/node/getting-started/quickstart",
-    docLabel: "Read the Node.js quickstart",
+    primary: { href: "/node/getting-started/quickstart", label: "Quickstart" },
+    secondary: { href: "/node/modules", label: "Read Modules" },
   },
   {
-    sdk: "java",
+    tier: "java",
     lang: "java",
     filename: "Tasks.java",
-    install: 'implementation("org.byteveda:flexiq")',
     code: `import org.byteveda.flexiq.*;
 import org.byteveda.flexiq.task.Task;
 import org.byteveda.flexiq.worker.Worker;
@@ -128,8 +139,8 @@ try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
         timing: "10 ms",
       },
     ],
-    docHref: "/java/getting-started/quickstart",
-    docLabel: "Read the Java quickstart",
+    primary: { href: "/java/getting-started/quickstart", label: "Quickstart" },
+    secondary: { href: "/java/modules", label: "Read Modules" },
   },
 ];
 

@@ -1,26 +1,42 @@
 import { Link } from "react-router";
 import { RawHtml } from "@/components/ui";
 import { useSdk } from "@/hooks";
-import { sdkProfile } from "@/lib";
+import { isSdk, type Tier, tierProfile } from "@/lib";
 import {
   highlightJava,
   highlightPython,
   highlightTs,
 } from "@/lib/highlight-lite";
-import { HERO_COMING_SOON, HERO_PANES } from "@/lib/landing-content";
+import {
+  HERO_COMING_SOON,
+  HERO_PANES,
+  type HeroPane,
+} from "@/lib/landing-content";
 import { CopyButton } from "./copy-button";
+
+/** A lookup rather than a ternary chain: the dialect is pane data, so adding one
+ *  should be a row here and not another nested branch. */
+const HIGHLIGHT: Record<HeroPane["lang"], (code: string) => string> = {
+  py: highlightPython,
+  ts: highlightTs,
+  java: highlightJava,
+};
 
 export function Hero() {
   const { sdk, setSdk } = useSdk();
-  // The selected snippet IS the global SDK — clicking a tab sets it, so the hero
-  // copy, the install/quickstart links, and the docs sidebar switch all follow.
-  const active = HERO_PANES.find((p) => p.sdk === sdk) ?? HERO_PANES[0];
-  const codeHtml =
-    active.lang === "ts"
-      ? highlightTs(active.code)
-      : active.lang === "java"
-        ? highlightJava(active.code)
-        : highlightPython(active.code);
+  // A tab is a *tier*, not a language: today every one of them happens to be an
+  // SDK, and clicking one sets the global SDK so the hero copy, the docs links
+  // and the sidebar all follow.
+  const active = HERO_PANES.find((p) => p.tier === sdk) ?? HERO_PANES[0];
+  const codeHtml = HIGHLIGHT[active.lang](active.code);
+
+  // Routed on `isSdk` rather than on the tier's name: only a language belongs in
+  // the SDK store, which is also the `<html data-sdk>` value.
+  function select(tier: Tier) {
+    if (isSdk(tier)) {
+      setSdk(tier);
+    }
+  }
 
   return (
     <section className="hero">
@@ -34,13 +50,15 @@ export function Hero() {
           language — the snippet, the links and the sidebar all follow it.
         </p>
         <div className="btns">
-          <Link className="btn pri" to={active.docHref}>
-            Quickstart →
+          <Link className="btn pri" to={active.primary.href}>
+            {active.primary.label} →
           </Link>
           {/* GitHub already sits in the nav; the second slot is better spent on
-              the section a reader lands here for after the quickstart. */}
-          <Link className="btn gho" to={`/${sdk}/modules`}>
-            Read Modules →
+              the section a reader lands here for after the quickstart. Both
+              hrefs come off the pane — a tier that is not a language has no
+              `/<sdk>/…` page to compose one from. */}
+          <Link className="btn gho" to={active.secondary.href}>
+            {active.secondary.label} →
           </Link>
         </div>
       </div>
@@ -64,13 +82,13 @@ export function Hero() {
           <div className="langtabs">
             {HERO_PANES.map((p) => (
               <button
-                key={p.sdk}
+                key={p.tier}
                 type="button"
-                aria-pressed={p.sdk === sdk}
-                className={`langtab ${p.sdk === sdk ? "active" : ""}`.trim()}
-                onClick={() => setSdk(p.sdk)}
+                aria-pressed={p.tier === sdk}
+                className={`langtab ${p.tier === sdk ? "active" : ""}`.trim()}
+                onClick={() => select(p.tier)}
               >
-                {sdkProfile(p.sdk).label}
+                {tierProfile(p.tier).label}
               </button>
             ))}
             {HERO_COMING_SOON.map((name) => (
