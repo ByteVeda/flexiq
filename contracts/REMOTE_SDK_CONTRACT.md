@@ -66,7 +66,11 @@ The exemptions are stated, not implied:
   `int-beyond-double-precision` is `2^53 + 1` and `byte-string` is a CBOR byte
   string. A client **MUST** re-encode what it decoded to the same `hex`.
 - The `float` case pins the value and not the bytes: an encoder may legitimately
-  choose a narrower width.
+  choose a narrower width. **It is the one place the vectors leave bytes free,
+  and that has a consequence.** An `auto:` idempotency key is a hash over the
+  serialized payload, so two conforming encoders can derive different keys for
+  the same float argument. A client whose payloads carry floats **SHOULD** set
+  `unique_key` itself rather than rely on `auto:` agreeing across runtimes.
 
 **A hex string is never edited to make a test pass.** A diff to one is a
 wire-format change, and it breaks every job already enqueued.
@@ -109,9 +113,11 @@ described as having established more:
 
 ## The surface
 
-Two packages, two doors, two credentials. `flexiq.executor.v1` **may** import
-`flexiq.v1`; the reverse import is forbidden, so a client generated for the
-producer door stays compilable on its own.
+Two packages, two doors, and one scope per package. A single credential **may**
+carry both scopes, though a producer and an executor are usually separate
+processes holding a token each. `flexiq.executor.v1` **may** import `flexiq.v1`;
+the reverse import is forbidden, so a client generated for the producer door
+stays compilable on its own.
 
 ### A producer client — `flexiq.v1.ProducerService`
 
@@ -333,8 +339,12 @@ none is `INVALID_ARGUMENT` with reason `INVALID_REQUEST`.
 Neither arm is second-class; the stored row is identical. But `structured` is
 JSON-shaped, and **it refuses what JSON cannot carry rather than rounding it**:
 integers past ±9007199254740991 (`2^53 − 1`), non-finite numbers, byte strings
-and CBOR tags. Those are exactly the three cases `wire-vectors.json` marks
-`decode_only`. It also normalises object key order, which moves the bytes
+and CBOR tags. Two of those four are pinned as vectors —
+`int-beyond-double-precision` and `byte-string`, the two `round_trip_only`
+entries under `decode_only` — while a non-finite number and a CBOR tag have no
+vector, because neither has a JSON form to state one in. `decode_only`'s third
+entry, `float`, is there for an unrelated reason: its width is not pinned.
+`structured` also normalises object key order, which moves the bytes
 without moving the meaning — a client using `structured` **SHOULD** set
 `unique_key` itself rather than rely on an `auto:` key matching another
 runtime's.
@@ -498,9 +508,17 @@ revoked, expired, wrong namespace — collapses to a single indistinguishable
 one is an oracle for whether a guessed token exists. A client **SHOULD** refresh
 its credential and retry once, and **MUST NOT** try to infer which case it hit.
 
-**`flexiq-server` terminates no TLS, on either door.** The bearer token is a
-credential, not transport security. A deployment on an untrusted network **MUST**
-put a proxy or a service mesh in front of the listener.
+**`flexiq-server` terminates no TLS, on either door.** The token is a *bearer*
+credential: anything that observes one can replay it, and nothing on the wire
+tells the replay from the original. So every hop that carries a token **MUST**
+be authenticated and encrypted, and a client **MUST** verify the peer it is
+presenting the token to rather than trust the name it dialled. Since this
+process will not terminate that, it is a TLS-terminating proxy or a service mesh
+in front of the listener.
+
+The exemptions are the hops with no network to observe: a Unix-domain socket,
+and a loopback bind whose peers are on the same host. Both still present a
+token — there is no uncredentialled bind — but neither puts one on a wire.
 
 ### Scopes
 
