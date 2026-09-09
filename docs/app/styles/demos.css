@@ -914,6 +914,24 @@
   background: color-mix(in oklch, var(--c) 7%, var(--panel));
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--c) 22%, transparent);
 }
+/* `on` says where the stage is; `live` says it is still happening. The ring
+   breathes rather than blinking on and off — this sits mid-article, and a hard
+   blink at this size reads as an error state. It is dropped once the playhead
+   reaches the end, because then nothing is working or waiting on anything. */
+.dm-stage .sd-box.on.live {
+  animation: sdlive 1.7s ease-in-out infinite;
+}
+@keyframes sdlive {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in oklch, var(--c) 22%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in oklch, var(--c) 30%, transparent),
+      0 0 16px color-mix(in oklch, var(--c) 26%, transparent);
+  }
+}
 .dm-stage .sd-boxhd {
   display: flex;
   flex-direction: column;
@@ -1416,7 +1434,8 @@
 @media (prefers-reduced-motion: reduce) {
   .dm-stage .sdfig-caret,
   .dm-stage .sdfig-fan.spin,
-  .dm-stage .sdfig-core.busy {
+  .dm-stage .sdfig-core.busy,
+  .dm-stage .sd-box.on.live {
     animation: none;
   }
 }

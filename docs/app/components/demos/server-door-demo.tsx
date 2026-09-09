@@ -407,6 +407,7 @@ export default function ServerDoorDemo(_props: DemoProps) {
             hopPct={hopPct}
             back={wire.back}
             last={i === LANES.length - 1}
+            live={play < DUR}
           >
             {lane.id === "client" ? (
               <ClientBox
@@ -564,6 +565,7 @@ function Box({
   hopPct,
   back,
   last,
+  live,
   children,
 }: {
   lane: (typeof LANES)[number];
@@ -573,12 +575,15 @@ function Box({
   hopPct: number;
   back: boolean;
   last: boolean;
+  /** The trace has not finished, so the lit box is one still working or still
+   *  waiting on something — it breathes rather than just sitting highlighted. */
+  live: boolean;
   children: React.ReactNode;
 }) {
   return (
     <>
       <div
-        className={`sd-box${active ? " on" : ""}`}
+        className={`sd-box${active ? " on" : ""}${active && live ? " live" : ""}`}
         style={{ "--c": TONE[tone] } as React.CSSProperties}
       >
         <div className="sd-boxhd">
