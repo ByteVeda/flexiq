@@ -16,7 +16,11 @@
   --txt: #ececf4;
   --txt2: #c3c2d4;
   --mut: #8c8ca3;
-  --dim: #5c5c70;
+  /* 4.77:1 on --panel3, the lightest surface it lands on. At #5c5c70 it was
+     2.69:1 and carried the sidebar group labels, the footer headings, the
+     search placeholder and the copyright line — every contrast failure on the
+     site was this one value. --faint stays where it is: one use, a background. */
+  --dim: #83839d;
   --faint: #3a3a48;
 
   /* FlexiQ brand green (matches the product/dashboard). Var names kept for compatibility. */
@@ -57,7 +61,8 @@
   --txt: #1b1a15;
   --txt2: #35332c;
   --mut: #615d52;
-  --dim: #8b877a;
+  /* 4.83:1 on --panel3; was 2.86:1. Same token, same failure, light side. */
+  --dim: #676256;
   --faint: #bdb9ab;
 
   --indigo: #10a152;
