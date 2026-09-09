@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SearchModal } from "@/components/docs";
 import {
   Footer,
@@ -10,7 +10,8 @@ import {
   useReveal,
 } from "@/components/landing";
 import { SiteNav } from "@/components/ui";
-import { useActiveSdk } from "@/hooks";
+import { useActiveTier } from "@/hooks";
+import { landingTiers } from "@/lib/search";
 import type { Route } from "./+types/home";
 
 /**
@@ -42,8 +43,12 @@ export function meta(_: Route.MetaArgs) {
 export default function Home() {
   useReveal();
   const [searchOpen, setSearchOpen] = useState(false);
-  // Scope landing search to the SDK chosen in the hero (store-backed on `/`).
-  const sdk = useActiveSdk();
+  // The landing has no sidebar for the palette to agree with, so it offers the
+  // tier the hero is showing *and* the server tier — a reader here has not
+  // picked a door, and the one that needs no SDK is the one they cannot know to
+  // search for. Memoised: it is a dependency of the palette's query effect.
+  const tier = useActiveTier();
+  const tiers = useMemo(() => landingTiers(tier), [tier]);
 
   // ⌘K / Ctrl-K opens search on the landing page too.
   useEffect(() => {
@@ -76,7 +81,7 @@ export default function Home() {
       <SearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        sdk={sdk}
+        tiers={tiers}
       />
     </>
   );

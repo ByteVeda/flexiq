@@ -1,165 +1,345 @@
-# Dark-theme parity, Node 24, Lighthouse
+# #823 — `flexiq-server` as a fourth hero tab
 
-Three asks, two PRs off `master` at `49728c2b`. The theme fix is independent.
-Node 24 and Lighthouse ship together because the Lighthouse workflow reads the
-`.nvmrc` the Node commit introduces, and both touch the same two `package.json`
-files and lockfiles — separating them would only create a merge-order trap.
+Branch `docs/hero-server-tab` off `master` at `bbc4ca0b`. One file of data, one
+component. #825 (`1788a838`) already built the seam this needs: `Tier = Sdk |
+"server"` in `app/lib/tier-registry.ts`, with `SDK_IDS` deliberately still three
+because its value is the persisted `<html data-sdk>` one.
 
-## 1. Dark theme: the dashboard adopts the docs' midnight palette
+## The two things the issue asks to settle
 
-`fix/dashboard-dark-theme-matches-docs` — one file, `dashboard/src/globals.css`.
+**1. The tab must not corrupt `useActiveSdk`.** Writing `server` into the SDK
+store lands it in `<html data-sdk>`, matches no `<SdkOnly>`/`<CodeTabs>` variant
+and blanks every shared page — and every SDK-relative link on the site resolves
+through that store's derived value. So the server tab is a *pane* and nothing
+more: it is held in the hero's own state and never reaches `setSdk`. This is the
+same rule `TierSelect` follows in `site-nav.tsx`, where picking the server tier
+navigates instead of setting the SDK.
 
-The two apps keep hand-synced palettes with no shared source; the only token
-name they share is `--bg`. Light mode was already paired on purpose
-(`tokens.css` says "matches the FlexiQ console"), dark mode never was:
+The hero's own two buttons stop being built out of the store (`/${sdk}/modules`)
+and come off the pane instead — the server tab has no `/python/modules` under
+it, and composing one from the store is exactly the prefix corruption the tier
+split exists to prevent.
 
-| role | dashboard was | docs |
-|---|---|---|
-| page bg | `#16120f` L .185 **h58 warm** | `#08080c` L .137 **h285 cool** |
-| panel | `#211b17` L .227 | `#0f0f17` L .172 |
-| body text | `#f2f0eb` h82 | `#ececf4` h286 |
-| brand green | `#5eca91` L .76 | `#1f9d54` L .61 |
+**2. `p.sdk === sdk` assumes tab identity is SDK identity.** A pane is keyed by
+`tier`, and the branch is `isSdk(next)` — the registry predicate — not a string
+compare against `"server"`. A future non-SDK tier needs no new branch.
 
-Docs is the reference: its dark palette also drives `mermaid-theme.ts` (hexes
-mirrored by hand), `shiki.css` and the landing gradients, so moving docs would
-cost four files and a re-tune. The dashboard's dark block is one file, and no
-component uses a Tailwind `dark:` utility — everything reads `var()`.
+## Content
 
-The three docs greens map onto the three accent roles by how each is consumed,
-which is not what their names suggest:
+The snippet is the door, not a language: the env-var invocation plus the
+`grpcurl` call that submits a job. Both halves already exist verified in-repo —
+the invocation is the server fold's first transcript (extracted to one const, so
+the page holds one copy of a command it shows twice), and the `grpcurl` shape is
+`examples/polyglot/grpc_producer.sh`, the working bash producer `clients.mdx`
+points at. It enqueues the same `add(2, 3)` the other three tabs define, so the
+four tabs tell one story.
 
-- `--accent-strong` fills the primary button (`ui/button.tsx`) → `--indigo-dk`
-  `#15803d`, with `--accent-fg` white, the pairing docs' own `.btn.pri` uses.
-- `--accent-ink` is accent *text* → `--indigo-br` `#3bbf72`.
-- `--accent` is borders, tints and the ring → `--indigo` `#1f9d54`.
+`grpcurl`, not `curl`, on purpose: the server fold lower on the same page is the
+HTTP/JSON binding, and printing the same request twice on one page teaches less
+than printing both doors once.
 
-- [x] Retune `html.dark` to the docs ladder, each value naming its source token
-- [x] Keep `--info` blue — docs has no blue, and its `--cyan` reads as the
-      success green; the existing blue already sits in the docs' status band
-- [x] Rename `--shadow-warm` → `--shadow-tint`; nothing outside this file used it
-- [x] Verify every text pair against WCAG AA
+## Commits
 
-Verified in the built CSS, not just the source: `#08080c`, `#0f0f17`, `#ececf4`,
-`#15803d`, `#ffb86b`, `#ff6b6b` come out byte-identical to the docs tokens; the
-rest land within one unit of the oklch round-trip.
+- [x] 1 — a hero pane is a tier, not an SDK (mechanical; still three tabs)
+  - [x] `LangPane` → `HeroPane`, `sdk: Sdk` → `tier: Tier`
+  - [x] `docHref` → `primary`/`secondary` CTAs on the pane; drop the
+        `/${sdk}/modules` template
+  - [x] drop `install` and `docLabel` — dead since the marketing sections left
+  - [x] highlighter chain → a `Record<lang, fn>` lookup (a fourth dialect is
+        coming and the ternary chain is already two deep)
+  - [x] tab label from `tierProfile`, so one registry names every tab
+- [x] 2 — the fourth tab
+  - [x] `SERVER_START` extracted; server `HeroPane` added with `lang: "sh"`
+  - [x] `runtag` per pane — the server snippet starts no worker, so the title
+        bar cannot claim `worker · live`
+  - [x] `pinnedTier` state: a tier the SDK store cannot hold, `isSdk`-routed
+  - [x] hero sub copy stops promising the tabs are all languages
 
-| pair | before | after |
-|---|---|---|
-| `--fg` on `--bg` | 16.35:1 | 17.01:1 |
-| `--fg-muted` on `--surface` | 7.38:1 | 10.89:1 |
-| `--fg-subtle` on `--bg` | 4.71:1 | 6.09:1 |
-| `--accent-fg` on `--accent-strong` (button) | 5.27:1 | 4.96:1 |
-| `--accent-ink` on `--surface` | 9.60:1 | 8.07:1 |
-| focus ring on `--bg` | 2.76:1 ✗ | 3.63:1 ✓ |
+## Verify
 
-The button and accent-text pairs give back a little headroom because they now
-sit on the docs' exact greens; both still clear AA, and the ring crosses 3:1 for
-the first time. Lighthouse scores the result 100 on accessibility.
-
-Not in scope: docs defaults to dark with no `prefers-color-scheme` fallback and
-offers no "system" option, where the dashboard has all three. That is a
-behaviour difference, not a palette one.
-
-## 2. Node 24 for the docs and dashboard toolchain
-
-`chore/node-24-and-lighthouse`, first commit.
-
-- [x] `.github/actions/dashboard-build/action.yml` `"22"` → `dashboard/.nvmrc`
-- [x] `.github/actions/setup-node/action.yml` default `"22"` → `"24"`
-- [x] `docker/scheduler.Dockerfile` `node:22-alpine` → `node:24-alpine`
-- [x] `docs.yml` `node-version: 24` → `node-version-file: docs/.nvmrc`
-- [x] New `docs/.nvmrc`, `dashboard/.nvmrc`
-- [x] `engines.node: ">=24"` on both `package.json`s
-- [x] `docs/package.json` `@types/node` `^25` → `^26`, matching the dashboard
-- [x] Drop `ci-node.yml`'s second Node install — it existed only to reach 24 for
-      the docs API-sync script while the job ran on 22
-
-Deliberately untouched, because they are the Node SDK's *library support floor*
-and not the build toolchain: `sdks/node/package.json` `engines.node: ">=20"`,
-and the `[20, 22, 24]` matrices in `ci-node.yml` and `ci-polyglot.yml`.
-
-**`engine-strict` was tried and reverted.** pnpm only warns on `engines` by
-default, so making the floor bite needs `engine-strict=true` — but that also
-enforces every *transitive* dependency's range, and `jsdom@30.0.1` wants
-`^24.15.0`. On Node 24.12 the docs install hard-fails locally while CI, which
-gets the latest 24.x, passes. A gate that breaks developers and not CI is worse
-than none. The `.nvmrc` files are the real pin: CI installs from them, so the
-toolchain is fixed regardless.
-
-## 3. Lighthouse for both
-
-`chore/node-24-and-lighthouse`, second commit. Nothing measured performance,
-accessibility or anything Lighthouse-shaped anywhere in the repo before this.
-
-- [x] `@lhci/cli` + `lighthouserc.yml` + a `lighthouse` script per project
-- [x] Audit the real production builds, not a dev server
-- [x] `.github/workflows/lighthouse.yml`, path-filtered, two jobs
-- [x] Floors calibrated to measured medians, so the gate starts green
-- [x] Upload the HTML reports and write a score table to the step summary
-
-Measured (median of 3 runs, desktop preset):
-
-| | perf | a11y | best-practices | seo |
-|---|---:|---:|---:|---:|
-| dashboard `/` | 100 | 100 | 100 | 82 |
-| docs `/` | 98 | 97 | 100 | 100 |
-| docs `/python/getting-started/quickstart` | 99 | 94 | 96 | 90 |
-| docs `/architecture` | 99 | 94 | 96 | 90 |
-
-Performance asserts at 0.90 against measured 98-100, which absorbs a slower
-runner. The other three are deterministic and pinned at what they measure, so
-any drop fails. The dashboard's SEO is ungated: the console is behind auth and
-deliberately not indexable, so it has no meta description to give.
-
-YAML rather than JSON for the rc files so the calibration can carry the comment
-explaining what would raise each floor. Biome does not read `.gitignore` here,
-so `.lighthouseci` needed an explicit exclude in `docs/biome.json` alongside the
-existing `!build`.
+- [x] `pnpm typecheck`
+- [x] `pnpm lint`
+- [x] `pnpm check:parity` — `/server` and `/server/clients` are real slugs
+- [x] `pnpm build` — the hero prerenders, so the snippet is highlighted at build
+- [x] rendered `/` from the build: four tabs, server pane selected, and
+      `<html data-sdk>` still a language
 
 ## Review
 
-### What the gate caught on its first run
+Two commits on `docs/hero-server-tab`, not pushed. `typecheck`, `lint`,
+`check:parity` and `build` all green.
 
-Not a flake, and not something either laptop run had reached: the dashboard
-scored accessibility 0.95 in CI against 1.00 locally, three runs out of three.
-`upload-artifact` skips dot-prefixed paths unless told otherwise, so
-`.lighthouseci/` had uploaded nothing and there was no report to read — fixed
-with `include-hidden-files`, and the summary now names the audits costing points
-and the elements they fired on, so a failure explains itself in the log.
+The prerendered `/` carries four `.langtab` buttons — the fourth labelled
+`flexiq-server` out of `tierProfile`, so one registry names every tab — with
+Python still active and `<html data-sdk="python">`. Rendering the server pane
+directly (a throwaway `pinnedTier` default, reverted) confirmed the rest: the
+title bar reads `door · live`, the two buttons resolve to `/server` and
+`/server/clients`, and `highlightShell` tokenises the snippet cleanly — the
+`sqlite:///tmp` and `localhost:50051` colons and the JSON body all survive,
+which is the case that pass exists for. `data-sdk` stayed `python` with the
+server tab active, which is the invariant the issue asked for.
 
-With the report in hand: the sign-in screen's Refresh control put `--fg-subtle`
-`#867f78` on `--bg` `#fcf9f5` at 3.76:1, against 4.5:1 required at 12px. The
-element was incidental — that token missed AA on *every* light surface
-(3.26:1 on `--surface-3` through 3.92:1 on `--surface`) while carrying table
-text, timestamps and counts across about ten components. Lowering it to L 0.52
-(`#6e6761`) gives 5.30:1 on `--bg` and 4.59:1 at worst. Fixed in #892, which
-owns `globals.css`; this floor went to 0.95 for one commit and back to 1 once
-that merged.
+The `[2, 3]` in the snippet is scalars where `grpc_producer.sh` passes an
+object: checked against `crates/flexiq-server/src/grpc/producer/structured.rs`,
+which converts any `google.protobuf.Value` and refuses only an integer past
+2^53.
 
-Worth recording that the first hypothesis was wrong: CI headless Chrome
-resolving `prefers-color-scheme: dark` would have explained the gap neatly, and
-forcing dark locally still scored 1.00. The report was the only thing that
-settled it.
+Worth keeping: `check:parity`'s `links.mjs` resolves `to=` literals out of
+`app/`, so moving the hero CTAs onto the pane put two hrefs under the gate that
+were previously composed at runtime from the SDK store and checked by nothing.
 
-### Found on the way, not fixed
+---
 
-Three pre-existing docs issues surfaced by the first Lighthouse run. All predate
-this work; none are caused by it, and each is someone's decision to make:
+# #823 follow-up — the server tier shows only server content
 
-- **Every contrast failure is one token.** `--dim: #5c5c70` at 2.92-3.06:1, on
-  sidebar group labels, footer headings, the search placeholder, the SDK label
-  and the copyright line — 10 to 17 nodes per page. Lifting that single value
-  clears the category and lets the a11y floor go to 1.0.
-- **React error #418** on doc pages but not the landing page: a hydration
-  mismatch under the docs layout. It is what holds best-practices at 0.96.
-- **No meta description** on doc pages, holding SEO at 0.90.
+Same branch. The tier switcher reads `flexiq-server` and the sidebar is the
+server tier's, but two things on the page still resolve through the *stored
+SDK* and walk a reader back out of the tier.
 
-### Worth knowing
+## 1. The top nav bar
 
-- The root cause behind item 1 is untouched: two palettes, hand-synced, sharing
-  exactly one token name. They will drift again. A shared token source needs a
-  pnpm workspace, and there isn't one — `docs/` and `dashboard/` are separate
-  projects with separate lockfiles.
-- `docker/scheduler.Dockerfile` is the one change not verified locally: building
-  the image needs docker, which this machine does not use. It is a one-line base
-  image bump on a stage that only runs `pnpm install` and `vite build`.
+`site-nav.tsx` builds `Concepts` / `API` / `Examples` as `` `/${sdk}/${href}` ``
+off `useActiveSdk()`. On `/server` that is the stored language, so the bar
+under a `flexiq-server` switcher links into `/python/…`. Same failure mode as
+the sidebar/prev-next trap #825 caught before shipping — one more consumer that
+was keyed to the SDK when it meant the tier.
+
+Fix: `useActiveTier()`, and each tier owns its three links, tier-relative so
+there is one prefixing rule. The server tier's are the two doors as a caller
+meets them, then running it — it has no `getting-started/concepts` to point at.
+
+- [x] `SDK_LINKS` / `SERVER_LINKS` / `SHARED_LINKS` + `navLinks(tier)`
+- [x] `SiteNav` reads `useActiveTier`; the landing is unaffected
+      (`tierForPath("/")` is null, so it still resolves to the stored SDK)
+
+## 2. ⌘K search
+
+`docs-layout.tsx` passes `useActiveSdk()`, and `search.ts` scopes on
+`forcedSdkForPath`, which returns **null** for `/server/*` — so server pages
+read as *shared* and every tier sees every other tier's pages. On `/server` the
+palette lists the Python tree.
+
+Fix, symmetric (user's call): a tier's search offers what its sidebar offers.
+
+```
+inTier(slug, tier) = tierForPath(slug) === null || tierForPath(slug) === tier
+```
+
+- [x] `inSdk` → `inTier`; `mountFor` swaps the prefix only when the tier is an
+      SDK; `hitInScope`'s per-SDK shared page is in scope for any SDK tier and
+      no other kind
+- [x] `SearchModal` prop `sdk` → `tier`; both callers pass `useActiveTier()`
+- [x] `SECTION_ORDER` gains `Server` before `Architecture` — the browse list is
+      sidebar-ordered, and without it a tier's own pages sort below shared ones
+
+Not touched: `Architecture` and `About` stay in the server sidebar and stay
+in scope. They are tier-neutral by design (#825) — the engine and the project
+are the same ones whichever door you came through. `<SdkLink>` inside a server
+page (`modules/executor` in the local-mode column) also stays SDK-resolved: it
+is talking about the SDK feature on purpose.
+
+## Verify
+
+- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
+- [x] prerendered `/server`: nav links are `/server/*`, none `/python/*`
+- [x] prerendered `/python/*`: nav links unchanged
+
+## Review
+
+Two more commits, still unpushed. All five gates green (`typecheck`, `lint`,
+`check:parity`, `check:search`, `build`).
+
+Nav, read out of the prerendered HTML: `/server` and `/server/operate/tokens`
+carry `/server/clients`, `/server/custom-executors`, `/server/operate`; every
+SDK page is unchanged; `/architecture/*` and `/` still fall back to the stored
+SDK, which is right — those pages belong to no tier.
+
+Search, checked by replaying `inTier` over every prerendered mount (443 of
+them) rather than by reading the diff:
+
+```
+python  in-scope 246  (own 225, tier-neutral 21)  leaked 0
+node    in-scope 201  (own 180, tier-neutral 21)  leaked 0
+java    in-scope 199  (own 178, tier-neutral 21)  leaked 0
+server  in-scope  30  (own   9, tier-neutral 21)  leaked 0
+```
+
+Python pages visible from the server tier: **0**, was every one of them. The 21
+tier-neutral are `/about/*`, `/architecture/*` and `/resources/*` — unchanged,
+and the reason the server tier still has 30 pages to search rather than 9.
+
+---
+
+# Follow-up 2 — the tier survives a tier-neutral page
+
+Reported: pick `flexiq-server`, click **Architecture** in its sidebar, land in
+Node.js. The sidebar is right to offer `/architecture/*` — those pages are
+tier-neutral by design — but the URL names no tier, so `useActiveTier` fell
+through to the *stored SDK*, and the switcher, nav bar, sidebar and search scope
+all flipped to whatever language was last picked. Every shared page was an exit
+from the server tier.
+
+The SDK store cannot hold the answer: its value is the `<html data-sdk>` one.
+So a second, tiny store holds the one thing it cannot.
+
+- [x] `app/lib/tier-store.ts` — `pinned: Tier | null`, null meaning "follow the
+      SDK". `set()` routes on `isSdk`: a language goes to `sdkStore` and clears
+      the pin, anything else is the pin
+- [x] In memory, not persisted — it carries a choice across a navigation, and a
+      fresh load of a shared page has no such choice to honour. Keeps the
+      no-flash boot script about `data-sdk` alone
+- [x] `useActiveTier` = `tierForPath(path) ?? pinned ?? sdk`
+- [x] `docs-layout`'s sticky effect becomes `tierForPath` + `tierStore.set`,
+      which subsumes the old `forcedSdkForPath` + `setSdk`
+- [x] `TierSelect.select` writes through the same store
+- [x] Hero drops its local `pinnedTier` for the shared one — one tier state, and
+      picking the server tab now also gives `/` the server nav bar and search
+      scope, which is what "only server content" meant there
+
+## Verify
+
+- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
+- [x] seed the pin to `server` and prerender: `/architecture` and
+      `/about/changelog` render the server sidebar, nav and switcher
+- [x] restore: those pages are Python again, `/server` unchanged, `/` unchanged
+
+## Review
+
+Two commits, `c5997fab` + the hero one. All five gates green.
+
+Verified by seeding the pin to `server` (both the live value and the server
+snapshot), building, and reading the prerendered HTML — the same trick as the
+hero pane, and the only way to see client state in a static build:
+
+```
+/architecture     switcher flexiq-server · nav /server/* · sidebar Server & wire | Operate | Architecture | About
+/about/changelog  switcher flexiq-server · nav /server/*
+```
+
+Restored, the same two pages are Python again and `/server`, `/python/*` and `/`
+are untouched. That the *sidebar* followed is the real proof: it reads
+`useActiveTier` independently of the nav bar, so both consumers agreed off one
+store.
+
+Worth keeping: the fix is one predicate in one place because `tierStore.set`
+routes on `isSdk` rather than on the tier's name — the same shape the hero used
+locally, which is why folding the hero into it removed state rather than adding
+any.
+
+---
+
+# Follow-up 3 — the serverdoor demo's row stayed `pending`
+
+`server-door-demo.tsx` drew the `jobs` row from a constant whose `status` was
+the literal `"pending"`. The trace does not stop at the 200: two stages follow
+it — a worker claims the job, then the result is written back — and neither
+touched the row. So the demo ended showing a finished job as pending, on the
+one page that argues the door writes the same row an SDK does.
+
+- [x] `Stage.rowStatus?: RowStatus`, typed `"pending" | "running" | "complete"`
+      — `JobStatus::as_str` in `flexiq-core`, so a typo is a type error
+- [x] `running` on the claim stage, `complete` on the result stage; `ROW` keeps
+      `pending` as the value the *insert* writes, and `status` falls back to it
+- [x] derived latest-wins like the client's status line, so scrubbing backwards
+      walks the row's status back too
+- [x] both stage details now say what moves it, rather than leaving the row to
+      contradict the prose
+
+## Verify
+
+- [x] `typecheck`, `lint`, `build`
+- [x] prerendered the demo at four playhead positions (temporary `const play`,
+      reverted): `0 → —`, `4000 → pending`, `6000 → running`, `DUR → complete`
+
+---
+
+# Follow-up 4 — the working box breathes
+
+`.sd-box.on` said *where* the current stage was, and nothing said it was still
+happening. Added `live` beside it: the ring breathes on the active box while the
+playhead is short of the end, in the stage's own tone (`--c`), so a refusal
+pulses red without a second rule.
+
+- [x] `Box` takes `live`; the class is only added alongside `on`
+- [x] `@keyframes sdlive` in `demos.css` — a breath, not a hard blink: this sits
+      mid-article, and an on/off blink at that size reads as an error state
+- [x] added to the file's existing `prefers-reduced-motion` query, which is
+      where every other demo animation is switched off
+- [x] verified by prerender: `play=0` → `sd-box on live`, `play=DUR` → `on`
+      alone, and both the keyframes and the reduced-motion rule ship in the CSS
+
+# Follow-up 5 — the finder's two panes are one height
+
+`.finder` was `align-items: start`, so the question list (a fixed seven options)
+and the answer card ended at different heights on nearly every scenario, and the
+pair resized whenever a different scenario was picked.
+
+- [x] `align-items: stretch`, and `.fd-answer` is a column flex with
+      `.fd-card { flex: 1 }` so the card fills its side too — otherwise the
+      shorter scenarios still stopped early inside a stretched column
+- [x] `.fd-foot` gets `margin-top: auto`: the spare space belongs under the
+      options, not under the footer line
+- [x] dropped `position: sticky` from `.fd-ask` and its mobile `static`
+      override — an item as tall as its row has nothing to slide past
+- [x] `.fd-code { min-height: calc(7lh + 30px) }` — the snippets run 3 to 7
+      lines and that spread was most of the resizing. `lh` is the block's own
+      line box, so it follows the font rather than restating it; confirmed it
+      survives Lightning CSS into the shipped bundle
+
+---
+
+# Follow-up 6 — the landing search reaches the server tier
+
+Tier scoping is symmetric, so an SDK tier's palette does not offer `/server/*`.
+Correct on a docs page, where the sidebar is the contract — wrong at `/`, which
+has no sidebar, and where a reader has not picked a door at all. The one door
+that needs no SDK is exactly the one they cannot know to search for.
+
+- [x] the scope parameter becomes `tiers: readonly Tier[]`, `tiers[0]` the one a
+      fan-out page mounts under, so a shared hit still lands in the language the
+      hero is showing
+- [x] `landingTiers(tier)` = `[...new Set([tier, SERVER_TIER])]` — no branch,
+      and it collapses to one entry when the hero is already on the server tab,
+      which keeps "server selected → server content only" true
+- [x] docs pages pass `[tier]` and are unchanged
+- [x] both callers memoise the array: it is a dependency of the palette's query
+      effect, and a fresh array per render would re-run it every render
+
+## Verify
+
+- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
+- [x] replayed the predicate over all prerendered mounts:
+
+```
+docs page   python 246 · node 201 · java 199 · server 30      (unchanged)
+landing     hero=python 255 = 225 python + 9 server + 21 neutral
+            hero=node   210 · hero=java 208 · hero=server 30  (no double count)
+```
+
+---
+
+# Follow-up 7 — the how-it-works diagram, redrawn
+
+Four small icon boxes on a wire said the shape and nothing else, right above a
+demo that says everything. Redrawn in that demo's grammar — box head, figure,
+mono detail lines, named wires — so the two read as one system seen twice.
+
+- [x] `FlowStage` replaces `DiagramStation`: kicker, title, sub, figure, and the
+      two or three lines that say what the box actually does
+- [x] four line-drawn figures in `currentColor`, so a box tints its own
+- [x] wires carry their label (`one write` · `claim` · `run`), and a return rail
+      closes the loop back to the row the enqueue wrote
+- [x] no controls. The demo below is the thing you scrub; two playheads on one
+      screen compete, and this is the one-glance answer read before scrubbing
+- [x] detail lines taken from the code, not the pitch — `delay()` returns a
+      `JobResult` handle, `Storage::claim_execution_batch`, `max_in_flight`
+- [x] old `.station` / `.dicon` / `.dpool` / `.diaglane` CSS and the
+      `DiagramStation` type deleted; the "shared with the server fold" comment
+      on the old component had been stale since the fold moved to `DocDemo`
+
+**The bug worth remembering:** the detail lines were given `class="code"`, and
+`landing.css` has a *bare* `.code` rule for the hero terminal — `height: 384px`,
+`white-space: pre`, `overflow: auto`. Every line inherited a 384px pre-formatted
+scroll box, so each card grew to ~800px and the snippets were clipped mid-token.
+Namespaced to `hiw-mono`. On this page a new class needs a grep before it is
+used: the landing's names are generic and global.

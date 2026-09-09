@@ -1,26 +1,40 @@
 import { Link } from "react-router";
 import { RawHtml } from "@/components/ui";
-import { useSdk } from "@/hooks";
-import { sdkProfile } from "@/lib";
+import { useActiveTier } from "@/hooks";
+import { tierProfile, tierStore } from "@/lib";
 import {
   highlightJava,
   highlightPython,
+  highlightShell,
   highlightTs,
 } from "@/lib/highlight-lite";
-import { HERO_COMING_SOON, HERO_PANES } from "@/lib/landing-content";
+import {
+  HERO_COMING_SOON,
+  HERO_PANES,
+  type HeroPane,
+} from "@/lib/landing-content";
 import { CopyButton } from "./copy-button";
 
+/** A lookup rather than a ternary chain: the dialect is pane data, so adding one
+ *  should be a row here and not another nested branch. */
+const HIGHLIGHT: Record<HeroPane["lang"], (code: string) => string> = {
+  py: highlightPython,
+  ts: highlightTs,
+  java: highlightJava,
+  sh: highlightShell,
+};
+
 export function Hero() {
-  const { sdk, setSdk } = useSdk();
-  // The selected snippet IS the global SDK — clicking a tab sets it, so the hero
-  // copy, the install/quickstart links, and the docs sidebar switch all follow.
-  const active = HERO_PANES.find((p) => p.sdk === sdk) ?? HERO_PANES[0];
-  const codeHtml =
-    active.lang === "ts"
-      ? highlightTs(active.code)
-      : active.lang === "java"
-        ? highlightJava(active.code)
-        : highlightPython(active.code);
+  // A tab is a *tier*, and only three of the four are languages. The choice is
+  // the site's, not this component's: `tierStore` routes a language to the SDK
+  // store — so the copy, the docs links and the sidebar follow it, as they
+  // always did — and holds the server tier itself, because that value in
+  // `<html data-sdk>` matches no `<SdkOnly>` variant and blanks every shared
+  // page. Picking the server tab therefore also gives the nav bar its links and
+  // scopes search, which is the point: the tab claims the whole page or none.
+  const tier = useActiveTier();
+  const active = HERO_PANES.find((p) => p.tier === tier) ?? HERO_PANES[0];
+  const codeHtml = HIGHLIGHT[active.lang](active.code);
 
   return (
     <section className="hero">
@@ -31,16 +45,19 @@ export function Hero() {
         </h1>
         <p className="sub">
           Guides, API reference and architecture for the task queue. Pick your
-          language — the snippet, the links and the sidebar all follow it.
+          language and the snippet, the links and the sidebar all follow it — or
+          pick the server, if the process enqueuing has no binding at all.
         </p>
         <div className="btns">
-          <Link className="btn pri" to={active.docHref}>
-            Quickstart →
+          <Link className="btn pri" to={active.primary.href}>
+            {active.primary.label} →
           </Link>
           {/* GitHub already sits in the nav; the second slot is better spent on
-              the section a reader lands here for after the quickstart. */}
-          <Link className="btn gho" to={`/${sdk}/modules`}>
-            Read Modules →
+              the section a reader lands here for after the quickstart. Both
+              hrefs come off the pane — a tier that is not a language has no
+              `/<sdk>/…` page to compose one from. */}
+          <Link className="btn gho" to={active.secondary.href}>
+            {active.secondary.label} →
           </Link>
         </div>
       </div>
@@ -58,19 +75,19 @@ export function Hero() {
             </div>
             <div className="runtag">
               <span className="ld" />
-              worker · live
+              {active.runtag}
             </div>
           </div>
           <div className="langtabs">
             {HERO_PANES.map((p) => (
               <button
-                key={p.sdk}
+                key={p.tier}
                 type="button"
-                aria-pressed={p.sdk === sdk}
-                className={`langtab ${p.sdk === sdk ? "active" : ""}`.trim()}
-                onClick={() => setSdk(p.sdk)}
+                aria-pressed={p.tier === tier}
+                className={`langtab ${p.tier === tier ? "active" : ""}`.trim()}
+                onClick={() => tierStore.set(p.tier)}
               >
-                {sdkProfile(p.sdk).label}
+                {tierProfile(p.tier).label}
               </button>
             ))}
             {HERO_COMING_SOON.map((name) => (

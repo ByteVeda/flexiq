@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { SearchModal, Sidebar, Toc } from "@/components/docs";
 import { SiteNav } from "@/components/ui";
-import { useActiveSdk, useSdk } from "@/hooks";
-import { forcedSdkForPath } from "@/lib";
+import { useActiveTier } from "@/hooks";
+import { tierForPath, tierStore } from "@/lib";
 
 /** Shell for every docs page: top nav + sidebar + article outlet + on-this-page TOC. */
 export default function DocsLayout() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const { pathname } = useLocation();
-  const { setSdk } = useSdk();
-  const sdk = useActiveSdk();
+  // Search is scoped to the tier, not the language: `/server/*` has a sidebar of
+  // its own, and the palette should offer what that sidebar does — this one
+  // tier and no other. Memoised because it is a dependency of the palette's
+  // query effect, and a fresh array each render would re-run it each render.
+  const tier = useActiveTier();
+  const tiers = useMemo(() => [tier], [tier]);
 
   // Close the mobile sidebar drawer whenever the route changes (i.e. a nav link
   // was tapped) so it never lingers over the freshly-loaded page.
@@ -20,14 +24,15 @@ export default function DocsLayout() {
     setNavOpen(false);
   }, [pathname]);
 
-  // Visiting an SDK-specific page (`/python/*`,`/node/*`) makes that SDK sticky,
-  // so walking onto a shared page keeps the choice. No-op on shared pages.
+  // Visiting a page inside a tier (`/python/*`, `/server/*`, …) makes that tier
+  // sticky, so walking onto a shared page keeps the choice — a language lands in
+  // the SDK store, the server tier in the tier store. No-op on shared pages.
   useEffect(() => {
-    const forced = forcedSdkForPath(pathname.replace(/\/$/, "") || "/");
+    const forced = tierForPath(pathname.replace(/\/$/, "") || "/");
     if (forced) {
-      setSdk(forced);
+      tierStore.set(forced);
     }
-  }, [pathname, setSdk]);
+  }, [pathname]);
 
   // ⌘K / Ctrl-K opens search anywhere in the docs.
   useEffect(() => {
@@ -58,7 +63,7 @@ export default function DocsLayout() {
       <SearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        sdk={sdk}
+        tiers={tiers}
       />
     </>
   );
