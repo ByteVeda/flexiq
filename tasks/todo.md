@@ -40,17 +40,17 @@ sit at the same level and point at each other.
 
 ## The plan
 
-- [ ] `contracts/REMOTE_SDK_CONTRACT.md` — the document. Sections below.
-- [ ] `.github/workflows/publish-server.yml:339` — add it to the tarball, and
+- [x] `contracts/REMOTE_SDK_CONTRACT.md` — the document. Sections below.
+- [x] `.github/workflows/publish-server.yml:339` — add it to the tarball, and
       amend the comment above the `tar` so the *why* survives the next edit.
-- [ ] `contracts/wire-vectors.json` `$comment` — name the new file as the
+- [x] `contracts/wire-vectors.json` `$comment` — name the new file as the
       contract the vectors are the conformance bar for. Hex is untouched: a
       diff to a hex string is a wire-format change.
-- [ ] `README.md` / `ARCHITECTURE.md` — both already link `BINDING_CONTRACT.md`
+- [x] `README.md` / `ARCHITECTURE.md` — both already link `BINDING_CONTRACT.md`
       in one sentence; the remote contract goes in the same sentence.
-- [ ] `crates/flexiq-core/BINDING_CONTRACT.md` — one line, at the top, saying
+- [x] `crates/flexiq-core/BINDING_CONTRACT.md` — one line, at the top, saying
       which of the two contracts the reader wants.
-- [ ] `docs/content/docs/server/{contract,clients,custom-executors}.mdx` — a
+- [x] `docs/content/docs/server/{contract,clients,custom-executors}.mdx` — a
       link to the normative file. The pages keep their prose; they stop being
       the only place the rules exist.
 
@@ -121,9 +121,78 @@ vector for every hard rule.
 
 ## Verify
 
-- [ ] `pnpm --dir docs typecheck` / `lint` / `build` (mdx touched)
-- [ ] `actionlint` on the workflow, and the `tar` line reproduced by hand
-- [ ] `python -c json.load` on `wire-vectors.json` — the `$comment` edit must
-      not break the file every SDK's suite parses
-- [ ] Every file:line and every constant in the document re-grepped after the
-      draft, not while writing it
+- [x] `pnpm --dir docs typecheck` / `lint` / `build` — all green, build exit 0
+- [x] The `tar` line reproduced by hand; `actionlint` is not installed here, so
+      the YAML was parsed and the step's `run` block read back instead
+- [x] `json.load` on `wire-vectors.json`, and the counts the document states
+      re-derived from it: 9 `encode`, 3 `decode_only`, 2 `round_trip_only`,
+      2 `encode` cases with a non-empty `kwargs`
+- [x] Every constant in the document re-grepped after the draft. Four claims
+      did not survive it — see below.
+
+---
+
+# Review
+
+Five commits, authored as `kartikeya`. No Rust, no proto, no schema: the only
+executable change is a `tar` argument.
+
+## The four claims the draft got wrong
+
+Each was written from a design document or a docs page and corrected against
+code. This is the argument for the re-grep pass being separate from the writing.
+
+1. **`EnqueueBatch` fails in two shapes, not one.** The draft said a client
+   reads results per item. It does — *when the batch could partially apply*.
+   Where it could not, the RPC itself fails and carries the failing item's
+   `index`, because returning earlier items as enqueued would report jobs that
+   do not exist (`producer_service.proto:145-149`). A client that only reads
+   `results` never sees that case.
+2. **`GetJob` does not return the payload by default.** `include_payload` is
+   opt-in (`producer_service.proto:163-165`). Nothing on the docs site says so,
+   and a client author would have found it by getting an empty field.
+3. **The docs URL.** `flexiq.byteveda.org` does not exist; the site is
+   `docs.byteveda.org/flexiq`.
+4. **`RetryInfo` is not `QUEUE_FULL`'s.** It is attached to *every*
+   `RESOURCE_EXHAUSTED` — `retry_after: (code == Code::ResourceExhausted)`,
+   `grpc/status/mod.rs:77` — so `RATE_LIMITED` carries one too. The design spec
+   names only `RESOURCE_EXHAUSTED`, which reads as the one reason if you come to
+   it through `QUEUE_FULL`'s metadata row.
+
+## Two things resolved by reading rather than by asserting
+
+- **`Heartbeat` is SHOULD, not MUST.** The obvious reading is that an executor
+  that stops heartbeating gets reaped. It does not: `idle_ms` is derived from
+  `last_seen_ms` (`worker/remote.rs:476`), *every* frame updates that
+  (`remote.rs:1439,1449`), and its only consumer is the dashboard's executor
+  list (`dashboard/routes/executors.rs:38`). Nothing evicts on it. The stream is
+  what liveness is; the heartbeat carries `free_slots` and an operator's view.
+- **`CONTRACT_TOO_OLD` is never about the client.** `ensure_contract_supported`
+  is called from exactly one place (`contract.rs:94`) and every caller invokes
+  it at storage open — including `flexiq-server` itself, before it serves. There
+  is no request path that raises it, and its `speaks` is the *server's* level.
+  The reason is on the closed list because the list is closed. That is the
+  sharpest available answer to the issue's fifth bullet.
+
+## What was deliberately not done
+
+- **No fourth copy of `limits.mdx`.** The delta section states the absent
+  surfaces as a table and drops the rationale prose; `limits.mdx` and
+  `custom-executors.mdx` already carry a near-verbatim "an executor cannot
+  enqueue" paragraph each, and a third would be how three copies become three
+  rules. The docs pages now name the normative file instead.
+- **No SDK packaging change.** `wire-vectors.json` is in no wheel, npm tarball
+  or jar, and adding it to three would be three new packaging surfaces to keep
+  in step. The release asset already carries it, and now carries the document
+  that says passing it is the bar — which is the issue's seventh bullet.
+
+## One bug found and not fixed, because it is not this issue
+
+`crates/flexiq-core/tests/rust/wire_vector_tests.rs` loads the vectors with
+`include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../contracts/wire-vectors.json"))`
+— a path **outside the crate root**. `flexiq-core` is published to crates.io
+(`publish-crates.yml:40`) and `cargo package` copies nothing above the crate
+directory, so `cargo test -p flexiq-core` against the published crate fails to
+compile on a missing file. CI never catches it: `cargo package --locked` builds
+lib and bin targets, not test targets. Latent, because nobody runs the vendored
+crate's tests. Worth its own issue.
