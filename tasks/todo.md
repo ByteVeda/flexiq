@@ -225,3 +225,28 @@ Worth keeping: the fix is one predicate in one place because `tierStore.set`
 routes on `isSdk` rather than on the tier's name — the same shape the hero used
 locally, which is why folding the hero into it removed state rather than adding
 any.
+
+---
+
+# Follow-up 3 — the serverdoor demo's row stayed `pending`
+
+`server-door-demo.tsx` drew the `jobs` row from a constant whose `status` was
+the literal `"pending"`. The trace does not stop at the 200: two stages follow
+it — a worker claims the job, then the result is written back — and neither
+touched the row. So the demo ended showing a finished job as pending, on the
+one page that argues the door writes the same row an SDK does.
+
+- [x] `Stage.rowStatus?: RowStatus`, typed `"pending" | "running" | "complete"`
+      — `JobStatus::as_str` in `flexiq-core`, so a typo is a type error
+- [x] `running` on the claim stage, `complete` on the result stage; `ROW` keeps
+      `pending` as the value the *insert* writes, and `status` falls back to it
+- [x] derived latest-wins like the client's status line, so scrubbing backwards
+      walks the row's status back too
+- [x] both stage details now say what moves it, rather than leaving the row to
+      contradict the prose
+
+## Verify
+
+- [x] `typecheck`, `lint`, `build`
+- [x] prerendered the demo at four playhead positions (temporary `const play`,
+      reverted): `0 → —`, `4000 → pending`, `6000 → running`, `DUR → complete`

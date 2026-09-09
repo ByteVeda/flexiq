@@ -32,6 +32,13 @@ const LANES: { id: Lane; label: string; sub: string }[] = [
 
 type Tone = "run" | "ok" | "bad";
 
+/** `JobStatus`'s lowercase display names, the form a listing shows. The column
+ *  itself is an integer; these are `JobStatus::as_str` in `flexiq-core`. */
+type RowStatus = "pending" | "running" | "complete";
+
+/** The one column a later stage rewrites instead of adding. */
+const STATUS_COL = "status";
+
 interface Stage {
   /** Milliseconds into the trace at which this stage begins. */
   t: number;
@@ -45,16 +52,21 @@ interface Stage {
   step?: 1 | 2 | 3;
   /** Field the `jobs` row gains at this stage. */
   row?: string[];
+  /** What the row's `status` column reads after this stage. The trace does not
+   *  stop at the response — a claim and a result follow it — so leaving this
+   *  unset past the insert left the row saying `pending` over a finished job. */
+  rowStatus?: RowStatus;
   /** Status line the client is holding after this stage. */
   status?: string;
 }
 
+/** The row as the insert writes it; `status` moves on from here. */
 const ROW: [string, string][] = [
   ["id", "01a08035-e66c-7b12-8f9b-577416f6fa9f"],
   ["task_name", "send_email"],
   ["namespace", "default"],
   ["queue", "default"],
-  ["status", "pending"],
+  [STATUS_COL, "pending"],
 ];
 
 /** The request the two scenarios both send, shown in the client box. */
@@ -129,7 +141,8 @@ const ACCEPTED: Stage[] = [
     tone: "run",
     title: "a worker claims it",
     detail:
-      "An ordinary SDK worker, unchanged and unaware. It never learns the job was enqueued over HTTP.",
+      "An ordinary SDK worker, unchanged and unaware. It never learns the job was enqueued over HTTP. The claim is what moves the row to `running`.",
+    rowStatus: "running",
   },
   {
     t: 6700,
@@ -138,7 +151,8 @@ const ACCEPTED: Stage[] = [
     tone: "ok",
     title: "result written back",
     detail:
-      "Same store, same scheduler, same retry and dead-letter rules as the embedded path. The door changed who could enqueue, and nothing else.",
+      "The row lands on `complete`, and a `GetJob` from the client that never held a database credential now reads it. Same store, same scheduler, same retry and dead-letter rules as the embedded path — the door changed who could enqueue, and nothing else.",
+    rowStatus: "complete",
   },
 ];
 
@@ -289,6 +303,8 @@ export default function ServerDoorDemo(_props: DemoProps) {
   const steps = new Set(done.map((s) => s.step).filter(Boolean));
   const rowFields = new Set(done.flatMap((s) => s.row ?? []));
   const status = [...done].reverse().find((s) => s.status)?.status;
+  // Latest wins, so scrubbing backwards walks the row's status back too.
+  const rowStatus = [...done].reverse().find((s) => s.rowStatus)?.rowStatus;
 
   // The hop is drawn only while its stage is the current one, and travels for
   // the first 70% of that stage — so the packet lands before the box lights up
@@ -406,7 +422,11 @@ export default function ServerDoorDemo(_props: DemoProps) {
                 failed={stage.tone === "bad"}
               />
             ) : lane.id === "store" ? (
-              <StoreBox fields={rowFields} tone={stage.tone} />
+              <StoreBox
+                fields={rowFields}
+                status={rowStatus}
+                tone={stage.tone}
+              />
             ) : (
               <WorkerBox
                 busy={done.some((s) => s.lane === "worker")}
@@ -672,8 +692,18 @@ function DoorBox({
   );
 }
 
-/** The store box: the `jobs` row filling in field by field. */
-function StoreBox({ fields, tone }: { fields: Set<string>; tone: Tone }) {
+/** The store box: the `jobs` row filling in field by field, then its `status`
+ *  moving as the worker claims the job and writes the result back. `status`
+ *  falls back to the inserted value, so every other column stays a constant. */
+function StoreBox({
+  fields,
+  status,
+  tone,
+}: {
+  fields: Set<string>;
+  status?: RowStatus;
+  tone: Tone;
+}) {
   return (
     <div className="sd-body">
       <StoreFigure
@@ -686,7 +716,9 @@ function StoreBox({ fields, tone }: { fields: Set<string>; tone: Tone }) {
           {ROW.map(([k, v]) => (
             <tr key={k} className={fields.has(k) ? "on" : ""}>
               <th scope="row">{k}</th>
-              <td>{fields.has(k) ? v : "—"}</td>
+              <td>
+                {fields.has(k) ? (k === STATUS_COL ? (status ?? v) : v) : "—"}
+              </td>
             </tr>
           ))}
         </tbody>
