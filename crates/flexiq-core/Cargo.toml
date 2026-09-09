@@ -9,6 +9,14 @@ description = "Embeddable task queue: SQLite/Postgres/Redis storage, scheduler w
 keywords = ["task-queue", "jobs", "scheduler", "background", "worker"]
 categories = ["asynchronous", "database"]
 readme = "README.md"
+# `tests/wire_vectors.rs` asserts `contracts/wire-vectors.json`, which lives at
+# the repository root because four runtimes assert the same file. `cargo package`
+# carries nothing above the package root, so this one target cannot compile from
+# a published tarball — it is a repository test hosted in a crate, not a crate
+# test. Excluded rather than fixed in place: moving the vectors in here would
+# give one fact two homes, and letting the test pass when it cannot find them
+# would be a conformance gate that fails open.
+exclude = ["tests/wire_vectors.rs"]
 
 [features]
 default = []

@@ -8,6 +8,10 @@
 //! `serde_json::Value`, which sorts object keys: one case pins a two-key map in
 //! the order it was written, and comparing against sorted bytes would assert
 //! the wrong thing.
+//!
+//! Its own target, and not a module under `tests/rust/`, so that `exclude` in
+//! `Cargo.toml` can drop this one file from the published crate: it reads a
+//! path above the package root, which `cargo package` cannot carry.
 
 use std::fmt;
 
