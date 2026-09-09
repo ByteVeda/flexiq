@@ -8,7 +8,7 @@ import {
   useRef,
 } from "react";
 import { Link } from "react-router";
-import { type Sdk, useSdk } from "@/hooks";
+import { type Sdk, useActiveSdk, useSdk } from "@/hooks";
 import { SDK_PROFILES } from "@/lib";
 
 /** Show children only under one SDK. All variants ship in the HTML; the inactive
@@ -27,7 +27,11 @@ export function SdkLink({
   ComponentProps<typeof Link>,
   "to" | "children"
 >) {
-  const { sdk } = useSdk();
+  // useActiveSdk, not useSdk: on a /python/* URL the store can still hold
+  // another SDK from localStorage until docs-layout's effect syncs it, and the
+  // link would resolve to that SDK's mount for the first paint. Same reason
+  // `<Card to=>` reads it; the two are one component's worth of behaviour.
+  const sdk = useActiveSdk();
   const path = to.startsWith("/") ? to : `/${to}`;
   return (
     <Link to={`/${sdk}${path}`} {...rest}>
