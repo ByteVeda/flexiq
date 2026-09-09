@@ -167,3 +167,61 @@ server  in-scope  30  (own   9, tier-neutral 21)  leaked 0
 Python pages visible from the server tier: **0**, was every one of them. The 21
 tier-neutral are `/about/*`, `/architecture/*` and `/resources/*` — unchanged,
 and the reason the server tier still has 30 pages to search rather than 9.
+
+---
+
+# Follow-up 2 — the tier survives a tier-neutral page
+
+Reported: pick `flexiq-server`, click **Architecture** in its sidebar, land in
+Node.js. The sidebar is right to offer `/architecture/*` — those pages are
+tier-neutral by design — but the URL names no tier, so `useActiveTier` fell
+through to the *stored SDK*, and the switcher, nav bar, sidebar and search scope
+all flipped to whatever language was last picked. Every shared page was an exit
+from the server tier.
+
+The SDK store cannot hold the answer: its value is the `<html data-sdk>` one.
+So a second, tiny store holds the one thing it cannot.
+
+- [x] `app/lib/tier-store.ts` — `pinned: Tier | null`, null meaning "follow the
+      SDK". `set()` routes on `isSdk`: a language goes to `sdkStore` and clears
+      the pin, anything else is the pin
+- [x] In memory, not persisted — it carries a choice across a navigation, and a
+      fresh load of a shared page has no such choice to honour. Keeps the
+      no-flash boot script about `data-sdk` alone
+- [x] `useActiveTier` = `tierForPath(path) ?? pinned ?? sdk`
+- [x] `docs-layout`'s sticky effect becomes `tierForPath` + `tierStore.set`,
+      which subsumes the old `forcedSdkForPath` + `setSdk`
+- [x] `TierSelect.select` writes through the same store
+- [x] Hero drops its local `pinnedTier` for the shared one — one tier state, and
+      picking the server tab now also gives `/` the server nav bar and search
+      scope, which is what "only server content" meant there
+
+## Verify
+
+- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
+- [x] seed the pin to `server` and prerender: `/architecture` and
+      `/about/changelog` render the server sidebar, nav and switcher
+- [x] restore: those pages are Python again, `/server` unchanged, `/` unchanged
+
+## Review
+
+Two commits, `c5997fab` + the hero one. All five gates green.
+
+Verified by seeding the pin to `server` (both the live value and the server
+snapshot), building, and reading the prerendered HTML — the same trick as the
+hero pane, and the only way to see client state in a static build:
+
+```
+/architecture     switcher flexiq-server · nav /server/* · sidebar Server & wire | Operate | Architecture | About
+/about/changelog  switcher flexiq-server · nav /server/*
+```
+
+Restored, the same two pages are Python again and `/server`, `/python/*` and `/`
+are untouched. That the *sidebar* followed is the real proof: it reads
+`useActiveTier` independently of the nav bar, so both consumers agreed off one
+store.
+
+Worth keeping: the fix is one predicate in one place because `tierStore.set`
+routes on `isSdk` rather than on the tier's name — the same shape the hero used
+locally, which is why folding the hero into it removed state rather than adding
+any.

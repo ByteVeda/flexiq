@@ -1,8 +1,7 @@
-import { useState } from "react";
 import { Link } from "react-router";
 import { RawHtml } from "@/components/ui";
-import { useSdk } from "@/hooks";
-import { isSdk, type Tier, tierProfile } from "@/lib";
+import { useActiveTier } from "@/hooks";
+import { tierProfile, tierStore } from "@/lib";
 import {
   highlightJava,
   highlightPython,
@@ -26,29 +25,16 @@ const HIGHLIGHT: Record<HeroPane["lang"], (code: string) => string> = {
 };
 
 export function Hero() {
-  const { sdk, setSdk } = useSdk();
-  // A tab is a *tier*, and only three of the four are languages. Picking a
-  // language sets the global SDK, so the docs links and the sidebar follow it.
-  // The server tier cannot go there: the store's value is also the
-  // `<html data-sdk>` one, where CSS uses it to pick which `<SdkOnly>` variant
-  // to show, and a value that is no language matches none of them. So it is
-  // pinned to this component instead, and the SDK the rest of the site reads
-  // stays whatever it was.
-  const [pinnedTier, setPinnedTier] = useState<Tier | null>(null);
-  const tier = pinnedTier ?? sdk;
+  // A tab is a *tier*, and only three of the four are languages. The choice is
+  // the site's, not this component's: `tierStore` routes a language to the SDK
+  // store — so the copy, the docs links and the sidebar follow it, as they
+  // always did — and holds the server tier itself, because that value in
+  // `<html data-sdk>` matches no `<SdkOnly>` variant and blanks every shared
+  // page. Picking the server tab therefore also gives the nav bar its links and
+  // scopes search, which is the point: the tab claims the whole page or none.
+  const tier = useActiveTier();
   const active = HERO_PANES.find((p) => p.tier === tier) ?? HERO_PANES[0];
   const codeHtml = HIGHLIGHT[active.lang](active.code);
-
-  // Routed on `isSdk` rather than on the tier's name, so a second non-language
-  // tier needs no second branch here.
-  function select(next: Tier) {
-    if (isSdk(next)) {
-      setSdk(next);
-      setPinnedTier(null);
-      return;
-    }
-    setPinnedTier(next);
-  }
 
   return (
     <section className="hero">
@@ -99,7 +85,7 @@ export function Hero() {
                 type="button"
                 aria-pressed={p.tier === tier}
                 className={`langtab ${p.tier === tier ? "active" : ""}`.trim()}
-                onClick={() => select(p.tier)}
+                onClick={() => tierStore.set(p.tier)}
               >
                 {tierProfile(p.tier).label}
               </button>
