@@ -250,3 +250,38 @@ one page that argues the door writes the same row an SDK does.
 - [x] `typecheck`, `lint`, `build`
 - [x] prerendered the demo at four playhead positions (temporary `const play`,
       reverted): `0 → —`, `4000 → pending`, `6000 → running`, `DUR → complete`
+
+---
+
+# Follow-up 4 — the working box breathes
+
+`.sd-box.on` said *where* the current stage was, and nothing said it was still
+happening. Added `live` beside it: the ring breathes on the active box while the
+playhead is short of the end, in the stage's own tone (`--c`), so a refusal
+pulses red without a second rule.
+
+- [x] `Box` takes `live`; the class is only added alongside `on`
+- [x] `@keyframes sdlive` in `demos.css` — a breath, not a hard blink: this sits
+      mid-article, and an on/off blink at that size reads as an error state
+- [x] added to the file's existing `prefers-reduced-motion` query, which is
+      where every other demo animation is switched off
+- [x] verified by prerender: `play=0` → `sd-box on live`, `play=DUR` → `on`
+      alone, and both the keyframes and the reduced-motion rule ship in the CSS
+
+# Follow-up 5 — the finder's two panes are one height
+
+`.finder` was `align-items: start`, so the question list (a fixed seven options)
+and the answer card ended at different heights on nearly every scenario, and the
+pair resized whenever a different scenario was picked.
+
+- [x] `align-items: stretch`, and `.fd-answer` is a column flex with
+      `.fd-card { flex: 1 }` so the card fills its side too — otherwise the
+      shorter scenarios still stopped early inside a stretched column
+- [x] `.fd-foot` gets `margin-top: auto`: the spare space belongs under the
+      options, not under the footer line
+- [x] dropped `position: sticky` from `.fd-ask` and its mobile `static`
+      override — an item as tall as its row has nothing to slide past
+- [x] `.fd-code { min-height: calc(7lh + 30px) }` — the snippets run 3 to 7
+      lines and that spread was most of the resizing. `lh` is the block's own
+      line box, so it follows the font rather than restating it; confirmed it
+      survives Lightning CSS into the shipped bundle

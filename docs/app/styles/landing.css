@@ -1044,11 +1044,14 @@ main {
    namespaced .finder / .fd-* (no collisions). Code-token colors
    (.kw/.def/.str/.num/.cmt/.fn) come from atoms.css.
    ============================================================ */
+/* Both panes fill the row rather than hugging their own content: the question
+   list is a fixed seven options and the answer card is not, so `start` left one
+   of them ending well short of the other at almost every scenario. */
 .finder {
   display: grid;
   grid-template-columns: 0.92fr 1.08fr;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
 /* Both panes must shrink below their content's intrinsic width so the snippet
    (`white-space: pre`) and CTA buttons never widen the track past the viewport. */
@@ -1056,6 +1059,8 @@ main {
 .fd-answer {
   min-width: 0;
 }
+/* Not sticky any more: an item as tall as its own row has nothing to slide
+   past, so the rule only looked like it did something. */
 .fd-ask {
   background: var(--panel);
   border: 1px solid var(--line2);
@@ -1064,8 +1069,6 @@ main {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  position: sticky;
-  top: 84px;
 }
 .fd-asklabel {
   display: flex;
@@ -1154,7 +1157,10 @@ main {
   background: var(--indigo-soft);
   border-color: var(--indigo-line);
 }
+/* Pinned to the bottom of the pane: the height now comes from the row, so the
+   spare space belongs under the options rather than under this line. */
 .fd-foot {
+  margin-top: auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1186,8 +1192,13 @@ main {
 
 .fd-answer {
   min-height: 420px;
+  display: flex;
+  flex-direction: column;
 }
+/* Fills its column, so the card matches the question list even on the
+   scenarios whose content is shorter than it. */
 .fd-card {
+  flex: 1;
   background: linear-gradient(180deg, var(--panel), var(--panel2));
   border: 1px solid var(--line2);
   border-radius: 18px;
@@ -1354,7 +1365,13 @@ main {
   font-size: 11.5px;
   color: var(--mut);
 }
+/* Reserved for the longest snippet in SCENARIOS (7 lines), plus the block's own
+   padding — box-sizing is border-box. The snippets run 3 to 7 lines, and that
+   spread was most of why picking a different scenario resized the card and the
+   question list beside it. `lh` is this block's line box, so the reservation
+   follows its font-size and line-height rather than restating them. */
 .fd-code {
+  min-height: calc(7lh + 30px);
   font-family: var(--code);
   font-size: 13px;
   line-height: 1.72;
@@ -1397,9 +1414,6 @@ main {
   .finder {
     grid-template-columns: 1fr;
     gap: 14px;
-  }
-  .fd-ask {
-    position: static;
   }
   .fd-answer {
     min-height: 0;
