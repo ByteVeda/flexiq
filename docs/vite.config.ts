@@ -48,7 +48,11 @@ export default defineConfig({
           [
             rehypeShiki,
             {
-              themes: { light: "github-light", dark: "github-dark" },
+              // github-dark-default, not github-dark: the latter's comment
+              // colour (#6a737d) is 3.96:1 on the code panel. This one's
+              // (#8b949e) is 6.20:1, and the rest of the palette is the same
+              // family. github-light already clears 4.82:1 on its panel.
+              themes: { light: "github-light", dark: "github-dark-default" },
               // Emit only --shiki-light/--shiki-dark CSS vars (no inline color/bg),
               // so app.css can switch them on our [data-theme] selector.
               defaultColor: false,
