@@ -148,6 +148,13 @@ jobs:
           # (see build.gradle.kts ffmCapable); a 17/21 build ships JNI-only.
           java-version: "25"
 
+      # The CI jobs have provisioned Gradle through this since it was written;
+      # the release did not, so both `./gradlew` calls below reached the network
+      # cold and gave up on the first bad response. A publish is the worst place
+      # to discover that: the tag is already cut.
+      - name: Provision Gradle
+        uses: ./.github/actions/provision-gradle
+
       - name: Build dashboard SPA
         uses: ./.github/actions/dashboard-build
         with:
