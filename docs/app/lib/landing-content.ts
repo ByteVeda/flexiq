@@ -182,10 +182,10 @@ try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
     // Not "worker · live": nothing in this snippet starts one. The door is what
     // is live, and whose worker drains the job is deliberately not its business.
     runtag: "door · live",
-    code: `# 1 · the door — the one process holding the DSN
+    code: `# terminal 1 · the door — the one process holding the DSN
 ${SERVER_START}
 
-# 2 · any producer — no binding, no CBOR library
+# terminal 2 · any producer — no binding, no CBOR library
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \\
   -d '{"task_name": "add", "structured": {"args": [2, 3]}}' \\
   localhost:50051 flexiq.v1.ProducerService/Enqueue`,
