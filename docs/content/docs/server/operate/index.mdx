@@ -10,7 +10,7 @@ dial in and run them there — so the image is small and identical whichever SDK
 wrote the tasks.
 
 It is additive, not a replacement:
-<SdkLink to="modules/server">Server mode</SdkLink> is the page about *whether*
+[Server & wire](/server) is the page about *whether*
 you want it. This section is about running it once you do.
 
 ```bash
@@ -148,12 +148,12 @@ restarted it.
 | `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE` | `1800` | Executor stream rotation, seconds. `0` never rotates |
 
 There is no token variable: callers present a
-<SdkLink to="operate/server/tokens">scoped API token</SdkLink> stored in the
+[scoped API token](/server/operate/tokens) stored in the
 database. `FLEXIQ_GRPC_TOKEN` was the shared secret an earlier build accepted
 and is now **refused at boot** rather than ignored, because a leftover value is
 a credential the operator believes is in force. The door itself, and what those
 four numbers actually bound, are on
-<SdkLink to="operate/server/grpc">The gRPC door</SdkLink>.
+[The gRPC door](/server/operate/grpc).
 
 ## What `FLEXIQ_MAINTENANCE=off` does not turn off
 
@@ -224,17 +224,17 @@ choosing roles, assigning maintenance, probes and secret rotation.
 
 <Cards>
   <Card
-    to="operate/server/tokens"
+    href="/server/operate/tokens"
     title="API tokens"
     description="Mint, scope, rotate and revoke the credential the gRPC door requires"
   />
   <Card
-    to="operate/server/grpc"
+    href="/server/operate/grpc"
     title="The gRPC door"
     description="The producer and executor doors, the JSON facade, reflection, and the TLS gap"
   />
   <Card
-    to="operate/server/scaling"
+    href="/server/operate/scaling"
     title="Scaling"
     description="What to scale on, per role, and where the maintenance owner sits"
   />

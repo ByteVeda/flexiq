@@ -5,7 +5,7 @@ description: "Enqueue and read work from a language FlexiQ has no SDK for: get t
 
 FlexiQ ships SDKs for three languages. This page is for the fourth — Go, Ruby,
 C#, PHP, Elixir, anything with a gRPC library — talking to the
-<SdkLink to="modules/server">producer door</SdkLink> of a running
+[producer door](/server) of a running
 `flexiq-server`. You need no native binding, no database credential, and, if you
 use `structured` arguments, no CBOR library either.
 
@@ -13,7 +13,7 @@ What you give up is worth naming up front. An SDK gives you task registration,
 middleware, retries expressed in your own code, and a worker. This door gives
 you four verbs — enqueue, read, cancel, count — against a queue somebody else's
 worker drains. If you also want to *run* the work in your language, that is a
-different door: <SdkLink to="modules/custom-executors">Custom executors</SdkLink>.
+different door: [Custom executors](/server/custom-executors).
 
 ## Getting the contract
 
@@ -95,7 +95,7 @@ Every call carries `authorization: Bearer <token>`, a scoped API token minted
 against the server's database. The producer door needs the `produce` scope, and
 a `produce` token cannot open the executor door. Mint, list, expire and revoke
 are covered in
-<SdkLink to="operate/server/tokens">API tokens</SdkLink>.
+[API tokens](/server/operate/tokens).
 
 **There is no namespace field on the wire.** The token carries it, and the
 server serves exactly one — so a job written with no namespace at all is
@@ -160,7 +160,7 @@ past ±9007199254740991 (`2^53 - 1`), non-finite numbers, byte strings and CBOR
 tags. It
 also encodes object keys in sorted order, which changes the bytes without
 changing the meaning. The consequences are set out in
-<SdkLink to="operate/server/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink>.
+[the full treatment](/server/operate/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless).
 
 ## Errors, and what may be retried
 
@@ -190,7 +190,7 @@ The same eight RPCs are served as ordinary HTTP with JSON bodies, on the same
 port and the same credential — proto3 JSON, lowerCamelCase field names with the
 `snake_case` ones accepted too, 64-bit integers as strings. The route table is
 in
-<SdkLink to="operate/server/grpc#the-same-door-without-grpc">The same door, without gRPC</SdkLink>,
+[The same door, without gRPC](/server/operate/grpc#the-same-door-without-grpc),
 and
 [`examples/polyglot/grpc_producer.sh`](https://github.com/ByteVeda/flexiq/blob/master/examples/polyglot/grpc_producer.sh)
 is a working producer in `bash`, `grpcurl` and `jq`.
@@ -199,7 +199,7 @@ is a working producer in `bash`, `grpcurl` and `jq`.
 
 | Cost | Mitigation |
 |---|---|
-| No task registration, middleware or worker — this is a producer, not an SDK | Run the workers in a language that has an SDK, or write a <SdkLink to="modules/custom-executors">custom executor</SdkLink> |
+| No task registration, middleware or worker — this is a producer, not an SDK | Run the workers in a language that has an SDK, or write a [custom executor](/server/custom-executors) |
 | Nothing warns you that a task name is misspelled until the job dead-letters | Enqueue one job by hand against a running worker before wiring the client in |
 | `Job.result` is bytes your generated client will not decode for you | Assert your decoder against `wire-vectors.json` once, then forget it |
 | No completion notification — `v1` has no watch stream | Poll `GetJob`, or subscribe a webhook |

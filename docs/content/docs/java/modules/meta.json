@@ -9,9 +9,6 @@
     "injection",
     "mesh",
     "executor",
-    "server",
-    "clients",
-    "custom-executors",
     "autoscaling"
   ]
 }

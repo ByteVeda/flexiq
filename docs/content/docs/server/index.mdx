@@ -1,7 +1,12 @@
 ---
-title: Server mode
-description: "Run flexiq-server as a network endpoint any language can reach, and know when to reach for it instead of an in-process queue."
+title: Server & wire
+description: "The network door in its own tier: whether to reach for flexiq-server at all, the two doors it opens, and what the wire guarantees a caller with no SDK."
 ---
+
+This tier sits beside Python, Node and Java rather than inside them, because
+the network door is not written in a language. Everything here holds whichever
+SDK — or none — is on the other end of it: one binary to run, two doors, one
+proto, one kind of credential.
 
 **No — this does not replace the mode you already use.** Embedded/local mode —
 one process, no daemon, straight to SQLite — stays the default and stays why
@@ -18,8 +23,8 @@ credential at all.
 | **Reach for it when** | The default — this is nearly always the right answer | A producer has no native binding to reach for, or the database credential must not live in every caller |
 
 Writing that caller is its own page, one per door:
-<SdkLink to="modules/clients">Clients without an SDK</SdkLink> for the producer
-side, <SdkLink to="modules/custom-executors">Custom executors</SdkLink> for the
+[Clients without an SDK](/server/clients) for the producer
+side, [Custom executors](/server/custom-executors) for the
 executor side.
 
 Nothing forces an all-or-nothing switch. A deployment can put only its producer
@@ -53,10 +58,10 @@ two names:
 A `produce` token cannot open an executor stream, and an `execute` token cannot
 enqueue — they are not a hierarchy, and a credential scoped to one package
 never opens the other. See
-<SdkLink to="operate/server/grpc">the gRPC door</SdkLink> for the producer RPCs,
-<SdkLink to="operate/server/tokens">API tokens</SdkLink> for the credential's
+[the gRPC door](/server/operate/grpc) for the producer RPCs,
+[API tokens](/server/operate/tokens) for the credential's
 lifecycle, and
-<SdkLink to="operate/server/grpc#the-executor-door">the executor door</SdkLink>
+[the executor door](/server/operate/grpc#the-executor-door)
 for the `Attach` stream.
 
 <Callout type="info" title="No SDK dials the executor door yet">
@@ -65,7 +70,7 @@ for the `Attach` stream.
   use. `flexiq.executor.v1` exists today for a custom executor written directly
   against the proto, in any language with a gRPC library, which is the same
   "no native binding" pitch the producer door makes.
-  <SdkLink to="modules/custom-executors">Custom executors</SdkLink> is how.
+  [Custom executors](/server/custom-executors) is how.
 </Callout>
 
 ## `raw` versus `structured`
@@ -75,7 +80,7 @@ an SDK already builds, byte for byte — nothing lost, but it needs a CBOR
 library. `structured` takes ordinary JSON values and lets the server build that
 same envelope, so a shell script can enqueue with no codec at all. What it
 cannot carry, it refuses rather than rounds: integers past `2^53 - 1`,
-non-finite numbers, and anything JSON has no syntax for. See <SdkLink to="operate/server/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless">the full treatment</SdkLink> for the one thing it silently normalises instead
+non-finite numbers, and anything JSON has no syntax for. See [the full treatment](/server/operate/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless) for the one thing it silently normalises instead
 — object key order — and what that costs an `auto:` idempotency key.
 
 ## Try it
@@ -96,3 +101,23 @@ the same producer door. The Java worker still opens the database file directly.
 | A second process to deploy, watch and restart | Reach for it only when local mode's constraint — a native binding, or the credential itself — is the actual blocker |
 | The executor door has no SDK client yet | Use TCP/Unix attach for an SDK-based executor; the gRPC stream is for a custom one |
 | TLS is not terminated by `flexiq-server` on either door | Put a sidecar proxy or service mesh in front of both listeners |
+
+## The rest of this tier
+
+<Cards>
+  <Card
+    href="/server/clients"
+    title="Clients without an SDK"
+    description="Get the contract, generate a producer client, and decode what comes back"
+  />
+  <Card
+    href="/server/custom-executors"
+    title="Custom executors"
+    description="Implement the executor door from scratch: the handshake, the frames, the lease"
+  />
+  <Card
+    href="/server/operate"
+    title="Running flexiq-server"
+    description="Four listener roles, the configuration, API tokens, the gRPC door, scaling"
+  />
+</Cards>

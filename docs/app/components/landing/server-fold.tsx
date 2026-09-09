@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import { DocDemo } from "@/components/demos";
 import { RawHtml } from "@/components/ui";
-import { useActiveSdk } from "@/hooks";
 import { highlightShell } from "@/lib/highlight-lite";
 import { SERVER_PANES, type ServerPane } from "@/lib/landing-content";
 import { CopyButton } from "./copy-button";
@@ -15,12 +14,11 @@ import { SectionHead } from "./sections";
  * with no reason to keep going. The `serverdoor` demo walks one request through
  * the door — scope check, envelope, row, response — and the two transcripts
  * beneath it are that request as a reader would actually type it. Then it hands
- * off: the trade-off belongs to `modules/server`, which argues it properly, so
- * the closing line links there rather than restating the case.
+ * off: the trade-off belongs to the `/server` tier, which argues it properly, so
+ * the closing line links there rather than restating the case. Those two links
+ * carry no SDK prefix on purpose — the tier is where the door stops being one.
  */
 export function ServerFold() {
-  const sdk = useActiveSdk();
-
   return (
     <section className="section srv" id="server-mode">
       <div className="wrap">
@@ -68,10 +66,10 @@ export function ServerFold() {
             better door.
           </p>
           <div className="doclinks">
-            <Link className="doclink" to={`/${sdk}/modules/server`}>
+            <Link className="doclink" to="/server">
               When to reach for server mode <Arrow />
             </Link>
-            <Link className="doclink" to={`/${sdk}/modules/clients`}>
+            <Link className="doclink" to="/server/clients">
               Write a client without an SDK <Arrow />
             </Link>
           </div>

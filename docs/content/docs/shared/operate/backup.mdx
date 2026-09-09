@@ -147,7 +147,7 @@ notice:
 So the recovery window is the heartbeat threshold plus one sweep, not the job's
 full timeout. **This does not depend on `FLEXIQ_MAINTENANCE`** — reaping and
 recovery run in every process, and only the retention sweeps are the maintenance
-owner's job. See <SdkLink to="operate/server">Server</SdkLink>.
+owner's job. See [Running flexiq-server](/server/operate).
 
 Two edges worth knowing. A worker that comes back with the **same** id and a
 fresh heartbeat is *live*, so its restored claims are not orphans; those jobs
@@ -186,7 +186,7 @@ flexiq-server token revoke <id>
 The same applies to dashboard users and sessions, which are stored the same way:
 a removed user comes back, and a password changed after the backup point reverts
 to the old one. Treat a restore as a credential event, not just a data event.
-<SdkLink to="operate/server/tokens">API tokens</SdkLink> has the rest of the
+[API tokens](/server/operate/tokens) has the rest of the
 lifecycle.
 
 ## Restoring into a newer version

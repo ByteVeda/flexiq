@@ -16,8 +16,10 @@
 //     adding a topic is a decision about all three trees at once.
 //
 // `dir` is relative to the SDK root. Sections outside a tree (`architecture`,
-// `about`) are shared by construction and need no skeleton. So is
-// `api-reference/symbols`, which `scripts/api/` generates.
+// `about`, and the `server` tier of #825) have one copy rather than three, so
+// there is nothing for a skeleton to hold in agreement — `checks/tier-shape.mjs`
+// covers the server tier instead. So is `api-reference/symbols`, which
+// `scripts/api/` generates.
 
 export const SECTION_SKELETON = [
   {
@@ -122,9 +124,6 @@ export const SECTION_SKELETON = [
       "injection",
       "mesh",
       "executor",
-      "server",
-      "clients",
-      "custom-executors",
       "autoscaling",
     ],
   },
@@ -177,7 +176,6 @@ export const SECTION_SKELETON = [
       "cli",
       "deployment",
       "kubernetes",
-      "server",
       "backup",
       "security",
       "troubleshooting",
@@ -185,16 +183,6 @@ export const SECTION_SKELETON = [
       "upgrading-0.15",
       "graalvm",
     ],
-  },
-  {
-    // #826. `flexiq-server` is one binary with four listener roles, and every
-    // one of them is an operator concern the three SDK trees share verbatim —
-    // so it is a group under `operate` rather than a page, and every page in it
-    // is shared. #825 lifts this group into the server tier when that tier
-    // exists; until then `operate` is where someone running the binary looks.
-    dir: "operate/server",
-    title: "Server",
-    pages: ["index", "tokens", "grpc", "scaling"],
   },
   {
     dir: "api-reference",

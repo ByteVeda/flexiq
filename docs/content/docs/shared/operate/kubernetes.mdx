@@ -118,7 +118,7 @@ Only the maintenance owner's pod gets `FLEXIQ_MAINTENANCE=on`. Every pod in the
 replicated release gets `FLEXIQ_MAINTENANCE=off` and runs no retention sweeps,
 so the deletes are never duplicated across replicas. What `off` does *not* turn
 off is dead-worker reaping and in-flight recovery — those stay on everywhere, on
-purpose. See <SdkLink to="operate/server">Server</SdkLink>.
+purpose. See [Running flexiq-server](/server/operate).
 
 Use distinct release names and expose only the Services clients should reach.
 All releases must use the same storage and namespace when they cooperate on the

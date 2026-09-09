@@ -88,6 +88,20 @@ const MOVED_IN_EVERY_SDK: [string, string][] = [
   ["guides/integrations/sentry", "guides/extend/sentry"],
 ];
 
+// #825 — the network door left the SDK trees entirely. It was never a language,
+// and holding one copy of it per SDK is what let it scatter across `modules/`
+// and `operate/` in the first place; it now has its own tier at `/server`, so
+// these three paths point out of the SDK prefix rather than across it.
+const MOVED_TO_SERVER_TIER: [string, string][] = [
+  ["modules/server", "/server"],
+  ["modules/clients", "/server/clients"],
+  ["modules/custom-executors", "/server/custom-executors"],
+  ["operate/server", "/server/operate"],
+  ["operate/server/tokens", "/server/operate/tokens"],
+  ["operate/server/grpc", "/server/operate/grpc"],
+  ["operate/server/scaling", "/server/operate/scaling"],
+];
+
 // Pages only one tree ever had: python's `advanced-execution` and standalone
 // dashboard group, and each SDK's own framework integrations.
 const MOVED_IN_ONE_SDK: Record<string, [string, string][]> = {
@@ -134,6 +148,11 @@ function sdkMoves(): [string, string][] {
   for (const [sdk, moves] of Object.entries(MOVED_IN_ONE_SDK)) {
     for (const [from, to] of moves) {
       all.push([`/${sdk}/${from}`, `/${sdk}/${to}`]);
+    }
+  }
+  for (const sdk of SDKS) {
+    for (const [from, to] of MOVED_TO_SERVER_TIER) {
+      all.push([`/${sdk}/${from}`, to]);
     }
   }
   return all;

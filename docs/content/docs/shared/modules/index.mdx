@@ -11,8 +11,6 @@ import {
   Network,
   PlugZap,
   Server,
-  FileCode,
-  Cable,
   Gauge,
 } from "lucide-react";
 
@@ -76,21 +74,9 @@ first and come back when you hit the problem a module solves.
   />
   <Card
     icon={<Server />}
-    title="Server mode"
-    to="modules/server"
-    description="Put a producer and executor door on the network, for callers with no native binding to reach for."
-  />
-  <Card
-    icon={<FileCode />}
-    title="Clients without an SDK"
-    to="modules/clients"
-    description="Enqueue and read work from a language FlexiQ has no SDK for: get the contract, generate a client, decode what comes back."
-  />
-  <Card
-    icon={<Cable />}
-    title="Custom executors"
-    to="modules/custom-executors"
-    description="Implement the executor door from scratch: the handshake, the frames, capability negotiation, and the lease."
+    title="Server & wire"
+    href="/server"
+    description="The network door, in its own tier: whether to reach for it, the proto it guarantees, and writing a client or an executor in a language with no SDK."
   />
 </Cards>
 
@@ -127,3 +113,7 @@ they sit with the rest of day-to-day queue behaviour in
 backends sit with the rest of running flexiq in production under
 <SdkLink to="operate">Operate</SdkLink>. The engine underneath all of it,
 modules included, is described in [Architecture](/architecture/overview).
+
+The one card above that is not a module is [Server & wire](/server). The network
+door is not written in any language, so it is not part of this SDK's tree at
+all — it is a tier beside it, and the card is the way across.
