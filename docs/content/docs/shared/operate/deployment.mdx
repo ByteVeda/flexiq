@@ -550,8 +550,7 @@ manager, or language runtime. Use logs, the health endpoints where
 tooling image as a separate ephemeral container joined to the server's process
 namespace and leaves the distroless target unchanged, instead of expecting
 `docker exec ... sh` to work.
-The <SdkLink to="modules/server">server module reference</SdkLink> lists its
-runtime configuration.
+[Server & wire](/server) lists its runtime configuration.
 
 The release workflow verifies the server version, OCI labels, and both
 architectures. It currently publishes no BuildKit provenance or SBOM
@@ -1012,12 +1011,12 @@ namespace it refuses to start without, a TLS gap, and its own scrape:
 
 <Cards>
   <Card
-    to="operate/server/grpc"
+    href="/server/operate/grpc"
     title="The gRPC door"
     description="What it serves, raw vs structured, the JSON facade, tuning, metrics, the executor door"
   />
   <Card
-    to="operate/server/tokens"
+    href="/server/operate/tokens"
     title="API tokens"
     description="The scoped credential every call on that listener presents"
   />

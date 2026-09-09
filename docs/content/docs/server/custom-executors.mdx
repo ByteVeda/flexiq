@@ -6,7 +6,7 @@ description: "Implement flexiq.executor.v1 from scratch: the handshake, the fram
 Every SDK's `executor` CLI dials the attach protocol over TCP or a Unix socket.
 `flexiq.executor.v1` is the same protocol as a gRPC stream, and it is there so
 an executor can be written in a language no SDK covers — the mirror of what
-<SdkLink to="modules/clients">Clients without an SDK</SdkLink> does for
+[Clients without an SDK](/server/clients) does for
 producers. If your language *does* have an SDK, use
 <SdkLink to="modules/executor">Attached executors</SdkLink> instead; this page
 is the harder road, taken on purpose.
@@ -159,7 +159,7 @@ incident to chase.
 A `job` frame's `payload` is the tagged wire envelope, and your `success`
 frame's result is one too. The tag table, the `[args, kwargs]` call body, the
 bare-value result body and the conformance vectors are all on
-<SdkLink to="modules/clients#the-payload-envelope">Clients without an SDK</SdkLink>.
+[Clients without an SDK](/server/clients#the-payload-envelope).
 Decode what you are given; do not re-encode it.
 
 ## Trade-offs

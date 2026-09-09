@@ -18,7 +18,7 @@ flexiq-server
 That listener refuses every call until a token exists, loopback included —
 `grpc.health.v1` excepted, so a readiness probe answers on an unprovisioned
 door. Mint one first —
-<SdkLink to="operate/server/tokens">API tokens</SdkLink> is the whole lifecycle,
+[API tokens](/server/operate/tokens) is the whole lifecycle,
 and the rest of this page assumes `$FLEXIQ_TOKEN` holds one.
 
 The address is parsed exactly like `FLEXIQ_LISTEN`: `host:port`, a bare `:port`
@@ -56,7 +56,7 @@ than conditionally absent.
 `grpc.health.v1` and reflection.
 
 Writing a client against it, in a language with no FlexiQ SDK, is
-<SdkLink to="modules/clients">its own page</SdkLink>.
+[its own page](/server/clients).
 
 ```bash
 # $FLEXIQ_TOKEN is a token you minted. Exported rather than prefixed onto the
@@ -273,7 +273,7 @@ method this build serves — including anything unrouted — is counted as `othe
 so no caller can mint a series by inventing a URL.
 
 What to do with those numbers is
-<SdkLink to="operate/server/scaling">Scaling</SdkLink>.
+[Scaling](/server/operate/scaling).
 
 ## Tuning the listener
 
@@ -319,7 +319,7 @@ dead-lettering changes because the executor that ran it dialled in over gRPC.
   "no native binding required" story the producer door tells. Reflection
   serves this package too, off the same embedded descriptor, so a client
   needs no `.proto` on hand.
-  <SdkLink to="modules/custom-executors">Custom executors</SdkLink> is the
+  [Custom executors](/server/custom-executors) is the
   page that walks through writing one.
 </Callout>
 
@@ -341,7 +341,7 @@ flexiq-server
 ```
 
 The `execute` scope opens this package, on the same token mechanism
-<SdkLink to="operate/server/tokens">API tokens</SdkLink> covers — mint one with
+[API tokens](/server/operate/tokens) covers — mint one with
 `flexiq-server token create --scope execute` and send it as
 `authorization: Bearer $FLEXIQ_TOKEN` gRPC metadata, exactly like a producer
 call. `Attach` is gated by the same tower layer as every other RPC on this

@@ -29,7 +29,7 @@ load-balanced once it has started, so an executor stays on whichever replica it
 first reached until the stream rotates. That is why it rotates —
 `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`, 30 minutes by default. Adding a replica
 does not rebalance the executors already attached; it takes up to one rotation
-period. See <SdkLink to="operate/server/grpc">The gRPC door</SdkLink>.
+period. See [The gRPC door](/server/operate/grpc).
 
 The webhook is the one role worth running at two replicas for availability
 rather than throughput: it sits in the pod-creation path, and its default

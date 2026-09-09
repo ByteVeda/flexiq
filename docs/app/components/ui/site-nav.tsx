@@ -2,8 +2,15 @@ import { Check, ChevronDown, Menu, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { useActiveSdk, useSdk } from "@/hooks";
-import { forcedSdkForPath, type Sdk, sdkLabels, sdkSwitchTarget } from "@/lib";
+import { useActiveSdk, useActiveTier, useSdk } from "@/hooks";
+import {
+  isSdk,
+  SERVER_TIER,
+  type Tier,
+  tierForPath,
+  tierLabels,
+  tierSwitchTarget,
+} from "@/lib";
 
 // lucide dropped brand glyphs, so the GitHub mark is inlined.
 function GithubMark() {
@@ -20,12 +27,12 @@ function GithubMark() {
   );
 }
 
-// Switcher options come from the SDK registry, so a new language appears here
-// automatically (add its glyph to SDK_ICONS alongside the registry row).
-const SDK_LABELS = sdkLabels();
+// Switcher options come from the tier registry, so a new tier appears here
+// automatically (add its glyph to TIER_ICONS alongside the registry row).
+const TIER_LABELS = tierLabels();
 
-/** Simplified single-color language marks (lucide carries no brand glyphs). */
-const SDK_ICONS: Record<Sdk, React.ReactNode> = {
+/** Simplified single-color marks (lucide carries no brand glyphs). */
+const TIER_ICONS: Record<Tier, React.ReactNode> = {
   python: (
     // The two-snake mark, monochrome.
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -61,14 +68,33 @@ const SDK_ICONS: Record<Sdk, React.ReactNode> = {
       <path d="M8 2.5c-1 1.2-1 2.3 0 3.5M12 2.5c-1 1.2-1 2.3 0 3.5" />
     </svg>
   ),
+  [SERVER_TIER]: (
+    // Two stacked rack units — the one option here that is a process, not a
+    // language.
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="7" rx="1.5" />
+      <rect x="3" y="13" width="18" height="7" rx="1.5" />
+      <path d="M7 7.5h.01M7 16.5h.01" />
+    </svg>
+  ),
 };
 
-/** Global SDK dropdown ("Choose SDK"). Sets the shared store (flips inline
- *  variants + the docs nav); on an SDK-specific page it also navigates to the
- *  counterpart page, on a shared page it stays put. A custom listbox so each
- *  option can carry its language glyph. */
-function SdkSelect() {
-  const { sdk, setSdk } = useSdk();
+/** Global tier dropdown ("Docs for"). Picking a language sets the shared store
+ *  (which flips inline variants and the docs nav); picking the server tier only
+ *  navigates, because that value has no meaning to `<html data-sdk>` and would
+ *  blank every `<SdkOnly>` on the page. A custom listbox so each option can
+ *  carry its glyph. */
+function TierSelect() {
+  const { setSdk } = useSdk();
+  const tier = useActiveTier();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -97,22 +123,28 @@ function SdkSelect() {
     };
   }, [open]);
 
-  function select(target: Sdk) {
+  function select(target: Tier) {
     setOpen(false);
-    if (target === sdk) {
+    if (target === tier) {
       return;
     }
-    setSdk(target);
-    if (forcedSdkForPath(pathname)) {
-      navigate(sdkSwitchTarget(pathname, target));
+    if (isSdk(target)) {
+      setSdk(target);
+    }
+    // A page in no tier (`/architecture/*`, `/about/*`) stays put when the
+    // choice is a language — the page is the same one either way. The server
+    // tier is the exception: it is a destination, not a variant of this page.
+    if (target === SERVER_TIER || tierForPath(pathname)) {
+      navigate(tierSwitchTarget(pathname, target));
     }
   }
 
-  const active = SDK_LABELS.find((l) => l.id === sdk) ?? SDK_LABELS[0];
+  const active = TIER_LABELS.find((l) => l.id === tier) ?? TIER_LABELS[0];
   return (
     <div className="sdk-dd" ref={rootRef}>
+      {/* "Docs for", not "Choose SDK": one of the four options is a binary. */}
       <span className="sdk-dd-label" id="sdk-dd-label">
-        Choose SDK
+        Docs for
       </span>
       <button
         type="button"
@@ -122,24 +154,24 @@ function SdkSelect() {
         aria-labelledby="sdk-dd-label"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="sdk-dd-icon">{SDK_ICONS[active.id]}</span>
+        <span className="sdk-dd-icon">{TIER_ICONS[active.id]}</span>
         <span className="sdk-dd-name">{active.label}</span>
         <ChevronDown className="sdk-caret" size={13} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="sdk-dd-menu" role="listbox" aria-label="SDK">
-          {SDK_LABELS.map(({ id, label }) => (
+        <div className="sdk-dd-menu" role="listbox" aria-label="Documentation">
+          {TIER_LABELS.map(({ id, label }) => (
             <button
               key={id}
               type="button"
               role="option"
-              aria-selected={id === sdk}
-              className={`sdk-dd-opt ${id === sdk ? "active" : ""}`.trim()}
+              aria-selected={id === tier}
+              className={`sdk-dd-opt ${id === tier ? "active" : ""}`.trim()}
               onClick={() => select(id)}
             >
-              <span className="sdk-dd-icon">{SDK_ICONS[id]}</span>
+              <span className="sdk-dd-icon">{TIER_ICONS[id]}</span>
               <span>{label}</span>
-              {id === sdk ? (
+              {id === tier ? (
                 <Check className="sdk-dd-check" size={13} aria-hidden="true" />
               ) : null}
             </button>
@@ -172,12 +204,12 @@ const LINKS: { label: string; href: string; sdk?: boolean }[] = [
 export function SiteNav({
   onSearch,
   onMenu,
-  showSdkSelect = true,
+  showTierSelect = true,
 }: {
   onSearch?: () => void;
   onMenu?: () => void;
   // Landing hides it — the hero language tabs already own SDK selection there.
-  showSdkSelect?: boolean;
+  showTierSelect?: boolean;
 }) {
   const sdk = useActiveSdk();
   // Basename-relative, so this stays `/` under DOCS_BASE_PATH too.
@@ -219,7 +251,7 @@ export function SiteNav({
         ))}
       </div>
       <div className="navright">
-        {showSdkSelect ? <SdkSelect /> : null}
+        {showTierSelect ? <TierSelect /> : null}
         <button type="button" className="kbar" onClick={onSearch}>
           <Search size={14} />
           <span>Search</span>

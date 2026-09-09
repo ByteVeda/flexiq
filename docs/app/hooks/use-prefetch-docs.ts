@@ -1,15 +1,15 @@
 import { useEffect } from "react";
-import { prefetchSdkDocs } from "@/lib/prefetch";
-import { useActiveSdk } from "./use-sdk";
+import { prefetchTierDocs } from "@/lib/prefetch";
+import { useActiveTier } from "./use-tier";
 
 /**
- * Warm the active SDK's docs in the background. Runs on mount and whenever the
- * selected language changes (hero tab, sidebar switcher, or a `/node|/python`
- * URL), so the first navigation into that SDK's docs is instant.
+ * Warm the active tier's docs in the background. Runs on mount and whenever the
+ * tier changes (hero tab, sidebar switcher, or a `/node|/python|/server` URL),
+ * so the first navigation into that tier's docs is instant.
  */
 export function usePrefetchDocs(): void {
-  const sdk = useActiveSdk();
+  const tier = useActiveTier();
   useEffect(() => {
-    prefetchSdkDocs(sdk);
-  }, [sdk]);
+    prefetchTierDocs(tier);
+  }, [tier]);
 }

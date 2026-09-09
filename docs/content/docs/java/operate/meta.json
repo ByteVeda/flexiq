@@ -8,7 +8,6 @@
     "cli",
     "deployment",
     "kubernetes",
-    "server",
     "backup",
     "security",
     "troubleshooting",

@@ -1,5 +1,12 @@
 import { docTitle, hasDoc } from "./manifest";
-import { SDK_IDS, SDK_PROFILES, type Sdk } from "./sdk-registry";
+import { isSdk, type Sdk } from "./sdk-registry";
+import {
+  SERVER_TIER,
+  TIER_IDS,
+  type Tier,
+  tierForPath,
+  tierProfile,
+} from "./tier-registry";
 
 interface Meta {
   title?: string;
@@ -71,7 +78,7 @@ function nodesForDir(dir: string): NavNode[] {
   return nodes;
 }
 
-/** Top-level sidebar groups for an SDK, one per section directory. */
+/** Top-level sidebar groups for a tier, one per section directory. */
 function buildTree(sections: string[]): NavNode[] {
   return sections.map((dir) => {
     const indexSlug = `/${dir}`;
@@ -83,30 +90,32 @@ function buildTree(sections: string[]): NavNode[] {
   });
 }
 
-// Each SDK's nav is its registry `navSections` built into a tree. `architecture`
-// and `resources` are SDK-neutral (the engine is identical across SDKs); both
-// appear in every SDK's section list at shared top-level URLs.
-const NAV_BY_SDK = Object.fromEntries(
-  SDK_IDS.map((id) => [id, buildTree(SDK_PROFILES[id].navSections)]),
-) as Record<Sdk, NavNode[]>;
+// Each tier's nav is its registry `navSections` built into a tree.
+// `architecture` and `about` are tier-neutral (the engine and the project are
+// the same ones); both appear in every tier's section list at shared top-level
+// URLs.
+const NAV_BY_TIER = Object.fromEntries(
+  TIER_IDS.map((id) => [id, buildTree(tierProfile(id).navSections)]),
+) as Record<Tier, NavNode[]>;
 
 export type { Sdk };
 
 /** The SDK forced by an explicit `/<sdk>` URL prefix, or null on a shared page
- *  (where the active SDK comes from the global store instead). */
+ *  or a `/server/*` one (where the active SDK comes from the global store). */
 export function forcedSdkForPath(path: string): Sdk | null {
-  for (const id of SDK_IDS) {
-    if (path === `/${id}` || path.startsWith(`/${id}/`)) {
-      return id;
-    }
-  }
-  return null;
+  const tier = tierForPath(path);
+  return tier !== null && isSdk(tier) ? tier : null;
 }
 
-/** Where the sidebar SDK switch should go: the same page under the target SDK's
- *  prefix if it exists, else that SDK's install landing. Shared pages stay put
- *  (the caller skips navigation when the current path isn't SDK-prefixed). */
-export function sdkSwitchTarget(path: string, target: Sdk): string {
+/** Where the switcher should go: the same page under the target tier's prefix
+ *  if it exists, else that tier's landing. The server tier mounts one copy of
+ *  each page rather than one per SDK, so it has no counterpart to swap to and
+ *  always lands on its own index. Pages in no tier stay put (the caller skips
+ *  navigation when the current path has no tier prefix). */
+export function tierSwitchTarget(path: string, target: Tier): string {
+  if (target === SERVER_TIER) {
+    return `/${SERVER_TIER}`;
+  }
   const current = forcedSdkForPath(path);
   if (current && current !== target) {
     const swapped = `/${target}${path.slice(`/${current}`.length)}`;
@@ -117,12 +126,12 @@ export function sdkSwitchTarget(path: string, target: Sdk): string {
   return `/${target}/getting-started/installation`;
 }
 
-export function navForSdk(sdk: Sdk): NavNode[] {
-  return NAV_BY_SDK[sdk];
+export function navForTier(tier: Tier): NavNode[] {
+  return NAV_BY_TIER[tier];
 }
 
-/** Depth-first flattened links for the active SDK — drives prev/next. */
-export function flatNav(sdk: Sdk): { title: string; href: string }[] {
+/** Depth-first flattened links for the active tier — drives prev/next. */
+export function flatNav(tier: Tier): { title: string; href: string }[] {
   const out: { title: string; href: string }[] = [];
   const walk = (nodes: NavNode[]) => {
     for (const n of nodes) {
@@ -134,6 +143,6 @@ export function flatNav(sdk: Sdk): { title: string; href: string }[] {
       }
     }
   };
-  walk(navForSdk(sdk));
+  walk(navForTier(tier));
   return out;
 }
