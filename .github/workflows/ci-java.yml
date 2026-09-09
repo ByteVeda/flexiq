@@ -74,6 +74,26 @@ jobs:
         # test suite to verify runtime behaviour on each JDK.
         run: ./gradlew ${{ matrix.java == '17' && 'build' || 'test' }} -x cargoBuild --no-daemon
 
+      # Gradle's console output gives one line per failed test — the assertion
+      # or exception type and nothing else. The message, the stack and any
+      # suppressed causes live only in the report, which dies with the runner.
+      # An intermittent failure therefore costs the same guesswork every time it
+      # appears, which is what happened to the Windows @TempDir cleanup.
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: java-test-reports-jdk${{ matrix.java }}
+          path: |
+            sdks/java/build/reports/tests/
+            sdks/java/build/test-results/
+            sdks/java/*/build/reports/tests/
+            sdks/java/*/build/test-results/
+          # A failure before the test task runs leaves nothing to collect, and
+          # that must not turn one red step into two.
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Smoke the other published platforms on one JDK: their native binary differs,
   # so they rebuild it (cargoBuild) instead of reusing the Linux artifact.
   smoke:
@@ -111,6 +131,22 @@ jobs:
         working-directory: sdks/java
         shell: bash
         run: ./gradlew build --no-daemon
+
+      # The leg that needs this most: the Windows runner is the only one whose
+      # failures have been platform-specific, and it is the one nobody can
+      # reproduce locally.
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: java-test-reports-${{ matrix.classifier }}
+          path: |
+            sdks/java/build/reports/tests/
+            sdks/java/build/test-results/
+            sdks/java/*/build/reports/tests/
+            sdks/java/*/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Prove the SDK works under GraalVM native-image using only the reachability
   # metadata the runtime jar ships (META-INF/native-image/org.byteveda/flexiq/):
