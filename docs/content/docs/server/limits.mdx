@@ -1,0 +1,106 @@
+---
+title: What a remote client cannot do
+description: "Everything an in-process SDK gives you that a caller on the network door does not, gathered in one place before you build against it."
+---
+
+Every other page in this tier argues for the door. This one is the bill.
+
+None of it is a gap waiting to be closed — each line is a decision recorded in
+the `.proto` itself, under the heading "what this service deliberately does not
+offer, and will not grow". Read it before you design against the door, not
+after; a few of these change what your caller has to do rather than merely what
+it can expect.
+
+## The producer door
+
+| An SDK | This door | Why |
+| --- | --- | --- |
+| Registers tasks, so a typo is a startup error | Takes a task name as a string | The server holds no task registry. An unimplemented name enqueues fine and <SdkLink to="guides/reliability/dead-letter">dead-letters later</SdkLink> |
+| Runs middleware around the enqueue | Runs none | Middleware is code in your process; there is no process here |
+| Runs the worker too | Enqueues onto a queue somebody else drains | The other half is [an executor](/server/custom-executors), and a separate credential |
+| Reaches the whole admin surface | Reaches none of it | Pausing queues, settings, dead-letter operations and webhook secrets stay behind the dashboard's session and role check. An operator surface and a producer surface must not share a credential |
+| Chooses its namespace in your own configuration | Is fixed to one at mint time | The namespace comes from the credential, and no RPC in either package has a field for it. A read for a job in another namespace is indistinguishable from a job that does not exist |
+| Decodes a result for you | Hands you bytes | `Job.result` is the tagged envelope; assert your decoder against `wire-vectors.json` once |
+| Can await completion | Cannot | There is no watch and no server stream in `v1`. Poll `GetJob`, or subscribe a webhook |
+
+Four more that hold for an SDK too, but that a network caller meets sooner
+because it is the one writing the retry loop:
+
+- **No ordering.** `priority` and `scheduled_at` influence dispatch. Nothing
+  promises two jobs enqueued in order run in order.
+- **Execution is at-least-once.** A `unique_key` dedupes an *enqueue*, not a run.
+- **A batch is not atomic.** Read `EnqueueBatchResponse` per item.
+- **No job id is permanent.** Retention archives and then deletes, so a
+  `NOT_FOUND` does not mean the job never existed.
+
+<Callout type="warn" title="No write on this door is safely retried blind">
+  `UNAVAILABLE`, `DEADLINE_EXCEEDED` and `CANCELLED` on an `Enqueue` may all
+  mean the write landed and the connection dropped afterwards, and no field on
+  the wire can tell you which. A client that retries sets a `unique_key` —
+  one per item for `EnqueueBatch` — and neither is retried for you.
+
+  That key dedupes against the *active* job, so once the original completes or
+  dead-letters it is released and the same request enqueues a second job. Your
+  total retry deadline has to be shorter than the job's own life.
+</Callout>
+
+## The executor door
+
+An attached executor holds **no database credential**. It never reads a job row,
+never writes a result, and never resolves its own namespace, owner or attempt —
+the scheduler applies every one of those from the dispatch it recorded. That is
+exactly what makes it a door an application container may dial *out* through,
+and it is also the source of every limit below.
+
+- **An executor cannot enqueue.** A task that fans out to a second stage goes
+  back through the producer door as an ordinary client, with a `produce`-scoped
+  credential of its own.
+- **Nothing you send names a namespace, an owner, an attempt or a resource
+  cap.** Anything an executor could name is something an executor could forge.
+- **No HTTP binding, ever.** The JSON facade serves `flexiq.v1` and nothing
+  else, so this door needs a real gRPC library.
+- **No registry fingerprint on the wire.** `hello` carries `tasks`; the
+  scheduler derives the fingerprint from it, rather than trusting a second copy
+  of one fact that is free to disagree with the first.
+
+## Scopes are two, and they are not a hierarchy
+
+`produce` opens `flexiq.v1`. `execute` opens `flexiq.executor.v1`. There is no
+third scope and no superset: a token that can poll for work cannot enqueue it,
+and the refusal is `PERMISSION_DENIED` with the reason `SCOPE_DENIED`, carrying
+the scope it lacked. Grant both only to something that genuinely does both.
+[API tokens](/server/operate/tokens) is the lifecycle.
+
+## Where a remote client is simply different
+
+Not losses — differences that surprise a reader who assumes the door is a thin
+wrapper over the SDK.
+
+- **`structured` arguments refuse rather than round.** Integers past
+  ±9007199254740991, non-finite numbers and byte strings have no JSON form, so
+  the call is rejected with `INVALID_ARGUMENT`. What it *does* normalise is
+  object key order, which moves the bytes an `auto:` idempotency key hashes —
+  set `unique_key` yourself.
+  [Two doors for one payload](/server/operate/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless)
+  has the whole of it.
+- **No CPU-parallelism story.** The prefork pool assumes an OS process beside
+  the jobs it runs. A remote executor is a network hop from the scheduler with
+  the capacity of whatever container it is in. The door buys reach, not cores.
+- **Your own message-size limit is yours to raise.** gRPC libraries default to
+  4 MiB each way; this door carries up to 64 MiB of payload plus envelope. The
+  default attaches cleanly and fails on the first large job.
+- **A stream rotation is not an error.** A gRPC stream cannot be load-balanced
+  once started, so the executor stream is bounded by
+  `FLEXIQ_GRPC_EXECUTOR_STREAM_MAX_AGE`. The scheduler drains the executor
+  before ending one, so nothing in flight is lost — but a client that logs a
+  rotation as a failure will page someone at 30-minute intervals.
+- **`flexiq-server` terminates no TLS**, on either door. The bearer token is a
+  credential, not transport security; put a proxy or a service mesh in front.
+
+## What is not on this list
+
+Retries, timeouts, rate limits, circuit breakers, priorities, unique keys,
+debouncing, workflows and durable steps all work exactly as they do for an
+in-process caller, because they are properties of the job and the scheduler
+rather than of the door it arrived through. Those live in the SDK trees:
+<SdkLink to="guides/reliability">Reliability</SdkLink> is the entry point.

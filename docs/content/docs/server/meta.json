@@ -1,5 +1,5 @@
 {
   "title": "Server & wire",
   "root": true,
-  "pages": ["index", "clients", "custom-executors"]
+  "pages": ["index", "contract", "clients", "custom-executors", "limits"]
 }

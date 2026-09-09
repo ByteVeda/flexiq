@@ -1,0 +1,128 @@
+---
+title: The wire contract
+description: "What the .proto promises a client generated against it: two packages, the compatibility rules CI enforces, and the two version numbers that are not the same number."
+---
+
+An SDK gets its compatibility promise from a package manager: pin a version,
+get a fixed API. A client generated from a `.proto` has no such thing — it is
+compiled once against a shape and then talks to whatever the server has become.
+This page is that missing promise, and every claim on it is one CI enforces
+rather than one a maintainer remembers.
+
+The calls themselves are elsewhere:
+[The gRPC door](/server/operate/grpc) for what the producer serves,
+[Clients without an SDK](/server/clients) for generating against it, and
+[Custom executors](/server/custom-executors) for the other package.
+
+## Two packages, and the import only goes one way
+
+| | `flexiq.v1` | `flexiq.executor.v1` |
+| --- | --- | --- |
+| **Service** | `ProducerService` | `ExecutorService` |
+| **Does** | Submit, read, cancel, count | Claim work, report on it |
+| **Transports** | gRPC, and the same calls as HTTP with JSON bodies on the same listener | gRPC only — no HTTP binding, ever |
+| **Scope** | `produce` | `execute` |
+
+They are separate because the audiences, credentials and exposure differ. The
+split is load-bearing rather than tidy: `flexiq.executor.v1` **may** import
+`flexiq.v1` and the reverse import is forbidden, so the package a third party
+generates a producer client from stays compilable — and reviewable — on its own,
+without pulling in the frames of a door it will never open.
+
+Both packages are **stable as of 2.0.0**, the release that first shipped the
+gRPC role. Field numbers, field names and RPC shapes are permanent from there.
+
+## The five rules, and the one that surprises people
+
+Stated in the `.proto` files themselves, because a client reads those and not a
+design document:
+
+1. Field numbers are never reused and never renumbered.
+2. Fields are deprecated in place. On removal **both the number and the name**
+   are reserved.
+3. New RPCs, messages, fields and enum values are additive, and never bump the
+   package version.
+4. A field's meaning and units are frozen with its number.
+5. Readers tolerate what they do not know: unknown fields, unknown enum values,
+   unknown `oneof` arms.
+
+Rule 2 is the one worth reading twice. The buf module is configured
+`breaking.use: WIRE_JSON`, not `WIRE`, and the difference is the field *name*.
+Binary protobuf encodes numbers, so a rename is invisible to it and `WIRE`
+allows one — but the JSON facade publishes those names to clients that have no
+`.proto` at all, and to them a rename is a silent outage. `lint.use` is
+`STANDARD` for the same reason: the naming rules `BASIC` omits are the ones a
+generated client's symbols are built from.
+
+<Callout type="info" title="Rule 5 has teeth in one specific place">
+  `JobStatus` reserves zero for `_UNSPECIFIED`, so its values sit one off the
+  Rust discriminants. A reader that meets a value it does not recognise must
+  treat the job as **not terminal** — never as failed. Only the values it knows
+  to be terminal are.
+</Callout>
+
+## What CI accepts and refuses, in cases
+
+`contracts/proto-guard` is a set of fixtures that runs the real gate against a
+copy of `contracts/proto/buf.yaml` — the production config, not a restatement of
+its rules. Relax `breaking.use` to `WIRE` or `lint.use` to `BASIC` and the guard
+goes red, which is what stops the promise below from quietly weakening.
+
+| Change | Checked by | Outcome |
+| --- | --- | --- |
+| Renumber a field | breaking | Refused |
+| Remove a field, reserving nothing | breaking | Refused |
+| Remove a field, reserving only the number | breaking | Refused — this is what `WIRE` alone would allow |
+| Remove a field, reserving the number **and** the name | breaking | **Accepted** — the sanctioned removal |
+| Rename a field | breaking | Refused |
+| Add a field | breaking | **Accepted** — additive stays free |
+| A service name without the `Service` suffix | lint | Refused |
+| An enum value without its type's prefix | lint | Refused |
+
+The two accepted rows carry as much weight as the refusals: a gate tightened
+until everything fails would still look green.
+
+## Reflection cannot describe a contract the server does not implement
+
+`contracts/descriptor.binpb` is a compiled `FileDescriptorSet`, committed to the
+repository, and it is the *same bytes* the server embeds and serves over
+reflection. `scripts/proto-check.sh` rebuilds it and compares, so a `.proto`
+edited without regenerating it fails before it merges.
+
+That comparison only means something at a fixed compiler version — buf does not
+promise byte-stable descriptor output across its own releases — so the version
+is pinned in `contracts/BUF_VERSION` and read by CI and the script alike. The
+descriptor keeps source info, which is why a comment-only edit makes it stale
+too.
+
+Every `server-v*` release attaches the same descriptor alongside the `.proto`
+tree, so a build pipeline needs neither a checkout nor a running server —
+[Getting the contract](/server/clients#getting-the-contract) has the two `curl`
+lines. The tarball also carries `wire-vectors.json`, the authority for the
+payload envelope, which is the half of the contract the `.proto` itself calls
+opaque bytes.
+
+## The escape hatch, and what it is now for
+
+A pull request labelled `proto-breaking` skips the breaking check. Before 2.0.0
+that was how the shape was allowed to settle. Now that the packages have
+shipped, it is for reverting a mistake made inside the same release train, and
+nothing else — a shipped field number is permanent, and the label does not make
+it less so.
+
+## Two version numbers, and they are not the same number
+
+This is the one place the vocabulary collides, so it is worth being blunt.
+
+| | The package version | The contract level |
+| --- | --- | --- |
+| **Written** | `flexiq.v1`, `flexiq.executor.v1` | `CONTRACT_VERSION` / `MIN_CONTRACT_VERSION`, both `2` |
+| **Governs** | The wire shape a remote client generates against | Whether two *builds* may share one database |
+| **Moves when** | Never, for an additive change — rule 3 | An older build can no longer read what a newer one writes |
+| **A remote client sees it** | Yes — it is in the package name | No. There is no contract-level field in either package |
+
+The contract level is a storage concern between processes that hold the database
+credential, dialled by the `contract:min_sdk` setting;
+<SdkLink to="operate/deployment#version-skew-and-the-contract-floor">Version skew and the contract floor</SdkLink>
+is where it belongs. A client on the network door holds no such credential, so a
+raised floor is not something it can violate — or notice.
