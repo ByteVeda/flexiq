@@ -247,6 +247,14 @@ jobs:
       # nothing more, which is why the readiness job's separate dry run was not
       # carried over with the two steps above. The upload below reuses these
       # tarballs via --no-verify rather than compiling everything a second time.
+      #
+      # It catches a missing file only for a *shipped lib or bin* target: the
+      # verify pass never builds tests, examples or benches. A test that reads a
+      # path above the package root therefore packages green and fails for the
+      # first person who vendors the crate and runs `cargo test`, which is what
+      # happened to `flexiq-core`'s wire-vector suite. When a target cannot
+      # compile from the tarball, `exclude` it in that crate's manifest and say
+      # why there.
       - name: Package and verify
         if: steps.pending.outputs.args != ''
         run: cargo package --locked ${{ steps.pending.outputs.args }}
