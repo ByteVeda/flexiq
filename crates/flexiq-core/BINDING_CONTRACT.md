@@ -6,6 +6,12 @@ must implement or call to reuse this Rust core. The core is **binding-agnostic**
 (enforced in CI — see [Invariant](#invariant)). The Python shell lives in
 `crates/flexiq-python`; study it as the reference implementation.
 
+**Wrong document?** This one is the FFI contract, for code compiled into the same
+process as the core. A client that reaches a running `flexiq-server` over gRPC holds no
+database credential and links nothing — it implements
+[`REMOTE_SDK_CONTRACT.md`](../../contracts/REMOTE_SDK_CONTRACT.md) instead. The two share
+the wire envelope below and nothing else.
+
 ## Invariant
 The generic crates must never depend on `pyo3` or any language runtime. CI fails if
 `pyo3` appears in the normal dependency tree of `flexiq-core`, `flexiq-workflows`,

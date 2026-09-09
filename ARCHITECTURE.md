@@ -29,7 +29,9 @@ management. A shell talks to the core only through its compiled binding crate
 Java) — **a shell never reaches into core internals, and the core never imports a
 host-language type except at the binding edge.** The `WorkerDispatcher` trait in
 `flexiq-core` is binding-free, so a new shell implements one trait against
-[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md).
+[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md). The network door is a
+second, unrelated contract — a client with no binding at all implements
+[`REMOTE_SDK_CONTRACT.md`](contracts/REMOTE_SDK_CONTRACT.md).
 
 ```text
 ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
