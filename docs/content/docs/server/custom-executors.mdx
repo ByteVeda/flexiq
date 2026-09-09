@@ -16,6 +16,11 @@ Get the `.proto` the same three ways the producer page describes. The service is
 `flexiq.v1` deliberately: the audiences, credentials and exposure differ, so a
 client generated for one stays compilable and reviewable on its own.
 
+The same tarball carries
+[`REMOTE_SDK_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/REMOTE_SDK_CONTRACT.md),
+which states this door's obligations normatively — which frames are mandatory,
+which are gated on a capability, and what a lease is required on.
+
 ## What an executor is not allowed to do
 
 An attached executor holds **no database credential**. It never reads a job row,
