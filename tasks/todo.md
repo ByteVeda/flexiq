@@ -315,3 +315,31 @@ docs page   python 246 · node 201 · java 199 · server 30      (unchanged)
 landing     hero=python 255 = 225 python + 9 server + 21 neutral
             hero=node   210 · hero=java 208 · hero=server 30  (no double count)
 ```
+
+---
+
+# Follow-up 7 — the how-it-works diagram, redrawn
+
+Four small icon boxes on a wire said the shape and nothing else, right above a
+demo that says everything. Redrawn in that demo's grammar — box head, figure,
+mono detail lines, named wires — so the two read as one system seen twice.
+
+- [x] `FlowStage` replaces `DiagramStation`: kicker, title, sub, figure, and the
+      two or three lines that say what the box actually does
+- [x] four line-drawn figures in `currentColor`, so a box tints its own
+- [x] wires carry their label (`one write` · `claim` · `run`), and a return rail
+      closes the loop back to the row the enqueue wrote
+- [x] no controls. The demo below is the thing you scrub; two playheads on one
+      screen compete, and this is the one-glance answer read before scrubbing
+- [x] detail lines taken from the code, not the pitch — `delay()` returns a
+      `JobResult` handle, `Storage::claim_execution_batch`, `max_in_flight`
+- [x] old `.station` / `.dicon` / `.dpool` / `.diaglane` CSS and the
+      `DiagramStation` type deleted; the "shared with the server fold" comment
+      on the old component had been stale since the fold moved to `DocDemo`
+
+**The bug worth remembering:** the detail lines were given `class="code"`, and
+`landing.css` has a *bare* `.code` rule for the hero terminal — `height: 384px`,
+`white-space: pre`, `overflow: auto`. Every line inherited a 384px pre-formatted
+scroll box, so each card grew to ~800px and the snippets were clipped mid-token.
+Namespaced to `hiw-mono`. On this page a new class needs a grep before it is
+used: the landing's names are generic and global.

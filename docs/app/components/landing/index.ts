@@ -1,5 +1,5 @@
 export { CopyButton } from "./copy-button";
-export { type DiagramStation, FlowDiagram } from "./flow-diagram";
+export { FlowDiagram, type FlowStage } from "./flow-diagram";
 export { Footer } from "./footer";
 export { Hero } from "./hero";
 export { useReveal } from "./reveal";

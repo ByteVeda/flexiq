@@ -485,74 +485,109 @@ main {
   margin: 0 auto;
   position: relative;
 }
-.flowdiag {
+/* The row: a box per participant, joined by named wires. Same grammar as the
+   server-door demo below — box head, figure, mono detail lines — so the two
+   read as one system seen twice rather than two diagrams. */
+.hiw {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hiw-row {
   display: flex;
   align-items: stretch;
   gap: 0;
   flex-wrap: nowrap;
 }
-.station {
+.hiw-box {
   flex: 1;
   min-width: 0;
   background: var(--panel);
   border: 1px solid var(--line2);
   border-radius: 15px;
-  padding: 18px 18px;
+  padding: 15px 15px 13px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
 }
-.station.accent {
+/* The two boxes that are FlexiQ's own, rather than yours or your database's. */
+.hiw-box.accent {
   border-color: var(--indigo-line);
   background: linear-gradient(180deg, var(--indigo-soft), var(--panel));
 }
-.station:hover {
+.hiw-box:hover {
   box-shadow: var(--shadow-md);
 }
-.srow {
+.hiw-hd {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.hiw-kicker {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mut);
+}
+.hiw-hd b {
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.hiw-sub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+/* The figure is the box's one piece of colour; everything in it is drawn in
+   `currentColor`, so this is the only place the tint is named. */
+.hiw-fig {
+  color: var(--indigo);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: color-mix(in oklch, var(--indigo-soft) 55%, transparent);
+  padding: 8px 6px;
+}
+.hiwfig {
+  display: block;
   width: 100%;
+  height: auto;
 }
-.dicon {
-  flex: none;
-  width: 44px;
-  height: 44px;
-  border-radius: 11px;
-  display: grid;
-  place-items: center;
-  background: var(--indigo-soft);
-  border: 1px solid var(--indigo-line);
-  color: var(--indigo-br);
+.hiwfig-caret {
+  animation: hiwcaret 1.1s steps(1) infinite;
 }
-.dicon svg {
-  width: 21px;
-  height: 21px;
+@keyframes hiwcaret {
+  50% {
+    opacity: 0;
+  }
 }
-.dpool {
-  flex: none;
-  width: 44px;
-  height: 44px;
-  border-radius: 11px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  place-content: center;
-  padding: 7px;
-  background: var(--indigo-soft);
-  border: 1px solid var(--indigo-line);
+/* The claimed batch arrives a bar at a time — the point being that a poll takes
+   several jobs, not one. */
+.hiwfig-batch {
+  opacity: 0.25;
+  animation: hiwbatch 2.4s ease-in-out infinite;
+  animation-delay: calc(var(--k) * 0.28s);
 }
-.dpool span {
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
-  background: var(--indigo);
+@keyframes hiwbatch {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  45% {
+    opacity: 0.95;
+  }
+}
+.hiwfig-core {
   opacity: 0.3;
   animation: wkpulse 1.8s ease-in-out infinite;
   animation-delay: calc(var(--k) * 0.18s);
+  transform-box: fill-box;
+  transform-origin: center;
 }
 @keyframes wkpulse {
   0%,
@@ -565,33 +600,48 @@ main {
     transform: scale(1);
   }
 }
-.smeta {
+.hiw-lines {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  gap: 5px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
-.slabel {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--mut);
+.hiw-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
 }
-.stitle {
-  font-size: 15.5px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.shint {
+.hiw-line dt {
+  flex: none;
+  width: 44px;
   font-family: var(--mono);
   font-size: 10.5px;
-  color: var(--dim);
+  color: var(--mut);
 }
-.wire {
-  flex: 0 0 46px;
+.hiw-line dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--txt2);
+}
+/* `hiw-mono`, not `code`: the landing already has a bare `.code` rule for the
+   hero terminal, and it pins a 384px height with `white-space: pre` — every one
+   of these lines inherited it and stretched the row to eight hundred pixels. */
+.hiw-line dd.hiw-mono {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--indigo-br);
+  overflow-wrap: anywhere;
+}
+
+/* The wire carries its own label, so what happens between two boxes is written
+   on the page rather than left to the reader. */
+.hiw-wire {
+  flex: 0 0 84px;
   align-self: center;
-  height: 2px;
   position: relative;
+  height: 2px;
   background-image: linear-gradient(
     90deg,
     var(--line3) 0 5px,
@@ -599,7 +649,7 @@ main {
   );
   background-size: 12px 2px;
 }
-.wire::after {
+.hiw-wire::after {
   content: "";
   position: absolute;
   right: -1px;
@@ -608,7 +658,17 @@ main {
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
 }
-.spark {
+.hiw-wirelbl {
+  position: absolute;
+  bottom: 9px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--mut);
+}
+.hiw-spark {
   position: absolute;
   top: 50%;
   left: 0;
@@ -619,10 +679,10 @@ main {
   background: var(--indigo);
   box-shadow: 0 0 10px var(--indigo);
   opacity: 0;
-  animation: sparkmove 2.4s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+  animation: hiwspark 2.4s cubic-bezier(0.45, 0, 0.3, 1) infinite;
   animation-delay: var(--wd);
 }
-@keyframes sparkmove {
+@keyframes hiwspark {
   0% {
     left: 0;
     opacity: 0;
@@ -634,30 +694,55 @@ main {
     opacity: 1;
   }
   100% {
-    left: 46px;
+    left: 100%;
     opacity: 0;
   }
 }
-.diaglane {
-  margin-top: 18px;
+
+/* The rail that closes the loop: the result travelling back to the row the
+   enqueue wrote. Right to left, because that is the direction it goes. */
+.hiw-return {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
   justify-content: center;
-  position: relative;
   border: 1px dashed var(--line2);
   border-radius: 11px;
-  padding: 11px 18px;
   background: var(--panel);
-  max-width: 560px;
-  margin-left: auto;
-  margin-right: auto;
+  padding: 10px 18px;
   overflow: hidden;
 }
-.diaglane .rlabel {
+.hiw-returnlbl {
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--cyan);
+  text-align: center;
+}
+.hiw-spark.hiw-back {
+  top: 0;
+  left: auto;
+  right: 0;
+  margin-top: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 0;
+  background: linear-gradient(
+    270deg,
+    transparent,
+    var(--cyan) 18%,
+    transparent 36%
+  );
+  box-shadow: none;
+  opacity: 0.75;
+  animation: hiwreturn 3.4s linear infinite;
+}
+@keyframes hiwreturn {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
 }
 
 /* ===== server fold ===== */
@@ -786,13 +871,15 @@ main {
   .hero {
     padding: 40px 22px 56px;
   }
-  .flowdiag {
+  .hiw-row {
     flex-direction: column;
   }
-  .wire {
-    flex: 0 0 28px;
+  /* The wire turns to run down the stack; its label moves off the line and
+     under it, since there is no longer any horizontal room beside it. */
+  .hiw-wire {
+    flex: 0 0 34px;
     width: 2px;
-    height: 28px;
+    height: 34px;
     align-self: center;
     background-image: linear-gradient(
       180deg,
@@ -801,7 +888,7 @@ main {
     );
     background-size: 2px 12px;
   }
-  .wire::after {
+  .hiw-wire::after {
     right: auto;
     top: auto;
     left: -3px;
@@ -811,12 +898,18 @@ main {
     border-top: 6px solid var(--line3);
     border-bottom: none;
   }
-  .spark {
-    animation: sparkmovev 2.4s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+  .hiw-wirelbl {
+    bottom: auto;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+  }
+  .hiw-spark {
+    animation: hiwsparkv 2.4s cubic-bezier(0.45, 0, 0.3, 1) infinite;
     animation-delay: var(--wd);
   }
 }
-@keyframes sparkmovev {
+@keyframes hiwsparkv {
   0% {
     top: 0;
     opacity: 0;
@@ -828,23 +921,30 @@ main {
     opacity: 1;
   }
   100% {
-    top: 28px;
+    top: 34px;
     opacity: 0;
   }
 }
 
-/* The page carries two flow diagrams now, so its ambient motion is a spark on
-   each of six wires, twelve pulsing worker dots and a blinking run indicator —
-   all of it decorative, none of it carrying information the static frame does
-   not. `useReveal` already honours this query; the loops did not. */
+/* The flow diagram's ambient motion — a spark on each of three wires, the
+   return rail, a caret, the claimed batch and six pulsing cores — plus the
+   hero's run indicator. All decorative: every one of them is drawn in a legible
+   resting state too, so switching them off loses nothing the static frame does
+   not already say. `useReveal` already honours this query; the loops did not. */
 @media (prefers-reduced-motion: reduce) {
-  .spark,
-  .dpool span,
+  .hiw-spark,
+  .hiwfig-caret,
+  .hiwfig-batch,
+  .hiwfig-core,
   .runtag .ld,
   .bgfx .glow {
     animation: none;
   }
-  .dpool span {
+  .hiw-spark {
+    opacity: 0;
+  }
+  .hiwfig-batch,
+  .hiwfig-core {
     opacity: 0.6;
   }
 }
