@@ -9,6 +9,11 @@ import { redirectFor } from "@/lib/redirects";
 import { isSdk } from "@/lib/sdk-registry";
 import type { Route } from "./+types/docs.$";
 
+/** Public origin the site is served from. A canonical must be absolute to
+ *  count, and nothing at prerender time knows the origin the way a browser
+ *  would — `window` does not exist yet. */
+const SITE_ORIGIN = "https://docs.byteveda.org";
+
 function pathOf(params: { "*"?: string }): string {
   return `/${params["*"] ?? ""}`;
 }
@@ -70,7 +75,7 @@ export function meta({ params }: Route.MetaArgs) {
     tags.push({
       tagName: "link",
       rel: "canonical",
-      href: `${base}${meta.canonical}`,
+      href: `${SITE_ORIGIN}${base}${meta.canonical}`,
     });
   }
   return tags;
