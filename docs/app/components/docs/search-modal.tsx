@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import type { Sdk } from "@/hooks";
+import type { Tier } from "@/hooks";
 import {
   browseDocs,
   prefetchSearchIndex,
@@ -73,11 +73,11 @@ function groupBySection(hits: SearchHit[]): Group[] {
 export function SearchModal({
   open,
   onClose,
-  sdk,
+  tier,
 }: {
   open: boolean;
   onClose: () => void;
-  sdk?: Sdk;
+  tier?: Tier;
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -86,7 +86,7 @@ export function SearchModal({
 
   // Browsing is synchronous (it reads the manifest already in memory); a real
   // query awaits the code-split full-text index, so results arrive as state.
-  const [hits, setHits] = useState<SearchHit[]>(() => browseDocs(sdk));
+  const [hits, setHits] = useState<SearchHit[]>(() => browseDocs(tier));
   const [pending, setPending] = useState(false);
   const groups = useMemo(() => groupBySection(hits), [hits]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -101,12 +101,12 @@ export function SearchModal({
   useEffect(() => {
     if (!query.trim()) {
       setPending(false);
-      setHits(browseDocs(sdk));
+      setHits(browseDocs(tier));
       return;
     }
     let current = true;
     setPending(true);
-    searchDocs(query, sdk).then(
+    searchDocs(query, tier).then(
       (results) => {
         if (current) {
           setHits(results);
@@ -124,7 +124,7 @@ export function SearchModal({
     return () => {
       current = false;
     };
-  }, [query, sdk]);
+  }, [query, tier]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection as results change
   useEffect(() => {

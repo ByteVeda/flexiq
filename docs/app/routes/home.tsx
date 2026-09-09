@@ -10,7 +10,7 @@ import {
   useReveal,
 } from "@/components/landing";
 import { SiteNav } from "@/components/ui";
-import { useActiveSdk } from "@/hooks";
+import { useActiveTier } from "@/hooks";
 import type { Route } from "./+types/home";
 
 /**
@@ -42,8 +42,9 @@ export function meta(_: Route.MetaArgs) {
 export default function Home() {
   useReveal();
   const [searchOpen, setSearchOpen] = useState(false);
-  // Scope landing search to the SDK chosen in the hero (store-backed on `/`).
-  const sdk = useActiveSdk();
+  // Scope landing search to the tier — which at `/` is the SDK chosen in the
+  // hero, since no URL prefix forces one here.
+  const tier = useActiveTier();
 
   // ⌘K / Ctrl-K opens search on the landing page too.
   useEffect(() => {
@@ -76,7 +77,7 @@ export default function Home() {
       <SearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        sdk={sdk}
+        tier={tier}
       />
     </>
   );

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { SearchModal, Sidebar, Toc } from "@/components/docs";
 import { SiteNav } from "@/components/ui";
-import { useActiveSdk, useSdk } from "@/hooks";
+import { useActiveTier, useSdk } from "@/hooks";
 import { forcedSdkForPath } from "@/lib";
 
 /** Shell for every docs page: top nav + sidebar + article outlet + on-this-page TOC. */
@@ -11,7 +11,9 @@ export default function DocsLayout() {
   const [navOpen, setNavOpen] = useState(false);
   const { pathname } = useLocation();
   const { setSdk } = useSdk();
-  const sdk = useActiveSdk();
+  // Search is scoped to the tier, not the language: `/server/*` has a sidebar of
+  // its own, and the palette should offer what that sidebar does.
+  const tier = useActiveTier();
 
   // Close the mobile sidebar drawer whenever the route changes (i.e. a nav link
   // was tapped) so it never lingers over the freshly-loaded page.
@@ -58,7 +60,7 @@ export default function DocsLayout() {
       <SearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        sdk={sdk}
+        tier={tier}
       />
     </>
   );

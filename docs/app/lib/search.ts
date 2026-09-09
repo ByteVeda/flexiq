@@ -1,13 +1,12 @@
 import type MiniSearch from "minisearch";
 import { DOC_METAS, docMeta } from "./manifest";
-import { forcedSdkForPath } from "./nav";
-import { DEFAULT_SDK } from "./sdk-registry";
-import type { Sdk } from "./sdk-store";
+import { DEFAULT_SDK, isSdk } from "./sdk-registry";
 import {
   type IndexedDoc,
   SEARCH_INDEX_OPTIONS,
   SEARCH_QUERY_OPTIONS,
 } from "./search-schema";
+import { type Tier, tierForPath } from "./tier-registry";
 
 // Two paths, deliberately different in cost.
 //
@@ -34,9 +33,12 @@ function sectionOf(slug: string): string {
 }
 
 // Browse-mode section order (mirrors the sidebar); unknown sections sort last.
+// `Server` sits above the tier-neutral sections for the same reason the SDK
+// sections do: a tier's own pages come before the ones it shares.
 const SECTION_ORDER = [
   "Getting Started",
   "Guides",
+  "Server",
   "Architecture",
   "Api Reference",
   "More",
@@ -47,38 +49,51 @@ const sectionRank = (s: string) => {
   return i === -1 ? SECTION_ORDER.length : i;
 };
 
-// A page is in scope when it's shared (no SDK prefix) or matches the active SDK.
-function inSdk(slug: string, sdk?: Sdk): boolean {
-  if (!sdk) {
+/**
+ * A page is in scope when it is tier-neutral (`/architecture/*`, `/about/*`) or
+ * belongs to the active tier.
+ *
+ * Scoped on the tier and not on the SDK, symmetrically: what a tier's search
+ * offers is what its sidebar offers, and nothing a reader would have to switch
+ * tiers to open. `forcedSdkForPath` — the old test — returns null for
+ * `/server/*`, which read the server tier as *shared* and put the Python tree
+ * in the palette of a `/server` page and the server tree in every SDK's.
+ */
+function inTier(slug: string, tier?: Tier): boolean {
+  if (!tier) {
     return true;
   }
-  const pageSdk = forcedSdkForPath(slug);
-  return pageSdk === null || pageSdk === sdk;
+  const pageTier = tierForPath(slug);
+  return pageTier === null || pageTier === tier;
 }
 
 /** The index stores one entry per content file, at its canonical URL, so a
  *  shared page is indexed once instead of once per SDK. That entry stands for
- *  every SDK's copy: swap the prefix to reach the active SDK's mount. */
-function mountFor(canonical: string, sdk?: Sdk): string {
+ *  every SDK's copy: swap the prefix to reach the active SDK's mount. A tier
+ *  that is not an SDK carries no such copy, so there is nothing to swap to. */
+function mountFor(canonical: string, tier?: Tier): string {
   const meta = docMeta(canonical);
-  if (!meta?.canonical || !sdk) {
+  if (!meta?.canonical || !tier || !isSdk(tier)) {
     return canonical;
   }
-  return `/${sdk}${canonical.slice(`/${DEFAULT_SDK}`.length)}`;
+  return `/${tier}${canonical.slice(`/${DEFAULT_SDK}`.length)}`;
 }
 
-/** A shared page always has a mount under the active SDK; anything else is in
- *  scope only if it isn't another SDK's page. */
-function hitInScope(canonical: string, sdk?: Sdk): boolean {
-  return docMeta(canonical)?.canonical ? true : inSdk(canonical, sdk);
+/** A page that fans out per SDK has a mount under every SDK tier and under no
+ *  other kind; anything else is in scope only if it is in the active tier. */
+function hitInScope(canonical: string, tier?: Tier): boolean {
+  if (!docMeta(canonical)?.canonical) {
+    return inTier(canonical, tier);
+  }
+  return tier === undefined || isSdk(tier);
 }
 
-function toHit(canonical: string, sdk?: Sdk): SearchHit | null {
+function toHit(canonical: string, tier?: Tier): SearchHit | null {
   const meta = docMeta(canonical);
   if (!meta) {
     return null;
   }
-  const id = mountFor(canonical, sdk);
+  const id = mountFor(canonical, tier);
   return {
     id,
     title: meta.title,
@@ -87,9 +102,9 @@ function toHit(canonical: string, sdk?: Sdk): SearchHit | null {
   };
 }
 
-/** The full page list for the active SDK, sidebar-ordered. No index needed. */
-export function browseDocs(sdk?: Sdk): SearchHit[] {
-  return DOC_METAS.filter((d) => inSdk(d.slug, sdk))
+/** The full page list for the active tier, sidebar-ordered. No index needed. */
+export function browseDocs(tier?: Tier): SearchHit[] {
+  return DOC_METAS.filter((d) => inTier(d.slug, tier))
     .map((d) => ({
       id: d.slug,
       title: d.title,
@@ -127,23 +142,23 @@ export function prefetchSearchIndex(): void {
   index().catch(() => {});
 }
 
-/** Ranked matches for a non-empty query, scoped to the active SDK. */
+/** Ranked matches for a non-empty query, scoped to the active tier. */
 export async function searchDocs(
   query: string,
-  sdk?: Sdk,
+  tier?: Tier,
 ): Promise<SearchHit[]> {
   const q = query.trim();
   if (!q) {
-    return browseDocs(sdk);
+    return browseDocs(tier);
   }
   const results = (await index()).search(q, SEARCH_QUERY_OPTIONS);
   const hits: SearchHit[] = [];
   for (const result of results) {
     const canonical = String(result.id);
-    if (!hitInScope(canonical, sdk)) {
+    if (!hitInScope(canonical, tier)) {
       continue;
     }
-    const hit = toHit(canonical, sdk);
+    const hit = toHit(canonical, tier);
     if (hit) {
       hits.push(hit);
     }
