@@ -2,7 +2,7 @@ import { Check, ChevronDown, Menu, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { useActiveSdk, useActiveTier, useSdk } from "@/hooks";
+import { useActiveTier, useSdk } from "@/hooks";
 import {
   isSdk,
   SERVER_TIER,
@@ -182,21 +182,53 @@ function TierSelect() {
   );
 }
 
-// `sdk` links are SDK-relative (prefixed with the active /python|/node); the rest
-// are shared, SDK-neutral pages.
+interface NavLink {
+  label: string;
+  /** Relative to the tier's own prefix in the two per-tier lists; absolute in
+   *  `SHARED_LINKS`. */
+  href: string;
+}
+
 /**
  * Deliberately short. The sidebar already lists every top-level section on the
  * same screen, so the bar carries only what a reader reaches for out of order:
  * the one concept page worth reading before anything else, the two references
- * you jump to mid-task, and what changed. `sdk` entries resolve to the active
- * SDK; the rest are SDK-neutral.
+ * you jump to mid-task, and what changed.
  */
-const LINKS: { label: string; href: string; sdk?: boolean }[] = [
-  { label: "Concepts", href: "getting-started/concepts", sdk: true },
-  { label: "API", href: "api-reference", sdk: true },
-  { label: "Examples", href: "more/examples", sdk: true },
+const SDK_LINKS: NavLink[] = [
+  { label: "Concepts", href: "getting-started/concepts" },
+  { label: "API", href: "api-reference" },
+  { label: "Examples", href: "more/examples" },
+];
+
+/**
+ * The same three slots for the server tier, which has none of those pages: the
+ * two doors as a caller meets them — producer side, executor side — and then
+ * running one.
+ *
+ * It needs its own list rather than the SDK one resolved against the stored
+ * language, which is what put `/python/…` in the bar of a page whose sidebar,
+ * breadcrumb and switcher all said `flexiq-server`.
+ */
+const SERVER_LINKS: NavLink[] = [
+  { label: "Clients", href: "clients" },
+  { label: "Executors", href: "custom-executors" },
+  { label: "Operate", href: "operate" },
+];
+
+/** Tier-neutral pages: the same link from whichever door you came through. */
+const SHARED_LINKS: NavLink[] = [
   { label: "Changelog", href: "/about/changelog" },
 ];
+
+/** The bar for one tier: its own three under its prefix, then the shared ones. */
+function navLinks(tier: Tier): NavLink[] {
+  const own = isSdk(tier) ? SDK_LINKS : SERVER_LINKS;
+  return [
+    ...own.map((l) => ({ label: l.label, href: `/${tier}/${l.href}` })),
+    ...SHARED_LINKS,
+  ];
+}
 
 /** Sticky top navigation, shared by the landing and docs shells. `onMenu` is
  *  passed only by the docs shell — it renders the mobile button that opens the
@@ -211,7 +243,10 @@ export function SiteNav({
   // Landing hides it — the hero language tabs already own SDK selection there.
   showTierSelect?: boolean;
 }) {
-  const sdk = useActiveSdk();
+  // The tier, not the SDK: on `/server/*` the SDK is whatever language the
+  // reader last picked, and resolving the bar against it links out of the tier.
+  // On the landing and on any tierless page the two are the same value.
+  const tier = useActiveTier();
   // Basename-relative, so this stays `/` under DOCS_BASE_PATH too.
   const atRoot = useLocation().pathname === "/";
   return (
@@ -244,8 +279,8 @@ export function SiteNav({
         {atRoot ? null : <span className="home">Home</span>}
       </Link>
       <div className="navlinks">
-        {LINKS.map((l) => (
-          <Link key={l.href} to={l.sdk ? `/${sdk}/${l.href}` : l.href}>
+        {navLinks(tier).map((l) => (
+          <Link key={l.href} to={l.href}>
             {l.label}
           </Link>
         ))}
