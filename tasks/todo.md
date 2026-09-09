@@ -1,345 +1,129 @@
-# #823 — `flexiq-server` as a fourth hero tab
+# #828 — `REMOTE_SDK_CONTRACT.md`, the contract the proto does not write down
 
-Branch `docs/hero-server-tab` off `master` at `bbc4ca0b`. One file of data, one
-component. #825 (`1788a838`) already built the seam this needs: `Tier = Sdk |
-"server"` in `app/lib/tier-registry.ts`, with `SDK_IDS` deliberately still three
-because its value is the persisted `<html data-sdk>` one.
+Branch `docs/remote-sdk-contract` off `master` at `0950d0dc`. One new file, one
+release-packaging line, four pointers. No Rust, no proto, no schema.
 
-## The two things the issue asks to settle
+## What is actually missing
 
-**1. The tab must not corrupt `useActiveSdk`.** Writing `server` into the SDK
-store lands it in `<html data-sdk>`, matches no `<SdkOnly>`/`<CodeTabs>` variant
-and blanks every shared page — and every SDK-relative link on the site resolves
-through that store's derived value. So the server tab is a *pane* and nothing
-more: it is held in the hero's own state and never reaches `setSdk`. This is the
-same rule `TierSelect` follows in `site-nav.tsx`, where picking the server tier
-navigates instead of setting the SDK.
+The tier is not undocumented. `docs/content/docs/server/` is ~1800 lines across
+seven pages and already carries the tag table, the retryability table, the scope
+rule, the "no contract-level field on the wire" answer and a capability-delta
+page (`limits.mdx`) that reads almost exactly like the issue's sixth bullet.
 
-The hero's own two buttons stop being built out of the store (`/${sdk}/modules`)
-and come off the pane instead — the server tab has no `/python/modules` under
-it, and composing one from the store is exactly the prefix corruption the tier
-split exists to prevent.
+Three things are genuinely absent, and they are the reason the file exists:
 
-**2. `p.sdk === sdk` assumes tab identity is SDK identity.** A pane is keyed by
-`tier`, and the branch is `isSdk(next)` — the registry predicate — not a string
-compare against `"server"`. A future non-SDK tier needs no new branch.
+1. **Nothing states what makes a client conformant.** No page anywhere says
+   which RPCs a program must implement to call itself a FlexiQ client and which
+   it may skip. The issue asks for that split first, and it is new text.
+2. **Nothing is normative.** The docs are a guide — "assert against it too, it
+   is the cheapest conformance test you will write". A contract has to be
+   testable prose: MUST, MUST NOT, SHOULD, closed lists.
+3. **The docs are a website.** A client author downloads
+   `flexiq-proto-2.0.0.tar.gz`, gets `proto/` and `wire-vectors.json`, and has
+   no specification in the tarball. The seventh bullet — "make it loadable from
+   outside this repository" — is half done already
+   (`publish-server.yml:339` puts the vectors in the tarball); what is missing
+   is the document that says passing them is the bar, in the same tarball.
 
-## Content
+So this is not a fourth copy of `limits.mdx`. It is the normative source those
+pages narrate, and it ships with the artifacts it specifies.
 
-The snippet is the door, not a language: the env-var invocation plus the
-`grpcurl` call that submits a job. Both halves already exist verified in-repo —
-the invocation is the server fold's first transcript (extracted to one const, so
-the page holds one copy of a command it shows twice), and the `grpcurl` shape is
-`examples/polyglot/grpc_producer.sh`, the working bash producer `clients.mdx`
-points at. It enqueues the same `add(2, 3)` the other three tabs define, so the
-four tabs tell one story.
+## Placement
 
-`grpcurl`, not `curl`, on purpose: the server fold lower on the same page is the
-HTTP/JSON binding, and printing the same request twice on one page teaches less
-than printing both doors once.
+`contracts/REMOTE_SDK_CONTRACT.md`, beside `proto/`, `wire-vectors.json`,
+`descriptor.binpb` and `BUF_VERSION` — the other half of the same tarball, and
+a one-argument change to the `tar` line rather than a `cp` before it.
 
-## Commits
+`crates/flexiq-core/BINDING_CONTRACT.md` stays where it is and keeps its
+audience: a language shell compiled against the core, in one process. The two
+sit at the same level and point at each other.
 
-- [x] 1 — a hero pane is a tier, not an SDK (mechanical; still three tabs)
-  - [x] `LangPane` → `HeroPane`, `sdk: Sdk` → `tier: Tier`
-  - [x] `docHref` → `primary`/`secondary` CTAs on the pane; drop the
-        `/${sdk}/modules` template
-  - [x] drop `install` and `docLabel` — dead since the marketing sections left
-  - [x] highlighter chain → a `Record<lang, fn>` lookup (a fourth dialect is
-        coming and the ternary chain is already two deep)
-  - [x] tab label from `tierProfile`, so one registry names every tab
-- [x] 2 — the fourth tab
-  - [x] `SERVER_START` extracted; server `HeroPane` added with `lang: "sh"`
-  - [x] `runtag` per pane — the server snippet starts no worker, so the title
-        bar cannot claim `worker · live`
-  - [x] `pinnedTier` state: a tier the SDK store cannot hold, `isSdk`-routed
-  - [x] hero sub copy stops promising the tabs are all languages
+## The plan
 
-## Verify
+- [ ] `contracts/REMOTE_SDK_CONTRACT.md` — the document. Sections below.
+- [ ] `.github/workflows/publish-server.yml:339` — add it to the tarball, and
+      amend the comment above the `tar` so the *why* survives the next edit.
+- [ ] `contracts/wire-vectors.json` `$comment` — name the new file as the
+      contract the vectors are the conformance bar for. Hex is untouched: a
+      diff to a hex string is a wire-format change.
+- [ ] `README.md` / `ARCHITECTURE.md` — both already link `BINDING_CONTRACT.md`
+      in one sentence; the remote contract goes in the same sentence.
+- [ ] `crates/flexiq-core/BINDING_CONTRACT.md` — one line, at the top, saying
+      which of the two contracts the reader wants.
+- [ ] `docs/content/docs/server/{contract,clients,custom-executors}.mdx` — a
+      link to the normative file. The pages keep their prose; they stop being
+      the only place the rules exist.
 
-- [x] `pnpm typecheck`
-- [x] `pnpm lint`
-- [x] `pnpm check:parity` — `/server` and `/server/clients` are real slugs
-- [x] `pnpm build` — the hero prerenders, so the snippet is highlighted at build
-- [x] rendered `/` from the build: four tabs, server pane selected, and
-      `<html data-sdk>` still a language
+## What the document says
 
-## Review
+Nine sections, in `BINDING_CONTRACT.md`'s register — bolded claim, then why,
+then the mechanical consequence; a table for anything enumerable; a byte-exact
+vector for every hard rule.
 
-Two commits on `docs/hero-server-tab`, not pushed. `typecheck`, `lint`,
-`check:parity` and `build` all green.
+1. **Two contracts, and which one you are reading.** The §3.1 table from
+   `tasks/specs/2026-09-01-flexiq-v1-proto-design.md`, plus which wins where.
+2. **Conformance.** The bar is `contracts/wire-vectors.json`: decode all 12,
+   encode every one of the 9 `encode` cases the client's call API can express,
+   re-encode the two `round_trip_only` cases to the same bytes. Three routes to
+   the file without a checkout — release asset, raw URL at a tag, reflection
+   for the proto half.
+3. **Surface.** Mandatory vs optional, per door.
+   - Producer: `Enqueue` and `GetJob` MUST — there is no completion
+     notification, so a client that cannot read back cannot observe an outcome
+     at all. `CancelJob` SHOULD. `EnqueueBatch`, `ListJobs`, `QueueStats`,
+     `SubmitWorkflow`, `GetWorkflowRun` MAY.
+   - Executor: `Attach` MUST, `Heartbeat` SHOULD — verified: `idle_ms` feeds
+     the dashboard and nothing evicts on it (`worker/remote.rs:476`,
+     `dashboard/routes/executors.rs:38`), so the stream is what liveness is.
+     Frames: `hello` and exactly one settling frame per job MUST; `progress`,
+     `task_log`, `step_commit`, `slept` are gated on the capability that was
+     advertised, and MUST NOT be sent without it.
+4. **Serialization.** Tag byte, `[args, kwargs]`, bare-value result, the two
+   encoder rules (definite-length, shortest-form) and why they are not style —
+   the `auto:` idempotency key hashes these bytes. The `structured` arm and the
+   four things it refuses rather than rounds.
+5. **Errors.** Two different structured errors, which the docs never separate in
+   one place: `google.rpc.Status` + `ErrorInfo` for a failed *request*, and the
+   `TaskError` JSON inside `Job.error` for a failed *job*. The closed reason
+   list, the metadata keys and their encodings, and the two unparseable-payload
+   rules (a bad metadata value is absent, not fatal; a `Job.error` that does not
+   parse is surfaced verbatim).
+6. **Auth.** `authorization: Bearer`, `fqt_<id>.<secret>`, mandatory expiry
+   (90 d default, 365 d cap), revocation effective on the next call, two
+   package-level scopes that are not a hierarchy.
+7. **Namespace.** There is no field. It is the credential's. A token for
+   another namespace is `UNAUTHENTICATED`, never `PERMISSION_DENIED` — the
+   other answer is an existence oracle.
+8. **Compatibility.** Three numbers a reader will collide: the package version
+   (`v1`, permanent), `CONTRACT_VERSION`/`MIN_CONTRACT_VERSION` (both `2`,
+   storage-only, **no field on either package carries it**), and the executor
+   `protocol_version` (`1`, equality-checked, the only version a remote peer
+   declares). The floor answer the issue asks for: a remote client cannot
+   violate or observe it, `ensure_contract_supported` runs once at storage open
+   in the server process, and `CONTRACT_TOO_OLD`'s `speaks` is the *server's*
+   level — it is on the closed list because the list is closed, not because a
+   client can cause it.
+9. **The delta from embedded.** The absent surfaces, stated as absent: settings
+   CAS, migrations, retention/election, topic pub/sub, dead-letter operations,
+   worker-registry CRUD, middleware, direct storage, and durable steps as a
+   unary call. Plus the four that hold for an SDK too but bite a network caller
+   first — no ordering, at-least-once, non-atomic batches, impermanent ids.
 
-The prerendered `/` carries four `.langtab` buttons — the fourth labelled
-`flexiq-server` out of `tierProfile`, so one registry names every tab — with
-Python still active and `<html data-sdk="python">`. Rendering the server pane
-directly (a throwaway `pinnedTier` default, reverted) confirmed the rest: the
-title bar reads `door · live`, the two buttons resolve to `/server` and
-`/server/clients`, and `highlightShell` tokenises the snippet cleanly — the
-`sqlite:///tmp` and `localhost:50051` colons and the JSON body all survive,
-which is the case that pass exists for. `data-sdk` stayed `python` with the
-server tab active, which is the invariant the issue asked for.
+## Rules for the writing
 
-The `[2, 3]` in the snippet is scalars where `grpc_producer.sh` passes an
-object: checked against `crates/flexiq-server/src/grpc/producer/structured.rs`,
-which converts any `google.protobuf.Value` and refuses only an integer past
-2^53.
-
-Worth keeping: `check:parity`'s `links.mjs` resolves `to=` literals out of
-`app/`, so moving the hero CTAs onto the pane put two hrefs under the gate that
-were previously composed at runtime from the SDK store and checked by nothing.
-
----
-
-# #823 follow-up — the server tier shows only server content
-
-Same branch. The tier switcher reads `flexiq-server` and the sidebar is the
-server tier's, but two things on the page still resolve through the *stored
-SDK* and walk a reader back out of the tier.
-
-## 1. The top nav bar
-
-`site-nav.tsx` builds `Concepts` / `API` / `Examples` as `` `/${sdk}/${href}` ``
-off `useActiveSdk()`. On `/server` that is the stored language, so the bar
-under a `flexiq-server` switcher links into `/python/…`. Same failure mode as
-the sidebar/prev-next trap #825 caught before shipping — one more consumer that
-was keyed to the SDK when it meant the tier.
-
-Fix: `useActiveTier()`, and each tier owns its three links, tier-relative so
-there is one prefixing rule. The server tier's are the two doors as a caller
-meets them, then running it — it has no `getting-started/concepts` to point at.
-
-- [x] `SDK_LINKS` / `SERVER_LINKS` / `SHARED_LINKS` + `navLinks(tier)`
-- [x] `SiteNav` reads `useActiveTier`; the landing is unaffected
-      (`tierForPath("/")` is null, so it still resolves to the stored SDK)
-
-## 2. ⌘K search
-
-`docs-layout.tsx` passes `useActiveSdk()`, and `search.ts` scopes on
-`forcedSdkForPath`, which returns **null** for `/server/*` — so server pages
-read as *shared* and every tier sees every other tier's pages. On `/server` the
-palette lists the Python tree.
-
-Fix, symmetric (user's call): a tier's search offers what its sidebar offers.
-
-```
-inTier(slug, tier) = tierForPath(slug) === null || tierForPath(slug) === tier
-```
-
-- [x] `inSdk` → `inTier`; `mountFor` swaps the prefix only when the tier is an
-      SDK; `hitInScope`'s per-SDK shared page is in scope for any SDK tier and
-      no other kind
-- [x] `SearchModal` prop `sdk` → `tier`; both callers pass `useActiveTier()`
-- [x] `SECTION_ORDER` gains `Server` before `Architecture` — the browse list is
-      sidebar-ordered, and without it a tier's own pages sort below shared ones
-
-Not touched: `Architecture` and `About` stay in the server sidebar and stay
-in scope. They are tier-neutral by design (#825) — the engine and the project
-are the same ones whichever door you came through. `<SdkLink>` inside a server
-page (`modules/executor` in the local-mode column) also stays SDK-resolved: it
-is talking about the SDK feature on purpose.
+- **Cross-link, never re-narrate.** `limits.mdx` and `custom-executors.mdx`
+  already carry a near-verbatim "an executor cannot enqueue" paragraph each. A
+  third copy is how three copies become three different rules.
+- **Every hard claim is checked against code, not against the design spec.**
+  The spec is a decision record and predates two amendments.
+- Self-contained on the issue's seven bullets: a reader with the tarball and no
+  network can implement from it. Links are for narrative, never for a rule.
 
 ## Verify
 
-- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
-- [x] prerendered `/server`: nav links are `/server/*`, none `/python/*`
-- [x] prerendered `/python/*`: nav links unchanged
-
-## Review
-
-Two more commits, still unpushed. All five gates green (`typecheck`, `lint`,
-`check:parity`, `check:search`, `build`).
-
-Nav, read out of the prerendered HTML: `/server` and `/server/operate/tokens`
-carry `/server/clients`, `/server/custom-executors`, `/server/operate`; every
-SDK page is unchanged; `/architecture/*` and `/` still fall back to the stored
-SDK, which is right — those pages belong to no tier.
-
-Search, checked by replaying `inTier` over every prerendered mount (443 of
-them) rather than by reading the diff:
-
-```
-python  in-scope 246  (own 225, tier-neutral 21)  leaked 0
-node    in-scope 201  (own 180, tier-neutral 21)  leaked 0
-java    in-scope 199  (own 178, tier-neutral 21)  leaked 0
-server  in-scope  30  (own   9, tier-neutral 21)  leaked 0
-```
-
-Python pages visible from the server tier: **0**, was every one of them. The 21
-tier-neutral are `/about/*`, `/architecture/*` and `/resources/*` — unchanged,
-and the reason the server tier still has 30 pages to search rather than 9.
-
----
-
-# Follow-up 2 — the tier survives a tier-neutral page
-
-Reported: pick `flexiq-server`, click **Architecture** in its sidebar, land in
-Node.js. The sidebar is right to offer `/architecture/*` — those pages are
-tier-neutral by design — but the URL names no tier, so `useActiveTier` fell
-through to the *stored SDK*, and the switcher, nav bar, sidebar and search scope
-all flipped to whatever language was last picked. Every shared page was an exit
-from the server tier.
-
-The SDK store cannot hold the answer: its value is the `<html data-sdk>` one.
-So a second, tiny store holds the one thing it cannot.
-
-- [x] `app/lib/tier-store.ts` — `pinned: Tier | null`, null meaning "follow the
-      SDK". `set()` routes on `isSdk`: a language goes to `sdkStore` and clears
-      the pin, anything else is the pin
-- [x] In memory, not persisted — it carries a choice across a navigation, and a
-      fresh load of a shared page has no such choice to honour. Keeps the
-      no-flash boot script about `data-sdk` alone
-- [x] `useActiveTier` = `tierForPath(path) ?? pinned ?? sdk`
-- [x] `docs-layout`'s sticky effect becomes `tierForPath` + `tierStore.set`,
-      which subsumes the old `forcedSdkForPath` + `setSdk`
-- [x] `TierSelect.select` writes through the same store
-- [x] Hero drops its local `pinnedTier` for the shared one — one tier state, and
-      picking the server tab now also gives `/` the server nav bar and search
-      scope, which is what "only server content" meant there
-
-## Verify
-
-- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
-- [x] seed the pin to `server` and prerender: `/architecture` and
-      `/about/changelog` render the server sidebar, nav and switcher
-- [x] restore: those pages are Python again, `/server` unchanged, `/` unchanged
-
-## Review
-
-Two commits, `c5997fab` + the hero one. All five gates green.
-
-Verified by seeding the pin to `server` (both the live value and the server
-snapshot), building, and reading the prerendered HTML — the same trick as the
-hero pane, and the only way to see client state in a static build:
-
-```
-/architecture     switcher flexiq-server · nav /server/* · sidebar Server & wire | Operate | Architecture | About
-/about/changelog  switcher flexiq-server · nav /server/*
-```
-
-Restored, the same two pages are Python again and `/server`, `/python/*` and `/`
-are untouched. That the *sidebar* followed is the real proof: it reads
-`useActiveTier` independently of the nav bar, so both consumers agreed off one
-store.
-
-Worth keeping: the fix is one predicate in one place because `tierStore.set`
-routes on `isSdk` rather than on the tier's name — the same shape the hero used
-locally, which is why folding the hero into it removed state rather than adding
-any.
-
----
-
-# Follow-up 3 — the serverdoor demo's row stayed `pending`
-
-`server-door-demo.tsx` drew the `jobs` row from a constant whose `status` was
-the literal `"pending"`. The trace does not stop at the 200: two stages follow
-it — a worker claims the job, then the result is written back — and neither
-touched the row. So the demo ended showing a finished job as pending, on the
-one page that argues the door writes the same row an SDK does.
-
-- [x] `Stage.rowStatus?: RowStatus`, typed `"pending" | "running" | "complete"`
-      — `JobStatus::as_str` in `flexiq-core`, so a typo is a type error
-- [x] `running` on the claim stage, `complete` on the result stage; `ROW` keeps
-      `pending` as the value the *insert* writes, and `status` falls back to it
-- [x] derived latest-wins like the client's status line, so scrubbing backwards
-      walks the row's status back too
-- [x] both stage details now say what moves it, rather than leaving the row to
-      contradict the prose
-
-## Verify
-
-- [x] `typecheck`, `lint`, `build`
-- [x] prerendered the demo at four playhead positions (temporary `const play`,
-      reverted): `0 → —`, `4000 → pending`, `6000 → running`, `DUR → complete`
-
----
-
-# Follow-up 4 — the working box breathes
-
-`.sd-box.on` said *where* the current stage was, and nothing said it was still
-happening. Added `live` beside it: the ring breathes on the active box while the
-playhead is short of the end, in the stage's own tone (`--c`), so a refusal
-pulses red without a second rule.
-
-- [x] `Box` takes `live`; the class is only added alongside `on`
-- [x] `@keyframes sdlive` in `demos.css` — a breath, not a hard blink: this sits
-      mid-article, and an on/off blink at that size reads as an error state
-- [x] added to the file's existing `prefers-reduced-motion` query, which is
-      where every other demo animation is switched off
-- [x] verified by prerender: `play=0` → `sd-box on live`, `play=DUR` → `on`
-      alone, and both the keyframes and the reduced-motion rule ship in the CSS
-
-# Follow-up 5 — the finder's two panes are one height
-
-`.finder` was `align-items: start`, so the question list (a fixed seven options)
-and the answer card ended at different heights on nearly every scenario, and the
-pair resized whenever a different scenario was picked.
-
-- [x] `align-items: stretch`, and `.fd-answer` is a column flex with
-      `.fd-card { flex: 1 }` so the card fills its side too — otherwise the
-      shorter scenarios still stopped early inside a stretched column
-- [x] `.fd-foot` gets `margin-top: auto`: the spare space belongs under the
-      options, not under the footer line
-- [x] dropped `position: sticky` from `.fd-ask` and its mobile `static`
-      override — an item as tall as its row has nothing to slide past
-- [x] `.fd-code { min-height: calc(7lh + 30px) }` — the snippets run 3 to 7
-      lines and that spread was most of the resizing. `lh` is the block's own
-      line box, so it follows the font rather than restating it; confirmed it
-      survives Lightning CSS into the shipped bundle
-
----
-
-# Follow-up 6 — the landing search reaches the server tier
-
-Tier scoping is symmetric, so an SDK tier's palette does not offer `/server/*`.
-Correct on a docs page, where the sidebar is the contract — wrong at `/`, which
-has no sidebar, and where a reader has not picked a door at all. The one door
-that needs no SDK is exactly the one they cannot know to search for.
-
-- [x] the scope parameter becomes `tiers: readonly Tier[]`, `tiers[0]` the one a
-      fan-out page mounts under, so a shared hit still lands in the language the
-      hero is showing
-- [x] `landingTiers(tier)` = `[...new Set([tier, SERVER_TIER])]` — no branch,
-      and it collapses to one entry when the hero is already on the server tab,
-      which keeps "server selected → server content only" true
-- [x] docs pages pass `[tier]` and are unchanged
-- [x] both callers memoise the array: it is a dependency of the palette's query
-      effect, and a fresh array per render would re-run it every render
-
-## Verify
-
-- [x] `typecheck`, `lint`, `check:parity`, `check:search`, `build`
-- [x] replayed the predicate over all prerendered mounts:
-
-```
-docs page   python 246 · node 201 · java 199 · server 30      (unchanged)
-landing     hero=python 255 = 225 python + 9 server + 21 neutral
-            hero=node   210 · hero=java 208 · hero=server 30  (no double count)
-```
-
----
-
-# Follow-up 7 — the how-it-works diagram, redrawn
-
-Four small icon boxes on a wire said the shape and nothing else, right above a
-demo that says everything. Redrawn in that demo's grammar — box head, figure,
-mono detail lines, named wires — so the two read as one system seen twice.
-
-- [x] `FlowStage` replaces `DiagramStation`: kicker, title, sub, figure, and the
-      two or three lines that say what the box actually does
-- [x] four line-drawn figures in `currentColor`, so a box tints its own
-- [x] wires carry their label (`one write` · `claim` · `run`), and a return rail
-      closes the loop back to the row the enqueue wrote
-- [x] no controls. The demo below is the thing you scrub; two playheads on one
-      screen compete, and this is the one-glance answer read before scrubbing
-- [x] detail lines taken from the code, not the pitch — `delay()` returns a
-      `JobResult` handle, `Storage::claim_execution_batch`, `max_in_flight`
-- [x] old `.station` / `.dicon` / `.dpool` / `.diaglane` CSS and the
-      `DiagramStation` type deleted; the "shared with the server fold" comment
-      on the old component had been stale since the fold moved to `DocDemo`
-
-**The bug worth remembering:** the detail lines were given `class="code"`, and
-`landing.css` has a *bare* `.code` rule for the hero terminal — `height: 384px`,
-`white-space: pre`, `overflow: auto`. Every line inherited a 384px pre-formatted
-scroll box, so each card grew to ~800px and the snippets were clipped mid-token.
-Namespaced to `hiw-mono`. On this page a new class needs a grep before it is
-used: the landing's names are generic and global.
+- [ ] `pnpm --dir docs typecheck` / `lint` / `build` (mdx touched)
+- [ ] `actionlint` on the workflow, and the `tar` line reproduced by hand
+- [ ] `python -c json.load` on `wire-vectors.json` — the `$comment` edit must
+      not break the file every SDK's suite parses
+- [ ] Every file:line and every constant in the document re-grepped after the
+      draft, not while writing it
