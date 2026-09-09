@@ -1,6 +1,10 @@
 // Single source of truth for every SDK. Add a language = append to `SDK_IDS` +
 // add a `SDK_PROFILES` row; the `Sdk` type, nav, switcher, boot script and
 // SDK-aware docs all derive from here. Don't hardcode "python"/"node" elsewhere.
+//
+// An SDK is one *tier* of these docs and not the only kind — `flexiq-server` is
+// a fourth without being a language. See `tier-registry.ts`; this list stays
+// three, because its value is also the persisted `<html data-sdk>` one.
 
 /** Supported SDK ids in display order; also the URL prefix + `data-sdk` value. */
 export const SDK_IDS = ["python", "node", "java"] as const;
@@ -81,9 +85,4 @@ export function isSdk(value: string | null | undefined): value is Sdk {
 
 export function sdkProfile(sdk: Sdk): SdkProfile {
   return SDK_PROFILES[sdk];
-}
-
-/** Ordered `{ id, label }` pairs for switcher UIs. */
-export function sdkLabels(): { id: Sdk; label: string }[] {
-  return SDK_IDS.map((id) => ({ id, label: SDK_PROFILES[id].label }));
 }

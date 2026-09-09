@@ -7,11 +7,13 @@ import { checkLegacyBranding } from "./checks/legacy-branding.mjs";
 import { checkLinks } from "./checks/links.mjs";
 import { checkRedirectShadowing } from "./checks/redirect-shadowing.mjs";
 import { checkSectionShape } from "./checks/section-shape.mjs";
+import { checkTierShape } from "./checks/tier-shape.mjs";
 import { loadContentFiles } from "./content.mjs";
 
 // Content-parity gate for the docs site (run: pnpm check:parity).
 // Blocking: CodeTabs SDK coverage on shared pages, slug collisions, redirect
-// shadowing, section shape, internal links, API reference coverage.
+// shadowing, section shape, server-tier shape, internal links, API reference
+// coverage.
 // Informational: per-SDK drift report (the migration queue).
 
 const files = loadContentFiles();
@@ -21,6 +23,7 @@ const results = [
   collisions,
   checkRedirectShadowing(collisions.slugs),
   checkSectionShape(files),
+  checkTierShape(files),
   checkLinks(files),
   checkLegacyBranding(),
   checkApiCoverage(files),

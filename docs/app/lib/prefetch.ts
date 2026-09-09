@@ -1,8 +1,8 @@
 import { allDocSlugs, getDocLoader } from "./content";
-import type { Sdk } from "./sdk-store";
+import type { Tier } from "./tier-registry";
 
-/** SDKs already warmed this session — a toggle back to one is a no-op. */
-const prefetched = new Set<Sdk>();
+/** Tiers already warmed this session — a toggle back to one is a no-op. */
+const prefetched = new Set<Tier>();
 
 /** Max chunks fetched at once, so a 80-page SDK doesn't saturate the network. */
 const CONCURRENCY = 3;
@@ -35,21 +35,21 @@ function prefetchAllowed(): boolean {
 }
 
 /**
- * Warm every doc chunk for `sdk` in the background. Idempotent per SDK; chunked
- * across idle callbacks with a small concurrency cap. A no-op during SSR/prerender
- * and under Save-Data / 2G. Failed prefetches are ignored — the page still loads
- * on demand when actually visited.
+ * Warm every doc chunk for `tier` in the background. Idempotent per tier;
+ * chunked across idle callbacks with a small concurrency cap. A no-op during
+ * SSR/prerender and under Save-Data / 2G. Failed prefetches are ignored — the
+ * page still loads on demand when actually visited.
  */
-export function prefetchSdkDocs(sdk: Sdk): void {
-  if (typeof window === "undefined" || prefetched.has(sdk)) {
+export function prefetchTierDocs(tier: Tier): void {
+  if (typeof window === "undefined" || prefetched.has(tier)) {
     return;
   }
   if (!prefetchAllowed()) {
     return; // not marked prefetched, so a later call can retry if conditions improve
   }
-  prefetched.add(sdk);
+  prefetched.add(tier);
 
-  const prefix = `/${sdk}`;
+  const prefix = `/${tier}`;
   const loaders = allDocSlugs()
     .filter((slug) => slug === prefix || slug.startsWith(`${prefix}/`))
     .map(getDocLoader)

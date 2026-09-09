@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
-import { useActiveSdk } from "@/hooks";
-import { type NavNode, navForSdk } from "@/lib";
+import { useActiveTier } from "@/hooks";
+import { type NavNode, navForTier } from "@/lib";
 
 function containsHref(node: NavNode, current: string): boolean {
   return (
@@ -180,7 +180,7 @@ export function Sidebar({
 }) {
   const { pathname } = useLocation();
   const current = pathname.replace(/\/$/, "") || "/";
-  const sdk = useActiveSdk();
+  const tier = useActiveTier();
   return (
     <>
       {/* Backdrop sits under the drawer on mobile; tapping it closes the menu. */}
@@ -200,7 +200,7 @@ export function Sidebar({
           </span>
         </button>
         <nav id="sidenav">
-          {navForSdk(sdk).map((group) => (
+          {navForTier(tier).map((group) => (
             <NavGroup key={group.title} group={group} current={current} />
           ))}
         </nav>

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { mountsForRelPath } from "../../../app/lib/doc-slugs.ts";
 import { REDIRECTS } from "../../../app/lib/redirects.ts";
 import { SDK_IDS } from "../../../app/lib/sdk-registry.ts";
+import { TIER_IDS } from "../../../app/lib/tier-registry.ts";
 
 // (g) Internal links resolve, and none of them point at a redirect source.
 //
@@ -27,7 +28,7 @@ const APP_EXEMPT = ["lib/redirects.ts", "lib/doc-slugs.ts"];
 
 // A doc URL always starts with one of these. Anything else in an app file is an
 // asset, an API route or an external link, and is none of this check's business.
-const DOC_ROOTS = [...SDK_IDS, "architecture", "about", "resources"];
+const DOC_ROOTS = [...TIER_IDS, "architecture", "about", "resources"];
 
 // App-side literals are matched conservatively: a leading slash and at least two
 // segments. `"python/guides"` (a content directory in the SDK registry) and
