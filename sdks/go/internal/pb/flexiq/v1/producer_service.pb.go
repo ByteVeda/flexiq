@@ -16,6 +16,7 @@
 package flexiqv1
 
 import (
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	status "google.golang.org/genproto/googleapis/rpc/status"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -863,7 +864,7 @@ var File_flexiq_v1_producer_service_proto protoreflect.FileDescriptor
 
 const file_flexiq_v1_producer_service_proto_rawDesc = "" +
 	"\n" +
-	" flexiq/v1/producer_service.proto\x12\tflexiq.v1\x1a\x13flexiq/v1/job.proto\x1a\x18flexiq/v1/workflow.proto\x1a\x17google/rpc/status.proto\"\xbb\x01\n" +
+	" flexiq/v1/producer_service.proto\x12\tflexiq.v1\x1a\x13flexiq/v1/job.proto\x1a\x18flexiq/v1/workflow.proto\x1a\x1cgoogle/api/annotations.proto\x1a\x17google/rpc/status.proto\"\xbb\x01\n" +
 	"\x0eEnqueueRequest\x12\x1b\n" +
 	"\ttask_name\x18\x01 \x01(\tR\btaskName\x12\x12\n" +
 	"\x03raw\x18\x02 \x01(\fH\x00R\x03raw\x12;\n" +
@@ -916,17 +917,18 @@ const file_flexiq_v1_producer_service_proto_rawDesc = "" +
 	"\tcompleted\x18\x03 \x01(\x03R\tcompleted\x12\x16\n" +
 	"\x06failed\x18\x04 \x01(\x03R\x06failed\x12\x12\n" +
 	"\x04dead\x18\x05 \x01(\x03R\x04dead\x12\x1c\n" +
-	"\tcancelled\x18\x06 \x01(\x03R\tcancelled2\x82\x05\n" +
-	"\x0fProducerService\x12@\n" +
-	"\aEnqueue\x12\x19.flexiq.v1.EnqueueRequest\x1a\x1a.flexiq.v1.EnqueueResponse\x12O\n" +
-	"\fEnqueueBatch\x12\x1e.flexiq.v1.EnqueueBatchRequest\x1a\x1f.flexiq.v1.EnqueueBatchResponse\x12B\n" +
-	"\x06GetJob\x12\x18.flexiq.v1.GetJobRequest\x1a\x19.flexiq.v1.GetJobResponse\"\x03\x90\x02\x01\x12H\n" +
-	"\bListJobs\x12\x1a.flexiq.v1.ListJobsRequest\x1a\x1b.flexiq.v1.ListJobsResponse\"\x03\x90\x02\x01\x12K\n" +
-	"\tCancelJob\x12\x1b.flexiq.v1.CancelJobRequest\x1a\x1c.flexiq.v1.CancelJobResponse\"\x03\x90\x02\x02\x12N\n" +
+	"\tcancelled\x18\x06 \x01(\x03R\tcancelled2\xe7\x06\n" +
+	"\x0fProducerService\x12U\n" +
+	"\aEnqueue\x12\x19.flexiq.v1.EnqueueRequest\x1a\x1a.flexiq.v1.EnqueueResponse\"\x13\x82\xd3\xe4\x93\x02\r:\x01*\"\b/v1/jobs\x12q\n" +
+	"\fEnqueueBatch\x12\x1e.flexiq.v1.EnqueueBatchRequest\x1a\x1f.flexiq.v1.EnqueueBatchResponse\" \x82\xd3\xe4\x93\x02\x1a:\x01*\"\x15/v1/jobs:batchEnqueue\x12[\n" +
+	"\x06GetJob\x12\x18.flexiq.v1.GetJobRequest\x1a\x19.flexiq.v1.GetJobResponse\"\x1c\x82\xd3\xe4\x93\x02\x13\x12\x11/v1/jobs/{job_id}\x90\x02\x01\x12X\n" +
+	"\bListJobs\x12\x1a.flexiq.v1.ListJobsRequest\x1a\x1b.flexiq.v1.ListJobsResponse\"\x13\x82\xd3\xe4\x93\x02\n" +
+	"\x12\b/v1/jobs\x90\x02\x01\x12k\n" +
+	"\tCancelJob\x12\x1b.flexiq.v1.CancelJobRequest\x1a\x1c.flexiq.v1.CancelJobResponse\"#\x82\xd3\xe4\x93\x02\x1a\"\x18/v1/jobs/{job_id}:cancel\x90\x02\x02\x12{\n" +
 	"\n" +
-	"QueueStats\x12\x1c.flexiq.v1.QueueStatsRequest\x1a\x1d.flexiq.v1.QueueStatsResponse\"\x03\x90\x02\x01\x12U\n" +
-	"\x0eSubmitWorkflow\x12 .flexiq.v1.SubmitWorkflowRequest\x1a!.flexiq.v1.SubmitWorkflowResponse\x12Z\n" +
-	"\x0eGetWorkflowRun\x12 .flexiq.v1.GetWorkflowRunRequest\x1a!.flexiq.v1.GetWorkflowRunResponse\"\x03\x90\x02\x01B\xb0\x01\n" +
+	"QueueStats\x12\x1c.flexiq.v1.QueueStatsRequest\x1a\x1d.flexiq.v1.QueueStatsResponse\"0\x82\xd3\xe4\x93\x02'Z\v\x12\t/v1/stats\x12\x18/v1/queues/{queue}/stats\x90\x02\x01\x12o\n" +
+	"\x0eSubmitWorkflow\x12 .flexiq.v1.SubmitWorkflowRequest\x1a!.flexiq.v1.SubmitWorkflowResponse\"\x18\x82\xd3\xe4\x93\x02\x12:\x01*\"\r/v1/workflows\x12x\n" +
+	"\x0eGetWorkflowRun\x12 .flexiq.v1.GetWorkflowRunRequest\x1a!.flexiq.v1.GetWorkflowRunResponse\"!\x82\xd3\xe4\x93\x02\x18\x12\x16/v1/workflows/{run_id}\x90\x02\x01B\xb0\x01\n" +
 	"\rcom.flexiq.v1B\x14ProducerServiceProtoP\x01ZDgithub.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1;flexiqv1\xa2\x02\x03FXX\xaa\x02\tFlexiq.V1\xca\x02\tFlexiq\\V1\xe2\x02\x15Flexiq\\V1\\GPBMetadata\xea\x02\n" +
 	"Flexiq::V1b\x06proto3"
 
