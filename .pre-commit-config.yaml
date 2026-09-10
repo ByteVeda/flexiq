@@ -108,8 +108,12 @@ repos:
         pass_filenames: false
 
       - id: proto-check
-        name: proto check (buf format, lint, descriptor drift)
+        name: proto check (buf format, lint, descriptor and OpenAPI drift)
         entry: ./scripts/proto-check.sh
         language: system
-        files: ^contracts/proto/
+        # The generator too: contracts/openapi.json goes stale when it changes
+        # for the same reason it does when a .proto changes. And the document
+        # itself, so a hand-edit is answered by the gate rather than by a
+        # reviewer.
+        files: ^(contracts/proto/|contracts/openapi\.json$|crates/flexiq-openapi/)
         pass_filenames: false
