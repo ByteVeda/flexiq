@@ -68,6 +68,20 @@ jobs:
             exit 1
           fi
 
+      # The reason `fq` lives in this workspace is that its version and the
+      # server's cannot drift. Asserting it here reds a pull request rather
+      # than shipping a release where they have.
+      - name: The command line reports the same version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          reported="$(docker run --rm --entrypoint /usr/local/bin/fq flexiq-server:ci --version)"
+          if [ "$reported" != "fq ${VERSION}" ]; then
+            echo "::error::fq reports '${reported}', expected 'fq ${VERSION}'"
+            exit 1
+          fi
+
       # publish-server.yml mirrors these labels onto the multiarch index, which
       # is where GHCR reads the package title and description from. Asserting
       # them here means a dropped LABEL reds a pull request instead of surfacing

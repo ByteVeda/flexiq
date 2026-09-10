@@ -144,6 +144,8 @@ jobs:
             # the Dockerfile and the SPA it embeds.
             server:
               - 'crates/flexiq-server/**'
+              # The image carries `fq` beside the server, from one cargo build.
+              - 'crates/flexiq-cli/**'
               - 'dashboard/**'
               - 'docker/**'
               - '!docker/**.md'
