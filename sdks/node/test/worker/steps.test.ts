@@ -74,6 +74,18 @@ async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<bo
 /** Fast retries, and enough of them that a dead-letter is a verdict, not a budget. */
 const RETRIES = { maxRetries: 5, retryBackoff: { baseMs: 1, maxMs: 10 } } as const;
 
+/**
+ * A promise with its settle handle, for pinning one callback open until
+ * another has reached a point the test needs it at.
+ */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = () => settle();
+  });
+  return { promise, resolve };
+}
+
 it("replays a committed step instead of running it again", async () => {
   const queue = newQueue();
   const completed: OutcomeEvent[] = [];
@@ -178,7 +190,24 @@ it("dead-letters two steps started at once rather than interleaving them", async
     "checkout",
     async () => {
       const steps = step();
-      await Promise.all([steps.run("charge", () => 1), steps.run("receipt", () => 2)]);
+      // Force the overlap rather than assume it. Two `run` calls made back to
+      // back only *look* concurrent: each start crosses to the core on the
+      // blocking pool, and with instant callbacks the first can begin, run and
+      // commit before the second start ever arrives — "receipt" then takes
+      // position 2 legitimately, the job completes and the rule under test is
+      // never exercised. So hold "charge" inside its callback, started and
+      // uncommitted, until "receipt" has been asked for and answered.
+      const charging = deferred();
+      const held = deferred();
+      const charge = steps.run("charge", async () => {
+        charging.resolve();
+        await held.promise;
+        return 1;
+      });
+      // Resolved from within the callback, so "charge" is past `beginRun`.
+      await charging.promise;
+      const receipt = steps.run("receipt", () => 2).finally(held.resolve);
+      await Promise.all([charge, receipt]);
       return "done";
     },
     RETRIES,
