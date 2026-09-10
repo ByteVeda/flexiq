@@ -1,10 +1,13 @@
 name: Provision Gradle
 description: >-
-  Downloads the Gradle distribution the wrapper pins, retrying transient network
-  failures. The wrapper fetches it on first use and gives up on the first error,
-  so a reset connection to services.gradle.org fails the build before any code
-  has run. Doing it in its own step keeps that retry off the real invocation,
-  which would otherwise re-run the build to recover a download.
+  Fetches everything a Gradle build needs off the network before the build runs,
+  retrying transient failures: the distribution the wrapper pins, and the
+  plugins the build scripts resolve at configuration time. Both are fetched on
+  first use and both give up on the first error, so a reset connection to
+  services.gradle.org or a bad response from plugins.gradle.org fails the build
+  before any code has run. Doing it in its own step keeps the retry off the real
+  invocation, which would otherwise re-run the build — and its tests — to
+  recover a download.
 
 inputs:
   working-directory:
@@ -15,16 +18,44 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Download the pinned Gradle distribution
+    - name: Fetch the Gradle distribution and the build's plugins
       working-directory: ${{ inputs.working-directory }}
       shell: bash
       run: |
-        for attempt in 1 2 3; do
-          if ./gradlew --version --no-daemon; then
-            exit 0
-          fi
-          echo "::warning::Gradle provisioning attempt ${attempt} failed; retrying"
-          sleep $((attempt * 10))
-        done
-        echo "::error::could not download the Gradle distribution after 3 attempts"
-        exit 1
+        # A failure inside `if` does not trip the shell's -e, so each attempt is
+        # observed rather than fatal; the last one decides. The backoff is only
+        # taken when another attempt follows — sleeping after the final one adds
+        # half a minute to every genuine outage and buys nothing.
+        retry() {
+          local what="$1"
+          shift
+          local attempts=3
+          local attempt=1
+          while true; do
+            if "$@"; then
+              return 0
+            fi
+            if [ "$attempt" -ge "$attempts" ]; then
+              echo "::error::${what}: gave up after ${attempts} attempts"
+              return 1
+            fi
+            echo "::warning::${what}: attempt ${attempt} failed; retrying"
+            sleep $((attempt * 10))
+            attempt=$((attempt + 1))
+          done
+        }
+
+        # `--version` provisions the distribution without configuring anything.
+        retry "downloading the Gradle distribution" \
+          ./gradlew --version --no-daemon
+
+        # `help` configures every project, which is what resolves the plugin
+        # artifacts — the step no amount of distribution retrying covers, and
+        # the one that fails when the plugin portal answers badly. It runs no
+        # task of the build itself, so it needs neither the JNI cdylib (built
+        # after this step in every caller) nor any generated source.
+        #
+        # Naming no plugin keeps this correct as plugins are added or bumped:
+        # whatever the build scripts declare is what gets resolved.
+        retry "resolving the build's plugins" \
+          ./gradlew help --no-daemon
