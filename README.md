@@ -44,7 +44,9 @@ Each SDK is self-contained — see its README for install, quickstart, and the f
 One Rust core (`crates/`), one thin SDK shell per language (`sdks/`). The DB is the source of
 truth; the GIL/event loop is held only during task execution. `WorkerDispatcher` in
 `flexiq-core` is binding-free, so new language shells implement one trait against
-[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md).
+[`BINDING_CONTRACT.md`](crates/flexiq-core/BINDING_CONTRACT.md). A client that talks to
+`flexiq-server` over the network instead implements
+[`REMOTE_SDK_CONTRACT.md`](contracts/REMOTE_SDK_CONTRACT.md), which needs no native binding.
 
 ## Features
 

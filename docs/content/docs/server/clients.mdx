@@ -49,7 +49,10 @@ curl -sSLO "${base}/flexiq-descriptor-${VERSION}.binpb"  # the compiled descript
 The tarball carries `proto/` with its own `buf.yaml` and `buf.lock`, so `buf`
 resolves the one external dependency — `buf.build/googleapis/googleapis`, for
 `google.rpc.Status` — without you declaring it. It also carries
-`wire-vectors.json`, which is the authority for the payload envelope below.
+`wire-vectors.json`, which is the authority for the payload envelope below, and
+`REMOTE_SDK_CONTRACT.md`, which is the normative version of this page: the RPCs
+a client must implement against the ones it may skip, stated as obligations
+rather than as a guide.
 
 **The repository** has the same tree at
 [`contracts/proto`](https://github.com/ByteVeda/flexiq/tree/master/contracts/proto).

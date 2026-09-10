@@ -9,6 +9,13 @@ compiled once against a shape and then talks to whatever the server has become.
 This page is that missing promise, and every claim on it is one CI enforces
 rather than one a maintainer remembers.
 
+This page explains the promise. The normative statement of it —
+which RPCs a client must implement, what it must do with an error it cannot
+parse, and what conformance means — is
+[`contracts/REMOTE_SDK_CONTRACT.md`](https://github.com/ByteVeda/flexiq/blob/master/contracts/REMOTE_SDK_CONTRACT.md),
+which ships in the same release asset as the `.proto` tree. Where this page and
+that file disagree, that file is the contract.
+
 The calls themselves are elsewhere:
 [The gRPC door](/server/operate/grpc) for what the producer serves,
 [Clients without an SDK](/server/clients) for generating against it, and
