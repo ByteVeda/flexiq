@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/grpc/status"
+
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // EnqueueRequest is one job to submit.
@@ -164,9 +165,20 @@ func (c *Client) EnqueueBatch(ctx context.Context, reqs []EnqueueRequest) ([]Bat
 		return nil, fromRPC(err)
 	}
 
-	results := make([]BatchResult, 0, len(resp.GetResults()))
-	for _, item := range resp.GetResults() {
-		results = append(results, batchResultFromProto(item))
+	// One result per input item, in input order, is the only thing that makes a
+	// result attributable: a BatchResult carries no id of its own, so position
+	// is the whole mapping. A response of the wrong length is a server that
+	// broke that promise, and pairing the two lists anyway would report one
+	// item's outcome against another item's request.
+	outcomes := resp.GetResults()
+	if len(outcomes) != len(reqs) {
+		return nil, fmt.Errorf("flexiq: enqueue batch: server answered %d results for %d items",
+			len(outcomes), len(reqs))
+	}
+
+	results := make([]BatchResult, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		results = append(results, batchResultFromProto(outcome))
 	}
 	return results, nil
 }

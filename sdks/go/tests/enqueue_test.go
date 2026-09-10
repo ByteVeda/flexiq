@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // TestEnqueueSendsTheTaggedEnvelope proves the client encodes rather than
@@ -249,6 +250,53 @@ func TestBatchPartialFailure(t *testing.T) {
 
 	if results[2].Err == nil {
 		t.Error("an unrecognised outcome arm was reported as a durable enqueue")
+	}
+}
+
+// TestBatchRefusesAMiscountedResponse: a BatchResult carries no id of its own,
+// so position is the whole mapping between a request and its outcome. A
+// response of the wrong length has to fail rather than be paired up anyway,
+// which would report one item's outcome against another item's request.
+func TestBatchRefusesAMiscountedResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		results []*pb.EnqueueBatchItemResult
+	}{
+		{"short", []*pb.EnqueueBatchItemResult{
+			{Outcome: &pb.EnqueueBatchItemResult_Enqueued{
+				Enqueued: &pb.EnqueueResponse{Job: &pb.Job{Id: "job-1"}},
+			}},
+		}},
+		{"long", []*pb.EnqueueBatchItemResult{
+			{Outcome: &pb.EnqueueBatchItemResult_Enqueued{
+				Enqueued: &pb.EnqueueResponse{Job: &pb.Job{Id: "job-1"}},
+			}},
+			{Outcome: &pb.EnqueueBatchItemResult_Enqueued{
+				Enqueued: &pb.EnqueueResponse{Job: &pb.Job{Id: "job-2"}},
+			}},
+			{Outcome: &pb.EnqueueBatchItemResult_Enqueued{
+				Enqueued: &pb.EnqueueResponse{Job: &pb.Job{Id: "job-3"}},
+			}},
+		}},
+		{"empty", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := serve(t, &fakeProducer{
+				enqueueBatch: func(context.Context, *pb.EnqueueBatchRequest) (*pb.EnqueueBatchResponse, error) {
+					return &pb.EnqueueBatchResponse{Results: tc.results}, nil
+				},
+			})
+
+			results, err := client.EnqueueBatch(context.Background(), []flexiq.EnqueueRequest{
+				{Task: "t"}, {Task: "t"},
+			})
+			if err == nil {
+				t.Fatalf("a %s response was accepted as %d results", tc.name, len(results))
+			}
+			if results != nil {
+				t.Error("results were returned beside the error; none of them are attributable")
+			}
+		})
 	}
 }
 
