@@ -1267,6 +1267,7 @@ dependencies = [
  "clap",
  "env_logger",
  "flexiq-core",
+ "flexiq-openapi",
  "flexiq-workflows",
  "hmac",
  "http",
