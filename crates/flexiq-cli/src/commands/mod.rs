@@ -5,3 +5,4 @@
 //! wire is testable without a server. Only the thin `run` around it needs one.
 
 pub mod enqueue;
+pub mod jobs;
