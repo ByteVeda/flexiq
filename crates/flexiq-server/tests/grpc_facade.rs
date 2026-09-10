@@ -318,6 +318,19 @@ async fn stats_count_one_queue_and_the_whole_namespace() {
     let every = harness.get("/v1/stats").await;
     assert_eq!(every.body["pending"], Value::from("2"));
 
+    // The contract binds `queue` to a path on one binding and leaves it
+    // unbound on the other, which makes it a query parameter there. The two
+    // spellings must answer the same thing, or the generated document
+    // advertises a filter the server ignores.
+    let filtered = harness.get("/v1/stats?queue=emails").await;
+    assert_eq!(filtered.status, StatusCode::OK);
+    assert_eq!(filtered.body["pending"], one.body["pending"]);
+
+    // And a parameter nobody declared is refused here as it is everywhere else.
+    let refused = harness.get("/v1/stats?nope=1").await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused.reason(), "INVALID_REQUEST");
+
     harness.stop().await;
 }
 

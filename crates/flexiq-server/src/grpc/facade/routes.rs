@@ -131,7 +131,8 @@ pub enum Binding {
     CancelJob,
     /// `GET /v1/queues/{queue}/stats`.
     QueueStats,
-    /// `GET /v1/stats` — every queue in the namespace.
+    /// `GET /v1/stats` — every queue in the namespace, or the one `?queue=`
+    /// names.
     NamespaceStats,
     /// `POST /v1/workflows`.
     SubmitWorkflow,
@@ -429,14 +430,21 @@ async fn queue_stats(
 }
 
 async fn namespace_stats(State(producer): State<Producer>, parts: Parts) -> Response {
-    // `queue: None` counts every queue in the namespace. It is never a way to
-    // reach another one: the namespace comes from the credential, and this
-    // request has no field for it.
-    let request = match scoped(&parts, pb::QueueStatsRequest { queue: None }) {
+    let request = match prepare_namespace_stats(&parts) {
         Ok(request) => request,
         Err(error) => return error::refuse(error),
     };
     finish(producer.queue_stats(request).await, write::queue_stats)
+}
+
+/// An unset `queue` counts every queue in the namespace, which is the reason
+/// this binding exists. It is never a way to reach another namespace: that
+/// comes from the credential, and the request has no field for it.
+fn prepare_namespace_stats(
+    parts: &Parts,
+) -> Result<tonic::Request<pb::QueueStatsRequest>, WireError> {
+    let filter: read::QueueStats = query(parts)?;
+    scoped(parts, filter.into_message())
 }
 
 async fn submit_workflow(State(producer): State<Producer>, request: Request) -> Response {

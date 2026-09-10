@@ -295,6 +295,28 @@ impl ListJobs {
     }
 }
 
+/// `GET /v1/stats` — the queue filter, as a query parameter.
+///
+/// The other binding of this RPC names the queue in the path. This one is the
+/// contract's `additional_bindings` with nothing bound, and a request field a
+/// path does not bind is a query parameter — so `?queue=emails` here is
+/// `/v1/queues/emails/stats`. Omitting it counts every queue in the namespace,
+/// which is the reason the second binding exists.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct QueueStats {
+    /// The queue to count; omitting it counts all of them.
+    #[serde(default)]
+    pub queue: Option<String>,
+}
+
+impl QueueStats {
+    /// The request message.
+    pub fn into_message(self) -> pb::QueueStatsRequest {
+        pb::QueueStatsRequest { queue: self.queue }
+    }
+}
+
 /// `POST /v1/workflows` — a `SubmitWorkflowRequest`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
