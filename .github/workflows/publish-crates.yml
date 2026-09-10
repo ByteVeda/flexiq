@@ -37,7 +37,7 @@ env:
   # flexiq-mesh both depend on flexiq-core, so the set goes up together and
   # cargo works out the upload order and the index waits itself. Every other
   # workspace member is `publish = false` — binding shells and binaries.
-  CRATES: flexiq flexiq-core flexiq-workflows flexiq-mesh
+  CRATES: flexiq-macros flexiq flexiq-core flexiq-workflows flexiq-mesh
   # The one version whose semver gate is waived — see the step that reads it.
   # Empty it, or move it forward, rather than deleting the check.
   SEMVER_EXEMPT_VERSION: ""
@@ -113,7 +113,7 @@ jobs:
       # validate that rewritten lockfile instead of the committed one.
       - name: The crates build at the declared MSRV
         env:
-          PACKAGES: -p flexiq -p flexiq-core -p flexiq-workflows -p flexiq-mesh
+          PACKAGES: -p flexiq -p flexiq-macros -p flexiq-core -p flexiq-workflows -p flexiq-mesh
         run: |
           set -euo pipefail
           msrv="$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"

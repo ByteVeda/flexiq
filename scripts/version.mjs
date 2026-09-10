@@ -46,6 +46,12 @@ const MIRRORS = [
     label: "flexiq-mesh registry coordinate",
   },
   {
+    file: "Cargo.toml",
+    pattern:
+      /^(flexiq-macros = \{ path = "crates\/flexiq-macros", version = ")(.+?)(" \})$/m,
+    label: "flexiq-macros registry coordinate",
+  },
+  {
     file: "sdks/node/package.json",
     pattern: /^(  "version": ")(.+?)(",)$/m,
     label: "npm package",
