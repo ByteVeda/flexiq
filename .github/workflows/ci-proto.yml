@@ -41,7 +41,14 @@ jobs:
           setup_only: true
           version: ${{ steps.pin.outputs.version }}
 
-      - name: Format, lint and descriptor drift
+      # contracts/openapi.json is generated from the descriptor by
+      # crates/flexiq-openapi, so this job compiles one small crate. Its deps
+      # are prost and serde_json, already in the lock — there is no tonic and
+      # no bundled sqlite on this path.
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Format, lint, descriptor and OpenAPI drift
         run: ./scripts/proto-check.sh
 
       - name: The gate catches what it claims to
