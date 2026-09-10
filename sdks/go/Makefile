@@ -20,7 +20,7 @@ PACKAGES ?= ./...
 
 .PHONY: help
 help: ## List the targets
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
@@ -38,6 +38,16 @@ test: ## Run the suite
 .PHONY: race
 race: ## Run the suite under the race detector, as CI does
 	$(GO) test -race -count=1 $(PACKAGES)
+
+.PHONY: server
+server: ## Build the flexiq-server that `make e2e` drives
+	cargo build --manifest-path ../../Cargo.toml -p flexiq-server --features grpc
+
+.PHONY: e2e
+e2e: ## Run the suite against a real flexiq-server — `make server` first
+	# -race for the same reason `race` has it, and more so: the harness reads
+	# the server's log on a goroutine while the tests run.
+	$(GO) test -tags integration -race -count=1 $(PACKAGES)
 
 .PHONY: cover
 cover: ## Run the suite and write coverage.out

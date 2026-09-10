@@ -16,6 +16,11 @@ run:
   # than annotated, because a `//nolint` in generated code is erased by the
   # next `buf generate`.
   tests: true
+  # The end-to-end suite is behind `//go:build integration`. Without naming the
+  # tag here the linter would not compile those files at all, which is a blanket
+  # exemption for a whole suite — the habit this config is written to avoid.
+  build-tags:
+    - integration
 
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused

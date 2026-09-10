@@ -33,6 +33,7 @@ jobs:
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
       go: ${{ steps.decide.outputs.go }}
+      go_e2e: ${{ steps.decide.outputs.go_e2e }}
       polyglot: ${{ steps.decide.outputs.polyglot }}
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
@@ -96,6 +97,29 @@ jobs:
               - 'contracts/wire-vectors.json'
               - 'contracts/BUF_VERSION'
               - '.github/workflows/ci-go.yml'
+            # The pair: this client against a real flexiq-server. It watches
+            # both halves, which is why it is a filter of its own rather than
+            # more entries on `go` — that suite's whole cost argument is that it
+            # needs no Rust, and this one builds the server.
+            #
+            # Deliberately not `*shared`: an engine-crate change that breaks the
+            # door already turns the Rust suite red, which runs
+            # `cargo test -p flexiq-server --features grpc`. What only this
+            # suite covers is the two halves meeting.
+            go_e2e:
+              - 'sdks/go/**'
+              - 'crates/flexiq-server/**'
+              - 'contracts/proto/**'
+              - 'contracts/descriptor.binpb'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/actions/setup-rust/**'
+              - '.github/workflows/ci-go-e2e.yml'
+              # The dispatcher, which `*shared` would have brought in. A suite
+              # wired into ci.yml and nowhere else has already gone silently
+              # dead here once, and the PR that does it is the one PR this
+              # filter would otherwise skip.
+              - '.github/workflows/ci.yml'
             # The cross-SDK suite: any embedded SDK, the example itself, or its
             # driver can break interop, so it watches all three shells at once.
             # Named one by one rather than `sdks/**`, because the Go client is
@@ -154,6 +178,7 @@ jobs:
           NODE: ${{ steps.filter.outputs.node }}
           JAVA: ${{ steps.filter.outputs.java }}
           GO: ${{ steps.filter.outputs.go }}
+          GO_E2E: ${{ steps.filter.outputs.go_e2e }}
           POLYGLOT: ${{ steps.filter.outputs.polyglot }}
           SERVER: ${{ steps.filter.outputs.server }}
           CHART: ${{ steps.filter.outputs.chart }}
@@ -171,6 +196,7 @@ jobs:
           decide node "$NODE"
           decide java "$JAVA"
           decide go "$GO"
+          decide go_e2e "$GO_E2E"
           decide polyglot "$POLYGLOT"
           decide server "$SERVER"
           decide chart "$CHART"
@@ -217,6 +243,12 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     uses: ./.github/workflows/ci-go.yml
 
+  go-e2e:
+    name: Go e2e
+    needs: changes
+    if: needs.changes.outputs.go_e2e == 'true'
+    uses: ./.github/workflows/ci-go-e2e.yml
+
   polyglot:
     name: Polyglot
     needs: changes
@@ -244,7 +276,7 @@ jobs:
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, go, polyglot, server-image, chart, proto]
+    needs: [changes, versions, rust, python, node, java, go, go-e2e, polyglot, server-image, chart, proto]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed
