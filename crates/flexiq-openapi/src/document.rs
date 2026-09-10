@@ -48,13 +48,7 @@ pub fn document(descriptor: &[u8]) -> Result<String, Error> {
         responses.push(method.output.clone());
 
         let operation = operation(&contract, &mut registry, binding)?;
-        let item = paths
-            .entry(binding.path.clone())
-            .or_insert_with(|| Value::Object(Map::new()));
-        let Some(item) = item.as_object_mut() else {
-            unreachable!("a path item is created as an object")
-        };
-        item.insert(binding.verb.as_str().to_string(), operation);
+        place(&mut paths, binding, operation)?;
     }
 
     // A request body is refused when it carries a field the reader does not
@@ -124,6 +118,36 @@ fn info() -> Value {
     `scripts/proto-check.sh --fix`.",
         "license": { "name": "MIT", "identifier": "MIT" }
     })
+}
+
+/// Put one operation in its path item, or refuse a pair already taken.
+///
+/// A path item holds one operation per verb, so a second binding on the same
+/// pair would *replace* the first — a document silently missing an annotated
+/// RPC, which the byte comparison in `scripts/proto-check.sh` would then gate
+/// as correct because the output is still deterministic. A gate must not fail
+/// open, so this is an error rather than a last-write-wins.
+fn place(paths: &mut Map<String, Value>, binding: &Binding, operation: Value) -> Result<(), Error> {
+    let item = paths
+        .entry(binding.path.clone())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(item) = item.as_object_mut() else {
+        unreachable!("a path item is created as an object")
+    };
+    if item
+        .insert(binding.verb.as_str().to_string(), operation)
+        .is_some()
+    {
+        return Err(Error::Unsupported {
+            element: format!("{}.{}", binding.service, binding.method),
+            reason: format!(
+                "{} {} is annotated more than once",
+                binding.verb.as_str().to_uppercase(),
+                binding.path
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// One binding, as an operation.
@@ -278,5 +302,29 @@ mod tests {
     fn a_further_binding_of_one_rpc_gets_its_own_id() {
         assert_eq!(operation_id(&binding(1)), "ProducerService_QueueStats_2");
         assert_eq!(operation_id(&binding(2)), "ProducerService_QueueStats_3");
+    }
+
+    /// `GET` and `POST /v1/jobs` are two bindings and one path item, which is
+    /// the case the refusal below must not catch.
+    #[test]
+    fn one_path_holds_an_operation_per_verb() {
+        let mut paths = Map::new();
+        let mut post = binding(0);
+        post.verb = Verb::Post;
+        assert!(place(&mut paths, &binding(0), Value::Null).is_ok());
+        assert!(place(&mut paths, &post, Value::Null).is_ok());
+        assert_eq!(paths["/v1/stats"].as_object().map(Map::len), Some(2));
+    }
+
+    /// And a pair already taken is refused rather than overwritten: the
+    /// document would otherwise be missing an RPC the contract annotates, and
+    /// still be byte-stable enough for the gate to pass it.
+    #[test]
+    fn one_path_and_verb_cannot_be_annotated_twice() {
+        let mut paths = Map::new();
+        assert!(place(&mut paths, &binding(0), Value::Null).is_ok());
+        let error = place(&mut paths, &binding(1), Value::Null)
+            .expect_err("the second binding takes a pair already held");
+        assert!(error.to_string().contains("GET /v1/stats"));
     }
 }
