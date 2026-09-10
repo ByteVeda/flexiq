@@ -13,7 +13,19 @@
 
 pub mod args;
 pub mod cli;
+pub mod commands;
 pub mod connect;
 pub mod error;
 pub mod output;
 pub mod pb;
+
+/// Run one invocation: dial the door, then dispatch.
+pub async fn run(cli: cli::Cli) -> anyhow::Result<()> {
+    let token = connect::token_from_env()?;
+    let mut client = connect::connect(&cli.endpoint, &token).await?;
+    match &cli.command {
+        cli::Command::Enqueue(args) => commands::enqueue::run(&mut client, args, cli.json).await,
+        // The remaining arms land with their commands.
+        _ => Err(anyhow::anyhow!("not yet wired")),
+    }
+}

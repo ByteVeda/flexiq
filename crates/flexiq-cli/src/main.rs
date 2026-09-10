@@ -4,9 +4,15 @@
 use clap::Parser;
 
 use flexiq_cli::cli::Cli;
+use flexiq_cli::error::EXIT_FAILURE;
 
-fn main() {
-    // Dispatch arrives with the first command; parsing already gives `--help`
-    // and `--version`, which is what this target owes the release wiring.
-    let _cli = Cli::parse();
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+    if let Err(error) = flexiq_cli::run(cli).await {
+        // `{:#}` walks the anyhow chain, so a transport failure prints the
+        // endpoint it was dialling as well as what the socket said.
+        eprintln!("error: {error:#}");
+        std::process::exit(EXIT_FAILURE);
+    }
 }
