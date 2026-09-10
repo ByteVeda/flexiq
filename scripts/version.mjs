@@ -61,6 +61,14 @@ const MIRRORS = [
     label: "Python source-tree fallback",
   },
   {
+    // A Go module carries no manifest version — a release is a git tag. This
+    // constant is what the client puts in its gRPC user agent, so it is the
+    // one place a Go release can disagree with the workspace.
+    file: "sdks/go/version.go",
+    pattern: /^(const Version = ")(.+?)(")$/m,
+    label: "Go module",
+  },
+  {
     file: "deploy/helm/flexiq-server/Chart.yaml",
     pattern: /^(version: )(.+)()$/m,
     label: "Helm chart",
