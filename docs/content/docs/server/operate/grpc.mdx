@@ -244,7 +244,7 @@ process.
 | `GET` | `/v1/jobs/{job_id}` | `GetJob` |
 | `POST` | `/v1/jobs/{job_id}:cancel` | `CancelJob` |
 | `GET` | `/v1/queues/{queue}/stats` | `QueueStats` for one queue |
-| `GET` | `/v1/stats` | `QueueStats` for the namespace |
+| `GET` | `/v1/stats` | `QueueStats` for the namespace, or for `?queue=` |
 | `POST` | `/v1/workflows` | `SubmitWorkflow` |
 | `GET` | `/v1/workflows/{run_id}` | `GetWorkflowRun` |
 
@@ -302,6 +302,28 @@ completion watch. Poll `GetJob` or use a webhook subscription.
 A request without a credential comes back `401` with `"reason":
 "UNAUTHENTICATED"` rather than a gRPC trailer. TLS is not terminated here
 either.
+
+### The OpenAPI document
+
+The table above is also published as a machine-readable document, so a client
+generator, a Postman import or an API gateway can read this door without anyone
+writing the paths out by hand:
+[`contracts/openapi.json`](https://github.com/ByteVeda/flexiq/blob/master/contracts/openapi.json).
+
+It is OpenAPI 3.1, generated from the same `.proto` files the gRPC door is
+generated from, and committed the way `contracts/descriptor.binpb` is. The
+paths in it are not a separate description that could go stale: each one is a
+`google.api.http` option on its RPC, and the server's route table is tested
+against those options, so a path the document advertises is a path the binary
+serves.
+
+Two things it deliberately does not describe. Response schemas are **open** — a
+later release may add a field, and a client that refuses one is a client that
+breaks on the next upgrade — while request bodies are closed, because that is
+what the door does. And a `oneof` is described as arms that exclude each other,
+not as one that must be set: "exactly one of `raw` and `structured`" is a rule
+the service enforces and states in its own prose, alongside the others it
+enforces on values.
 
 ## Health, and which probe it belongs in
 

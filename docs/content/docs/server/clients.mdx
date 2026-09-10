@@ -98,6 +98,14 @@ Either way you get `flexiq.v1.ProducerService` with eight RPCs: `Enqueue`,
 `EnqueueBatch`, `GetJob`, `ListJobs`, `CancelJob`, `QueueStats`,
 `SubmitWorkflow` and `GetWorkflowRun`.
 
+With neither, generate against the JSON facade instead:
+[`contracts/openapi.json`](https://github.com/ByteVeda/flexiq/blob/master/contracts/openapi.json)
+describes the same eight RPCs as HTTP paths, in OpenAPI 3.1. It is generated
+from the `.proto` files above and gated against them, so it is the same contract
+read through a different generator ecosystem — not a second one. What it costs
+is the payload envelope: see
+[Two doors for one payload](/server/operate/grpc#two-doors-for-one-payload-and-only-one-of-them-is-lossless).
+
 <Callout type="info" title="Version 1 is permanent">
   Field numbers are never reused or renumbered, fields are deprecated in place,
   and new RPCs, messages, fields and enum values are additive. Your generated
