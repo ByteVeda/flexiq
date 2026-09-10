@@ -64,8 +64,11 @@ Writing a client against it, in a language with no FlexiQ SDK, is
 # this block needs the value.
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   localhost:50051 list
-# Health is the exception, and needs no credential.
-grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+# The health *call* is the exception and needs no credential. The token is here
+# because grpcurl looks a method up through reflection before calling it, and
+# reflection does — a probe carrying its own descriptor needs neither.
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 grpc.health.v1.Health/Check
 grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   -d '{"task_name":"send_email","raw":"","options":{"queue":"emails"}}' \
   localhost:50051 flexiq.v1.ProducerService/Enqueue
@@ -81,11 +84,95 @@ webhook secrets stay behind the dashboard's session and role check, because an
 operator surface and a producer surface should not share a credential. And there
 is **no way to name a namespace**; it comes from the credential, as above.
 
-Reflection works without a `.proto` on hand because the wire contract is
-embedded in the binary — the same committed descriptor the buf gate builds, so
-it cannot drift from the schema CI checks. It is gated by the credential like
-everything else: a caller that cannot authenticate cannot enumerate the services
-this build carries.
+## Reflection, and what it hands out
+
+The `list` above needed no `.proto` on hand, no checkout and no `-protoset`
+flag, because the wire contract is embedded in the binary — the same committed
+descriptor the buf gate builds, so it cannot drift from the schema CI checks.
+Against a bare image, that is the whole toolchain:
+
+```text
+flexiq.executor.v1.ExecutorService
+flexiq.v1.ProducerService
+grpc.health.v1.Health
+grpc.reflection.v1.ServerReflection
+```
+
+Name a service and `list` narrows to its methods — the fully-qualified form the
+`Enqueue` line above passes as its last argument:
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 list flexiq.v1.ProducerService
+```
+
+```text
+flexiq.v1.ProducerService.CancelJob
+flexiq.v1.ProducerService.Enqueue
+flexiq.v1.ProducerService.EnqueueBatch
+flexiq.v1.ProducerService.GetJob
+flexiq.v1.ProducerService.GetWorkflowRun
+flexiq.v1.ProducerService.ListJobs
+flexiq.v1.ProducerService.QueueStats
+flexiq.v1.ProducerService.SubmitWorkflow
+```
+
+`describe` answers with the type, comments included. The descriptor keeps source
+info, so what comes back is the `.proto` as written rather than a shape stripped
+of its reasons — which is why the two arms below explain themselves without a
+second page:
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
+  localhost:50051 describe flexiq.v1.EnqueueRequest
+```
+
+```text
+flexiq.v1.EnqueueRequest is a message:
+message EnqueueRequest {
+  // The registered task to run. Not validated here; see the service comment.
+  string task_name = 1;
+  // The job's body.
+  //
+  // Setting no arm is an error: an absent body is not an empty one, and
+  // `raw = ""` is a zero-length payload.
+  //
+  // Both arms end up as the same envelope in storage. They differ in what they
+  // can express: `raw` carries anything the format does, `structured` carries
+  // what JSON does. Pick `raw` if you have a CBOR library.
+  oneof body {
+    // The tagged envelope from BINDING_CONTRACT.md — one tag byte followed by
+    // CBOR [args, kwargs]. Reaches storage untouched.
+    bytes raw = 2;
+    // Arguments the server encodes into that same envelope. Refuses the values
+    // it cannot encode losslessly rather than rounding them, and does not
+    // preserve object key order — see StructuredArgs.
+    .flexiq.v1.StructuredArgs structured = 3;
+  }
+  .flexiq.v1.EnqueueOptions options = 4;
+}
+```
+
+`describe` takes a service the same way, and on `flexiq.v1.ProducerService` it
+returns that service's whole comment block — the list of what the door
+deliberately does not offer and does not promise, which is worth reading once
+before building against it.
+
+That is the loop, and it closes without a file: `list` to find the method,
+`describe` to learn the message, `-d` with a JSON body to call it. A build
+pipeline that wants the same contract without a running server downloads it
+instead — [Getting the contract](/server/clients#getting-the-contract) has the
+two `curl` lines, and they are the supported route.
+
+<Callout type="warn" title="Reflection is authenticated, but it is not scoped">
+Reflection is refused `UNAUTHENTICATED` without a credential like every other
+non-health call, so the open port alone does not publish the schema. What it
+does not check is *which* scope. A `produce` token `list`s and `describe`s
+`flexiq.executor.v1` in full and is then refused `PERMISSION_DENIED` the moment
+it calls one of those RPCs — schema access is what a live token buys, not what
+its scope buys. Narrowing a leaked token's scope therefore does not narrow what
+it can read; revoking it is what does.
+</Callout>
 
 ## Two doors for one payload, and only one of them is lossless
 
@@ -393,6 +480,13 @@ Same posture as the attach listener:
 - **Nothing on this door is an admin surface.** Pausing queues, settings,
   dead-letter operations and webhook secrets stay behind the dashboard's session
   and role check. A token that leaks costs you an enqueue path, not a tenant.
+- **The schema is behind the credential, but not behind a scope.** Any live
+  token reads every package this build carries, its own scope included and the
+  other one too — see
+  [Reflection, and what it hands out](#reflection-and-what-it-hands-out). What
+  that costs is small while the `.proto` is published anyway; what it means is
+  that revocation, not scoping, is the control over who can enumerate this
+  door.
 
 <Callout type="warn" title="The TLS gap, stated plainly">
 A sidecar proxy or a service mesh is a reasonable answer for a cluster that

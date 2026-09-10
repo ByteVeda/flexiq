@@ -102,12 +102,16 @@ is pinned in `contracts/BUF_VERSION` and read by CI and the script alike. The
 descriptor keeps source info, which is why a comment-only edit makes it stale
 too.
 
-Every `server-v*` release attaches the same descriptor alongside the `.proto`
-tree, so a build pipeline needs neither a checkout nor a running server —
-[Getting the contract](/server/clients#getting-the-contract) has the two `curl`
-lines. The tarball also carries `wire-vectors.json`, the authority for the
+Every `server-v*` release from 2.0.0 attaches the same descriptor alongside the
+`.proto` tree, so a build pipeline needs neither a checkout nor a running
+server — [Getting the contract](/server/clients#getting-the-contract) has the two
+`curl` lines. The tarball also carries `wire-vectors.json`, the authority for the
 payload envelope, which is the half of the contract the `.proto` itself calls
 opaque bytes.
+
+The version is not a floor to be polite about: the gRPC role shipped in 2.0.0,
+so `server-v1.0.0` and everything before it carries no wire artifacts at all and
+those URLs 404 rather than serving an older contract.
 
 ## The escape hatch, and what it is now for
 
