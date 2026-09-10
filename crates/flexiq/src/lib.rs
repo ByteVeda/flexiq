@@ -10,6 +10,15 @@ pub use flexiq_core::*;
 // `flexiq_core::` keeps compiling when it depends only on this crate.
 pub use flexiq_core;
 
+// Module names here must not collide with a `pub mod` on the core root: a
+// private module of the same name shadows the glob re-export above, so
+// `flexiq::error` would stop resolving to `flexiq_core::error`. Core owns
+// `contract, error, job, lease, periodic, pubsub, resilience, scheduler,
+// settings, step, storage, wire, worker` — the shell's names steer clear.
+mod outcome;
+
+pub use outcome::{Abort, Outcome};
+
 /// DAG workflows. Enable the `workflows` feature.
 ///
 /// Re-export of [`flexiq_workflows`]; `flexiq::workflows::WorkflowRun` and

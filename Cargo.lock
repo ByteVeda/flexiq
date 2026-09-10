@@ -1143,6 +1143,7 @@ dependencies = [
  "flexiq-core",
  "flexiq-mesh",
  "flexiq-workflows",
+ "serde_json",
 ]
 
 [[package]]

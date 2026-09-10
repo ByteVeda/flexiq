@@ -27,3 +27,6 @@ mesh = ["dep:flexiq-mesh"]
 flexiq-core = { workspace = true }
 flexiq-workflows = { workspace = true, optional = true }
 flexiq-mesh = { workspace = true, optional = true }
+# A failed job records canonical JSON, not a bare message — the shape every
+# other shell reads. See `error::task_error_json`.
+serde_json = { workspace = true }
