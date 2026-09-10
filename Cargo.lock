@@ -1296,6 +1296,7 @@ dependencies = [
  "chrono",
  "clap",
  "env_logger",
+ "flexiq-cli",
  "flexiq-core",
  "flexiq-openapi",
  "flexiq-workflows",
