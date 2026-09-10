@@ -11,6 +11,7 @@
 //! documentation lists what is missing and what it is blocked on.
 #![deny(missing_docs)]
 
+pub mod args;
 pub mod cli;
 pub mod connect;
 pub mod pb;
