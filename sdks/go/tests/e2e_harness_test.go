@@ -73,6 +73,13 @@ const (
 
 	// stopGrace is how long a SIGTERM has to drain before the kill.
 	stopGrace = 10 * time.Second
+
+	// drainBudget outlives stopGrace deliberately. cmd.WaitDelay starts its own
+	// stopGrace timer at the same instant the drain-wait below does, and if the
+	// drain-wait won that race it would call cmd.Wait — which closes the stderr
+	// pipe — while the log reader is still on it. That is the exact race the
+	// ordering in stop() exists to avoid.
+	drainBudget = stopGrace + 5*time.Second
 )
 
 // server is a flexiq-server process, the SQLite file behind it, and everything
@@ -158,6 +165,15 @@ func (s *server) readLog(scanner *bufio.Scanner, bound chan<- string) {
 			reported = true
 		}
 	}
+
+	// A read that ended on an error rather than on EOF closes `drained` all the
+	// same, and every waiter reads that as the process having exited. Recording
+	// it keeps the failure message from naming the wrong cause.
+	if err := scanner.Err(); err != nil {
+		s.mu.Lock()
+		s.log = append(s.log, "[harness] stopped reading the server log: "+err.Error())
+		s.mu.Unlock()
+	}
 }
 
 // awaitAddress blocks until the listener reports its port, the process exits,
@@ -220,10 +236,11 @@ func (s *server) awaitServing() error {
 func (s *server) stop() {
 	s.cancel()
 	// The reader gets first refusal on the pipe; the budget is there so a
-	// process that ignores SIGTERM cannot hang the suite instead of failing it.
+	// process that ignores both SIGTERM and cmd.WaitDelay's kill cannot hang
+	// the suite instead of failing it.
 	select {
 	case <-s.drained:
-	case <-time.After(stopGrace):
+	case <-time.After(drainBudget):
 	}
 	_ = s.cmd.Wait()
 }

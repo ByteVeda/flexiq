@@ -45,7 +45,9 @@ server: ## Build the flexiq-server that `make e2e` drives
 
 .PHONY: e2e
 e2e: ## Run the suite against a real flexiq-server — `make server` first
-	$(GO) test -tags integration -count=1 $(PACKAGES)
+	# -race for the same reason `race` has it, and more so: the harness reads
+	# the server's log on a goroutine while the tests run.
+	$(GO) test -tags integration -race -count=1 $(PACKAGES)
 
 .PHONY: cover
 cover: ## Run the suite and write coverage.out
