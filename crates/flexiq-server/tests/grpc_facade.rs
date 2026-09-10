@@ -423,6 +423,14 @@ async fn a_missing_job_carries_its_reason_and_a_404() {
     assert_eq!(answer.code(), "NOT_FOUND");
     assert_eq!(answer.reason(), "JOB_NOT_FOUND");
 
+    // A run answers without an `ErrorInfo`, so this is the arm that used to
+    // render a 404 with `"status": "OK"` in the body — a client branching on
+    // the name, as the contract tells it to, read a failure as a success.
+    let answer = harness.get("/v1/workflows/no-such-run").await;
+    assert_eq!(answer.status, StatusCode::NOT_FOUND);
+    assert_eq!(answer.code(), "NOT_FOUND");
+    assert_eq!(answer.body["error"]["code"], Value::from(404));
+
     harness.stop().await;
 }
 
