@@ -15,12 +15,14 @@ behaviour to conduct@byteveda.org.
 - Python 3.9+
 - Rust (stable) — install via [rustup](https://rustup.rs/)
 - [maturin](https://github.com/PyO3/maturin) — builds the Rust extension
+- Go 1.25+ — only for `sdks/go`, which builds nothing from `crates/`. The `go-fmt` and `go-vet`
+  pre-commit hooks need it on `PATH` when a `.go` file is staged.
 
 ### Clone and Install
 
 ```bash
 git clone https://github.com/ByteVeda/flexiq.git
-cd flexiq/sdks/python   # the Python SDK lives here; node/ and java/ are peers
+cd flexiq/sdks/python   # the Python SDK lives here; node/, java/ and go/ are peers
 
 # Create a virtual environment
 python -m venv .venv
@@ -136,6 +138,14 @@ went up that way.
 | npm | `node-vX.Y.Z` | `publish-node.yml` |
 | Maven Central | `java-vX.Y.Z` | `publish-java.yml` |
 | GHCR (server image and Helm chart) | `server-vX.Y.Z` | `publish-server.yml` |
+| Go module proxy | `sdks/go/vX.Y.Z` | none — see below |
+
+The Go client has no publish workflow because a Go module has no registry to push to: the proxy
+fetches it from the tag. Neither half of that tag is a style choice — a module in a subdirectory is
+only resolvable at `<subdir>/vX.Y.Z`, so it is `sdks/go/v2.0.0` and never `go-v2.0.0`, and a module
+released above v1 carries the major in its own path, which is why the import path is
+`github.com/ByteVeda/flexiq/sdks/go/v2`. Moving to 3.0.0 means editing that path in `go.mod` as
+well as cutting the tag.
 
 The server workflow packages the Helm chart during preflight, then publishes it
 after the image, tag, release, and wire-contract assets succeed. On the first
