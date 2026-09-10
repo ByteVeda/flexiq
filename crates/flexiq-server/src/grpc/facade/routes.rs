@@ -131,7 +131,8 @@ pub enum Binding {
     CancelJob,
     /// `GET /v1/queues/{queue}/stats`.
     QueueStats,
-    /// `GET /v1/stats` — every queue in the namespace.
+    /// `GET /v1/stats` — every queue in the namespace, or the one `?queue=`
+    /// names.
     NamespaceStats,
     /// `POST /v1/workflows`.
     SubmitWorkflow,
@@ -429,14 +430,21 @@ async fn queue_stats(
 }
 
 async fn namespace_stats(State(producer): State<Producer>, parts: Parts) -> Response {
-    // `queue: None` counts every queue in the namespace. It is never a way to
-    // reach another one: the namespace comes from the credential, and this
-    // request has no field for it.
-    let request = match scoped(&parts, pb::QueueStatsRequest { queue: None }) {
+    let request = match prepare_namespace_stats(&parts) {
         Ok(request) => request,
         Err(error) => return error::refuse(error),
     };
     finish(producer.queue_stats(request).await, write::queue_stats)
+}
+
+/// An unset `queue` counts every queue in the namespace, which is the reason
+/// this binding exists. It is never a way to reach another namespace: that
+/// comes from the credential, and the request has no field for it.
+fn prepare_namespace_stats(
+    parts: &Parts,
+) -> Result<tonic::Request<pb::QueueStatsRequest>, WireError> {
+    let filter: read::QueueStats = query(parts)?;
+    scoped(parts, filter.into_message())
 }
 
 async fn submit_workflow(State(producer): State<Producer>, request: Request) -> Response {
@@ -655,6 +663,102 @@ mod tests {
             );
             seen.push(key);
         }
+    }
+
+    /// The verb an annotation spells, as this table spells it.
+    fn annotated_verb(verb: Verb) -> flexiq_openapi::Verb {
+        match verb {
+            Verb::Get => flexiq_openapi::Verb::Get,
+            Verb::Post => flexiq_openapi::Verb::Post,
+        }
+    }
+
+    /// Every `google.api.http` binding the producer package declares.
+    fn annotated() -> Vec<flexiq_openapi::Binding> {
+        flexiq_openapi::bindings(pb::FILE_DESCRIPTOR_SET, descriptor::PRODUCER_PACKAGE)
+            .expect("the committed descriptor carries the http annotations")
+    }
+
+    /// This table and the contract's annotations are one mapping written
+    /// twice, and `contracts/openapi.json` is generated from the annotation
+    /// half. So this is what stops that document describing a door nobody
+    /// serves: change a path here without changing the `.proto` and the two
+    /// tests below fail.
+    #[test]
+    fn every_binding_is_annotated_on_its_rpc() {
+        let annotated = annotated();
+        for binding in ROUTES {
+            let rules: Vec<_> = annotated
+                .iter()
+                .filter(|rule| rule.method == binding.rpc().as_str() && rule.path == binding.path())
+                .collect();
+            assert_eq!(
+                rules.len(),
+                1,
+                "{:?} is served at {}, which {} does not annotate on {}",
+                binding,
+                binding.path(),
+                descriptor::PRODUCER_PACKAGE,
+                binding.rpc().as_str()
+            );
+            assert_eq!(
+                rules[0].verb,
+                annotated_verb(binding.verb()),
+                "{binding:?} answers a different method than the contract annotates"
+            );
+        }
+    }
+
+    /// And the other direction: an annotation with no binding is a path the
+    /// document would advertise and the router would answer `NO_SUCH_METHOD`.
+    #[test]
+    fn every_annotation_is_a_binding_this_table_serves() {
+        for rule in annotated() {
+            let bindings: Vec<_> = ROUTES
+                .iter()
+                .filter(|binding| {
+                    binding.rpc().as_str() == rule.method
+                        && binding.path() == rule.path
+                        && annotated_verb(binding.verb()) == rule.verb
+                })
+                .collect();
+            assert_eq!(
+                bindings.len(),
+                1,
+                "{} {} is annotated on {}.{} and is not served",
+                rule.verb.as_str().to_uppercase(),
+                rule.path,
+                rule.service,
+                rule.method
+            );
+        }
+    }
+
+    /// A `GET` carries no body on either door, so an annotation that gave one
+    /// a request body would describe a call the handler cannot read.
+    #[test]
+    fn no_annotated_get_declares_a_body() {
+        for rule in annotated() {
+            assert!(
+                rule.verb != flexiq_openapi::Verb::Get || rule.body.is_none(),
+                "GET {} declares a request body",
+                rule.path
+            );
+        }
+    }
+
+    /// The worker surface is not transcoded, and an annotation is the only way
+    /// it could become so by accident.
+    #[test]
+    fn no_executor_rpc_is_annotated_with_a_path() {
+        let annotated =
+            flexiq_openapi::bindings(pb::FILE_DESCRIPTOR_SET, descriptor::EXECUTOR_PACKAGE)
+                .expect("the committed descriptor is readable");
+        assert!(
+            annotated.is_empty(),
+            "{} annotates HTTP paths: {annotated:?}",
+            descriptor::EXECUTOR_PACKAGE
+        );
     }
 
     /// The public path and the registered pattern differ in exactly one place,

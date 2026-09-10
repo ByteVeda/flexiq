@@ -156,11 +156,21 @@ fn set_headers(headers: &mut HeaderMap) {
 fn rich(status: &Status) -> tonic_types::pb::Status {
     use prost::Message as _;
 
-    tonic_types::pb::Status::decode(status.details()).unwrap_or(tonic_types::pb::Status {
+    // The emptiness check is the whole correctness of this function. A status
+    // built without details has an *empty* detail buffer, and prost decodes
+    // empty bytes into a default message — code 0 — which renders as
+    // `"status": "OK"` in the body of a response that failed. Only a non-empty
+    // buffer can say more than the trailer already does.
+    if !status.details().is_empty() {
+        if let Ok(decoded) = tonic_types::pb::Status::decode(status.details()) {
+            return decoded;
+        }
+    }
+    tonic_types::pb::Status {
         code: status.code() as i32,
         message: status.message().to_string(),
         details: Vec::new(),
-    })
+    }
 }
 
 /// The two detail messages this error model produces, in the `@type` form the
@@ -267,6 +277,44 @@ mod tests {
         )));
         assert_eq!(value["error"]["code"], Value::from(503));
         assert!(!value.to_string().contains("db.internal"));
+    }
+
+    /// A status with no `ErrorInfo` — what a bare `Status::not_found` is, and
+    /// what `GetWorkflowRun` answers with — still has to name its own code. It
+    /// did not: an empty detail buffer decodes as a *default* `google.rpc.Status`,
+    /// so the body claimed `"status": "OK"` under a 404, and a client branching
+    /// on `status` as the contract tells it to read a failure as a success.
+    #[test]
+    fn a_status_carrying_no_details_still_names_its_code() {
+        let value = body(&rich(&Status::not_found("no such workflow run")));
+        assert_eq!(value["error"]["code"], Value::from(404));
+        assert_eq!(value["error"]["status"], Value::from("NOT_FOUND"));
+        assert_eq!(
+            value["error"]["message"],
+            Value::from("no such workflow run")
+        );
+        assert_eq!(value["error"]["details"], Value::Array(Vec::new()));
+    }
+
+    /// And the HTTP status and the name never disagree, whichever arm built
+    /// the body.
+    #[test]
+    fn the_rendered_status_matches_the_one_the_response_carries() {
+        for status in [
+            Status::not_found("gone"),
+            Status::invalid_argument("bad"),
+            Status::unavailable("later"),
+        ] {
+            let rendered = body(&rich(&status));
+            assert_eq!(
+                rendered["error"]["code"],
+                Value::from(http_status(status.code()).as_u16())
+            );
+            assert_eq!(
+                rendered["error"]["status"],
+                Value::from(code_name(status.code()))
+            );
+        }
     }
 
     #[test]

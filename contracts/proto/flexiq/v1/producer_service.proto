@@ -13,6 +13,11 @@ package flexiq.v1;
 
 import "flexiq/v1/job.proto";
 import "flexiq/v1/workflow.proto";
+// The `google.api.http` bindings on every RPC below are the JSON facade's real
+// routes, not an aspiration: the server's route table is drift-tested against
+// them and contracts/openapi.json is generated from them, so a path here that
+// nothing serves fails the build.
+import "google/api/annotations.proto";
 import "google/rpc/status.proto";
 
 // The producer door: submit work, read it back, cancel it, count it.
@@ -53,19 +58,31 @@ service ProducerService {
   // Not idempotent, even with a unique_key: the level is a property of the
   // method, and one that held only for some requests is one a proxy would apply
   // to the others.
-  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse) {
+    option (google.api.http) = {
+      post: "/v1/jobs"
+      body: "*"
+    };
+  }
 
   // Submit many jobs, with one result per input item in input order.
-  rpc EnqueueBatch(EnqueueBatchRequest) returns (EnqueueBatchResponse);
+  rpc EnqueueBatch(EnqueueBatchRequest) returns (EnqueueBatchResponse) {
+    option (google.api.http) = {
+      post: "/v1/jobs:batchEnqueue"
+      body: "*"
+    };
+  }
 
   // Read one job by id.
   rpc GetJob(GetJobRequest) returns (GetJobResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/jobs/{job_id}"};
   }
 
   // Page through jobs, newest first.
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/jobs"};
   }
 
   // Cancel a job, and report the state that leaves it in.
@@ -74,11 +91,20 @@ service ProducerService {
   // did: a second call answers the same thing as the first.
   rpc CancelJob(CancelJobRequest) returns (CancelJobResponse) {
     option idempotency_level = IDEMPOTENT;
+    // A custom method (AIP-136), and no `body`: the id is the whole request,
+    // and the handler reads nothing off the wire.
+    option (google.api.http) = {post: "/v1/jobs/{job_id}:cancel"};
   }
 
   // Per-status job counts, for one queue or for the whole namespace.
   rpc QueueStats(QueueStatsRequest) returns (QueueStatsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
+    // Two paths for one RPC: `queue` is optional and unset counts the
+    // namespace, which no single path with a queue in it can express.
+    option (google.api.http) = {
+      get: "/v1/queues/{queue}/stats"
+      additional_bindings: {get: "/v1/stats"}
+    };
   }
 
   // Submit a workflow graph for execution.
@@ -86,11 +112,17 @@ service ProducerService {
   // Not idempotent: there is no unique_key equivalent for a workflow, so a
   // retried call after a dropped connection can submit twice. See
   // SubmitWorkflowRequest.
-  rpc SubmitWorkflow(SubmitWorkflowRequest) returns (SubmitWorkflowResponse);
+  rpc SubmitWorkflow(SubmitWorkflowRequest) returns (SubmitWorkflowResponse) {
+    option (google.api.http) = {
+      post: "/v1/workflows"
+      body: "*"
+    };
+  }
 
   // Read a workflow run's state and every node's.
   rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
+    option (google.api.http) = {get: "/v1/workflows/{run_id}"};
   }
 }
 
@@ -210,7 +242,8 @@ message CancelJobResponse {
 }
 
 message QueueStatsRequest {
-  // Unset counts every queue in the namespace.
+  // Which queue to count. A request that does not name one counts every queue
+  // in the namespace; the queue-scoped path always names one.
   optional string queue = 1;
 }
 
