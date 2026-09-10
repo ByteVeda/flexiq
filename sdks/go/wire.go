@@ -70,6 +70,30 @@ var (
 		NaNConvert:    cbor.NaNConvert7e00,
 		InfConvert:    cbor.InfConvertFloat16,
 	})
+	// kwargsMode differs from encMode in one setting, and it applies to one
+	// value: the top-level keyword map.
+	//
+	// Go map iteration order is unspecified, so encoding that map with sorting
+	// off would give the same call different bytes on different runs — and a
+	// caller deriving a unique key by hashing its own payload would get a
+	// different key each time. Sorting the keys makes it stable.
+	//
+	// The order is RFC 8949's core-deterministic one: keys compare as their
+	// encoded bytes, so the length header sorts ahead of the text and shorter
+	// keys come first. It looks unalphabetical and is the order every CBOR
+	// implementation agrees on.
+	//
+	// It is safe to sort here and nowhere else because the keyword map is the
+	// only container this client builds itself. Its *values* are marshalled
+	// separately with encMode and spliced in pre-encoded, so a struct inside a
+	// keyword argument still encodes in declaration order.
+	kwargsMode = mustEncMode(cbor.EncOptions{
+		Sort:          cbor.SortBytewiseLexical,
+		IndefLength:   cbor.IndefLengthForbidden,
+		ShortestFloat: cbor.ShortestFloatNone,
+		NaNConvert:    cbor.NaNConvert7e00,
+		InfConvert:    cbor.InfConvertFloat16,
+	})
 	decMode = mustDecMode(cbor.DecOptions{
 		// A CBOR map keyed by anything but a string has no natural Go form
 		// here; decoding to map[string]any is what makes a decoded payload
@@ -86,22 +110,52 @@ var (
 // A nil slice or map is encoded as its empty form. The array is always two
 // elements, so a call with neither argument kind is not an empty payload.
 //
-// Go map iteration order is unspecified, so a map argument encodes to
-// different bytes on different runs. Where the bytes matter — deriving a
-// unique key by hashing the payload, or matching another runtime's — pass a
-// struct instead: its fields encode in declaration order, every time.
+// The keyword map's own keys are sorted, so the same call encodes to the same
+// bytes every time. A map *inside* an argument is not: Go map iteration order
+// is unspecified, and sorting one would reorder keys the caller wrote in a
+// particular order. Where those bytes matter — deriving a unique key by
+// hashing the payload, or matching what another runtime would have sent — pass
+// a struct: its fields encode in declaration order, every time.
 func EncodeCall(args []any, kwargs map[string]any) ([]byte, error) {
 	if args == nil {
 		args = []any{}
 	}
-	if kwargs == nil {
-		kwargs = map[string]any{}
+
+	encodedArgs, err := encMode.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode call args: %w", err)
 	}
-	body, err := encMode.Marshal([2]any{args, kwargs})
+	encodedKwargs, err := encodeKwargs(kwargs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Both halves are already CBOR, so this writes the two-element array header
+	// and copies them in.
+	body, err := encMode.Marshal([2]cbor.RawMessage{encodedArgs, encodedKwargs})
 	if err != nil {
 		return nil, fmt.Errorf("flexiq: encode call: %w", err)
 	}
 	return append([]byte{TagCBOR}, body...), nil
+}
+
+// encodeKwargs encodes the keyword map with its keys sorted and its values
+// left exactly as encMode wrote them.
+func encodeKwargs(kwargs map[string]any) (cbor.RawMessage, error) {
+	encoded := make(map[string]cbor.RawMessage, len(kwargs))
+	for key, value := range kwargs {
+		raw, err := encMode.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("flexiq: encode keyword argument %q: %w", key, err)
+		}
+		encoded[key] = raw
+	}
+
+	body, err := kwargsMode.Marshal(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode call kwargs: %w", err)
+	}
+	return body, nil
 }
 
 // DecodeCall reads a payload envelope back into the call it describes.

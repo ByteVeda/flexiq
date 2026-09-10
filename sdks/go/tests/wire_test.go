@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
@@ -170,6 +171,79 @@ func TestDecodeResultIsNotAnArray(t *testing.T) {
 	}
 	if wide != 1<<53 {
 		t.Errorf("decoded result is %d, want %d", wide, uint64(1)<<53)
+	}
+}
+
+// TestKeywordOrderIsStable covers the one container this client builds itself.
+// Go map iteration order is unspecified, so without sorted keys the same call
+// would encode to different bytes on different runs, and a caller deriving a
+// unique key by hashing its own payload would get a different key each time.
+func TestKeywordOrderIsStable(t *testing.T) {
+	kwargs := map[string]any{
+		"zulu": 1, "alpha": 2, "mike": 3, "bravo": 4,
+		"yankee": 5, "delta": 6, "kilo": 7, "echo": 8,
+	}
+
+	first, err := flexiq.EncodeCall(nil, kwargs)
+	if err != nil {
+		t.Fatalf("EncodeCall: %v", err)
+	}
+	for i := range 50 {
+		again, encodeErr := flexiq.EncodeCall(nil, kwargs)
+		if encodeErr != nil {
+			t.Fatalf("EncodeCall: %v", encodeErr)
+		}
+		if !bytes.Equal(first, again) {
+			t.Fatalf("run %d encoded different bytes\n got: %s\nwant: %s",
+				i, hex.EncodeToString(again), hex.EncodeToString(first))
+		}
+	}
+
+	// Sorted, and still decodable as what went in.
+	call, err := flexiq.DecodeCall(first)
+	if err != nil {
+		t.Fatalf("DecodeCall: %v", err)
+	}
+	if len(call.Kwargs) != len(kwargs) {
+		t.Errorf("decoded %d keyword arguments, want %d", len(call.Kwargs), len(kwargs))
+	}
+	// Tag, then [args, kwargs]: 82 for the two-element array, 80 for the empty
+	// args, a8 for an eight-entry definite-length map.
+	if want := "02" + "8280" + "a8"; !strings.HasPrefix(hex.EncodeToString(first), want) {
+		t.Errorf("body does not open %s: %s", want, hex.EncodeToString(first))
+	}
+
+	// The order is RFC 8949's: keys compare as their *encoded* bytes, so the
+	// length header sorts first and "echo" (64 65 63 68 6f) leads a set whose
+	// alphabetical first is "alpha". That is the deterministic order every
+	// CBOR implementation agrees on, which is the point of choosing it.
+	if !strings.HasPrefix(hex.EncodeToString(first), "028280a8"+"646563686f") {
+		t.Errorf("keyword keys are not in the deterministic order: %s", hex.EncodeToString(first))
+	}
+}
+
+// TestKeywordValuesKeepTheirOwnOrder: sorting applies to the keyword map's
+// keys and stops there. A struct passed as a keyword argument still encodes in
+// declaration order, which is what another runtime would have sent.
+func TestKeywordValuesKeepTheirOwnOrder(t *testing.T) {
+	type order struct {
+		OrderID     string `cbor:"order_id"`
+		AmountCents int    `cbor:"amount_cents"`
+	}
+
+	got, err := flexiq.EncodeCall(nil, map[string]any{
+		"payload": order{OrderID: "ord-0001", AmountCents: 1000},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCall: %v", err)
+	}
+
+	// The same object bytes the single-object-arg vector pins, unsorted:
+	// order_id first, amount_cents second.
+	objectBytes := "a2686f726465725f6964686f72642d303030316c616d6f756e745f63656e74731903e8"
+	if !strings.Contains(hex.EncodeToString(got), objectBytes) {
+		t.Errorf("a struct keyword argument was reordered\n got: %s\nwant it to contain: %s",
+			hex.EncodeToString(got), objectBytes)
 	}
 }
 
