@@ -187,6 +187,68 @@ fn stats_count_a_pending_job() {
     assert_eq!(stats.pending, 1);
 }
 
+// ── The macro ────────────────────────────────────────────────────────
+
+/// Charge an order.
+#[flexiq::task(max_retries = 5, timeout = "30s", queue = "billing", priority = 3)]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    let _ = order_id;
+    Ok(cents)
+}
+
+#[flexiq::task(name = "billing.refund")]
+fn refund(cents: i64) -> flexiq::Outcome<()> {
+    let _ = cents;
+    Ok(())
+}
+
+#[flexiq::task]
+fn heartbeat() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+#[test]
+fn the_macro_carries_its_attributes_into_the_job() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q
+        .enqueue(charge::call("ord-1".into(), 4200))
+        .expect("enqueues");
+
+    assert_eq!(job.task_name, "charge");
+    assert_eq!(job.queue, "billing");
+    assert_eq!(job.max_retries, 5);
+    assert_eq!(job.timeout_ms, 30_000);
+    assert_eq!(job.priority, 3);
+}
+
+/// The retry cap reaches both halves: the job row *and* the scheduler's config.
+#[test]
+fn max_retries_reaches_the_dispatch_config_too() {
+    assert_eq!(<charge as Task>::config().retry_policy.max_retries, 5);
+}
+
+#[test]
+fn an_explicit_name_overrides_the_function_name() {
+    assert_eq!(<refund as Task>::NAME, "billing.refund");
+}
+
+/// A task with no parameters skips argument decoding entirely — an empty
+/// argument array is not a unit value.
+#[test]
+fn a_task_with_no_parameters_encodes_an_empty_argument_list() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q.enqueue(heartbeat::call()).expect("enqueues");
+
+    assert_eq!(job.task_name, "heartbeat");
+    assert_eq!(job.payload, vec![0x02, 0x82, 0x80, 0xa0]);
+}
+
+/// The body stays callable, so it can be unit-tested without a queue at all.
+#[test]
+fn the_original_body_is_still_directly_callable() {
+    assert_eq!(charge::run("ord-1".into(), 4200).expect("runs"), 4200);
+}
+
 #[test]
 fn listing_finds_the_enqueued_job() {
     let q = FlexiQ::in_memory().expect("opens");

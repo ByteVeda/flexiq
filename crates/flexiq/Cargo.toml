@@ -30,6 +30,7 @@ mesh = ["dep:flexiq-mesh"]
 
 [dependencies]
 flexiq-core = { workspace = true }
+flexiq-macros = { workspace = true }
 flexiq-workflows = { workspace = true, optional = true }
 flexiq-mesh = { workspace = true, optional = true }
 # A failed job records canonical JSON, not a bare message — the shape every
@@ -47,3 +48,8 @@ ciborium = "0.2"
 # to storage.
 sha2 = "0.11"
 hex = "0.4"
+
+[dev-dependencies]
+# A macro's error messages are its user interface, and nothing else here
+# exercises them: every other test in this crate compiles.
+trybuild = "1"

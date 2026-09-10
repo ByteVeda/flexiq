@@ -1,0 +1,19 @@
+[package]
+name = "flexiq-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The #[task] attribute macro for the FlexiQ Rust SDK"
+keywords = ["task-queue", "jobs", "macro", "background", "worker"]
+categories = ["asynchronous", "development-tools::procedural-macro-helpers"]
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

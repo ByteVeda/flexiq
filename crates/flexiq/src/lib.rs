@@ -24,6 +24,13 @@ mod queue;
 mod steps;
 mod task;
 
+/// Register a function as a task. See the [crate-level example](crate).
+///
+/// Re-exported from `flexiq-macros`, which exists only to hold it: a
+/// proc-macro crate can export nothing but macros, and a caller should need one
+/// dependency rather than two.
+pub use flexiq_macros::task;
+
 pub use call::TaskCall;
 pub use decode::DecodeError;
 pub use encode::EncodeError;
@@ -43,7 +50,7 @@ pub use task::{StepHandle, Task};
 pub mod __private {
     pub use crate::decode::decode_args;
     pub use crate::encode::{encode_args, to_wire};
-    pub use flexiq_core::wire::WireValue;
+    pub use flexiq_core::wire::{encode_result, WireValue};
 }
 
 /// DAG workflows. Enable the `workflows` feature.

@@ -1,0 +1,5 @@
+error: `discard` is not a shedding policy. Use one of: defer, drop
+ --> tests/ui/bad_on_excess.rs:3:28
+  |
+3 | #[flexiq::task(on_excess = "discard")]
+  |                            ^^^^^^^^^

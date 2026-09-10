@@ -1,0 +1,5 @@
+error: `30 fortnights` is not a duration. Write it as 500ms, 30s, 5m, 2h, 1d, or a bare integer of milliseconds
+ --> tests/ui/bad_duration.rs:3:26
+  |
+3 | #[flexiq::task(timeout = "30 fortnights")]
+  |                          ^^^^^^^^^^^^^^^
