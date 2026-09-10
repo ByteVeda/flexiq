@@ -164,6 +164,16 @@ pipeline that wants the same contract without a running server downloads it
 instead — [Getting the contract](/server/clients#getting-the-contract) has the
 two `curl` lines, and they are the supported route.
 
+<Callout type="warn" title="Reflection is authenticated, but it is not scoped">
+Reflection is refused `UNAUTHENTICATED` without a credential like every other
+non-health call, so the open port alone does not publish the schema. What it
+does not check is *which* scope. A `produce` token `list`s and `describe`s
+`flexiq.executor.v1` in full and is then refused `PERMISSION_DENIED` the moment
+it calls one of those RPCs — schema access is what a live token buys, not what
+its scope buys. Narrowing a leaked token's scope therefore does not narrow what
+it can read; revoking it is what does.
+</Callout>
+
 ## Two doors for one payload, and only one of them is lossless
 
 `Job.payload` is the tagged envelope from the binding contract: one tag byte,
@@ -470,6 +480,13 @@ Same posture as the attach listener:
 - **Nothing on this door is an admin surface.** Pausing queues, settings,
   dead-letter operations and webhook secrets stay behind the dashboard's session
   and role check. A token that leaks costs you an enqueue path, not a tenant.
+- **The schema is behind the credential, but not behind a scope.** Any live
+  token reads every package this build carries, its own scope included and the
+  other one too — see
+  [Reflection, and what it hands out](#reflection-and-what-it-hands-out). What
+  that costs is small while the `.proto` is published anyway; what it means is
+  that revocation, not scoping, is the control over who can enumerate this
+  door.
 
 <Callout type="warn" title="The TLS gap, stated plainly">
 A sidecar proxy or a service mesh is a reasonable answer for a cluster that

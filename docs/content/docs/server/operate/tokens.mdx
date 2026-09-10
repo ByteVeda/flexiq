@@ -84,6 +84,13 @@ Neither scope is an admin surface. Pausing queues, settings, dead-letter
 operations and webhook secrets stay behind the dashboard's session and role
 check, so a token that leaks costs you an enqueue path rather than a tenant.
 
+The table is about *calls*, not about the schema. Server reflection asks only
+that a caller be authenticated, so either row above reads both packages — a
+`produce` token can `describe` the executor RPCs it will then be refused. The
+gRPC door's
+[Reflection, and what it hands out](/server/operate/grpc#reflection-and-what-it-hands-out)
+has the shape of that, and why revoking is the control rather than scoping.
+
 ## One namespace, fixed at mint time
 
 A token is bound to the namespace the minting process itself serves, and it is
