@@ -50,7 +50,10 @@ repos:
 
       - id: go-vet
         name: go vet
-        entry: bash -c 'cd sdks/go && go vet ./...'
+        # -tags integration so the end-to-end suite is type-checked too. It
+        # needs a flexiq-server to *run*, but only the Go toolchain to compile,
+        # and a file no local hook looks at is a file that breaks in CI.
+        entry: bash -c 'cd sdks/go && go vet -tags integration ./...'
         language: system
         files: ^sdks/go/(.*\.go|go\.mod|go\.sum)$
         pass_filenames: false
