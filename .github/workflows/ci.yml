@@ -115,6 +115,11 @@ jobs:
               - 'Cargo.lock'
               - '.github/actions/setup-rust/**'
               - '.github/workflows/ci-go-e2e.yml'
+              # The dispatcher, which `*shared` would have brought in. A suite
+              # wired into ci.yml and nowhere else has already gone silently
+              # dead here once, and the PR that does it is the one PR this
+              # filter would otherwise skip.
+              - '.github/workflows/ci.yml'
             # The cross-SDK suite: any embedded SDK, the example itself, or its
             # driver can break interop, so it watches all three shells at once.
             # Named one by one rather than `sdks/**`, because the Go client is
