@@ -32,6 +32,7 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
     let config = config(&attrs);
     let defaults = defaults(&attrs);
     let decode = decode(&idents, &types, &name);
+    let periodic = periodic(&attrs, &params)?;
 
     // `run` keeps the caller's own signature so the body compiles unchanged and
     // stays directly callable from a unit test. `call` mirrors it, so a wrong
@@ -68,6 +69,8 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
             fn defaults() -> ::flexiq::EnqueueOptions {
                 #defaults
             }
+
+            #periodic
 
             fn run_encoded(
                 job: &::flexiq::Job,
@@ -109,6 +112,47 @@ fn decode(idents: &[&Ident], types: &[&Type], name: &str) -> TokenStream {
                 )))
             })?;
     }
+}
+
+/// The cron schedule, when one was declared.
+///
+/// A scheduled task must take no parameters. A periodic fire has no caller to
+/// supply them, and `Scheduler::check_periodic` builds the job's payload from
+/// the stored `args` alone — so a parameter here would decode as missing on
+/// every fire, at runtime, forever.
+fn periodic(attrs: &TaskAttrs, params: &[Param]) -> Result<TokenStream> {
+    let Some(cron) = &attrs.cron else {
+        if let Some(tz) = &attrs.timezone {
+            let _ = tz;
+            return Err(Error::new(
+                proc_macro2::Span::call_site(),
+                "`timezone` only means something beside `cron`",
+            ));
+        }
+        return Ok(quote! {});
+    };
+
+    if let Some(param) = params.first() {
+        return Err(Error::new(
+            param.ident.span(),
+            "a scheduled task takes no parameters: a periodic fire has no caller to \
+             supply them. Enqueue it by hand if it needs arguments",
+        ));
+    }
+
+    let timezone = match &attrs.timezone {
+        Some(tz) => quote! { ::std::option::Option::Some(#tz) },
+        None => quote! { ::std::option::Option::None },
+    };
+
+    Ok(quote! {
+        fn periodic() -> ::std::option::Option<::flexiq::PeriodicSpec> {
+            ::std::option::Option::Some(::flexiq::PeriodicSpec {
+                cron: #cron,
+                timezone: #timezone,
+            })
+        }
+    })
 }
 
 /// The scheduler's half of the attributes.

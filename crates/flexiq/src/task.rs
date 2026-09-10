@@ -28,6 +28,14 @@ pub trait Task: Send + Sync + 'static {
 
     /// Decode the job's payload, run the body, encode the result.
     fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>;
+
+    /// This task's cron schedule, when it was declared with one.
+    ///
+    /// A worker registers every scheduled task it knows about at startup. The
+    /// default is `None`, so a task without `cron` costs nothing.
+    fn periodic() -> Option<crate::PeriodicSpec> {
+        None
+    }
 }
 
 /// The durable-step handle a running task holds.

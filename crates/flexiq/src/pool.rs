@@ -31,6 +31,9 @@ use crate::{Abort, Outcome, Task};
 /// One registered task's body, erased of its argument types.
 type Handler = Arc<dyn Fn(&Job) -> Outcome<Option<Vec<u8>>> + Send + Sync>;
 
+/// One scheduled task's registration, erased the same way.
+type PeriodicRegistration = Box<dyn FnOnce(&StorageBackend) -> Result<()> + Send>;
+
 /// Builds a worker over the tasks registered on it.
 ///
 /// Not called `Worker`: core exports a type by that name through this crate's
@@ -41,6 +44,7 @@ pub struct WorkerBuilder {
     namespace: Option<String>,
     handlers: HashMap<String, Handler>,
     configs: Vec<(String, TaskConfig)>,
+    periodics: Vec<PeriodicRegistration>,
     queues: Vec<String>,
     num_workers: usize,
     worker_id: Option<String>,
@@ -56,6 +60,7 @@ impl WorkerBuilder {
             namespace,
             handlers: HashMap::new(),
             configs: Vec::new(),
+            periodics: Vec::new(),
             queues: vec!["default".to_string()],
             num_workers: 4,
             worker_id: None,
@@ -75,6 +80,12 @@ impl WorkerBuilder {
             self.duplicate.get_or_insert_with(|| T::NAME.to_string());
         }
         self.configs.push((T::NAME.to_string(), T::config()));
+        if let Some(spec) = T::periodic() {
+            // Boxed as a closure so the builder does not have to carry `T`.
+            let register: PeriodicRegistration =
+                Box::new(move |storage| crate::cron::register::<T>(storage, &spec));
+            self.periodics.push(register);
+        }
         self
     }
 
@@ -110,6 +121,12 @@ impl WorkerBuilder {
                 "task `{name}` was registered twice on one worker: one of the two bodies \
                  would never run"
             )));
+        }
+
+        // Before the scheduler starts, so a periodic that is already due is
+        // found on the first tick rather than one interval late.
+        for register in self.periodics {
+            register(&self.storage)?;
         }
 
         let dispatcher = Arc::new(ShellDispatcher::new(

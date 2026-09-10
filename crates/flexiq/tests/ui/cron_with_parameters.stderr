@@ -1,0 +1,5 @@
+error: a scheduled task takes no parameters: a periodic fire has no caller to supply them. Enqueue it by hand if it needs arguments
+ --> tests/ui/cron_with_parameters.rs:5:12
+  |
+5 | fn nightly(cents: i64) -> flexiq::Outcome<()> {
+  |            ^^^^^

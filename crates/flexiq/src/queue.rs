@@ -166,6 +166,30 @@ impl FlexiQ {
     pub fn stats(&self) -> Result<QueueStats> {
         self.storage.stats(self.namespace.as_deref())
     }
+
+    /// Every registered periodic task.
+    pub fn list_periodic(&self) -> Result<Vec<flexiq_core::PeriodicTask>> {
+        self.storage.list_periodic()
+    }
+
+    /// Remove a periodic. `false` when there was none by that name.
+    ///
+    /// A worker that still has the task registered writes it back at its next
+    /// startup: the schedule is declared in code, and this removes the row
+    /// rather than the declaration.
+    pub fn delete_periodic(&self, name: &str) -> Result<bool> {
+        self.storage.delete_periodic(name)
+    }
+
+    /// Stop a periodic firing, without forgetting it.
+    pub fn pause_periodic(&self, name: &str) -> Result<bool> {
+        self.storage.set_periodic_enabled(name, false)
+    }
+
+    /// Let a paused periodic fire again.
+    pub fn resume_periodic(&self, name: &str) -> Result<bool> {
+        self.storage.set_periodic_enabled(name, true)
+    }
 }
 
 /// The dedup key `idempotent` derives: `auto:` and the first 32 hex characters
