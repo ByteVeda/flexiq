@@ -280,6 +280,13 @@ exception. One consequence looks wrong and is not: a request body over the 4 MiB
 cap answers **400** with `"status": "OUT_OF_RANGE"`, not 413. A mapping with one
 exception in it is two mappings.
 
+Every path, parameter and body shape above is published as `contracts/openapi.json`,
+an OpenAPI 3.1 document generated from these same `.proto` files and committed
+beside the descriptor. It is **descriptive, not normative**: what binds is the
+`google.api.http` option on each RPC, which is what the document is generated
+from and what the server's route table is tested against. Generate a client from
+it, or read the annotations directly — they cannot disagree.
+
 ## Serialization
 
 `Job.payload` and `Job.result` are `bytes`, and the `.proto` calls them opaque.

@@ -1,0 +1,28 @@
+[package]
+name = "flexiq-openapi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Generates the OpenAPI document for the FlexiQ JSON facade from the committed wire contract"
+# A build tool. It is a workspace member so `scripts/proto-check.sh` can run it
+# without a second toolchain, and it is kept off crates.io because nothing
+# outside this repository has a reason to depend on it.
+publish = false
+
+[lib]
+name = "flexiq_openapi"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flexiq-openapi"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to what crates/flexiq-server's codegen already resolves, so reading the
+# descriptor here adds no third-party entry to Cargo.lock.
+prost = "0.14"
+prost-types = "0.14"
+serde_json = { workspace = true }
+thiserror = { workspace = true }

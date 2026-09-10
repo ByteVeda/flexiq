@@ -1,0 +1,1320 @@
+{
+  "components": {
+    "schemas": {
+      "Error": {
+        "description": "The body of any response that is not a 2xx.",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/Status"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "One failure. `status` names the `google.rpc.Code` and is what a client branches on; `code` is the HTTP status the same failure carries, and `message` is prose that may be reworded in any release.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "details": {
+            "description": "Typed detail messages, each tagged with `@type`. `google.rpc.ErrorInfo` carries the stable `reason` a client branches on.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "message": {
+            "description": "A human-readable description. Not stable.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The `google.rpc.Code` by name, such as `NOT_FOUND`.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.CacheConfig": {
+        "additionalProperties": false,
+        "description": "Memoize this node's result and skip re-running it on a later, otherwise\nidentical, submission.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field**, for the\nsame reason as GateConfig: nothing reachable from the producer door\nresolves a cache hit yet.",
+        "properties": {
+          "ttl": {
+            "description": "Unset caches indefinitely.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.CancelJobResponse": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/flexiq.v1.Job",
+            "description": "The job as it stands after the call, carrying neither payload nor result.\n\nA pending job is CANCELLED outright. A running one cannot be stopped from\noutside, so it comes back RUNNING with cancel_requested set and the task\nstops at its next check. A job already in a terminal state comes back\nunchanged, which is what makes calling this twice safe."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.Debounce": {
+        "additionalProperties": false,
+        "description": "Collapse a burst of enqueues carrying one key into a single run.\n\nWhile a job with this key is still pending and unclaimed, its scheduled time\nslides forward instead of a second job being inserted.",
+        "properties": {
+          "key": {
+            "description": "Non-empty. Jobs sharing it share a window.",
+            "type": "string"
+          },
+          "maxPending": {
+            "description": "The producer's own admission cap for the target queue, mirroring the SDK\napp config rather than any server-side policy. Absent means uncapped, and\nthen nothing is counted. Non-negative.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "maxWait": {
+            "description": "Ceiling on the total delay, measured from the pending job's creation.\nMandatory, and at least `window`: without it a producer that never stops\nenqueuing starves the job forever.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "replacePayload": {
+            "description": "Overwrite the pending job's payload with this one. False keeps the payload\nthe window opened with.",
+            "type": "boolean"
+          },
+          "window": {
+            "description": "How far ahead of now each enqueue pushes the run. Must be positive.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueBatchItemResult": {
+        "oneOf": [
+          {
+            "required": [
+              "enqueued"
+            ]
+          },
+          {
+            "required": [
+              "error"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "enqueued"
+                  ]
+                },
+                {
+                  "required": [
+                    "error"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "enqueued": {
+            "$ref": "#/components/schemas/flexiq.v1.EnqueueResponse",
+            "description": "Exactly what Enqueue answers, deduplicated included."
+          },
+          "error": {
+            "$ref": "#/components/schemas/Status",
+            "description": "This item alone did not land."
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The same shape one Enqueue takes, so a client's single-enqueue handling\nworks unchanged per item.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.EnqueueRequest"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueBatchResponse": {
+        "properties": {
+          "results": {
+            "description": "One result per input item, in input order.\n\n**No atomicity is promised**, because not every backend can keep such a\npromise. Where a batch is one transaction, an item failure fails the whole\nRPC — returning earlier items as enqueued would report jobs that do not\nexist — and the error carries the failing item's `index`. Where a batch can\npartially apply, the RPC succeeds and an `error` arm means that item alone\ndid not land. Treating an `enqueued` arm as durable is correct under both.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.EnqueueBatchItemResult"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueOptions": {
+        "additionalProperties": false,
+        "description": "The producer-settable knobs on a job.\n\nMirrors the producer-settable half of `NewJob` in\ncrates/flexiq-core/src/job.rs and invents no second vocabulary for the same\nvalues. Two things proto3 cannot express and a client cannot guess:\n\n  * an empty `queue` means \"default\", substituted server-side;\n  * a higher `priority` runs first.\n\nAbsent, deliberately: a namespace, which is a property of the credential and\nnever of a request; and any `idempotent` flag. The `auto:` key is a sha256\nover the serialized payload and belongs to the SDKs — a client that wants one\ncomputes it and sends it as `unique_key`.",
+        "properties": {
+          "debounce": {
+            "$ref": "#/components/schemas/flexiq.v1.Debounce",
+            "description": "Present or absent: the three-of-three validation the SDKs do by hand\nbecomes a question about the message."
+          },
+          "dependsOn": {
+            "description": "Job ids this job waits on. An id in another namespace is refused exactly as\na missing one is, and reports the same reason.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expiresAt": {
+            "description": "After this instant the job is cancelled instead of dispatched.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "maxRetries": {
+            "description": "Attempts after the first. Zero means the job is not retried.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "metadata": {
+            "description": "Opaque JSON text, byte-preserved (see Job.metadata).",
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "priority": {
+            "description": "Higher runs first.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "queue": {
+            "description": "Empty means \"default\".",
+            "type": "string"
+          },
+          "resultTtl": {
+            "description": "How long to keep the result after completion.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "scheduledAt": {
+            "description": "Unset means \"as soon as possible\".",
+            "format": "date-time",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Unset takes the server's default.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "uniqueKey": {
+            "description": "Dedupes against the **active** job carrying the same key, in the caller's\nown namespace. It is not an idempotency key without an expiry: a retry\nthat arrives after the original finished enqueues a second job.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "raw"
+            ]
+          },
+          {
+            "required": [
+              "structured"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "raw"
+                  ]
+                },
+                {
+                  "required": [
+                    "structured"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "options": {
+            "$ref": "#/components/schemas/flexiq.v1.EnqueueOptions"
+          },
+          "raw": {
+            "contentEncoding": "base64",
+            "description": "The tagged envelope from BINDING_CONTRACT.md — one tag byte followed by\nCBOR [args, kwargs]. Reaches storage untouched.",
+            "type": "string"
+          },
+          "structured": {
+            "$ref": "#/components/schemas/flexiq.v1.StructuredArgs",
+            "description": "Arguments the server encodes into that same envelope. Refuses the values\nit cannot encode losslessly rather than rounding them, and does not\npreserve object key order — see StructuredArgs."
+          },
+          "taskName": {
+            "description": "The registered task to run. Not validated here; see the service comment.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.EnqueueResponse": {
+        "properties": {
+          "deduplicated": {
+            "description": "The unique_key matched a job that was already active, and this is that job\nrather than a new one.\n\nEvery other response field describes resulting state rather than what the\ncall did. This one is the exception, because it is the whole reason a\nproducer sets a unique_key: without it the two calls are indistinguishable.",
+            "type": "boolean"
+          },
+          "job": {
+            "$ref": "#/components/schemas/flexiq.v1.Job"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.FanInConfig": {
+        "additionalProperties": false,
+        "description": "Collect a fan-out's expanded results back into one node.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field**, for the\nsame reason as FanOutConfig.",
+        "properties": {
+          "from": {
+            "description": "The fan-out node this collects.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.FanOutConfig": {
+        "additionalProperties": false,
+        "description": "Expand this node into one job per item at runtime.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field.** Runtime\nexpansion is exactly the kind of thing a live SDK tracker does and a\nstateless RPC cannot.",
+        "properties": {
+          "itemsFrom": {
+            "description": "The node whose result supplies the items to expand over. Unset infers the\nsingle predecessor structurally, the same inference a fan-out with no\nexplicit source already falls back to in every shell.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.GateConfig": {
+        "additionalProperties": false,
+        "description": "A gate: the node pauses and waits for an external decision before running.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field.** Gate\nevaluation is driven by a live SDK tracker process today, and nothing\nreachable from the producer door can drive one — see WorkflowNodeConfig.\nThe field exists so the wire never needs a second, breaking pass to add it\nonce that changes.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "onTimeout": {
+            "description": "What a gate does if its timeout elapses with no decision.",
+            "enum": [
+              "ON_TIMEOUT_UNSPECIFIED",
+              "ON_TIMEOUT_APPROVE",
+              "ON_TIMEOUT_REJECT"
+            ],
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Unset waits indefinitely.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.GetJobResponse": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/flexiq.v1.Job"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.GetWorkflowRunResponse": {
+        "properties": {
+          "nodes": {
+            "description": "Every node the run has, in no particular order.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.WorkflowNode"
+            },
+            "type": "array"
+          },
+          "run": {
+            "$ref": "#/components/schemas/flexiq.v1.WorkflowRun"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.Job": {
+        "description": "A job, as a reader sees it.\n\nMirrors the read model in crates/flexiq-core/src/job.rs. Numbers 1-15 encode\nin one byte and are spent on the fields every response carries; the optional\ntail starts at 16.\n\nTimes are google.protobuf.Timestamp and durations are\ngoogle.protobuf.Duration. Storage keeps Unix milliseconds, so sub-millisecond\nprecision is truncated on the way in.\n\nFields whose absence differs from their zero carry explicit presence. A\nmessage-typed field has presence inherently in proto3, so `optional` appears\nonly on the scalars that need it.",
+        "properties": {
+          "cancelRequested": {
+            "description": "A cancel was requested while the job was running; the task polls for it.",
+            "type": "boolean"
+          },
+          "completedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "debounceKey": {
+            "type": "string"
+          },
+          "error": {
+            "description": "Canonical JSON `{errtype, message, traceback[]}` when whatever produced the\nerror wrote one, and free prose otherwise. Readers fall back on non-JSON.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "After this instant the job is cancelled instead of dispatched.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "hasDeps": {
+            "description": "The job waits on at least one dependency.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Opaque. A UUIDv7 today; read it as a string, never as a UUID.",
+            "type": "string"
+          },
+          "maxRetries": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "metadata": {
+            "description": "Opaque JSON text, byte-preserved. Not a Struct: a Struct round trip\nreorders keys and cannot hold every value this field already carries.",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Output-only, and always the caller's own. It is here so a client logging a\njob record has it, not so a client can select one — no request carries a\nnamespace.",
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "description": "The tagged envelope from BINDING_CONTRACT.md, opaque and never re-encoded.\n\nAbsent means the caller did not ask for it; present and zero-length means\nthe job carries no body. They are different answers, which is why this is\n`optional bytes` and not a bare `bytes`.",
+            "type": "string"
+          },
+          "priority": {
+            "description": "Higher runs first.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "progress": {
+            "description": "0-100, reported by the running task.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "result": {
+            "contentEncoding": "base64",
+            "description": "The task's return value, opaque.\n\nAbsent means the job returned nothing — or that the caller did not ask for\nit; present and empty means it returned an empty value.",
+            "type": "string"
+          },
+          "resultTtl": {
+            "description": "How long the result is kept after completion.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "retryCount": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "scheduledAt": {
+            "description": "When the job becomes eligible to run.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "Lifecycle state of a job.\n\nOne-to-one with `JobStatus` in crates/flexiq-core/src/job.rs, but offset by\none: the Rust discriminants start at `Pending = 0` and zero is spent here on\n`_UNSPECIFIED`. The conversion is an exhaustive match with no wildcard, so\nadding a variant on either side fails to compile rather than silently\nmapping to something wrong.\n\nA reader that does not recognise a value must treat the job as **not\nterminal** — never as failed. Only the values it knows are terminal are.",
+            "enum": [
+              "JOB_STATUS_UNSPECIFIED",
+              "JOB_STATUS_PENDING",
+              "JOB_STATUS_RUNNING",
+              "JOB_STATUS_COMPLETE",
+              "JOB_STATUS_FAILED",
+              "JOB_STATUS_DEAD",
+              "JOB_STATUS_CANCELLED"
+            ],
+            "type": "string"
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "timeout": {
+            "description": "How long one attempt may run before the scheduler reclaims it.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          },
+          "uniqueKey": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.ListJobsResponse": {
+        "properties": {
+          "jobs": {
+            "description": "Newest first. Rows never carry payload or result — a page of a hundred jobs\nwould otherwise be a page of a hundred payloads. Read one with GetJob.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.Job"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "description": "Empty when this is the last page.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.QueueStatsResponse": {
+        "properties": {
+          "cancelled": {
+            "description": "Cancelled.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "completed": {
+            "description": "Finished successfully.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "dead": {
+            "description": "Moved to the dead-letter queue.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "failed": {
+            "description": "Failed terminally.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "pending": {
+            "description": "Waiting to run.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "running": {
+            "description": "Currently executing.",
+            "format": "int64",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.StructuredArgs": {
+        "additionalProperties": false,
+        "description": "A call the server encodes into the payload envelope on the caller's behalf.\n\nThe other arm of EnqueueRequest.body, `raw`, carries the envelope from\nBINDING_CONTRACT.md verbatim and loses nothing; it is what an SDK sends. This\none exists so a client with no CBOR library — a shell script, `curl`, a\nlanguage whose ecosystem has no codec — can still submit a job. The server\nencodes these values into that same envelope, so storage never holds two\nformats and a worker cannot tell which door a job arrived through.\n\nTwo consequences of being JSON-shaped. Both are permanent, and neither is a\nfootnote:\n\n  1. **Values JSON cannot hold are refused, not rounded.** A number here is a\n     double, so an integer is carried only up to a magnitude of 9007199254740991\n     (2^53 - 1). 2^53 is refused along with everything past it, because it is\n     also what 2^53 + 1 rounds to and no server can tell the two apart.\n     Anything beyond the range fails with INVALID_ARGUMENT rather than being\n     silently truncated, and a non-finite number is refused outright. Byte strings and CBOR tags have no Value arm at all.\n     contracts/wire-vectors.json pins exactly those cases as decode-only\n     because no JSON-shaped writer can produce them — `raw` is the door that\n     carries them.\n  2. **Object key order is not preserved.** A protobuf map is unordered, so\n     keys reach the envelope sorted. Nothing decodes differently, a CBOR map\n     being unordered too — but the bytes differ from what an SDK would have\n     sent for the same call, so an SDK's automatic `auto:` idempotency key,\n     which is a hash over those bytes, will not match across the two doors. A\n     caller that wants deduplication sets EnqueueOptions.unique_key, which is\n     the only mechanism this door has in any case.",
+        "properties": {
+          "args": {
+            "description": "Positional arguments, in order.",
+            "items": {
+              "description": "Any JSON value."
+            },
+            "type": "array"
+          },
+          "kwargs": {
+            "additionalProperties": {
+              "description": "Any JSON value."
+            },
+            "description": "Keyword arguments. A language with no keyword arguments sends none; the\nenvelope still carries the empty map, because the call body is always a\ntwo-element array.",
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.SubWorkflowSpec": {
+        "additionalProperties": false,
+        "description": "A child workflow, submitted and tracked as part of running this node.\n\n**`SubmitWorkflow` refuses any graph where a node sets this field.**\nRecursive on WorkflowGraph rather than a bespoke transport: a child node\nalready carries its own args on its own `body` oneof, so nothing here needs\na second, parallel payload map the way today's per-SDK sub-workflow\ntransports each independently invented one.",
+        "properties": {
+          "deferredNodeNames": {
+            "description": "Node names in `graph` whose job is not pre-enqueued at submission — an\nSDK tracker creates it at runtime once its gating condition resolves.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/flexiq.v1.WorkflowGraph"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.SubmitWorkflowRequest": {
+        "additionalProperties": false,
+        "description": "Submit a workflow graph for execution.\n\nRefused, FAILED_PRECONDITION, naming the offending node, if any\nWorkflowNodeConfig sets gate, cache, fan_out, fan_in or sub_workflow — see\nWorkflowNodeConfig's per-field comments. A graph that clears that check is\npre-enqueued as one Job per node, chained by the graph's edges, exactly as\nan equivalent call through an SDK's own submit_workflow would be; any\nworker with workflow tracking enabled advances it, whether or not it is the\ncaller that submitted the graph.\n\nThere is no caller-supplied version: every submission is version 1 of\n`name`. Resubmitting `name` with a graph that differs from what version 1\nalready holds is refused, INVALID_ARGUMENT — never silently reused —\nbecause a run's definition must describe the graph that produced its jobs.\nSubmit a materially different graph under a different `name` until this\ngains a real version field.",
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/flexiq.v1.WorkflowGraph"
+          },
+          "name": {
+            "type": "string"
+          },
+          "paramsJson": {
+            "description": "Arbitrary caller data attached to the run, opaque JSON text and\nbyte-preserved — the same convention as Job.metadata, not the raw/structured\nenvelope: it is data the run carries, never a call a task receives.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.SubmitWorkflowResponse": {
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowGraph": {
+        "additionalProperties": false,
+        "description": "A workflow's shape: which steps exist, how they depend on one another, and\neach step's own configuration.\n\nTwo independent pieces, matching how a workflow is actually built and\ncompiled server-side (crates/flexiq-python/src/py_workflow/mod.rs): a bare\ngraph of node names and edges, and a name-keyed configuration map. Neither\nthis message nor WorkflowNodeConfig ever carries `dag_data` — the JSON\ndagron_core::SerializableGraph produces internally. This message compiles\ninto that form; it does not transmit it.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.WorkflowGraphEdge"
+            },
+            "type": "array"
+          },
+          "nodeConfigs": {
+            "description": "Every non-empty node in `nodes` must have exactly one entry here, keyed by\nWorkflowNodeConfig.name.",
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.WorkflowNodeConfig"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/flexiq.v1.WorkflowGraphNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowGraphEdge": {
+        "additionalProperties": false,
+        "description": "One edge, `from` must complete before `to` becomes eligible.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowGraphNode": {
+        "additionalProperties": false,
+        "description": "One node in the graph's shape. The node's configuration lives in the\nmatching WorkflowNodeConfig, not here — this message carries only what the\nDAG itself needs.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowNode": {
+        "description": "One node's state within a run.",
+        "properties": {
+          "completedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "jobId": {
+            "description": "Unset while the node has not yet been enqueued (deferred nodes, before an\nSDK tracker creates their job).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "description": "Status of one node within a run.\n\nOne-to-one with `WorkflowNodeStatus` in crates/flexiq-workflows/src/node.rs.\nThe numbers were the core's discriminants offset by one until READY was\nremoved in 2.0.0; they are wire values now, so the mapping is the explicit\ntable in grpc/producer/convert.rs and nothing may be renumbered to restore\nthe arithmetic.",
+            "enum": [
+              "WORKFLOW_NODE_STATUS_UNSPECIFIED",
+              "WORKFLOW_NODE_STATUS_PENDING",
+              "WORKFLOW_NODE_STATUS_RUNNING",
+              "WORKFLOW_NODE_STATUS_COMPLETED",
+              "WORKFLOW_NODE_STATUS_FAILED",
+              "WORKFLOW_NODE_STATUS_SKIPPED",
+              "WORKFLOW_NODE_STATUS_WAITING_APPROVAL",
+              "WORKFLOW_NODE_STATUS_CACHE_HIT",
+              "WORKFLOW_NODE_STATUS_COMPENSATING",
+              "WORKFLOW_NODE_STATUS_COMPENSATED",
+              "WORKFLOW_NODE_STATUS_COMPENSATION_FAILED"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowNodeConfig": {
+        "additionalProperties": false,
+        "description": "One node's configuration: what it runs, and how it relates to the workflow\naround it.\n\nEvery StepMetadata field (crates/flexiq-workflows/src/definition.rs:9-45)\nhas a typed home here, including the five that are opaque JSON strings\nserver-side today — gate, cache, fan_out, fan_in, sub_workflow — so the wire\nnever needs a breaking pass to type them later. `args_template` and\n`kwargs_template` do not appear: a node's arguments travel on `body`, the\nsame oneof EnqueueRequest already uses, and `kwargs_template` had no reader\nin any shell.\n\nFields 1-15 fit the one-byte range (see job.proto's Job message) because\nevery field here is a real per-node decision, not a hot path some caller\nskips.",
+        "oneOf": [
+          {
+            "required": [
+              "raw"
+            ]
+          },
+          {
+            "required": [
+              "structured"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "raw"
+                  ]
+                },
+                {
+                  "required": [
+                    "structured"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "cache": {
+            "$ref": "#/components/schemas/flexiq.v1.CacheConfig"
+          },
+          "compensate": {
+            "description": "The task to run if this node needs to be rolled back by a saga\ncompensation. A task name, never JSON.",
+            "type": "string"
+          },
+          "condition": {
+            "description": "How an inbound edge gates this node. Unset behaves as ALWAYS.",
+            "enum": [
+              "EDGE_CONDITION_UNSPECIFIED",
+              "EDGE_CONDITION_ON_SUCCESS",
+              "EDGE_CONDITION_ON_FAILURE",
+              "EDGE_CONDITION_ALWAYS"
+            ],
+            "type": "string"
+          },
+          "fanIn": {
+            "$ref": "#/components/schemas/flexiq.v1.FanInConfig"
+          },
+          "fanOut": {
+            "$ref": "#/components/schemas/flexiq.v1.FanOutConfig"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/flexiq.v1.GateConfig"
+          },
+          "maxRetries": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "name": {
+            "description": "Matches a WorkflowGraphNode.name in the same WorkflowGraph.",
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "queue": {
+            "description": "Empty means \"default\".",
+            "type": "string"
+          },
+          "raw": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "structured": {
+            "$ref": "#/components/schemas/flexiq.v1.StructuredArgs"
+          },
+          "subWorkflow": {
+            "$ref": "#/components/schemas/flexiq.v1.SubWorkflowSpec"
+          },
+          "taskName": {
+            "description": "The registered task to run. Not validated here; see ProducerService.",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "A span of time, seconds with up to nine fractional digits and a trailing `s`.",
+            "pattern": "^-?[0-9]+(\\.[0-9]{1,9})?s$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "flexiq.v1.WorkflowRun": {
+        "description": "A workflow run, as a reader sees it.\n\nMirrors crates/flexiq-workflows/src/run.rs. Fields whose absence differs\nfrom their zero carry explicit presence.",
+        "properties": {
+          "completedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "definitionId": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "parentNodeName": {
+            "type": "string"
+          },
+          "parentRunId": {
+            "description": "Set when this run is a sub-workflow: the parent run and the node in it\nthat started this run.",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "An instant, RFC 3339 with a `Z` offset.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "Lifecycle state of a workflow run.\n\nOne-to-one with `WorkflowState` in crates/flexiq-workflows/src/state.rs,\noffset by one the same way JobStatus is: zero is spent here on\n`_UNSPECIFIED`, and the conversion is an exhaustive match with no wildcard.\nA reader that does not recognise a value must treat the run as **not\nterminal**.",
+            "enum": [
+              "WORKFLOW_STATE_UNSPECIFIED",
+              "WORKFLOW_STATE_PENDING",
+              "WORKFLOW_STATE_RUNNING",
+              "WORKFLOW_STATE_PAUSED",
+              "WORKFLOW_STATE_COMPLETED",
+              "WORKFLOW_STATE_COMPLETED_WITH_FAILURES",
+              "WORKFLOW_STATE_FAILED",
+              "WORKFLOW_STATE_CANCELLED",
+              "WORKFLOW_STATE_COMPENSATING",
+              "WORKFLOW_STATE_COMPENSATED",
+              "WORKFLOW_STATE_COMPENSATION_FAILED"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "An API token, minted by `flexiq-server token`. It carries the namespace, so no request names one.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "The JSON facade of the FlexiQ gRPC producer door, transcoded from `contracts/proto/flexiq/v1`. Every path here reaches the same service method a gRPC client reaches, on the same listener and behind the same token check.\n\nRequests are refused when they carry a field the contract does not declare. Responses are not closed: a later release may add one.\n\nA listener serves exactly one namespace and it comes from the token, so no request names one. A job in another namespace is indistinguishable from a job that does not exist.\n\nThis document is generated. Edit `contracts/proto/flexiq/v1/producer_service.proto` and run `scripts/proto-check.sh --fix`.",
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "summary": "Submit work, read it back, cancel it, count it.",
+    "title": "FlexiQ producer API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/jobs": {
+      "get": {
+        "operationId": "ProducerService_ListJobs",
+        "parameters": [
+          {
+            "description": "Unset lists every status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "description": "Lifecycle state of a job.\n\nOne-to-one with `JobStatus` in crates/flexiq-core/src/job.rs, but offset by\none: the Rust discriminants start at `Pending = 0` and zero is spent here on\n`_UNSPECIFIED`. The conversion is an exhaustive match with no wildcard, so\nadding a variant on either side fails to compile rather than silently\nmapping to something wrong.\n\nA reader that does not recognise a value must treat the job as **not\nterminal** — never as failed. Only the values it knows are terminal are.",
+              "enum": [
+                "JOB_STATUS_UNSPECIFIED",
+                "JOB_STATUS_PENDING",
+                "JOB_STATUS_RUNNING",
+                "JOB_STATUS_COMPLETE",
+                "JOB_STATUS_FAILED",
+                "JOB_STATUS_DEAD",
+                "JOB_STATUS_CANCELLED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unset lists every queue.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unset lists every task.",
+            "in": "query",
+            "name": "taskName",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Rows per page. Zero takes the server's default; the server may return\nfewer, and may cap a large value.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous response's next_page_token. Opaque: its contents are free to\nchange between backends and between releases, so a client passes it back\nand interprets nothing.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.ListJobsResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Page through jobs, newest first.",
+        "tags": [
+          "ProducerService"
+        ]
+      },
+      "post": {
+        "description": "Submit one job.\n\nNot idempotent, even with a unique_key: the level is a property of the\nmethod, and one that held only for some requests is one a proxy would apply\nto the others.",
+        "operationId": "ProducerService_Enqueue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.v1.EnqueueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.EnqueueResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Submit one job.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "ProducerService_GetJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Send Job.payload back. Off by default: a payload is the largest thing a job\ncarries and most readers do not want it.",
+            "in": "query",
+            "name": "includePayload",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Send Job.result back.",
+            "in": "query",
+            "name": "includeResult",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.GetJobResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Read one job by id.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}:cancel": {
+      "post": {
+        "description": "Cancel a job, and report the state that leaves it in.\n\nIdempotent because the response describes state rather than what the call\ndid: a second call answers the same thing as the first.",
+        "operationId": "ProducerService_CancelJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.CancelJobResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Cancel a job, and report the state that leaves it in.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/jobs:batchEnqueue": {
+      "post": {
+        "operationId": "ProducerService_EnqueueBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.v1.EnqueueBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.EnqueueBatchResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Submit many jobs, with one result per input item in input order.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/queues/{queue}/stats": {
+      "get": {
+        "operationId": "ProducerService_QueueStats",
+        "parameters": [
+          {
+            "description": "Which queue to count. A request that does not name one counts every queue\nin the namespace; the queue-scoped path always names one.",
+            "in": "path",
+            "name": "queue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.QueueStatsResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Per-status job counts, for one queue or for the whole namespace.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/stats": {
+      "get": {
+        "operationId": "ProducerService_QueueStats_2",
+        "parameters": [
+          {
+            "description": "Which queue to count. A request that does not name one counts every queue\nin the namespace; the queue-scoped path always names one.",
+            "in": "query",
+            "name": "queue",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.QueueStatsResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Per-status job counts, for one queue or for the whole namespace.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/workflows": {
+      "post": {
+        "description": "Submit a workflow graph for execution.\n\nNot idempotent: there is no unique_key equivalent for a workflow, so a\nretried call after a dropped connection can submit twice. See\nSubmitWorkflowRequest.",
+        "operationId": "ProducerService_SubmitWorkflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/flexiq.v1.SubmitWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.SubmitWorkflowResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Submit a workflow graph for execution.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    },
+    "/v1/workflows/{run_id}": {
+      "get": {
+        "operationId": "ProducerService_GetWorkflowRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/flexiq.v1.GetWorkflowRunResponse"
+                }
+              }
+            },
+            "description": "The call succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The call did not succeed. The HTTP status is a function of the `google.rpc.Code` in the body, which is the finer answer and the one to branch on."
+          }
+        },
+        "summary": "Read a workflow run's state and every node's.",
+        "tags": [
+          "ProducerService"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "The gRPC listener. It speaks HTTP/1.1 on the same port, so these paths are served wherever FLEXIQ_GRPC_LISTEN is bound.",
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "ProducerService"
+    }
+  ]
+}
