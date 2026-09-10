@@ -14,4 +14,5 @@
 pub mod args;
 pub mod cli;
 pub mod connect;
+pub mod output;
 pub mod pb;
