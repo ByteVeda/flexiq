@@ -10,7 +10,7 @@
 //! root, so a packaged copy could not read them even if it wanted to. See
 //! `Cargo.toml`'s `exclude`, and #900 for what that trap cost last time.
 
-use flexiq::__private::{encode_args, to_wire, WireValue};
+use flexiq::__private::{decode_args, encode_args, to_wire, WireValue};
 use serde::Serialize;
 
 /// Encode a positional argument list and render it the way the vectors do.
@@ -136,4 +136,97 @@ fn a_non_string_map_key_is_refused() {
     map.insert(1_i64, "one");
     let err = to_wire(&map).expect_err("non-string key");
     assert!(err.to_string().contains("key"), "{err}");
+}
+
+// ── Decoding ─────────────────────────────────────────────────────────
+//
+// Core ships no reader — `wire/cbor.rs`: "There is no reader." A Rust worker is
+// the first thing in the tree that has to decode one of these, and where the
+// writer has exactly one legal output, a reader has to take everything any
+// writer may legally emit.
+
+/// What a handler does: decode the payload back into its parameter types.
+#[test]
+fn a_positional_call_round_trips() {
+    let payload = encode_args(&[arg(&1_i64), arg(&"a")]);
+    let (n, s): (i64, String) = decode_args(&payload).expect("decodes");
+    assert_eq!(n, 1);
+    assert_eq!(s, "a");
+}
+
+/// Case `float`: the pinned bytes are a double.
+#[test]
+fn the_pinned_float_decodes() {
+    let payload = hex::decode("028281fb3ff8000000000000a0").expect("valid hex");
+    let (f,): (f64,) = decode_args(&payload).expect("decodes");
+    assert_eq!(f, 1.5);
+}
+
+/// The same value at half precision.
+///
+/// Not a vector — the file pins one width and says a writer may choose a
+/// narrower one, so this is the half of that rule a reader has to satisfy and
+/// no vector can express. `f9 3e 00` is 1.5 in binary16.
+#[test]
+fn a_narrower_float_decodes_to_the_same_value() {
+    let payload = hex::decode("028281f93e00a0").expect("valid hex");
+    let (f,): (f64,) = decode_args(&payload).expect("decodes");
+    assert_eq!(f, 1.5);
+}
+
+/// Case `int-beyond-double-precision`: 9007199254740993, one past 2^53.
+///
+/// The value is asserted here even though the vectors file cannot assert it:
+/// JSON would lose the last digit, Rust's `i64` does not.
+#[test]
+fn an_integer_past_double_precision_keeps_its_last_digit() {
+    let payload = hex::decode("0282811b0020000000000001a0").expect("valid hex");
+    let (n,): (i64,) = decode_args(&payload).expect("decodes");
+    assert_eq!(n, 9_007_199_254_740_993);
+}
+
+/// Every `decode_only` vector, decoded and re-encoded to the same bytes.
+///
+/// `round_trip_only` is the file's way of saying a value has no cross-language
+/// spelling — a byte string surfaces differently in every runtime — so the
+/// assertion is that this crate's two halves agree, not that a literal matches.
+#[test]
+fn every_decode_only_vector_round_trips() {
+    for hex_text in [
+        "028281fb3ff8000000000000a0", // float
+        "0282811b0020000000000001a0", // int-beyond-double-precision
+        "028281420102a0",             // byte-string
+    ] {
+        let payload = hex::decode(hex_text).expect("valid hex");
+        let args: Vec<ciborium::Value> = decode_args(&payload).expect("decodes");
+        let rewritten: Vec<WireValue> = args.iter().map(arg).collect();
+        assert_eq!(
+            hex::encode(encode_args(&rewritten)),
+            hex_text,
+            "{hex_text} did not survive a decode/encode round trip"
+        );
+    }
+}
+
+/// A payload whose leading byte names a codec this shell does not read.
+#[test]
+fn an_unknown_codec_tag_is_refused_by_number() {
+    let err = decode_args::<(i64,)>(&[0x7f, 0x00]).expect_err("unknown tag");
+    assert!(err.to_string().contains("0x7f"), "{err}");
+}
+
+/// An empty payload carries no tag at all, which is a different fault from a
+/// tag this build does not know.
+#[test]
+fn an_empty_payload_is_refused() {
+    let err = decode_args::<(i64,)>(&[]).expect_err("no tag");
+    assert!(err.to_string().contains("empty"), "{err}");
+}
+
+/// Arguments that do not fit the handler's parameters.
+#[test]
+fn a_shape_mismatch_names_the_arguments() {
+    let payload = encode_args(&[arg(&"not a number")]);
+    let err = decode_args::<(i64,)>(&payload).expect_err("wrong type");
+    assert!(err.to_string().contains("arguments"), "{err}");
 }

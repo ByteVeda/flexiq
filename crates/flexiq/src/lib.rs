@@ -15,9 +15,12 @@ pub use flexiq_core;
 // `flexiq::error` would stop resolving to `flexiq_core::error`. Core owns
 // `contract, error, job, lease, periodic, pubsub, resilience, scheduler,
 // settings, step, storage, wire, worker` — the shell's names steer clear.
+mod decode;
 mod encode;
 mod outcome;
 
+pub use decode::DecodeError;
+pub use encode::EncodeError;
 pub use outcome::{Abort, Outcome};
 
 /// The seam `#[flexiq::task]` expands against. Not a stable API.
@@ -29,7 +32,8 @@ pub use outcome::{Abort, Outcome};
 /// generated.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::encode::{encode_args, to_wire, EncodeError};
+    pub use crate::decode::decode_args;
+    pub use crate::encode::{encode_args, to_wire};
     pub use flexiq_core::wire::WireValue;
 }
 

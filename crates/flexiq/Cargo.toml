@@ -38,6 +38,10 @@ serde_json = { workspace = true }
 # Task arguments are `Serialize`; `encode` turns them into core's WireValue.
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Core writes the envelope and deliberately ships no reader, so a Rust worker
+# brings its own. Reading must accept every shape a writer may legally emit,
+# which is a real CBOR implementation's job rather than a mirror of the writer.
+ciborium = "0.2"
 
 [dev-dependencies]
 hex = "0.4"
