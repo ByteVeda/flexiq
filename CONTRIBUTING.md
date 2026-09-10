@@ -194,7 +194,7 @@ mutable, so that last push replaces the version already there — which is also
 why the published chart version is worth verifying as part of the release check
 rather than assumed from a green run.
 
-One `git tag` per tag — it takes a single name plus an optional commit, so passing all five at
+One `git tag` per tag — it takes a single name plus an optional commit, so passing all six at
 once is `fatal: too many arguments` and creates none of them:
 
 ```bash
@@ -203,25 +203,29 @@ git tag crates-vX.Y.Z
 git tag node-vX.Y.Z
 git tag java-vX.Y.Z
 git tag server-vX.Y.Z
-git tag -l          # all five there? a failed tag is silent otherwise
+git tag sdks/go/vX.Y.Z
+git tag -l          # all six there? a failed tag is silent otherwise
 ```
 
 Push them by name, and push `crates-v*` on its own first. `git push origin --tags` is the wrong
 instrument twice over: it sends every local tag, including any stale one that never belonged to
-this release, and it starts all five workflows at once — which throws away the crates.io-first
-ordering below.
+this release, and it starts every tag-driven workflow at once — which throws away the
+crates.io-first ordering below.
 
 ```bash
 git push origin crates-vX.Y.Z
 # wait for publish-crates.yml to go green
-git push origin X.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z
+git push origin X.Y.Z node-vX.Y.Z java-vX.Y.Z server-vX.Y.Z sdks/go/vX.Y.Z
 ```
 
-Four things are easy to get wrong:
+Five things are easy to get wrong:
 
 - **The tag patterns are exact-match globs.** A near miss like `crates-X.Y.Z` matches no workflow
   and fails silently — no run, no error, nothing published.
 - **`publish-py.yml` also matches `vX.Y.Z`**, but every historical Python tag is bare. Keep it bare.
+- **`sdks/go/vX.Y.Z` starts nothing, and that is not a reason to skip it.** It is the only tag with
+  no workflow behind it — the Go module proxy serves the module *from* the tag, so a release that
+  omits it publishes five registries and no Go client. Nothing turns red when it is missing.
 - **A crates.io version can be yanked but never replaced**, and PyPI is the same. That is why
   `crates-v*` goes first and alone: if it fails, the registries that can still be redone are ahead
   of you rather than behind. A bad `X.Y.Z` becomes `X.Y.Z+1`; there is no re-push.
