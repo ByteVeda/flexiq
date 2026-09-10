@@ -45,6 +45,10 @@ grpcurl -plaintext -H "authorization: Bearer $FLEXIQ_TOKEN" \
   localhost:50051 describe flexiq.v1.ProducerService
 ```
 
+[Reflection, and what it hands out](/server/operate/grpc#reflection-and-what-it-hands-out)
+shows what those two answer with, and the one thing the credential does not
+buy you.
+
 **The release asset** is attached to every `server-v*` release:
 
 ```bash
