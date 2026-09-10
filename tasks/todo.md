@@ -63,7 +63,7 @@ flaked and the issue does not name it.
 The diagnosis was measured, not argued. A throwaway probe reran the **old** shape with the
 starvation made explicit — a 300 ms delay before the second `run` — and the job **completed**:
 
-```
+```text
 PROBE dead= 0 completed= 1
 ```
 
