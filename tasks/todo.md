@@ -78,7 +78,7 @@ reflection is gated. The line now carries the token, and says why.
 `FLEXIQ_GRPC_LISTEN=127.0.0.1:50051`. Every code block on the new section is pasted from that
 run. The caveat was demonstrated both ways: a `produce` token `list`s
 `flexiq.executor.v1.ExecutorService` and its two methods, then gets
-`PermissionDenied: this credential does not carry the `execute` scope` on
+``PermissionDenied: this credential does not carry the `execute` scope`` on
 `ExecutorService/Attach`. An `execute` token reaches the handler instead
 (`NotFound: no attached stream for this session`), so the executor door *is* routed here — the
 listing is not of a service this build fails to serve.
