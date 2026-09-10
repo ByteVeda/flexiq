@@ -21,15 +21,17 @@
 - **Error strings are an interface.** Before rewording any user-visible message, `grep -rn` for `match=` / `toThrow` / `assertThrows` across every SDK.
 - **Task names in tests use the shell's own default** (bare function name), never a module path.
 - **Feature combinations that must stay green:** default, `--features postgres`, `--features redis`.
+- **Pre-commit clippy is workspace-wide with `-D warnings`, so an unused helper fails the commit.** Building bottom-up means a `pub(crate)` item often lands one task before its only consumer, and `dead_code` is an error there, not a warning. Either land the helper with its consumer, or carry `#[allow(dead_code)]` with a comment naming the task that removes it — and make the removal an explicit step in that task.
+- **A shell module must not be named after a core one.** `crates/flexiq/src/lib.rs` re-exports `flexiq_core::*` with a glob, and a private `mod x;` of the same name **shadows** it — `flexiq::error::QueueError` would silently stop resolving, which is a breaking change to a published crate. Rustc catches it as `hidden_glob_reexports`, a warning, not an error. Core owns `contract, error, job, lease, periodic, pubsub, resilience, scheduler, settings, step, storage, wire, worker`; the shell uses `outcome, steps, cron, pool, task, call, options, queue, encode, decode`. The same rule already governs type names — hence `WorkerBuilder`, never `Worker`.
 
 ---
 
 ### Task 1: Shell error types — `Abort`, `Outcome`, and the contract's task-error JSON
 
 **Files:**
-- Create: `crates/flexiq/src/error.rs`
+- Create: `crates/flexiq/src/outcome.rs`
 - Modify: `crates/flexiq/src/lib.rs`
-- Test: inline `#[cfg(test)] mod tests` in `crates/flexiq/src/error.rs`
+- Test: inline `#[cfg(test)] mod tests` in `crates/flexiq/src/outcome.rs`
 
 **Interfaces:**
 - Consumes: `flexiq_core::{TaskError, StepSleep}`.
@@ -39,7 +41,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `crates/flexiq/src/error.rs`:
+Add to `crates/flexiq/src/outcome.rs`:
 
 ```rust
 #[cfg(test)]
@@ -74,11 +76,11 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p flexiq -j2 error::tests`
-Expected: FAIL — `crates/flexiq/src/error.rs` does not exist, so the module cannot be found.
+Expected: FAIL — `crates/flexiq/src/outcome.rs` does not exist, so the module cannot be found.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `crates/flexiq/src/error.rs`:
+Create `crates/flexiq/src/outcome.rs`:
 
 ```rust
 //! What a task body can end with, and the failure shape the wire expects.
@@ -157,7 +159,7 @@ Expected: PASS, 2 tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/flexiq/src/error.rs crates/flexiq/src/lib.rs crates/flexiq/Cargo.toml
+git add crates/flexiq/src/outcome.rs crates/flexiq/src/lib.rs crates/flexiq/Cargo.toml
 git commit -m "feat: shell error types and the contract's failure JSON"
 ```
 
@@ -510,7 +512,7 @@ git commit -m "feat: decode call envelopes into typed arguments"
 ### Task 4: `Task`, `TaskCall` and `EnqueueOptions`
 
 **Files:**
-- Create: `crates/flexiq/src/task.rs`, `crates/flexiq/src/call.rs`, `crates/flexiq/src/options.rs`, `crates/flexiq/src/step.rs` (stub only — Task 8 fills it)
+- Create: `crates/flexiq/src/task.rs`, `crates/flexiq/src/call.rs`, `crates/flexiq/src/options.rs`, `crates/flexiq/src/steps.rs` (stub only — Task 8 fills it)
 - Modify: `crates/flexiq/src/lib.rs`
 
 **Interfaces:**
@@ -683,11 +685,11 @@ pub trait Task: Send + Sync + 'static {
 /// The durable-step handle a running task holds. Grown in Task 8; it exists
 /// now so [`Task::run_encoded`]'s signature never changes.
 pub struct StepHandle {
-    pub(crate) inner: Option<crate::step::Session>,
+    pub(crate) inner: Option<crate::steps::Session>,
 }
 ```
 
-`StepHandle` names `crate::step::Session`, so `step.rs` must exist for this to compile. Create it now as a stub — Task 8 replaces the body, not the name:
+`StepHandle` names `crate::steps::Session`, so `steps.rs` must exist for this to compile. Create it now as a stub — Task 8 replaces the body, not the name:
 
 ```rust
 //! Durable steps for a running task. Filled in when steps land.
@@ -696,7 +698,7 @@ pub struct StepHandle {
 pub(crate) struct Session;
 ```
 
-Add `mod step;` to `lib.rs` alongside the others.
+Add `mod steps;` to `lib.rs` alongside the others.
 
 `call.rs` defines `TaskCall<T>`:
 
@@ -752,7 +754,7 @@ Everything a caller or a macro expansion names has to leave the crate. In `crate
 ```rust
 mod call;
 mod options;
-mod step;
+mod steps;
 mod task;
 
 pub use call::TaskCall;
@@ -770,7 +772,7 @@ Expected: PASS, 2 tests.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/flexiq/src/task.rs crates/flexiq/src/call.rs crates/flexiq/src/options.rs crates/flexiq/src/step.rs crates/flexiq/src/lib.rs
+git add crates/flexiq/src/task.rs crates/flexiq/src/call.rs crates/flexiq/src/options.rs crates/flexiq/src/steps.rs crates/flexiq/src/lib.rs
 git commit -m "feat: the Task trait, TaskCall and enqueue options"
 ```
 
@@ -1150,7 +1152,7 @@ git commit -m "chore: add flexiq-macros to the publish set"
 ### Task 7: `WorkerBuilder` and the shell's dispatcher
 
 **Files:**
-- Create: `crates/flexiq/src/worker.rs`
+- Create: `crates/flexiq/src/pool.rs`
 - Create: `crates/flexiq/tests/worker.rs`
 - Modify: `crates/flexiq/src/lib.rs`, `crates/flexiq/src/queue.rs`
 
@@ -1256,7 +1258,7 @@ Expected: FAIL to compile — `FlexiQ::worker` does not exist.
 
 - [ ] **Step 4: Write the dispatcher and builder**
 
-`worker.rs` holds two things. First, `ShellDispatcher`:
+`pool.rs` holds two things. First, `ShellDispatcher`:
 
 ```rust
 /// The shell's pool: [`NativeDispatcher`]'s shape, plus the fence.
@@ -1297,7 +1299,7 @@ fn job_result(job: &Job, outcome: Outcome<Option<Vec<u8>>>, started: Instant) ->
     match outcome {
         Ok(result) => JobResult::Success { /* .. */ },
         Err(Abort::Fail(err)) => JobResult::Failure {
-            error: crate::error::task_error_json(&err),
+            error: crate::outcome::task_error_json(&err),
             should_retry: err.retryable,
             /* .. */
         },
@@ -1331,15 +1333,22 @@ Second, `WorkerBuilder`, which collects handlers and `TaskConfig`s and hands the
 
 Note that `Worker::spawn` skips the registry fingerprint when a custom dispatcher is supplied, so nothing else needs doing about it.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 5: Drop the temporary `allow`**
+
+`outcome.rs` carries `#[allow(dead_code)]` on `task_error_json` because this dispatcher is its only caller and did not exist yet. Delete the attribute and its comment now, and let clippy prove the call is real.
+
+- [ ] **Step 6: Run test to verify it passes**
 
 Run: `cargo test -p flexiq -j2 --test worker`
 Expected: PASS, 3 tests.
 
+Then: `CARGO_BUILD_JOBS=2 cargo clippy -p flexiq --all-targets -- -D warnings`
+Expected: clean, and no `dead_code` on `task_error_json`.
+
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/flexiq/src/worker.rs crates/flexiq/src/lib.rs crates/flexiq/src/queue.rs crates/flexiq/tests/worker.rs
+git add crates/flexiq/src/pool.rs crates/flexiq/src/lib.rs crates/flexiq/src/queue.rs crates/flexiq/tests/worker.rs
 git commit -m "feat: a worker that runs registered Rust tasks"
 ```
 
@@ -1348,9 +1357,9 @@ git commit -m "feat: a worker that runs registered Rust tasks"
 ### Task 8: Durable steps
 
 **Files:**
-- Create: `crates/flexiq/src/step.rs`
+- Create: `crates/flexiq/src/steps.rs`
 - Create: `crates/flexiq/tests/steps.rs`
-- Modify: `crates/flexiq/src/task.rs`, `crates/flexiq/src/worker.rs`
+- Modify: `crates/flexiq/src/task.rs`, `crates/flexiq/src/pool.rs`
 
 **Interfaces:**
 - Consumes: Task 7's `ShellDispatcher`, `flexiq_core::{StorageStepSession, StorageSteps, StepSession, StepLimits, StepSleep, LeaseBook}`.
@@ -1457,7 +1466,7 @@ Use `tokio::task_local!` for async handlers and a `thread_local!` for the `spawn
 
 `current_step()` outside a task must not panic in a way that kills the pool. Return a `StepHandle` whose `inner` is `None`, and have every method on it return `Abort::Fail(TaskError::fatal(..))` naming the misuse.
 
-- [ ] **Step 4: Write `step.rs`**
+- [ ] **Step 4: Write `steps.rs`**
 
 `StepHandle::run` encodes the body's return value with Task 2's encoder, hands the bytes to `StepSession::run`, and decodes the returned bytes with Task 3's decoder — so a memo written on one attempt and read on the next goes through exactly the same codec as a job payload.
 
@@ -1475,7 +1484,7 @@ Add a test asserting the committed `job_steps` row carries a non-null epoch, rea
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/flexiq/src/step.rs crates/flexiq/src/task.rs crates/flexiq/src/worker.rs crates/flexiq/tests/steps.rs
+git add crates/flexiq/src/steps.rs crates/flexiq/src/task.rs crates/flexiq/src/pool.rs crates/flexiq/tests/steps.rs
 git commit -m "feat: durable steps for Rust tasks, fenced on the epoch"
 ```
 
@@ -1484,9 +1493,9 @@ git commit -m "feat: durable steps for Rust tasks, fenced on the epoch"
 ### Task 9: Periodic tasks
 
 **Files:**
-- Create: `crates/flexiq/src/periodic.rs`
+- Create: `crates/flexiq/src/cron.rs`
 - Create: `crates/flexiq/tests/periodic.rs`
-- Modify: `crates/flexiq/src/worker.rs`, `crates/flexiq-macros/src/attrs.rs`, `crates/flexiq-macros/src/expand.rs`
+- Modify: `crates/flexiq/src/pool.rs`, `crates/flexiq-macros/src/attrs.rs`, `crates/flexiq-macros/src/expand.rs`
 
 **Interfaces:**
 - Consumes: `flexiq_core::{NewPeriodicTask, PeriodicTask}`, `flexiq_core::periodic::{next_cron_time, next_cron_time_tz}`.
@@ -1561,12 +1570,12 @@ Expected: PASS, 2 tests.
 
 - [ ] **Step 5: Document the fleet caveat**
 
-In `periodic.rs`'s module doc, state plainly: firing is per-`Scheduler` and not leader-elected, and the dedup key is `"periodic:{name}:{now}"` computed from each process's own clock, so two workers that both registered the same periodic can both fire it in the same window. Register periodics from one process.
+In `cron.rs`'s module doc, state plainly: firing is per-`Scheduler` and not leader-elected, and the dedup key is `"periodic:{name}:{now}"` computed from each process's own clock, so two workers that both registered the same periodic can both fire it in the same window. Register periodics from one process.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/flexiq/src/periodic.rs crates/flexiq/src/worker.rs crates/flexiq-macros/src crates/flexiq/tests/periodic.rs
+git add crates/flexiq/src/cron.rs crates/flexiq/src/pool.rs crates/flexiq-macros/src crates/flexiq/tests/periodic.rs
 git commit -m "feat: cron tasks for the Rust shell"
 ```
 
