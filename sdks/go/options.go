@@ -52,14 +52,26 @@ func WithToken(token string) Option {
 
 // WithTLS replaces the default TLS configuration, for a private CA or a pinned
 // certificate.
+//
+// It clears a prior [WithInsecureTransport], so the last transport option a
+// caller passes is the one that holds. Options are applied in order, and
+// leaving the insecure flag set behind a later TLS option would put the token
+// on a plaintext wire while the call site says otherwise.
 func WithTLS(cfg *tls.Config) Option {
-	return func(c *config) { c.creds = credentials.NewTLS(cfg) }
+	return func(c *config) {
+		c.creds = credentials.NewTLS(cfg)
+		c.insecure = false
+	}
 }
 
 // WithTransportCredentials sets the transport credentials directly, for a mesh
-// or a credential type TLS does not cover.
+// or a credential type TLS does not cover. Like [WithTLS], it clears a prior
+// [WithInsecureTransport].
 func WithTransportCredentials(creds credentials.TransportCredentials) Option {
-	return func(c *config) { c.creds = creds }
+	return func(c *config) {
+		c.creds = creds
+		c.insecure = false
+	}
 }
 
 // WithInsecureTransport sends the token over an unencrypted connection.

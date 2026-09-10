@@ -2,13 +2,16 @@ package tests
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc/codes"
 
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
-	"google.golang.org/grpc/codes"
 )
 
 // TestEveryCallCarriesTheBearerToken covers the rule with no exception on this
@@ -64,6 +67,30 @@ func TestNewRequiresAToken(t *testing.T) {
 	_, err := flexiq.New("localhost:50051")
 	if !errors.Is(err, flexiq.ErrNoToken) {
 		t.Fatalf("want ErrNoToken, got %v", err)
+	}
+}
+
+// TestSecureTransportOptionWinsOverAnEarlierInsecureOne: options are applied
+// in order, so a later WithTLS has to clear the insecure flag. Leaving it set
+// would dial plaintext — and put the bearer token on it — while the call site
+// says TLS.
+func TestSecureTransportOptionWinsOverAnEarlierInsecureOne(t *testing.T) {
+	// A TLS dial against a bufconn listener speaking plain HTTP/2 cannot
+	// complete, which is exactly the observable difference: if the insecure
+	// flag had survived, this call would succeed.
+	fake := &fakeProducer{}
+	client := serve(t, fake,
+		flexiq.WithTLS(&tls.Config{InsecureSkipVerify: true}), //nolint:gosec // the handshake must fail, not verify
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, err := client.Enqueue(ctx, flexiq.EnqueueRequest{Task: "t"}); err == nil {
+		t.Fatal("a TLS client completed a call to a plaintext listener; the insecure flag survived")
+	}
+	if fake.calls != 0 {
+		t.Errorf("the server handled %d calls over what should have been TLS", fake.calls)
 	}
 }
 
