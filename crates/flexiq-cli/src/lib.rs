@@ -12,4 +12,5 @@
 #![deny(missing_docs)]
 
 pub mod cli;
+pub mod connect;
 pub mod pb;
