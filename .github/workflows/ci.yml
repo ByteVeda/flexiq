@@ -32,6 +32,7 @@ jobs:
       python: ${{ steps.decide.outputs.python }}
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
+      go: ${{ steps.decide.outputs.go }}
       polyglot: ${{ steps.decide.outputs.polyglot }}
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
