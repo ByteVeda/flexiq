@@ -6,3 +6,4 @@
 
 pub mod enqueue;
 pub mod jobs;
+pub mod queues;

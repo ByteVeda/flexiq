@@ -26,7 +26,6 @@ pub async fn run(cli: cli::Cli) -> anyhow::Result<()> {
     match &cli.command {
         cli::Command::Enqueue(args) => commands::enqueue::run(&mut client, args, cli.json).await,
         cli::Command::Jobs(command) => commands::jobs::run(&mut client, command, cli.json).await,
-        // The remaining arm lands with its command.
-        _ => Err(anyhow::anyhow!("not yet wired")),
+        cli::Command::Queues(args) => commands::queues::run(&mut client, args, cli.json).await,
     }
 }
