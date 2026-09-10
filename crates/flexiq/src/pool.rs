@@ -26,10 +26,10 @@ use flexiq_core::{
 use tokio::sync::Semaphore;
 
 use crate::outcome::task_error_json;
-use crate::{Abort, Outcome, StepHandle, Task};
+use crate::{Abort, Outcome, Task};
 
 /// One registered task's body, erased of its argument types.
-type Handler = Arc<dyn Fn(&Job, &mut StepHandle) -> Outcome<Option<Vec<u8>>> + Send + Sync>;
+type Handler = Arc<dyn Fn(&Job) -> Outcome<Option<Vec<u8>>> + Send + Sync>;
 
 /// Builds a worker over the tasks registered on it.
 ///
@@ -112,7 +112,11 @@ impl WorkerBuilder {
             )));
         }
 
-        let dispatcher = Arc::new(ShellDispatcher::new(self.handlers, self.num_workers));
+        let dispatcher = Arc::new(ShellDispatcher::new(
+            self.handlers,
+            self.storage.clone(),
+            self.num_workers,
+        ));
 
         let mut worker = Worker::new(self.storage)
             .queues(self.queues)
@@ -140,6 +144,9 @@ impl WorkerBuilder {
 /// The pool the shell runs its handlers on.
 struct ShellDispatcher {
     handlers: Arc<HashMap<String, Handler>>,
+    /// Held so a dispatch can open its own step session; the scheduler hands
+    /// this pool jobs, not a way back to storage.
+    storage: StorageBackend,
     num_workers: usize,
     shutdown: AtomicBool,
     /// The claim owner, handed over by the scheduler at startup. Core's own
@@ -151,9 +158,14 @@ struct ShellDispatcher {
 }
 
 impl ShellDispatcher {
-    fn new(handlers: HashMap<String, Handler>, num_workers: usize) -> Self {
+    fn new(
+        handlers: HashMap<String, Handler>,
+        storage: StorageBackend,
+        num_workers: usize,
+    ) -> Self {
         Self {
             handlers: Arc::new(handlers),
+            storage,
             num_workers: num_workers.max(1),
             shutdown: AtomicBool::new(false),
             owner: Mutex::new(String::new()),
@@ -163,9 +175,9 @@ impl ShellDispatcher {
 
     /// The fence this dispatch runs under.
     ///
-    /// Unused until a step session needs it, and read here rather than at the
-    /// step call site because the lease is a property of the dispatch.
-    #[allow(dead_code)]
+    /// Read here rather than at the step call site because a lease is a
+    /// property of the dispatch, not of the step. The epoch is the term core's
+    /// own pool cannot supply, having thrown the lease book away.
     fn fence(&self, job: &Job) -> (String, i32, Option<i64>) {
         let owner = self.owner.lock().expect("owner lock").clone();
         let epoch = self
@@ -257,14 +269,31 @@ impl WorkerDispatcher for ShellDispatcher {
             };
 
             let tx = result_tx.clone();
+            let (owner, _attempt, epoch) = self.fence(&job);
+            let storage = self.storage.clone();
+
             // Every handler is synchronous, so every handler runs here. An
             // async task is refused by the macro rather than silently blocking
             // a runtime thread.
             tokio::task::spawn_blocking(move || {
                 let _permit = permit; // Hold the slot until the body returns.
                 let started = Instant::now();
-                let mut step = StepHandle::detached();
-                let outcome = handler(&job, &mut step);
+
+                // A session that cannot be opened is not fatal to the job: a
+                // task that never calls `current_step` does not need one, and
+                // one that does gets a message naming the failure.
+                match crate::steps::open(&storage, &job, &owner, epoch) {
+                    Ok(session) => crate::steps::install(session),
+                    Err(e) => log::debug!("no step session for job {}: {e}", job.id),
+                }
+
+                let outcome = handler(&job);
+
+                // Blocking threads are reused, so the session has to come back
+                // off this one however the body ended.
+                if let Some(session) = crate::steps::take() {
+                    session.finish();
+                }
                 let _ = tx.send(job_result(&job, outcome, started));
             });
         }
@@ -280,5 +309,75 @@ impl WorkerDispatcher for ShellDispatcher {
 
     fn set_lease_book(&self, leases: Arc<LeaseBook>) {
         *self.leases.lock().expect("lease lock") = Some(leases);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flexiq_core::{Lease, NewJob, SqliteStorage};
+
+    use super::*;
+
+    fn dispatcher() -> ShellDispatcher {
+        let storage = StorageBackend::Sqlite(SqliteStorage::in_memory().expect("opens"));
+        ShellDispatcher::new(HashMap::new(), storage, 1)
+    }
+
+    fn job() -> Job {
+        NewJob {
+            queue: "default".into(),
+            task_name: "charge".into(),
+            payload: Vec::new(),
+            priority: 0,
+            scheduled_at: 0,
+            max_retries: 3,
+            timeout_ms: 1_000,
+            unique_key: None,
+            metadata: None,
+            notes: None,
+            depends_on: Vec::new(),
+            expires_at: None,
+            result_ttl_ms: None,
+            namespace: None,
+            debounce_key: None,
+        }
+        .into_job()
+    }
+
+    /// The reason this pool exists.
+    ///
+    /// `NativeDispatcher` leaves `set_claim_owner` and `set_lease_book` as the
+    /// trait's default no-ops, so the fence the scheduler minted is gone by the
+    /// time a handler runs. Every other shell fences a step on `(owner,
+    /// attempt)` and leaves the epoch unset for want of somewhere to keep the
+    /// book; this asserts all three terms survive.
+    #[test]
+    fn the_dispatcher_keeps_the_whole_fence() {
+        let dispatcher = dispatcher();
+        let job = job();
+
+        let leases = Arc::new(LeaseBook::default());
+        leases.issue(&job.id, Lease::from_epoch(4_242));
+        dispatcher.set_claim_owner("rust-worker-1");
+        dispatcher.set_lease_book(leases);
+
+        let (owner, attempt, epoch) = dispatcher.fence(&job);
+        assert_eq!(owner, "rust-worker-1");
+        assert_eq!(attempt, job.retry_count);
+        assert_eq!(epoch, Some(4_242));
+    }
+
+    /// A job the book has no lease for still fences on the first two terms,
+    /// rather than failing to open a session at all.
+    #[test]
+    fn a_job_with_no_lease_still_has_an_owner_and_an_attempt() {
+        let dispatcher = dispatcher();
+        let job = job();
+        dispatcher.set_claim_owner("rust-worker-1");
+        dispatcher.set_lease_book(Arc::new(LeaseBook::default()));
+
+        let (owner, _attempt, epoch) = dispatcher.fence(&job);
+        assert_eq!(owner, "rust-worker-1");
+        assert_eq!(epoch, None);
     }
 }

@@ -54,6 +54,7 @@ hex = "0.4"
 async-trait = { workspace = true }
 crossbeam-channel = { workspace = true }
 tokio = { workspace = true }
+log = { workspace = true }
 
 [dev-dependencies]
 # A macro's error messages are its user interface, and nothing else here

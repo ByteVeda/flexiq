@@ -27,33 +27,37 @@ pub trait Task: Send + Sync + 'static {
     fn defaults() -> EnqueueOptions;
 
     /// Decode the job's payload, run the body, encode the result.
-    ///
-    /// The `Option<Vec<u8>>` is the archived result: `None` when the body
-    /// returned `()`, so a unit task stores nothing rather than storing an
-    /// encoded nothing.
-    fn run_encoded(job: &Job, step: &mut StepHandle) -> Outcome<Option<Vec<u8>>>;
+    fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>;
 }
 
 /// The durable-step handle a running task holds.
 ///
-/// Reached through [`crate::current_step`] rather than a parameter, because a
+/// Obtained from [`current_step`] rather than passed in, because a
 /// macro-expanded body is the caller's own function and cannot grow an argument
-/// it did not declare.
+/// it did not declare. The handle itself carries nothing: the session it
+/// reaches belongs to the dispatch running on this thread, so two handles
+/// inside one task are the same session, and one taken in another task is a
+/// different session.
 pub struct StepHandle {
-    // Temporary: written by nothing until the dispatcher can open a session.
-    // Remove with the one in `detached` when `pool.rs` lands.
-    #[allow(dead_code)]
-    pub(crate) inner: Option<crate::steps::Session>,
+    _private: (),
 }
 
-impl StepHandle {
-    /// A handle with no session behind it.
-    ///
-    /// What [`crate::current_step`] returns outside a running task. Every
-    /// method on it fails rather than panicking: a panic here would take down a
-    /// pool thread over a caller's mistake in their own code.
-    #[allow(dead_code)]
-    pub(crate) fn detached() -> Self {
-        Self { inner: None }
-    }
+/// The durable-step handle for the task running on this thread.
+///
+/// Outside a running task, every method on the result fails with a message
+/// saying so rather than panicking — a panic here would take down a pool thread
+/// over a mistake in a caller's own code.
+///
+/// ```ignore
+/// #[flexiq::task]
+/// fn checkout(order: String) -> flexiq::Outcome<()> {
+///     let mut step = flexiq::current_step();
+///     let receipt: String = step.run("charge", || Ok(charge(&order)))?;
+///     step.sleep_ms("settle", 60_000)?;
+///     let _ = receipt;
+///     Ok(())
+/// }
+/// ```
+pub fn current_step() -> StepHandle {
+    StepHandle { _private: () }
 }

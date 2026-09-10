@@ -67,6 +67,22 @@ pub fn decode_args<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T, 
         .map_err(|e| DecodeError::Arguments(e.to_string()))
 }
 
+/// Strip the tag and read a bare value, the shape `wire::encode_result` writes.
+///
+/// A result is not a call: no `[args, kwargs]` array around it. Used for a
+/// step's memoized value, which is written with the same writer a job result
+/// is, so a memo read on a later attempt goes through exactly the codec the
+/// value was written with.
+pub(crate) fn decode_result<T: serde::de::DeserializeOwned>(
+    payload: &[u8],
+) -> Result<T, DecodeError> {
+    let (tag, body) = payload.split_first().ok_or(DecodeError::Empty)?;
+    if *tag != TAG_CBOR {
+        return Err(DecodeError::Codec(*tag));
+    }
+    ciborium::from_reader(body).map_err(|e| DecodeError::Arguments(e.to_string()))
+}
+
 /// Name a CBOR value's shape for an error message, without printing its
 /// contents — a payload can be large and can carry a caller's data.
 fn describe(value: &ciborium::Value) -> &'static str {

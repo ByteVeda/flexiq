@@ -39,7 +39,7 @@ pub use options::{Debounce, EnqueueOptions};
 pub use outcome::{Abort, Outcome};
 pub use pool::WorkerBuilder;
 pub use queue::FlexiQ;
-pub use task::{StepHandle, Task};
+pub use task::{current_step, StepHandle, Task};
 
 /// The seam `#[flexiq::task]` expands against. Not a stable API.
 ///

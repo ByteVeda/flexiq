@@ -1216,6 +1216,7 @@ dependencies = [
  "flexiq-mesh",
  "flexiq-workflows",
  "hex",
+ "log",
  "serde",
  "serde_json",
  "sha2 0.11.0",

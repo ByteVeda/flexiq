@@ -71,9 +71,8 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
 
             fn run_encoded(
                 job: &::flexiq::Job,
-                step: &mut ::flexiq::StepHandle,
             ) -> ::flexiq::Outcome<::std::option::Option<::std::vec::Vec<u8>>> {
-                let _ = (job, step);
+                let _ = job;
                 #decode
                 let value = Self::run(#(#idents),*)?;
                 let encoded = ::flexiq::__private::to_wire(&value).map_err(|e| {

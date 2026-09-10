@@ -3,7 +3,7 @@
 //! Hand-written on purpose: the macro is ergonomics, and everything below has
 //! to work without it. It is also what a caller writing an unusual task does.
 
-use flexiq::{EnqueueOptions, FlexiQ, Outcome, StepHandle, Task, TaskCall};
+use flexiq::{EnqueueOptions, FlexiQ, Outcome, Task, TaskCall};
 use flexiq_core::{Job, TaskConfig};
 
 /// A task that takes one name and returns nothing.
@@ -20,7 +20,7 @@ impl Task for Greet {
         EnqueueOptions::default()
     }
 
-    fn run_encoded(_job: &Job, _step: &mut StepHandle) -> Outcome<Option<Vec<u8>>> {
+    fn run_encoded(_job: &Job) -> Outcome<Option<Vec<u8>>> {
         Ok(None)
     }
 }
