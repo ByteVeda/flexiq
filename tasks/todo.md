@@ -1,53 +1,88 @@
-# #829 — a Go client over the producer door
+# #833 — the descriptor as a supported interface
 
-Branch `feat/go-producer-client` off `master` at `739923da`. One new module at `sdks/go`, its CI
-suite, and the prose that stops being true once it exists. No Rust, no proto, no schema.
+Branch `feat/descriptor-release-asset` off `master` at `f349fae1`. Docs only: no Rust, no proto,
+no workflow change, no new page.
 
-Design record: [`tasks/specs/2026-09-10-go-producer-client-design.md`](specs/2026-09-10-go-producer-client-design.md).
+## What the issue asked for, and what is already true
 
-## Scope
+The issue has two bullets. The first is **already shipped**, and the second is two-thirds shipped.
 
-Six of the eight producer RPCs — everything the issue names, plus `ListJobs` because paging is
-cheap once the client exists. `SubmitWorkflow` and `GetWorkflowRun` are filed, not built. The
-executor door is out of scope by the issue's own words.
+- **"Publish the descriptor as a release asset."** Done in #803. `publish-server.yml:332-364`
+  stages `contracts/descriptor.binpb` as `flexiq-descriptor-<v>.binpb` beside
+  `flexiq-proto-<v>.tar.gz` and `gh release upload --clobber`s both. Verified live:
+  `server-v2.0.0` carries the descriptor at 88467 bytes. Nothing to add.
+- **"Document the reflection-only path."** `clients.mdx` has reflection as one of three routes
+  to the contract with the `list`/`describe` commands and the two asset `curl` lines;
+  `grpc.mdx` has `list` and a JSON-body `Enqueue`; `contract.mdx` explains why reflection
+  cannot describe a contract the server does not implement.
+
+## What was actually missing
+
+1. **No page showed what `list` and `describe` return.** Every one showed the command and
+   stopped. That is the concrete thing the issue names and the thing a reader cannot supply
+   themselves.
+2. **The security caveat was the wrong shape.** The issue says reflection "exposes the schema to
+   anyone who can reach the port". False here — `grpc/auth/gate.rs:80-86` classifies reflection
+   `Requirement::Authenticated` and `tests/grpc_auth.rs:426` pins that an anonymous
+   `ListServices` is refused `Unauthenticated`. The true caveat is sharper and matches the
+   issue's own "matters once auth scopes are more than binary": reflection is authenticated but
+   **unscoped**, so a `produce` token reads the whole schema, `flexiq.executor.v1` included.
+3. **`contract.mdx` claimed "every `server-v*` release attaches the same descriptor".** False for
+   `server-v1.0.0`, which carries zero assets — the gRPC role shipped in 2.0.0.
 
 ## Plan
 
-- [x] `sdks/go` module at `github.com/ByteVeda/flexiq/sdks/go/v2`, `buf generate` wired to
-      `contracts/proto`, stubs committed under `internal/pb`
-- [x] The payload envelope — tag byte, definite-length CBOR `[args, kwargs]`, bare-value results
-- [x] Conformance test against `contracts/wire-vectors.json`: 9 encode, 12 decode, 2 round trips
-- [x] `Client`, dial options, bearer credential, TLS by default, both message-size directions
-- [x] `Enqueue` / `EnqueueBatch`, options and debounce
-- [x] `GetJob` / `ListJobs` / `AllJobs` iterator / `QueueStats` / `CancelJob`
-- [x] The error model: closed `Reason` list, `errors.Is`, metadata accessors, `RetryAfter`
-- [x] `TaskError`, including the unstructured fallback
-- [x] A `ProducerService` double on bufconn, and the behaviour tests over it
-- [x] `ci-go.yml` + dispatcher wiring, labeler entry, pre-commit hooks
-- [x] `version.mjs` mirror so `--check` covers Go
-- [x] README, root README, CONTRIBUTING, and the docs page that called Go the fourth
-- [x] File the gaps as issues — #907 workflow RPCs, #908 the executor door, #909 a live end-to-end
-      test against a real server
+- [x] Build `flexiq-server --features grpc -j2`, run it on a temp SQLite DSN with a namespace,
+      mint a token, and capture real `grpcurl` output. Nothing goes in the docs unrun.
+- [x] `grpc.mdx`: turn the one reflection paragraph into a section that shows what `list` and
+      `describe` return, verbatim, and ties the credential-free `-proto` flag to the JSON-body
+      call already above it
+- [x] `grpc.mdx`: state the caveat accurately — authenticated, unscoped, and what that means for
+      revocation vs scoping
+- [x] `contract.mdx` + `clients.mdx`: pin the asset to releases from 2.0.0
+- [x] `pnpm --dir docs check:parity`, `lint`, `typecheck`, `build`
+
+## Not doing
+
+- **No new page.** Three pages already assert facts about reflection; a fourth becomes the fourth
+  source of truth on one claim, which is the failure mode this tier is warned about.
+- **No extra release asset.** Attaching the descriptor to the PyPI, npm, Maven and crates
+  releases would put a server artifact on four releases whose door is not the server.
 
 ## Review
 
-**What shipped.** A `sdks/go` module of about 1,100 lines of client and 1,000 of test, with no
-dependency on `crates/`. `go test -race ./...` is green on go1.27; `go vet` and `gofmt` are clean;
-`go mod tidy` is a no-op. `node scripts/version.mjs --check` passes with the Go mirror in place.
-Docs `lint` and `typecheck` both pass.
+Three commits, all docs.
 
-**Three things worth knowing later.**
+- `docs: show what gRPC reflection returns` — a `## Reflection, and what it hands out` section in
+  `grpc.mdx` carrying the real output of `list`, `list flexiq.v1.ProducerService` and
+  `describe flexiq.v1.EnqueueRequest`, and a pointer to it from `clients.mdx`.
+- `docs: name what a token buys on the reflection door` — the unscoped-reflection callout, a
+  `## Security` bullet, and the same fact under `tokens.mdx`'s scope table, which is about calls
+  and was silent about the schema.
+- `docs: pin the descriptor asset to releases from 2.0.0`.
 
-1. **The module path carries `/v2`.** Go requires it of any module released above v1, and the
-   client ships at the repo's version. The tag is `sdks/go/v2.0.0`; there is no publish workflow
-   because the proxy fetches from the tag.
-2. **The CBOR encoder does not sort.** It cannot: `single-object-arg` pins `order_id` before
-   `amount_cents`, and a sorting encoder fails that vector. The cost is that a Go `map` argument
-   encodes to different bytes on different runs, so the README tells a caller to pass a struct
-   where the bytes matter.
-3. **The `polyglot` CI filter no longer watches `sdks/**`.** It names the three shells one by one
-   instead, so a Go-only change stops triggering a three-runtime example build it has nothing to
-   do with.
+**A bug the verification turned up, fixed in the first commit.** `grpc.mdx` carried
 
-**Not done, deliberately.** No live end-to-end test against a running `flexiq-server`: the double
-proves this client's half of the contract, and only a real server proves the pair. Filed.
+```bash
+grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
+```
+
+under the comment "Health is the exception, and needs no credential." Run against a real server
+it fails: `Unauthenticated: failed to query for service descriptor "grpc.health.v1.Health"`.
+The health *call* is public — `-import-path . -proto health.proto` returns `SERVING` with no
+credential — but grpcurl resolves a method through **reflection** before invoking it, and
+reflection is gated. The line now carries the token, and says why.
+
+**Verified against a running server**, not from the descriptor: `flexiq-server 2.0.0` built with
+`--features grpc`, on a temp SQLite DSN with `FLEXIQ_NAMESPACE=prod` and
+`FLEXIQ_GRPC_LISTEN=127.0.0.1:50051`. Every code block on the new section is pasted from that
+run. The caveat was demonstrated both ways: a `produce` token `list`s
+`flexiq.executor.v1.ExecutorService` and its two methods, then gets
+`PermissionDenied: this credential does not carry the `execute` scope` on
+`ExecutorService/Attach`. An `execute` token reaches the handler instead
+(`NotFound: no attached stream for this session`), so the executor door *is* routed here — the
+listing is not of a service this build fails to serve.
+
+`pnpm --dir docs check:parity` (tier shape and internal links included), `lint`, `typecheck` and
+`build` all green; the new heading's anchor and both inbound links were checked in the
+prerendered HTML, since the link checker strips anchors rather than resolving them.
