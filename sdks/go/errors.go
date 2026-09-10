@@ -11,10 +11,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// errorDomain scopes the ErrorInfo this client trusts. A detail from another
+// ErrorDomain scopes the ErrorInfo this client trusts. A detail from another
 // domain belongs to a proxy or a mesh in the path, not to FlexiQ, and reading
 // its reason as one of ours would branch on somebody else's vocabulary.
-const errorDomain = "flexiq.byteveda.org"
+//
+// It is exported because a caller writing its own interceptor needs the same
+// test.
+const ErrorDomain = "flexiq.byteveda.org"
 
 // Reason is the machine-readable half of a failed request, and the only part
 // of it a program should branch on.
@@ -232,7 +235,7 @@ func fromStatus(st *status.Status) *Error {
 	for _, detail := range st.Details() {
 		switch info := detail.(type) {
 		case *errdetails.ErrorInfo:
-			if info.GetDomain() != errorDomain {
+			if info.GetDomain() != ErrorDomain {
 				continue
 			}
 			wireErr.Reason = Reason(info.GetReason())

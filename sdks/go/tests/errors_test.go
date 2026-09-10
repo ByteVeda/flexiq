@@ -1,4 +1,4 @@
-package flexiq
+package tests
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -15,7 +16,7 @@ import (
 )
 
 // failWith makes the fake answer every enqueue with one status.
-func failWith(t *testing.T, code codes.Code, message string, details ...protoadapt.MessageV1) *Client {
+func failWith(t *testing.T, code codes.Code, message string, details ...protoadapt.MessageV1) *flexiq.Client {
 	t.Helper()
 
 	st := status.New(code, message)
@@ -40,8 +41,8 @@ func failWith(t *testing.T, code codes.Code, message string, details ...protoada
 func TestErrorBranchesOnReasonNotCode(t *testing.T) {
 	client := failWith(t, codes.InvalidArgument, "step exceeded its byte limit",
 		&errdetails.ErrorInfo{
-			Domain: errorDomain,
-			Reason: string(ReasonStepLimitExceeded),
+			Domain: flexiq.ErrorDomain,
+			Reason: string(flexiq.ReasonStepLimitExceeded),
 			Metadata: map[string]string{
 				"limit":   "step bytes",
 				"actual":  "70000",
@@ -49,15 +50,15 @@ func TestErrorBranchesOnReasonNotCode(t *testing.T) {
 			},
 		})
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	if !errors.Is(err, ReasonStepLimitExceeded) {
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	if !errors.Is(err, flexiq.ReasonStepLimitExceeded) {
 		t.Fatalf("errors.Is did not match the reason: %v", err)
 	}
-	if errors.Is(err, ReasonInvalidRequest) {
+	if errors.Is(err, flexiq.ReasonInvalidRequest) {
 		t.Error("matched a different reason under the same code")
 	}
 
-	wireErr, ok := AsError(err)
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}
@@ -78,15 +79,15 @@ func TestErrorBranchesOnReasonNotCode(t *testing.T) {
 func TestResourceExhaustedCarriesItsOwnBackoff(t *testing.T) {
 	client := failWith(t, codes.ResourceExhausted, "queue `payments` is full",
 		&errdetails.ErrorInfo{
-			Domain:   errorDomain,
-			Reason:   string(ReasonQueueFull),
+			Domain:   flexiq.ErrorDomain,
+			Reason:   string(flexiq.ReasonQueueFull),
 			Metadata: map[string]string{"queue": "payments", "pending": "1001", "cap": "1000"},
 		},
 		&errdetails.RetryInfo{RetryDelay: durationpb.New(time.Second)},
 	)
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	wireErr, ok := AsError(err)
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}
@@ -113,17 +114,17 @@ func TestResourceExhaustedCarriesItsOwnBackoff(t *testing.T) {
 func TestUnparsableMetadataIsAbsentNotFatal(t *testing.T) {
 	client := failWith(t, codes.ResourceExhausted, "queue is full",
 		&errdetails.ErrorInfo{
-			Domain:   errorDomain,
-			Reason:   string(ReasonQueueFull),
+			Domain:   flexiq.ErrorDomain,
+			Reason:   string(flexiq.ReasonQueueFull),
 			Metadata: map[string]string{"queue": "payments", "pending": "1_001", "cap": "1000"},
 		})
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	wireErr, ok := AsError(err)
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}
-	if wireErr.Reason != ReasonQueueFull {
+	if wireErr.Reason != flexiq.ReasonQueueFull {
 		t.Errorf("reason is %q", wireErr.Reason)
 	}
 	if _, ok := wireErr.MetaInt64("pending"); ok {
@@ -144,11 +145,11 @@ func TestForeignErrorDomainIsIgnored(t *testing.T) {
 			Reason: "QUEUE_FULL",
 		})
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	if errors.Is(err, ReasonQueueFull) {
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	if errors.Is(err, flexiq.ReasonQueueFull) {
 		t.Fatal("a foreign domain's reason was read as FlexiQ's")
 	}
-	wireErr, ok := AsError(err)
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}
@@ -165,13 +166,16 @@ func TestForeignErrorDomainIsIgnored(t *testing.T) {
 func TestScopeDeniedNamesTheScope(t *testing.T) {
 	client := failWith(t, codes.PermissionDenied, "this credential does not open flexiq.v1",
 		&errdetails.ErrorInfo{
-			Domain:   errorDomain,
-			Reason:   string(ReasonScopeDenied),
+			Domain:   flexiq.ErrorDomain,
+			Reason:   string(flexiq.ReasonScopeDenied),
 			Metadata: map[string]string{"scope": "produce"},
 		})
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	wireErr, _ := AsError(err)
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	wireErr, ok := flexiq.AsError(err)
+	if !ok {
+		t.Fatalf("error is %T, want *flexiq.Error", err)
+	}
 	scope, ok := wireErr.Scope()
 	if !ok || scope != "produce" {
 		t.Errorf("scope is %q (ok=%v), want produce", scope, ok)
@@ -187,8 +191,8 @@ func TestScopeDeniedNamesTheScope(t *testing.T) {
 func TestErrorWithoutDetailsStillReports(t *testing.T) {
 	client := failWith(t, codes.Unavailable, "the storage backend is unavailable")
 
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"})
-	wireErr, ok := AsError(err)
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"})
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}
@@ -198,7 +202,7 @@ func TestErrorWithoutDetailsStillReports(t *testing.T) {
 	if status.Code(err) != codes.Unavailable {
 		t.Errorf("status.Code says %s; the error stopped being a gRPC status", status.Code(err))
 	}
-	if errors.Is(err, ReasonQueueFull) {
+	if errors.Is(err, flexiq.ReasonQueueFull) {
 		t.Error("an error carrying no reason matched one")
 	}
 }

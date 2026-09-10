@@ -180,9 +180,14 @@ buf generate             # regenerate internal/pb from ../../contracts/proto
 `internal/pb` is committed because `go get` runs no code generator. CI regenerates it and fails on
 a diff, so it cannot drift from `contracts/proto`.
 
-`wire_test.go` asserts [`contracts/wire-vectors.json`](../../contracts/wire-vectors.json), the same
-file every FlexiQ runtime asserts in its own suite. **A hex string there is never edited to make a
-test pass** — a diff to one is a wire-format change, and it breaks every job already enqueued.
+The suite lives in `tests/`, beside the package rather than inside it. Everything there reaches the
+client through its exported API, the same way you do — a surface that is awkward to use is awkward
+to test.
+
+`tests/wire_test.go` asserts [`contracts/wire-vectors.json`](../../contracts/wire-vectors.json),
+the same file every FlexiQ runtime asserts in its own suite. **A hex string there is never edited
+to make a test pass** — a diff to one is a wire-format change, and it breaks every job already
+enqueued.
 
 ## The contract
 

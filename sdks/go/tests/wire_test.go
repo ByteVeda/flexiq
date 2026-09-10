@@ -1,4 +1,4 @@
-package flexiq
+package tests
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 )
 
 // The cross-SDK conformance bar. Every FlexiQ runtime asserts this file in its
@@ -19,7 +21,7 @@ import (
 //
 // A hex string here is never edited to make a test pass: a diff to one is a
 // wire-format change, and it breaks every job already enqueued.
-const vectorsPath = "../../contracts/wire-vectors.json"
+const vectorsPath = "../../../contracts/wire-vectors.json"
 
 type vectorFile struct {
 	SchemaVersion int      `json:"$schema_version"`
@@ -63,7 +65,7 @@ func TestEncodeVectors(t *testing.T) {
 		t.Run(v.Name, func(t *testing.T) {
 			args, kwargs := callFor(t, v)
 
-			got, err := EncodeCall(args, kwargs)
+			got, err := flexiq.EncodeCall(args, kwargs)
 			if err != nil {
 				t.Fatalf("EncodeCall: %v", err)
 			}
@@ -81,7 +83,7 @@ func TestDecodeVectors(t *testing.T) {
 	file := loadVectors(t)
 	for _, v := range append(append([]vector{}, file.Encode...), file.DecodeOnly...) {
 		t.Run(v.Name, func(t *testing.T) {
-			call, err := DecodeCall(mustHex(t, v.Hex))
+			call, err := flexiq.DecodeCall(mustHex(t, v.Hex))
 			if err != nil {
 				t.Fatalf("DecodeCall: %v", err)
 			}
@@ -110,11 +112,11 @@ func TestRoundTripOnlyVectors(t *testing.T) {
 		}
 		found++
 		t.Run(v.Name, func(t *testing.T) {
-			call, err := DecodeCall(mustHex(t, v.Hex))
+			call, err := flexiq.DecodeCall(mustHex(t, v.Hex))
 			if err != nil {
 				t.Fatalf("DecodeCall: %v", err)
 			}
-			got, err := EncodeCall(call.Args, call.Kwargs)
+			got, err := flexiq.EncodeCall(call.Args, call.Kwargs)
 			if err != nil {
 				t.Fatalf("EncodeCall: %v", err)
 			}
@@ -133,12 +135,12 @@ func TestRoundTripOnlyVectors(t *testing.T) {
 // sniffed past: a payload this client cannot read must fail naming its tag, so
 // a caller can tell "another SDK's native format" from "corrupt bytes".
 func TestEnvelopeRejectsForeignTags(t *testing.T) {
-	for _, tag := range []byte{TagNative, TagMessagePack, 0x03, 0xff} {
-		_, err := DecodeCall([]byte{tag, 0x80})
+	for _, tag := range []byte{flexiq.TagNative, flexiq.TagMessagePack, 0x03, 0xff} {
+		_, err := flexiq.DecodeCall([]byte{tag, 0x80})
 		if err == nil {
 			t.Fatalf("tag 0x%02x decoded as if it were CBOR", tag)
 		}
-		if !errors.Is(err, ErrUnsupportedTag) {
+		if !errors.Is(err, flexiq.ErrUnsupportedTag) {
 			t.Errorf("tag 0x%02x: want ErrUnsupportedTag, got %v", tag, err)
 		}
 		if !bytes.Contains([]byte(err.Error()), []byte(fmt.Sprintf("0x%02x", tag))) {
@@ -146,7 +148,7 @@ func TestEnvelopeRejectsForeignTags(t *testing.T) {
 		}
 	}
 
-	if _, err := DecodeCall(nil); err == nil {
+	if _, err := flexiq.DecodeCall(nil); err == nil {
 		t.Error("an empty payload decoded without error")
 	}
 }
@@ -155,7 +157,7 @@ func TestEnvelopeRejectsForeignTags(t *testing.T) {
 // the tag then a two-element array, a result is the tag then a bare value.
 func TestDecodeResultIsNotAnArray(t *testing.T) {
 	var got bool
-	if err := DecodeResult([]byte{TagCBOR, 0xf5}, &got); err != nil {
+	if err := flexiq.DecodeResult([]byte{flexiq.TagCBOR, 0xf5}, &got); err != nil {
 		t.Fatalf("DecodeResult: %v", err)
 	}
 	if !got {
@@ -163,7 +165,7 @@ func TestDecodeResultIsNotAnArray(t *testing.T) {
 	}
 
 	var wide uint64
-	if err := DecodeResult(mustHex(t, "021b0020000000000000"), &wide); err != nil {
+	if err := flexiq.DecodeResult(mustHex(t, "021b0020000000000000"), &wide); err != nil {
 		t.Fatalf("DecodeResult: %v", err)
 	}
 	if wide != 1<<53 {

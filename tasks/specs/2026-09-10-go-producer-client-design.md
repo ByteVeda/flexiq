@@ -35,8 +35,14 @@ It links nothing from `crates/` and needs no Rust toolchain to build or test.
 | `errors.go` | `Error`, the closed `Reason` list, status conversion |
 | `taskerror.go` | a failed job's recorded error |
 | `internal/pb` | generated stubs, committed |
+| `tests/` | the whole suite, in its own package |
 
 A new RPC is a new file plus a conversion; nothing above has to move to make room for one.
+
+The tests sit beside the package rather than inside it, so every one of them reaches the client
+through its exported API — a surface that is awkward to use is awkward to test, and nothing can
+quietly lean on an unexported helper. It cost one export: `ErrorDomain`, which a caller writing
+its own interceptor needs anyway.
 
 ## Decisions
 
@@ -106,7 +112,7 @@ and the doc comment tell a caller to pass where the bytes matter.
 
 ## Testing
 
-Two layers, no server and no Rust build:
+Two layers, no server and no Rust build, both in `tests/`:
 
 1. **The conformance vectors.** `wire_test.go` reads `contracts/wire-vectors.json` out of the tree:
    all nine `encode` cases produced byte-exact, all twelve decoded, both `round_trip_only` cases

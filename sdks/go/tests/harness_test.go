@@ -1,17 +1,24 @@
-package flexiq
+// Package tests holds the client's test suite.
+//
+// It sits beside the package rather than inside it on purpose: everything here
+// reaches the client through its exported API, the same way a caller does, so
+// a surface that is awkward to use is awkward to test. Nothing here can reach
+// an unexported helper, and nothing should need to.
+package tests
 
 import (
 	"context"
 	"net"
 	"testing"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// The test harness: a ProducerService double on an in-process connection.
+// The harness: a ProducerService double on an in-process connection.
 //
 // It is a double rather than a real flexiq-server because what these tests are
 // about is this client's half of the contract — the metadata it sends, the
@@ -84,7 +91,7 @@ func (f *fakeProducer) QueueStats(ctx context.Context, req *pb.QueueStatsRequest
 
 // serve starts the double and returns a client connected to it. Both are torn
 // down when the test ends.
-func serve(t *testing.T, fake *fakeProducer, opts ...Option) *Client {
+func serve(t *testing.T, fake *fakeProducer, opts ...flexiq.Option) *flexiq.Client {
 	t.Helper()
 
 	listener := bufconn.Listen(64 * 1024)
@@ -98,12 +105,12 @@ func serve(t *testing.T, fake *fakeProducer, opts ...Option) *Client {
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
 		return listener.DialContext(ctx)
 	}
-	base := []Option{
-		WithToken(testToken),
-		WithInsecureTransport(),
-		WithGRPCDialOptions(grpc.WithContextDialer(dialer)),
+	base := []flexiq.Option{
+		flexiq.WithToken(testToken),
+		flexiq.WithInsecureTransport(),
+		flexiq.WithGRPCDialOptions(grpc.WithContextDialer(dialer)),
 	}
-	client, err := New("passthrough:///bufnet", append(base, opts...)...)
+	client, err := flexiq.New("passthrough:///bufnet", append(base, opts...)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

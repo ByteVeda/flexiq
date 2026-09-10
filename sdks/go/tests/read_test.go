@@ -1,9 +1,10 @@
-package flexiq
+package tests
 
 import (
 	"context"
 	"testing"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,7 +23,7 @@ func TestGetJobLeavesThePayloadOutByDefault(t *testing.T) {
 	client := serve(t, fake)
 	ctx := context.Background()
 
-	job, err := client.GetJob(ctx, "job-1", GetJobOptions{})
+	job, err := client.GetJob(ctx, "job-1", flexiq.GetJobOptions{})
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
@@ -33,7 +34,10 @@ func TestGetJobLeavesThePayloadOutByDefault(t *testing.T) {
 		t.Error("a job that carries no payload came back with one")
 	}
 
-	if _, err := client.GetJob(ctx, "job-1", GetJobOptions{IncludePayload: true, IncludeResult: true}); err != nil {
+	if _, err := client.GetJob(ctx, "job-1", flexiq.GetJobOptions{
+		IncludePayload: true,
+		IncludeResult:  true,
+	}); err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
 	if !got.GetIncludePayload() || !got.GetIncludeResult() {
@@ -58,7 +62,10 @@ func TestGetJobDecodesPayloadAndResult(t *testing.T) {
 		},
 	})
 
-	job, err := client.GetJob(context.Background(), "job-1", GetJobOptions{IncludePayload: true, IncludeResult: true})
+	job, err := client.GetJob(context.Background(), "job-1", flexiq.GetJobOptions{
+		IncludePayload: true,
+		IncludeResult:  true,
+	})
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
@@ -96,15 +103,15 @@ func TestListJobsLeavesUnsetFiltersUnset(t *testing.T) {
 	client := serve(t, fake)
 	ctx := context.Background()
 
-	if _, err := client.ListJobs(ctx, ListJobsQuery{}); err != nil {
+	if _, err := client.ListJobs(ctx, flexiq.ListJobsQuery{}); err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
 	if got.Status != nil || got.Queue != nil || got.TaskName != nil {
 		t.Errorf("an unfiltered listing sent filters: %v", got)
 	}
 
-	if _, err := client.ListJobs(ctx, ListJobsQuery{
-		Status:   StatusDead,
+	if _, err := client.ListJobs(ctx, flexiq.ListJobsQuery{
+		Status:   flexiq.StatusDead,
 		Queue:    "payments",
 		TaskName: "billing.charge",
 		PageSize: 25,
@@ -143,7 +150,7 @@ func TestAllJobsPagesWithTheServersToken(t *testing.T) {
 	})
 
 	var ids []string
-	for job, err := range client.AllJobs(context.Background(), ListJobsQuery{}) {
+	for job, err := range client.AllJobs(context.Background(), flexiq.ListJobsQuery{}) {
 		if err != nil {
 			t.Fatalf("AllJobs: %v", err)
 		}
@@ -172,7 +179,7 @@ func TestAllJobsStopsEarlyWithoutFetchingMore(t *testing.T) {
 		},
 	})
 
-	for range client.AllJobs(context.Background(), ListJobsQuery{}) {
+	for range client.AllJobs(context.Background(), flexiq.ListJobsQuery{}) {
 		break
 	}
 	if calls != 1 {

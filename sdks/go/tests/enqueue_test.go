@@ -1,4 +1,4 @@
-package flexiq
+package tests
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -26,7 +27,7 @@ func TestEnqueueSendsTheTaggedEnvelope(t *testing.T) {
 	}
 	client := serve(t, fake)
 
-	if _, err := client.Enqueue(context.Background(), EnqueueRequest{
+	if _, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{
 		Task: "billing.charge",
 		Args: []any{1, "a"},
 	}); err != nil {
@@ -56,7 +57,7 @@ func TestEnqueueRawBodyReachesStorageUntouched(t *testing.T) {
 	client := serve(t, fake)
 
 	raw := mustHex(t, "028280a1616bf5")
-	if _, err := client.Enqueue(context.Background(), EnqueueRequest{
+	if _, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{
 		Task: "t",
 		Args: []any{"ignored"},
 		Raw:  raw,
@@ -85,9 +86,9 @@ func TestEnqueueOptionsMapOntoTheWire(t *testing.T) {
 
 	runAt := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
 	maxPending := int64(500)
-	if _, err := client.Enqueue(ctx, EnqueueRequest{
+	if _, err := client.Enqueue(ctx, flexiq.EnqueueRequest{
 		Task: "t",
-		Options: EnqueueOptions{
+		Options: flexiq.EnqueueOptions{
 			Queue:       "payments",
 			Priority:    5,
 			MaxRetries:  3,
@@ -98,7 +99,7 @@ func TestEnqueueOptionsMapOntoTheWire(t *testing.T) {
 			Notes:       "retried by hand",
 			DependsOn:   []string{"job-a", "job-b"},
 			ResultTTL:   time.Hour,
-			Debounce: &Debounce{
+			Debounce: &flexiq.Debounce{
 				Key:            "tenant:acme",
 				Window:         5 * time.Second,
 				MaxWait:        time.Minute,
@@ -134,7 +135,7 @@ func TestEnqueueOptionsMapOntoTheWire(t *testing.T) {
 
 	// And the same call with nothing set: the optional fields must be absent,
 	// not empty.
-	if _, err := client.Enqueue(ctx, EnqueueRequest{Task: "t"}); err != nil {
+	if _, err := client.Enqueue(ctx, flexiq.EnqueueRequest{Task: "t"}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	if got.UniqueKey != nil || got.Metadata != nil || got.Notes != nil {
@@ -161,9 +162,9 @@ func TestEnqueueReportsDeduplication(t *testing.T) {
 	}
 	client := serve(t, fake)
 
-	result, err := client.Enqueue(context.Background(), EnqueueRequest{
+	result, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{
 		Task:    "t",
-		Options: EnqueueOptions{UniqueKey: "k"},
+		Options: flexiq.EnqueueOptions{UniqueKey: "k"},
 	})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
@@ -180,7 +181,7 @@ func TestEnqueueRejectsAnEmptyTaskName(t *testing.T) {
 	fake := &fakeProducer{}
 	client := serve(t, fake)
 
-	if _, err := client.Enqueue(context.Background(), EnqueueRequest{}); err == nil {
+	if _, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{}); err == nil {
 		t.Fatal("an empty task name was accepted")
 	}
 	if fake.calls != 0 {
@@ -193,8 +194,8 @@ func TestEnqueueRejectsAnEmptyTaskName(t *testing.T) {
 func TestBatchPartialFailure(t *testing.T) {
 	itemErr, err := status.New(codes.ResourceExhausted, "queue `payments` is full").
 		WithDetails(&errdetails.ErrorInfo{
-			Domain:   errorDomain,
-			Reason:   string(ReasonQueueFull),
+			Domain:   flexiq.ErrorDomain,
+			Reason:   string(flexiq.ReasonQueueFull),
 			Metadata: map[string]string{"queue": "payments", "pending": "1001", "cap": "1000"},
 		})
 	if err != nil {
@@ -218,7 +219,7 @@ func TestBatchPartialFailure(t *testing.T) {
 	}
 	client := serve(t, fake)
 
-	results, err := client.EnqueueBatch(context.Background(), []EnqueueRequest{
+	results, err := client.EnqueueBatch(context.Background(), []flexiq.EnqueueRequest{
 		{Task: "t"}, {Task: "t"}, {Task: "t"},
 	})
 	if err != nil {
@@ -235,11 +236,11 @@ func TestBatchPartialFailure(t *testing.T) {
 	if results[1].Result != nil {
 		t.Error("item 1 reported a job and an error at once")
 	}
-	failed, ok := AsError(results[1].Err)
+	failed, ok := flexiq.AsError(results[1].Err)
 	if !ok {
 		t.Fatalf("item 1 error is %T, want *flexiq.Error", results[1].Err)
 	}
-	if failed.Reason != ReasonQueueFull {
+	if failed.Reason != flexiq.ReasonQueueFull {
 		t.Errorf("item 1 reason is %q", failed.Reason)
 	}
 	if info, ok := failed.QueueFull(); !ok || info.Queue != "payments" || info.Cap != 1000 {
@@ -257,8 +258,8 @@ func TestBatchPartialFailure(t *testing.T) {
 func TestBatchWholeRPCFailureNamesTheItem(t *testing.T) {
 	failure, err := status.New(codes.InvalidArgument, "item 1 is not a shape this service accepts").
 		WithDetails(&errdetails.ErrorInfo{
-			Domain:   errorDomain,
-			Reason:   string(ReasonInvalidRequest),
+			Domain:   flexiq.ErrorDomain,
+			Reason:   string(flexiq.ReasonInvalidRequest),
 			Metadata: map[string]string{"index": "1"},
 		})
 	if err != nil {
@@ -271,11 +272,11 @@ func TestBatchWholeRPCFailureNamesTheItem(t *testing.T) {
 		},
 	})
 
-	results, err := client.EnqueueBatch(context.Background(), []EnqueueRequest{{Task: "t"}, {Task: "t"}})
+	results, err := client.EnqueueBatch(context.Background(), []flexiq.EnqueueRequest{{Task: "t"}, {Task: "t"}})
 	if results != nil {
 		t.Error("a failed batch returned results; none of them landed")
 	}
-	wireErr, ok := AsError(err)
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("error is %T, want *flexiq.Error", err)
 	}

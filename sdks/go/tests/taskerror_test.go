@@ -1,8 +1,10 @@
-package flexiq
+package tests
 
 import (
 	"reflect"
 	"testing"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 )
 
 // TestTaskErrorParsesTheCanonicalShape covers the cross-SDK JSON a raising
@@ -10,7 +12,7 @@ import (
 func TestTaskErrorParsesTheCanonicalShape(t *testing.T) {
 	raw := `{"errtype":"ValueError","message":"bad value 42","traceback":["frame one","frame two"]}`
 
-	got := ParseTaskError(raw)
+	got := flexiq.ParseTaskError(raw)
 	if !got.Structured {
 		t.Fatal("the canonical shape was not recognised")
 	}
@@ -44,7 +46,7 @@ func TestTaskErrorSurfacesUnstructuredVerbatim(t *testing.T) {
 	}
 
 	for _, raw := range unstructured {
-		got := ParseTaskError(raw)
+		got := flexiq.ParseTaskError(raw)
 		if got.Structured {
 			t.Errorf("%q was read as the canonical shape", raw)
 		}
@@ -60,7 +62,7 @@ func TestTaskErrorSurfacesUnstructuredVerbatim(t *testing.T) {
 // TestTaskErrorKeepsEmptyRequiredFields: message may be "" and traceback may be
 // [], and both still make the canonical shape.
 func TestTaskErrorKeepsEmptyRequiredFields(t *testing.T) {
-	got := ParseTaskError(`{"errtype":"Cancelled","message":"","traceback":[]}`)
+	got := flexiq.ParseTaskError(`{"errtype":"Cancelled","message":"","traceback":[]}`)
 
 	if !got.Structured {
 		t.Fatal("an empty message and traceback are still the canonical shape")

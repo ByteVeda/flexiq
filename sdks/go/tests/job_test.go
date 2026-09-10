@@ -1,10 +1,11 @@
-package flexiq
+package tests
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,7 +23,7 @@ func TestUnknownStatusIsNotTerminal(t *testing.T) {
 		},
 	})
 
-	job, err := client.GetJob(context.Background(), "job-1", GetJobOptions{})
+	job, err := client.GetJob(context.Background(), "job-1", flexiq.GetJobOptions{})
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
@@ -40,14 +41,14 @@ func TestUnknownStatusIsNotTerminal(t *testing.T) {
 // TestTerminalStatuses pins which states a job does not leave. FAILED is not
 // one of them: a failed attempt may still be retried.
 func TestTerminalStatuses(t *testing.T) {
-	terminal := map[JobStatus]bool{
-		StatusUnspecified: false,
-		StatusPending:     false,
-		StatusRunning:     false,
-		StatusComplete:    true,
-		StatusFailed:      false,
-		StatusDead:        true,
-		StatusCancelled:   true,
+	terminal := map[flexiq.JobStatus]bool{
+		flexiq.StatusUnspecified: false,
+		flexiq.StatusPending:     false,
+		flexiq.StatusRunning:     false,
+		flexiq.StatusComplete:    true,
+		flexiq.StatusFailed:      false,
+		flexiq.StatusDead:        true,
+		flexiq.StatusCancelled:   true,
 	}
 	for status, want := range terminal {
 		if got := status.IsTerminal(); got != want {
@@ -62,8 +63,8 @@ func TestTerminalStatuses(t *testing.T) {
 func TestJobMapsEveryField(t *testing.T) {
 	created := time.Now().UTC().Truncate(time.Millisecond)
 	progress := int32(42)
-	payload := []byte{TagCBOR, 0x82, 0x80, 0xa0}
-	result := []byte{TagCBOR, 0xf5}
+	payload := []byte{flexiq.TagCBOR, 0x82, 0x80, 0xa0}
+	result := []byte{flexiq.TagCBOR, 0xf5}
 
 	client := serve(t, &fakeProducer{
 		getJob: func(context.Context, *pb.GetJobRequest) (*pb.GetJobResponse, error) {
@@ -96,7 +97,7 @@ func TestJobMapsEveryField(t *testing.T) {
 		},
 	})
 
-	job, err := client.GetJob(context.Background(), "job-1", GetJobOptions{})
+	job, err := client.GetJob(context.Background(), "job-1", flexiq.GetJobOptions{})
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
@@ -104,10 +105,10 @@ func TestJobMapsEveryField(t *testing.T) {
 	if job.ID != "job-1" || job.Queue != "payments" || job.TaskName != "billing.charge" {
 		t.Errorf("identity fields are %q/%q/%q", job.ID, job.Queue, job.TaskName)
 	}
-	if job.Status != StatusRunning || job.Priority != 7 || job.RetryCount != 1 || job.MaxRetries != 3 {
+	if job.Status != flexiq.StatusRunning || job.Priority != 7 || job.RetryCount != 1 || job.MaxRetries != 3 {
 		t.Errorf("scheduling fields are %s/%d/%d/%d", job.Status, job.Priority, job.RetryCount, job.MaxRetries)
 	}
-	if !job.CreatedAt.Equal(created) || job.CompletedAt != (time.Time{}) {
+	if !job.CreatedAt.Equal(created) || !job.CompletedAt.IsZero() {
 		t.Errorf("times are created=%s completed=%s; an unset time must be the zero time",
 			job.CreatedAt, job.CompletedAt)
 	}
@@ -140,7 +141,7 @@ func TestProgressAbsentIsNotZero(t *testing.T) {
 		},
 	})
 
-	job, err := client.GetJob(context.Background(), "job-1", GetJobOptions{})
+	job, err := client.GetJob(context.Background(), "job-1", flexiq.GetJobOptions{})
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}

@@ -1,4 +1,4 @@
-package flexiq
+package tests
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/grpc/codes"
 )
@@ -18,12 +19,12 @@ func TestEveryCallCarriesTheBearerToken(t *testing.T) {
 	client := serve(t, fake)
 	ctx := context.Background()
 
-	if _, err := client.Enqueue(ctx, EnqueueRequest{Task: "t"}); err != nil {
+	if _, err := client.Enqueue(ctx, flexiq.EnqueueRequest{Task: "t"}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	assertBearer(t, fake)
 
-	if _, err := client.GetJob(ctx, "job-1", GetJobOptions{}); err != nil {
+	if _, err := client.GetJob(ctx, "job-1", flexiq.GetJobOptions{}); err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
 	assertBearer(t, fake)
@@ -47,21 +48,21 @@ func TestClientNamesItselfInTheUserAgent(t *testing.T) {
 	fake := &fakeProducer{}
 	client := serve(t, fake)
 
-	if _, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t"}); err != nil {
+	if _, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t"}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
 	agents := fake.metadata.Get("user-agent")
-	if len(agents) != 1 || !strings.Contains(agents[0], "flexiq-go/"+Version) {
-		t.Errorf("user-agent is %v, want it to name flexiq-go/%s", agents, Version)
+	if len(agents) != 1 || !strings.Contains(agents[0], "flexiq-go/"+flexiq.Version) {
+		t.Errorf("user-agent is %v, want it to name flexiq-go/%s", agents, flexiq.Version)
 	}
 }
 
 // TestNewRequiresAToken fails the caller at construction rather than on the
 // first call, where the refusal would look like a server problem.
 func TestNewRequiresAToken(t *testing.T) {
-	_, err := New("localhost:50051")
-	if !errors.Is(err, ErrNoToken) {
+	_, err := flexiq.New("localhost:50051")
+	if !errors.Is(err, flexiq.ErrNoToken) {
 		t.Fatalf("want ErrNoToken, got %v", err)
 	}
 }
@@ -73,14 +74,14 @@ func TestOversizePayloadFailsBeforeItIsSent(t *testing.T) {
 	fake := &fakeProducer{}
 	client := serve(t, fake)
 
-	oversize := make([]byte, MaxMessageBytes+1024)
-	oversize[0] = TagCBOR
-	_, err := client.Enqueue(context.Background(), EnqueueRequest{Task: "t", Raw: oversize})
+	oversize := make([]byte, flexiq.MaxMessageBytes+1024)
+	oversize[0] = flexiq.TagCBOR
+	_, err := client.Enqueue(context.Background(), flexiq.EnqueueRequest{Task: "t", Raw: oversize})
 	if err == nil {
 		t.Fatal("an oversized payload was accepted")
 	}
 
-	wireErr, ok := AsError(err)
+	wireErr, ok := flexiq.AsError(err)
 	if !ok {
 		t.Fatalf("want a *flexiq.Error, got %T: %v", err, err)
 	}
@@ -110,7 +111,7 @@ func TestCancelJobReportsResultingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
-	if job.Status != StatusRunning || !job.CancelRequested {
+	if job.Status != flexiq.StatusRunning || !job.CancelRequested {
 		t.Errorf("got status %s cancelRequested=%v, want RUNNING with a cancel requested",
 			job.Status, job.CancelRequested)
 	}
