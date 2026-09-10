@@ -9,6 +9,11 @@ description = "Embeddable task queue for Rust — the `flexiq` entry point, re-e
 keywords = ["task-queue", "jobs", "scheduler", "background", "worker"]
 categories = ["asynchronous", "database"]
 readme = "README.md"
+# `tests/wire_vectors.rs` reads `contracts/wire-vectors.json`, which lives above
+# this crate's root and therefore cannot travel in the package. Excluding the
+# file keeps `cargo build --tests` working from the tarball — `cargo package`'s
+# own verify pass builds lib and bin targets only and would not catch it. #900.
+exclude = ["tests/wire_vectors.rs"]
 
 [features]
 default = []
@@ -28,5 +33,11 @@ flexiq-core = { workspace = true }
 flexiq-workflows = { workspace = true, optional = true }
 flexiq-mesh = { workspace = true, optional = true }
 # A failed job records canonical JSON, not a bare message — the shape every
-# other shell reads. See `error::task_error_json`.
+# other shell reads. See `outcome::task_error_json`.
 serde_json = { workspace = true }
+# Task arguments are `Serialize`; `encode` turns them into core's WireValue.
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = "0.4"

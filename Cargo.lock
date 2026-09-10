@@ -1143,7 +1143,10 @@ dependencies = [
  "flexiq-core",
  "flexiq-mesh",
  "flexiq-workflows",
+ "hex",
+ "serde",
  "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

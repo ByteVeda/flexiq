@@ -15,9 +15,23 @@ pub use flexiq_core;
 // `flexiq::error` would stop resolving to `flexiq_core::error`. Core owns
 // `contract, error, job, lease, periodic, pubsub, resilience, scheduler,
 // settings, step, storage, wire, worker` — the shell's names steer clear.
+mod encode;
 mod outcome;
 
 pub use outcome::{Abort, Outcome};
+
+/// The seam `#[flexiq::task]` expands against. Not a stable API.
+///
+/// A macro expands in the *caller's* crate, so everything its output names has
+/// to be reachable from outside this one. Collecting those items here rather
+/// than exporting them at the root keeps the crate's real surface readable, and
+/// keeps a caller from building against something that exists only to be
+/// generated.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::encode::{encode_args, to_wire, EncodeError};
+    pub use flexiq_core::wire::WireValue;
+}
 
 /// DAG workflows. Enable the `workflows` feature.
 ///
