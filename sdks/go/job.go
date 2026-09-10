@@ -4,9 +4,10 @@ import (
 	"strconv"
 	"time"
 
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // JobStatus is a job's lifecycle state.
@@ -16,6 +17,8 @@ import (
 type JobStatus int32
 
 const (
+	// StatusUnspecified is the zero value, which a server never sends. See
+	// [JobStatus.IsKnown].
 	StatusUnspecified JobStatus = 0
 	// StatusPending means waiting to be dequeued, or scheduled for the future.
 	StatusPending JobStatus = 1
@@ -47,7 +50,14 @@ func (s JobStatus) IsTerminal() bool {
 	}
 }
 
-// IsKnown reports whether this build has a name for the status.
+// IsKnown reports whether the status is one this build can reason about.
+//
+// [StatusUnspecified] is not, and that is deliberate rather than an omission:
+// a server never sends it. It has a name here because proto3 spends zero on
+// one, so receiving it means either a value from a build newer than this one
+// or a job that arrived without a status at all — and neither is a state a
+// caller can act on. Both answer false, which is the answer that keeps a
+// caller from trusting the value.
 func (s JobStatus) IsKnown() bool {
 	switch s {
 	case StatusPending, StatusRunning, StatusComplete, StatusFailed, StatusDead, StatusCancelled:
@@ -158,9 +168,14 @@ func (j Job) DecodeResult(v any) error {
 
 // jobFromProto maps the wire message onto the read model.
 //
-// Unknown fields and unknown enum values arrive as themselves and are carried
-// through rather than rejected: to this build they are "not this build", never
-// an error.
+// An enum value this build has no name for is carried through as its number
+// rather than rejected — see [JobStatus.IsKnown].
+//
+// A *field* this build has no name for is dropped here. It survives protobuf
+// decoding, but this mapping names every field it copies, so a field a newer
+// server adds reaches the wire message and stops. That is the trade for a
+// hand-written read model, and it is why a client is generated against a
+// version of the contract rather than discovering one.
 func jobFromProto(msg *pb.Job) Job {
 	if msg == nil {
 		return Job{}

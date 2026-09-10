@@ -56,7 +56,8 @@ type QueueStats struct {
 // server stream. Poll this, or subscribe a webhook on the server side.
 //
 // A job in another namespace answers [ReasonJobNotFound], indistinguishable
-// from a job that never existed. So does a job retention has already deleted.
+// from a job that never existed. So does a job that retention has already
+// deleted.
 func (c *Client) GetJob(ctx context.Context, jobID string, opts GetJobOptions) (Job, error) {
 	resp, err := c.producer.GetJob(ctx, &pb.GetJobRequest{
 		JobId:          jobID,

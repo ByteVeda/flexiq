@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // TestUnknownStatusIsNotTerminal is the tolerance rule with the sharpest
