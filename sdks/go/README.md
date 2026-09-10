@@ -178,6 +178,8 @@ make lint       # golangci-lint with the committed .golangci.yml
 make fmt        # rewrite formatting and import grouping
 make generate   # regenerate internal/pb from ../../contracts/proto
 make tools      # install the pinned linter into GOBIN
+make server     # build the flexiq-server that `make e2e` drives
+make e2e        # run the suite against that server, over a real socket
 ```
 
 The linter version is pinned in two places that must agree: `GOLANGCI_LINT_VERSION` in the
@@ -190,6 +192,21 @@ a diff, so it cannot drift from `contracts/proto`.
 The suite lives in `tests/`, beside the package rather than inside it. Everything there reaches the
 client through its exported API, the same way you do — a surface that is awkward to use is awkward
 to test.
+
+Most of it answers a `ProducerService` double on an in-process connection, which pins this client's
+half of the contract. The **end-to-end suite** pins the other half — the pair. It is behind
+`//go:build integration`, so `make test` stays double-only and needs no Rust toolchain:
+
+```bash
+make server     # cargo build -p flexiq-server --features grpc
+make e2e
+```
+
+`make e2e` starts a real `flexiq-server` on a temporary SQLite file, mints its credentials through
+`flexiq-server token create`, runs the suite against a real socket, and tears the process down. It
+finds the binary under the workspace `target/`; point `FLEXIQ_SERVER_BIN` at one to override that.
+A missing binary **fails** the run rather than skipping it — a suite that skips itself in CI is a
+suite that stopped running and said nothing.
 
 `tests/wire_test.go` asserts [`contracts/wire-vectors.json`](../../contracts/wire-vectors.json),
 the same file every FlexiQ runtime asserts in its own suite. **A hex string there is never edited

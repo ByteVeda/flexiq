@@ -1,7 +1,7 @@
 # #833 — the descriptor as a supported interface
 
-Branch `feat/descriptor-release-asset` off `master` at `f349fae1`. Docs only: no Rust, no proto,
-no workflow change, no new page.
+Branch `feat/descriptor-release-asset` off `master` at `f349fae1`, later merged up to `fac8d1c0`
+(#911). Docs only: no Rust, no proto, no workflow change, no new page.
 
 ## What the issue asked for, and what is already true
 
