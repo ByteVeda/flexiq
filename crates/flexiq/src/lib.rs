@@ -15,13 +15,22 @@ pub use flexiq_core;
 // `flexiq::error` would stop resolving to `flexiq_core::error`. Core owns
 // `contract, error, job, lease, periodic, pubsub, resilience, scheduler,
 // settings, step, storage, wire, worker` — the shell's names steer clear.
+mod call;
 mod decode;
 mod encode;
+mod options;
 mod outcome;
+mod queue;
+mod steps;
+mod task;
 
+pub use call::TaskCall;
 pub use decode::DecodeError;
 pub use encode::EncodeError;
+pub use options::{Debounce, EnqueueOptions};
 pub use outcome::{Abort, Outcome};
+pub use queue::FlexiQ;
+pub use task::{StepHandle, Task};
 
 /// The seam `#[flexiq::task]` expands against. Not a stable API.
 ///

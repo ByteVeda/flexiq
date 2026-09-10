@@ -1,0 +1,180 @@
+//! The handle a producer holds.
+
+use flexiq_core::{
+    ensure_contract_supported, Job, QueueError, QueueStats, Result, SqliteStorage, Storage,
+    StorageBackend,
+};
+use sha2::{Digest, Sha256};
+
+use crate::{Task, TaskCall};
+
+/// An embedded FlexiQ: one storage backend, and the operations a producer needs.
+///
+/// Named for the product rather than `Queue`, because a *queue* here is already
+/// a named string every job carries. A type called `Queue` that is not one of
+/// those would be the more confusing of the two options.
+#[derive(Clone)]
+pub struct FlexiQ {
+    storage: StorageBackend,
+    namespace: Option<String>,
+}
+
+impl FlexiQ {
+    /// Open, or create, a SQLite database at `path`.
+    pub fn open(path: &str) -> Result<Self> {
+        Self::from_storage(StorageBackend::Sqlite(SqliteStorage::new(path)?))
+    }
+
+    /// Open a private in-memory database. Useful in tests; the data dies with
+    /// the handle.
+    pub fn in_memory() -> Result<Self> {
+        Self::from_storage(StorageBackend::Sqlite(SqliteStorage::in_memory()?))
+    }
+
+    /// Wrap a backend that is already open — a Postgres or Redis one, or a
+    /// SQLite handle sharing a pool with something else.
+    ///
+    /// This is where the contract floor is checked. `BINDING_CONTRACT.md`
+    /// requires every shell to call `ensure_contract_supported` once at storage
+    /// open, and a gate that runs anywhere else is a gate a caller can skip by
+    /// choosing a different constructor.
+    pub fn from_storage(storage: StorageBackend) -> Result<Self> {
+        ensure_contract_supported(&storage)?;
+        Ok(Self {
+            storage,
+            namespace: None,
+        })
+    }
+
+    /// Scope every operation on this handle to a tenant namespace.
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = Some(namespace.into());
+        self
+    }
+
+    /// The namespace this handle is scoped to, if any.
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    /// The backend underneath, for an operation this shell does not wrap.
+    pub fn storage(&self) -> &StorageBackend {
+        &self.storage
+    }
+
+    /// Enqueue one call.
+    ///
+    /// Three writes hide behind this, and which one runs is decided by the
+    /// call's own options: a debounce window routes to `enqueue_debounced`, a
+    /// dedup key to `enqueue_unique`, and everything else to the plain insert.
+    pub fn enqueue<T: Task>(&self, call: TaskCall<T>) -> Result<Job> {
+        let (new_job, debounce, unique) = self.prepare::<T>(call);
+
+        match (debounce, unique) {
+            (Some(window), _) => self.storage.enqueue_debounced(new_job, window),
+            (None, true) => self.storage.enqueue_unique(new_job),
+            (None, false) => self.storage.enqueue(new_job),
+        }
+    }
+
+    /// Enqueue several calls of the same task in one write.
+    ///
+    /// A debounced call is refused rather than split out: storage has no
+    /// batched debounce, and looping it item by item would cost the Diesel
+    /// backends the atomicity that is the reason to send a batch at all.
+    pub fn enqueue_batch<T: Task>(&self, calls: Vec<TaskCall<T>>) -> Result<Vec<Job>> {
+        let mut rows = Vec::with_capacity(calls.len());
+        let mut any_unique = false;
+
+        for call in calls {
+            let (new_job, debounce, unique) = self.prepare::<T>(call);
+            if debounce.is_some() {
+                return Err(QueueError::Other(format!(
+                    "a debounce window cannot ride a batch: enqueue `{}` on its own",
+                    T::NAME
+                )));
+            }
+            any_unique |= unique;
+            rows.push(new_job);
+        }
+
+        if any_unique {
+            self.storage.enqueue_unique_batch(rows)
+        } else {
+            self.storage.enqueue_batch(rows)
+        }
+    }
+
+    /// Turn a call into the row storage takes, and say which write it wants.
+    fn prepare<T: Task>(
+        &self,
+        call: TaskCall<T>,
+    ) -> (
+        flexiq_core::NewJob,
+        Option<flexiq_core::storage::records::DebounceOptions>,
+        bool,
+    ) {
+        let TaskCall {
+            payload,
+            mut options,
+            ..
+        } = call;
+
+        if options.namespace.is_none() {
+            options.namespace.clone_from(&self.namespace);
+        }
+        // An explicit key wins: a caller who names an identity has said
+        // something the payload's bytes cannot.
+        if options.idempotent && options.unique_key.is_none() {
+            options.unique_key = Some(auto_unique_key(T::NAME, &payload));
+        }
+
+        let unique = options.unique_key.is_some();
+        let window = options.debounce.as_ref().map(|d| d.options());
+        (options.into_new_job(T::NAME, payload), window, unique)
+    }
+
+    /// Cancel a pending job. `false` when there was nothing to cancel.
+    pub fn cancel(&self, job_id: &str) -> Result<bool> {
+        self.storage.cancel_job(job_id, self.namespace.as_deref())
+    }
+
+    /// Ask a *running* job to stop. The task has to poll for it; nothing
+    /// interrupts a handler mid-call.
+    pub fn request_cancel(&self, job_id: &str) -> Result<bool> {
+        self.storage
+            .request_cancel(job_id, self.namespace.as_deref())
+    }
+
+    /// Read one job back.
+    pub fn get_job(&self, job_id: &str) -> Result<Option<Job>> {
+        self.storage.get_job(job_id, self.namespace.as_deref())
+    }
+
+    /// The most recent jobs in this namespace, newest first.
+    pub fn list_jobs(&self, limit: i64, offset: i64) -> Result<Vec<Job>> {
+        self.storage
+            .list_jobs(None, None, None, limit, offset, self.namespace.as_deref())
+    }
+
+    /// Counts by lifecycle state.
+    pub fn stats(&self) -> Result<QueueStats> {
+        self.storage.stats(self.namespace.as_deref())
+    }
+}
+
+/// The dedup key `idempotent` derives: `auto:` and the first 32 hex characters
+/// of `sha256(task_name || 0x00 || payload)`.
+///
+/// The separator is a NUL byte and the digest is truncated to 32 characters.
+/// Both are wire-visible: this key is how the same call sent from another
+/// language deduplicates against this one, so a divergence does not fail
+/// anything here — it silently stops deduping over there.
+fn auto_unique_key(task_name: &str, payload: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(task_name.as_bytes());
+    hasher.update([0x00]);
+    hasher.update(payload);
+    let digest = hex::encode(hasher.finalize());
+    format!("auto:{}", &digest[..32])
+}

@@ -42,6 +42,8 @@ thiserror = { workspace = true }
 # brings its own. Reading must accept every shape a writer may legally emit,
 # which is a real CBOR implementation's job rather than a mirror of the writer.
 ciborium = "0.2"
-
-[dev-dependencies]
+# `idempotent` derives its dedup key as sha256(name || 0x00 || payload); the
+# digest is a cross-language identity, so it is computed here rather than left
+# to storage.
+sha2 = "0.11"
 hex = "0.4"
