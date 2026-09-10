@@ -1,0 +1,96 @@
+# Lint configuration for the Go client.
+#
+# Run it with `make lint` from this directory, or `golangci-lint run`. CI runs
+# the same config at the version pinned in .github/workflows/ci-go.yml, so a
+# lint that passes here passes there.
+#
+# The linter set is deliberately small and all of it is enforced. A config that
+# enables everything and then suppresses half of it teaches contributors to
+# reach for `//nolint` rather than to fix the finding; adding a linter here is
+# cheap once its findings are at zero.
+version: "2"
+
+run:
+  timeout: 5m
+  # The stubs under internal/pb are generated. They are excluded below rather
+  # than annotated, because a `//nolint` in generated code is erased by the
+  # next `buf generate`.
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint # a wrapped error compared with == is a bug waiting for a wrap
+    - goconst
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      # An unchecked type assertion panics, and a panic inside a library is
+      # never the client's to throw.
+      check-type-assertions: true
+      # Deliberately off. Assigning to `_` is how Go says "ignored on purpose",
+      # and flagging it would turn every teardown into a //nolint — which is
+      # the habit this file is trying not to teach.
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        # Struct field alignment is a memory optimisation, and reordering the
+        # public option and job structs to satisfy it would put the fields in
+        # an order nobody reading the contract expects.
+        - fieldalignment
+    revive:
+      rules:
+        - name: exported
+          # Every exported identifier in this package is part of the client's
+          # public surface, and its doc comment is the documentation a caller
+          # reads on pkg.go.dev.
+          severity: error
+          disabled: false
+        - name: package-comments
+        - name: indent-error-flow
+        - name: errorf
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+  exclusions:
+    generated: strict
+    rules:
+      # The test package builds deliberately malformed inputs and asserts on
+      # what the client does with them; naming every one of them a constant
+      # would bury the case each test is about.
+      - path: tests/
+        linters:
+          - goconst
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ByteVeda/flexiq

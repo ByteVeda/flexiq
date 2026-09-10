@@ -32,6 +32,7 @@ jobs:
       python: ${{ steps.decide.outputs.python }}
       node: ${{ steps.decide.outputs.node }}
       java: ${{ steps.decide.outputs.java }}
+      go: ${{ steps.decide.outputs.go }}
       polyglot: ${{ steps.decide.outputs.polyglot }}
       server: ${{ steps.decide.outputs.server }}
       chart: ${{ steps.decide.outputs.chart }}
@@ -84,8 +85,22 @@ jobs:
               - '.github/actions/provision-gradle/**'
               - 'sdks/java/**'
               - '.github/workflows/ci-java.yml'
-            # The cross-SDK suite: any SDK, the example itself, or its driver can
-            # break interop, so it watches all three shells at once.
+            # Deliberately not `*shared`: the Go client links no native
+            # binding and compiles nothing from crates/. What it does depend on
+            # is the wire contract — the committed stubs are generated from
+            # contracts/proto, and the conformance test reads the vectors
+            # straight out of the tree.
+            go:
+              - 'sdks/go/**'
+              - 'contracts/proto/**'
+              - 'contracts/wire-vectors.json'
+              - 'contracts/BUF_VERSION'
+              - '.github/workflows/ci-go.yml'
+            # The cross-SDK suite: any embedded SDK, the example itself, or its
+            # driver can break interop, so it watches all three shells at once.
+            # Named one by one rather than `sdks/**`, because the Go client is
+            # not part of the polyglot example and a change to it has no
+            # three-runtime build to justify.
             polyglot:
               - *shared
               - 'rust-toolchain.toml'
@@ -93,7 +108,9 @@ jobs:
               - '.github/actions/setup-node/**'
               - '.github/actions/setup-java/**'
               - '.github/actions/provision-gradle/**'
-              - 'sdks/**'
+              - 'sdks/python/**'
+              - 'sdks/node/**'
+              - 'sdks/java/**'
               - 'examples/polyglot/**'
               - 'scripts/polyglot_e2e.py'
               - '.github/workflows/ci-polyglot.yml'
@@ -136,6 +153,7 @@ jobs:
           PYTHON: ${{ steps.filter.outputs.python }}
           NODE: ${{ steps.filter.outputs.node }}
           JAVA: ${{ steps.filter.outputs.java }}
+          GO: ${{ steps.filter.outputs.go }}
           POLYGLOT: ${{ steps.filter.outputs.polyglot }}
           SERVER: ${{ steps.filter.outputs.server }}
           CHART: ${{ steps.filter.outputs.chart }}
@@ -152,6 +170,7 @@ jobs:
           decide python "$PYTHON"
           decide node "$NODE"
           decide java "$JAVA"
+          decide go "$GO"
           decide polyglot "$POLYGLOT"
           decide server "$SERVER"
           decide chart "$CHART"
@@ -192,6 +211,12 @@ jobs:
     if: needs.changes.outputs.java == 'true'
     uses: ./.github/workflows/ci-java.yml
 
+  go:
+    name: Go
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    uses: ./.github/workflows/ci-go.yml
+
   polyglot:
     name: Polyglot
     needs: changes
@@ -219,7 +244,7 @@ jobs:
   ci-status:
     name: CI status
     if: always()
-    needs: [changes, versions, rust, python, node, java, polyglot, server-image, chart, proto]
+    needs: [changes, versions, rust, python, node, java, go, polyglot, server-image, chart, proto]
     runs-on: ubuntu-latest
     steps:
       - name: Check that no required job failed

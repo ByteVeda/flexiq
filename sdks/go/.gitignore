@@ -1,0 +1,6 @@
+# Build and test output. The module ships source only — there is no compiled
+# artifact to keep, unlike the other SDKs here.
+/coverage.out
+/coverage.html
+*.test
+*.out

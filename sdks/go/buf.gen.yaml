@@ -1,0 +1,46 @@
+# Stub generation for the Go client.
+#
+# The output is committed under internal/pb. Two reasons, and neither is a
+# preference:
+#
+#   * `go get` runs no code generator, so a consumer of this module has to find
+#     the stubs already there. Every other language in this repo generates at
+#     build time; Go cannot.
+#   * `internal/` keeps protobuf types out of the public API. The exported
+#     surface is hand-written Go, so a regenerated stub can never be a breaking
+#     change for a caller.
+#
+# Regenerate with `buf generate` from this directory; CI fails on a diff.
+version: v2
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb
+  disable:
+    # google.rpc.Status is the error arm of an EnqueueBatch item result. It has
+    # a published Go home already, so rewriting its go_package would generate a
+    # second, incompatible copy of a type callers get from genproto.
+    - file_option: go_package
+      module: buf.build/googleapis/googleapis
+
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.10
+    out: internal/pb
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go:v1.5.1
+    out: internal/pb
+    opt: paths=source_relative
+
+# The contract lives one module up, not in this directory. Reading it from the
+# tree is what keeps the stubs and contracts/proto from drifting apart within a
+# commit; an external client would take the same tree from the release asset.
+inputs:
+  - directory: ../../contracts/proto
+    # flexiq.v1 only. flexiq.executor.v1 is a second door behind a second scope
+    # and this module does not open it; generating its stubs would ship a
+    # client surface nothing here implements. The contract forbids the reverse
+    # import, so the producer package compiles without them.
+    paths:
+      - ../../contracts/proto/flexiq/v1

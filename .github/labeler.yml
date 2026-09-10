@@ -10,6 +10,11 @@ python:
       - any-glob-to-any-file:
           - "sdks/python/**"
 
+area/sdk-go:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "sdks/go/**"
+
 dashboard:
   - changed-files:
       - any-glob-to-any-file:

@@ -3,11 +3,19 @@ title: Clients without an SDK
 description: "Enqueue and read work from a language FlexiQ has no SDK for: get the contract, generate a client, and decode what comes back."
 ---
 
-FlexiQ ships SDKs for three languages. This page is for the fourth — Go, Ruby,
+FlexiQ ships SDKs for three languages. This page is for everything else — Ruby,
 C#, PHP, Elixir, anything with a gRPC library — talking to the
 [producer door](/server) of a running
 `flexiq-server`. You need no native binding, no database credential, and, if you
 use `structured` arguments, no CBOR library either.
+
+<Callout title="Go has a client already">
+  You do not have to generate one:
+  [`github.com/ByteVeda/flexiq/sdks/go/v2`](https://github.com/ByteVeda/flexiq/tree/master/sdks/go)
+  implements this page — enqueue, batch, read, cancel, count — with the payload
+  envelope, the reason-based errors and the bearer credential already handled.
+  It is a producer client, not an SDK: it cannot execute tasks.
+</Callout>
 
 What you give up is worth naming up front. An SDK gives you task registration,
 middleware, retries expressed in your own code, and a worker. This door gives
