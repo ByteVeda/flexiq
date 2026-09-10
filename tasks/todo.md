@@ -1,64 +1,87 @@
-# #831 — an OpenAPI document generated from the proto
+# #880 — the node concurrent-steps case flakes on macOS
 
-Branch `feat/openapi-from-proto` off `master` at `5aeccb98`. Design:
-`tasks/specs/2026-09-10-openapi-from-proto-design.md`.
+Branch `fix/node-concurrent-steps-test-flake` off `master` at `5aeccb98`. One test file:
+no `src/`, no Rust, no docs change.
+
+## The failure
+
+`Node SDK Smoke (macos-15)` on run 34492507551 failed
+`test/worker/steps.test.ts:190` — `expect(await waitFor(() => dead.length > 0)).toBe(true)`
+returned `false`. No `job.dead` event inside the 20s budget, which every other `waitFor` in
+the file shares, so the budget is not the problem.
+
+## Why it can pass, and therefore fail
+
+The case asserts "a step started while another is uncommitted has no position to take" —
+`sequence.rs:339`'s `check_issuable`. It set that up with
+
+```ts
+await Promise.all([steps.run("charge", () => 1), steps.run("receipt", () => 2)]);
+```
+
+Two `run` calls made back to back only *look* concurrent. Each start crosses to the core
+through `JsStepSession::begin_run`, which is a `#[napi]` async fn dispatching to
+`spawn_blocking`, so the two starts are two tasks on the blocking pool rather than two
+statements. With instant callbacks (`() => 1`) a loaded runner can let the first start, run
+and *commit* before the second start is picked up. `receipt` then takes position 2
+legitimately, the body returns `"done"`, the job completes, and `dead` stays empty until the
+budget expires.
+
+`sequence.rs` is not wrong. The test was depending on scheduling instead of on the rule.
 
 ## Plan
 
-- [x] 1. Annotate the eight `flexiq.v1` RPCs with `google.api.http`; regenerate
-      `contracts/descriptor.binpb` via `scripts/proto-check.sh --fix`.
-- [x] 2. `crates/flexiq-openapi` — descriptor reader (incl. the `HttpRule`
-      extension prost drops), proto3-JSON schema mapping, document assembly,
-      binary that writes to stdout or `--out`.
-- [x] 3. Generate `contracts/openapi.json`; gate it in `scripts/proto-check.sh`
-      beside the descriptor compare.
-- [x] 4. Drift test in `facade/routes.rs`: every `Binding` ⟺ exactly one
-      annotation, same verb, same path.
-- [x] 5. `GET /v1/stats` reads `?queue=`, so the annotation's query parameter is
-      real (design D5).
-- [x] 6. `ci.yml` path filters gain the generator crate; `ci-proto.yml` gains a
-      toolchain.
-- [x] 7. Docs: link the document from the `/server/grpc` page, the client guide
-      and `contracts/REMOTE_SDK_CONTRACT.md`.
+- [x] Read the issue, the failing job and `check_issuable`, and confirm the diagnosis against
+      the napi binding rather than assuming it
+- [x] Add a `deferred()` helper beside `waitFor`
+- [x] Hold `charge` open inside its callback until `receipt` has been asked for and answered,
+      so the second start is guaranteed to reach the sequence while the first is uncommitted
+- [x] Reproduce the wrong-reason pass locally, so the diagnosis is measured rather than argued
+- [x] `pnpm build:native`, then run the file and the whole node suite
+- [x] `pnpm typecheck` and `pnpm lint`
+- [ ] Commit, push, open the PR
+
+## Shape of the fix
+
+`charge`'s callback resolves `charging` — which only runs once its `beginRun` returned a
+`Run` decision, so `state.pending` is set — and then parks on `held`. The body awaits
+`charging` before asking for `receipt`, and `receipt`'s promise resolves `held` on settle, so
+nothing deadlocks when `receipt` rejects (which is the expected outcome). `Promise.all`
+attaches handlers to both up front, so `charge`'s later settlement cannot surface as an
+unhandled rejection.
+
+The latch keeps the *first* signal, so the dead letter still carries `still uncommitted`.
+
+## Not in scope
+
+The Python twin (`tests/core/test_steps.py:766`) forces the same overlap with an
+`asyncio.sleep(0.05)` in the step body. Time-based rather than a handshake, but it has not
+flaked and the issue does not name it.
 
 ## Review
 
-Nine operations over eight RPCs, 29 component schemas, 52 KB. OpenAPI 3.1,
-validated by `openapi-spec-validator`.
+The diagnosis was measured, not argued. A throwaway probe reran the **old** shape with the
+starvation made explicit — a 300 ms delay before the second `run` — and the job **completed**:
 
-**What the live check found.** Driving every documented operation against a
-running `flexiq-server` — the thing the issue asks for in its second bullet —
-turned up a bug that has nothing to do with generation. `facade/error.rs`'s
-`rich()` decoded `status.details()` unconditionally, and prost decodes an
-*empty* buffer into a default `google.rpc.Status`. Every error carrying no
-`ErrorInfo` therefore rendered as `{"code": 200, "status": "OK"}` under a
-non-2xx HTTP status: `GET /v1/workflows/no-such-run` answered 404 with a body
-that said the call succeeded. A client branching on `status`, as
-`REMOTE_SDK_CONTRACT.md` tells it to, read a failure as a success. Fixed in its
-own commit with a unit test per arm and an assertion on the live path.
+```text
+PROBE dead= 0 completed= 1
+```
 
-**One deliberate behaviour change** (design D5). `GET /v1/stats` now reads
-`?queue=`, because under `google.api.http` a request field the path does not
-bind is a query parameter, and the alternative was a document advertising a
-filter the server ignored.
+Zero dead letters, one completion. That is the macOS failure exactly: `receipt` arrives after
+`charge` has committed, takes position 2 legitimately, and the case's `waitFor` then spends
+its whole 20s budget waiting for an event that is never coming. The probe was deleted before
+committing.
 
-**What the descriptor cost.** `google/api/annotations.proto` pulls in
-`google/protobuf/descriptor.proto`, so `contracts/descriptor.binpb` went from
-88 KB to 182 KB. It is embedded in the binary and served over reflection, which
-is correct — a client resolving the annotations needs those files — but it is
-the one number in this change that got twice as big.
+With the handshake the case is deterministic: 15 consecutive runs of it alone, all green,
+each settling in about a second rather than near the budget.
 
-**Not done, and why.** The listener does not serve the document, and there is no
-test sweeping the spec against a live server on every run. The annotation-to-
-`Binding` drift test is what holds the document to the router; the live sweep
-was run by hand, once, before this landed.
+- `pnpm exec vitest run test/worker/steps.test.ts` → 24 passed
+- `pnpm test` → 102 files, 780 passed, 6 skipped, 0 failed
+- `pnpm typecheck` → clean · `pnpm lint` → exit 0 (one pre-existing warning in
+  `executorAttach.test.ts`, untouched here)
 
-## Verification
+The dashboard cases need `static/dashboard/index.html`, so a worktree with no
+`dashboard/node_modules` fails all ten on collection. `pnpm -C dashboard install` and
+`pnpm run build:dashboard` fix that; CI builds the SPA itself and never sees it.
 
-- `scripts/proto-check.sh` clean; staleness proven by hand (a path renamed in
-  the `.proto`, descriptor refreshed alone, gate failed on the document).
-- `cargo test -p flexiq-openapi` (17), `cargo test -p flexiq-server --features
-  grpc` (422 unit + every integration suite).
-- `cargo clippy --all-targets -- -D warnings` on both crates.
-- Every one of the nine documented operations driven against a running server:
-  all routed, every error body's `code` agreeing with its HTTP status.
+No `src/` and no Rust change: `check_issuable` was always right, and the test is what moved.
