@@ -242,7 +242,8 @@ message CancelJobResponse {
 }
 
 message QueueStatsRequest {
-  // Unset counts every queue in the namespace.
+  // Which queue to count. A request that does not name one counts every queue
+  // in the namespace; the queue-scoped path always names one.
   optional string queue = 1;
 }
 

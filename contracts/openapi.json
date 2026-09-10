@@ -1138,7 +1138,7 @@
         "operationId": "ProducerService_QueueStats",
         "parameters": [
           {
-            "description": "Unset counts every queue in the namespace.",
+            "description": "Which queue to count. A request that does not name one counts every queue\nin the namespace; the queue-scoped path always names one.",
             "in": "path",
             "name": "queue",
             "required": true,
@@ -1180,7 +1180,7 @@
         "operationId": "ProducerService_QueueStats_2",
         "parameters": [
           {
-            "description": "Unset counts every queue in the namespace.",
+            "description": "Which queue to count. A request that does not name one counts every queue\nin the namespace; the queue-scoped path always names one.",
             "in": "query",
             "name": "queue",
             "required": false,

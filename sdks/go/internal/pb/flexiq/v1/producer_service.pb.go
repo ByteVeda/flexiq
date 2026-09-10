@@ -727,7 +727,8 @@ func (x *CancelJobResponse) GetJob() *Job {
 
 type QueueStatsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Unset counts every queue in the namespace.
+	// Which queue to count. A request that does not name one counts every queue
+	// in the namespace; the queue-scoped path always names one.
 	Queue         *string `protobuf:"bytes,1,opt,name=queue,proto3,oneof" json:"queue,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
