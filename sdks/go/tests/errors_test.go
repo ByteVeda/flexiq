@@ -6,13 +6,14 @@ import (
 	"testing"
 	"time"
 
-	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // failWith makes the fake answer every enqueue with one status.

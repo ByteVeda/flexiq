@@ -4,8 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/grpc"
+
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // Client talks to the producer door of a running flexiq-server.

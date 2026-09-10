@@ -36,6 +36,9 @@ repos:
         types: [python]
         pass_filenames: false
 
+      # gofmt and go vet rather than golangci-lint: these need only the Go
+      # toolchain, which anyone touching sdks/go already has. The full lint is
+      # `make -C sdks/go lint`, and CI runs it on every push.
       - id: go-fmt
         name: go fmt (gofmt)
         # gofmt exits 0 whether or not it found anything, so the file list it

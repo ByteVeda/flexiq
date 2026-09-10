@@ -15,6 +15,12 @@ defaults:
   run:
     working-directory: sdks/go
 
+env:
+  # Pinned rather than latest: a linter that changes its rule set turns a green
+  # branch red on a morning nobody touched Go. Keep in step with
+  # GOLANGCI_LINT_VERSION in sdks/go/Makefile.
+  GOLANGCI_LINT_VERSION: v2.13.2
+
 jobs:
   test:
     name: Test (go ${{ matrix.go }})
@@ -63,13 +69,14 @@ jobs:
           go-version: "1.27.x"
           cache-dependency-path: sdks/go/go.sum
 
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt would rewrite: $unformatted"
-            exit 1
-          fi
+      # Formatting and import grouping are part of the lint config
+      # (sdks/go/.golangci.yml), so `golangci-lint run` covers gofmt too. This
+      # action reads the same file the Makefile does.
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: sdks/go
 
       - name: go.mod and go.sum are tidy
         run: |

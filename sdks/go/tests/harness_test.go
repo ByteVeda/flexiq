@@ -11,11 +11,12 @@ import (
 	"net"
 	"testing"
 
-	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
-	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
+
+	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
+	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
 )
 
 // The harness: a ProducerService double on an in-process connection.

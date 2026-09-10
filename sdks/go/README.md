@@ -171,11 +171,18 @@ type charge struct {
 ## Development
 
 ```bash
-go test -race ./...      # includes the cross-SDK conformance vectors
-go vet ./...
-gofmt -l .
-buf generate             # regenerate internal/pb from ../../contracts/proto
+make            # lists every target
+make check      # build, vet, lint and the race suite — what CI runs, in CI's order
+make test       # the suite, including the cross-SDK conformance vectors
+make lint       # golangci-lint with the committed .golangci.yml
+make fmt        # rewrite formatting and import grouping
+make generate   # regenerate internal/pb from ../../contracts/proto
+make tools      # install the pinned linter into GOBIN
 ```
+
+The linter version is pinned in two places that must agree: `GOLANGCI_LINT_VERSION` in the
+[`Makefile`](Makefile) and in [`ci-go.yml`](../../.github/workflows/ci-go.yml). Formatting is part
+of the lint config, so `make lint` covers `gofmt` as well.
 
 `internal/pb` is committed because `go get` runs no code generator. CI regenerates it and fails on
 a diff, so it cannot drift from `contracts/proto`.

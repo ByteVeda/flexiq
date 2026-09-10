@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 	pb "github.com/ByteVeda/flexiq/sdks/go/v2/internal/pb/flexiq/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 // TestGetJobLeavesThePayloadOutByDefault pins the default a reader relies on: a
@@ -145,7 +146,13 @@ func TestAllJobsPagesWithTheServersToken(t *testing.T) {
 				t.Errorf("client invented a page token: %q", req.GetPageToken())
 				return &pb.ListJobsResponse{}, nil
 			}
-			return proto.Clone(page).(*pb.ListJobsResponse), nil
+			// Cloned so a handler cannot hand the same message out twice and
+			// have the second call mutate the first caller's page.
+			clone, ok := proto.Clone(page).(*pb.ListJobsResponse)
+			if !ok {
+				t.Fatalf("clone of a ListJobsResponse is a %T", clone)
+			}
+			return clone, nil
 		},
 	})
 
