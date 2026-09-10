@@ -48,6 +48,12 @@ ciborium = "0.2"
 # to storage.
 sha2 = "0.11"
 hex = "0.4"
+# The shell runs its own `WorkerDispatcher`, so it needs the same three crates
+# core's pool does: the trait is async, results come back over a crossbeam
+# channel, and concurrency is a tokio semaphore.
+async-trait = { workspace = true }
+crossbeam-channel = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 # A macro's error messages are its user interface, and nothing else here

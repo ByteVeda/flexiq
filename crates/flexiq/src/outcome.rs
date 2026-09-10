@@ -39,11 +39,6 @@ impl From<TaskError> for Abort {
 /// is the constant `"TaskError"` and `traceback` is null. Both fields are still
 /// written: a reader in another language matches on their presence, and omitting
 /// them would make a Rust failure the one shape that needs a special case.
-// Temporary: the dispatcher is the only caller and does not exist yet. Remove
-// this the moment `pool.rs` lands — pre-commit runs clippy over the whole
-// workspace with `-D warnings`, so a `pub(crate)` helper with no consumer is a
-// commit failure, not a warning.
-#[allow(dead_code)]
 pub(crate) fn task_error_json(err: &TaskError) -> String {
     serde_json::json!({
         "errtype": "TaskError",

@@ -134,6 +134,11 @@ impl FlexiQ {
         (options.into_new_job(T::NAME, payload), window, unique)
     }
 
+    /// Start building a worker over this backend.
+    pub fn worker(&self) -> crate::WorkerBuilder {
+        crate::WorkerBuilder::new(self.storage.clone(), self.namespace.clone())
+    }
+
     /// Cancel a pending job. `false` when there was nothing to cancel.
     pub fn cancel(&self, job_id: &str) -> Result<bool> {
         self.storage.cancel_job(job_id, self.namespace.as_deref())

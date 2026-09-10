@@ -20,6 +20,7 @@ mod decode;
 mod encode;
 mod options;
 mod outcome;
+mod pool;
 mod queue;
 mod steps;
 mod task;
@@ -36,6 +37,7 @@ pub use decode::DecodeError;
 pub use encode::EncodeError;
 pub use options::{Debounce, EnqueueOptions};
 pub use outcome::{Abort, Outcome};
+pub use pool::WorkerBuilder;
 pub use queue::FlexiQ;
 pub use task::{StepHandle, Task};
 
