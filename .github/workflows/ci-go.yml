@@ -1,0 +1,98 @@
+name: CI Go
+
+# Reusable Go client workflow. The Go client is a gRPC client, not an SDK
+# shell: it links no native binding and compiles nothing from crates/, so this
+# suite needs no Rust toolchain and no prebuilt artifact for a matrix to fan
+# out from. That makes the version matrix the whole job. Called by ci.yml when
+# Go-relevant paths change.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: sdks/go
+
+jobs:
+  test:
+    name: Test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor from go.mod, and the two releases the Go team supports.
+        # The floor is the one that matters: it is what a consumer's toolchain
+        # is allowed to be.
+        go: ["1.25.x", "1.26.x", "1.27.x"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: sdks/go/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        # -race because the client is documented as safe for concurrent use,
+        # and one connection shared across goroutines is exactly where that
+        # claim would break.
+        run: go test -race -count=1 ./...
+
+  static:
+    name: Formatting, tidiness, generated stubs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: sdks/go/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite: $unformatted"
+            exit 1
+          fi
+
+      - name: go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Read the pinned buf version
+        id: pin
+        working-directory: .
+        # The same single pin ci-proto.yml reads. Generation is only
+        # reproducible against a fixed buf.
+        run: echo "version=$(tr -d '[:space:]' < contracts/BUF_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@v1.5.0
+        with:
+          setup_only: true
+          version: ${{ steps.pin.outputs.version }}
+
+      # The stubs are committed because `go get` runs no code generator, which
+      # makes them a second copy of the contract — and a second copy drifts
+      # unless something proves it has not.
+      - name: Committed stubs match contracts/proto
+        run: |
+          buf generate
+          git diff --exit-code -- internal/pb

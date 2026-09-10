@@ -36,6 +36,22 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: go-fmt
+        name: go fmt (gofmt)
+        # gofmt exits 0 whether or not it found anything, so the file list it
+        # prints is the result.
+        entry: bash -c 'cd sdks/go && test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }'
+        language: system
+        files: ^sdks/go/.*\.go$
+        pass_filenames: false
+
+      - id: go-vet
+        name: go vet
+        entry: bash -c 'cd sdks/go && go vet ./...'
+        language: system
+        files: ^sdks/go/(.*\.go|go\.mod|go\.sum)$
+        pass_filenames: false
+
       - id: node-lint
         name: node lint (biome)
         entry: bash -c 'cd sdks/node && pnpm exec biome ci src test'
