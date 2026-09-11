@@ -15,17 +15,28 @@ import flexiq "github.com/ByteVeda/flexiq/sdks/go/v2"
 The `/v2` is Go's rule, not a second module: a module released at a major version above 1 carries
 that major in its path. The client ships at the repo's own version, which is 2.x.
 
-## This is a client, not an SDK
+## Two doors, two packages, two credentials
 
-**It cannot execute tasks.** A Go worker means the executor door, `flexiq.executor.v1`, which is a
-separate package behind a separate scope and a larger design. This module does not open it, and
-nothing here is a step towards it that you can finish yourself.
+**The root package cannot execute tasks.** Running work is the executor door,
+`flexiq.executor.v1`, which the [`executor`](#running-work-the-executor-door) subpackage opens. The
+split is the wire's, not a preference: they are separate packages behind separate scopes, and a
+token scoped to `produce` cannot attach while a token scoped to `execute` cannot enqueue.
 
-What that leaves out, all of it deliberate rather than missing: task registration, middleware, the
-admin surface, settings, migrations, pub/sub, durable steps and the worker registry. They are not
-on this door — see [the delta from an embedded SDK](../../contracts/REMOTE_SDK_CONTRACT.md#the-delta-from-an-embedded-sdk).
-If you want a queue *and* the workers that drain it in one process, use the Python, Node or Java
-SDK instead.
+| Package | Door | Scope | What it does |
+| --- | --- | --- | --- |
+| `sdks/go/v2` | `flexiq.v1` | `produce` | Enqueue, read, cancel, count, submit workflows |
+| `sdks/go/v2/executor` | `flexiq.executor.v1` | `execute` | Attach, run tasks, report results |
+
+A task that fans out to a second stage holds one of each: it runs on the executor door and goes
+back through the producer door as an ordinary client.
+
+What neither door has, all of it deliberate rather than missing: middleware, the admin surface,
+settings, migrations, pub/sub and the worker registry. See
+[the delta from an embedded SDK](../../contracts/REMOTE_SDK_CONTRACT.md#the-delta-from-an-embedded-sdk).
+Durable steps are absent from the executor package specifically — see its own section below.
+
+Task registration is absent for a different reason: the server holds no task registry at all.
+Enqueuing a name nobody implements succeeds, and the job dead-letters later.
 
 ## Quickstart
 
@@ -144,6 +155,102 @@ already holds is refused, `INVALID_ARGUMENT` — a run's definition has to
 describe the graph that produced its jobs. Submit a materially different graph
 under a different name.
 
+## Running work: the executor door
+
+```go
+import "github.com/ByteVeda/flexiq/sdks/go/v2/executor"
+```
+
+```go
+w, err := executor.New("queue.internal:50051",
+    executor.WithToken(os.Getenv("FLEXIQ_EXECUTE_TOKEN")),
+    executor.WithID("go-worker-1"),
+    executor.WithSlots(8),
+)
+if err != nil {
+    return err
+}
+defer w.Close()
+
+if err := w.Handle("billing.charge", func(ctx context.Context, job *executor.Job) (any, error) {
+    var c charge
+    if err := job.Bind(&c); err != nil {
+        return nil, executor.Fatal(err)
+    }
+    job.Progress(50)
+    return receipt{OrderID: c.OrderID}, nil
+}); err != nil {
+    return err
+}
+
+return w.Run(ctx)
+```
+
+`Run` blocks. It attaches, dispatches each job to its handler on its own goroutine, and reconnects
+on its own. Register every handler first: the handshake advertises the task names, nothing else is
+ever sent to this executor, and the list is fixed for the life of a stream.
+
+### What a handler returns
+
+| Returns | Becomes |
+| --- | --- |
+| `(value, nil)` | A success, with `value` in the cross-SDK result envelope |
+| `(nil, nil)` | A success that **returned nothing** — not the same as returning an empty value |
+| `(_, err)` | A failure the scheduler retries |
+| `(_, executor.Fatal(err))` | A failure it does not retry |
+| `(_, ctx.Err())` after a cancel | A cancellation |
+| a panic | A failure, recovered, with the stack as the traceback |
+
+**Whether to retry is your decision.** Only the executor can see the exception and the scheduler
+never inspects one, so `Fatal` is the only way a Go task dead-letters itself.
+
+The handler's context carries the job's timeout and is cancelled when the scheduler asks for the
+job to stop. Honour it — cancellation is cooperative, and nothing here can stop a goroutine that
+does not return. A handler that ignores its cancel and finishes settles normally.
+
+### The stream ends, and that is normal
+
+Streams are bounded, 30 minutes by default, because a gRPC stream cannot be load-balanced once it
+has started. Before ending one the scheduler stops matching work to it and waits for what the
+executor already holds, so a rotation never costs a job.
+
+**A clean end means reconnect; a `shutdown` frame means stop.** `Run` does both for you, logs the
+difference, and backs off only for a real transport failure. It returns rather than reconnecting
+for the refusals that would repeat verbatim: a duplicate executor id, a protocol version mismatch,
+a revoked credential and a wrong scope.
+
+Cancelling the context `Run` was given begins a graceful drain. No new work is accepted, the jobs
+already running keep their contexts until the drain budget expires, and their results still reach
+the scheduler before the stream closes.
+
+### Capabilities
+
+Optional behaviour is negotiated, never versioned. This client implements two:
+
+| Capability | What it gives you |
+| --- | --- |
+| `side_channel` | `job.Progress`, `job.Log` and `job.Publish` |
+| `lease` | The dispatch lease, echoed on every frame about the attempt |
+
+Both degrade silently when the scheduler does not acknowledge them — the side-channel calls become
+no-ops. They are fire and forget either way: nothing answers them, they never settle a job, and one
+naming a job this stream is not running is dropped at the far end.
+
+**Durable steps are not implemented.** The `steps` capability is never advertised, so the scheduler
+sends no step frames and none go back. That capability is the one that fails rather than degrades —
+a durable step that silently did not commit is a step that will re-run a charge — which is exactly
+why it is absent rather than half-present.
+
+### An executor cannot enqueue
+
+Not a rule this package applies: there is no enqueue-shaped RPC in `flexiq.executor.v1` at all. A
+task that fans out goes back through the producer door as an ordinary client, holding a second,
+`produce`-scoped credential of its own.
+
+Nothing an executor sends names a namespace, an owner, an attempt or a resource cap. Anything a
+client could name is something a client could forge, so the scheduler applies every one of those
+from the dispatch it recorded.
+
 ## Credentials
 
 Every call carries `authorization: Bearer <token>`; there is no anonymous path. An operator mints
@@ -151,7 +258,12 @@ one:
 
 ```bash
 flexiq-server token create --name my-service --scope produce
+flexiq-server token create --name my-worker  --scope execute
 ```
+
+One token may carry both scopes, though a producer and an executor are usually separate processes
+holding one each. A `produce` token cannot open an executor stream and an `execute` token cannot
+enqueue, so a process that does both needs either both scopes or two tokens.
 
 The token is opaque — do not parse it — and it expires, 90 days by default and 365 at the outside.
 Nothing on the wire warns you that yours is about to: track the expiry you were given.

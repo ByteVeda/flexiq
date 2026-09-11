@@ -7,12 +7,19 @@
 //
 // # What this is not
 //
-// This is a client, not a port of a FlexiQ SDK. It cannot execute tasks. A Go
-// worker means the executor door, flexiq.executor.v1, which is a separate
-// package behind a separate scope and a larger design; nothing in this module
-// opens it. Task registration, middleware, the admin surface, settings,
-// migrations and pub/sub are all absent for the same reason — they are not on
-// this door.
+// This is a client, not a port of a FlexiQ SDK. It cannot execute tasks:
+// running work is the executor door, flexiq.executor.v1, a separate package
+// behind a separate scope. The subpackage
+// [github.com/ByteVeda/flexiq/sdks/go/v2/executor] opens that one, and holds a
+// credential of its own — a token scoped to produce cannot attach, and a token
+// scoped to execute cannot enqueue.
+//
+// Middleware, the admin surface, settings, migrations and pub/sub are absent
+// from both, because they are on neither door.
+//
+// Task registration is absent for a different reason: the server holds no task
+// registry at all. Enqueuing a name nobody implements succeeds, and the job
+// dead-letters later.
 //
 // # Getting started
 //
