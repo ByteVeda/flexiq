@@ -1,108 +1,147 @@
-# #830 — a Rust client shell over flexiq-core
+# docs: a Rust tier on the site (#920)
 
-Branch `feat/rust-sdk-shell` off `master` at `9f3bdef4`. Branch 1 of two.
+Second half of #830. The crate shipped in #916 (`e4340ba7`); the site's switcher
+offers three languages and Rust is not one of them.
 
-**Spec:** [`tasks/specs/2026-09-10-rust-sdk-shell-design.md`](specs/2026-09-10-rust-sdk-shell-design.md)
-**Plan:** [`tasks/plans/2026-09-11-rust-sdk-shell.md`](plans/2026-09-11-rust-sdk-shell.md)
+Branch `docs/rust-tier`, worktree `../taskito-rust-docs`, off `master`. Not pushed.
 
-## The decision the issue asked for first
+## The shape of the problem
 
-Embedded, then remote — and **not** behind one API. Cargo features are additive, so
-`embedded`/`remote` cannot be a switch; and the two doors disagree in the signature, not the
-implementation (namespace, batch shape, payload-on-read, error vocabulary). What is shared is the
-*call*, not the handle. Embedded goes first because `REMOTE_SDK_CONTRACT.md`'s delta table records
-task registration and durable steps as absent from the remote tier **by decision**, so the macro
-and the worker this issue asks for cannot be built over the producer door at all.
+`"rust"` in `SDK_IDS` is not additive. The moment it joins:
+
+- `shared/**` fans out to `/rust/**` (`mountsForRelPath`) — 41 files, **160
+  `<CodeTabs>` blocks**, every one of which `checks/code-tabs.mjs` requires to
+  carry a `<Tab sdk="rust">`, no grandfathering.
+- `checks/section-shape.mjs` demands all 14 `SECTION_SKELETON` dirs under
+  `rust/`, title-exact, `meta.pages` a **subsequence** of the skeleton's list.
+- `checks/links.mjs` resolves every unscoped `<SdkLink>`/`<Card to>` once per
+  SDK — a shared page linking `operate/cli` now needs `/rust/operate/cli`.
+- `scripts/api/inventory.mjs` `SDKS = [...SDK_IDS]`, so `SOURCES.rust` and
+  `content/api/rust.json` must exist or `sync:api` throws.
+- `CodeTabs` renders `SDK_PROFILES[variant].label` — a `<Tab sdk="rust">` before
+  the registry row exists **crashes the prerender**. Registry lands first.
+
+## Decisions
+
+- **Page tree is the honest subset (~45 pages), not 78-page Java parity.**
+  `meta.pages` may be a subsequence, so an SDK omits a page rather than
+  documenting a surface it does not ship. No workflows builder, DI, canvas,
+  saga, events, webhooks, framework integrations, async tasks, prefork or
+  streaming pages — the shell has none of them.
+- **Every one of the 160 shared blocks gets a `rust` tab.** Real code where the
+  shell (or the `queue.storage()` / `flexiq_core` escape hatch) supports it;
+  a short honest note where it does not. Never `data-parity-exempt` — an exempt
+  block renders an **empty panel** under `data-sdk="rust"`.
+- **Accuracy floor: every Rust snippet is grounded in `crates/flexiq`.** The
+  README's "durable steps" and "periodic tasks" examples are ```` rust,ignore ````
+  and do not compile — `crates/flexiq/tests/{steps,periodic,worker,queue}.rs`
+  and `examples/quickstart.rs` are the known-good sources.
 
 ## Tasks
 
-- [x] 1. Shell error types — `Abort`, `Outcome`, the contract's task-error JSON
-- [x] 2. Encode arguments through core's wire writer (+ the #900 packaging trap)
-- [x] 3. Decode call envelopes into typed arguments (`ciborium`)
-- [x] 4. `Task`, `TaskCall`, `EnqueueOptions`
-- [x] 5. The `FlexiQ` handle (+ `ensure_contract_supported` at open)
-- [x] 6. `flexiq-macros` and `#[flexiq::task]` (+ publish wiring)
-- [x] 7. `WorkerBuilder` and the shell's fence-carrying dispatcher
-- [x] 8. Durable steps, fenced on `(owner, attempt, epoch)`
-- [x] 9. Periodic tasks
-- [x] 10. README, rustdoc, example, full gate
+### Phase 0 — register the SDK (code)
+- [ ] `app/lib/highlight-lite.ts` — `RUST_KW` + `highlightRust()`
+- [ ] `app/lib/sdk-registry.ts` — `SDK_IDS` + `SDK_PROFILES.rust` (+ `navSections`)
+- [ ] `app/styles/sdk.css` — 4th `[data-sdk="rust"]` pair (not compile-forced)
+- [ ] `app/lib/redirects.ts` — its own `SDKS` literal, not derived
+- [ ] `app/lib/landing-content.ts` — `lang: "rs"` + a Rust hero pane
+- [ ] `app/components/landing/hero.tsx` — `HIGHLIGHT.rs`
+- [ ] `app/components/ui/site-nav.tsx` — `TIER_ICONS.rust`
+- [ ] `app/components/landing/sections.tsx` — the `python · node · java` string
+- [ ] `app/components/diagrams/{arch-stack,worker-fork}.tsx` — `rust=` on all 7
+      `<SdkSwap>` (`Partial<Record<Sdk,…>>`: a missing prop silently renders
+      Python's copy)
 
-## Not in this branch
+### Phase 1 — the generated API reference
+- [ ] `scripts/api/extract/rust.mjs` — text parser over `crates/flexiq/src/*.rs`
+      (`cargo doc` is not available to the docs CI job)
+- [ ] `scripts/api/inventory.mjs` — `SOURCES.rust` + `OWNERS` rows for the
+      shell's declaring types
+- [ ] `scripts/api/render.mjs` — `rustParam` + a Rust arm in `callForm`
+      (`-> T`, not `: T`)
+- [ ] `pnpm sync:api` → commit `content/api/rust.json` + the generated
+      `rust/api-reference/symbols/**`
+- [ ] `scripts/parity/api-coverage.json` — `allowlist.rust` + `documented.rust`
 
-Docs site tier — branch 2. Adding `"rust"` to `SDK_IDS` turns `check:parity` red until ~78 pages
-and 160 `<Tab sdk="rust">` panels all exist, so it has no green intermediate state and cannot ride
-along.
+### Phase 2 — the Rust content tree (`content/docs/rust/**`)
+- [ ] 14 skeleton `meta.json` + tier root + `more/`
+- [ ] getting-started: `installation`
+- [ ] guides: `index`; core: `index`, `execution-model`, `enqueue-options`,
+      `cancellation`, `batch-enqueue`, `unique-tasks`, `dependencies`
+- [ ] reliability: `index`, `timeouts`, `dead-letter`, `rate-limiting`, `concurrency`
+- [ ] extend: `index`, `logging`, `notes`
+- [ ] modules: `workflows/index`, `dashboard/index`
+- [ ] operate: `index`, `backends`, `inspection`, `cli`, `security`
+- [ ] api-reference: `index`, `overview`, `task`, `worker`, `result`, `errors`;
+      `queue/{index,jobs,queues,workers}`
+- [ ] more/examples: `index`, `notifications`, `data-pipeline`
 
-Polyglot example worker — dropped from scope.
+### Phase 3 — the shared tree
+- [ ] 160 `<Tab sdk="rust">` panels across 34 files
+- [ ] `rust=` on the 64 `<SdkSwap>` in 16 content files
+
+### Phase 4 — green
+- [ ] `pnpm check:parity` (links.mjs names every missing `/rust/` page — that
+      list, not a guess, decides the last few pages)
+- [ ] `pnpm typecheck`, `pnpm lint`, `check:diagrams`, `check:search`
+- [ ] `NODE_OPTIONS=--max-old-space-size=8192 pnpm build`
+
+### Phase 5 — commits
+- [ ] Focused commits, stromanni identity, no AI attribution, no push
 
 ## Review
 
-**What shipped.** Two crates. `crates/flexiq` stops being a pure re-export and becomes the SDK —
-additively, so nothing published at 2.0.0 changes meaning and the glob re-export of the engine
-stays as the escape hatch. `crates/flexiq-macros` is a new published crate holding `#[task]` and
-nothing else, because a proc-macro crate can export nothing else.
+All nine parity checks, `typecheck`, `lint`, `check:diagrams`, `check:search`
+and the full prerender build are green. The tier is **51 mdx + 17 meta.json**,
+of which `api-reference/symbols/` (4 mdx + meta) is generated.
 
-**Decisions worth remembering.**
+### What the shape of the work turned out to be
 
-- **Embedded first, remote as a separate handle.** "One API behind a feature flag" cannot be built
-  as the issue describes it: Cargo features are additive, so both can be on at once, and a flag can
-  only decide whether tonic compiles in — never which API a caller gets. What the two doors share
-  is `TaskCall`, not the handle.
-- **A shell module must not be named after a core one.** `mod error;` shadows the glob re-export of
-  `flexiq_core::error`, silently breaking `flexiq::error::QueueError` for anyone already using it.
-  Rustc reports it as `hidden_glob_reexports`, a *warning*. Hence `outcome`, `steps`, `cron`,
-  `pool` — and `WorkerBuilder`, never `Worker`.
-- **Encoding goes through core; decoding could not.** `wire::encode_call` is the pinned writer and
-  the `encode` vectors assert it byte for byte. There is no reader in the tree — `wire/cbor.rs`
-  says so outright — so decoding uses `ciborium`, the one new third-party dependency, in this crate
-  rather than in the engine.
-- **The shell needs its own pool, and that is the whole reason it has one.** `NativeDispatcher`
-  overrides neither `set_claim_owner` nor `set_lease_book`; both are default no-ops, so the
-  `(owner, attempt, epoch)` the scheduler mints is dropped before a handler could see it. A step is
-  written under that fence. `ShellDispatcher` keeps all three, and calls `StorageSteps::with_epoch`
-  — which **no other shell does**, each fencing on `(owner, attempt)` alone because each reaches
-  steps through an FFI class that has to be one concrete non-generic type.
-- **A failed job records the contract's JSON.** `NativeDispatcher` stores `TaskError.message` raw;
-  `BINDING_CONTRACT.md` specifies `{errtype,message,traceback}`, which is what every other shell
-  reads.
-- **`FlexiQ::open` calls `ensure_contract_supported`.** Required of every shell at storage open, and
-  done by neither `Worker::spawn` nor the core examples.
-- **Two things the type system does that the other shells do at runtime.** A debounce window is one
-  value, so a partial window does not compile — where Python refuses it with a message, because an
-  absent `max_wait_ms` is an unbounded debounce that starves the job. And a `cron` task with
-  parameters is a compile error, because `check_periodic` builds the payload from the stored `args`
-  alone and a parameter would decode as missing on every fire, forever.
-- **A task is named after its function.** Not `module_path!()`: that embeds the crate name, so
-  renaming a binary would change a name a producer in another language has to type.
+The 160 `<CodeTabs>` blocks were the advertised cost. Two things were not:
 
-**Two places the plan was wrong, corrected against the code.**
+- **`<SdkOnly>` has no parity check.** 32 shared files carried ~180 blocks with
+  no `rust` sibling — parameter tables and whole sections that render as a
+  heading with nothing under it, exactly the failure `data-parity-exempt` would
+  have caused in a tab. Found by scanning, not by a gate. Now filled; a scan for
+  `rust < max(python, node, java)` per file comes back clean.
+- **Prose between the tabs.** "the three SDKs", "flexiq ships a Sentry
+  middleware", "a dedup key is rejected" — all false for a fourth SDK, none of
+  it checkable. `architecture/overview.mdx` rendered "a hybrid **Rust/Rust**
+  system" off `<SdkLang />`.
 
-- The plan asked for a test asserting the committed step row carries an epoch. `JobStep` has no
-  epoch column — `NewJobStep`'s own doc says owner and attempt "are deliberately *not* here: they
-  fence the write". Replaced with a unit test of `ShellDispatcher::fence()` over a hand-built
-  `LeaseBook`, which asserts all three terms survive.
-- A completed job correctly has **zero** step rows: archival deletes them in the same transaction
-  that archives the job, because a memo is execution state with no value past the job's end. The
-  first version of that test read them afterwards and failed for a good reason; it now reads
-  mid-run, after a `sleep_ms` has ended the attempt, and covers both step kinds.
+### Two checks changed, both because a fourth SDK exposed them
 
-**Verified.** 63 tests in the two crates — 18 wire-vector (every `encode` case byte-exact, every
-`decode_only` case round-tripped), 18 queue, 7 worker, 7 dispatcher/options unit, 4 steps, 4
-periodic, 5 compile-fail cases, plus doctests. `cargo test --workspace`; clippy `--all-targets`
-with `-D warnings` on both crates; `cargo check --workspace` under `postgres` and under `redis`;
-the rustdoc gate; `node scripts/version.mjs --check`; `cargo package` for both crates, with the
-packaged `flexiq` tarball confirmed to exclude `tests/wire_vectors.rs` and still build `--tests`
-(the #900 trap). `cargo run --example quickstart` runs and exits 0.
+- `links.mjs` resolved an unscoped `<SdkLink>` for *every* SDK regardless of
+  which tree the file lived in, so a `/rust/` page could not link its own pages
+  whenever a sibling tier omitted one. A page under `<sdk>/` is only ever read
+  under that SDK (`forcedSdkForPath`), so it now scopes to its own tier.
+- `api-coverage.mjs` compared against `undefined` when an SDK had no
+  `documented.<sdk>` baseline. Both comparisons are false, so the ratchet
+  silently never fired. It is now an error.
 
-**Follow-ups to file.**
+### Grounding
 
-1. A remote producer handle behind a `remote` feature, under epic #835.
-2. The docs site's `rust` tier — branch 2, sized like #780 was for the other three.
-3. `flexiq::worker::TaskHandler` and `DebounceOptions` are both missing from core's root re-export
-   list while every sibling type is there.
-4. `NewPeriodicTask.kwargs` is written by no shell and read by no scheduler.
-5. `register_periodic` diverges across backends on `last_run`: Postgres's upsert preserves it,
-   SQLite's `REPLACE INTO` and Redis's explicit `None` both reset it. Not covered by the shared
-   contract suite.
-6. Async task bodies. The macro refuses them by name; the pool runs every handler on
-   `spawn_blocking`, and core's `register_async` path is the seam if they are wanted.
+Every Rust snippet was written against `crates/flexiq` at `e4340ba7`, and most
+sections were compile-checked by assembling their fences into a throwaway
+`examples/` target and running `cargo check`. That caught real bugs before they
+shipped — notably that `let extract = queue.enqueue(extract::call(…))` parses as
+a *struct pattern*, because `#[flexiq::task]` emits a unit struct named after
+the function.
+
+### Findings worth their own issues
+
+- **`enqueue` silently prefers debounce over a dedup key.** `queue.rs` matches
+  `(Some(window), _) => enqueue_debounced` first, so `.idempotent()` is never
+  applied; another shell raises on the combination (`app.py:923`). A shipped
+  behaviour divergence, not a docs bug.
+- **No public typed result read.** `decode_result` is `pub(crate)`; `job.result`
+  is `Option<Vec<u8>>` and the crate's own example prints its length.
+- **`queue.storage()` is namespace-blind** — a scoped handle silently loses its
+  scope through the escape hatch.
+- `WorkerBuilder` exposes neither `on_outcome` nor `queue_config`, and reaching
+  them through `flexiq_core::Worker` costs the durable-step fence.
+- `crates/flexiq` declares `log` as a dependency and never uses it.
+- `/api/scaler` is not in `PUBLIC_PATHS`, so `FLEXIQ_DASHBOARD_AUTH=session`
+  returns 401 to a KEDA `metrics-api` trigger.
+- Mesh `request_shutdown()` notifies one of two waiting loops; the `Leave`
+  broadcast only runs in the gossip loop's arm.
