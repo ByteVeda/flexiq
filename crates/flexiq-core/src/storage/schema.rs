@@ -67,7 +67,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    periodic_tasks (name) {
+    periodic_tasks (namespace, name) {
         name -> Text,
         task_name -> Text,
         cron_expr -> Text,
@@ -78,6 +78,7 @@ diesel::table! {
         last_run -> Nullable<BigInt>,
         next_run -> BigInt,
         timezone -> Nullable<Text>,
+        namespace -> Nullable<Text>,
     }
 }
 

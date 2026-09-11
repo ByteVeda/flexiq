@@ -161,6 +161,22 @@ pub fn dml(backend: Backend, stmt: &sea_query::UpdateStatement) -> Stmt {
     }
 }
 
+/// Render an `INSERT … SELECT` — how a table rebuild carries the old rows into
+/// the new shape. Column lists are code-defined; no literal and no user input
+/// reaches here.
+pub fn insert_select(backend: Backend, stmt: &sea_query::InsertStatement) -> Stmt {
+    Stmt {
+        sql: match backend {
+            Backend::Sqlite => stmt.to_string(SqliteQueryBuilder),
+            #[cfg(feature = "postgres")]
+            Backend::Postgres => stmt.to_string(PostgresQueryBuilder),
+            #[cfg(not(feature = "postgres"))]
+            Backend::Postgres => unreachable!("Postgres migrations require the `postgres` feature"),
+        },
+        tolerate: Tolerate::Nothing,
+    }
+}
+
 fn render_schema<S: SchemaStatementBuilder>(stmt: &S, backend: Backend) -> String {
     match backend {
         Backend::Sqlite => stmt.to_string(SqliteQueryBuilder),

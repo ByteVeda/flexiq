@@ -234,6 +234,11 @@ pub struct RateLimitRow {
 }
 
 /// A row in the `periodic_tasks` table.
+///
+/// The natural key is `(namespace, name)`; there is no surrogate id. A NULL
+/// `namespace` is the default namespace, which is why the uniqueness index
+/// `m0018` builds runs over `COALESCE(namespace, '')` rather than the bare
+/// column — a unique index treats two NULLs as distinct on both backends.
 #[derive(Queryable, Selectable, Debug, Clone)]
 #[diesel(table_name = periodic_tasks)]
 pub struct PeriodicTaskRow {
@@ -247,11 +252,21 @@ pub struct PeriodicTaskRow {
     pub last_run: Option<i64>,
     pub next_run: i64,
     pub timezone: Option<String>,
+    pub namespace: Option<String>,
 }
 
 /// Insertable struct for periodic tasks.
+///
+/// `AsChangeset` skips `namespace` and `name` on its own — they are the table's
+/// primary key, so a re-registration updates the schedule in place rather than
+/// moving it. `last_run` is absent for the reason it always was: a
+/// re-registration must not forget when the task last fired.
+///
+/// `treat_none_as_null` so a re-registration that drops the timezone (or the
+/// arguments) actually clears the column. Diesel's default would read `None` as
+/// "leave this alone", which would leave a stale value no caller can remove.
 #[derive(Insertable, AsChangeset, Debug)]
-#[diesel(table_name = periodic_tasks)]
+#[diesel(table_name = periodic_tasks, treat_none_as_null = true)]
 pub struct NewPeriodicTaskRow<'a> {
     pub name: &'a str,
     pub task_name: &'a str,
@@ -262,6 +277,7 @@ pub struct NewPeriodicTaskRow<'a> {
     pub enabled: bool,
     pub next_run: i64,
     pub timezone: Option<&'a str>,
+    pub namespace: Option<&'a str>,
 }
 
 /// A row in the `job_errors` table (for SELECT queries).
@@ -845,6 +861,7 @@ impl From<PeriodicTaskRow> for PeriodicTask {
             last_run: r.last_run,
             next_run: r.next_run,
             timezone: r.timezone,
+            namespace: r.namespace,
         }
     }
 }

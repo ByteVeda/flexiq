@@ -33,7 +33,7 @@ use crate::{Abort, Outcome, Task};
 type Handler = Arc<dyn Fn(&Job) -> Outcome<Option<Vec<u8>>> + Send + Sync>;
 
 /// One scheduled task's registration, erased the same way.
-type PeriodicRegistration = Box<dyn FnOnce(&StorageBackend) -> Result<()> + Send>;
+type PeriodicRegistration = Box<dyn FnOnce(&StorageBackend, Option<&str>) -> Result<()> + Send>;
 
 /// Builds a worker over the tasks registered on it.
 ///
@@ -83,8 +83,9 @@ impl WorkerBuilder {
         self.configs.push((T::NAME.to_string(), T::config()));
         if let Some(spec) = T::periodic() {
             // Boxed as a closure so the builder does not have to carry `T`.
-            let register: PeriodicRegistration =
-                Box::new(move |storage| crate::cron::register::<T>(storage, &spec));
+            let register: PeriodicRegistration = Box::new(move |storage, namespace| {
+                crate::cron::register::<T>(storage, &spec, namespace)
+            });
             self.periodics.push(register);
         }
         self
@@ -125,16 +126,11 @@ impl WorkerBuilder {
         }
 
         // Before the scheduler starts, so a periodic that is already due is
-        // found on the first tick rather than one interval late.
-        if !self.periodics.is_empty() {
-            if self.namespace.is_some() {
-                return Err(crate::cron::unsupported_in_namespace(
-                    "registering a scheduled task",
-                ));
-            }
-            for register in self.periodics {
-                register(&self.storage)?;
-            }
+        // found on the first tick rather than one interval late. Each schedule
+        // is written into this worker's namespace, which is what keeps two
+        // tenants declaring the same task name off one another's rows.
+        for register in self.periodics {
+            register(&self.storage, self.namespace.as_deref())?;
         }
 
         let dispatcher = Arc::new(ShellDispatcher::new(

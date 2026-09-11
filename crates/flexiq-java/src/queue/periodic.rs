@@ -61,14 +61,15 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_registerPer
             enabled: enabled != 0,
             next_run,
             timezone,
+            namespace: queue.namespace.clone(),
         };
         queue.storage.register_periodic(&row)?;
         Ok(next_run)
     })
 }
 
-/// `String listPeriodic(long handle)` — a JSON array of registered periodic
-/// tasks (enabled and paused).
+/// `String listPeriodic(long handle)` — a JSON array of the periodic tasks
+/// registered in this queue's namespace (enabled and paused).
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_listPeriodic<'local>(
     mut env: JNIEnv<'local>,
@@ -77,13 +78,14 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_listPeriodi
 ) -> jstring {
     guard(&mut env, std::ptr::null_mut(), |env| {
         let queue = unsafe { borrow_queue(handle) };
-        let tasks = queue.storage.list_periodic()?;
+        let tasks = queue.storage.list_periodic(queue.namespace.as_deref())?;
         let views: Vec<PeriodicTaskView> = tasks.iter().map(PeriodicTaskView::from).collect();
         new_string(env, to_json(&views)?)
     })
 }
 
-/// `boolean deletePeriodic(long handle, String name)` — false if none had that name.
+/// `boolean deletePeriodic(long handle, String name)` — false if this queue's
+/// namespace had none by that name.
 #[no_mangle]
 pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_deletePeriodic<'local>(
     mut env: JNIEnv<'local>,
@@ -94,7 +96,11 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_deletePerio
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &name)?;
-        Ok(to_jboolean(queue.storage.delete_periodic(&name)?))
+        Ok(to_jboolean(
+            queue
+                .storage
+                .delete_periodic(&name, queue.namespace.as_deref())?,
+        ))
     })
 }
 
@@ -111,8 +117,10 @@ pub extern "system" fn Java_org_byteveda_flexiq_internal_NativeQueue_setPeriodic
     guard(&mut env, JNI_FALSE, |env| {
         let queue = unsafe { borrow_queue(handle) };
         let name = read_string(env, &name)?;
-        Ok(to_jboolean(
-            queue.storage.set_periodic_enabled(&name, enabled != 0)?,
-        ))
+        Ok(to_jboolean(queue.storage.set_periodic_enabled(
+            &name,
+            enabled != 0,
+            queue.namespace.as_deref(),
+        )?))
     })
 }

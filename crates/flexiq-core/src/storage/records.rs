@@ -39,9 +39,12 @@ pub struct RateLimitState {
 }
 
 /// A registered periodic (cron) task.
+///
+/// Identified by `(namespace, name)`: a name is unique within a namespace and
+/// nowhere else, so every `Storage` member that addresses one takes both.
 #[derive(Debug, Clone)]
 pub struct PeriodicTask {
-    /// Unique schedule name.
+    /// Schedule name, unique within [`namespace`](Self::namespace).
     pub name: String,
     /// Task to enqueue on each firing.
     pub task_name: String,
@@ -61,12 +64,16 @@ pub struct PeriodicTask {
     pub next_run: i64,
     /// IANA timezone for cron evaluation. `None` = UTC.
     pub timezone: Option<String>,
+    /// Tenant namespace the schedule belongs to. `None` is the default
+    /// namespace, the same value [`NewJob::namespace`](crate::job::NewJob)
+    /// carries, and is distinct from `Some("")`.
+    pub namespace: Option<String>,
 }
 
 /// Registration payload for a periodic task. `last_run` starts unset.
 #[derive(Debug, Clone)]
 pub struct NewPeriodicTask {
-    /// Unique schedule name.
+    /// Schedule name, unique within [`namespace`](Self::namespace).
     pub name: String,
     /// Task to enqueue on each firing.
     pub task_name: String,
@@ -84,6 +91,9 @@ pub struct NewPeriodicTask {
     pub next_run: i64,
     /// IANA timezone for cron evaluation. `None` = UTC.
     pub timezone: Option<String>,
+    /// Tenant namespace to register the schedule in. `None` is the default
+    /// namespace — a value being written, never a wildcard.
+    pub namespace: Option<String>,
 }
 
 /// A topic subscription in the pub/sub registry.
