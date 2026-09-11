@@ -396,7 +396,8 @@ fn parse_rate_spec(
     match spec {
         Some(s) => RateLimitConfig::parse(s).map(Some).ok_or_else(|| {
             crate::error::BindingError::new(format!(
-                "invalid {field} '{s}' on task '{task}' (expected e.g. '100/m')"
+                "invalid {field} '{s}' on task '{task}' \
+                 (expected a count of at least 1 over a unit, as in '100/m')"
             ))
         }),
         None => Ok(None),

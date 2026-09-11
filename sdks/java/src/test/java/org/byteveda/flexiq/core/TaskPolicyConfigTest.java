@@ -191,6 +191,29 @@ class TaskPolicyConfigTest {
         }
     }
 
+    /**
+     * A count below one is well-formed but builds a bucket that never holds the token a
+     * dispatch needs, so the task would never run and nothing would say why. It has to fail
+     * the start the same way a typo does.
+     */
+    @Test
+    @Timeout(30)
+    void rateLimitBelowOneFailsTheStart(@TempDir Path dir) {
+        Task<String> dead = Task.of("dead", String.class).rateLimit("0/s");
+
+        try (FlexiQ queue = FlexiQ.builder()
+                .backend("sqlite")
+                .url(dir.resolve("t.db").toString())
+                .open()) {
+            RuntimeException error = assertThrows(
+                    RuntimeException.class,
+                    () -> queue.worker().handle(dead, (String p) -> null).start());
+            assertTrue(
+                    error.getMessage().contains("0/s"),
+                    "the error should quote the dead rate, got: " + error.getMessage());
+        }
+    }
+
     /** {@code onExcess=DROP} sheds the jobs a saturated limiter turns away. */
     @Test
     @Timeout(60)

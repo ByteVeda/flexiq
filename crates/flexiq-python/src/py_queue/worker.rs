@@ -119,7 +119,8 @@ fn parse_rate(
     };
     let parsed = RateLimitConfig::parse(raw).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!(
-            "invalid {field} {raw:?} for {scope} {name}: expected a rate like \"100/m\""
+            "invalid {field} {raw:?} for {scope} {name}: \
+             expected a count of at least 1 over a unit, as in \"100/m\""
         ))
     })?;
     Ok(Some(parsed))

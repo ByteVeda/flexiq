@@ -32,7 +32,8 @@ fn parse_rate_spec(
     match spec {
         Some(s) => RateLimitConfig::parse(s).map(Some).ok_or_else(|| {
             invalid_arg(format!(
-                "invalid {field} '{s}' on {scope} '{name}' (expected e.g. '100/m')"
+                "invalid {field} '{s}' on {scope} '{name}' \
+                 (expected a count of at least 1 over a unit, as in '100/m')"
             ))
         }),
         None => Ok(None),
