@@ -3,12 +3,30 @@ title: Prometheus Metrics
 description: "Per-task execution counters and a duration histogram from middleware, plus polled queue depth and dead-letter gauges."
 ---
 
-FlexiQ exports Prometheus metrics through two pieces — a middleware that
-records per-task execution counters and a duration histogram, and a stats
-collector that polls queue depth and dead-letter size onto gauges on an
-interval. Both write into the same
-<SdkSwap python={<code>prometheus-client</code>} node={<code>prom-client</code>} java={<code>Micrometer</code>} />
+Where a binding ships a Prometheus integration, it exports metrics through two
+pieces — a middleware that records per-task execution counters and a duration
+histogram, and a stats collector that polls queue depth and dead-letter size
+onto gauges on an interval. Both write into one
+<SdkSwap python={<code>prometheus-client</code>} node={<code>prom-client</code>} java={<code>Micrometer</code>} rust={<>client-library</>} />
 registry, so one HTTP endpoint can serve everything.
+
+<SdkOnly sdk="rust">
+
+The Rust SDK ships neither piece, and has no middleware to hang the first one
+on. Both halves are still reachable by hand: a
+`flexiq_core::Worker::on_outcome` callback is handed every outcome with its
+task name and `wall_time_ns`, which is the counter and the histogram, and
+`queue.stats()` is the poll behind the gauges. Wire either into whichever
+Prometheus client crate you already run.
+
+Reaching the first one has a price worth knowing before you start.
+`WorkerBuilder` does not expose `on_outcome`, so that worker is built through
+`flexiq_core::Worker` — which runs core's reference pool, and that pool discards
+the `(owner, attempt, epoch)` fence a durable step is written under. A task body
+that calls `flexiq::current_step()` cannot run on it at all. Counting this way
+is a choice *instead of* durable steps, not a layer on top of them.
+
+</SdkOnly>
 
 <SdkOnly sdk="java">
 
@@ -81,6 +99,15 @@ subpath — it is not exported from the main barrel.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Nothing to install from the queue's side. There is no `prometheus` Cargo
+feature and no optional dependency to switch on — add whichever Prometheus
+client crate you already use to your own `Cargo.toml`, and nothing below will
+ask `flexiq` about it.
+
+</SdkOnly>
+
 ## Metrics tracked
 
 <SdkOnly sdk="python">
@@ -117,6 +144,27 @@ collector independently as long as they share a namespace.
   There's no `worker_utilization` gauge on Node — `PrometheusStatsCollector`
   only polls queue depth and DLQ size.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+None — no series exist, because nothing emits one. What each name above would
+have to be assembled from:
+
+| Metric elsewhere | Where the number lives in Rust |
+|---|---|
+| `flexiq_jobs_total` | Counting `ResultOutcome::Success` and `ResultOutcome::DeadLettered` inside an `on_outcome` callback |
+| `flexiq_job_duration_seconds` | `wall_time_ns` on that same outcome — nanoseconds the worker measured, and `0` when nothing measured the run |
+| `flexiq_retries_total` | `ResultOutcome::Retry`, whose `retry_count` is the attempt number *after* the failure |
+| `flexiq_queue_depth` | `queue.stats().pending`, or `stats_all_queues` through `queue.storage()` for the per-queue split |
+| `flexiq_dlq_size` | `queue.stats().dead` |
+| `flexiq_active_workers` | `list_workers()` on `queue.storage()` — the cluster registry, not a local count |
+
+One label does not survive the trip. `ResultOutcome::Success` carries `job_id`,
+`task_name` and `wall_time_ns` and nothing else; only the other arms — `Retry`,
+`DeadLettered`, `Cancelled`, `Slept` — name a `queue`. A per-queue *success*
+counter therefore has to come from the polled side rather than the callback.
 
 </SdkOnly>
 
@@ -167,6 +215,42 @@ queue.use(prometheusMiddleware());
 | `register` | `Registry` | global `register` | prom-client registry to register metrics into |
 | `taskFilter` | `(taskName) => boolean` | — | Return `false` to skip a task |
 | `buckets` | `number[]` | prom-client defaults | Histogram bucket boundaries (seconds) |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+With no middleware to register, the recording goes in the callback core's
+worker accepts:
+
+```rust
+use flexiq::{ResultOutcome, Worker};
+
+let worker = Worker::new(queue.storage().clone())
+    // Core's worker registers handlers by name over raw bytes, not
+    // `#[flexiq::task]` types.
+    .register("charge", |_job| Ok(None))
+    .on_outcome(|outcome| match outcome {
+        ResultOutcome::Success { task_name, wall_time_ns, .. } => {
+            observe_duration(task_name, *wall_time_ns);
+        }
+        ResultOutcome::Retry { task_name, retry_count, .. } => {
+            count_retry(task_name, *retry_count);
+        }
+        // `Slept` is an attempt that ended in a durable sleep rather than a
+        // result; `Superseded` is a result the job has already moved past.
+        // Counting either as a finished execution overstates both.
+        _ => {}
+    })
+    .spawn()?;
+```
+
+`on_outcome` holds one callback, so a second call replaces the first rather
+than chaining — put every concern in the same closure. It runs on the worker's
+drain thread after the outcome is already recorded, which means a slow exporter
+delays result handling for every other job instead of failing this one.
+<SdkLink to="guides/extend/monitoring">Monitoring</SdkLink> walks the whole
+shape.
 
 </SdkOnly>
 
@@ -240,6 +324,32 @@ process.on("SIGTERM", () => {
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The polled half needs neither a callback nor core's worker — `stats()` on the
+handle you already hold is the whole read, and it is scoped to that handle's
+namespace:
+
+```rust
+use flexiq::Storage;
+
+let stats = queue.stats()?;
+set_gauge("queue_depth", stats.pending);
+set_gauge("dlq_size", stats.dead);
+
+// Per queue, one escape hatch away.
+for (name, per_queue) in queue.storage().stats_all_queues(queue.namespace())? {
+    set_labelled_gauge("queue_depth", &name, per_queue.pending);
+}
+```
+
+`count_pending_by_queue(queue_name)` is the cheaper single-number read when
+depth on one lane is all a gauge wants. No collector ships with the crate and
+no thread is started for you: call this on an interval of your own, or nothing
+ticks at all.
+
+</SdkOnly>
+
 ## Exposing metrics
 
 <SdkOnly sdk="python">
@@ -298,6 +408,22 @@ app.get("/metrics", async (_req, res) => {
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The crate opens no socket, so there is no endpoint to start and none to confuse
+with a dashboard's. Render the exposition text from whatever HTTP server your
+binary already runs.
+
+If you would rather not run one, `flexiq-server` already does: point it at the
+same backend and it serves `/metrics` beside the dashboard, gated by
+`FLEXIQ_DASHBOARD_METRICS_TOKEN` or a session. What it publishes is
+storage-derived and fixed — `flexiq_jobs{queue,status}`, `flexiq_workers`, and
+`flexiq_executors` / `flexiq_executor_slots` when executors are attached to it.
+None of the per-task names above appear there, because that process runs no task
+code of yours and so has nothing to time.
+
+</SdkOnly>
+
 ## Full example
 
 <SdkOnly sdk="python">
@@ -349,6 +475,49 @@ app.listen(9090);
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Both halves in one binary — the counting side on core's worker, the polling
+side on a thread beside it:
+
+```rust
+use std::thread;
+use std::time::Duration;
+
+use flexiq::{FlexiQ, ResultOutcome, Worker};
+
+let queue = FlexiQ::open("myapp.db")?;
+
+let worker = Worker::new(queue.storage().clone())
+    .register("charge", |_job| Ok(None))
+    .on_outcome(|outcome| {
+        if let ResultOutcome::Success { task_name, wall_time_ns, .. } = outcome {
+            observe_duration(task_name, *wall_time_ns);
+        }
+    })
+    .spawn()?;
+
+// `FlexiQ` is `Clone`, so the poller takes its own handle instead of sharing
+// one behind a lock.
+let polled = queue.clone();
+thread::spawn(move || loop {
+    if let Ok(stats) = polled.stats() {
+        set_gauge("queue_depth", stats.pending);
+        set_gauge("dlq_size", stats.dead);
+    }
+    thread::sleep(Duration::from_secs(10));
+});
+
+// ... on the way out:
+worker.shutdown()?;
+```
+
+`shutdown()` is what unregisters this worker — dropping the handle does not, so
+a binary that exits without calling it leaves a row in the worker registry for
+the reaper to clean up later.
+
+</SdkOnly>
+
 Prometheus scrape config for either SDK:
 
 ```yaml
@@ -376,6 +545,21 @@ scrape_configs:
 - **Duration p95** — `histogram_quantile(0.95, rate(flexiq_job_duration_seconds_bucket[5m]))`
 - **Queue depth** — `flexiq_queue_depth` by `queue`
 - **DLQ size** — `flexiq_dlq_size` with an alert threshold
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There are no series names to hand you — the panels are whatever your callback
+and your poller chose to export. Two worth building whatever you called them:
+
+- **Sleeping apart from failing** — give `ResultOutcome::Slept` its own counter
+  rather than folding it into `Retry`. A durable sleep spends no retry and is
+  not a failure, so a panel that merges the two reads a healthy long-running
+  workflow as an incident.
+- **Depth beside workers** — `stats().pending` next to the row count from
+  `list_workers()`. Depth on its own cannot tell a busy queue from one with
+  nothing consuming it.
 
 </SdkOnly>
 
@@ -417,6 +601,20 @@ Java exports metrics through
 [Micrometer](/java/guides/extend/micrometer), not this contrib — the
 metric names in these rules don't exist there. Build the equivalent alerts on
 the names your Micrometer→Prometheus registry emits instead.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Both expressions match nothing on a Rust deployment: neither `flexiq_dlq_size`
+nor `flexiq_jobs_total` is ever written, so the rules fire never rather than
+loudly. Point them at the names you exported yourself.
+
+If the series come from `flexiq-server` instead, the dead-letter reading is
+`flexiq_jobs{status="dead"}` — a gauge of the stored count, so alert on it
+crossing a threshold and not on a `rate()`. There is no failure-rate counter to
+rewrite `HighErrorRate` against; the nearest equivalent is a rise in
+`flexiq_jobs{status="failed"}`.
 
 </SdkOnly>
 
@@ -462,5 +660,15 @@ queue.use(sentryMiddleware());
 
 See <SdkLink to="guides/extend/middleware">Middleware</SdkLink> for
 more on hook ordering.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no stack to compose and no ordering to reason about. `on_outcome`
+keeps a single callback — registering a second one drops the first — so metrics,
+logging and error reporting share one closure, or live in the task bodies
+themselves. <SdkLink to="guides/extend/middleware">Middleware</SdkLink> spells
+out what taking the `on_outcome` route costs a task that uses durable steps.
 
 </SdkOnly>

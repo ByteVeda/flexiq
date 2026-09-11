@@ -40,6 +40,17 @@ Task<String> CALL_API = Task.of("call-api", String.class).rateLimit("10/s");
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(rate_limit = "10/s")]
+fn call_api(endpoint: String) -> flexiq::Outcome<String> {
+    let body = http::get(&endpoint).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(body)
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 ## Coalesce: identical calls become one job
@@ -77,6 +88,20 @@ Task<Order> CHARGE = Task.of("charge", Order.class).idempotent(true);
 
 String first = flexiq.enqueue(CHARGE, order);
 String second = flexiq.enqueue(CHARGE, order);  // same id — coalesced
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(idempotent)]               // key = auto: + sha256(task name + payload)
+fn charge(customer_id: i64, cents: i64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+let first = queue.enqueue(charge::call(42, 1_000))?;
+let second = queue.enqueue(charge::call(42, 1_000))?;
+assert_eq!(second.id, first.id);          // coalesced onto the first job
 ```
 
   </Tab>
@@ -132,6 +157,23 @@ flexiq.enqueue(BUILD_REPORT, new Report("u1", 2));  // same id — deadline move
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task]
+fn build_report(user_id: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+// A window is named on the enqueue — there is no debounce task attribute — and
+// the key is a literal the caller builds rather than a template.
+let key = format!("report:{user_id}");            // one window per user
+// slide the run 5 minutes out per call, but never delay past 30 minutes
+queue.enqueue(build_report::call(user_id.clone()).debounce_ms(key.clone(), 300_000, 1_800_000))?;
+queue.enqueue(build_report::call(user_id).debounce_ms(key, 300_000, 1_800_000))?;
+```
+
+  </Tab>
 </CodeTabs>
 
 Which one you want follows from the question you are answering:
@@ -142,8 +184,8 @@ Which one you want follows from the question you are answering:
 | "This click got double-submitted." | Coalesce |
 | "Rebuild the report once they stop typing." | Debounce |
 
-A dedup key and a debounce window cannot be combined — one pins the job, the
-other moves it — and setting both is an error rather than a precedence rule.
+A dedup key and a debounce window do not mix — one pins the job, the other moves
+it. <SdkSwap python={<>Setting both is an error the SDK raises at enqueue, not a precedence rule</>} node={<>Setting both is an error the SDK raises at enqueue, not a precedence rule</>} java={<>Setting both is an error the SDK raises at enqueue, not a precedence rule</>} rust={<>The Rust SDK raises nothing here: setting both is a silent precedence rule, and the window wins — <code>enqueue</code> routes on the debounce window before it ever reads the dedup key</>} />.
 
 ## What already ships
 
@@ -151,16 +193,16 @@ The whole flow-control family, in one place:
 
 | Knob | Scope | What it does |
 |---|---|---|
-| <SdkSwap python={<code>rate_limit</code>} node={<code>rateLimit</code>} java={<code>rateLimit</code>} /> | Task name, cluster-wide | Token bucket at the scheduler. Excess jobs defer by default |
-| <SdkSwap python={<code>on_excess</code>} node={<code>onExcess</code>} java={<code>onExcess</code>} /> | Task name | Defer or drop what the limit turns away |
-| <SdkSwap python={<code>max_concurrent</code>} node={<code>maxConcurrent</code>} java={<code>maxConcurrent</code>} /> | Task name, cluster-wide | Cap on jobs of this task running at once |
-| <SdkSwap python={<code>max_in_flight_per_task</code>} node={<code>maxInFlightPerTask</code>} java={<code>maxInFlightPerTask</code>} /> | Task name, per worker | One task's share of a worker's slots, so it cannot starve the others |
-| <SdkSwap python={<code>retry_budget</code>} node={<code>retryBudget</code>} java={<code>retryBudget</code>} /> | Task name, cluster-wide | Rate cap on *retries*. Once spent, failures dead-letter instead of retrying |
-| <SdkSwap python={<code>circuit_breaker</code>} node={<code>circuitBreaker</code>} java={<code>circuitBreaker</code>} /> | Task name | Stop dispatching after repeated failures, then probe |
-| <SdkSwap python={<code>set_queue_max_pending()</code>} node={<code>maxPending</code>} java={<code>maxPending()</code>} /> | Queue | Admission cap. Enqueue is rejected once the backlog is full |
-| <SdkSwap python={<code>set_queue_codel()</code>} node={<code>codel</code>} java={<code>codel()</code>} /> | Queue | CoDel: shed the stalest jobs under *sustained* overload |
+| <SdkSwap python={<code>rate_limit</code>} node={<code>rateLimit</code>} java={<code>rateLimit</code>} rust={<code>rate_limit</code>} /> | Task name, cluster-wide | Token bucket at the scheduler. Excess jobs defer by default |
+| <SdkSwap python={<code>on_excess</code>} node={<code>onExcess</code>} java={<code>onExcess</code>} rust={<code>on_excess</code>} /> | Task name | Defer or drop what the limit turns away |
+| <SdkSwap python={<code>max_concurrent</code>} node={<code>maxConcurrent</code>} java={<code>maxConcurrent</code>} rust={<code>max_concurrent</code>} /> | Task name, cluster-wide | Cap on jobs of this task running at once |
+| <SdkSwap python={<code>max_in_flight_per_task</code>} node={<code>maxInFlightPerTask</code>} java={<code>maxInFlightPerTask</code>} rust={<code>max_in_flight_per_task</code>} /> | Task name, per worker | One task's share of a worker's slots, so it cannot starve the others |
+| <SdkSwap python={<code>retry_budget</code>} node={<code>retryBudget</code>} java={<code>retryBudget</code>} rust={<code>retry_budget</code>} /> | Task name, cluster-wide | Rate cap on *retries*. Once spent, failures dead-letter instead of retrying |
+| <SdkSwap python={<code>circuit_breaker</code>} node={<code>circuitBreaker</code>} java={<code>circuitBreaker</code>} rust={<><code>TaskConfig::circuit_breaker</code> — a field, not a <code>#[flexiq::task]</code> attribute</>} /> | Task name | Stop dispatching after repeated failures, then probe |
+| <SdkSwap python={<code>set_queue_max_pending()</code>} node={<code>maxPending</code>} java={<code>maxPending()</code>} rust={<><code>Debounce::max_pending</code>, on a debounced enqueue only — there is no queue-wide cap</>} /> | Queue | Admission cap. Enqueue is rejected once the backlog is full |
+| <SdkSwap python={<code>set_queue_codel()</code>} node={<code>codel</code>} java={<code>codel()</code>} rust={<>Not wrapped — <code>flexiq_core::Scheduler::register_queue_codel</code></>} /> | Queue | CoDel: shed the stalest jobs under *sustained* overload |
 | Debounce window | Resolved debounce key | Collapse a burst into one run on a sliding deadline |
-| <SdkSwap python={<code>unique_key</code>} node={<code>uniqueKey</code>} java={<code>uniqueKey</code>} /> | Task name + arguments, or an explicit key | Collapse duplicate enqueues onto the first job |
+| <SdkSwap python={<code>unique_key</code>} node={<code>uniqueKey</code>} java={<code>uniqueKey</code>} rust={<code>unique_key</code>} /> | Task name + arguments, or an explicit key | Collapse duplicate enqueues onto the first job |
 
 <SdkOnly sdk="python">
 
@@ -185,6 +227,17 @@ Queue-level configuration covers admission and shedding —
 `flexiq.maxPending("emails", 10_000)`, `flexiq.codel("emails", 500, 5_000)`,
 `flexiq.dispatchOrder("emails", DispatchOrder.LIFO)`. Rate limits and
 concurrency caps are per task name.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Queue-level rate limits and concurrency caps are `QueueConfig` — two fields,
+`rate_limit` and `max_concurrent`, and no `Default` to fall back on. The shell
+does not wrap it: it is handed to `flexiq_core::Worker::queue_config`, which
+`WorkerBuilder` does not expose, so build the worker through
+`flexiq_core::Worker` directly when you need one. A task's `on_excess` applies
+to the queue's limit as well as its own.
 
 </SdkOnly>
 
@@ -243,6 +296,18 @@ EnqueueOptions.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue.enqueue(build_report::call(user_id).debounce_ms("report:u1", 300_000))?;
+// Does not compile: `debounce_ms` takes the window and the ceiling together,
+// and `Debounce` has no constructor that omits `max_wait_ms`.
+```
+
+An unbounded window is unrepresentable rather than refused. A ceiling *below*
+the window is still a runtime answer — the enqueue returns `QueueError::Config`.
+
+  </Tab>
 </CodeTabs>
 
 The ceiling is measured from when the window **opened**, not from the latest
@@ -289,6 +354,14 @@ Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Wrong: one window for every user on the platform.
+queue.enqueue(build_report::call(user_id).debounce_ms("report", 300_000, 1_800_000))?;
+```
+
+  </Tab>
 </CodeTabs>
 
 The key is a template resolved against each call's arguments, so the unit of
@@ -319,6 +392,19 @@ queue.task("buildReport", buildReport, {
 ```java
 Task<Report> BUILD_REPORT = Task.of("build-report", Report.class)
         .debounce(Duration.ofMinutes(5), "report:{userId}", Duration.ofMinutes(30));
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+There is no placeholder syntax: the key is a literal, so the interpolation is
+the caller's, at the call site where the arguments already exist.
+
+```rust
+queue.enqueue(
+    build_report::call(user_id.clone())
+        .debounce_ms(format!("report:{user_id}"), 300_000, 1_800_000),
+)?;
 ```
 
   </Tab>
@@ -364,6 +450,19 @@ Task<Sample> RECORD_SAMPLE = Task.of("record-sample", Sample.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(rate_limit = "10/s", on_excess = "drop")]
+fn record_sample(metric: String, value: f64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+`on_excess` takes `"defer"` or `"drop"`, and the macro rejects any other
+spelling at compile time.
+
+  </Tab>
 </CodeTabs>
 
 Dropped is not deleted. The job is dead-lettered on the spot, so shedding is
@@ -377,7 +476,7 @@ three things that tell it apart:
 
 | Field | Value |
 |---|---|
-| `error` | <code>rate_limit: task '<SdkSwap python="record_sample" node="recordSample" java="record-sample" />' is over its dispatch rate limit, and its on_excess is drop</code> |
+| `error` | <code>rate_limit: task '<SdkSwap python="record_sample" node="recordSample" java="record-sample" rust="record_sample" />' is over its dispatch rate limit, and its on_excess is drop</code> |
 | `metadata` | `{"shed":"rate_limit"}` |
 | `retry_count` | Unchanged — the job never ran, so nothing was attempted |
 
@@ -428,5 +527,5 @@ those guarantees back.
 <Callout type="info">
   Dispatch order is a separate lever from all of the above. Under overload, LIFO
   runs the freshest jobs first, which pairs well with CoDel; FIFO (the default)
-  is fair. Set it per queue with <SdkSwap python={<code>set_queue_dispatch_order()</code>} node={<code>configureQueue()</code>} java={<code>dispatchOrder()</code>} />, which takes <SdkSwap python={<code>"lifo"</code>} node={<code>"lifo"</code>} java={<code>DispatchOrder.LIFO</code>} />. Honored on SQLite and PostgreSQL; Redis is FIFO-only.
+  is fair. Set it per queue with <SdkSwap python={<code>set_queue_dispatch_order()</code>} node={<code>configureQueue()</code>} java={<code>dispatchOrder()</code>} rust={<><code>flexiq_core::Scheduler::register_queue_dispatch_order</code>, which the shell does not wrap</>} />, which takes <SdkSwap python={<code>"lifo"</code>} node={<code>"lifo"</code>} java={<code>DispatchOrder.LIFO</code>} rust={<code>DispatchOrder::Lifo</code>} />. Honored on SQLite and PostgreSQL; Redis is FIFO-only.
 </Callout>

@@ -119,6 +119,91 @@ try (Worker worker = queue.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Workflows are an opt-in dependency rather than part of the shell —
+`flexiq = { version = "2.0.0", features = ["workflows"] }` re-exports the
+`flexiq-workflows` crate as `flexiq::workflows`. A step records its
+compensator in `StepMetadata::compensate`:
+
+```rust
+use std::collections::{HashMap, HashSet};
+
+use flexiq::flexiq_core::wire::{encode_call, WireValue};
+use flexiq::workflows::dagron_core::DAG;
+use flexiq::workflows::lifecycle::{submit_workflow, SubmitStaticWorkflowRequest};
+use flexiq::workflows::{StepMetadata, WorkflowSqliteStorage, WorkflowStorageBackend};
+use flexiq::{FlexiQ, SqliteStorage, StorageBackend};
+
+// One SQLite handle, cloned — clones share the pool, so the job tables and the
+// workflow tables are the same database.
+let base = SqliteStorage::new("tasks.db")?;
+let queue = FlexiQ::from_storage(StorageBackend::Sqlite(base.clone()))?;
+let wf = WorkflowStorageBackend::Sqlite(WorkflowSqliteStorage::new(base, None)?);
+
+let mut dag: DAG<()> = DAG::new();
+for step in ["reserve", "charge", "ship"] {
+    dag.add_node(step.to_string(), ())?;
+}
+dag.add_edge("reserve", "charge", Some(1.0), None)?;
+dag.add_edge("charge", "ship", Some(1.0), None)?;
+
+let step = |task: &str, compensate: Option<&str>| StepMetadata {
+    task_name: task.to_string(),
+    compensate: compensate.map(str::to_string),
+    // ship has no compensator — if it never succeeded, there's nothing to undo.
+    ..Default::default()
+};
+
+// Positional arguments only; the envelope writer is the cross-SDK one.
+let order = encode_call(&[WireValue::Text("4212".into())], &[]);
+
+let run = submit_workflow(
+    queue.storage(),
+    &wf,
+    SubmitStaticWorkflowRequest {
+        name: "checkout".into(),
+        version: 1,
+        dag_bytes: dag.to_json(|_| None)?.into_bytes(),
+        step_metadata: HashMap::from([
+            ("reserve".into(), step("reserve_inventory", Some("unreserve_inventory"))),
+            ("charge".into(), step("charge_payment", Some("refund_payment"))),
+            ("ship".into(), step("ship_order", None)),
+        ]),
+        node_payloads: HashMap::from([
+            ("reserve".into(), order.clone()),
+            ("charge".into(), order.clone()),
+            ("ship".into(), order),
+        ]),
+        queue_default: "default".into(),
+        params_json: None,
+        deferred_node_names: HashSet::new(),
+        cache_hit_nodes: HashMap::new(),
+        parent_run_id: None,
+        parent_node_name: None,
+        default_timeout_ms: 300_000,
+        default_priority: 0,
+        default_max_retries: 3,
+        result_ttl_ms: None,
+        namespace: None,
+    },
+)?;
+println!("{}", run.run_id);
+```
+
+`submit_workflow` writes the definition, the run, a `WorkflowNode` per step,
+and one job per step wired through `depends_on` — so the DAG runs in order on
+an ordinary worker. **Nothing in Rust rolls it back.** `flexiq-workflows` is
+the storage half of the engine: it has the `compensate` field, the
+`Compensating` / `Compensated` / `CompensationFailed` states, and the three
+setters that write them, but no tracker that notices a step failing and
+decides what to undo. Submission reads only `task_name`, `queue`,
+`max_retries`, `timeout_ms` and `priority` off a `StepMetadata`; `compensate`
+is recorded and otherwise ignored. Driving rollback is yours: watch node
+status through `WorkflowStorage::get_workflow_nodes` and enqueue the
+compensators yourself.
+
+  </Tab>
 </CodeTabs>
 
 <Mermaid
@@ -223,6 +308,25 @@ worker.handle(refund, result -> {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`compensate` is a task **name**, stored as a plain `Option<String>` on the
+step's metadata:
+
+```rust
+StepMetadata {
+    task_name: "charge_payment".into(),
+    compensate: Some("refund_payment".into()),
+    ..Default::default()
+}
+```
+
+There is no argument contract to write against, because no Rust code enqueues
+that task: what a compensator is called with is decided by whatever enqueues
+it, which here is your own code. A compensator is an ordinary
+`#[flexiq::task]` function — give it the parameters you intend to pass.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -254,6 +358,72 @@ wf.step("charge", charge_payment, compensates=None)         # disable compensati
 > BullMQ — you'd hand-roll rollback logic in your own failure handler.
 > flexiq's `compensate` option and automatic reverse-order rollback are
 > flexiq-only.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Before reaching for `StepMetadata::compensate`, know that the field is inert:
+nothing collects completed nodes, nothing builds waves, and nothing enqueues the
+task it names. A saga that actually rolls back is written one of two ways.
+
+**One task, durable steps.** The forward work and its undo live in the same
+body, so the undo can see what the forward step returned. This is the shape to
+reach for first:
+
+```rust
+#[flexiq::task]
+fn checkout(order_id: String) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+
+    let hold = step.run_keyed("reserve", &order_id, || reserve(&order_id))?;
+    let charge = step.run_keyed("charge", &order_id, || charge(&order_id))?;
+
+    // A step that may need undoing commits its failure as a value.
+    let shipped: Result<(), String> = step.run_keyed("ship", &order_id, || {
+        Ok(ship(&order_id).map_err(|e| e.to_string()))
+    })?;
+
+    if let Err(reason) = shipped {
+        // Reverse order, innermost first — the ordering waves would have given you.
+        step.run_keyed("refund", &order_id, || refund(&charge))?;
+        step.run_keyed("unreserve", &order_id, || unreserve(&hold))?;
+        return Err(flexiq::TaskError::fatal(reason).into());
+    }
+    Ok(())
+}
+```
+
+Memoization does the idempotency: a committed step is not re-run on a later
+attempt, so a rollback interrupted halfway resumes rather than double-refunding.
+
+<Callout type="warn" title="Keyed steps, not `run`">
+  Every step on a compensating path must use `run_keyed`. An unkeyed step is
+  matched **by position** in the recorded sequence, and the undo branch asks for
+  steps the earlier attempt never recorded there — the run fails with a step
+  divergence before any compensator body executes. A keyed step is matched by
+  key wherever it sits, and one that was never recorded is simply new ground.
+</Callout>
+
+<Callout type="warn" title="The failing step must not abort">
+  Note that `ship` returns its failure rather than raising it. A step body that
+  returns `Err` commits nothing and leaves its own position outstanding, and the
+  session refuses to start another step while one is — so the very next
+  `run_keyed` fails with `started while step 'ship' is still uncommitted`,
+  surfacing as a retryable error and a retry loop that never reaches the
+  rollback.
+
+  So: forward steps you will never compensate can use `?` freely. The one whose
+  failure *triggers* the rollback has to hand the failure back as data, the way
+  `Result<(), String>` does above.
+</Callout>
+
+**Separate jobs, driven by you.** If the rollback has to be its own job, the
+node row has columns for it — `set_workflow_node_compensation_job` moves a node
+to `Compensating` and records the job id, then
+`set_workflow_node_compensated` or `set_workflow_node_compensation_failed`
+closes it out. The reverse-topological ordering is yours to compute;
+`topological_order` gives you the forward order to walk backwards.
 
 </SdkOnly>
 
@@ -305,20 +475,44 @@ Workflow partial = Workflow.named("partial-saga")
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`compensate` defaults to `None`, so a step opts out by saying nothing:
+
+```rust
+let steps = HashMap::from([
+    ("a".to_string(), StepMetadata {
+        task_name: "task_a".into(),
+        compensate: Some("undo_a".into()),
+        ..Default::default()
+    }),
+    ("b".to_string(), StepMetadata {
+        task_name: "task_b".into(),
+        ..Default::default() // no compensator
+    }),
+]);
+```
+
+Which steps are eligible is still a decision your own rollback code makes.
+`WorkflowNodeStatus::is_compensable()` is the rule to key off: `true` for
+`Completed` and `CacheHit`, `false` for everything else — so a step that never
+ran, and a step that failed, are both excluded.
+
+  </Tab>
 </CodeTabs>
 
 ## Final run states
 
 | State | Meaning |
 |---|---|
-| <SdkSwap python={<code>WorkflowState.COMPLETED</code>} node={<code>"completed"</code>} java={<code>WorkflowState.COMPLETED</code>} /> | All steps succeeded — no compensation ran |
-| <SdkSwap python={<code>WorkflowState.FAILED</code>} node={<code>"failed"</code>} java={<code>WorkflowState.FAILED</code>} /> | A step failed and no completed step had a compensator |
-| <SdkSwap python={<code>WorkflowState.COMPENSATED</code>} node={<code>"compensated"</code>} java={<code>WorkflowState.COMPENSATED</code>} /> | A step failed; every applicable compensator succeeded |
-| <SdkSwap python={<code>WorkflowState.COMPENSATION_FAILED</code>} node={<code>"compensation_failed"</code>} java={<code>WorkflowState.COMPENSATION_FAILED</code>} /> | A step failed; at least one compensator also failed |
+| <SdkSwap python={<code>WorkflowState.COMPLETED</code>} node={<code>"completed"</code>} java={<code>WorkflowState.COMPLETED</code>} rust={<code>WorkflowState::Completed</code>} /> | All steps succeeded — no compensation ran |
+| <SdkSwap python={<code>WorkflowState.FAILED</code>} node={<code>"failed"</code>} java={<code>WorkflowState.FAILED</code>} rust={<code>WorkflowState::Failed</code>} /> | A step failed and no completed step had a compensator |
+| <SdkSwap python={<code>WorkflowState.COMPENSATED</code>} node={<code>"compensated"</code>} java={<code>WorkflowState.COMPENSATED</code>} rust={<code>WorkflowState::Compensated</code>} /> | A step failed; every applicable compensator succeeded |
+| <SdkSwap python={<code>WorkflowState.COMPENSATION_FAILED</code>} node={<code>"compensation_failed"</code>} java={<code>WorkflowState.COMPENSATION_FAILED</code>} rust={<code>WorkflowState::CompensationFailed</code>} /> | A step failed; at least one compensator also failed |
 
 <Callout type="warn" title="Manual intervention">
   `CompensationFailed` needs a human: inspect each step's status (
-  <SdkSwap python={<code>run.status().nodes</code>} node={<code>handle.nodes()</code>} java={<code>status.nodes</code>} />
+  <SdkSwap python={<code>run.status().nodes</code>} node={<code>handle.nodes()</code>} java={<code>status.nodes</code>} rust={<code>wf.get_workflow_nodes(run_id)</code>} />
   ) to find which rollback failed and whether data is left partially
   consistent.
 </Callout>
@@ -330,6 +524,35 @@ Workflow partial = Workflow.named("partial-saga")
   `is_terminal()` is also `True` for `CANCELLED` (compensation never runs
   on a cancelled run) and `COMPLETED_WITH_FAILURES`, covered next.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Read that table as a vocabulary, not a state machine that runs. Every one of
+those four is a value you pass to `update_workflow_run_state` yourself; nothing
+transitions a run on its own.
+
+`WorkflowState` has ten variants in all — the four above plus `Pending`,
+`Running`, `Paused`, `Compensating`, `Cancelled` and `CompletedWithFailures`.
+What it also ships is the legal-move table, which is worth using even though the
+writer does not:
+
+```rust
+use flexiq::workflows::WorkflowState;
+
+assert!(WorkflowState::Running.can_transition_to(WorkflowState::Compensating));
+assert!(WorkflowState::Compensating.can_transition_to(WorkflowState::Compensated));
+// Terminal is terminal — nothing leaves Compensated.
+assert!(!WorkflowState::Compensated.can_transition_to(WorkflowState::Running));
+```
+
+`update_workflow_run_state` does **not** call it. Gate on it before the write or
+a retried handler will happily move a `Compensated` run back to `Running`. Note
+which edges exist: `Compensating` is reachable from `Running`, `Completed`,
+`CompletedWithFailures` and `Failed`, and `Cancelled` has no outgoing edge at
+all — a cancelled run cannot be compensated, which matches the rule everywhere
+else.
 
 </SdkOnly>
 
@@ -384,6 +607,39 @@ runs.
   shorthand. Compensation is declared per step with
   `Step.Builder.compensate(...)` and rolls back only when the run fails.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="info" title="No run-level failure policy to opt into">
+  `SubmitStaticWorkflowRequest` carries no `on_failure` mode and no
+  `compensate_on_continue`. Fail-fast versus continue is not a setting here —
+  it is what your own code does when it sees a failed node.
+
+  `CompletedWithFailures` is still a real state you can write, and
+  `can_transition_to` allows `CompletedWithFailures → Compensating`, so the
+  continue-then-compensate shape is expressible. It is just a sequence of
+  writes, not a flag.
+</Callout>
+
+Inside a single durable-step task the distinction is which shape the step's
+value takes:
+
+```rust
+// Fail fast — the abort ends the attempt here.
+let charge = step.run_keyed("charge", &order_id, || charge(&order_id))?;
+
+// Continue — the failure is committed as the step's value, so the body runs on.
+let shipped: Result<(), String> = step.run_keyed("ship", &order_id, || {
+    Ok(ship(&order_id).map_err(|e| e.to_string()))
+})?;
+```
+
+Only the second one keeps going. `.is_ok()` on the first would not: an aborted
+step commits nothing and leaves its position outstanding, so the next step in
+that attempt is refused. Continue mode here means a step that *succeeds at
+recording a failure*, which is also what makes the outcome survive a retry.
 
 </SdkOnly>
 
@@ -450,6 +706,27 @@ Workflow safeCheckout = Workflow.named("safe-checkout")
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`condition` is a step field, and like `compensate` it is an opaque string that
+submission records but never evaluates:
+
+```rust
+StepMetadata {
+    task_name: "send_failure_email".into(),
+    condition: Some("on_failure".into()),
+    ..Default::default()
+}
+```
+
+`submit_workflow` pre-enqueues every non-deferred node up front and wires it
+with `depends_on`, and a dependency counts as satisfied only once it reaches
+`Complete` — so an `on_failure` step submitted this way waits forever behind
+the step it was meant to react to. Branch on outcome the other way round: list
+the node in `deferred_node_names` so it gets a `WorkflowNode` row and no job,
+then enqueue it yourself once the run's node statuses tell you to.
+
+  </Tab>
 </CodeTabs>
 
 ## Events
@@ -490,6 +767,34 @@ via `queue.on_event(event_type, callback)`:
   `DEAD`, `CANCELLED`. No workflow/saga transition events are emitted. Poll
   `WorkflowRun` / `status.nodes` for compensation progress.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no event bus — not for saga transitions and not for job outcomes.
+`WorkerBuilder` exposes no hook at all; `flexiq_core::Worker::on_outcome` is the
+nearest seam and the builder does not reach it.
+
+For a saga written as durable steps this matters less than it looks, because the
+rollback is a branch in code you wrote — put the notification on the branch:
+
+```rust
+if let Err(reason) = shipped {
+    notify_rollback(&order_id, &reason);   // your own transport
+    step.run_keyed("refund", &order_id, || refund(&charge))?;
+}
+```
+
+Send it outside the step closures, not inside one. A step body is memoized: on a
+replay it does not run, so a notification in there fires once for the first
+attempt and never again — which is right for a charge and wrong for an alert.
+
+For a saga spread over workflow nodes, the compensation columns are the record
+to poll: `get_workflow_nodes(run_id)` and look at `status`,
+`compensation_started_at`, `compensation_completed_at` and `compensation_error`.
+`WorkflowNodeStatus::{Compensating, Compensated, CompensationFailed}` are the
+three to watch, and `CompensationFailed` is the one that wants a human.
 
 </SdkOnly>
 

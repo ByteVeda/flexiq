@@ -65,6 +65,15 @@ FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::FlexiQ;
+
+let queue = FlexiQ::open("flexiq.db")?;
+```
+
+  </Tab>
 </CodeTabs>
 
 That is the whole setup. Most task queues need a **broker** here — a separate
@@ -113,6 +122,17 @@ queue.task("send_welcome", (userId: number) => `welcomed ${userId}`);
 // The descriptor is the name plus the payload type; the handler is registered
 // on the worker, so a producer only ever needs this.
 Task<Long> SEND_WELCOME = Task.of("send_welcome", Long.class);
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// The task's name is the function's name, unless `name = "..."` says otherwise.
+#[flexiq::task]
+fn send_welcome(user_id: i64) -> flexiq::Outcome<String> {
+    Ok(format!("welcomed {user_id}"))
+}
 ```
 
   </Tab>
@@ -178,6 +198,14 @@ Worker worker = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let worker = queue.worker().register::<send_welcome>().spawn()?;
+// ... later: worker.shutdown()?; — drains, then unregisters.
+```
+
+  </Tab>
 </CodeTabs>
 
 Workers are interchangeable and disposable. Run one, or twenty across five
@@ -218,6 +246,22 @@ String value = flexiq.getResult(id, String.class).orElseThrow();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let enqueued = queue.enqueue(send_welcome::call(42))?;
+
+// Any process holding the store can read the row back, minutes or days later.
+let job = queue.get_job(&enqueued.id)?.expect("the job exists");
+println!("{:?}", job.status);
+println!("{} result bytes", job.result.map_or(0, |bytes| bytes.len()));
+```
+
+`job.result` is the archived return value as `Option<Vec<u8>>`: the Rust SDK
+does not wrap a typed result read, and nothing blocks until a job finishes —
+poll `get_job` until `status` is terminal.
+
+  </Tab>
 </CodeTabs>
 
 Waiting on a result blocks the caller, which gives back the latency you enqueued
@@ -232,7 +276,7 @@ A **namespace** scopes everything one deployment can see. Set it on the queue
 and every worker, dashboard and admin call inherits it — listings, totals,
 recovery and job ids all stop at the boundary.
 
-<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} />
+<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} rust={<code>FlexiQ::open("flexiq.db")?.with_namespace("tenant-a")</code>} />
 
 Leaving it unset — the default — addresses every namespace, which is what a
 single-tenant deployment wants. You can ignore namespaces entirely until you are

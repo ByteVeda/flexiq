@@ -66,6 +66,24 @@ public String checkout(String orderId) throws Exception {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(max_retries = 3)]
+fn checkout(order_id: String) -> flexiq::Outcome<String> {
+    let mut step = flexiq::current_step();
+    let receipt: String = step.run("charge", || Ok(charge(&order_id)))?;
+    step.sleep_ms("settle", 3_600_000)?;                  // attempt ends here
+    step.run("receipt", || Ok(send_receipt(&receipt)))?;  // runs an hour later
+    Ok(receipt)
+}
+```
+
+The session comes from `current_step()` rather than an argument — a
+macro-expanded body is your own function and cannot grow a parameter it did not
+declare. Every sleep is named, because there is no unnamed form.
+
+  </Tab>
 </CodeTabs>
 
 Retry that job after the receipt fails and the card is **not** charged a second
@@ -114,13 +132,37 @@ its decoded shape. Return something the serializer preserves, or a handle to it.
 
 Steps run **one at a time**. A step's position in the sequence is what identifies
 it, so a second step started while the first is uncommitted has no position to
-take: <SdkSwap python={<><code>asyncio.gather</code> over two <code>arun</code> calls</>} node={<><code>Promise.all</code> over two <code>step.run</code> calls</>} java={<>two steps issued from different threads</>} /> fails the attempt rather than
+take: <SdkSwap python={<><code>asyncio.gather</code> over two <code>arun</code> calls</>} node={<><code>Promise.all</code> over two <code>step.run</code> calls</>} java={<>two steps issued from different threads</>} rust={<>a <code>step.run</code> called from inside another <code>step.run</code> body</>} /> fails the attempt rather than
 interleaving. Issue them in order.
 
 <SdkOnly sdk="python">
 
 `step.run` and `step.sleep` have `await` twins — `step.arun`, `step.asleep`,
 `step.asleep_until` — for `async def` tasks. The rules are identical.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There are no async twins, because there is no async task to need them.
+`#[flexiq::task]` refuses an `async fn` outright:
+
+```text
+error: an async task is not supported yet: the shell's pool runs every handler
+on a blocking thread. Track the work with an async runtime inside the body, or
+use `flexiq_core::Worker::register_async` directly
+```
+
+Take the first half of that advice when steps are involved. The session lives in
+a thread-local that this shell's own pool installs per dispatch, so a handler
+registered through `flexiq_core::Worker::register_async` never has one —
+`current_step()` there returns a handle whose every method fails with `outside a
+running task`. Block on the async work inside the body instead, and keep the
+task registered through `queue.worker()`.
+
+That thread-local is also why the handle takes no parameter: a macro-expanded
+body is your own function and cannot grow an argument it did not declare, so
+`flexiq::current_step()` reads the session rather than receiving it.
 
 </SdkOnly>
 
@@ -148,7 +190,7 @@ happened, so it makes it again:
 Nothing on this side of the network closes that window. The only thing that does
 is a key the *other* service dedupes on, and the only key that works is one this
 job mints the same way every time it runs. That is
-<SdkSwap python={<><code>step.idempotency_key</code></>} node={<><code>step.idempotencyKey</code></>} java={<><code>step.idempotencyKey()</code></>} />:
+<SdkSwap python={<><code>step.idempotency_key</code></>} node={<><code>step.idempotencyKey</code></>} java={<><code>step.idempotencyKey()</code></>} rust={<><code>flexiq::step::idempotency_key</code>, which the shell does not hand to a task body</>} />:
 
 ```text
 018f…c2:charge#0
@@ -194,6 +236,17 @@ StepContext step = JobContext.current().step();
 Charge charge = step.run("charge", Charge.class, () ->
         stripe.charges().create(order.total(), step.idempotencyKey()));  // 018f…c2:charge#0
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK does not hand a task body its step's idempotency key. The shell's
+step closure discards the key `flexiq_core::StepSession::run` passes it, and a
+`#[flexiq::task]` body takes its declared arguments and no job handle to derive
+one from. The recipe itself is public —
+`flexiq::step::idempotency_key(run_key, step_key)` — so a step that must pass a
+key downstream drives `flexiq_core::StepSession` directly instead of
+`current_step()`.
 
   </Tab>
 </CodeTabs>
@@ -251,6 +304,18 @@ for (String orderId : orderIds) {           // iteration order is arbitrary
     step.run("fetch", Order.class, () -> loadOrder(orderId), StepOptions.key(orderId));  // → fetch:1234
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+for order_id in &order_ids {                // iteration order is arbitrary
+    let _: Order = step.run_keyed("fetch", order_id, || Ok(load_order(order_id)))?;  // → fetch:1234
+}
+```
+
+`run_keyed` is a separate method rather than an option on `run`, so the key is
+positional and cannot be forgotten halfway through a loop.
 
   </Tab>
 </CodeTabs>
@@ -365,6 +430,22 @@ public void onboarding(String userId) throws Exception {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task]
+fn onboarding(user_id: String) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+    step.run("welcome", || Ok(send_welcome(&user_id)))?;
+    step.sleep_ms("cool_off", 3 * 24 * 60 * 60 * 1_000)?;   // attempt ends
+    step.run("nudge", || Ok(send_nudge(&user_id)))?;
+    step.sleep_until("until_billing", next_billing_date(&user_id))?;
+    step.run("invoice", || Ok(invoice(&user_id)))?;
+    Ok(())
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 On wake the job replays from the top of the task body. `welcome` is a memo hit,
@@ -377,17 +458,17 @@ the sleep is a memo hit and returns immediately, and execution carries on at
 | <SdkLink to="guides/reliability/timeouts">Timeout</SdkLink> | Not running, so not timed out. The stale-job reaper skips it |
 | Retry count | Untouched. A sleep is not a failure |
 | Retry budget, circuit breaker, task metrics | Untouched |
-| <SdkLink to="guides/extend/middleware">Middleware</SdkLink> | Gets <SdkSwap python={<><code>on_sleep(ctx, wake_at)</code></>} node={<><code>onSleep(ctx, wakeAt)</code></>} java={<><code>onSleep(ctx, wakeAt)</code></>} /> instead of `after` |
+| <SdkLink to="guides/extend/middleware">Middleware</SdkLink> | Gets <SdkSwap python={<><code>on_sleep(ctx, wake_at)</code></>} node={<><code>onSleep(ctx, wakeAt)</code></>} java={<><code>onSleep(ctx, wakeAt)</code></>} rust={<>nothing (the Rust SDK has no middleware hooks)</>} /> instead of `after` |
 | Events | Emits `job.sleeping`, carrying the sleep's step key and wake time, not `job.completed` |
 
 The deadline is fixed by the **first** commit. Replaying a `"1h"` sleep wakes at
 the original instant rather than an hour later each time, which is what stops a
 crash loop from producing a sleep that outlives the job. Reach for
-<SdkSwap python={<><code>sleep_until</code></>} node={<><code>sleepUntil</code></>} java={<><code>sleepUntil</code></>} /> when the deadline means something outside the job — a billing date, a market
+<SdkSwap python={<><code>sleep_until</code></>} node={<><code>sleepUntil</code></>} java={<><code>sleepUntil</code></>} rust={<><code>sleep_until</code></>} /> when the deadline means something outside the job — a billing date, a market
 open — because an absolute instant does not care how many times the attempt
 replayed.
 
-<SdkSwap python={<>Durations use the same grammar as <code>debounce</code>: <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>, a <code>timedelta</code>, or a bare number of <strong>seconds</strong>. <code>sleep_until</code> takes a <code>datetime</code> or a Unix timestamp in seconds.</>} node={<>Durations are a number of <strong>milliseconds</strong> or a suffixed string — <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>. <code>sleepUntil</code> takes a <code>Date</code> or Unix milliseconds.</>} java={<>Durations are a <code>java.time.Duration</code> and <code>sleepUntil</code> takes a <code>java.time.Instant</code>; the millisecond conversion happens at the JNI boundary.</>} />
+<SdkSwap python={<>Durations use the same grammar as <code>debounce</code>: <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>, a <code>timedelta</code>, or a bare number of <strong>seconds</strong>. <code>sleep_until</code> takes a <code>datetime</code> or a Unix timestamp in seconds.</>} node={<>Durations are a number of <strong>milliseconds</strong> or a suffixed string — <code>"500ms"</code>, <code>"30s"</code>, <code>"5m"</code>, <code>"2h"</code>, <code>"1d"</code>. <code>sleepUntil</code> takes a <code>Date</code> or Unix milliseconds.</>} java={<>Durations are a <code>java.time.Duration</code> and <code>sleepUntil</code> takes a <code>java.time.Instant</code>; the millisecond conversion happens at the JNI boundary.</>} rust={<>There is no duration grammar: <code>sleep_ms</code> takes a bare count of <strong>milliseconds</strong> as an <code>i64</code>, and <code>sleep_until</code> takes a Unix-millisecond instant as an <code>i64</code>.</>} />
 
 Name your sleeps. An unnamed one is numbered `sleep#0`, `sleep#1`, `sleep#2`, and
 a divergence report reading `step 2 was 'sleep#1'` tells nobody which one moved.
@@ -451,6 +532,21 @@ byte[] pdf = step.run("render", byte[].class, () -> renderReport(reportId));
 String key = step.run("render", String.class, () -> upload(renderReport(reportId)));
 step.run("email", () -> sendLink(key));
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Wrong: the rendered PDF is not a checkpoint.
+let pdf: Vec<u8> = step.run("render", || Ok(render_report(report_id)))?;
+
+// Right: the step's result is the pointer.
+let key: String = step.run("render", || Ok(upload(render_report(report_id))))?;
+step.run("email", || Ok(send_link(&key)))?;
+```
+
+A step value is stored as the wire CBOR of whatever it returns, so the cap is
+measured on those bytes — `Vec<u8>` included.
 
   </Tab>
 </CodeTabs>
@@ -535,6 +631,45 @@ FlexiQ queue = FlexiQ.builder().sqlite(tempDir + "/steps.db").open();
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no test mode to get any of this wrong in. `FlexiQ::in_memory()` opens a
+real SQLite database that happens to live in memory, so a test runs the same
+sequence code, the same fence and the same caps a file-backed queue does — a
+task that passes there is a task a worker runs identically.
+
+```rust
+let queue = FlexiQ::in_memory()?;
+let job = queue.enqueue(checkout::call("ord-1".to_string()))?;
+let worker = queue.worker().register::<checkout>().spawn()?;
+// … poll `queue.get_job(&job.id)?` until it is terminal, then assert.
+worker.shutdown()?;
+```
+
+To exercise the body without a queue at all, `#[flexiq::task]` also emits
+`<task>::run(args…)` — the original function, callable directly. It is the right
+tool for a body's own logic and the wrong one for its steps: with no dispatch,
+there is no session, and `current_step()` returns a handle whose every method
+fails fatally with `outside a running task`. That is deliberate — a panic there
+would take a pool thread down over a caller's mistake — but it means a step-using
+body has to be tested through a worker.
+
+Reading what was committed goes through the storage handle, since `FlexiQ` does
+not wrap it:
+
+```rust
+use flexiq::Storage; // the trait has to be in scope for the method to resolve
+
+let steps = queue.storage().get_job_steps(&job.id, None)?;
+assert_eq!(steps.len(), 1, "one commit per durable run");
+```
+
+The second argument is the namespace. A `JobStep` carries `step_key`, `kind`,
+`result` and `wake_at` — a run memoizes a value and leaves `wake_at` unset, a
+sleep memoizes a deadline and leaves `result` unset.
+
+</SdkOnly>
+
 ## Signals you cannot catch away
 
 A step sleep and a step failure both unwind the task body, and neither may be
@@ -543,10 +678,21 @@ claim, and a swallowed divergence returns a memoized answer to a different
 question.
 
 So they are not ordinary errors.
-<SdkSwap python={<>Every one descends from <code>BaseException</code>, the way <code>KeyboardInterrupt</code> does, so a bare <code>except Exception</code> in a task body misses them.</>} node={<>JavaScript has no uncatchable tier — a <code>catch</code> sees everything — so the class hierarchy is documentation and the latch below is the enforcement.</>} java={<>Every one extends <code>java.lang.Error</code>, so an ordinary <code>catch (Exception e)</code> does not see them — only <code>catch (Throwable t)</code> does.</>} />
-And because that alone cannot stop a determined catch-everything handler, the
-worker also latches, and refuses to report whatever the body did after the
-signal. What it reports instead depends on which signal was caught:
+<SdkSwap python={<>Every one descends from <code>BaseException</code>, the way <code>KeyboardInterrupt</code> does, so a bare <code>except Exception</code> in a task body misses them.</>} node={<>JavaScript has no uncatchable tier — a <code>catch</code> sees everything — so the class hierarchy is documentation and the latch below is the enforcement.</>} java={<>Every one extends <code>java.lang.Error</code>, so an ordinary <code>catch (Exception e)</code> does not see them — only <code>catch (Throwable t)</code> does.</>} rust={<>Rust has no exception tier at all: a sleep and a step failure are both the <code>Err(Abort)</code> a step call returns, and <code>?</code> is what carries them out. The latch described below is not part of the Rust pool — a body that matches on that <code>Err</code> and carries on is not stopped, so let <code>?</code> do its job.</>} />
+And because that alone cannot stop a determined catch-everything handler, a
+binding's worker may also latch, refusing to report whatever the body did after
+the signal. Where it does, what it reports instead depends on which signal was
+caught:
+
+<SdkOnly sdk="rust">
+
+The Rust pool is not one of them. It runs the handler, calls `session.finish()`
+and reports exactly what the body returned — so a body that matches on the
+`Err(Abort)` and goes on to return `Ok` is recorded as a success, and the two
+rules below never fire. That is the whole reason to let `?` carry a step's
+`Err` out of the body untouched.
+
+</SdkOnly>
 
 - A swallowed **sleep** is reported as the sleep it is. The row, the claim
   revocation and the reschedule were committed before the signal was ever

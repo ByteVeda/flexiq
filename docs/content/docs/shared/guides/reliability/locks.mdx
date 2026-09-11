@@ -32,6 +32,14 @@ constraint.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+> The Rust SDK wraps no lock API — no guard type, no scoped form, no background
+> renewal. `queue.storage()` reaches the `Storage` lock methods directly, and
+> everything below is written against those four calls.
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 <Seq
@@ -69,6 +77,20 @@ constraint.
     { right: "granted — owner-scoped", rev: true },
     { self: "extend(ttlMs) before long sections" },
     { left: "release() (or close() via try-with-resources)" },
+  ]}
+/>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Seq
+  heads={["Worker", "Lock store"]}
+  rows={[
+    { left: "storage.acquire_lock(\"report\", owner, 30_000)" },
+    { right: "true — owner-scoped, TTL-bounded", rev: true },
+    { self: "extend_lock(..) at checkpoints you place" },
+    { left: "release_lock(\"report\", owner)" },
   ]}
 />
 
@@ -116,6 +138,25 @@ if (!ran) {
 It never throws for a lock that's already held; it returns `false` instead.
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK does not wrap locks in a scoped guard. `queue.storage()` reaches
+the `Storage` lock methods, and the release is yours to make:
+
+```rust
+use flexiq::Storage;
+
+let owner = format!("worker-{}", std::process::id());
+if queue.storage().acquire_lock("cache-refresh", &owner, 30_000)? {
+    refresh_cache();
+    queue.storage().release_lock("cache-refresh", &owner)?;
+}
+```
+
+A panic between the two calls leaks the lock until its TTL expires — which is
+what the TTL is for, but it is the only thing releasing it.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -129,6 +170,27 @@ async with queue.alock("cache-refresh"):
 
 `alock()` accepts the same parameters as `lock()` and is safe to use inside
 async functions and FastAPI/Django async views.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+### From an async context
+
+The `Storage` lock methods are synchronous and there is no async variant of any
+of them. Inside an async function, run them on a blocking thread rather than on
+the executor:
+
+```rust
+use flexiq::Storage;
+
+let storage = queue.storage().clone();
+let held = tokio::task::spawn_blocking(move || {
+    storage.acquire_lock("cache-refresh", "worker-1", 30_000)
+})
+.await
+.expect("the blocking task did not panic")?;
+```
 
 </SdkOnly>
 
@@ -194,6 +256,36 @@ try (Lock lock = flexiq.lock("resource", 30_000)) {
 `flexiq.lock(name)` without a TTL defaults to 30 seconds.
 
   </Tab>
+  <Tab sdk="rust">
+
+There is no handle type — the manual form is the only form:
+
+```rust
+use flexiq::Storage;
+
+let storage = queue.storage();
+let owner = format!("worker-{}", std::process::id());
+
+if storage.acquire_lock("resource", &owner, 30_000)? {
+    // ... critical section
+    storage.extend_lock("resource", &owner, 30_000)?; // push the expiry out
+    storage.release_lock("resource", &owner)?;
+} else {
+    // ... another process holds the lock
+}
+```
+
+| Method | Description |
+|---|---|
+| `acquire_lock(name, owner, ttl_ms)` | Try once; `false` if another owner holds a live lock. |
+| `extend_lock(name, owner, ttl_ms)` | Push the expiry out; `false` means this owner no longer holds it. |
+| `get_lock_info(name)` | The current holder and expiry, as `Option<LockInfo>`. |
+| `release_lock(name, owner)` | Give the lock up; `false` if this owner did not hold it. |
+
+`acquire_lock` refuses a live lock even for the owner that already holds it —
+renew with `extend_lock` rather than calling `acquire_lock` twice.
+
+  </Tab>
 </CodeTabs>
 
 ## Auto-extension
@@ -238,6 +330,18 @@ using lock = queue.lock("long-job", { ttlMs: 30_000, autoExtend: false });
   extend means the lock expired and another owner may now hold it, so stop
   the critical section. Expiry is what keeps a crashed owner from holding a
   lock forever.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="warn">
+  Locks do not auto-extend, and nothing renews one in the background. Choose a
+  TTL comfortably longer than the protected work's worst case, or call
+  `extend_lock` at checkpoints — `false` there means this owner no longer holds
+  the lock, so stop the critical section rather than finish it unprotected.
+  Expiry is what keeps a crashed owner from holding a lock forever.
 </Callout>
 
 </SdkOnly>
@@ -292,6 +396,27 @@ try (Lock lock = flexiq.lock("resource", 30_000)) {
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`acquire_lock` tries exactly once. Nothing on the `Storage` surface retries with
+a timeout, so waiting is a loop you write:
+
+```rust
+use flexiq::Storage;
+use std::time::{Duration, Instant};
+
+let deadline = Instant::now() + Duration::from_secs(5);
+let mut held = false;
+while !held && Instant::now() < deadline {
+    held = queue.storage().acquire_lock("resource", &owner, 30_000)?;
+    if !held {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+```
+
+</SdkOnly>
+
 ## Inspecting a lock
 
 Check who currently holds a lock — useful for a dashboard, a health check,
@@ -322,6 +447,22 @@ info.ifPresent(i -> log.info("held by {} until {}", i.ownerId, i.expiresAt));
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+if let Some(info) = queue.storage().get_lock_info("my-lock")? {
+    // LockInfo { lock_name, owner_id, acquired_at, expires_at } — times are Unix ms.
+    println!("held by {} until {}", info.owner_id, info.expires_at);
+}
+```
+
+`owner_id` comes back raw: it is a bearer token, and whoever knows it can
+release or extend the lock. Mask it yourself before showing it to anyone who
+is not the holder.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -333,6 +474,18 @@ info.ifPresent(i -> log.info("held by {} until {}", i.ownerId, i.expiresAt));
   low-level `queue._inner.get_lock_info()` (which returns the raw token)
   when surfacing lock status to other parties, e.g. a dashboard or another
   tenant.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="warn" title="Owner token is sensitive">
+  `owner_id` comes back raw, and there is nothing that masks it — `get_lock_info`
+  *is* the storage read, with no handle above it that could know whether the
+  caller is the current holder. Whoever knows the token can release or extend the
+  lock, so mask it yourself before surfacing lock status to another party: a
+  dashboard, another tenant, a log line.
 </Callout>
 
 </SdkOnly>
@@ -385,6 +538,25 @@ if (!ran) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+let owner = format!("worker-{}", std::process::id());
+if !queue.storage().acquire_lock("my-lock", &owner, 30_000)? {
+    // Another process holds the lock; a held lock is `false`, not an error.
+    eprintln!("skipping — another process is running the critical section");
+    return Ok(());
+}
+critical_section();
+queue.storage().release_lock("my-lock", &owner)?;
+```
+
+The `Err` arm means the backend could not be reached, never that the lock was
+taken — those are two different answers and they arrive on different channels.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="node">
@@ -394,6 +566,18 @@ if (!ran) {
   lost while the guarded function was still running (the TTL expired
   faster than auto-extend could renew it) — the critical section may have
   run unprotected, so the result is discarded either way.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="info">
+  There is no lost-lease signal. Nothing watches the lock while the critical
+  section runs, so the only way to learn the TTL lapsed — or that another owner
+  took the lock over — is `extend_lock` returning `false` at a checkpoint you
+  placed. Everything between the lapse and that checkpoint ran unprotected, which
+  is the argument for checking rather than trusting the TTL.
 </Callout>
 
 </SdkOnly>
@@ -450,6 +634,26 @@ try (Lock lock = flexiq.lock("billing-run", 30_000)) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+// Process A (machine 1) — `FlexiQ::from_storage` over a shared Postgres or
+// Redis backend, so both machines see the same lock table.
+let owner = format!("machine-1-{}", std::process::id());
+if queue.storage().acquire_lock("billing-run", &owner, 30_000)? {
+    run_billing();
+    queue.storage().release_lock("billing-run", &owner)?;
+}
+
+// Process B (machine 2) — acquire_lock returns false while A holds it.
+```
+
+There is no retry-with-timeout: poll `acquire_lock` in your own loop with a
+short delay if process B needs to wait rather than skip.
+
+  </Tab>
 </CodeTabs>
 
 <Callout type="info" title="SQLite vs Postgres vs Redis">
@@ -491,6 +695,28 @@ queue._inner.release_lock("my-lock", owner_id)
   The low-level API skips auto-extension and does not release on
   exception. Prefer `queue.lock()` / `queue.alock()` for production code.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+## Reaping expired locks
+
+An expired lock stops blocking an acquisition the moment its TTL passes —
+`acquire_lock` only refuses an *unexpired* one — but the row itself stays until
+something removes it. `reap_expired_locks` is that something: it deletes every
+lock that expired before the timestamp you hand it and returns how many it
+removed.
+
+```rust
+use flexiq::Storage;
+
+let removed = queue.storage().reap_expired_locks(flexiq::now_millis())?;
+```
+
+You rarely need to: the scheduler a worker spawns already calls it on its stale
+sweep, so a deployment that runs any worker at all is reaping locks. Calling it
+by hand is for a process that only ever produces.
 
 </SdkOnly>
 

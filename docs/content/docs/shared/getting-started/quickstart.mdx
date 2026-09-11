@@ -72,7 +72,46 @@ FlexiQ flexiq = FlexiQ.builder().sqlite("flexiq.db").open();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Add `flexiq = "2"` to `Cargo.toml`, then write `src/main.rs`:
+
+```rust
+use flexiq::FlexiQ;
+
+#[flexiq::task]
+fn add(a: i64, b: i64) -> flexiq::Outcome<i64> {
+    Ok(a + b)
+}
+
+// Durations are written the way you say them: 500ms, 30s, 5m, 2h, 1d.
+#[flexiq::task(max_retries = 3, retry_backoff_ms = "2s", timeout = "30s")]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<String> {
+    // Your email sending logic here.
+    println!("sending to {to}: {subject} ({} bytes)", body.len());
+    Ok(format!("sent to {to}"))
+}
+
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open("flexiq.db")?;
+    // Steps 2 and 3 go here.
+    Ok(())
+}
+```
+
+  </Tab>
 </CodeTabs>
+
+<SdkOnly sdk="rust">
+
+The name a job carries is the **function name** — `add`, not the module path —
+so it is also the name a producer in any other language enqueues. The attribute
+takes a fixed key set and nothing else: an unrecognised key is a compile error
+that lists the ones it accepts. So are `async fn`, `unsafe fn`, a generic or
+variadic signature, and a parameter written as a destructuring pattern, since
+the payload is decoded into parameters one at a time.
+
+</SdkOnly>
 
 ## 2. Start a worker
 
@@ -154,6 +193,23 @@ Worker worker = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// This process, or another one opened on the same file.
+let worker = queue
+    .worker()
+    .register::<add>()
+    .register::<send_email>()
+    .num_workers(4)
+    .spawn()?;
+// ... later: worker.shutdown()?;
+```
+
+There is no worker binary to run: the worker *is* this process. `spawn` returns
+as soon as its threads are up and jobs run behind `main`.
+
+  </Tab>
 </CodeTabs>
 
 <Callout type="info" title="Keep the worker running">
@@ -161,6 +217,17 @@ Worker worker = flexiq.worker()
   `pending` until a worker claims them — so leave this worker running while you
   enqueue jobs in the next step.
 </Callout>
+
+<SdkOnly sdk="rust">
+
+Keeping it running means keeping the *process* running: the worker is this
+binary, so `main` returning takes its threads with it. And when you do stop,
+stop it deliberately — `worker.shutdown()` is what halts dispatch, drains
+in-flight jobs and unregisters the worker. Dropping the handle does none of
+that, so a binary that simply exits leaves its registration behind until another
+worker's heartbeat reaps it.
+
+</SdkOnly>
 
 ## 3. Enqueue jobs and get results
 
@@ -212,6 +279,36 @@ int result = flexiq.getResult(id, Integer.class).orElseThrow(); // 5
 
 worker.close();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use std::time::Duration;
+
+use flexiq::JobStatus;
+
+// Enqueue — writes a row and comes straight back; `add` does NOT run here.
+let enqueued = queue.enqueue(add::call(2, 3).priority(5))?;
+println!("job {} is {:?}", enqueued.id, enqueued.status); // Pending
+
+// Nothing blocks on a result, so poll the row until it is terminal.
+let done = loop {
+    let job = queue.get_job(&enqueued.id)?.expect("the job exists");
+    if matches!(job.status, JobStatus::Complete | JobStatus::Failed) {
+        break job;
+    }
+    std::thread::sleep(Duration::from_millis(25));
+};
+
+println!("{:?}", done.status);
+println!("{} result bytes", done.result.map_or(0, |bytes| bytes.len()));
+
+worker.shutdown()?;
+```
+
+`result` holds the encoded return value as `Option<Vec<u8>>` — the Rust SDK does
+not wrap a typed result read.
 
   </Tab>
 </CodeTabs>
@@ -273,6 +370,21 @@ flexiq --url flexiq.db stats
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let stats = queue.stats()?;
+println!(
+    "{} pending, {} completed, {} dead",
+    stats.pending, stats.completed, stats.dead
+);
+```
+
+This crate ships no CLI. `stats()` is the read, and `queue.storage()` reaches
+the counts the handle does not wrap — `stats_by_queue` for one lane, `list_dead`
+for the dead-letter queue.
+
+  </Tab>
 </CodeTabs>
 
 ### Web dashboard
@@ -326,6 +438,12 @@ Open `http://localhost:8080` in your browser.
 [Dashboard guide →](/java/modules/dashboard)
 
 </SdkOnly>
+
+  </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK does not serve a dashboard. The `flexiq-server` crate is what
+serves the bundled SPA — point its binary at the same database file.
 
   </Tab>
 </CodeTabs>

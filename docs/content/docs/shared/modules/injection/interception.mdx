@@ -38,6 +38,20 @@ below.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+This SDK hooks into it nowhere. There is no `intercept`, no registry, and no
+producer-side hook of any kind — `enqueue` takes a `TaskCall<T>` and writes it.
+
+Most of what interception is for does not arise, because the call is typed:
+`<task>::call(..)` mirrors the function's own signature, so a value the task
+does not accept is a compile error rather than something to catch at the
+producer. What is left — validating a value the type system allows, or
+rejecting one — is a function you call before `call(..)`. See
+[Validating before the call](#validating-before-the-call) below.
+
+</SdkOnly>
+
 ## Strategies
 
 Across the SDKs, an interceptor resolves to one of a handful of named
@@ -77,6 +91,25 @@ Here, `REDIRECT` replaces the **entire enqueue call** with a different task
 and different payload. There's no argument-level classification and no
 `PROXY` strategy. See [The interceptor pipeline](#the-interceptor-pipeline)
 below.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+None of these four exist here — not as an enum, not as a mode, not as a return
+value. Read the table as vocabulary for the other runtimes, and map each row to
+what actually does the job:
+
+| Strategy | Rust equivalent |
+|---|---|
+| `PASS` | The default and the only behaviour. |
+| `CONVERT` | A `Serialize` impl, or a type conversion at the call site. |
+| `REDIRECT` | Call a different task's `call(..)`. It is your `if`, not the queue's. |
+| `REJECT` | Return an error before `enqueue`, or let the encoder refuse the value. |
+
+There is no `PROXY` either, and nothing to build one on: a task takes its
+declared arguments and nothing is injected, so there is no seam where a live
+object could be swapped for a recipe.
 
 </SdkOnly>
 
@@ -422,5 +455,87 @@ that will actually be stored, after any rewrites.
   Keep interceptors fast and side-effect-free — they run on the producer
   thread inside every `enqueue` call.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+## Validating before the call
+
+With no hook to register, the place to centralise a producer-side rule is a
+function that builds the call. Give it the validation and hand back a
+`TaskCall`, and every call site goes through it because there is nothing else to
+call:
+
+```rust
+use flexiq::TaskCall;
+
+/// The only sanctioned way to enqueue a charge.
+fn charge_call(amount_cents: i64) -> Result<TaskCall<charge_card>, ChargeError> {
+    if amount_cents < 0 {
+        return Err(ChargeError::Negative);
+    }
+    Ok(charge_card::call(amount_cents))
+}
+
+queue.enqueue(charge_call(-5)?)?;  // never reaches the queue
+```
+
+Redirecting is the same idea with a second arm — but note that the return type
+pins the task, so two task types need two functions or an enum. `TaskCall<T>` is
+generic in `T`, and `charge_card` and `charge_card_v2` are different types.
+
+### What the encoder refuses on its own
+
+Some values pass the type checker and still have no representation in the call
+envelope. Those are caught at `enqueue`, not at `call(..)`, and come back as a
+`QueueError`:
+
+```text
+task `charge_card` could not encode its arguments: cannot encode task argument:
+a u64 out of range for the envelope's signed integer
+```
+
+The refusals are structural rather than configurable, because a value that
+encoded *differently* would still interoperate and quietly break `auto:`
+idempotency keys:
+
+| Refused | Why |
+|---|---|
+| A `u64`, `i128` or `u128` outside `i64`'s range | Nothing widens silently, and wrapping would change the value |
+| A map key that is not text | The envelope's maps are text-keyed |
+
+The second one catches more than it sounds like. Only three things make a legal
+key: a `&str`/`String`, a `char`, and a fieldless enum variant — which travels as
+its own name. A `bool`, **any** integer, a float, bytes, `None`, `()`, and every
+composite are refused, so a `HashMap<i64, _>` argument fails at `enqueue` even
+though it serializes fine everywhere else. Key by `String` instead.
+
+Everything else encodes: `f32`/`f64`, byte strings, `Option`, `Vec`, structs, and
+both fieldless and data-carrying enum variants (the latter as serde's externally
+tagged one-entry map). The serializer runs in **binary** mode —
+`is_human_readable()` is `false` — so a `Uuid` round-trips as its bytes rather
+than its hyphenated string.
+
+### Redaction
+
+There is no hook that could redact for you, so keep the secret out of the
+payload instead of trying to strip it later. Enqueue a key and let the task read
+the value from the store it came from:
+
+```rust
+// Not: charge_card::call(card_number)
+queue.enqueue(charge_card::call(vault_token))?;
+```
+
+That is worth doing regardless of the runtime — a payload is at rest in storage,
+readable by anything with the connection string.
+
+### Struct field order matters
+
+If an argument is a struct, its fields encode in **declaration order** and
+nothing sorts them. Reordering the fields changes the encoded bytes, which
+changes the `auto:` key `.idempotent()` derives — so a field moved during a
+refactor silently stops deduping against jobs enqueued by the old build.
 
 </SdkOnly>
