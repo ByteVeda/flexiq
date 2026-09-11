@@ -282,6 +282,15 @@ fn reject_unsupported(item: &ItemFn) -> Result<()> {
              `flexiq_core::Worker::register_async` directly",
         ));
     }
+    if let Some(token) = item.sig.unsafety {
+        return Err(Error::new(
+            token.span(),
+            "an unsafe task is not supported: the expansion would emit a safe `run` and call \
+             it from `run_encoded` with decoded arguments, which drops the contract the \
+             `unsafe` was there to state. Make the function safe and put the `unsafe` block \
+             inside it, where its preconditions can be checked",
+        ));
+    }
     if !item.sig.generics.params.is_empty() {
         return Err(Error::new(
             item.sig.generics.span(),
