@@ -38,9 +38,19 @@ plugins:
 # commit; an external client would take the same tree from the release asset.
 inputs:
   - directory: ../../contracts/proto
-    # flexiq.v1 only. flexiq.executor.v1 is a second door behind a second scope
-    # and this module does not open it; generating its stubs would ship a
-    # client surface nothing here implements. The contract forbids the reverse
-    # import, so the producer package compiles without them.
+    # Both doors. flexiq.v1 is the producer surface in package flexiq;
+    # flexiq.executor.v1 is the executor surface in package executor, behind a
+    # second scope and a credential of its own.
+    #
+    # One module for two doors because they share everything below the RPC: the
+    # payload envelope, the task-error JSON, the bearer credential and the
+    # release version. Splitting them would mean a second /v2 tag namespace and
+    # a copy of the codec. The import graph is what keeps the scopes apart —
+    # package executor reaches no producer stub.
+    #
+    # These paths resolve against this directory, not against `directory:`, so
+    # the full prefix is required; a bare `flexiq/v1` is reported as outside the
+    # context directory.
     paths:
       - ../../contracts/proto/flexiq/v1
+      - ../../contracts/proto/flexiq/executor/v1
