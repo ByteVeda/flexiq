@@ -73,8 +73,10 @@ func TestRunRefusesAWorkerWithNoHandlers(t *testing.T) {
 }
 
 func TestHandleRefusesRegistrationAfterRunHasStarted(t *testing.T) {
-	fake := &fakeScheduler{attach: func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, executor.CapLease)
+	fake := &fakeScheduler{attach: func(_ int, s *schedulerStream) error {
+		if err := s.handshake(executor.CapLease); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}}
@@ -82,7 +84,7 @@ func TestHandleRefusesRegistrationAfterRunHasStarted(t *testing.T) {
 	mustHandle(t, w, "t", noopHandler)
 	runWorker(t, w)
 
-	await(t, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
+	await(t, fake, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
 
 	// The advertised list is fixed for the life of a stream, so a handler added
 	// now is one the scheduler does not know exists and will never dispatch to.

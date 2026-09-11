@@ -30,10 +30,14 @@ func mustEncodeCall(t *testing.T, args ...any) []byte {
 }
 
 // dispatches scripts a stream that hands over one job and then waits.
-func dispatches(job *executorv1.AttachResponse, capabilities ...string) func(*testing.T, int, *schedulerStream) error {
-	return func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, capabilities...)
-		s.send(t, job)
+func dispatches(job *executorv1.AttachResponse, capabilities ...string) func(int, *schedulerStream) error {
+	return func(_ int, s *schedulerStream) error {
+		if err := s.handshake(capabilities...); err != nil {
+			return err
+		}
+		if err := s.send(job); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}
@@ -41,7 +45,7 @@ func dispatches(job *executorv1.AttachResponse, capabilities ...string) func(*te
 
 func awaitSettled(t *testing.T, fake *fakeScheduler, jobID string) *executorv1.AttachRequest {
 	t.Helper()
-	await(t, "a settling frame for "+jobID, func() bool { return settled(fake.frames(), jobID) != nil })
+	await(t, fake, "a settling frame for "+jobID, func() bool { return settled(fake.frames(), jobID) != nil })
 	return settled(fake.frames(), jobID)
 }
 
@@ -142,10 +146,16 @@ func TestAFailedJobRetriesAndAFatalOneDoesNot(t *testing.T) {
 }
 
 func TestAPanicSettlesTheJobRatherThanEndingTheStream(t *testing.T) {
-	fake := &fakeScheduler{attach: func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, executor.CapLease)
-		s.send(t, jobFrame("job-1", "t", mustEncodeCall(t)))
-		s.send(t, jobFrame("job-2", "t", mustEncodeCall(t)))
+	fake := &fakeScheduler{attach: func(_ int, s *schedulerStream) error {
+		if err := s.handshake(executor.CapLease); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-1", "t", mustEncodeCall(t))); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-2", "t", mustEncodeCall(t))); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}}
@@ -209,12 +219,16 @@ func TestAJobOverItsTimeoutSettlesAsTimedOut(t *testing.T) {
 }
 
 func TestACancelFrameCancelsTheHandlerAndSettlesCancelled(t *testing.T) {
-	fake := &fakeScheduler{attach: func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, executor.CapLease)
-		s.send(t, jobFrame("job-1", "slow", mustEncodeCall(t)))
-		s.send(t, &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_Cancel{
-			Cancel: &executorv1.CancelFrame{JobId: "job-1"},
-		}})
+	fake := &fakeScheduler{attach: func(_ int, s *schedulerStream) error {
+		if err := s.handshake(executor.CapLease); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-1", "slow", mustEncodeCall(t))); err != nil {
+			return err
+		}
+		if err := s.send(cancelFrame("job-1")); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}}
@@ -232,12 +246,16 @@ func TestACancelFrameCancelsTheHandlerAndSettlesCancelled(t *testing.T) {
 }
 
 func TestAHandlerThatIgnoresItsCancelStillSettlesNormally(t *testing.T) {
-	fake := &fakeScheduler{attach: func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, executor.CapLease)
-		s.send(t, jobFrame("job-1", "stubborn", mustEncodeCall(t)))
-		s.send(t, &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_Cancel{
-			Cancel: &executorv1.CancelFrame{JobId: "job-1"},
-		}})
+	fake := &fakeScheduler{attach: func(_ int, s *schedulerStream) error {
+		if err := s.handshake(executor.CapLease); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-1", "stubborn", mustEncodeCall(t))); err != nil {
+			return err
+		}
+		if err := s.send(cancelFrame("job-1")); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}}
@@ -257,10 +275,16 @@ func TestAHandlerThatIgnoresItsCancelStillSettlesNormally(t *testing.T) {
 
 func TestAJobWithNoFreeSlotIsRefusedRetryablyRatherThanDropped(t *testing.T) {
 	release := make(chan struct{})
-	fake := &fakeScheduler{attach: func(t *testing.T, _ int, s *schedulerStream) error {
-		s.handshake(t, executor.CapLease)
-		s.send(t, jobFrame("job-1", "slow", mustEncodeCall(t)))
-		s.send(t, jobFrame("job-2", "slow", mustEncodeCall(t)))
+	fake := &fakeScheduler{attach: func(_ int, s *schedulerStream) error {
+		if err := s.handshake(executor.CapLease); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-1", "slow", mustEncodeCall(t))); err != nil {
+			return err
+		}
+		if err := s.send(jobFrame("job-2", "slow", mustEncodeCall(t))); err != nil {
+			return err
+		}
 		drain(s)
 		return nil
 	}}
@@ -323,7 +347,7 @@ func TestALeaseIsEchoedOnEveryFrameAboutTheAttempt(t *testing.T) {
 	runWorker(t, w)
 
 	awaitSettled(t, fake, "job-1")
-	await(t, "the side-channel frames", func() bool {
+	await(t, fake, "the side-channel frames", func() bool {
 		var progress, logs int
 		for _, frame := range fake.frames() {
 			if frame.GetProgress() != nil {
@@ -417,7 +441,7 @@ func TestProgressIsClampedToTheRangeTheFrameDeclares(t *testing.T) {
 	runWorker(t, w)
 
 	awaitSettled(t, fake, "job-1")
-	await(t, "a progress frame", func() bool {
+	await(t, fake, "a progress frame", func() bool {
 		for _, frame := range fake.frames() {
 			if frame.GetProgress() != nil {
 				return true
@@ -466,7 +490,7 @@ func TestAPublishedPartialIsALogAtResultLevel(t *testing.T) {
 	runWorker(t, w)
 
 	awaitSettled(t, fake, "job-1")
-	await(t, "the published partial", func() bool {
+	await(t, fake, "the published partial", func() bool {
 		for _, frame := range fake.frames() {
 			if frame.GetTaskLog() != nil {
 				return true

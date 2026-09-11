@@ -33,8 +33,10 @@ func firstHello(frames []*executorv1.AttachRequest) *executorv1.HelloFrame {
 
 func TestHelloIsTheFirstFrameAndAdvertisesEveryRegisteredTask(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease, executor.CapSideChannel)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease, executor.CapSideChannel); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -44,7 +46,7 @@ func TestHelloIsTheFirstFrameAndAdvertisesEveryRegisteredTask(t *testing.T) {
 	mustHandle(t, w, "billing.charge", noopHandler)
 	runWorker(t, w)
 
-	await(t, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
+	await(t, fake, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
 
 	frames := fake.frames()
 	if got := frames[0].GetHello(); got == nil {
@@ -75,8 +77,10 @@ func TestHelloIsTheFirstFrameAndAdvertisesEveryRegisteredTask(t *testing.T) {
 
 func TestTheExecutorNeverAdvertisesTheStepsCapability(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease, executor.CapSideChannel, executor.CapSteps)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease, executor.CapSideChannel, executor.CapSteps); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -85,7 +89,7 @@ func TestTheExecutorNeverAdvertisesTheStepsCapability(t *testing.T) {
 	mustHandle(t, w, "t", noopHandler)
 	runWorker(t, w)
 
-	await(t, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
+	await(t, fake, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
 
 	// A scheduler willing to do steps changes nothing: the rule is that a
 	// client sends no frame for a behaviour it did not advertise, and this one
@@ -99,8 +103,10 @@ func TestTheExecutorNeverAdvertisesTheStepsCapability(t *testing.T) {
 
 func TestTheSessionTokenIsReadFromMetadataAndEchoedOnEveryHeartbeat(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -109,7 +115,7 @@ func TestTheSessionTokenIsReadFromMetadataAndEchoedOnEveryHeartbeat(t *testing.T
 	mustHandle(t, w, "t", noopHandler)
 	runWorker(t, w)
 
-	await(t, "a heartbeat", func() bool { return len(fake.beats()) > 0 })
+	await(t, fake, "a heartbeat", func() bool { return len(fake.beats()) > 0 })
 
 	beat := fake.beats()[0]
 	if string(beat.GetSession()) != testSessionToken {
@@ -127,8 +133,10 @@ func TestTheSessionTokenIsReadFromMetadataAndEchoedOnEveryHeartbeat(t *testing.T
 func TestAnAttachWithoutASessionTokenSendsNoHeartbeats(t *testing.T) {
 	fake := &fakeScheduler{
 		withoutSessionToken: true,
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -137,7 +145,7 @@ func TestAnAttachWithoutASessionTokenSendsNoHeartbeats(t *testing.T) {
 	mustHandle(t, w, "t", noopHandler)
 	runWorker(t, w)
 
-	await(t, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
+	await(t, fake, "the handshake", func() bool { return firstHello(fake.frames()) != nil })
 	time.Sleep(100 * time.Millisecond) // several heartbeat intervals
 
 	if beats := fake.beats(); len(beats) != 0 {
@@ -147,11 +155,15 @@ func TestAnAttachWithoutASessionTokenSendsNoHeartbeats(t *testing.T) {
 
 func TestAProtocolVersionMismatchIsPermanentAndReconnectsNoFurther(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.recv(t)
+		attach: func(_ int, s *schedulerStream) error {
+			if _, err := s.recv(); err != nil {
+				return err
+			}
 			// A real scheduler acknowledges first and refuses second, so both
 			// ends can log both numbers. The client must read the ack.
-			s.send(t, ack(99))
+			if err := s.send(ack(99)); err != nil {
+				return err
+			}
 			return status.Error(codes.FailedPrecondition, "protocol version mismatch: we speak 99, peer speaks 1")
 		},
 	}
@@ -174,8 +186,10 @@ func TestAProtocolVersionMismatchIsPermanentAndReconnectsNoFurther(t *testing.T)
 
 func TestADuplicateExecutorIDIsPermanent(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			return status.Error(codes.AlreadyExists,
 				"executor go-executor-test is already attached; wait for the previous stream to end")
 		},
@@ -196,12 +210,16 @@ func TestADuplicateExecutorIDIsPermanent(t *testing.T) {
 
 func TestATransportFailureReconnects(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, attempt int, s *schedulerStream) error {
+		attach: func(attempt int, s *schedulerStream) error {
 			if attempt == 1 {
-				s.recv(t)
+				if _, err := s.recv(); err != nil {
+					return err
+				}
 				return status.Error(codes.Unavailable, "the scheduler is starting")
 			}
-			s.handshake(t, executor.CapLease)
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -210,13 +228,15 @@ func TestATransportFailureReconnects(t *testing.T) {
 	mustHandle(t, w, "t", noopHandler)
 	runWorker(t, w)
 
-	await(t, "a second attach", func() bool { return fake.attachCount() >= 2 })
+	await(t, fake, "a second attach", func() bool { return fake.attachCount() >= 2 })
 }
 
 func TestACleanStreamEndIsARotationAndReconnects(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, attempt int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
+		attach: func(attempt int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			if attempt == 1 {
 				// Exactly what a rotation is: the scheduler drains the stream
 				// and closes it, with no frame to say so.
@@ -230,7 +250,7 @@ func TestACleanStreamEndIsARotationAndReconnects(t *testing.T) {
 	mustHandle(t, w, "t", noopHandler)
 	_, errs := runWorker(t, w)
 
-	await(t, "a reconnect after the rotation", func() bool { return fake.attachCount() >= 2 })
+	await(t, fake, "a reconnect after the rotation", func() bool { return fake.attachCount() >= 2 })
 
 	select {
 	case err := <-errs:
@@ -241,11 +261,13 @@ func TestACleanStreamEndIsARotationAndReconnects(t *testing.T) {
 
 func TestAShutdownFrameStopsRunWithoutReconnecting(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
-			s.send(t, &executorv1.AttachResponse{
-				Frame: &executorv1.AttachResponse_Shutdown{Shutdown: &executorv1.ShutdownFrame{}},
-			})
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
+			if err := s.send(shutdownFrame()); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -264,17 +286,23 @@ func TestAShutdownFrameStopsRunWithoutReconnecting(t *testing.T) {
 
 func TestAnUnknownFrameArmIsSkippedAndTheStreamStaysAligned(t *testing.T) {
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
 			// No arm set at all, which is what a frame type this build does not
 			// know decodes to. A newer scheduler and an older executor stay
 			// attached exactly because this is skipped rather than fatal.
-			s.send(t, &executorv1.AttachResponse{})
+			if err := s.send(&executorv1.AttachResponse{}); err != nil {
+				return err
+			}
 			// A step frame, which this executor never asked for.
-			s.send(t, &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_JobSteps{
-				JobSteps: &executorv1.JobStepsFrame{JobId: "job-1", Snapshot: []byte("[]\n")},
-			}})
-			s.send(t, jobFrame("job-1", "t", mustEncodeCall(t)))
+			if err := s.send(jobStepsFrame("job-1", []byte("[]\n"))); err != nil {
+				return err
+			}
+			if err := s.send(jobFrame("job-1", "t", mustEncodeCall(t))); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -283,7 +311,7 @@ func TestAnUnknownFrameArmIsSkippedAndTheStreamStaysAligned(t *testing.T) {
 	mustHandle(t, w, "t", func(context.Context, *executor.Job) (any, error) { return "done", nil })
 	runWorker(t, w)
 
-	await(t, "the job after the frames the executor could not read", func() bool {
+	await(t, fake, "the job after the frames the executor could not read", func() bool {
 		return settled(fake.frames(), "job-1") != nil
 	})
 }
@@ -292,9 +320,13 @@ func TestCancellingRunDrainsAndReturnsTheContextError(t *testing.T) {
 	started := make(chan struct{})
 	released := make(chan struct{})
 	fake := &fakeScheduler{
-		attach: func(t *testing.T, _ int, s *schedulerStream) error {
-			s.handshake(t, executor.CapLease)
-			s.send(t, jobFrame("job-1", "slow", mustEncodeCall(t)))
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
+			if err := s.send(jobFrame("job-1", "slow", mustEncodeCall(t))); err != nil {
+				return err
+			}
 			drain(s)
 			return nil
 		},
@@ -319,6 +351,41 @@ func TestCancellingRunDrainsAndReturnsTheContextError(t *testing.T) {
 	}
 	if frame := settled(fake.frames(), "job-1"); frame == nil || frame.GetSuccess() == nil {
 		t.Fatalf("the job running through the drain settled as %v, want a success", frame)
+	}
+}
+
+func TestAHeartbeatThatIsNeverAnsweredDoesNotParkTeardown(t *testing.T) {
+	fake := &fakeScheduler{
+		heartbeat: func(ctx context.Context, _ *executorv1.HeartbeatRequest) (*executorv1.HeartbeatResponse, error) {
+			// A peer that holds the connection open and answers nothing. The
+			// call has no deadline of its own unless the client gives it one,
+			// and the context it inherits outlives the call on the teardown
+			// path — so an unbounded one blocks the drain that is trying to
+			// close the stream it is blocking.
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		attach: func(_ int, s *schedulerStream) error {
+			if err := s.handshake(executor.CapLease); err != nil {
+				return err
+			}
+			if err := s.send(shutdownFrame()); err != nil {
+				return err
+			}
+			drain(s)
+			return nil
+		},
+	}
+	w := serveExecutor(t, fake)
+	mustHandle(t, w, "t", noopHandler)
+	_, errs := runWorker(t, w)
+
+	started := time.Now()
+	if err := awaitErrorOrNil(t, errs); err != nil {
+		t.Fatalf("Run returned %v, want nil: shutdown is an ordinary stop", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("Run took %s to return; the teardown waited on a heartbeat nobody was going to answer", elapsed)
 	}
 }
 

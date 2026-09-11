@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -25,6 +26,13 @@ import (
 // need the scheduler to do something a real one never would — refuse a version,
 // send a frame arm that does not exist, end a stream mid-job — and a real
 // server cannot be asked for any of that.
+//
+// **Nothing in here calls t.Fatalf.** A script runs on a gRPC handler goroutine,
+// and FailNow from a goroutine that is not the test's own stops only that
+// goroutine: the test would carry on waiting, fail on its own timeout, and
+// report "timed out waiting for X" instead of the failure that caused it.
+// Scripts return errors, the double records the first, and [await] raises it
+// from the test goroutine where it means something.
 
 const (
 	// testSessionToken stands in for the 16 bytes a real scheduler mints. Only
@@ -40,14 +48,17 @@ type schedulerStream struct {
 }
 
 // recv reads the next frame from the executor and records it.
-func (s *schedulerStream) recv(t *testing.T) *executorv1.AttachRequest {
-	t.Helper()
+//
+// A failure here is the harness breaking, not the scheduler refusing, so it is
+// recorded as well as returned. The two are different: a script that returns
+// status.Error on purpose is stating what this test is about.
+func (s *schedulerStream) recv() (*executorv1.AttachRequest, error) {
 	req, err := s.Recv()
 	if err != nil {
-		t.Fatalf("Recv: %v", err)
+		return nil, s.fake.fail(fmt.Errorf("recv: %w", err))
 	}
 	s.fake.record(req)
-	return req
+	return req, nil
 }
 
 // recvOrEnd reads the next frame, reporting a stream the executor closed.
@@ -60,21 +71,24 @@ func (s *schedulerStream) recvOrEnd() (*executorv1.AttachRequest, bool) {
 	return req, true
 }
 
-func (s *schedulerStream) send(t *testing.T, frame *executorv1.AttachResponse) {
-	t.Helper()
+func (s *schedulerStream) send(frame *executorv1.AttachResponse) error {
 	if err := s.Send(frame); err != nil {
-		t.Fatalf("Send: %v", err)
+		return s.fake.fail(fmt.Errorf("send: %w", err))
 	}
+	return nil
 }
 
 // handshake reads hello and answers it, which is what every test that is not
 // about the handshake wants.
-func (s *schedulerStream) handshake(t *testing.T, capabilities ...string) {
-	t.Helper()
-	if hello := s.recv(t).GetHello(); hello == nil {
-		t.Fatalf("the executor's first frame was %T, want hello", s.fake.lastFrame())
+func (s *schedulerStream) handshake(capabilities ...string) error {
+	req, err := s.recv()
+	if err != nil {
+		return err
 	}
-	s.send(t, ack(1, capabilities...))
+	if req.GetHello() == nil {
+		return s.fake.fail(fmt.Errorf("the executor's first frame was %T, want hello", req.GetFrame()))
+	}
+	return s.send(ack(1, capabilities...))
 }
 
 func ack(version uint32, capabilities ...string) *executorv1.AttachResponse {
@@ -93,38 +107,49 @@ func jobFrame(id, task string, payload []byte) *executorv1.AttachResponse {
 	}}
 }
 
+func cancelFrame(jobID string) *executorv1.AttachResponse {
+	return &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_Cancel{
+		Cancel: &executorv1.CancelFrame{JobId: jobID},
+	}}
+}
+
+func shutdownFrame() *executorv1.AttachResponse {
+	return &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_Shutdown{
+		Shutdown: &executorv1.ShutdownFrame{},
+	}}
+}
+
+// jobStepsFrame is a durable-step snapshot, which this client never asks for.
+// It exists so a test can prove one arriving anyway is skipped.
+func jobStepsFrame(jobID string, snapshot []byte) *executorv1.AttachResponse {
+	return &executorv1.AttachResponse{Frame: &executorv1.AttachResponse_JobSteps{
+		JobSteps: &executorv1.JobStepsFrame{JobId: jobID, Snapshot: snapshot},
+	}}
+}
+
 // fakeScheduler answers whatever a test scripts. Attach is given the attempt
 // number so a test about reconnecting can behave differently the second time.
 type fakeScheduler struct {
 	executorv1.UnimplementedExecutorServiceServer
 
-	attach    func(t *testing.T, attempt int, s *schedulerStream) error
+	attach    func(attempt int, s *schedulerStream) error
 	heartbeat func(context.Context, *executorv1.HeartbeatRequest) (*executorv1.HeartbeatResponse, error)
 	// withoutSessionToken suppresses the metadata a real scheduler always sends.
 	withoutSessionToken bool
-
-	t *testing.T
 
 	mu         sync.Mutex
 	attempts   int
 	received   []*executorv1.AttachRequest
 	heartbeats []*executorv1.HeartbeatRequest
-	attached   chan struct{}
+	// failed is the first error a script reported, kept for the test goroutine
+	// to raise.
+	failed error
 }
 
 func (f *fakeScheduler) record(req *executorv1.AttachRequest) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.received = append(f.received, req)
-}
-
-func (f *fakeScheduler) lastFrame() any {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.received) == 0 {
-		return nil
-	}
-	return f.received[len(f.received)-1].GetFrame()
 }
 
 // frames returns a copy, so an assertion cannot race the stream still running.
@@ -146,7 +171,32 @@ func (f *fakeScheduler) beats() []*executorv1.HeartbeatRequest {
 	return append([]*executorv1.HeartbeatRequest(nil), f.heartbeats...)
 }
 
+// fail records the first script failure and hands it back for returning.
+//
+// The first, because the client reconnects: a script that failed once fails
+// again on every retry, and the one worth reading is the original.
+func (f *fakeScheduler) fail(err error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failed == nil {
+		f.failed = err
+	}
+	return err
+}
+
+func (f *fakeScheduler) failure() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failed
+}
+
 func (f *fakeScheduler) Attach(raw grpc.BidiStreamingServer[executorv1.AttachRequest, executorv1.AttachResponse]) error {
+	if err := f.failure(); err != nil {
+		// Already broken. Answering again reruns a script with nothing left to
+		// prove and buries the first failure under its repeats.
+		return err
+	}
+
 	f.mu.Lock()
 	f.attempts++
 	attempt := f.attempts
@@ -157,24 +207,23 @@ func (f *fakeScheduler) Attach(raw grpc.BidiStreamingServer[executorv1.AttachReq
 		// it has read hello. Sending it here mirrors that ordering, which is
 		// what the client's Header() call depends on.
 		if err := raw.SendHeader(metadata.Pairs("flexiq-attach-session-bin", testSessionToken)); err != nil {
-			return err
-		}
-	}
-
-	if f.attached != nil {
-		select {
-		case f.attached <- struct{}{}:
-		default:
+			return f.fail(err)
 		}
 	}
 
 	stream := &schedulerStream{BidiStreamingServer: raw, fake: f}
 	if f.attach == nil {
-		stream.handshake(f.t)
+		if err := stream.handshake(); err != nil {
+			return err
+		}
 		drain(stream)
 		return nil
 	}
-	return f.attach(f.t, attempt, stream)
+	// Returned as-is. A script that refuses on purpose — a version mismatch, a
+	// duplicate id, a scheduler still starting — is saying what its test is
+	// about, and that is not a harness failure. The helpers above record the
+	// ones that are.
+	return f.attach(attempt, stream)
 }
 
 // drain reads until the executor closes its half, so a scripted stream can end
@@ -198,12 +247,11 @@ func (f *fakeScheduler) Heartbeat(ctx context.Context, req *executorv1.Heartbeat
 	return f.heartbeat(ctx, req)
 }
 
-// worker builds a worker wired to the double, with the timings a test wants:
-// short enough that a case about reconnecting finishes, long enough that a
-// loaded machine does not fail one about anything else.
+// serveExecutor builds a worker wired to the double, with the timings a test
+// wants: short enough that a case about reconnecting finishes, long enough that
+// a loaded machine does not fail one about anything else.
 func serveExecutor(t *testing.T, fake *fakeScheduler, opts ...executor.Option) *executor.Worker {
 	t.Helper()
-	fake.t = t
 
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -236,13 +284,18 @@ func serveExecutor(t *testing.T, fake *fakeScheduler, opts ...executor.Option) *
 		_ = w.Close()
 		server.Stop()
 		_ = listener.Close()
+		// The backstop for a script that failed after every assertion had
+		// already passed, which no await would have looked at.
+		if scriptErr := fake.failure(); scriptErr != nil {
+			t.Errorf("the scheduler double failed: %v", scriptErr)
+		}
 	})
 	return w
 }
 
-// runWorker starts the worker and hands back the channel its error arrives on, plus
-// the cancel that stops it. The test is responsible for reaching one or the
-// other; the cleanup only makes sure nothing is left running.
+// runWorker starts the worker and hands back the channel its error arrives on,
+// plus the cancel that stops it. The test is responsible for reaching one or
+// the other; the cleanup only makes sure nothing is left running.
 func runWorker(t *testing.T, w *executor.Worker) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
@@ -267,12 +320,20 @@ func runWorker(t *testing.T, w *executor.Worker) (context.CancelFunc, <-chan err
 }
 
 // await fails the test rather than hanging when something never happens.
-func await(t *testing.T, what string, condition func() bool) {
+//
+// It watches the double as well as the condition: a script that failed is
+// usually why the condition will never come true, and reporting the timeout
+// instead would name the symptom.
+func await(t *testing.T, fake *fakeScheduler, what string, condition func() bool) {
 	t.Helper()
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return
+		}
+		if err := fake.failure(); err != nil {
+			t.Fatalf("waiting for %s: the scheduler double failed: %v", what, err)
 		}
 		time.Sleep(time.Millisecond)
 	}
