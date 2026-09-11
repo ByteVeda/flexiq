@@ -64,6 +64,8 @@ There is no completion notification anywhere on this door — no watch, no serve
 | `ListJobs` / `AllJobs` | Page through jobs, newest first |
 | `CancelJob` | Cancel, and report the state that leaves it in |
 | `QueueStats` | Per-status counts for one queue or the namespace |
+| `SubmitWorkflow` | Submit a graph of steps, one job per node |
+| `GetWorkflowRun` | Read a run and every node it has |
 
 `AllJobs` is a range-over-func iterator that pages for you:
 
@@ -76,7 +78,61 @@ for job, err := range client.AllJobs(ctx, flexiq.ListJobsQuery{Queue: "payments"
 }
 ```
 
-`SubmitWorkflow` and `GetWorkflowRun` are not implemented yet.
+## Workflows
+
+A workflow is a graph of steps. Submit one and the server pre-enqueues a job per
+node, chained by the graph's edges, and the ordinary scheduler advances it — any
+worker with workflow tracking enabled, not only whoever submitted it.
+
+```go
+submitted, err := client.SubmitWorkflow(ctx, flexiq.SubmitWorkflowRequest{
+    Name: "checkout",
+    Graph: flexiq.WorkflowGraph{
+        Nodes: []flexiq.WorkflowNode{
+            {Name: "charge", Task: "billing.charge", Args: []any{order}},
+            {Name: "ship", Task: "fulfilment.ship", Options: flexiq.WorkflowNodeOptions{
+                Queue:      "fulfilment",
+                MaxRetries: 2,
+                Condition:  flexiq.EdgeConditionOnSuccess,
+            }},
+        },
+        Edges: []flexiq.WorkflowEdge{{From: "charge", To: "ship"}},
+    },
+})
+
+run, err := client.GetWorkflowRun(ctx, submitted.RunID)
+for _, node := range run.Nodes {
+    fmt.Println(node.Name, node.Status, node.JobID)
+}
+```
+
+Poll `GetWorkflowRun` and stop when `run.State.IsTerminal()` says to. As
+everywhere else on this door, there is no watch and no server stream.
+
+**Static graphs only.** A node may set `Gate`, `Cache`, `FanOut`, `FanIn` or
+`SubWorkflow` — the wire carries all five — but this door refuses a graph that
+does, `FAILED_PRECONDITION` with reason `WORKFLOW_CONSTRUCT_UNSUPPORTED`, before
+anything is written. Nothing outside a live SDK process can advance a run using
+one. The refusal names the node and the field, and one graph is refused for one
+node at a time:
+
+```go
+if wireErr, ok := flexiq.AsError(err); ok {
+    if construct, ok := wireErr.WorkflowConstruct(); ok {
+        log.Printf("node %q cannot set %q over this door", construct.Node, construct.Field)
+    }
+}
+```
+
+**A submission is not idempotent.** There is no `unique_key` equivalent for a
+workflow, so a call retried after a dropped connection submits a second run.
+Record the run id you were given before retrying.
+
+**There is no version to submit under.** Every submission is version 1 of its
+name. Resubmitting a name with a graph that differs from the one version 1
+already holds is refused, `INVALID_ARGUMENT` — a run's definition has to
+describe the graph that produced its jobs. Submit a materially different graph
+under a different name.
 
 ## Credentials
 
@@ -188,6 +244,11 @@ of the lint config, so `make lint` covers `gofmt` as well.
 
 `internal/pb` is committed because `go get` runs no code generator. CI regenerates it and fails on
 a diff, so it cannot drift from `contracts/proto`.
+
+One file per concern, named after it — `enqueue.go`, `read.go`, `cancel.go`, `errors.go`. A
+surface with more than one file's worth in it takes a prefixed family rather than a longer file:
+`workflow_graph.go` is the shape you submit, `workflow_submit.go` the call, `workflow_run.go` what
+comes back and `workflow_status.go` the enums those carry. The tests mirror the same names.
 
 The suite lives in `tests/`, beside the package rather than inside it. Everything there reaches the
 client through its exported API, the same way you do — a surface that is awkward to use is awkward
