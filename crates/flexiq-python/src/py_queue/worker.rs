@@ -105,20 +105,45 @@ fn duration_ms(wall_time_ns: i64) -> Option<i64> {
 /// Both `rate_limit` and `retry_budget` take this syntax, and both silently lose
 /// their limit if the value does not parse — a typo would look like it took
 /// effect while the task ran unthrottled. Fail at worker start instead.
+///
+/// A queue carries a rate limit too, so the error names the kind as well as the
+/// name: `scope` is `"task"` or `"queue"`.
 fn parse_rate(
-    value: Option<&String>,
+    value: Option<&str>,
     field: &str,
-    task_name: &str,
+    scope: &str,
+    name: &str,
 ) -> PyResult<Option<RateLimitConfig>> {
     let Some(raw) = value else {
         return Ok(None);
     };
     let parsed = RateLimitConfig::parse(raw).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!(
-            "invalid {field} {raw:?} for task {task_name}: expected a rate like \"100/m\""
+            "invalid {field} {raw:?} for {scope} {name}: \
+             expected a count of at least 1 over a unit, as in \"100/m\""
         ))
     })?;
     Ok(Some(parsed))
+}
+
+/// Read a queue's `rate_limit` out of the JSON its config travelled in.
+///
+/// An absent field (or an explicit null) means no limit. A present one has to be
+/// a string: `Value::as_str` reads a number as `None`, which would put a
+/// misconfigured queue straight back on the silent-no-limit path this parse
+/// exists to close. `set_queue_rate_limit` is typed `str`, but nothing enforces
+/// that at runtime and the dashboard overrides merge into the same map.
+fn queue_rate(cfg: &serde_json::Value, queue_name: &str) -> PyResult<Option<RateLimitConfig>> {
+    let raw = match cfg.get("rate_limit") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(value) => value.as_str().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid rate_limit {value} for queue {queue_name}: \
+                 expected a rate string like \"100/m\""
+            ))
+        })?,
+    };
+    parse_rate(Some(raw), "rate_limit", "queue", queue_name)
 }
 
 /// Parse the `on_excess` spec a task registered with. Unset means the default,
@@ -475,8 +500,9 @@ impl PyQueue {
                 max_delay_ms,
                 custom_delays_ms,
             };
-            let rate_limit = parse_rate(tc.rate_limit.as_ref(), "rate_limit", &tc.name)?;
-            let retry_budget = parse_rate(tc.retry_budget.as_ref(), "retry_budget", &tc.name)?;
+            let rate_limit = parse_rate(tc.rate_limit.as_deref(), "rate_limit", "task", &tc.name)?;
+            let retry_budget =
+                parse_rate(tc.retry_budget.as_deref(), "retry_budget", "task", &tc.name)?;
             let circuit_breaker =
                 tc.circuit_breaker_threshold
                     .map(|threshold| CircuitBreakerConfig {
@@ -509,10 +535,9 @@ impl PyQueue {
             >(qc_json)
             {
                 for (queue_name, cfg) in map {
-                    let rate_limit = cfg
-                        .get("rate_limit")
-                        .and_then(|v| v.as_str())
-                        .and_then(RateLimitConfig::parse);
+                    // Same rule as a task's: a rate the core cannot read fails the
+                    // start rather than leaving the queue quietly unthrottled.
+                    let rate_limit = queue_rate(&cfg, &queue_name)?;
                     let max_concurrent = cfg
                         .get("max_concurrent")
                         .and_then(|v| v.as_i64())

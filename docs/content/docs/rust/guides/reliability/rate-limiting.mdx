@@ -52,6 +52,10 @@ out a token, so the task would simply never dispatch, with nothing anywhere
 saying why. The same check rejects a negative count, a `NaN`, and a string with
 more than one `/`.
 
+The rule is not the macro's alone. `RateLimitConfig::parse` applies it too, so a
+rate assembled at runtime rather than written as a literal returns `None` rather
+than a bucket that never opens.
+
 ## `on_excess` — defer or drop
 
 When the bucket is empty the scheduler has two choices, and `on_excess` picks
