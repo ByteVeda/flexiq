@@ -31,6 +31,14 @@
 //		},
 //	})
 //
+// # Workflows
+//
+// [Client.SubmitWorkflow] takes a graph of steps and the server pre-enqueues
+// one job per node, chained by the graph's edges; [Client.GetWorkflowRun] reads
+// the run and every node back. The door executes static graphs only — a node
+// setting a gate, a cache, a fan-out, a fan-in or a sub-workflow is refused,
+// because nothing outside a live SDK process can advance one.
+//
 // # Two kinds of failure
 //
 // A failed request is an [*Error], and it is branched on by reason:

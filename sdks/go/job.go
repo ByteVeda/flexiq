@@ -70,19 +70,19 @@ func (s JobStatus) IsKnown() bool {
 func (s JobStatus) String() string {
 	switch s {
 	case StatusUnspecified:
-		return "UNSPECIFIED"
+		return nameUnspecified
 	case StatusPending:
-		return "PENDING"
+		return namePending
 	case StatusRunning:
-		return "RUNNING"
+		return nameRunning
 	case StatusComplete:
 		return "COMPLETE"
 	case StatusFailed:
-		return "FAILED"
+		return nameFailed
 	case StatusDead:
 		return "DEAD"
 	case StatusCancelled:
-		return "CANCELLED"
+		return nameCancelled
 	default:
 		// A status from a newer server. Naming the number is more use than
 		// "unknown" when it turns up in a log.

@@ -174,6 +174,36 @@ func (e *Error) QueueFull() (QueueFullInfo, bool) {
 	return QueueFullInfo{Queue: queue, Pending: pending, Cap: capacity}, true
 }
 
+// WorkflowConstructInfo is the node and the field behind a
+// [ReasonWorkflowConstructUnsupported].
+type WorkflowConstructInfo struct {
+	// Node is the offending node's name in the submitted graph.
+	Node string
+	// Field is the construct it set: "gate", "cache", "fan_out", "fan_in" or
+	// "sub_workflow". A newer server may name one this build has not seen.
+	Field string
+}
+
+// WorkflowConstruct reports which node of a submitted graph set a construct
+// [Client.SubmitWorkflow] does not execute, and which construct it was. The
+// second return is false unless this error is a
+// [ReasonWorkflowConstructUnsupported] carrying both.
+//
+// The refusal names one node even where the graph sets several: the whole call
+// is refused before anything is written, so the first one found ends it. A
+// caller clearing them does so until the call succeeds, not in one pass.
+func (e *Error) WorkflowConstruct() (WorkflowConstructInfo, bool) {
+	if e.Reason != ReasonWorkflowConstructUnsupported {
+		return WorkflowConstructInfo{}, false
+	}
+	node, hasNode := e.Meta("node")
+	field, hasField := e.Meta("field")
+	if !hasNode || !hasField {
+		return WorkflowConstructInfo{}, false
+	}
+	return WorkflowConstructInfo{Node: node, Field: field}, true
+}
+
 // Scope reports which scope the credential was missing — "produce" or
 // "execute" — on a [ReasonScopeDenied].
 func (e *Error) Scope() (string, bool) {
