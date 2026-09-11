@@ -105,17 +105,21 @@ fn duration_ms(wall_time_ns: i64) -> Option<i64> {
 /// Both `rate_limit` and `retry_budget` take this syntax, and both silently lose
 /// their limit if the value does not parse — a typo would look like it took
 /// effect while the task ran unthrottled. Fail at worker start instead.
+///
+/// A queue carries a rate limit too, so the error names the kind as well as the
+/// name: `scope` is `"task"` or `"queue"`.
 fn parse_rate(
-    value: Option<&String>,
+    value: Option<&str>,
     field: &str,
-    task_name: &str,
+    scope: &str,
+    name: &str,
 ) -> PyResult<Option<RateLimitConfig>> {
     let Some(raw) = value else {
         return Ok(None);
     };
     let parsed = RateLimitConfig::parse(raw).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!(
-            "invalid {field} {raw:?} for task {task_name}: expected a rate like \"100/m\""
+            "invalid {field} {raw:?} for {scope} {name}: expected a rate like \"100/m\""
         ))
     })?;
     Ok(Some(parsed))
@@ -475,8 +479,9 @@ impl PyQueue {
                 max_delay_ms,
                 custom_delays_ms,
             };
-            let rate_limit = parse_rate(tc.rate_limit.as_ref(), "rate_limit", &tc.name)?;
-            let retry_budget = parse_rate(tc.retry_budget.as_ref(), "retry_budget", &tc.name)?;
+            let rate_limit = parse_rate(tc.rate_limit.as_deref(), "rate_limit", "task", &tc.name)?;
+            let retry_budget =
+                parse_rate(tc.retry_budget.as_deref(), "retry_budget", "task", &tc.name)?;
             let circuit_breaker =
                 tc.circuit_breaker_threshold
                     .map(|threshold| CircuitBreakerConfig {
@@ -509,10 +514,14 @@ impl PyQueue {
             >(qc_json)
             {
                 for (queue_name, cfg) in map {
-                    let rate_limit = cfg
-                        .get("rate_limit")
-                        .and_then(|v| v.as_str())
-                        .and_then(RateLimitConfig::parse);
+                    // Same rule as a task's: a rate the core cannot read fails the
+                    // start rather than leaving the queue quietly unthrottled.
+                    let rate_limit = parse_rate(
+                        cfg.get("rate_limit").and_then(|v| v.as_str()),
+                        "rate_limit",
+                        "queue",
+                        &queue_name,
+                    )?;
                     let max_concurrent = cfg
                         .get("max_concurrent")
                         .and_then(|v| v.as_i64())

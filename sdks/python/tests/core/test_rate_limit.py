@@ -71,13 +71,12 @@ def test_rate_limit_throttles(queue: Queue, poll_until: PollUntil) -> None:
         join_worker(worker_thread)
 
 
-def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
-    """A typo must not silently disable the limit."""
+def start_error(queue: Queue) -> str:
+    """Start a worker that is expected to refuse, and return what it said.
 
-    @queue.task(rate_limit="not-a-rate")
-    def bad_rate() -> None:
-        pass
-
+    ``run_worker`` blocks, so a config the core rejects surfaces as an exception
+    on the worker's own thread rather than at the call site.
+    """
     thread_error: list[BaseException] = []
 
     def _run() -> None:
@@ -91,5 +90,50 @@ def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
     join_worker(thread, message="worker never exited after rejecting the rate")
     queue.shutdown()
 
-    assert thread_error, "an invalid rate_limit must be rejected, not ignored"
-    assert "rate_limit" in str(thread_error[0])
+    assert thread_error, "an invalid rate must be rejected, not ignored"
+    return str(thread_error[0])
+
+
+def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
+    """A typo must not silently disable the limit."""
+
+    @queue.task(rate_limit="not-a-rate")
+    def bad_rate() -> None:
+        pass
+
+    assert "rate_limit" in start_error(queue)
+
+
+def test_rate_limit_rejects_a_count_below_one(queue: Queue) -> None:
+    """A bucket of zero tokens never refills past the one an acquire needs.
+
+    Nothing downstream would report that: the task would simply never dispatch,
+    indistinguishable from one nobody enqueued. The rate has to be refused at the
+    start instead.
+    """
+
+    @queue.task(rate_limit="0/s")
+    def never_runs() -> None:
+        pass
+
+    error = start_error(queue)
+    assert "rate_limit" in error
+    assert "0/s" in error
+
+
+def test_queue_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
+    """A queue's rate is held to the same rule as a task's.
+
+    It used to be dropped on a parse failure, which left the queue running with no
+    limit at all — the one direction a misconfigured throttle must never fail in.
+    """
+
+    @queue.task()
+    def fine() -> None:
+        pass
+
+    queue.set_queue_rate_limit("default", "0/s")
+
+    error = start_error(queue)
+    assert "rate_limit" in error
+    assert "queue default" in error
