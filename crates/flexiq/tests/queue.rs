@@ -118,6 +118,48 @@ fn an_explicit_unique_key_beats_the_derived_one() {
     assert_eq!(job.unique_key.as_deref(), Some("mine"));
 }
 
+/// A scoped handle is a boundary, not a default.
+///
+/// `TaskCall::namespace` is public, so a caller holding a handle for one tenant
+/// could otherwise name another on the call and write into it.
+#[test]
+fn a_scoped_handle_refuses_a_call_naming_another_namespace() {
+    let q = FlexiQ::in_memory()
+        .expect("opens")
+        .with_namespace("tenant-a");
+
+    let err = q
+        .enqueue(greet("world").namespace("tenant-b"))
+        .expect_err("a scoped handle must not write outside its namespace");
+    assert!(err.to_string().contains("tenant-b"), "message: {err}");
+
+    let err = q
+        .enqueue_batch(vec![greet("a").namespace("tenant-b")])
+        .expect_err("the same holds for a batch");
+    assert!(err.to_string().contains("tenant-b"), "message: {err}");
+
+    // Naming its own namespace is not a mismatch, and inheriting is the default.
+    let named = q
+        .enqueue(greet("world").namespace("tenant-a"))
+        .expect("its own namespace is fine");
+    assert_eq!(named.namespace.as_deref(), Some("tenant-a"));
+
+    let inherited = q.enqueue(greet("world")).expect("inherits");
+    assert_eq!(inherited.namespace.as_deref(), Some("tenant-a"));
+}
+
+/// An unscoped handle naming a namespace per call is how a caller targets one
+/// without holding a scoped handle, and stays allowed.
+#[test]
+fn an_unscoped_handle_may_still_name_a_namespace() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q
+        .enqueue(greet("world").namespace("tenant-b"))
+        .expect("enqueues");
+
+    assert_eq!(job.namespace.as_deref(), Some("tenant-b"));
+}
+
 #[test]
 fn a_batch_enqueues_every_call() {
     let q = FlexiQ::in_memory().expect("opens");

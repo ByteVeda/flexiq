@@ -68,7 +68,7 @@ impl FlexiQ {
     /// call's own options: a debounce window routes to `enqueue_debounced`, a
     /// dedup key to `enqueue_unique`, and everything else to the plain insert.
     pub fn enqueue<T: Task>(&self, call: TaskCall<T>) -> Result<Job> {
-        let (new_job, debounce, unique) = self.prepare::<T>(call);
+        let (new_job, debounce, unique) = self.prepare::<T>(call)?;
 
         match (debounce, unique) {
             (Some(window), _) => self.storage.enqueue_debounced(new_job, window),
@@ -87,7 +87,7 @@ impl FlexiQ {
         let mut any_unique = false;
 
         for call in calls {
-            let (new_job, debounce, unique) = self.prepare::<T>(call);
+            let (new_job, debounce, unique) = self.prepare::<T>(call)?;
             if debounce.is_some() {
                 return Err(QueueError::Other(format!(
                     "a debounce window cannot ride a batch: enqueue `{}` on its own",
@@ -109,20 +109,33 @@ impl FlexiQ {
     fn prepare<T: Task>(
         &self,
         call: TaskCall<T>,
-    ) -> (
+    ) -> Result<(
         flexiq_core::NewJob,
         Option<flexiq_core::storage::records::DebounceOptions>,
         bool,
-    ) {
+    )> {
         let TaskCall {
             payload,
             mut options,
             ..
         } = call;
 
-        if options.namespace.is_none() {
-            options.namespace.clone_from(&self.namespace);
+        match (self.namespace.as_deref(), options.namespace.as_deref()) {
+            // A scoped handle is a boundary, not a default. `TaskCall::namespace`
+            // is public, so without this check a caller holding a handle for one
+            // tenant could name another on the call and write into it.
+            (Some(handle), Some(named)) if handle != named => {
+                return Err(QueueError::Other(format!(
+                    "this handle is scoped to namespace `{handle}`, and the call names \
+                     `{named}`: a scoped handle cannot enqueue outside its own namespace"
+                )))
+            }
+            (Some(_), None) => options.namespace.clone_from(&self.namespace),
+            // An unscoped handle naming a namespace per call is how a caller
+            // targets one without holding a scoped handle, and stays allowed.
+            _ => {}
         }
+
         // An explicit key wins: a caller who names an identity has said
         // something the payload's bytes cannot.
         if options.idempotent && options.unique_key.is_none() {
@@ -131,7 +144,7 @@ impl FlexiQ {
 
         let unique = options.unique_key.is_some();
         let window = options.debounce.as_ref().map(|d| d.options());
-        (options.into_new_job(T::NAME, payload), window, unique)
+        Ok((options.into_new_job(T::NAME, payload), window, unique))
     }
 
     /// Start building a worker over this backend.
