@@ -118,6 +118,11 @@ prost = { version = "0.14", optional = true }
 prost-types = { version = "0.14", optional = true }
 
 [dev-dependencies]
+# The `fq` command line, for `tests/grpc_cli.rs`. The dependency runs this way
+# round on purpose: `flexiq-cli` links no member of this workspace, and a
+# dev-dependency from it onto this crate would unify the `grpc` feature into
+# every `cargo check --workspace`.
+flexiq-cli = { path = "../flexiq-cli" }
 tower = { version = "0.5", features = ["util"] }
 # The generator behind contracts/openapi.json. Depended on only by the facade's
 # drift test, which holds the route table to the `google.api.http` annotations

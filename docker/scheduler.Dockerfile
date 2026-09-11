@@ -43,19 +43,28 @@ COPY --from=dashboard /src/dashboard/dist ./dashboard/dist
 # picks at runtime. `grpc` too, so FLEXIQ_GRPC_LISTEN turns the role on rather
 # than being refused by a binary that has no gRPC server to start.
 #
-# The binary is copied out of the cache mount because cache mounts are not part
-# of the resulting layer, and the PT_INTERP check fails the build rather than
-# the container: distroless/static ships no dynamic loader.
+# `fq` rides the same invocation rather than a second one. That is the whole
+# point of it living in this workspace: one cargo build means the CLI and the
+# server in an image are the same version, and the image is the artifact an
+# operator with no Rust toolchain reaches for.
+#
+# The binaries are copied out of the cache mount because cache mounts are not
+# part of the resulting layer, and the PT_INTERP check fails the build rather
+# than the container: distroless/static ships no dynamic loader.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     FLEXIQ_DASHBOARD_ASSETS_DIR=/src/dashboard/dist \
-    cargo build --release --locked -p flexiq-server --features postgres,redis,grpc \
+    cargo build --release --locked -p flexiq-server -p flexiq-cli \
+      --features flexiq-server/postgres,flexiq-server/redis,flexiq-server/grpc \
     && cp target/release/flexiq-server /flexiq-server \
-    && if readelf -l /flexiq-server | grep -q INTERP; then \
-         echo "flexiq-server is dynamically linked — distroless/static cannot run it" >&2; \
-         exit 1; \
-       fi
+    && cp target/release/fq /fq \
+    && for binary in /flexiq-server /fq; do \
+         if readelf -l "$binary" | grep -q INTERP; then \
+           echo "$binary is dynamically linked — distroless/static cannot run it" >&2; \
+           exit 1; \
+         fi; \
+       done
 
 # --- image -------------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
@@ -67,11 +76,14 @@ ARG VERSION=dev
 # from the child images' config labels, so a label alone leaves the package page
 # blank. ci-server-image.yml asserts they are all still set.
 LABEL org.opencontainers.image.title="flexiq-server" \
-      org.opencontainers.image.description="FlexiQ scheduler, executor attach listener, and dashboard" \
+      org.opencontainers.image.description="FlexiQ scheduler, executor attach listener, dashboard, and the fq command line" \
       org.opencontainers.image.source="https://github.com/ByteVeda/flexiq" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=builder /flexiq-server /usr/local/bin/flexiq-server
+# The standalone command line, over gRPC. Not the entrypoint — reach it with
+# `docker run --entrypoint /usr/local/bin/fq …`, or copy it out of the image.
+COPY --from=builder /fq /usr/local/bin/fq
 # Attach listener, dashboard and gRPC. All stay off until FLEXIQ_LISTEN /
 # FLEXIQ_DASHBOARD / FLEXIQ_GRPC_LISTEN are set, so this documents the ports
 # rather than opening them.

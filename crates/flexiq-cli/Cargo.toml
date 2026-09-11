@@ -1,0 +1,51 @@
+[package]
+name = "flexiq-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Standalone command line for a FlexiQ server, over gRPC"
+publish = false
+
+[lib]
+name = "flexiq_cli"
+path = "src/lib.rs"
+
+# `fq`, not `flexiq`: that name is already the Python SDK's console script, the
+# Node package's bin entry and the Java CLI's picocli command. A fourth thing
+# called `flexiq` is a collision the operator hits, not one the build catches.
+[[bin]]
+name = "fq"
+path = "src/main.rs"
+
+# Nothing from this workspace. That is the crate's premise: no flexiq-core means
+# no Diesel, no bundled SQLite, no libpq and no C toolchain, so an operator with
+# no FlexiQ SDK installed can still drive the server.
+[dependencies]
+anyhow = "1"
+base64 = "0.23"
+chrono = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+prost = "0.14"
+prost-types = "0.14"
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+# `tls-native-roots` is what the https:// scheme verifies against; the server
+# terminates no TLS itself, so the peer is a proxy or a mesh with a real chain.
+tonic = { version = "0.14", features = ["tls-ring", "tls-native-roots"] }
+tonic-prost = "0.14"
+# google.rpc: the ErrorInfo and RetryInfo every non-OK response attaches, and
+# the StatusExt that reads them.
+tonic-types = "0.14"
+# The Unix-socket connector: `service_fn` to build it, `TokioIo` to hand tonic a
+# `UnixStream` in the IO shape hyper wants.
+tower = { version = "0.5", features = ["util"] }
+hyper-util = "0.1"
+
+[build-dependencies]
+# Codegen reads contracts/descriptor.binpb — the same FileDescriptorSet the
+# server compiles and serves over reflection — so no protoc on any PATH.
+prost = "0.14"
+prost-types = "0.14"
+tonic-prost-build = "0.14"

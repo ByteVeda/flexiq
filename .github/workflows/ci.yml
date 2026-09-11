@@ -144,6 +144,8 @@ jobs:
             # the Dockerfile and the SPA it embeds.
             server:
               - 'crates/flexiq-server/**'
+              # The image carries `fq` beside the server, from one cargo build.
+              - 'crates/flexiq-cli/**'
               - 'dashboard/**'
               - 'docker/**'
               - '!docker/**.md'
@@ -153,6 +155,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci-server-image.yml'
+              # The dispatcher, for the same reason `go_e2e` watches it:
+              # ci-server-image.yml has no trigger of its own, so a PR that
+              # touches only this file would skip the suite it just edited.
+              - '.github/workflows/ci.yml'
             # Template rendering only — seconds, and independent of the image.
             chart:
               - 'deploy/helm/**'
