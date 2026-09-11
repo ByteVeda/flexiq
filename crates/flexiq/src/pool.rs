@@ -126,8 +126,15 @@ impl WorkerBuilder {
 
         // Before the scheduler starts, so a periodic that is already due is
         // found on the first tick rather than one interval late.
-        for register in self.periodics {
-            register(&self.storage)?;
+        if !self.periodics.is_empty() {
+            if self.namespace.is_some() {
+                return Err(crate::cron::unsupported_in_namespace(
+                    "registering a scheduled task",
+                ));
+            }
+            for register in self.periodics {
+                register(&self.storage)?;
+            }
         }
 
         let dispatcher = Arc::new(ShellDispatcher::new(

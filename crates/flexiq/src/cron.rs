@@ -16,7 +16,7 @@
 //! process, or accept that a fleet may double-fire.
 
 use flexiq_core::periodic::{next_cron_time, next_cron_time_tz};
-use flexiq_core::{now_millis, NewPeriodicTask, Result, Storage};
+use flexiq_core::{now_millis, NewPeriodicTask, QueueError, Result, Storage};
 
 use crate::Task;
 
@@ -27,6 +27,26 @@ pub struct PeriodicSpec {
     pub cron: &'static str,
     /// An IANA timezone name. `None` is UTC.
     pub timezone: Option<&'static str>,
+}
+
+/// Why a namespaced handle refuses every periodic operation.
+///
+/// Periodic tasks are not namespace-aware anywhere below this crate.
+/// [`NewPeriodicTask`] carries no namespace, and every backend keys the table by
+/// `name` alone — so on a shared database two namespaces registering the same
+/// task name overwrite one another's row, a listing returns every tenant's
+/// schedules, and a delete or pause reaches a name it does not own.
+///
+/// Refusing is the honest answer while that is true: scoping this properly is a
+/// migration plus a change to the `Storage` contract and all three backends,
+/// which is its own piece of work. A handle with no namespace behaves exactly
+/// as before.
+pub(crate) fn unsupported_in_namespace(operation: &str) -> QueueError {
+    QueueError::Other(format!(
+        "{operation} is not available on a namespaced handle: periodic tasks are keyed by name \
+         alone in every backend, so a namespaced call would reach another namespace's rows. \
+         Use a handle without a namespace."
+    ))
 }
 
 /// Write `T`'s schedule, or refresh it if it is already there.

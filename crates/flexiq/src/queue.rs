@@ -168,7 +168,16 @@ impl FlexiQ {
     }
 
     /// Every registered periodic task.
+    ///
+    /// **Refused on a namespaced handle.** Periodic rows carry no namespace and
+    /// every backend keys the table by name alone, so a namespaced listing would
+    /// return other namespaces' schedules. The same holds for
+    /// [`delete_periodic`](Self::delete_periodic),
+    /// [`pause_periodic`](Self::pause_periodic) and
+    /// [`resume_periodic`](Self::resume_periodic), and for registering one on a
+    /// namespaced worker.
     pub fn list_periodic(&self) -> Result<Vec<flexiq_core::PeriodicTask>> {
+        self.refuse_periodic_in_namespace("list_periodic")?;
         self.storage.list_periodic()
     }
 
@@ -178,17 +187,29 @@ impl FlexiQ {
     /// startup: the schedule is declared in code, and this removes the row
     /// rather than the declaration.
     pub fn delete_periodic(&self, name: &str) -> Result<bool> {
+        self.refuse_periodic_in_namespace("delete_periodic")?;
         self.storage.delete_periodic(name)
     }
 
     /// Stop a periodic firing, without forgetting it.
     pub fn pause_periodic(&self, name: &str) -> Result<bool> {
+        self.refuse_periodic_in_namespace("pause_periodic")?;
         self.storage.set_periodic_enabled(name, false)
     }
 
     /// Let a paused periodic fire again.
     pub fn resume_periodic(&self, name: &str) -> Result<bool> {
+        self.refuse_periodic_in_namespace("resume_periodic")?;
         self.storage.set_periodic_enabled(name, true)
+    }
+
+    /// The periodic table is keyed by name alone, so a namespaced handle has no
+    /// safe way to touch it.
+    fn refuse_periodic_in_namespace(&self, operation: &str) -> Result<()> {
+        match self.namespace {
+            Some(_) => Err(crate::cron::unsupported_in_namespace(operation)),
+            None => Ok(()),
+        }
     }
 }
 

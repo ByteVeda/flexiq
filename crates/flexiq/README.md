@@ -100,6 +100,11 @@ A worker registers every scheduled task it knows about at startup. Firing is
 per-scheduler and not leader-elected, so register a periodic from one process
 unless a fleet double-firing it is acceptable.
 
+Periodic tasks are **not namespace-aware**: the table is keyed by name alone in
+every backend, so a namespaced handle refuses to register, list, delete, pause
+or resume one rather than reach another namespace's rows. Everything else on a
+namespaced handle works as usual.
+
 ## Talking to the other SDKs
 
 Task arguments travel in the cross-SDK envelope, byte for byte as

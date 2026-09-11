@@ -87,6 +87,56 @@ fn a_scheduled_task_actually_fires() {
     );
 }
 
+/// Periodic rows are keyed by name alone in every backend — `NewPeriodicTask`
+/// has no namespace — so a namespaced handle would read and overwrite another
+/// namespace's schedules. Refused until the table grows one.
+#[test]
+fn a_namespaced_handle_refuses_every_periodic_operation() {
+    let q = FlexiQ::in_memory()
+        .expect("opens")
+        .with_namespace("tenant-a");
+
+    for message in [
+        q.list_periodic().map(|_| ()).unwrap_err().to_string(),
+        q.delete_periodic("nightly")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string(),
+        q.pause_periodic("nightly")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string(),
+        q.resume_periodic("nightly")
+            .map(|_| ())
+            .unwrap_err()
+            .to_string(),
+    ] {
+        assert!(
+            message.contains("namespaced handle"),
+            "the refusal should say why: {message}"
+        );
+    }
+
+    let err = match q.worker().register::<nightly>().spawn() {
+        Ok(handle) => {
+            handle.shutdown().expect("clean shutdown");
+            panic!("a namespaced worker must refuse to register a schedule");
+        }
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("namespaced handle"), "message: {err}");
+}
+
+/// A worker with no scheduled tasks is unaffected by the refusal above.
+#[test]
+fn a_namespaced_worker_without_schedules_still_starts() {
+    let q = FlexiQ::in_memory()
+        .expect("opens")
+        .with_namespace("tenant-a");
+    let worker = q.worker().spawn().expect("spawns");
+    worker.shutdown().expect("clean shutdown");
+}
+
 #[test]
 fn a_periodic_can_be_paused_resumed_and_deleted() {
     let q = FlexiQ::in_memory().expect("opens");
