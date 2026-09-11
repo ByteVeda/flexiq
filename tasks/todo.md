@@ -60,7 +60,29 @@ rather than bare names. Pre-#918 rows are orphaned, not migrated (the #773
 precedent), and inert rather than merely unreachable: a legacy due member is not
 a key under the periodic root, so nothing reads it — reading one *would* fire it
 and then write the advance to the new key, leaving the old `next_run` to fire
-again forever.
+again forever. The due read drops such a member as it finds it, because nothing
+else ever will: its score does not advance, so it would come back on every pass.
+
+Each write is a read-modify-write of one JSON document, so all three go through
+one `WATCH`-guarded helper. Without it a worker re-registering a schedule would
+put back the `last_run` a scheduler had just advanced — the Diesel backends have
+no such window, because their `AsChangeset` never names `last_run` at all.
+
+### The migration ledger is now the lock
+
+Review caught that `run_generic` read `schema_migrations` *outside* the
+per-migration transaction and recorded the version with `ON CONFLICT DO
+NOTHING`. Two processes booting at once could therefore both see `0018` as
+pending, both rebuild the table, and both commit — the loser copying the rows
+through `CARRIED`, which has no `namespace`, and resetting every schedule to the
+default namespace. Harmless while every migration was idempotent; not harmless
+for a rebuild.
+
+The recording now runs **first**, inside the transaction, without the conflict
+clause: the ledger's primary key is what serializes the two, and the loser rolls
+back before touching the schema. A unique violation is only treated as a lost
+race when the ledger actually holds the version afterwards, so a migration whose
+own DDL collides with existing data still fails the run.
 
 ### Shells
 
