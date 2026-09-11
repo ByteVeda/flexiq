@@ -64,6 +64,22 @@ impl ser::Serializer for WireSerializer {
     type SerializeStruct = MapBuilder;
     type SerializeStructVariant = VariantMapBuilder;
 
+    /// Binary, because the reader is.
+    ///
+    /// Serde defaults this to `true` and `ciborium` — which decodes everything
+    /// this writes — reports `false`. A type that branches on it, `uuid::Uuid`
+    /// among them, would otherwise encode as text here and be asked for bytes
+    /// at dispatch: the enqueue succeeds and the job fails when it runs.
+    ///
+    /// The cost is that such a type travels in its binary form, which a worker
+    /// in another language sees as a byte string rather than as text. The two
+    /// runtimes disagree about that representation whichever answer is given
+    /// here; only one answer round-trips. Send a `String` when the far side is
+    /// another language.
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
     fn serialize_bool(self, value: bool) -> Result<Self::Ok, Self::Error> {
         Ok(WireValue::Bool(value))
     }

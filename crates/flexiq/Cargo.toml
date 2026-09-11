@@ -60,3 +60,6 @@ log = { workspace = true }
 # A macro's error messages are its user interface, and nothing else here
 # exercises them: every other test in this crate compiles.
 trybuild = "1"
+# Naming a CBOR byte string on the way back out, to assert the writer took the
+# binary arm its reader expects.
+serde_bytes = "0.11"

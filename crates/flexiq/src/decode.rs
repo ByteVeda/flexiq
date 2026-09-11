@@ -28,15 +28,17 @@ pub enum DecodeError {
     /// The arguments did not match the task's parameter types.
     #[error("task arguments do not match the handler: {0}")]
     Arguments(String),
+    /// The call carried keyword arguments, which a Rust task has no parameter
+    /// for.
+    #[error(
+        "call carries {0} keyword argument(s); a Rust task takes positional arguments only, \
+         so passing them would drop them silently"
+    )]
+    Kwargs(usize),
 }
 
-/// Strip the tag, read `[args, kwargs]`, deserialize `args` into `T`.
-///
-/// `kwargs` is read and discarded rather than refused when non-empty. A
-/// producer in a language that has keyword arguments may legally send them, and
-/// a Rust handler with no parameter for one should fail on the argument tuple's
-/// shape — a message naming the mismatch — rather than on the map's presence.
-pub fn decode_args<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T, DecodeError> {
+/// Split a payload into its `args` and `kwargs` halves.
+fn envelope(payload: &[u8]) -> Result<(ciborium::Value, ciborium::Value), DecodeError> {
     let (tag, body) = payload.split_first().ok_or(DecodeError::Empty)?;
     if *tag != TAG_CBOR {
         return Err(DecodeError::Codec(*tag));
@@ -45,26 +47,70 @@ pub fn decode_args<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T, 
     let call: ciborium::Value =
         ciborium::from_reader(body).map_err(|e| DecodeError::Envelope(e.to_string()))?;
 
-    let mut items = match call {
-        ciborium::Value::Array(items) if items.len() == 2 => items,
-        ciborium::Value::Array(items) => {
-            return Err(DecodeError::Envelope(format!(
-                "expected a 2-element [args, kwargs] array, found {} elements",
-                items.len()
-            )))
+    match call {
+        ciborium::Value::Array(mut items) if items.len() == 2 => {
+            let kwargs = items.remove(1);
+            let args = items.remove(0);
+            Ok((args, kwargs))
         }
-        other => {
-            return Err(DecodeError::Envelope(format!(
-                "expected a 2-element [args, kwargs] array, found {}",
-                describe(&other)
-            )))
-        }
-    };
+        ciborium::Value::Array(items) => Err(DecodeError::Envelope(format!(
+            "expected a 2-element [args, kwargs] array, found {} elements",
+            items.len()
+        ))),
+        other => Err(DecodeError::Envelope(format!(
+            "expected a 2-element [args, kwargs] array, found {}",
+            describe(&other)
+        ))),
+    }
+}
 
-    items
-        .remove(0)
-        .deserialized()
+/// Refuse a call that carries keyword arguments.
+///
+/// Rust has no keyword arguments, so there is nothing to bind them to. Running
+/// the task anyway would drop what the caller sent without saying so, and a
+/// caller who sent them meant something by it.
+fn reject_kwargs(kwargs: &ciborium::Value) -> Result<(), DecodeError> {
+    match kwargs {
+        ciborium::Value::Map(entries) if entries.is_empty() => Ok(()),
+        ciborium::Value::Map(entries) => Err(DecodeError::Kwargs(entries.len())),
+        other => Err(DecodeError::Envelope(format!(
+            "expected a kwargs map, found {}",
+            describe(other)
+        ))),
+    }
+}
+
+/// Strip the tag, read `[args, kwargs]`, deserialize `args` into `T`.
+///
+/// `T` is the task's parameter tuple, so a payload with too many or too few
+/// positional arguments fails here on the tuple's length.
+pub fn decode_args<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T, DecodeError> {
+    let (args, kwargs) = envelope(payload)?;
+    reject_kwargs(&kwargs)?;
+    args.deserialized()
         .map_err(|e| DecodeError::Arguments(e.to_string()))
+}
+
+/// Validate the envelope of a call to a task that takes no parameters.
+///
+/// A task with no parameters has no tuple to deserialize into, and skipping the
+/// read entirely would let it run on *any* payload — a malformed envelope, or a
+/// call carrying arguments it was never going to receive. Both mean the caller
+/// and the task disagree, which is worth hearing about.
+pub fn decode_no_args(payload: &[u8]) -> Result<(), DecodeError> {
+    let (args, kwargs) = envelope(payload)?;
+    reject_kwargs(&kwargs)?;
+    match args {
+        ciborium::Value::Array(items) if items.is_empty() => Ok(()),
+        ciborium::Value::Array(items) => Err(DecodeError::Arguments(format!(
+            "call carries {} positional argument(s), and this task takes none",
+            items.len()
+        ))),
+        other => Err(DecodeError::Envelope(format!(
+            "expected an args array, found {}",
+            describe(&other)
+        ))),
+    }
 }
 
 /// Strip the tag and read a bare value, the shape `wire::encode_result` writes.

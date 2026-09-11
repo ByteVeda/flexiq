@@ -52,7 +52,7 @@ pub use task::{current_step, StepHandle, Task};
 /// generated.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::decode::decode_args;
+    pub use crate::decode::{decode_args, decode_no_args};
     pub use crate::encode::{encode_args, to_wire};
     pub use flexiq_core::wire::{encode_result, WireValue};
 }

@@ -128,6 +128,35 @@ fn an_oversized_unsigned_is_refused() {
     assert!(err.to_string().contains("out of range"), "{err}");
 }
 
+/// A type that branches on `is_human_readable` must take the binary arm, the
+/// one the decoder will ask for.
+///
+/// `uuid::Uuid` is the type this really bites: in text mode it encodes as a
+/// string and `ciborium` then asks for bytes, so the enqueue succeeds and the
+/// job fails when it runs. Reproduced here without the dependency.
+#[test]
+fn the_serializer_is_in_binary_mode_like_its_reader() {
+    struct Branching;
+
+    impl Serialize for Branching {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            if s.is_human_readable() {
+                s.serialize_str("text")
+            } else {
+                s.serialize_bytes(&[0x01, 0x02])
+            }
+        }
+    }
+
+    let encoded = encode_args(&[arg(&Branching)]);
+    let (bytes,): (serde_bytes::ByteBuf,) = decode_args(&encoded).expect("decodes");
+    assert_eq!(
+        bytes.as_ref(),
+        &[0x01, 0x02],
+        "the writer must take the same arm the reader expects"
+    );
+}
+
 /// The envelope's maps are text-keyed, so a map with integer keys is refused
 /// rather than coerced into one with stringified keys.
 #[test]
@@ -221,6 +250,45 @@ fn an_unknown_codec_tag_is_refused_by_number() {
 fn an_empty_payload_is_refused() {
     let err = decode_args::<(i64,)>(&[]).expect_err("no tag");
     assert!(err.to_string().contains("empty"), "{err}");
+}
+
+/// A Rust task has no parameter to bind a keyword argument to, so a call
+/// carrying one is refused rather than run with it dropped.
+#[test]
+fn keyword_arguments_are_refused_by_count() {
+    use flexiq_core::wire::encode_call;
+
+    let payload = encode_call(&[arg(&1_i64)], &[("k".to_string(), arg(&true))]);
+    let err = decode_args::<(i64,)>(&payload).expect_err("kwargs must be refused");
+    assert!(err.to_string().contains("keyword argument"), "{err}");
+}
+
+/// A task with no parameters still validates its envelope.
+#[test]
+fn a_no_argument_call_is_validated() {
+    use flexiq::__private::decode_no_args;
+    use flexiq_core::wire::encode_call;
+
+    decode_no_args(&encode_args(&[])).expect("the empty call is the valid one");
+
+    let with_args = encode_args(&[arg(&1_i64)]);
+    let err = decode_no_args(&with_args).expect_err("surplus arguments must be refused");
+    assert!(err.to_string().contains("takes none"), "{err}");
+
+    let with_kwargs = encode_call(&[], &[("k".to_string(), arg(&true))]);
+    assert!(
+        decode_no_args(&with_kwargs).is_err(),
+        "kwargs must be refused"
+    );
+
+    assert!(
+        decode_no_args(&[]).is_err(),
+        "an empty payload is not a call"
+    );
+    assert!(
+        decode_no_args(&[0x7f, 0x00]).is_err(),
+        "an unknown codec is not a call"
+    );
 }
 
 /// Arguments that do not fit the handler's parameters.
