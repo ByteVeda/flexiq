@@ -38,6 +38,13 @@ const settleBuffer = 64
 // cannot be written is not made writable by waiting longer.
 const flushBudget = 5 * time.Second
 
+// heartbeatFloor keeps a short heartbeat interval from becoming a deadline no
+// real network answers inside. The deadline is the interval, because a
+// capacity report that has not landed by the next tick is already stale — but
+// an executor configured to heartbeat every 20ms wants frequent reports, not
+// failing ones.
+const heartbeatFloor = time.Second
+
 // sessionEnd says why a stream stopped, which is the whole input to what
 // happens next.
 type sessionEnd int
@@ -550,7 +557,10 @@ func (s *session) heartbeat(ctx context.Context) {
 }
 
 func (s *session) beat(ctx context.Context) bool {
-	_, err := s.client.Heartbeat(ctx, &executorv1.HeartbeatRequest{
+	callCtx, cancel := context.WithTimeout(ctx, s.heartbeatDeadline())
+	defer cancel()
+
+	_, err := s.client.Heartbeat(callCtx, &executorv1.HeartbeatRequest{
 		Session:   s.token,
 		FreeSlots: s.slots.available(),
 	})
@@ -575,9 +585,23 @@ func (s *session) beginDrain(ctx context.Context) {
 		return
 	}
 	s.slots.drain()
-	if len(s.token) > 0 {
-		_, _ = s.client.Heartbeat(ctx, &executorv1.HeartbeatRequest{Session: s.token, FreeSlots: 0})
+	if len(s.token) == 0 {
+		return
 	}
+
+	// Deadlined, because this runs on the teardown path *before* the stream
+	// context is cancelled. A peer that holds the connection open and never
+	// answers would otherwise park the teardown here, and Run could neither
+	// close the stream nor reconnect.
+	callCtx, cancel := context.WithTimeout(ctx, s.heartbeatDeadline())
+	defer cancel()
+	_, _ = s.client.Heartbeat(callCtx, &executorv1.HeartbeatRequest{Session: s.token, FreeSlots: 0})
+}
+
+// heartbeatDeadline bounds one heartbeat call. Unary RPCs inherit only the
+// context they are given, and the contexts these are given outlive them.
+func (s *session) heartbeatDeadline() time.Duration {
+	return max(s.cfg.heartbeatInterval, heartbeatFloor)
 }
 
 // waitInFlight waits for the jobs this stream is already running, up to budget.
