@@ -48,8 +48,12 @@ Two things: where the door is, and a token.
 
 ```bash
 export FLEXIQ_ENDPOINT=http://127.0.0.1:50051
-export FLEXIQ_TOKEN=fqt_REPLACE_WITH_YOUR_TOKEN
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
 ```
+
+`token create` writes the token to stdout and everything else — what it minted,
+and the reminder that this is the only time it is shown — to stderr, so the
+substitution above captures the credential and nothing else.
 
 **The scheme picks the transport, and `fq` will not guess one.**
 
