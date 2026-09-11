@@ -144,47 +144,41 @@ fn a_namespaced_handle_refuses_every_periodic_operation() {
     assert!(err.contains("namespaced handle"), "message: {err}");
 }
 
-/// Restarting a worker keeps the deadline a previous run computed.
+/// Restarting a worker writes nothing when the declaration has not changed.
 ///
-/// Recomputing it every start means a restart landing after a deadline has
-/// passed, but before the scheduler fired it, pushes the deadline to the next
-/// occurrence — losing that firing, repeatedly, for a process that restarts
-/// often.
+/// Stronger than "keeps the deadline", and deliberately so: reading the row and
+/// writing it back still races the scheduler advancing `next_run` and an
+/// operator pausing the task, because `register_periodic` is not conditional.
+/// Not writing is the only thing that closes that window from here.
+///
+/// Asserted against values nothing in this process produced — a deadline and a
+/// paused flag set by hand — so a write of *any* kind would show.
 #[test]
-fn restarting_a_worker_keeps_the_existing_deadline() {
-    let q = FlexiQ::in_memory().expect("opens");
+fn restarting_a_worker_writes_nothing_when_the_declaration_is_unchanged() {
+    use flexiq_core::Storage;
 
+    let q = FlexiQ::in_memory().expect("opens");
     let first = q.worker().register::<nightly>().spawn().expect("spawns");
     first.shutdown().expect("clean shutdown");
-    let before = q.list_periodic().expect("lists")[0].next_run;
 
-    let second = q.worker().register::<nightly>().spawn().expect("spawns");
-    second.shutdown().expect("clean shutdown");
-
-    assert_eq!(
-        q.list_periodic().expect("lists")[0].next_run,
-        before,
-        "a restart must not move a deadline it did not reach"
-    );
-}
-
-/// And a paused periodic stays paused across one.
-///
-/// Writing `enabled: true` unconditionally would quietly resume it the next
-/// time its worker came up, which is the opposite of what pausing it meant.
-#[test]
-fn restarting_a_worker_keeps_a_periodic_paused() {
-    let q = FlexiQ::in_memory().expect("opens");
-
-    let first = q.worker().register::<nightly>().spawn().expect("spawns");
-    first.shutdown().expect("clean shutdown");
+    // Stand in for another worker's scheduler having fired it, and for an
+    // operator having paused it.
+    let sentinel = flexiq_core::now_millis() + 999_999;
+    q.storage()
+        .update_periodic_schedule("nightly", flexiq_core::now_millis(), sentinel)
+        .expect("advances");
     assert!(q.pause_periodic("nightly").expect("pauses"));
 
     let second = q.worker().register::<nightly>().spawn().expect("spawns");
     second.shutdown().expect("clean shutdown");
 
+    let row = &q.list_periodic().expect("lists")[0];
+    assert_eq!(
+        row.next_run, sentinel,
+        "a restart must not overwrite a deadline something else advanced"
+    );
     assert!(
-        !q.list_periodic().expect("lists")[0].enabled,
+        !row.enabled,
         "a restart must not resume a task an operator paused"
     );
 }
