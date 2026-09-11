@@ -82,24 +82,29 @@ fn convert(input: serde_json::Value) -> Result<Value> {
 /// The door rejects the same values rather than rounding them, so refusing
 /// here names the limit; letting it through would surface as an
 /// `INVALID_ARGUMENT` with the number already lost.
+///
+/// The magnitude test is on the resulting `f64`, not on the integer arm alone.
+/// `serde_json` reads `9007199254740993` through `as_i64` but `9007199254740993.0`
+/// — the same value with a decimal point — through `as_f64`, where it has
+/// already rounded to `9007199254740992.0`. Checking only the integer arm would
+/// let the second spelling past a guard that claims to catch it.
 fn number_of(number: &serde_json::Number) -> Result<f64> {
-    if let Some(integer) = number.as_i64() {
-        return exact(i128::from(integer)).map(|value| value as f64);
-    }
-    if let Some(unsigned) = number.as_u64() {
-        return exact(i128::from(unsigned)).map(|value| value as f64);
-    }
-    number
+    let value = number
         .as_f64()
         .filter(|value| value.is_finite())
-        .ok_or_else(|| anyhow!("{number} is not a finite number, which this wire arm requires"))
+        .ok_or_else(|| anyhow!("{number} is not a finite number, which this wire arm requires"))?;
+    exact(value)
 }
 
-/// An integer within the range a double holds exactly.
-fn exact(value: i128) -> Result<i128> {
-    if value.abs() > i128::from(MAX_EXACT_INTEGER) {
+/// A value the `structured` arm carries without rounding it.
+///
+/// Mirrors `crates/flexiq-server/src/grpc/producer/structured.rs::convert_number`
+/// — a fractional value is a double and passes, an integral one past the exact
+/// range is refused rather than silently rounded.
+fn exact(value: f64) -> Result<f64> {
+    if value.fract() == 0.0 && value.abs() > MAX_EXACT_INTEGER as f64 {
         return Err(anyhow!(
-            "{value} is past ±{MAX_EXACT_INTEGER}, the largest integer this wire arm holds \
+            "{value:.0} is past ±{MAX_EXACT_INTEGER}, the largest integer this wire arm holds \
              exactly. Pass it as a string, or enqueue from an SDK."
         ));
     }
@@ -174,6 +179,28 @@ mod tests {
         assert!(error.to_string().contains("9007199254740991"), "{error}");
         let error = value("-9007199254740993").expect_err("too small");
         assert!(error.to_string().contains("9007199254740991"), "{error}");
+    }
+
+    /// `serde_json` routes the decimal-point spelling through `as_f64`, where
+    /// it has already rounded. A guard on the integer arm alone would pass it.
+    #[test]
+    fn the_float_spelling_of_a_too_large_integer_is_refused_too() {
+        let error = value("9007199254740993.0").expect_err("too large");
+        assert!(error.to_string().contains("9007199254740991"), "{error}");
+        let error = value("1e300").expect_err("far too large");
+        assert!(error.to_string().contains("9007199254740991"), "{error}");
+    }
+
+    /// A value with a fraction is a double on the wire and the integer guard
+    /// must not catch it. "Has a fraction" is `fract() != 0.0`, not "was
+    /// written with a point": past 2⁵³ every `f64` is integral, so `1.5e300`
+    /// is an integer as far as this rule is concerned — which is exactly what
+    /// the server's `convert_number` decides, and why it refuses that one too.
+    #[test]
+    fn a_value_with_a_fraction_is_not_subject_to_the_integer_limit() {
+        assert!(matches!(kind("0.5"), Kind::NumberValue(number) if number == 0.5));
+        assert!(matches!(kind("-2.25"), Kind::NumberValue(number) if number == -2.25));
+        assert!(value("1.5e300").is_err());
     }
 
     #[test]
