@@ -49,7 +49,7 @@ pub fn request(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueRequest
         // The `structured` arm, always: the server encodes the CBOR envelope
         // with the one in-tree encoder, so this binary carries no second one.
         body: Some(pb::enqueue_request::Body::Structured(body)),
-        options: Some(options(cli_args, now_ms)),
+        options: Some(options(cli_args, now_ms)?),
     })
 }
 
@@ -58,26 +58,43 @@ pub fn request(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueRequest
 /// `now_ms` is passed in rather than read here because two of the flags are
 /// relative and the wire's fields are absolute; a caller that supplies the
 /// clock is a function a test can pin.
-pub fn options(cli_args: &EnqueueArgs, now_ms: i64) -> pb::EnqueueOptions {
-    pb::EnqueueOptions {
+pub fn options(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueOptions> {
+    Ok(pb::EnqueueOptions {
         // Empty means "the server's default queue", which is what an omitted
         // flag means too.
         queue: cli_args.queue.clone().unwrap_or_default(),
         priority: cli_args.priority.unwrap_or_default(),
         max_retries: cli_args.max_retries.unwrap_or_default(),
-        scheduled_at: cli_args.delay_ms.map(|delay| timestamp(now_ms + delay)),
+        scheduled_at: instant_after(now_ms, cli_args.delay_ms, "--delay-ms")?,
         timeout: cli_args.timeout_ms.map(duration),
         unique_key: cli_args.unique_key.clone(),
         metadata: cli_args.metadata.clone(),
         notes: cli_args.notes.clone(),
         depends_on: cli_args.depends_on.clone(),
-        expires_at: cli_args.expires_in_ms.map(|span| timestamp(now_ms + span)),
+        expires_at: instant_after(now_ms, cli_args.expires_in_ms, "--expires-in-ms")?,
         result_ttl: cli_args.result_ttl_ms.map(duration),
         // Debounce is a three-field message with its own invariants, not a
         // flag; a CLI that offered half of it would be worse than one that
         // offers none.
         debounce: None,
-    }
+    })
+}
+
+/// `now_ms + offset` as an absolute instant, refusing an offset that does not
+/// fit.
+///
+/// An unchecked `+` here panics under `overflow-checks` and wraps without them
+/// — and a wrapped offset is the worse outcome, because it schedules the job at
+/// an instant in the distant past rather than failing.
+fn instant_after(now_ms: i64, offset_ms: Option<i64>, flag: &str) -> Result<Option<Timestamp>> {
+    offset_ms
+        .map(|offset| {
+            now_ms
+                .checked_add(offset)
+                .map(timestamp)
+                .ok_or_else(|| anyhow!("`{flag} {offset}` is too far from now to be an instant"))
+        })
+        .transpose()
 }
 
 /// Unix milliseconds as a `Timestamp`.
@@ -126,7 +143,7 @@ mod tests {
     /// conversion needs the clock — passed in so the test can pin it.
     #[test]
     fn a_delay_becomes_an_absolute_instant() {
-        let options = options(&sample(), 1_757_500_000_000);
+        let options = options(&sample(), 1_757_500_000_000).expect("builds");
         let scheduled = options.scheduled_at.expect("a delay sets one");
         assert_eq!(scheduled.seconds, 1_757_500_060);
         assert_eq!(scheduled.nanos, 0);
@@ -136,12 +153,15 @@ mod tests {
     fn no_delay_leaves_the_instant_unset() {
         let mut input = sample();
         input.delay_ms = None;
-        assert!(options(&input, 1_757_500_000_000).scheduled_at.is_none());
+        assert!(options(&input, 1_757_500_000_000)
+            .expect("builds")
+            .scheduled_at
+            .is_none());
     }
 
     #[test]
     fn every_option_reaches_the_wire() {
-        let options = options(&sample(), 0);
+        let options = options(&sample(), 0).expect("builds");
         assert_eq!(options.queue, "mail");
         assert_eq!(options.priority, 5);
         assert_eq!(options.max_retries, 3);
@@ -161,7 +181,23 @@ mod tests {
     fn an_omitted_queue_is_the_empty_default() {
         let mut input = sample();
         input.queue = None;
-        assert_eq!(options(&input, 0).queue, "");
+        assert_eq!(options(&input, 0).expect("builds").queue, "");
+    }
+
+    /// An unchecked `+` would wrap here and schedule the job in the distant
+    /// past, which is worse than refusing the flag.
+    #[test]
+    fn an_offset_that_does_not_fit_is_refused_by_flag_name() {
+        let mut input = sample();
+        input.delay_ms = Some(i64::MAX);
+        let error = options(&input, 1_757_500_000_000).expect_err("overflows");
+        assert!(error.to_string().contains("--delay-ms"), "{error}");
+
+        let mut input = sample();
+        input.delay_ms = None;
+        input.expires_in_ms = Some(i64::MAX);
+        let error = options(&input, 1_757_500_000_000).expect_err("overflows");
+        assert!(error.to_string().contains("--expires-in-ms"), "{error}");
     }
 
     #[test]
@@ -179,7 +215,7 @@ mod tests {
     fn a_sub_second_timeout_keeps_its_nanos() {
         let mut input = sample();
         input.timeout_ms = Some(1_500);
-        let timeout = options(&input, 0).timeout.expect("set");
+        let timeout = options(&input, 0).expect("builds").timeout.expect("set");
         assert_eq!(timeout.seconds, 1);
         assert_eq!(timeout.nanos, 500_000_000);
     }
