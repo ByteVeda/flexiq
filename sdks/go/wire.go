@@ -186,6 +186,89 @@ func DecodeCall(payload []byte) (Call, error) {
 	return call, nil
 }
 
+// DecodeCallInto decodes a payload's positional arguments into targets, in
+// order. Each target is a pointer to the type that argument was sent as.
+//
+// It exists beside [DecodeCall] because that one decodes into `any`, which
+// turns every number into whatever CBOR's widest form for it is and every
+// object into a map. Decoding straight into the caller's own type is what makes
+// a payload usable without a type switch per field.
+//
+// A call carrying keyword arguments is refused rather than bound positionally.
+// Go has nothing to bind a keyword argument to, and binding them by position
+// would pair a name with whatever happened to be next. Read them with
+// [DecodeCall] instead. The cross-SDK convention is a single object argument —
+// `args = [{…}]`, `kwargs = {}` — so a call written for more than one runtime
+// rarely carries any.
+func DecodeCallInto(payload []byte, targets ...any) error {
+	args, kwargs, err := splitCall(payload)
+	if err != nil {
+		return err
+	}
+	if len(kwargs) > 0 {
+		return fmt.Errorf(
+			"flexiq: decode call: it carries %d keyword argument(s), which a Go handler takes no form of; read them with DecodeCall",
+			len(kwargs),
+		)
+	}
+	if len(args) < len(targets) {
+		return fmt.Errorf("flexiq: decode call: want %d positional argument(s), got %d", len(targets), len(args))
+	}
+
+	for i, target := range targets {
+		if err := decMode.Unmarshal(args[i], target); err != nil {
+			return fmt.Errorf("flexiq: decode positional argument %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// splitCall unwraps the envelope and separates the call body's two halves,
+// leaving each argument encoded so a caller can decode it into its own type.
+func splitCall(payload []byte) ([]cbor.RawMessage, map[string]cbor.RawMessage, error) {
+	body, err := unwrap(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var parts []cbor.RawMessage
+	if err := decMode.Unmarshal(body, &parts); err != nil {
+		return nil, nil, fmt.Errorf("flexiq: decode call body: %w", err)
+	}
+	if len(parts) != 2 {
+		return nil, nil, fmt.Errorf("flexiq: decode call body: want a 2-element array, got %d", len(parts))
+	}
+
+	var args []cbor.RawMessage
+	if err := decMode.Unmarshal(parts[0], &args); err != nil {
+		return nil, nil, fmt.Errorf("flexiq: decode call args: %w", err)
+	}
+	var kwargs map[string]cbor.RawMessage
+	if err := decMode.Unmarshal(parts[1], &kwargs); err != nil {
+		return nil, nil, fmt.Errorf("flexiq: decode call kwargs: %w", err)
+	}
+	return args, kwargs, nil
+}
+
+// EncodeResult builds the envelope for a task's return value: the CBOR tag
+// byte followed by a bare CBOR value.
+//
+// The asymmetry with [EncodeCall] is the point. A call body is a two-element
+// array because there are two things to pair — positional and keyword
+// arguments. A result is one value, so there is nothing to wrap it in, and
+// wrapping it anyway would make every reader unwrap a one-element array to
+// find out.
+//
+// A map inside the value encodes in whatever order Go iterates it, for the
+// reason [EncodeCall] gives. Nothing hashes a result, so it costs nothing here.
+func EncodeResult(v any) ([]byte, error) {
+	body, err := encMode.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("flexiq: encode result: %w", err)
+	}
+	return append([]byte{TagCBOR}, body...), nil
+}
+
 // DecodeResult reads a job's result envelope into v.
 //
 // A result is not shaped like a payload: the tag byte is followed by a bare

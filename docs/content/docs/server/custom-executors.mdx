@@ -21,6 +21,15 @@ The same tarball carries
 which states this door's obligations normatively — which frames are mandatory,
 which are gated on a capability, and what a lease is required on.
 
+<Callout title="Go has an executor already">
+  You do not have to write one:
+  [`github.com/ByteVeda/flexiq/sdks/go/v2/executor`](https://github.com/ByteVeda/flexiq/tree/master/sdks/go/executor)
+  implements this page — the handshake, the session token, the settling frames,
+  the lease echo, reconnect and rotation — behind a handler you register per
+  task. Durable steps are the one thing it leaves out, so it advertises no
+  `steps` capability and the scheduler sends it no step frames.
+</Callout>
+
 ## What an executor is not allowed to do
 
 An attached executor holds **no database credential**. It never reads a job row,

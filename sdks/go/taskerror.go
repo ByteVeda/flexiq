@@ -68,3 +68,39 @@ func (e TaskError) Error() string {
 	}
 	return e.Type + ": " + e.Message
 }
+
+// EncodeTaskError writes the canonical cross-SDK JSON a failed job records:
+// the three keys, in the order the contract pins them, with no extra
+// whitespace.
+//
+// Traceback is written as [] and never as null, even when the runtime has no
+// frames to offer. The key is required and its type is an array; a null is a
+// third shape readers have to special-case, and the ones that do not will read
+// the whole document as prose and lose the errtype with it.
+//
+// Type defaults to "Error" rather than being omitted, for the same reason: a
+// document missing a key is not this shape.
+func EncodeTaskError(errType, message string, traceback []string) string {
+	if errType == "" {
+		errType = "Error"
+	}
+	if traceback == nil {
+		traceback = []string{}
+	}
+
+	// Marshalled through the struct rather than a map, because a map would sort
+	// the keys and the contract pins their order.
+	encoded, err := json.Marshal(canonicalTaskError{
+		ErrType:   &errType,
+		Message:   &message,
+		Traceback: &traceback,
+	})
+	if err != nil {
+		// Unreachable: every field is a string or a slice of them, and
+		// encoding/json cannot fail on those. Losing the message would lose the
+		// only account of why the job failed, so fall back to the prose form,
+		// which every reader accepts.
+		return message
+	}
+	return string(encoded)
+}
