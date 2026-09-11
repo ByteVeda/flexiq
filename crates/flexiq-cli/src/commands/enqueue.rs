@@ -20,6 +20,12 @@ const MIN_TIMESTAMP_MS: i64 = -62_135_596_800_000;
 /// `9999-12-31T23:59:59.999Z`, the latest.
 const MAX_TIMESTAMP_MS: i64 = 253_402_300_799_999;
 
+/// The widest span a `google.protobuf.Duration` may carry, in milliseconds.
+///
+/// The type is documented as ±315,576,000,000 seconds — roughly ten thousand
+/// years, the same span the timestamp range covers.
+const MAX_DURATION_MS: i64 = 315_576_000_000_000;
+
 /// Submit the job and print what came back.
 pub async fn run(client: &mut Client, cli_args: &EnqueueArgs, json: bool) -> Result<()> {
     let request = request(cli_args, chrono::Utc::now().timestamp_millis())?;
@@ -73,13 +79,13 @@ pub fn options(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueOptions
         priority: cli_args.priority.unwrap_or_default(),
         max_retries: cli_args.max_retries.unwrap_or_default(),
         scheduled_at: instant_after(now_ms, cli_args.delay_ms, "--delay-ms")?,
-        timeout: cli_args.timeout_ms.map(duration),
+        timeout: span(cli_args.timeout_ms, "--timeout-ms")?,
         unique_key: cli_args.unique_key.clone(),
         metadata: cli_args.metadata.clone(),
         notes: cli_args.notes.clone(),
         depends_on: cli_args.depends_on.clone(),
         expires_at: instant_after(now_ms, cli_args.expires_in_ms, "--expires-in-ms")?,
-        result_ttl: cli_args.result_ttl_ms.map(duration),
+        result_ttl: span(cli_args.result_ttl_ms, "--result-ttl-ms")?,
         // Debounce is a three-field message with its own invariants, not a
         // flag; a CLI that offered half of it would be worse than one that
         // offers none.
@@ -125,6 +131,26 @@ fn timestamp(millis: i64) -> Timestamp {
         seconds: millis.div_euclid(MILLIS_PER_SECOND),
         nanos: millis.rem_euclid(MILLIS_PER_SECOND) as i32 * NANOS_PER_MILLI,
     }
+}
+
+/// A span in milliseconds as a `Duration`, refusing one the type cannot carry.
+///
+/// Same shape as [`instant_after`] and for the same reason: `i64` milliseconds
+/// reach roughly 292 million years, a `Duration` about ten thousand, and the
+/// door's `millis_from_duration` *saturates* rather than refusing — so an
+/// out-of-range timeout would become a plausible wrong one instead of an error.
+fn span(millis: Option<i64>, flag: &str) -> Result<Option<ProtoDuration>> {
+    millis
+        .map(|millis| {
+            if millis.abs() > MAX_DURATION_MS {
+                return Err(anyhow!(
+                    "`{flag} {millis}` is longer than the ±{MAX_DURATION_MS} milliseconds a \
+                     duration can express"
+                ));
+            }
+            Ok(duration(millis))
+        })
+        .transpose()
 }
 
 /// A span in milliseconds as a `Duration`.
@@ -241,6 +267,38 @@ mod tests {
             assert!(error.to_string().contains(flag), "{error}");
             assert!(error.to_string().contains("9999-12-31"), "{error}");
         }
+    }
+
+    /// `i64` milliseconds reach ~292 million years; a `Duration` reaches about
+    /// ten thousand. The door saturates rather than refusing, so an
+    /// out-of-range timeout would be stored as a plausible wrong one.
+    #[test]
+    fn a_span_longer_than_a_duration_is_refused_by_flag_name() {
+        let mut input = sample();
+        input.timeout_ms = Some(i64::MAX);
+        let error = options(&input, NOW).expect_err("too long");
+        assert!(error.to_string().contains("--timeout-ms"), "{error}");
+
+        let mut input = sample();
+        input.result_ttl_ms = Some(-i64::MAX);
+        let error = options(&input, NOW).expect_err("too long");
+        assert!(error.to_string().contains("--result-ttl-ms"), "{error}");
+    }
+
+    #[test]
+    fn the_duration_bound_itself_is_accepted() {
+        let mut input = sample();
+        input.timeout_ms = Some(MAX_DURATION_MS);
+        assert!(options(&input, NOW).is_ok());
+
+        input.timeout_ms = Some(MAX_DURATION_MS + 1);
+        assert!(options(&input, NOW).is_err());
+
+        input.timeout_ms = Some(-MAX_DURATION_MS);
+        assert!(options(&input, NOW).is_ok());
+
+        input.timeout_ms = Some(-MAX_DURATION_MS - 1);
+        assert!(options(&input, NOW).is_err());
     }
 
     /// Both ends of the range are accepted, and one millisecond past either is
