@@ -212,7 +212,13 @@ fn rate(lit: &Lit) -> Result<String> {
     let unit = parts.next().unwrap_or_default().trim();
     let extra = parts.next();
 
-    let counted = !count.is_empty() && count.parse::<f64>().is_ok();
+    // At least one, and finite. A bucket built from zero, a negative or a NaN
+    // never hands out a token — the backends compare against `tokens < 1.0`, a
+    // comparison NaN loses — so the task would simply never dispatch, with
+    // nothing anywhere saying why.
+    let counted = count
+        .parse::<f64>()
+        .is_ok_and(|n| n.is_finite() && n >= 1.0);
     let united = matches!(unit, "s" | "m" | "h" | "second" | "minute" | "hour");
     if counted && united && extra.is_none() {
         return Ok(value);
@@ -220,7 +226,8 @@ fn rate(lit: &Lit) -> Result<String> {
     Err(Error::new(
         lit.span(),
         format!(
-            "`{value}` is not a rate. Write it as a count over a unit, as in 100/s, 60/m or 1000/h"
+            "`{value}` is not a rate. Write it as a count of at least 1 over a unit, as in \
+             100/s, 60/m or 1000/h — a rate below one never releases a job"
         ),
     ))
 }

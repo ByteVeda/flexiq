@@ -207,6 +207,41 @@ fn heartbeat() -> flexiq::Outcome<()> {
     Ok(())
 }
 
+/// A `cfg` under the attribute has to reach every generated item, or the task
+/// stays compiled in under a condition that said not to.
+///
+/// This file *is* a test binary, so `not(test)` is false here and the
+/// `compile_error!` below must never fire. That it does not is the assertion —
+/// before the fix, the macro dropped the `cfg` and this body was compiled.
+#[cfg(not(test))]
+#[flexiq::task]
+fn never_compiled(_n: i64) -> flexiq::Outcome<()> {
+    compile_error!("the cfg was dropped: this body must never be compiled");
+}
+
+/// The mirror case: a `cfg` that holds leaves the task present.
+#[cfg(test)]
+#[flexiq::task]
+fn always_compiled(_n: i64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+/// A doc comment survives onto the generated type, and so does an `allow`.
+#[allow(clippy::needless_pass_by_value)]
+/// Documented, so `#![deny(missing_docs)]` in a caller's crate is satisfied.
+#[flexiq::task]
+fn documented(_n: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+#[test]
+fn a_cfg_gate_reaches_every_generated_item() {
+    // `never_compiled` is absent entirely; naming it would not compile. That
+    // this file builds at all is the assertion.
+    assert_eq!(<always_compiled as Task>::NAME, "always_compiled");
+    assert_eq!(<documented as Task>::NAME, "documented");
+}
+
 #[test]
 fn the_macro_carries_its_attributes_into_the_job() {
     let q = FlexiQ::in_memory().expect("opens");

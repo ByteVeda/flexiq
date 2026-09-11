@@ -27,7 +27,7 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
     let inputs = &item.sig.inputs;
     let output = &item.sig.output;
     let body = &item.block;
-    let doc = docs(&item);
+    let (cfgs, attrs_on_type) = forwarded(&item);
 
     let config = config(&attrs);
     let defaults = defaults(&attrs);
@@ -39,10 +39,12 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
     // argument to an enqueue is the same compile error as a wrong argument to
     // the function.
     Ok(quote! {
+        #(#cfgs)*
         #[allow(non_camel_case_types)]
-        #doc
+        #(#attrs_on_type)*
         #vis struct #ident;
 
+        #(#cfgs)*
         impl #ident {
             /// Build a call to this task, ready to enqueue.
             #vis fn call(#inputs) -> ::flexiq::TaskCall<#ident> {
@@ -59,6 +61,7 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
             #vis fn run(#inputs) #output #body
         }
 
+        #(#cfgs)*
         impl ::flexiq::Task for #ident {
             const NAME: &'static str = #name;
 
@@ -100,7 +103,18 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
 /// payload that is perfectly correct.
 fn decode(idents: &[&Ident], types: &[&Type], name: &str) -> TokenStream {
     if idents.is_empty() {
-        return quote! {};
+        // Still read the envelope: skipping it entirely would run this task on
+        // any payload at all, including one carrying arguments it has no
+        // parameters for.
+        return quote! {
+            ::flexiq::__private::decode_no_args(&job.payload).map_err(|e| {
+                ::flexiq::Abort::Fail(::flexiq::TaskError::fatal(::std::format!(
+                    "task `{}` could not read its arguments: {}",
+                    #name,
+                    e
+                )))
+            })?;
+        };
     }
     quote! {
         let ( #(#idents,)* ): ( #(#types,)* ) =
@@ -281,21 +295,38 @@ fn reject_unsupported(item: &ItemFn) -> Result<()> {
     Ok(())
 }
 
-/// The function's own doc comments, moved onto the type that replaces it.
+/// The caller's own attributes, split into the ones every generated item needs
+/// and the ones only the type needs.
 ///
-/// Without this a documented task becomes an undocumented public type, which
-/// `#![deny(missing_docs)]` in the caller's crate would reject — and the
-/// caller's documentation would vanish from a name they still use.
-fn docs(item: &ItemFn) -> TokenStream {
-    let attrs: Vec<_> = item
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("doc"))
-        .collect();
+/// `cfg` and `cfg_attr` go on **all three** items. They decide whether the task
+/// exists at all, so putting them on the type alone would leave two `impl`
+/// blocks referring to a type that is not there — and dropping them, which is
+/// what filtering to `doc` used to do, leaves a task compiled in under a
+/// condition that said not to.
+///
+/// Everything else goes on the type. Doc comments in particular: without them a
+/// documented task becomes an undocumented public item, which
+/// `#![deny(missing_docs)]` in the caller's crate would reject, and the prose
+/// would vanish from a name they still use. Anything that does not belong on a
+/// struct produces an error against the caller's own attribute, which beats
+/// discarding it.
+fn forwarded(item: &ItemFn) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let mut conditions = Vec::new();
+    let mut on_type = Vec::new();
+    let mut documented = false;
 
-    if attrs.is_empty() {
-        let generated = format!("The `{}` task.", item.sig.ident);
-        return quote! { #[doc = #generated] };
+    for attr in &item.attrs {
+        if attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr") {
+            conditions.push(quote! { #attr });
+        } else {
+            documented |= attr.path().is_ident("doc");
+            on_type.push(quote! { #attr });
+        }
     }
-    quote! { #(#attrs)* }
+
+    if !documented {
+        let generated = format!("The `{}` task.", item.sig.ident);
+        on_type.push(quote! { #[doc = #generated] });
+    }
+    (conditions, on_type)
 }
