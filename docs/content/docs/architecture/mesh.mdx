@@ -34,9 +34,9 @@ flood the queue.
 
 ## Crate structure
 
-The mesh is implemented as a standalone Rust crate (`crates/flexiq-mesh/`)
-with no PyO3 dependency. Feature-gated via `mesh` cargo feature on
-`flexiq-python`. Depends on `flexiq-core` for the
+The mesh is implemented as a standalone Rust crate (`crates/flexiq-mesh/`) with
+no binding dependency. It is feature-gated behind the `mesh` cargo feature,
+which each SDK's crate forwards. Depends on `flexiq-core` for the
 [`Job`](/architecture/job-lifecycle) type only.
 
 ## SWIM gossip protocol

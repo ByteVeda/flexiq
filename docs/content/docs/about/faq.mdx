@@ -175,6 +175,17 @@ Task<Data> process = Task.of("process", Data.class)
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+```rust
+#[flexiq::task(timeout = "5m")] // 5 minute timeout
+fn process(payload: String) -> flexiq::Outcome<usize> {
+    Ok(payload.len())
+}
+```
+
+</SdkOnly>
+
 ## How big can the SQLite database get?
 
 SQLite can handle databases up to 281 TB (theoretical limit). In practice,
@@ -209,6 +220,21 @@ is milliseconds):
 
 ```java
 flexiq.purgeCompleted(Duration.ofHours(24).toMillis()); // keep 24h
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The Rust SDK does not expose a queue-wide retention setting. Declare the TTL on
+the task instead, and the scheduler's cleanup pass drops the row once it
+expires:
+
+```rust
+#[flexiq::task(result_ttl = "24h")] // keep results 24h
+fn report(day: String) -> flexiq::Outcome<String> {
+    Ok(format!("report for {day}"))
+}
 ```
 
 </SdkOnly>
@@ -258,6 +284,22 @@ switch the backend:
 
 ```java
 FlexiQ.builder().postgres(System.getenv("PG_URL")).open();
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Turn on the `postgres` feature, then open the backend yourself and hand it to
+the queue:
+
+```rust
+// cargo add flexiq --features postgres
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+let queue = FlexiQ::from_storage(StorageBackend::Postgres(
+    PostgresStorage::new("postgres://localhost/flexiq")?,
+))?;
 ```
 
 </SdkOnly>
@@ -325,6 +367,17 @@ or a Micrometer `MeterRegistry`. There is no dedicated OTel/Prometheus class.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The Rust SDK has no middleware surface, so there is nothing to hang an
+integration on. The nearest seam is `flexiq_core::Worker::on_outcome`, a
+callback on every finished job, which `WorkerBuilder` does not expose — build
+the worker through `flexiq_core::Worker` directly if you need it. The queue and
+the scheduler log through the `log` facade, so whichever logger your binary
+installs picks their output up.
+
+</SdkOnly>
+
 ## How does flexiq compare to running Celery with SQLite?
 
 Celery can use SQLite as a result backend, but still requires a broker (Redis
@@ -333,20 +386,18 @@ SQLite database. Additionally:
 
 - flexiq's scheduler runs in Rust (faster polling, lower overhead)
 - Worker threads are OS threads managed by Rust, not{" "}
-  <SdkSwap python="Python processes" node="separate Node processes" java="separate JVM processes" />
+  <SdkSwap python="Python processes" node="separate Node processes" java="separate JVM processes" rust="a pool of child processes" />
 - No external dependencies beyond{" "}
-  <SdkSwap python={<><code>cloudpickle</code></>} node="the native addon" java="the bundled native library" />
+  <SdkSwap python={<><code>cloudpickle</code></>} node="the native addon" java="the bundled native library" rust={<>the <code>flexiq</code> crate itself, which links straight into your binary</>} />
 
 ## Can I use async tasks?
 
-Yes. Define the task function with{" "}
-<SdkSwap python={<code>async def</code>} node={<code>async</code>} java="a handler that runs on the worker's executor" /> and the
-worker dispatches it natively —{" "}
 <SdkSwap
-  python="no asyncio.run() wrapping, no thread-pool bridging"
-  node="each runs on your Node event loop, no thread per job"
-  java="each job runs as its own executor task, sized by concurrency(n) or autoscale"
-/>:
+  python={<>Yes. Define the task function with <code>async def</code> and the worker dispatches it natively — no <code>asyncio.run()</code> wrapping, no thread-pool bridging:</>}
+  node={<>Yes. Define the task function <code>async</code> and the worker dispatches it natively — each runs on your Node event loop, no thread per job:</>}
+  java={<>Yes. Write a handler that runs on the worker's executor and the worker dispatches it natively — each job runs as its own executor task, sized by <code>concurrency(n)</code> or autoscale:</>}
+  rust={<>Not as a task body: <code>#[flexiq::task]</code> rejects an <code>async fn</code> at compile time, because the worker pool runs every handler on a blocking thread. Drive the future with a runtime inside the body, or register the handler with <code>flexiq_core::Worker::register_async</code> — which <code>WorkerBuilder</code> does not expose, so build the worker through <code>flexiq_core::Worker</code> directly.</>}
+/>
 
 <SdkOnly sdk="python">
 
@@ -407,16 +458,21 @@ try (Worker worker = queue.worker()
 
 </SdkOnly>
 
-Sync and async tasks can coexist in the same queue. The worker automatically
-routes each job to the correct pool based on the task type. See the{" "}
-<SdkLink to="guides/core">Async Tasks guide</SdkLink> for details
-including concurrency tuning and{" "}
-<SdkSwap python={<code>current_job</code>} node={<code>currentJob()</code>} java="middleware-provided job context" />{" "}
-context in async tasks.
+<SdkSwap
+  python={<>Sync and async tasks can coexist in the same queue. The worker automatically routes each job to the correct pool based on the task type. See the <SdkLink to="guides/core">Async Tasks guide</SdkLink> for details including concurrency tuning and <code>current_job</code> context in async tasks.</>}
+  node={<>Sync and async tasks can coexist in the same queue. The worker automatically routes each job to the correct pool based on the task type. See the <SdkLink to="guides/core">Async Tasks guide</SdkLink> for details including concurrency tuning and <code>currentJob()</code> context in async tasks.</>}
+  java={<>Sync and async tasks can coexist in the same queue. The worker automatically routes each job to the correct pool based on the task type. See the <SdkLink to="guides/core">Async Tasks guide</SdkLink> for details including concurrency tuning and middleware-provided job context in async tasks.</>}
+  rust={<>Every task body is synchronous, so there is one pool and nothing to route between. See <SdkLink to="guides/core">Tasks &amp; execution</SdkLink> for the worker's concurrency knobs.</>}
+/>
 
 ## What serialization format does flexiq use?
 
-By default, <SdkSwap python={<code>SmartSerializer</code>} node={<code>JsonSerializer</code>} java={<code>JsonSerializer</code>} /> — <SdkSwap python="which uses MessagePack with a cloudpickle fallback, so it handles most Python objects including lambdas and closures; switch to JsonSerializer for simpler, cross-language payloads" node="human-readable JSON bytes; switch to MsgpackSerializer for compact, binary payloads" java="human-readable JSON bytes via Jackson; switch to MsgpackSerializer for compact, binary payloads" /> — or provide a custom serializer:
+<SdkSwap
+  python={<>By default, <code>SmartSerializer</code> — which uses MessagePack with a cloudpickle fallback, so it handles most Python objects including lambdas and closures; switch to <code>JsonSerializer</code> for simpler, cross-language payloads — or provide a custom serializer:</>}
+  node={<>By default, <code>JsonSerializer</code> — human-readable JSON bytes; switch to <code>MsgpackSerializer</code> for compact, binary payloads — or provide a custom serializer:</>}
+  java={<>By default, <code>JsonSerializer</code> — human-readable JSON bytes via Jackson; switch to <code>MsgpackSerializer</code> for compact, binary payloads — or provide a custom serializer:</>}
+  rust={<>One codec, and it is not selectable: arguments and results travel in the cross-SDK CBOR envelope, written by <code>flexiq_core::wire::encode_call</code> and read back by this crate's own <code>ciborium</code> reader. Arguments are positional — a call carrying keyword arguments is refused rather than run with them dropped.</>}
+/>
 
 <SdkOnly sdk="python">
 
@@ -458,7 +514,7 @@ Custom serializers implement the `Serializer` interface with
 
 </SdkOnly>
 
-Regardless of serializer, avoid passing unserializable objects like open file
+Whatever the codec, avoid passing objects that cannot be serialized — open file
 handles, database connections, or thread locks.
 
 ## Can I run the dashboard and worker in the same process?
@@ -509,6 +565,14 @@ flexiq.dashboard(8081); // or DashboardServer.start(flexiq, 8081)
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The Rust SDK serves no dashboard — the `flexiq-server` crate does. A worker is
+`queue.worker()…spawn()` inside your own process, so run the server beside it
+against the same database.
+
+</SdkOnly>
+
 ## How do I reset / clear all jobs?
 
 <SdkOnly sdk="python">
@@ -539,6 +603,21 @@ await queue.purgeDead(0);
 // Purge all completed jobs and dead letters (argument is milliseconds; 0 = all)
 flexiq.purgeCompleted(0L);
 flexiq.purgeDead(0L);
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`FlexiQ` does not wrap the purges. Reach them on the backend underneath, which
+is what `storage()` is for:
+
+```rust
+use flexiq::Storage; // the trait the purges live on
+
+// Argument is milliseconds; 0 = all
+queue.storage().purge_completed(0)?;
+queue.storage().purge_dead(0)?;
 ```
 
 </SdkOnly>
