@@ -45,7 +45,9 @@ outright when the predicate fails, and composes with `Predicates.allOf`,
 A gate is not the only lever. A task can also carry a token-bucket limit the
 scheduler enforces globally per task name — `"100/m"` means 100 a minute across
 the whole deployment, not per worker. The worker registers it on `start()` and
-rejects a malformed spec rather than running unthrottled:
+rejects a malformed spec rather than running unthrottled — a count below `1`
+counts as malformed, since a bucket that never holds one token never releases a
+job:
 
 ```java
 Task<String> CALL_API = Task.of("call_api", String.class)

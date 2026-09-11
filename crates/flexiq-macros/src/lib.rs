@@ -60,7 +60,8 @@ mod expand;
 /// | `cron`, `timezone` | Register the task as a periodic. |
 ///
 /// Durations accept `500ms`, `30s`, `5m`, `2h`, `1d`, or a bare integer of
-/// milliseconds.
+/// milliseconds. A rate's count has to be at least one — a bucket that never
+/// holds a whole token never releases a job.
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let parsed = match attrs::TaskAttrs::parse(attr.into()) {
