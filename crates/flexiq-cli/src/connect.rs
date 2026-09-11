@@ -13,7 +13,9 @@
 //! namespace is fixed when the token is minted and the gRPC role serves exactly
 //! one, so a flag would be a control the server ignores.
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use tonic::metadata::{Ascii, MetadataValue};
@@ -24,6 +26,22 @@ use crate::pb::producer_service_client::ProducerServiceClient;
 
 /// The only place a credential comes from.
 pub const TOKEN_VAR: &str = "FLEXIQ_TOKEN";
+
+/// How long one call may take before the client gives up.
+///
+/// The door's own `FLEXIQ_GRPC_REQUEST_TIMEOUT` defaults to the same 30
+/// seconds, so this is the server's number rather than a tighter one invented
+/// here. Without it a peer that accepts the connection and then answers
+/// nothing leaves the command pending forever — tonic applies no deadline of
+/// its own.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the TCP handshake may take.
+///
+/// Separate from [`REQUEST_TIMEOUT`] because a blackholed address never
+/// completes a handshake at all, and without this the wait is the operating
+/// system's, which is minutes.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A ready client: the generated one, with the credential attached.
 pub type Client = ProducerServiceClient<InterceptedService<Channel, Bearer>>;
@@ -129,11 +147,47 @@ pub async fn connect(endpoint: &str, token: &str) -> Result<Client> {
 
 /// Dial a TCP address, negotiating TLS when the scheme asked for it.
 async fn connect_tcp(uri: Uri, tls: bool) -> Result<Channel> {
-    let mut builder = tonic::transport::Endpoint::from(uri);
+    if !tls && !is_local(&uri) {
+        // The credential rides this connection in a header. Over plaintext to
+        // somewhere other than this machine, anything on the path can read it
+        // and replay it until it expires.
+        //
+        // A warning rather than a refusal: the door terminates no TLS itself,
+        // so `http://` to a sidecar or a mesh proxy on the same host is the
+        // supported deployment, and a peer behind a TLS-terminating ingress is
+        // reached as `https://`. Refusing plaintext outright would reject the
+        // configuration the server documents.
+        eprintln!(
+            "warning: sending {TOKEN_VAR} in cleartext to {}. Use https:// or unix: unless the \
+             path to this host is already private.",
+            uri.host().unwrap_or("the endpoint")
+        );
+    }
+    let mut builder = tonic::transport::Endpoint::from(uri)
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT);
     if tls {
         builder = builder.tls_config(ClientTlsConfig::new().with_native_roots())?;
     }
     Ok(builder.connect().await?)
+}
+
+/// Whether `uri` names this machine.
+///
+/// A literal loopback address or `localhost`. A name that merely resolves to
+/// loopback is treated as remote: resolution happens later and can change,
+/// and a warning that depends on DNS is not one an operator can reason about.
+fn is_local(uri: &Uri) -> bool {
+    match uri.host() {
+        Some("localhost") => true,
+        // An IPv6 literal arrives bracketed.
+        Some(host) => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback()),
+        None => false,
+    }
 }
 
 /// Dial a Unix socket.
@@ -145,6 +199,8 @@ async fn connect_unix(path: &Path) -> Result<Channel> {
     let path = path.to_path_buf();
     Ok(tonic::transport::Endpoint::try_from("http://[::1]:50051")
         .expect("a valid placeholder URI")
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .connect_with_connector(tower::service_fn(move |_: Uri| {
             let path = path.clone();
             async move {
@@ -206,6 +262,23 @@ mod tests {
         assert!(error.to_string().contains(TOKEN_VAR));
         let error = token_from(Some("   ".to_string())).expect_err("blank token");
         assert!(error.to_string().contains(TOKEN_VAR));
+    }
+
+    /// The cleartext warning keys off this, so a wrong answer either cries
+    /// wolf on every local run or stays silent on the case that matters.
+    #[test]
+    fn loopback_is_local_and_a_routable_address_is_not() {
+        let local = |text: &str| {
+            let Endpoint::Tcp { uri, .. } = parse_endpoint(text).expect("parses") else {
+                panic!("a TCP endpoint");
+            };
+            is_local(&uri)
+        };
+        assert!(local("http://127.0.0.1:50051"));
+        assert!(local("http://localhost:50051"));
+        assert!(local("http://[::1]:50051"));
+        assert!(!local("http://10.0.0.4:50051"));
+        assert!(!local("http://queue.example:50051"));
     }
 
     #[test]
