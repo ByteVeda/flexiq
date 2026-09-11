@@ -71,7 +71,7 @@ jobs:
         # depending on it. See crates/flexiq-core/BINDING_CONTRACT.md.
         run: |
           set -euo pipefail
-          for crate in flexiq flexiq-core flexiq-workflows flexiq-mesh; do
+          for crate in flexiq flexiq-macros flexiq-core flexiq-workflows flexiq-mesh; do
             # Capture first so a `cargo tree` failure aborts (set -e) instead of
             # being swallowed by the pipe and silently passing the check.
             tree_output="$(cargo tree -p "$crate" -e normal --all-features)"

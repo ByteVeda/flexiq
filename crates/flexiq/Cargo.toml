@@ -9,6 +9,11 @@ description = "Embeddable task queue for Rust — the `flexiq` entry point, re-e
 keywords = ["task-queue", "jobs", "scheduler", "background", "worker"]
 categories = ["asynchronous", "database"]
 readme = "README.md"
+# `tests/wire_vectors.rs` reads `contracts/wire-vectors.json`, which lives above
+# this crate's root and therefore cannot travel in the package. Excluding the
+# file keeps `cargo build --tests` working from the tarball — `cargo package`'s
+# own verify pass builds lib and bin targets only and would not catch it. #900.
+exclude = ["tests/wire_vectors.rs"]
 
 [features]
 default = []
@@ -25,5 +30,36 @@ mesh = ["dep:flexiq-mesh"]
 
 [dependencies]
 flexiq-core = { workspace = true }
+flexiq-macros = { workspace = true }
 flexiq-workflows = { workspace = true, optional = true }
 flexiq-mesh = { workspace = true, optional = true }
+# A failed job records canonical JSON, not a bare message — the shape every
+# other shell reads. See `outcome::task_error_json`.
+serde_json = { workspace = true }
+# Task arguments are `Serialize`; `encode` turns them into core's WireValue.
+serde = { workspace = true }
+thiserror = { workspace = true }
+# Core writes the envelope and deliberately ships no reader, so a Rust worker
+# brings its own. Reading must accept every shape a writer may legally emit,
+# which is a real CBOR implementation's job rather than a mirror of the writer.
+ciborium = "0.2"
+# `idempotent` derives its dedup key as sha256(name || 0x00 || payload); the
+# digest is a cross-language identity, so it is computed here rather than left
+# to storage.
+sha2 = "0.11"
+hex = "0.4"
+# The shell runs its own `WorkerDispatcher`, so it needs the same three crates
+# core's pool does: the trait is async, results come back over a crossbeam
+# channel, and concurrency is a tokio semaphore.
+async-trait = { workspace = true }
+crossbeam-channel = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+# A macro's error messages are its user interface, and nothing else here
+# exercises them: every other test in this crate compiles.
+trybuild = "1"
+# Naming a CBOR byte string on the way back out, to assert the writer took the
+# binary arm its reader expects.
+serde_bytes = "0.11"

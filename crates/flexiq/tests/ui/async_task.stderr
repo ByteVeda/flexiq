@@ -1,0 +1,5 @@
+error: an async task is not supported yet: the shell's pool runs every handler on a blocking thread. Track the work with an async runtime inside the body, or use `flexiq_core::Worker::register_async` directly
+ --> tests/ui/async_task.rs:6:1
+  |
+6 | async fn charge(cents: i64) -> flexiq::Outcome<()> {
+  | ^^^^^

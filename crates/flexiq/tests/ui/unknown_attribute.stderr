@@ -1,0 +1,5 @@
+error: `retries` is not a task attribute. Accepted: name, queue, priority, max_retries, retry_backoff_ms, retry_max_delay_ms, timeout, expires, result_ttl, idempotent, on_excess, max_concurrent, max_in_flight_per_task, rate_limit, retry_budget, cron, timezone
+ --> tests/ui/unknown_attribute.rs:4:16
+  |
+4 | #[flexiq::task(retries = 5)]
+  |                ^^^^^^^

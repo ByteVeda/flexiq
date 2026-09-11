@@ -1,0 +1,5 @@
+error: an unsafe task is not supported: the expansion would emit a safe `run` and call it from `run_encoded` with decoded arguments, which drops the contract the `unsafe` was there to state. Make the function safe and put the `unsafe` block inside it, where its preconditions can be checked
+ --> tests/ui/unsafe_task.rs:6:1
+  |
+6 | unsafe fn charge(cents: i64) -> flexiq::Outcome<()> {
+  | ^^^^^^
