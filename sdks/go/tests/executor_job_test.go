@@ -105,6 +105,34 @@ func TestReturningNothingIsAnAbsentResultNotAnEmptyOne(t *testing.T) {
 	}
 }
 
+func TestAResultThatDoesNotEncodeIsFatalNotASilentEmptySuccess(t *testing.T) {
+	fake := &fakeScheduler{attach: dispatches(jobFrame("job-1", "t", mustEncodeCall(t)), executor.CapLease)}
+	w := serveExecutor(t, fake)
+	mustHandle(t, w, "t", func(context.Context, *executor.Job) (any, error) {
+		// A channel has no CBOR form. The handler still ran, and whatever it
+		// did outside this process has already happened.
+		return make(chan int), nil
+	})
+	runWorker(t, w)
+
+	frame := awaitSettled(t, fake, "job-1")
+	if frame.GetSuccess() != nil {
+		t.Fatal("recorded a success whose result no reader can decode; that is a different answer from the one the task gave")
+	}
+	failure := frame.GetFailure()
+	if failure == nil {
+		t.Fatalf("the job settled as %T, want a failure", frame.GetFrame())
+	}
+	// Not retryable: the handler's side effects already happened, and the next
+	// attempt would repeat them and fail on the same type.
+	if failure.GetShouldRetry() {
+		t.Error("should_retry is set; retrying runs the side effects again and fails identically")
+	}
+	if message := flexiq.ParseTaskError(failure.GetError()).Message; !strings.Contains(message, "does not encode") {
+		t.Errorf("message = %q, want it to name what went wrong", message)
+	}
+}
+
 func TestAFailedJobRetriesAndAFatalOneDoesNot(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

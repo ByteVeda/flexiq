@@ -35,11 +35,26 @@ func settle(job *Job, o outcome) *executorv1.AttachRequest {
 
 	switch {
 	case o.err == nil:
+		result, err := encodeResult(o.value)
+		if err != nil {
+			return failureFrame(job, failure{
+				error: flexiq.EncodeTaskError("ResultEncodeError",
+					fmt.Sprintf("task %q returned a value that does not encode: %v", job.TaskName, err), nil),
+				// Fatal, not retryable. The handler ran and its side effects
+				// happened; only the value cannot be written, and the next
+				// attempt would run them again and fail on the same type.
+				// Recording a success with an empty result instead would be a
+				// different answer from the one the task gave, and one no
+				// reader can decode.
+				shouldRetry: false,
+				wall:        wall,
+			})
+		}
 		return &executorv1.AttachRequest{
 			Frame: &executorv1.AttachRequest_Success{Success: &executorv1.SuccessFrame{
 				JobId:    job.ID,
 				TaskName: job.TaskName,
-				Result:   encodeResult(o.value),
+				Result:   result,
 				WallTime: wall,
 			}},
 		}
@@ -98,20 +113,16 @@ func failureFrame(job *Job, f failure) *executorv1.AttachRequest {
 }
 
 // encodeResult keeps "returned nothing" and "returned an empty value" apart.
-// They are different answers, and the frame has a way to say each.
+// They are different answers, and the frame has a way to say each: nil for the
+// first, a non-nil slice for the second.
 //
-// A value this client cannot encode is reported as an empty result rather than
-// as a failure: the task ran, and turning a successful side effect into a retry
-// because its return value was unserialisable would run the side effect twice.
-func encodeResult(value any) []byte {
+// A value that does not encode is an error for the caller to settle on, not
+// something to paper over — see the fatal branch in settle.
+func encodeResult(value any) ([]byte, error) {
 	if value == nil {
-		return nil
+		return nil, nil
 	}
-	encoded, err := flexiq.EncodeResult(value)
-	if err != nil {
-		return []byte{}
-	}
-	return encoded
+	return flexiq.EncodeResult(value)
 }
 
 // isCancellation reports whether the handler stopped because it was asked to.
