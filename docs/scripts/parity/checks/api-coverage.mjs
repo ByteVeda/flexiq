@@ -55,7 +55,14 @@ export function checkApiCoverage(files) {
         `${sdk}: allowlist entry ${entry} matches no symbol — drop it from scripts/parity/api-coverage.json`,
       );
     }
-    if (documented < baseline) {
+    if (typeof baseline !== "number") {
+      // Without this the ratchet fails open: `documented < undefined` and
+      // `documented > undefined` are both false, so an SDK added to SDK_IDS but
+      // not to this file is never enforced — and looks green while it is not.
+      errors.push(
+        `${sdk}: no documented.${sdk} baseline — add \`"${sdk}": ${documented}\` to scripts/parity/api-coverage.json, or the ratchet never fires for it`,
+      );
+    } else if (documented < baseline) {
       errors.push(
         `${sdk}: reference coverage fell from ${baseline} to ${documented}; still undocumented: ${undocumented
           .map((symbol) => symbol.name)
