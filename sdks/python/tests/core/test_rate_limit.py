@@ -2,7 +2,7 @@
 
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from conftest import join_worker
 from flexiq import Queue
@@ -132,7 +132,41 @@ def test_queue_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
     def fine() -> None:
         pass
 
+    queue.set_queue_rate_limit("default", "not-a-rate")
+
+    error = start_error(queue)
+    assert "rate_limit" in error
+    assert "queue default" in error
+
+
+def test_queue_rate_limit_rejects_a_count_below_one(queue: Queue) -> None:
+    """The count floor reaches a queue's rate, not only a task's."""
+
+    @queue.task()
+    def fine() -> None:
+        pass
+
     queue.set_queue_rate_limit("default", "0/s")
+
+    error = start_error(queue)
+    assert "0/s" in error
+    assert "queue default" in error
+
+
+def test_queue_rate_limit_rejects_a_non_string(queue: Queue) -> None:
+    """A present-but-not-a-string rate is the fail-open wearing another hat.
+
+    ``set_queue_rate_limit`` is typed ``str``, but the value travels as JSON and
+    nothing enforces that at runtime — and the dashboard overrides merge into the
+    same map. Reading it with ``as_str`` alone would take a number for an unset
+    field and leave the queue unthrottled.
+    """
+
+    @queue.task()
+    def fine() -> None:
+        pass
+
+    queue.set_queue_rate_limit("default", cast("str", 100))
 
     error = start_error(queue)
     assert "rate_limit" in error
