@@ -1,0 +1,4 @@
+{
+  "title": "Queue",
+  "pages": ["index", "jobs", "queues", "workers"]
+}

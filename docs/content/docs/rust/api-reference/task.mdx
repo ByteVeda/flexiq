@@ -1,0 +1,254 @@
+---
+title: Task
+description: "The #[flexiq::task] attribute macro — every accepted attribute, the literal syntax, what it expands to, and every shape it refuses — plus the Task trait it implements."
+---
+
+```rust
+#[flexiq::task(max_retries = 5, timeout = "30s", queue = "billing")]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    println!("charging {order_id}: {cents} cents");
+    Ok(cents)
+}
+```
+
+The function is replaced by a type of the same name carrying three things:
+`charge::call(..)`, `charge::run(..)`, and an implementation of `flexiq::Task`.
+
+```rust
+queue.enqueue(charge::call("ord-1".into(), 4_200))?;   // produce
+queue.worker().register::<charge>().spawn()?;          // consume
+let cents = charge::run("ord-2".into(), 7);            // call the body directly
+```
+
+## The task's name
+
+A task is named after its function — `"charge"` above — unless `name = "..."`
+says otherwise. Deliberately not the module path: that would embed the crate
+name, so renaming a binary would change a name a producer in another language
+has to type.
+
+## Attributes
+
+Seventeen, and nothing else. An unknown key is a compile error that lists the
+whole set.
+
+| Attribute | Type | Effect |
+|---|---|---|
+| `name` | string | The task name a job carries. Defaults to the function's name. |
+| `queue` | string | Which queue to enqueue on. Default `"default"`. |
+| `priority` | integer | Dispatch priority; higher runs first. Default `0`. |
+| `max_retries` | integer | Retries before the job dead-letters. Default `3`. |
+| `retry_backoff_ms` | duration | The retry policy's base delay. |
+| `retry_max_delay_ms` | duration | The retry policy's cap. |
+| `timeout` | duration | One attempt's execution cap. Default `300000` ms. |
+| `expires` | duration | How long a pending job stays eligible. |
+| `result_ttl` | duration | How long the archived result is kept. |
+| `idempotent` | flag or bool | Derive the dedup key from the name and payload. |
+| `on_excess` | `"defer"` \| `"drop"` | What a shed does when a limit turns the job away. |
+| `max_concurrent` | integer | Cluster-wide cap on concurrent runs. |
+| `max_in_flight_per_task` | integer | This task's share of one worker's slots. |
+| `rate_limit` | rate | Dispatch rate cap. |
+| `retry_budget` | rate | Token bucket bounding retries. |
+| `cron` | string | Register the task as a periodic. Six fields, seconds first. |
+| `timezone` | string | IANA timezone name for `cron`. Omitted means UTC. |
+
+`idempotent` is the only bare flag. It is also accepted as `idempotent = true`,
+so a caller generating attributes does not have to special-case it. Every other
+value is a literal on the right of `key = value`; an expression is refused.
+
+### Durations
+
+`retry_backoff_ms`, `retry_max_delay_ms`, `timeout`, `expires` and `result_ttl`
+all read the same spellings:
+
+| Literal | Milliseconds |
+|---|---|
+| `"500ms"` | 500 |
+| `"30s"` | 30000 |
+| `"5m"` | 300000 |
+| `"2h"` | 7200000 |
+| `"1d"` | 86400000 |
+| `1500` | 1500 — a bare integer is already milliseconds |
+
+`ms` is matched before `m`: reading `"5ms"` as five minutes would be a 60,000×
+error that still runs. A count that overflows `i64` when scaled is refused
+rather than wrapped.
+
+### Rates
+
+`rate_limit` and `retry_budget` take `"<count>/<unit>"`, validated at compile
+time so a typo is a build failure rather than a task that silently never
+dispatches.
+
+| Part | Accepted |
+|---|---|
+| count | At least `1`, and finite. `"0/s"` and `"NaN/s"` are refused. |
+| unit | `s`, `m`, `h`, or the long forms `second`, `minute`, `hour`. |
+
+`"100/s"`, `"60/m"`, `"1000/h"`. The string still travels to core as written —
+the macro validates the format, it does not redefine it.
+
+## What it expands to
+
+Three items, all carrying the function's own visibility:
+
+```rust
+struct charge;                                   // zero-sized, same name
+
+impl charge {
+    fn call(order_id: String, cents: i64) -> flexiq::TaskCall<charge> { /* … */ }
+    fn run(order_id: String, cents: i64) -> flexiq::Outcome<i64> { /* the body */ }
+}
+
+impl flexiq::Task for charge { /* NAME, config, defaults, run_encoded, periodic */ }
+```
+
+`call` mirrors the function's signature, so a wrong argument to an enqueue is
+the same compile error as a wrong argument to the function. `run` *is* the
+original body, unchanged and directly callable — which is how you unit-test one
+without a queue.
+
+The attributes split in two. `max_retries` is the one that lands in both.
+
+| Reaches `Task::config()` — the scheduler's half | Reaches `Task::defaults()` — the enqueue half |
+|---|---|
+| `max_retries`, `retry_backoff_ms`, `retry_max_delay_ms`, `on_excess`, `max_concurrent`, `max_in_flight_per_task`, `rate_limit`, `retry_budget` | `queue`, `priority`, `max_retries`, `timeout`, `expires`, `result_ttl`, `idempotent` |
+
+An absent attribute is left at `TaskConfig::default()` or
+`EnqueueOptions::default()` — the macro never restates a default.
+
+### Your own attributes
+
+`#[cfg]` and `#[cfg_attr]` are copied onto all three generated items: they
+decide whether the task exists at all, and putting them on the type alone would
+leave two `impl` blocks referring to a type that is not there. Everything else,
+doc comments included, goes on the type. A task you did not document gets a
+generated one-line doc, so `#![deny(missing_docs)]` in your crate stays happy.
+
+```rust
+/// Charge an order. This line lands on the generated `charge` type.
+#[cfg(feature = "billing")]
+#[flexiq::task(queue = "billing")]
+fn charge(order_id: String) -> flexiq::Outcome<()> { let _ = order_id; Ok(()) }
+```
+
+## What it refuses
+
+Seven refusals are pinned by `trybuild` fixtures — the messages are part of the
+macro's interface, checked byte for byte, not incidental text.
+
+| Written | Refused because |
+|---|---|
+| `async fn charge(..)` | The shell's pool runs every handler on a blocking thread. |
+| `unsafe fn charge(..)` | The expansion emits a safe `run` and calls it from `run_encoded`, which drops the contract the `unsafe` was there to state. |
+| `#[flexiq::task(retries = 5)]` | Not an attribute. The message lists all seventeen that are. |
+| `#[flexiq::task(timeout = "30 fortnights")]` | Not a duration the parser reads. |
+| `#[flexiq::task(on_excess = "discard")]` | Not one of the two shedding policies. |
+| `#[flexiq::task(rate_limit = "0/s")]` | A rate below one never releases a job, so the task would simply never dispatch. |
+| `#[flexiq::task(cron = "0 0 3 * * *")]` on a function with parameters | A periodic fire has no caller to supply them; left to runtime it decodes as missing arguments on every fire. |
+
+The exact text each produces:
+
+```text
+error: an async task is not supported yet: the shell's pool runs every handler
+on a blocking thread. Track the work with an async runtime inside the body, or
+use `flexiq_core::Worker::register_async` directly
+
+error: an unsafe task is not supported: the expansion would emit a safe `run`
+and call it from `run_encoded` with decoded arguments, which drops the contract
+the `unsafe` was there to state. Make the function safe and put the `unsafe`
+block inside it, where its preconditions can be checked
+
+error: `retries` is not a task attribute. Accepted: name, queue, priority,
+max_retries, retry_backoff_ms, retry_max_delay_ms, timeout, expires, result_ttl,
+idempotent, on_excess, max_concurrent, max_in_flight_per_task, rate_limit,
+retry_budget, cron, timezone
+
+error: `30 fortnights` is not a duration. Write it as 500ms, 30s, 5m, 2h, 1d, or
+a bare integer of milliseconds
+
+error: `discard` is not a shedding policy. Use one of: defer, drop
+
+error: `0/s` is not a rate. Write it as a count of at least 1 over a unit, as in
+100/s, 60/m or 1000/h — a rate below one never releases a job
+
+error: a scheduled task takes no parameters: a periodic fire has no caller to
+supply them. Enqueue it by hand if it needs arguments
+```
+
+Four more shapes are refused by the same pass, without a fixture of their own:
+
+| Written | Why |
+|---|---|
+| A generic function | One registration is one task name, and a generic function is a family of them. |
+| A variadic function | There is no argument list to decode into. |
+| A parameter list containing `self` | A task is a free function. |
+| A destructuring parameter pattern — `fn f((a, b): (i64, i64))` | A payload is decoded into parameters one by one, so there is nothing to destructure yet. Bind a plain name and destructure in the body. |
+
+And `timezone` without `cron` is refused too: it only means something beside a
+schedule.
+
+<Callout type="warn">
+  The refusals are the point. Each of these compiles into something that works
+  until it doesn't — an `async fn` that never awaits, a `"0/s"` limit that
+  dispatches nothing with no error anywhere, a cron task whose arguments decode
+  as missing on every single fire. A build failure is the cheap version.
+</Callout>
+
+## The `Task` trait
+
+`#[flexiq::task]` implements it. Implementing it by hand is supported and is
+what this crate's own tests do — the macro is ergonomics, not plumbing, so a
+task with an unusual shape can skip it.
+
+```rust
+pub trait Task: Send + Sync + 'static {
+    const NAME: &'static str;
+
+    fn config() -> TaskConfig;
+    fn defaults() -> EnqueueOptions;
+    fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>;
+
+    fn periodic() -> Option<PeriodicSpec> { None }
+}
+```
+
+| Item | Meaning |
+|---|---|
+| `NAME` | The name a job carries, and the name a producer in any language enqueues. |
+| `config()` | Dispatch policy: retries, rate limits, breaker, concurrency caps. Read by the scheduler, never by the job row. |
+| `defaults()` | The enqueue defaults, seeded into every `TaskCall` before a caller's per-call overrides. |
+| `run_encoded(job)` | Decode the payload, run the body, encode the result. |
+| `periodic()` | This task's cron schedule, when it was declared with one. Defaults to `None`, so a task without `cron` costs nothing. |
+
+`TaskConfig` carries no `queue`, `priority` or `timeout`: those are properties
+of a job, not of a task, and live on `defaults()` instead.
+
+A hand-written implementation, shaped like the one the macro emits:
+
+```rust
+use flexiq::{EnqueueOptions, Job, Outcome, Task, TaskConfig};
+
+struct Greet;
+
+impl Task for Greet {
+    const NAME: &'static str = "greet";
+
+    fn config() -> TaskConfig {
+        TaskConfig::default()
+    }
+
+    fn defaults() -> EnqueueOptions {
+        EnqueueOptions::default()
+    }
+
+    fn run_encoded(_job: &Job) -> Outcome<Option<Vec<u8>>> {
+        Ok(None)
+    }
+}
+```
+
+See <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> for what `TaskCall`
+does with those defaults, and
+<SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> for
+`PeriodicSpec`.

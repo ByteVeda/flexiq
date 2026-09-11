@@ -1,0 +1,122 @@
+---
+title: Batch enqueue
+description: "enqueue_batch — many calls of one task in a single write, how uniqueness routes it, and the one option it refuses."
+---
+
+`enqueue_batch` inserts many calls in one storage write and returns the jobs it
+created, in input order.
+
+```rust
+let jobs = queue.enqueue_batch(vec![
+    resize::call("a.png".into()),
+    resize::call("b.png".into()),
+    resize::call("c.png".into()),
+])?;
+
+assert_eq!(jobs.len(), 3);
+```
+
+The signature is `enqueue_batch<T: Task>(&self, calls: Vec<TaskCall<T>>) ->
+Result<Vec<Job>>`. One `T`, so one task per batch — a `Vec` of two different
+task types does not typecheck. Enqueue each task's calls as its own batch.
+
+Per-call options still apply, per call:
+
+```rust
+queue.enqueue_batch(vec![
+    resize::call("a.png".into()).priority(9),
+    resize::call("b.png".into()).queue("bulk"),
+])?;
+```
+
+## Why one write
+
+The Diesel backends run the insert in a single transaction — either every row
+lands or none does. That atomicity is the reason to send a batch at all, which
+is also why the shell will not quietly turn one batch into a loop of single
+enqueues.
+
+## Uniqueness routes the whole batch
+
+If **any** call in the batch carries a dedup key — set explicitly with
+`.unique_key(..)`, or derived by `.idempotent()` — the batch goes through the
+deduplicating write. A call whose key already has an active job resolves to that
+job instead of inserting a duplicate; the rest insert normally.
+
+```rust
+queue.enqueue_batch(vec![
+    send_welcome::call("u-1".into()).unique_key("welcome:u-1"),
+    send_welcome::call("u-2".into()).unique_key("welcome:u-2"),
+])?;
+```
+
+Within a batch a dependency id may also name another job in the same batch — see
+<SdkLink to="guides/core/dependencies">dependencies</SdkLink>.
+
+## A debounce window cannot ride a batch
+
+This is a hard refusal, not a fallback:
+
+```rust
+let err = queue
+    .enqueue_batch(vec![
+        greet::call("a".into()),
+        greet::call("b".into()).debounce_ms("k", 500, 5_000),
+    ])
+    .unwrap_err();
+// "a debounce window cannot ride a batch: enqueue `greet` on its own"
+```
+
+Storage has no batched debounce, and looping it item by item would cost the
+Diesel backends exactly the atomicity the batch was for. The SDK's own test
+pins this, and the server's door refuses the same combination.
+
+Enqueue the debounced call on its own:
+
+```rust
+queue.enqueue(greet::call("b".into()).debounce_ms("k", 500, 5_000))?;
+```
+
+## One bad item fails the call
+
+An argument with no representation in the call envelope is carried on the
+`TaskCall` and raised by the enqueue. In a batch that means the whole call
+fails, naming the task — nothing is inserted:
+
+```rust
+let err = queue
+    .enqueue_batch(vec![
+        takes_a_big_number::call(1),
+        takes_a_big_number::call(u64::MAX),
+    ])
+    .unwrap_err();
+// "task `takes_a_big_number` could not encode its arguments: …"
+```
+
+The namespace boundary is checked the same way, per call: a handle scoped to one
+tenant refuses a batch containing a call that names another.
+
+<Callout type="info">
+  Batching on the *worker* side is a different thing entirely.
+  `SchedulerConfig::batch_size` sets how many already-enqueued jobs the scheduler
+  claims per poll — a throughput knob for the claim query, not a way to group
+  payloads. See <SdkLink to="guides/core/execution-model">execution models</SdkLink>.
+</Callout>
+
+<Cards>
+  <Card
+    title="Enqueue options"
+    to="guides/core/enqueue-options"
+    description="Every per-call setter, and the defaults it overrides."
+  />
+  <Card
+    title="Unique tasks"
+    to="guides/core/unique-tasks"
+    description="Which key routes a batch to the deduplicating write."
+  />
+  <Card
+    title="Debouncing"
+    to="guides/reliability/debouncing"
+    description="What a window does, and why it has to be its own write."
+  />
+</Cards>

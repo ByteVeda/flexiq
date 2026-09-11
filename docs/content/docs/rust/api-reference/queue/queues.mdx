@@ -1,0 +1,143 @@
+---
+title: Queues & namespaces
+description: "stats, choosing which queue a job lands on, tenant namespaces, and the periodic admin calls a namespaced handle refuses."
+---
+
+```rust
+let stats = queue.stats()?;
+println!("{} pending, {} running, {} dead", stats.pending, stats.running, stats.dead);
+```
+
+## `stats`
+
+```rust
+pub fn stats(&self) -> Result<QueueStats>
+```
+
+Counts by lifecycle state, across every queue, scoped to the handle's
+namespace. The six fields are on
+<SdkLink to="api-reference/result">`QueueStats`</SdkLink>.
+
+Per-queue counts are not on `FlexiQ`. `Storage::stats_by_queue` is:
+
+```rust
+use flexiq::Storage;
+
+let billing = queue.storage().stats_by_queue("billing", queue.namespace())?;
+```
+
+Pausing a queue is on the same trait — `pause_queue(name)`, `resume_queue(name)`
+— and likewise not wrapped.
+
+## Choosing a queue
+
+A queue is a name every job carries. There is no queue object to create: naming
+one on an enqueue is what makes it exist.
+
+| Where | How | Wins over |
+|---|---|---|
+| On the task | `#[flexiq::task(queue = "billing")]` | the `"default"` default |
+| On the call | `charge::call(..).queue("billing-urgent")` | the declared queue |
+
+A worker pulls from the queues it was told to:
+
+```rust
+let worker = queue
+    .worker()
+    .register::<charge>()
+    .queues(["billing", "default"])
+    .spawn()?;
+```
+
+<Callout type="warn">
+  A job on a queue no running worker serves sits `Pending` forever, with nothing
+  anywhere reporting it. `WorkerBuilder::queues` defaults to `["default"]`, so a
+  task declared `queue = "billing"` needs a worker that names `"billing"` —
+  declaring the queue on the task does not enlist a worker for it.
+</Callout>
+
+## Namespaces
+
+```rust
+let tenant = FlexiQ::open("flexiq.db")?.with_namespace("tenant-a");
+```
+
+| Method | Description |
+|---|---|
+| `with_namespace(impl Into<String>) -> Self` | Scope every operation on this handle to a tenant namespace. |
+| `namespace() -> Option<&str>` | The namespace this handle is scoped to, if any. |
+
+A scoped handle carries its namespace into every read, every write, `stats`,
+and the worker it builds. The rules are three, and they are checked on the
+write path:
+
+| The handle | The call names | Result |
+|---|---|---|
+| Scoped to `tenant-a` | nothing | Inherits `tenant-a`. |
+| Scoped to `tenant-a` | `tenant-a` | Fine — naming its own namespace is not a mismatch. |
+| Scoped to `tenant-a` | `tenant-b` | **Refused**, on `enqueue` and on `enqueue_batch`. |
+| Unscoped | `tenant-b` | Writes into `tenant-b`. |
+
+The third row is the one that matters. `TaskCall::namespace` is public, so
+without the check a caller holding a handle for one tenant could name another
+on the call and write into it. A scoped handle is a boundary, not a default.
+
+The fourth is deliberate too: an unscoped handle naming a namespace per call is
+how a caller targets one without holding a scoped handle, and stays allowed.
+
+## Periodic administration
+
+Four methods, all on `FlexiQ`:
+
+| Method | Description |
+|---|---|
+| `list_periodic() -> Result<Vec<PeriodicTask>>` | Every registered periodic task. |
+| `delete_periodic(name: &str) -> Result<bool>` | Remove a periodic. `false` when there was none by that name. |
+| `pause_periodic(name: &str) -> Result<bool>` | Stop a periodic firing, without forgetting it. |
+| `resume_periodic(name: &str) -> Result<bool>` | Let a paused periodic fire again. |
+
+`PeriodicTask` carries `name`, `task_name`, `cron_expr`, `args`, `kwargs`,
+`queue`, `enabled`, `last_run`, `next_run` and `timezone`. Both timestamps are
+Unix milliseconds.
+
+```rust
+for task in queue.list_periodic()? {
+    println!("{} → {} ({})", task.name, task.cron_expr, task.queue);
+}
+```
+
+`delete_periodic` removes the row, not the declaration. A worker that still has
+the task registered writes it back at its next startup — the schedule lives in
+code, and this is the database's copy of it. Pausing survives a restart:
+re-registering an unchanged declaration writes nothing, and a changed one keeps
+the `enabled` flag an operator set.
+
+### Refused on a namespaced handle
+
+All four, plus registering one on a namespaced worker:
+
+```text
+list_periodic is not available on a namespaced handle: periodic tasks are keyed
+by name alone in every backend, so a namespaced call would reach another
+namespace's rows. Use a handle without a namespace.
+```
+
+Periodic tasks are not namespace-aware anywhere below the shell.
+`NewPeriodicTask` carries no namespace and every backend keys the table by
+`name` alone — so on a shared database two namespaces registering the same task
+name overwrite one another's row, a listing returns every tenant's schedules,
+and a delete or pause reaches a name it does not own.
+
+Refusing is the honest answer while that is true. Scoping it properly is a
+migration plus a change to the `Storage` contract and all three backends, which
+is tracked as **issue #918**. A handle with no namespace behaves exactly as
+before, and everything else on a namespaced handle works as usual.
+
+<Callout type="info">
+  This bites at `spawn()`, not at `register`. A namespaced worker with a task
+  that declared `cron` fails to start, naming the problem — rather than starting
+  and quietly never scheduling it.
+</Callout>
+
+See <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> for
+`PeriodicSpec` and how a schedule is declared in the first place.

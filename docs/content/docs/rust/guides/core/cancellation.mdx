@@ -1,0 +1,142 @@
+---
+title: Cancellation
+description: "cancel for a pending job, request_cancel for a running one — what each does, and what the shell leaves to you."
+---
+
+Two methods, two different jobs. A **pending** job is cancelled outright. A
+**running** one is asked to stop, and the task has to agree.
+
+```rust
+let stopped = queue.cancel(&job_id)?;         // pending only
+let asked = queue.request_cancel(&job_id)?;   // running only
+```
+
+Both return `bool`, and both are namespace-scoped: a handle scoped to one tenant
+gets `false` for an id in another, which is the same answer an unknown id gets.
+A scoped caller learns nothing about ids outside its own namespace.
+
+## `cancel` — a pending job
+
+`cancel` archives the job as `Cancelled` and cascade-cancels its dependents, in
+one transaction. Nothing is running, so nothing has to cooperate.
+
+```rust
+let job = queue.enqueue(charge::call("ord-1".into(), 4_200))?;
+assert!(queue.cancel(&job.id)?);
+assert!(!queue.cancel("no-such-job")?);
+```
+
+`false` means there was nothing to cancel: the id is unknown, or the job is no
+longer pending. A job that has already started is not reachable this way — that
+is what `request_cancel` is for.
+
+## `request_cancel` — a running job
+
+`request_cancel` sets the cancel-requested flag on a `Running` job and returns.
+Nothing interrupts a handler mid-call; the task has to poll for the flag and
+unwind on its own.
+
+```rust
+queue.request_cancel(&job.id)?;   // producer side
+```
+
+`false` means no running job matched.
+
+## Polling for it
+
+The shell does not wrap the poll, and a macro-declared task body takes its
+decoded arguments and nothing else — it is never handed its own job id. Two
+things are true as a result.
+
+**Reading the flag** goes through the backend:
+
+```rust
+use flexiq::Storage;
+
+if queue.storage().is_cancel_requested(&job_id, queue.namespace())? {
+    // stop between units of work
+}
+```
+
+`queue.namespace()` hands back this handle's scope, so the read stays inside the
+same boundary the enqueue did.
+
+**Getting the job id into the body** means implementing `Task` by hand instead
+of using the attribute. `run_encoded` receives the `&Job`, so `job.id` and
+`job.cancel_requested` are both in reach:
+
+```rust
+use flexiq::{EnqueueOptions, Job, Outcome, Task, TaskConfig};
+
+struct Export;
+
+impl Task for Export {
+    const NAME: &'static str = "export";
+
+    fn config() -> TaskConfig {
+        TaskConfig::default()
+    }
+
+    fn defaults() -> EnqueueOptions {
+        EnqueueOptions::default()
+    }
+
+    fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>> {
+        if job.cancel_requested {
+            // …unwind…
+        }
+        Ok(None)
+    }
+}
+```
+
+Implementing the trait by hand is supported and is what this SDK's own tests do
+— the macro is ergonomics, not plumbing.
+
+<Callout type="info">
+  `job.cancel_requested` is the value read when the job was claimed. A request
+  made *after* that needs a fresh read through `queue.storage()`.
+</Callout>
+
+## What the shell will not record
+
+The pool builds three outcomes — success, failure and slept — and a cancelled
+outcome is not among them. A Rust task that observes the flag and returns an
+error records a **failure**, which the retry policy then retries or
+dead-letters. Give it a fatal error so it stops on the first attempt:
+
+```rust
+return Err(flexiq::TaskError::fatal("cancelled").into());
+```
+
+Reporting a job as `Cancelled` from a running handler needs a dispatcher of your
+own, built against `flexiq_core::WorkerDispatcher`. The shell does not wrap it.
+
+`Storage::mark_cancelled` is reachable through `queue.storage()` and archives a
+running job as cancelled, but it races the result the pool is already about to
+send for the same job — it is an operator's tool, not a handler's.
+
+## Cancellation cascades
+
+Cancelling a job cancels every pending job that depends on it, directly or
+transitively, with the reason `dependency cancelled`. The same happens when a
+job exhausts its retries and is dead-lettered, with the reason
+`dependency failed`. See <SdkLink to="guides/core/dependencies">dependencies</SdkLink>.
+
+<Cards>
+  <Card
+    title="Dependencies"
+    to="guides/core/dependencies"
+    description="depends_on, and how a cancellation travels down the chain."
+  />
+  <Card
+    title="Error handling"
+    to="guides/reliability/error-handling"
+    description="Retryable versus fatal, and the JSON a failure records."
+  />
+  <Card
+    title="Execution Models"
+    to="guides/core/execution-model"
+    description="The three outcomes the pool reports."
+  />
+</Cards>

@@ -1,0 +1,129 @@
+---
+title: Dead-letter queue
+description: "Where a job goes when its retries run out — and why reading the DLQ goes through queue.storage(), not FlexiQ."
+---
+
+A job that has spent its retry budget moves to the **dead-letter queue**. The
+row leaves `jobs` and becomes a `DeadJob` entry carrying the payload, the final
+error and the failure time, so the work is recoverable rather than lost.
+
+Four routes lead there:
+
+| Cause | When |
+| --- | --- |
+| Retries exhausted | `retry_count` reached the job's own `max_retries` |
+| Fatal error | The body returned `TaskError::fatal`, whatever retries remained |
+| Retry budget exhausted | The task's `retry_budget` had no token left; recorded as `retry_budget_exhausted` |
+| Shed | `on_excess = "drop"` and a rate limit turned the job away; recorded with a reserved `rate_limit:` reason |
+
+A timeout is not a separate route — it is an ordinary retryable failure that
+dead-letters once the budget runs out. See
+<SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink>.
+
+## Reading it back is not on `FlexiQ`
+
+The queue handle wraps enqueue, cancel, the job reads and the periodic table.
+It does **not** wrap the dead-letter queue. Those calls live on the `Storage`
+trait, and `queue.storage()` is the way to them:
+
+```rust
+use flexiq::{FlexiQ, Storage};
+
+let queue = FlexiQ::open("flexiq.db")?;
+
+// Newest first, paged.
+let dead = queue.storage().list_dead(50, 0, queue.namespace())?;
+
+for entry in &dead {
+    println!("{} {} {:?}", entry.id, entry.task_name, entry.error);
+}
+```
+
+`Storage` has to be in scope for the method to resolve — `flexiq::Storage` and
+`flexiq_core::Storage` are the same trait, so either import works.
+
+<Callout type="warn">
+  `storage()` hands back the raw backend, and the backend does not know about
+  your handle's namespace. Every one of these methods takes a `namespace`
+  argument: pass `queue.namespace()` so a scoped handle keeps its scope. Passing
+  `None` reads every namespace.
+</Callout>
+
+## The methods
+
+```rust
+use flexiq::Storage;
+
+let store = queue.storage();
+let ns = queue.namespace();
+
+// Read
+let dead = store.list_dead(50, 0, ns)?;
+let charges = store.list_dead_by_task("charge", 50, 0, ns)?;
+
+// Act on one entry
+let entry = &dead[0];
+let new_job_id: String = store.retry_dead(&entry.id, ns)?;  // re-enqueues, deletes the entry
+let removed: bool = store.delete_dead(&entry.id, ns)?;
+
+// Bulk
+let dropped: u64 = store.purge_dead(cutoff_ms)?;            // everything older than a cutoff
+let cleared: u64 = store.purge_dead_by_task("charge")?;
+```
+
+`retry_dead` returns the **new** job's id and removes the dead-letter entry, so
+the same entry cannot be replayed twice. An id that is absent — or that belongs
+to another namespace — reports `JobNotFound`.
+
+## What an entry carries
+
+`DeadJob` is the full record, not a summary: `id`, `original_job_id`,
+`queue`, `task_name`, `payload`, `error`, `retry_count`, `failed_at`,
+`metadata`, `notes`, `priority`, `max_retries`, `timeout_ms`, `result_ttl_ms`,
+`namespace`, `dlq_retry_count` and `origin_job_id`.
+
+`error` is the canonical failure JSON a Rust task writes —
+`errtype`, `message` and `traceback` — so parse it rather than reading it as a
+bare message:
+
+```rust
+if let Some(raw) = entry.error.as_deref() {
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+        println!("{}", parsed["message"]);
+    }
+}
+```
+
+`serde_json` is not re-exported by this crate — add it to your own
+`Cargo.toml` if you want to parse the field.
+
+For the attempt-by-attempt history behind one failure, read the error records
+for the original job:
+
+```rust
+for err in queue.storage().get_job_errors(&entry.original_job_id, ns)? {
+    println!("attempt {}: {}", err.attempt, err.error);
+}
+```
+
+## Shed entries are different
+
+A job dropped by `on_excess = "drop"` is written through a separate path and
+marked. It appears in `list_dead`, but the engine's own automatic DLQ retry
+sweep skips it deliberately — the scheduler threw that job away on purpose, and
+letting it fill a bounded page would starve the sweep of the failures it exists
+to retry. Retry it by hand with `retry_dead` if you want it back. See
+<SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink>.
+
+## Cleaning up
+
+`purge_dead(older_than_ms)` takes an absolute Unix-millisecond cutoff, not an
+age:
+
+```rust
+let month_ago = flexiq::now_millis() - 30 * 24 * 60 * 60 * 1_000;
+let dropped = queue.storage().purge_dead(month_ago)?;
+```
+
+Retention also runs on its own inside the scheduler, so a long-lived deployment
+does not need this loop — reach for it when you want a specific sweep now.

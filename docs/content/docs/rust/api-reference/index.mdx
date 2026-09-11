@@ -1,0 +1,34 @@
+---
+title: API Reference
+description: "The flexiq crate's public surface — the queue handle, the task macro, the worker, durable steps, results and errors."
+---
+
+The SDK is the [`flexiq`](https://crates.io/crates/flexiq) crate.
+`flexiq-core` is the engine underneath, re-exported in full — `flexiq::Storage`
+and `flexiq_core::Storage` are the same trait — so anything the shell does not
+wrap is one import away.
+
+```rust
+use flexiq::{FlexiQ, Outcome, TaskCall, EnqueueOptions, Debounce, Abort,
+             WorkerBuilder, Task, StepHandle, current_step, PeriodicSpec};
+```
+
+| Page | Covers |
+|---|---|
+| <SdkLink to="api-reference/overview">Overview</SdkLink> | The crate map — what the shell defines, and what the glob re-export brings with it. |
+| <SdkLink to="api-reference/queue">FlexiQ</SdkLink> | `FlexiQ::open`, `in_memory`, `from_storage`, and the shape of the handle. |
+| <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> | `enqueue`, `enqueue_batch`, `get_job`, `list_jobs`, `cancel`, `TaskCall`, `EnqueueOptions`. |
+| <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink> | `stats`, queue selection, `with_namespace`, the periodic admin calls. |
+| <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> | `queue.worker()`, `current_step`, `StepHandle`, `PeriodicSpec`. |
+| <SdkLink to="api-reference/task">Task</SdkLink> | `#[flexiq::task]` — every attribute, what it expands to, what it refuses. |
+| <SdkLink to="api-reference/worker">Worker</SdkLink> | `WorkerBuilder` and `WorkerHandle`. |
+| <SdkLink to="api-reference/result">Result</SdkLink> | `Job`, `JobStatus`, `QueueStats` — and why there is no typed result read. |
+| <SdkLink to="api-reference/errors">Errors</SdkLink> | `QueueError`, `TaskError`, `Abort`, `Outcome`, `EncodeError`, `DecodeError`. |
+
+Everything on these pages is in the `flexiq` crate at version `2`. The MSRV is
+`1.88`.
+
+```toml
+[dependencies]
+flexiq = "2"
+```

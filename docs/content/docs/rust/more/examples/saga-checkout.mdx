@@ -1,0 +1,247 @@
+---
+title: Saga — e-commerce checkout
+description: "No saga engine in the shell — compensation built on durable steps: reserve, charge, settle, ship, and an exact reverse-order rollback that never runs twice."
+---
+
+The Rust SDK has **no saga engine**: nothing declares a compensation, nothing
+walks one backwards, and no status records that a run compensated. What it does
+have is the mechanism a saga is built out of — durable steps, where a committed
+step is never re-run and the work it did is therefore never repeated.
+
+That turns out to be the whole thing. A saga is a body that does its work in
+steps, and on failure runs the undo steps before it gives up.
+
+The four blocks below are one `src/main.rs`, in order.
+
+## The services
+
+Stubs returning `Result<_, String>`, which is what lets a body end with
+`.map_err(TaskError::retryable)?`. Each returns the id of the thing it created,
+because the compensating call needs it.
+
+```rust
+use std::time::{Duration, Instant};
+
+use flexiq::{Abort, FlexiQ, JobStatus, StepHandle, TaskError};
+
+fn reserve_stock(order_id: &str) -> Result<String, String> {
+    println!("  reserving stock for {order_id}");
+    Ok(format!("res-{order_id}"))
+}
+
+fn release_stock(reservation_id: &str) -> Result<String, String> {
+    println!("  releasing {reservation_id}");
+    Ok(format!("rel-{reservation_id}"))
+}
+
+fn charge_card(order_id: &str, cents: i64) -> Result<String, String> {
+    println!("  charging {cents} cents for {order_id}");
+    Ok(format!("ch-{order_id}"))
+}
+
+fn refund_card(charge_id: &str) -> Result<String, String> {
+    println!("  refunding {charge_id}");
+    Ok(format!("rf-{charge_id}"))
+}
+
+fn ship(order_id: &str, reservation_id: &str) -> Result<String, String> {
+    println!("  shipping {order_id} from {reservation_id}");
+    Err("carrier refused the parcel".to_string())
+}
+```
+
+`ship` fails on purpose — that is the path this example is about.
+
+## The saga
+
+```rust
+/// Reserve, charge, let the payment settle, ship. If shipping fails, undo the
+/// charge and the reservation, in that order, and stop.
+#[flexiq::task(
+    queue = "checkout",
+    max_retries = 5,
+    retry_backoff_ms = 2_000,
+    timeout = "2m"
+)]
+fn checkout(order_id: String, cents: i64) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+
+    let reservation: String = step.run_keyed("reserve-stock", &order_id, || {
+        Ok(reserve_stock(&order_id).map_err(TaskError::retryable)?)
+    })?;
+
+    let charge: String = step.run_keyed("charge-card", &order_id, || {
+        Ok(charge_card(&order_id, cents).map_err(TaskError::retryable)?)
+    })?;
+
+    // Give the payment time to settle. This *ends the attempt*: the job is
+    // rescheduled and its claim released, so the worker's slot is free while it
+    // waits. The body restarts from the top a minute later with both steps
+    // above memoized — and without spending a retry.
+    step.sleep_ms("settle", 60_000)?;
+
+    // Deliberately no `?`. A failure here is the one the compensation exists
+    // for, and `?` would return before it could run.
+    match step.run_keyed("ship", &order_id, || {
+        Ok(ship(&order_id, &reservation).map_err(TaskError::retryable)?)
+    }) {
+        Ok(tracking) => {
+            println!("order {order_id} shipped: {tracking}");
+            Ok(())
+        }
+        Err(cause) => compensate(&mut step, &order_id, &charge, &reservation, cause),
+    }
+}
+
+/// Undo in reverse order, then fail terminally.
+fn compensate(
+    step: &mut StepHandle,
+    order_id: &str,
+    charge_id: &str,
+    reservation_id: &str,
+    cause: Abort,
+) -> flexiq::Outcome<()> {
+    // Steps, like the forward path: a compensation that half-ran and was
+    // interrupted must not refund twice when the attempt is replayed.
+    let _: String = step.run_keyed("refund-card", charge_id, || {
+        Ok(refund_card(charge_id).map_err(TaskError::retryable)?)
+    })?;
+
+    let _: String = step.run_keyed("release-stock", reservation_id, || {
+        Ok(release_stock(reservation_id).map_err(TaskError::retryable)?)
+    })?;
+
+    // Fatal, not retryable. The compensation has committed; another attempt
+    // would replay past it and re-do the work it just undid.
+    Err(TaskError::fatal(format!("checkout {order_id} rolled back after {cause:?}")).into())
+}
+```
+
+## Running it
+
+```rust
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open("checkout.db")?;
+
+    // `idempotent()` derives the dedup key from the task name and the encoded
+    // arguments, so submitting the same order twice finds the first job.
+    let job = queue.enqueue(checkout::call("ord-1001".into(), 12_900).idempotent())?;
+
+    let worker = queue
+        .worker()
+        .queues(["checkout"])
+        .register::<checkout>()
+        .num_workers(2)
+        .spawn()?;
+
+    let done = wait_for(&queue, &job.id);
+    println!("{:?} after {} retries", done.status, done.retry_count);
+    if let Some(error) = done.error {
+        // The contract's `{"errtype","message","traceback"}` JSON.
+        println!("{error}");
+    }
+
+    worker.shutdown()
+}
+
+/// Poll until the job reaches a terminal state. The budget has to clear the
+/// settle window, so it is generous.
+fn wait_for(queue: &FlexiQ, job_id: &str) -> flexiq::Job {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    while Instant::now() < deadline {
+        let job = queue.get_job(job_id).expect("reads").expect("the job exists");
+        if matches!(
+            job.status,
+            JobStatus::Complete | JobStatus::Failed | JobStatus::Dead | JobStatus::Cancelled
+        ) {
+            return job;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    panic!("job {job_id} never finished");
+}
+```
+
+What it prints: the reservation and the charge on the first attempt, then a
+minute of nothing, then the body again from the top — **without** reserving or
+charging a second time — then the failed ship, the refund, the release, and a
+dead-lettered job carrying the rollback message.
+
+## Why the steps are keyed
+
+`run` and `run_keyed` are matched differently, and a saga is exactly the case
+where it matters.
+
+- An **unkeyed** step is matched by *position*: `ship#0` means "the first `ship`
+  of this attempt", and it replays only if it is asked for at the same point in
+  the sequence.
+- A **keyed** step is matched by *key, wherever it sits*.
+
+A saga does not ask for the same sequence on every attempt — the compensating
+path asks for steps the happy path never does. With unkeyed steps the recorded
+sequence and the one the body walks stop lining up, and the attempt fails with a
+step-divergence error instead of doing anything useful. Keying them removes the
+question.
+
+<Callout type="info">
+  The key is per step name, so `&order_id` is fine for all five here:
+  `reserve-stock:ord-1001` and `charge-card:ord-1001` are already distinct.
+  Compensations key on the id they undo, which is the identity that survives a
+  replay.
+</Callout>
+
+## Why the ending is fatal
+
+Compensating and then returning `TaskError::retryable` looks tidier and is
+wrong. The refund and the release have **committed**. A retry replays them from
+their memos, walks past them, and calls `ship` again — undoing the rollback that
+just succeeded. Once the saga has rolled back, the job is finished; say so.
+
+A *failed* step body is different, and safe: it commits nothing, so the sequence
+is exactly where it was and a retry re-runs it. That is what
+`max_retries = 5` is for — a flaky reservation or a timed-out charge retries
+normally, and only a failure the compensation can see takes the rollback path.
+
+## What the mechanism guarantees, and what it does not
+
+| It does | It does not |
+| --- | --- |
+| Run a committed step exactly once per job, however often the attempt after it fails | Give you a typed result read — `job.result` is `Option<Vec<u8>>` and the decoder is private |
+| End the attempt at `sleep_ms` without spending a retry, and resume from the top | Run compensations for you, or record that a run compensated |
+| Fence every write on `(owner, attempt, epoch)`, so a superseded attempt cannot commit | Survive the job finishing: archiving a job deletes its step rows in the same transaction |
+| Fail with `outside a running task` rather than panicking, if a step is used off a worker | Let a step nest — a step opened inside another step's body is refused by name |
+
+<Callout type="warn" title="Steps are checkpoints, not storage">
+  A step's encoded value is capped at 256 KB, a job's total at 4 MB, and a job
+  at 1,000 steps. A value that does not encode is a **fatal** failure, not a
+  retry — the body already ran, so repeating it would repeat its side effects
+  and fail identically.
+</Callout>
+
+## Key patterns
+
+| Pattern | Where |
+| --- | --- |
+| Exactly-once work inside a retrying job | `step.run_keyed(name, key, ..)` |
+| Wait without holding a worker slot | `step.sleep_ms("settle", 60_000)?` |
+| Compensation | Run the undo steps, then `TaskError::fatal` |
+| Don't submit the same order twice | `.idempotent()` on the call |
+| Read the outcome | `queue.get_job(&id)?` → `status`, `retry_count`, `error` |
+
+<Cards>
+  <Card
+    title="Durable steps"
+    to="modules/steps"
+    description="The full API: run, run_keyed, sleep_ms, sleep_until."
+  />
+  <Card
+    title="Error handling"
+    to="guides/reliability/error-handling"
+    description="Retryable or fatal, and why the macro will not guess."
+  />
+  <Card
+    title="Fan-out and fan-in"
+    to="modules/workflows/fan-out"
+    description="When the work is many jobs rather than one body."
+  />
+</Cards>

@@ -1,0 +1,101 @@
+---
+title: Installation
+description: "Add the crate — one Cargo dependency, a feature per backend, the MSRV, and where the task macro comes from."
+---
+
+`flexiq` is a library, not a service. There is no install step and no daemon to
+start: add the crate, open a database, and the queue lives inside your own
+process.
+
+```toml
+[dependencies]
+flexiq = "2.0.0"
+```
+
+`cargo add flexiq` writes the same line.
+
+The crate is **edition 2021** and its minimum supported Rust version is
+**1.88** — `sea-query` sets that floor, and a CI job holds it there.
+
+## The macro arrives with the crate
+
+`#[flexiq::task]` lives in `flexiq-macros`, which `flexiq` depends on and
+re-exports. One dependency is enough; you never name the macro crate.
+
+```rust
+#[flexiq::task(max_retries = 5, timeout = "30s", queue = "billing")]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    println!("charging {order_id}: {cents} cents");
+    Ok(cents)
+}
+```
+
+<Callout type="warn">
+  Don't depend on `flexiq-macros` directly. Its expansion names `::flexiq::`, so
+  a crate that has the macro without the SDK will not compile.
+</Callout>
+
+## Features
+
+| Feature | Effect |
+| --- | --- |
+| *(default)* | SQLite storage. Nothing to enable — `libsqlite3` is bundled and built from source. |
+| `postgres` | PostgreSQL storage. |
+| `redis` | Redis storage. |
+| `push-dispatch` | Event-driven scheduler wakeups instead of polling. |
+| `workflows` | DAG workflows at `flexiq::workflows`. |
+| `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
+
+```toml
+flexiq = { version = "2.0.0", features = ["postgres"] }
+```
+
+`postgres` and `redis` forward verbatim to the identically named feature on
+`flexiq-core`, so the flag behaves exactly as it does there. Cargo features are
+additive — turning one on never takes another away, and a build with both
+`postgres` and `redis` has all three backends compiled in.
+
+`workflows` and `mesh` pull in `flexiq-workflows` and `flexiq-mesh`, which are
+separate published crates. Both are off by default: Rust resolves source crates,
+so a consumer that only enqueues jobs should not compile a DAG engine and a
+gossip mesh unasked. Depending on either crate directly works identically — the
+re-export saves a line in `Cargo.toml`, it is not a wrapper.
+
+## Pick a backend
+
+SQLite needs no feature and no server:
+
+```rust
+use flexiq::FlexiQ;
+
+let queue = FlexiQ::open("flexiq.db")?;   // a file on disk
+let scratch = FlexiQ::in_memory()?;       // private; dies with the handle
+```
+
+Postgres and Redis are built by hand and handed to `from_storage`:
+
+```rust
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+let url = std::env::var("PG_URL").expect("PG_URL is set");
+let queue = FlexiQ::from_storage(StorageBackend::Postgres(PostgresStorage::new(&url)?))?;
+```
+
+`RedisStorage::new("redis://localhost")` fills `StorageBackend::Redis` the same
+way, under the `redis` feature.
+
+<Callout type="info">
+  `open` and `from_storage` check the storage contract version before handing
+  back a handle, so a database written by a build this one cannot read is
+  refused at open rather than half-read later.
+</Callout>
+
+## What else the crate carries
+
+`flexiq` re-exports `flexiq-core` whole: `flexiq::Storage` and
+`flexiq_core::Storage` are the same trait, `flexiq::Job` the same struct. Every
+engine type is one import away, and `queue.storage()` hands back the backend for
+anything the SDK does not wrap.
+
+Next: the <SdkLink to="getting-started/quickstart">quickstart</SdkLink>, or
+<SdkLink to="guides/core/tasks">tasks</SdkLink> for the attribute in full.

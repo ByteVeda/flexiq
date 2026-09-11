@@ -1,0 +1,154 @@
+---
+title: Conditions
+description: "No condition nodes in the shell — a branch is an if in the task body, or a task that enqueues the next call, and depends_on is a success edge only."
+---
+
+There are **no condition nodes in the `flexiq` shell**: no `on_success`, no
+`on_failure`, no `always`, no skip propagation, and no predicate attached to an
+edge. The DAG crate the `workflows` feature re-exports carries the fields a
+condition would live in, but nothing in this crate reads them —
+<SdkLink to="modules/workflows">Workflows</SdkLink> is explicit about that split.
+
+Branching in Rust is control flow. Two shapes cover it.
+
+## A branch inside one task
+
+When both arms are cheap and belong to the same unit of work, they are an `if`:
+
+```rust
+#[flexiq::task(queue = "orders", max_retries = 3, timeout = "1m")]
+fn settle_order(order_id: String, cents: i64) -> flexiq::Outcome<()> {
+    if cents >= 100_000 {
+        flag_for_review(&order_id).map_err(flexiq::TaskError::retryable)?;
+    } else {
+        auto_approve(&order_id).map_err(flexiq::TaskError::retryable)?;
+    }
+    Ok(())
+}
+```
+
+Nothing about the queue is involved, which is the point: the body is an ordinary
+function and `settle_order::run("ord-1".into(), 4_200)` calls it directly in a
+unit test.
+
+## A task that enqueues the next one
+
+When the arms are different work — different retry policies, different queues,
+different durations — the branch decides which job to enqueue next. A task body
+gets no queue handle, so it reads one from a static the same way it reads any
+other dependency:
+
+```rust
+use std::sync::OnceLock;
+
+static QUEUE: OnceLock<flexiq::FlexiQ> = OnceLock::new();
+
+fn queue() -> flexiq::Outcome<&'static flexiq::FlexiQ> {
+    QUEUE
+        .get()
+        .ok_or_else(|| flexiq::TaskError::fatal("the queue handle was never initialised").into())
+}
+
+#[flexiq::task(queue = "orders")]
+fn triage(order_id: String, cents: i64) -> flexiq::Outcome<()> {
+    let queue = queue()?;
+
+    let next = if cents >= 100_000 {
+        // Slow, human-paced, and it must not be retried into a second review.
+        queue.enqueue(
+            manual_review::call(order_id.clone()).unique_key(format!("review:{order_id}")),
+        )
+    } else {
+        queue.enqueue(auto_capture::call(order_id))
+    };
+
+    next.map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(())
+}
+```
+
+<Callout type="warn" title="The enqueue is a side effect, so make it idempotent">
+  If `triage` fails after the enqueue lands, the retry enqueues again. A
+  `.unique_key(..)` or `.idempotent()` on the branch call is what stops the
+  second one — see
+  <SdkLink to="guides/reliability/idempotency">idempotency</SdkLink>. Where the
+  branch is expensive rather than merely duplicated, put it in a
+  <SdkLink to="modules/steps">durable step</SdkLink> so a retry replays the memo
+  instead of the decision.
+</Callout>
+
+## `depends_on` is a success edge, and only that
+
+The one piece of graph wiring the shell does have is not a condition:
+
+| What you might want | What `depends_on` does |
+| --- | --- |
+| "Run B after A succeeds" | Exactly this. B is held until every dependency has completed |
+| "Run C if A fails" | **Nothing.** There is no failure edge |
+| "Run D either way" | **Nothing.** There is no `always` |
+
+A dependency that dead-letters or is cancelled does not fire an alternative
+branch — it **cancels its dependents**, transitively, with `dependency failed`
+or `dependency cancelled` recorded as the reason. That is the opposite of an
+`on_failure` edge, and mistaking one for the other is how a cleanup task
+silently never runs.
+
+The cascade is a dead-letter event, not a per-attempt one: a dependency that
+fails an attempt and is retried holds its dependents rather than cancelling them.
+
+## So where does the failure branch go
+
+Inside the failing task, while it still has control:
+
+```rust
+#[flexiq::task(queue = "orders", max_retries = 2)]
+fn capture(order_id: String) -> flexiq::Outcome<()> {
+    match charge(&order_id) {
+        Ok(()) => Ok(()),
+        Err(reason) => {
+            // The compensating work is enqueued here, because after this
+            // returns there is no branch left to take.
+            queue()?
+                .enqueue(release_hold::call(order_id.clone()).idempotent())
+                .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+            Err(flexiq::TaskError::fatal(format!("capture {order_id} failed: {reason}")).into())
+        }
+    }
+}
+```
+
+Returning `TaskError::fatal` rather than `retryable` is deliberate: the
+alternative branch has already been taken, and a retry would take it again.
+<SdkLink to="guides/reliability/error-handling">Error handling</SdkLink> covers
+the choice; <SdkLink to="more/examples/saga-checkout">the saga checkout
+example</SdkLink> works the same idea through durable steps, which is the
+version that does not repeat itself.
+
+Out of process, the dead-letter table is the failure feed. Nothing subscribes to
+it, but everything is in it:
+
+```rust
+use flexiq::Storage;
+
+for dead in queue.storage().list_dead(50, 0, queue.namespace())? {
+    println!("{} {}", dead.task_name, dead.error.as_deref().unwrap_or(""));
+}
+```
+
+<Cards>
+  <Card
+    title="Fan-out and fan-in"
+    to="modules/workflows/fan-out"
+    description="The other half: splitting work, and joining it back."
+  />
+  <Card
+    title="Dependencies"
+    to="guides/core/dependencies"
+    description="What a success edge validates, and how the cascade works."
+  />
+  <Card
+    title="Durable steps"
+    to="modules/steps"
+    description="Branch once, and keep the decision across a retry."
+  />
+</Cards>

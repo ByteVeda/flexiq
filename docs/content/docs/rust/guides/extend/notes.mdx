@@ -1,0 +1,112 @@
+---
+title: Structured notes
+description: "The .notes() enqueue option and Job.notes — a small JSON object attached to a job, stored verbatim and unvalidated by this shell."
+---
+
+`notes` is a bounded, structured annotation on a job: a small JSON object you
+attach at enqueue and read back off the job afterwards. It is for the short,
+user-readable facts a human or the dashboard wants to scan — a customer id, a
+tier, a reason — rather than for operational payload.
+
+```rust
+let job = queue.enqueue(
+    charge::call("ord-1".into(), 4_200)
+        .notes(r#"{"customer_id":"cus_abc","tier":"gold"}"#),
+)?;
+
+assert_eq!(job.notes.as_deref(), Some(r#"{"customer_id":"cus_abc","tier":"gold"}"#));
+```
+
+`.notes()` sits on `TaskCall` and on `EnqueueOptions` alike, so a task's
+declared defaults and a per-call override use the same setter.
+
+## It takes a string, not a map
+
+This is the part worth reading twice. `.notes()` takes
+`impl Into<String>` — **pre-encoded JSON**, not a map the crate serialises for
+you.
+
+```rust
+// What the setter expects.
+pub fn notes(mut self, notes: impl Into<String>) -> Self
+```
+
+Build the string however you like. `serde_json` is the obvious way, and it is
+not re-exported by this crate — add it to your own `Cargo.toml`:
+
+```rust
+let notes = serde_json::json!({
+    "customer_id": "cus_abc",
+    "tier": "gold",
+    "priority_reason": "VIP onboarding",
+})
+.to_string();
+
+queue.enqueue(charge::call("ord-1".into(), 4_200).notes(notes))?;
+```
+
+## Nothing validates it here
+
+The contract for the field is a **canonical JSON object with at most 15
+top-level fields**. Other shells enforce that at their binding boundary before
+the value crosses into the engine. The Rust shell does not: the string you pass
+is written onto the job row verbatim.
+
+<Callout type="error">
+  There is no validation, no field count check, and no JSON parse on the way in.
+  A malformed string reaches storage and stays there, and the first thing to
+  notice is whatever reads the field later. Encode with a real JSON serialiser
+  and keep it to 15 top-level keys — the cap is a contract, not a suggestion.
+</Callout>
+
+Keep the values small too. The field is meant to be scannable, and the dashboard
+renders it as a fixed-size key/value table on the job detail page on the
+assumption that it is.
+
+## Reading it back
+
+`Job::notes` is `Option<String>` — the same JSON text, untouched. There is no
+parsed accessor, so parse it yourself if you want the values:
+
+```rust
+let job = queue.get_job(&job_id)?.expect("job exists");
+
+if let Some(raw) = job.notes.as_deref() {
+    let parsed: serde_json::Value = serde_json::from_str(raw)?;
+    println!("{}", parsed["customer_id"]);
+}
+```
+
+`None` means the job carried no notes.
+
+## `notes` vs `metadata`
+
+Both are `Option<String>` holding pre-encoded JSON, and both are set the same
+way. The difference is the contract around them, not the type.
+
+| | `.notes(_)` | `.metadata(_)` |
+| --- | --- | --- |
+| Shape | JSON object | Any JSON |
+| Top-level fields | ≤ 15 by contract | unbounded |
+| Validated by this shell | No | No |
+| Dashboard render | Key/value table | Raw blob |
+| Meant for | Short, user-readable annotations | Operational and debug context |
+
+Use `notes` for what an operator should read at a glance. Use `metadata` for the
+trace id, the request envelope, and anything else whose size you cannot promise.
+
+## Where notes travel
+
+The field is part of the job record rather than a side table, so it follows the
+job everywhere:
+
+- it is on `Job` while the job is live;
+- it is on `DeadJob` after the job dead-letters, so the annotation is still there
+  when you are looking at the failure;
+- `retry_dead` carries it onto the re-enqueued job, so a replay keeps the context
+  the original run was given.
+
+See <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink> for
+reading those entries, and
+<SdkLink to="guides/core/enqueue-options">Enqueue options</SdkLink> for the rest
+of what rides on an enqueue.

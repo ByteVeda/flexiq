@@ -1,0 +1,138 @@
+---
+title: Reference overview
+description: "The crate map — what flexiq defines of its own, what the glob re-export of flexiq-core brings with it, and where the escape hatch is."
+---
+
+```rust
+use flexiq::{FlexiQ, Task, Outcome};   // the shell's own types
+use flexiq::{Job, JobStatus, Storage}; // core's, through the glob
+```
+
+`flexiq` is the SDK. `flexiq-core` is the engine. The crate root is
+`pub use flexiq_core::*` plus a dozen items of its own, so both spellings
+resolve to the same item: `flexiq::Storage` and `flexiq_core::Storage` are one
+trait, not two.
+
+## What the shell defines
+
+Everything below is declared in `flexiq` itself:
+
+| Item | Kind | Page |
+|---|---|---|
+| `FlexiQ` | The queue handle a producer holds. | <SdkLink to="api-reference/queue">FlexiQ</SdkLink> |
+| `TaskCall<T>` | One encoded call, before it is enqueued. | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| `EnqueueOptions` | The per-enqueue option bag, with defaults. | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| `Debounce` | A debounce window, whole. | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| `WorkerBuilder` | Builds a worker over registered tasks. | <SdkLink to="api-reference/worker">Worker</SdkLink> |
+| `Task` | The trait `#[flexiq::task]` implements. | <SdkLink to="api-reference/task">Task</SdkLink> |
+| `task` | The attribute macro, re-exported from `flexiq-macros`. | <SdkLink to="api-reference/task">Task</SdkLink> |
+| `StepHandle`, `current_step` | Durable steps for a running task. | <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> |
+| `PeriodicSpec` | A task's cron schedule, as declared. | <SdkLink to="api-reference/queue/workers">Workers & steps</SdkLink> |
+| `Outcome<T>`, `Abort` | What a task body ends with. | <SdkLink to="api-reference/errors">Errors</SdkLink> |
+| `EncodeError`, `DecodeError` | The two wire failures. | <SdkLink to="api-reference/errors">Errors</SdkLink> |
+
+## The shell's own modules
+
+They are private. Each holds one concern, and every type above is re-exported at
+the crate root, so `flexiq::FlexiQ` — never `flexiq::queue::FlexiQ` — is the
+path that resolves.
+
+| Module | Holds |
+|---|---|
+| `call` | `TaskCall<T>` |
+| `cron` | `PeriodicSpec` and periodic registration |
+| `decode` | `DecodeError` and the shell's CBOR reader |
+| `encode` | `EncodeError` and the `Serialize` sink that builds a `WireValue` |
+| `options` | `EnqueueOptions`, `Debounce`, and the shared setter macro |
+| `outcome` | `Outcome<T>`, `Abort`, the failure JSON a failed job records |
+| `pool` | `WorkerBuilder` and the dispatcher it spawns |
+| `queue` | `FlexiQ` |
+| `steps` | The per-dispatch step session |
+| `task` | `Task`, `StepHandle`, `current_step` |
+
+Their names are chosen not to collide with a public module on core's root:
+a private module of the same name would shadow the glob re-export, and
+`flexiq::error` would quietly stop resolving.
+
+## The glob is the escape hatch
+
+`pub use flexiq_core::*` means every core root export is reachable as
+`flexiq::X`. Reach for it whenever the shell does not wrap an operation — it is
+the same crate, so there is no bridging to do:
+
+```rust
+let queue = flexiq::FlexiQ::open("flexiq.db")?;
+
+// `list_dead` is not on `FlexiQ`. `Storage` is in scope through the glob,
+// and `storage()` hands back the backend the handle already holds.
+use flexiq::Storage;
+let dead = queue.storage().list_dead(50, 0, None)?;
+```
+
+Types that arrive this way and turn up throughout this reference:
+
+| Through the glob | What it is |
+|---|---|
+| `Job`, `JobStatus`, `NewJob`, `QueueStats` | The job row, its lifecycle state, the raw insert, the counts. |
+| `QueueError`, `Result<T>` | The crate's error and its result alias. |
+| `TaskError` | A task's own failure, carrying the retryable/fatal bit. |
+| `Storage`, `StorageBackend`, `SqliteStorage` | The storage trait, the backend enum, the default backend. |
+| `Worker`, `WorkerHandle`, `WorkerDispatcher` | Core's worker, the handle `spawn()` returns, the pool trait. |
+| `SchedulerConfig`, `TaskConfig`, `QueueConfig` | Scheduler tuning, per-task policy, per-queue policy. |
+| `RetryPolicy`, `RateLimitConfig`, `CircuitBreakerConfig` | The resilience knobs `TaskConfig` carries. |
+| `PeriodicTask`, `NewPeriodicTask` | A registered schedule and its registration payload. |
+| `StepLimits`, `StepSession`, `StepSleep` | The durable-step machinery the shell drives. |
+| `CONTRACT_VERSION`, `MIN_CONTRACT_VERSION`, `ensure_contract_supported` | The contract floor checked at open. |
+
+Core's public modules come with it: `flexiq::wire`, `flexiq::storage`,
+`flexiq::scheduler`, `flexiq::step`, `flexiq::worker`, `flexiq::job`,
+`flexiq::error`, `flexiq::contract`, `flexiq::lease`, `flexiq::periodic`,
+`flexiq::pubsub`, `flexiq::resilience`, `flexiq::settings`. `flexiq_core`
+itself is re-exported under its own name too, so code that already spells out
+`flexiq_core::` keeps compiling against `flexiq` alone.
+
+<Callout type="info">
+  `flexiq::__private` exists and is `#[doc(hidden)]`. It is the seam
+  `#[flexiq::task]` expands against — a macro expands in the *caller's* crate,
+  so its output has to name something reachable. Nothing in it is a stable API.
+</Callout>
+
+## Features
+
+```toml
+flexiq = { version = "2", features = ["postgres"] }
+```
+
+| Feature | Effect |
+|---|---|
+| *(default)* | SQLite storage. |
+| `postgres` | PostgreSQL storage. Forwards to the same feature on `flexiq-core`. |
+| `redis` | Redis storage. Forwards likewise. |
+| `push-dispatch` | Event-driven scheduler wakeups instead of polling. |
+| `workflows` | DAG workflows at `flexiq::workflows`. |
+| `mesh` | Decentralized mesh scheduling at `flexiq::mesh`. |
+
+`workflows` and `mesh` are re-exports of the separate `flexiq-workflows` and
+`flexiq-mesh` crates, not a shell API: `flexiq::workflows::WorkflowRun` and
+`flexiq_workflows::WorkflowRun` are the same type. Both are off by default —
+Rust resolves source crates, so a consumer who only enqueues jobs should not
+compile a DAG engine and a gossip mesh.
+
+## What the shell does not wrap
+
+Stated plainly, because a reader looking for one of these will otherwise go
+looking for a method that is not there.
+
+| Absent | What there is instead |
+|---|---|
+| A typed result read | `job.result` is `Option<Vec<u8>>`. See <SdkLink to="api-reference/result">Result</SdkLink>. |
+| Middleware hooks | No hook surface. `flexiq_core::Worker::on_outcome` is the nearest seam, and `WorkerBuilder` does not expose it. |
+| Pluggable serializers | The payload codec is the wire CBOR, fixed. |
+| Events, webhooks | Not wrapped. |
+| Dependency injection | A task takes its arguments and nothing else. |
+| A dashboard | `flexiq-server` serves it; the shell does not. |
+| Async tasks | `#[flexiq::task]` refuses `async fn`. `flexiq_core::Worker::register_async` is the escape hatch. |
+| Prefork, streaming results | Neither exists. |
+| Namespaced periodics | Refused on a namespaced handle — see <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink>. |
+| A debounce inside a batch | `enqueue_batch` refuses a call carrying a debounce window. |
+| Admin reads — `list_dead`, `requeue_stuck`, `stats_by_queue`, `get_job_steps` | Not on `FlexiQ`. Reach them through `queue.storage()`. |

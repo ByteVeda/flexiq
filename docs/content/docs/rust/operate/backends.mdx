@@ -1,0 +1,131 @@
+---
+title: Backends
+description: "SQLite by default, Postgres and Redis behind cargo features — the constructors, the connection strings, and where the contract floor is checked."
+---
+
+One backend holds everything: jobs, results, schedules, locks, rate-limit state.
+There is no broker process beside it. SQLite is compiled in and needs nothing
+running; Postgres and Redis are cargo features on the `flexiq` crate.
+
+## SQLite
+
+```rust
+let queue = flexiq::FlexiQ::open("flexiq.db")?;   // a file, created if absent
+let queue = flexiq::FlexiQ::in_memory()?;         // dies with the handle
+```
+
+`open` takes a **filesystem path**, not a URL — `flexiq.db`,
+`/var/lib/app/flexiq.db`. A `sqlite://` prefix is not stripped and would be
+taken as a directory name. There is no default path: the Rust SDK will not pick
+one for you.
+
+`in_memory()` opens `:memory:` on a single-connection pool. It is the test
+constructor; two handles do not see each other's data.
+
+Every pooled SQLite connection is opened with `journal_mode = WAL`,
+`busy_timeout = 5000`, `synchronous = NORMAL` and a 64 MiB journal size limit.
+
+## Postgres and Redis
+
+Both are opt-in. Turn the feature on, build the backend yourself, and hand it to
+`FlexiQ::from_storage`:
+
+```toml
+flexiq = { version = "2", features = ["postgres"] }
+```
+
+```rust
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+let url = std::env::var("DATABASE_URL").expect("DATABASE_URL is set");
+let queue = FlexiQ::from_storage(StorageBackend::Postgres(PostgresStorage::new(&url)?))?;
+```
+
+```toml
+flexiq = { version = "2", features = ["redis"] }
+```
+
+```rust
+use flexiq::{FlexiQ, RedisStorage, StorageBackend};
+
+let storage = RedisStorage::new("redis://127.0.0.1:6379")?;
+let queue = FlexiQ::from_storage(StorageBackend::Redis(storage))?;
+```
+
+`StorageBackend::Postgres` and `StorageBackend::Redis` are the feature-gated
+variants of the same enum `StorageBackend::Sqlite` belongs to, so the rest of
+the API does not change shape when you switch.
+
+<Callout type="info">
+  `FlexiQ::from_storage` is the only constructor that takes a backend you opened
+  — and `open` and `in_memory` route through it, so the contract floor is
+  checked exactly once, at open, whichever door you came in by.
+</Callout>
+
+## The constructors
+
+Each backend type has more than one. The short one picks the defaults in the
+right-hand column.
+
+| Constructor | Defaults it picks |
+| --- | --- |
+| `SqliteStorage::new(path)` | pool size 8 |
+| `SqliteStorage::with_pool_size(path, n)` | — |
+| `SqliteStorage::in_memory()` | `:memory:`, pool size 1 |
+| `PostgresStorage::new(url)` | schema `flexiq`, pool size 10 |
+| `PostgresStorage::with_schema(url, schema)` | pool size 10 |
+| `PostgresStorage::with_pool_size(url, n)` | schema `flexiq` |
+| `PostgresStorage::with_schema_and_pool_size(url, schema, n)` | — |
+| `RedisStorage::new(url)` | key prefix `flexiq:` |
+| `RedisStorage::with_prefix(url, prefix)` | — |
+
+A Postgres schema name must be non-empty and `[A-Za-z0-9_]` only; anything else
+is a config error rather than a query that fails later. `RedisStorage` pings on
+construction, so a bad URL or a dead server fails here and not on the first
+enqueue.
+
+## Choosing one
+
+| Backend | Use when | How it dispatches |
+| --- | --- | --- |
+| **SQLite** | One host, simplest deploy | One file in WAL mode, no server |
+| **Postgres** | Producers and workers on different hosts | `SELECT … FOR UPDATE SKIP LOCKED`, isolated schema |
+| **Redis** | High throughput, history may be ephemeral | JSON values and sorted sets, atomic Lua claims |
+
+<Callout type="warn">
+  Producers and workers must open the **same** backend. SQLite is per-host —
+  a shared file — so a multi-host deployment wants Postgres or Redis, or the
+  [server](/server/operate) in front of one.
+</Callout>
+
+## Schema migrations
+
+`new`, `with_pool_size`, `with_schema*` and `in_memory` apply pending schema
+changes as they open. When the credential the process holds is not allowed to
+run DDL, open without them and migrate out of band:
+
+```rust
+use flexiq::{FlexiQ, SqliteStorage, StorageBackend};
+
+let storage = StorageBackend::Sqlite(SqliteStorage::unmigrated("flexiq.db", 8)?);
+let report = storage.migrate()?;          // applied a schema change per entry
+assert!(storage.is_migrated()?);
+let queue = FlexiQ::from_storage(storage)?;
+```
+
+`unmigrated` exists on `SqliteStorage` and `PostgresStorage`. Redis has none: it
+is schemaless, its `migrate()` is a successful no-op and `is_migrated()` always
+answers `true`.
+
+`StorageBackend::migrate()` runs the DDL and *then* re-checks the contract
+floor, so a database migrated up by a newer writer is refused here rather than
+half-read.
+
+## When the floor is too old
+
+Opening against a database written by a newer contract level fails with
+`QueueError::ContractTooOld { speaks, required }`. The floor is a stored
+setting, not a compile-time constant — see
+[Storage](/architecture/storage) for the shape of the tables underneath, and
+<SdkLink to="operate/backup">Backup and restore</SdkLink> for what a restore
+does to work that was in flight.

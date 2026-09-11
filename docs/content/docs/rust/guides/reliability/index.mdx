@@ -1,0 +1,106 @@
+---
+title: Reliability
+description: "Retries, timeouts, dead letters, rate limits, concurrency caps and locks — what keeps a Rust worker honest under load."
+---
+
+The engine decides what happens to a job that fails, stalls, or arrives faster
+than it can be run. Most of it is declared on the task with
+`#[flexiq::task(...)]` and enforced by the scheduler, so a second producer in
+another process gets the same behaviour without configuring anything.
+
+<Cards>
+  <Card
+    title="Error handling"
+    to="guides/reliability/error-handling"
+    description="TaskError, retryable vs fatal, and the JSON a failure records"
+  />
+  <Card
+    title="Delivery guarantees"
+    to="guides/reliability/guarantees"
+    description="At-least-once delivery, and how to make a task safe under it"
+  />
+  <Card
+    title="Retries"
+    to="guides/reliability/retries"
+    description="max_retries, backoff, and the retry budget"
+  />
+  <Card
+    title="Timeouts"
+    to="guides/reliability/timeouts"
+    description="Bound one attempt with timeout and .timeout_ms()"
+  />
+  <Card
+    title="Idempotency"
+    to="guides/reliability/idempotency"
+    description="unique_key, idempotent, and the auto: key"
+  />
+  <Card
+    title="Debouncing"
+    to="guides/reliability/debouncing"
+    description="Collapse a burst onto one key with a sliding deadline"
+  />
+  <Card
+    title="Flow control"
+    to="guides/reliability/flow-control"
+    description="Defer, shed, debounce — which lever fits which overload"
+  />
+  <Card
+    title="Rate limiting"
+    to="guides/reliability/rate-limiting"
+    description="rate_limit as a token bucket across the whole deployment"
+  />
+  <Card
+    title="Concurrency"
+    to="guides/reliability/concurrency"
+    description="num_workers, max_in_flight_per_task and max_concurrent"
+  />
+  <Card
+    title="Dead-letter queue"
+    to="guides/reliability/dead-letter"
+    description="Where an exhausted job lands, and how to read it back"
+  />
+  <Card
+    title="Circuit breakers"
+    to="guides/reliability/circuit-breakers"
+    description="Stop hammering a dependency that is already down"
+  />
+  <Card
+    title="Distributed locks"
+    to="guides/reliability/locks"
+    description="Mutual exclusion across workers, backed by the database"
+  />
+</Cards>
+
+## Where each setting lives
+
+Two places, and the split is not arbitrary. Anything that is a property of *one
+job* is written onto the job row at enqueue, and a per-call setter overrides it.
+Anything that is a property of *the task* is registered with the scheduler when
+a worker calls `spawn()`.
+
+| On the job row | On the scheduler |
+| --- | --- |
+| `queue`, `priority`, `max_retries`, `timeout`, `expires`, `result_ttl` | `retry_backoff_ms`, `retry_max_delay_ms`, `rate_limit`, `retry_budget`, `on_excess`, `max_concurrent`, `max_in_flight_per_task` |
+
+`max_retries` is the one that reaches both: the job carries the budget it was
+enqueued with, and the scheduler gets it too so the backoff policy agrees.
+
+```rust
+#[flexiq::task(
+    max_retries = 5,
+    timeout = "30s",
+    rate_limit = "100/m",
+    on_excess = "defer",
+)]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    let _ = order_id;
+    Ok(cents)
+}
+```
+
+A per-call override touches only the job-row half — there is no per-call rate
+limit, because a rate limit is a property of the task across every producer.
+
+```rust
+queue.enqueue(charge::call("ord-1".into(), 4_200).timeout_ms(5_000))?;
+```
