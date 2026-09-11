@@ -3,11 +3,17 @@
 // SDK-aware docs all derive from here. Don't hardcode "python"/"node" elsewhere.
 //
 // An SDK is one *tier* of these docs and not the only kind — `flexiq-server` is
-// a fourth without being a language. See `tier-registry.ts`; this list stays
-// three, because its value is also the persisted `<html data-sdk>` one.
+// a fifth without being a language. See `tier-registry.ts`; only a *language*
+// belongs in this list, because its value is also the persisted
+// `<html data-sdk>` one and every `<CodeTabs>` panel is keyed off it.
+//
+// Appending an id is not additive: `checks/code-tabs.mjs` then requires a
+// `<Tab sdk="...">` on every block in the shared tree, `checks/section-shape.mjs`
+// a full tree under `content/docs/<id>/`, and `scripts/api/inventory.mjs` a
+// `SOURCES` entry. `pnpm check:parity` stays red until all three are in.
 
 /** Supported SDK ids in display order; also the URL prefix + `data-sdk` value. */
-export const SDK_IDS = ["python", "node", "java"] as const;
+export const SDK_IDS = ["python", "node", "java", "rust"] as const;
 
 export type Sdk = (typeof SDK_IDS)[number];
 
@@ -74,6 +80,24 @@ export const SDK_PROFILES: Record<Sdk, SdkProfile> = {
       "java/api-reference",
       "architecture",
       "java/more/examples",
+      "about",
+    ],
+  },
+  rust: {
+    id: "rust",
+    label: "Rust",
+    // The only shell with nothing between it and the engine: `crates/flexiq`
+    // links `flexiq-core` as a dependency, so `binding` names the absence.
+    language: "Rust",
+    binding: "no FFI",
+    navSections: [
+      "rust/getting-started",
+      "rust/guides",
+      "rust/modules",
+      "rust/operate",
+      "rust/api-reference",
+      "architecture",
+      "rust/more/examples",
       "about",
     ],
   },

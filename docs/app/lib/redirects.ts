@@ -22,7 +22,7 @@ const ARCH_PAGES = [
   "serialization",
 ];
 
-const SDKS = ["node", "python", "java"];
+const SDKS = ["node", "python", "java", "rust"];
 
 // The bare SDK root (`/python`) is a URL prefix, not a page — a breadcrumb crumb
 // or an external link landing there would otherwise 404. Every section below it

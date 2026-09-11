@@ -26,7 +26,7 @@ export interface HeroPane {
    *  `hero.tsx` for why the tab strip is not simply the SDK switcher. */
   tier: Tier;
   /** Highlighter dialect for the snippet. */
-  lang: "py" | "ts" | "java" | "sh";
+  lang: "py" | "ts" | "java" | "rs" | "sh";
   filename: string;
   /** Right-hand tag in the terminal title bar. Per pane because not every tab
    *  starts a worker — the server one starts a door and nothing else. */
@@ -160,7 +160,50 @@ try (FlexiQ queue = FlexiQ.builder().sqlite("tasks.db").open();
     primary: { href: "/java/getting-started/quickstart", label: "Quickstart" },
     secondary: { href: "/java/modules", label: "Read Modules" },
   },
-  // The fourth tab is not a language, so its snippet is not one either: the
+  // The one tab whose snippet has no boundary in it: `crates/flexiq` is a
+  // dependency of the caller's binary, so the engine the other three reach
+  // through PyO3, N-API and JNI is here just another crate in the build.
+  //
+  // It ends at the enqueue on purpose. `decode_result` is `pub(crate)`, so the
+  // shell has no typed read of a finished job's value — `crates/flexiq`'s own
+  // `examples/quickstart.rs` prints `result.len()` and nothing more. A hero
+  // `let sum: i64 = …` would be the one line on this page that does not compile.
+  {
+    tier: "rust",
+    lang: "rs",
+    filename: "main.rs",
+    runtag: "worker · live",
+    code: `use flexiq::{FlexiQ, Outcome};
+
+#[flexiq::task(max_retries = 3)]
+fn add(a: i64, b: i64) -> Outcome<i64> {
+    Ok(a + b)
+}
+
+let queue = FlexiQ::open("tasks.db")?;
+let worker = queue.worker().register::<add>().spawn()?;
+
+queue.enqueue(add::call(2, 3))?;   // the worker drains it
+worker.shutdown()?;`,
+    output: [
+      { glyph: "$", glyphKind: "p", text: "cargo run" },
+      {
+        glyph: "→",
+        glyphKind: "p",
+        text: "worker started · no FFI boundary",
+      },
+      {
+        glyph: "✓",
+        glyphKind: "g",
+        text: "add(2, 3) =",
+        value: "5",
+        timing: "1 ms",
+      },
+    ],
+    primary: { href: "/rust/getting-started/quickstart", label: "Quickstart" },
+    secondary: { href: "/rust/modules", label: "Read Modules" },
+  },
+  // The fifth tab is not a language, so its snippet is not one either: the
   // process that holds the credential, then a producer with no binding at all
   // enqueuing the same `add(2, 3)` the three tabs above define.
   //

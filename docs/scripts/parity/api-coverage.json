@@ -54,11 +54,13 @@
       "JsStepSession.commitRun": "step-session plumbing",
       "JsStepSession.finish": "step-session plumbing"
     },
-    "java": {}
+    "java": {},
+    "rust": {}
   },
   "documented": {
     "python": 116,
     "node": 105,
-    "java": 165
+    "java": 165,
+    "rust": 65
   }
 }
