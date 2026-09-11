@@ -39,10 +39,15 @@ function javaParam(param) {
   return param.type ? `${param.type} ${param.name}` : param.name;
 }
 
+function rustParam(param) {
+  return param.type ? `${param.name}: ${param.type}` : param.name;
+}
+
 const PARAM_FORM = {
   python: pythonParam,
   node: typescriptParam,
   java: javaParam,
+  rust: rustParam,
 };
 
 /**
@@ -52,11 +57,35 @@ const PARAM_FORM = {
  * that is how the docs and the code read. Java is written in declaration form
  * — a return type in front of a receiver (`boolean flexiq.ackMessage(…)`) is
  * not Java, and javadoc is what a Java reader is used to.
+ *
+ * Rust is call form too, with one difference the other three do not have: an
+ * associated function is reached with `::` and a method with `.`, so the
+ * separator is part of the answer rather than a formatting choice. Bounds stay
+ * on the name (`queue.enqueue<T: Task>(…)`) because that is where rustdoc puts
+ * them, and a reader with an unbound `T` in the parameter list has been told
+ * less than nothing.
  */
 function callForm(sdk, symbol, receiver) {
   // A static is reached through its type, never through an instance: a caller
   // has no `ctx` until `JobContext.current()` has handed them one.
   const isStatic = symbol.kind === "static";
+  if (sdk === "rust") {
+    const target = isStatic
+      ? `${symbol.owner}::`
+      : receiver
+        ? `${receiver}.`
+        : "";
+    const params = symbol.params.map(rustParam).join(", ");
+    const returns = symbol.returns ? ` -> ${symbol.returns}` : "";
+    const head = `${target}${symbol.name}${symbol.typeParams ?? ""}`;
+    const flat = `${head}(${params})${returns}`;
+    if (flat.length <= WRAP_AT || symbol.params.length === 0) {
+      return flat;
+    }
+    return `${head}(\n${symbol.params
+      .map((param) => `    ${rustParam(param)}`)
+      .join(",\n")}\n)${returns}`;
+  }
   const prefix =
     sdk === "java" || !receiver ? "" : `${isStatic ? symbol.owner : receiver}.`;
   if (symbol.kind === "property") {
