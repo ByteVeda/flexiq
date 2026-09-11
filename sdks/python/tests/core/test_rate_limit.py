@@ -87,11 +87,16 @@ def start_error(queue: Queue) -> str:
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    join_worker(thread, message="worker never exited after rejecting the rate")
-    queue.shutdown()
-
-    assert thread_error, "an invalid rate must be rejected, not ignored"
-    return str(thread_error[0])
+    try:
+        # `join_worker` asserts the thread exited, so a rate that was *not*
+        # rejected raises here. Shut down in `finally` either way: a daemon
+        # worker left running holds this test's SQLite file open for the rest of
+        # the session, which on Windows blocks the tmp_path cleanup.
+        join_worker(thread, message="worker never exited after rejecting the rate")
+        assert thread_error, "an invalid rate must be rejected, not ignored"
+        return str(thread_error[0])
+    finally:
+        queue.shutdown()
 
 
 def test_rate_limit_rejects_an_unparseable_rate(queue: Queue) -> None:
