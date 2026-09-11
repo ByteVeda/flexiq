@@ -1,0 +1,208 @@
+---
+title: Jobs
+description: "enqueue, enqueue_batch, get_job, list_jobs, cancel and request_cancel — plus TaskCall and EnqueueOptions in full."
+---
+
+```rust
+let job = queue.enqueue(charge::call("ord-1".into(), 4_200).priority(9))?;
+let back = queue.get_job(&job.id)?;
+```
+
+A `TaskCall<T>` is a task name, an encoded payload, and a set of options. It is
+the value the handle takes; `#[flexiq::task]` generates the `::call` that builds
+one.
+
+## Producing
+
+| Method | Description |
+|---|---|
+| `enqueue<T: Task>(call: TaskCall<T>) -> Result<Job>` | Enqueue one call. Returns the job row that was written. |
+| `enqueue_batch<T: Task>(calls: Vec<TaskCall<T>>) -> Result<Vec<Job>>` | Enqueue several calls of the same task in one write. |
+
+Three writes hide behind `enqueue`, and which one runs is decided by the call's
+own options:
+
+| The call carries | The write |
+|---|---|
+| A debounce window | A debounced enqueue — a burst on the same key coalesces into one job. |
+| A dedup key, explicit or derived | A unique enqueue — a second call with a live key finds the first job. |
+| Neither | The plain insert. |
+
+`enqueue_batch` takes one task's calls, so the `Vec` is homogeneous in `T`. If
+any call carries a dedup key the whole batch goes through the unique write; a
+call carrying a **debounce window is refused**, because storage has no batched
+debounce and looping it item by item would cost the Diesel backends the
+atomicity that is the reason to send a batch at all.
+
+```rust
+let jobs = queue.enqueue_batch(vec![
+    charge::call("ord-1".into(), 100),
+    charge::call("ord-2".into(), 200),
+])?;
+```
+
+An argument with no representation in the envelope does not fail at `::call` —
+it is carried on the call and raised here, naming the task. See
+<SdkLink to="api-reference/errors">`EncodeError`</SdkLink> for why.
+
+## Reading
+
+| Method | Description |
+|---|---|
+| `get_job(job_id: &str) -> Result<Option<Job>>` | Read one job back, whole. `None` when there is no such job in this namespace. |
+| `list_jobs(limit: i64, offset: i64) -> Result<Vec<Job>>` | The most recent jobs in this namespace, newest first. |
+
+<Callout type="warn">
+  Listing rows are **blob-free** on every backend: `payload` and `result` come
+  back empty, so a listing never drags a megabyte of arguments per row across
+  the wire. `get_job` is the one that returns them. A `job.result.is_none()`
+  read off a `list_jobs` row means nothing.
+</Callout>
+
+`list_jobs` takes no filters. `Storage::list_jobs(status, queue_name,
+task_name, limit, offset, namespace)` does, and keyset pagination is
+`list_jobs_after`:
+
+```rust
+use flexiq::{JobStatus, Storage};
+
+let failed = queue.storage().list_jobs(
+    Some(JobStatus::Failed as i32),
+    Some("billing"),
+    None,
+    50,
+    0,
+    queue.namespace(),
+)?;
+```
+
+## Cancelling
+
+| Method | Description |
+|---|---|
+| `cancel(job_id: &str) -> Result<bool>` | Cancel a pending job. `false` when there was nothing to cancel. |
+| `request_cancel(job_id: &str) -> Result<bool>` | Ask a *running* job to stop. |
+
+`request_cancel` sets a flag. Nothing interrupts a handler mid-call — the task
+has to poll `job.cancel_requested` itself and return. A task that never looks
+runs to completion, which is the honest behaviour: the alternative is killing a
+thread in the middle of a write.
+
+## `TaskCall<T>`
+
+```rust
+pub struct TaskCall<T: Task> { /* payload, options */ }
+```
+
+| Method | Description |
+|---|---|
+| `task_name() -> &'static str` | The task this call runs — `T::NAME`. |
+| *the enqueue setters* | Every method in the table below, each taking and returning `self`. |
+
+The call is transport-free on purpose: a task name, a payload and a set of
+options is what any door accepts, so the value does not change with the way it
+is sent.
+
+It is seeded with `T::defaults()` — everything the `#[flexiq::task]` attribute
+declared — and a per-call setter overrides one field of that:
+
+```rust
+// `charge` declared queue = "billing", max_retries = 5, timeout = "30s"
+queue.enqueue(
+    charge::call("ord-1".into(), 4_200)
+        .queue("billing-urgent")   // overrides the declared queue
+        .priority(9)               // never declared; 0 otherwise
+        .delay_ms(60_000),
+)?;
+```
+
+## `EnqueueOptions`
+
+The option bag itself, and what `Task::defaults()` returns. It carries the same
+setters as `TaskCall` — they are emitted from one macro into both `impl` blocks,
+so the two cannot drift apart.
+
+| Setter | Default | Description |
+|---|---|---|
+| `queue(impl Into<String>)` | `"default"` | Run this job on a named queue. |
+| `priority(i32)` | `0` | Dispatch ahead of lower-priority jobs. |
+| `delay_ms(i64)` | none | Hold the job for `ms` before it becomes eligible. |
+| `max_retries(i32)` | `3` | Cap the retries before the job dead-letters. |
+| `timeout_ms(i64)` | `300_000` | Cap one attempt's execution time. |
+| `unique_key(impl Into<String>)` | none | Deduplicate against any other non-terminal job with this key. |
+| `idempotent()` | off | Derive the dedup key from the task name and payload. |
+| `metadata(impl Into<String>)` | none | Attach pre-encoded JSON metadata. |
+| `notes(impl Into<String>)` | none | Attach structured notes: a JSON object of at most 15 fields. |
+| `depends_on(impl IntoIterator<Item = impl Into<String>>)` | empty | Hold the job until these job ids have completed. |
+| `expires_in_ms(i64)` | none | Expire the job if it has not started within `ms`. |
+| `result_ttl_ms(i64)` | none | Keep the archived result for `ms`. |
+| `namespace(impl Into<String>)` | none | Scope the job to a tenant namespace. |
+| `debounce_ms(key, window_ms, max_wait_ms)` | none | Coalesce a burst on `key` into one run. |
+| `debounce(Debounce)` | none | The whole window, including payload replacement and the admission cap. |
+
+`EnqueueOptions::default()` gives you the four defaults above and `None`
+everywhere else. Relative times resolve against one `now`, read once, so
+`scheduled_at` and `expires_at` cannot disagree by the width of the call.
+
+<Callout type="info">
+  `EnqueueOptions` is not an argument to `enqueue`. Options ride on the
+  `TaskCall`. The standalone type exists so a hand-written `Task::defaults()`
+  has something to build and return.
+</Callout>
+
+### `unique_key` vs `idempotent`
+
+`unique_key` is a **dedup** key, not an idempotency key: it releases when the
+job reaches a terminal state, so a caller retrying past that point enqueues a
+second job.
+
+`idempotent()` derives one for you: `auto:` followed by the first 32 hex
+characters of `sha256(task_name || 0x00 || payload)`. The separator is a NUL
+byte and the digest is truncated to 32 characters — both are wire-visible,
+because this key is how the same call sent from another language deduplicates
+against this one.
+
+An explicit `unique_key` beats `idempotent()`. A caller who names an identity
+has said something the payload's bytes cannot.
+
+## `Debounce`
+
+```rust
+pub struct Debounce {
+    pub key: String,
+    pub window_ms: i64,
+    pub max_wait_ms: i64,
+    pub replace_payload: bool,
+    pub max_pending: Option<i64>,
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `key` | The key a burst coalesces on. |
+| `window_ms` | How far each new arrival slides the deadline. |
+| `max_wait_ms` | The ceiling, measured from the first arrival. |
+| `replace_payload` | Whether a later arrival replaces the pending payload. |
+| `max_pending` | The target queue's admission cap. |
+
+`Debounce::new(key, window_ms, max_wait_ms)` builds one with no payload
+replacement and no admission cap — the same three values `debounce_ms` takes.
+A window is three values or none: an absent `max_wait_ms` is an unbounded
+debounce that starves the job, and here that call does not compile.
+
+`max_pending` rides only on a debounced write. It is the write whose caller
+cannot apply the cap itself, because only storage knows whether the call adds a
+row or slides an open window. Over the cap, the enqueue fails with
+<SdkLink to="api-reference/errors">`QueueError::QueueFull`</SdkLink>.
+
+```rust
+use flexiq::Debounce;
+
+queue.enqueue(charge::call("ord-1".into(), 4_200).debounce(Debounce {
+    key: "ord-1".into(),
+    window_ms: 500,
+    max_wait_ms: 5_000,
+    replace_payload: true,
+    max_pending: Some(1_000),
+}))?;
+```

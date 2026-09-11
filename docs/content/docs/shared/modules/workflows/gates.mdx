@@ -95,6 +95,32 @@ try (Worker worker = queue.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+There is no gate in Rust. Workflows are the opt-in `flexiq-workflows` crate
+(`flexiq = { version = "2.0.0", features = ["workflows"] }`), and a gate there
+is one field — an opaque string that submission stores and never reads:
+
+```rust
+use flexiq::workflows::StepMetadata;
+
+StepMetadata {
+    task_name: "approve_deploy".into(),
+    // Recorded verbatim. No Rust code parses this, times it out, or waits on it.
+    gate: Some(r#"{"timeoutMs":86400000,"onTimeout":"reject"}"#.into()),
+    ..Default::default()
+};
+```
+
+Two consequences worth knowing before you reach for it. A gate node that is
+not listed in `deferred_node_names` is enqueued as an ordinary job under its
+`task_name` — it does not pause anything. And a deferred node is *excluded*
+from its successors' `depends_on`, so deferring only the gate lets `deploy`
+start immediately. A pause you can rely on means deferring the gate **and**
+everything downstream of it, then enqueueing those steps yourself once you
+decide the gate has been resolved.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -105,6 +131,36 @@ try (Worker worker = queue.worker()
   their jobs are only created when the gate resolves, and the tracker supplies
   their payloads from the registered definition.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The deferral set is what does the pausing, so it goes in the submission:
+
+```rust
+use std::collections::HashSet;
+
+SubmitStaticWorkflowRequest {
+    // The gate AND everything downstream of it. A node left out of this set
+    // gets a job at submission time and runs regardless.
+    deferred_node_names: HashSet::from([
+        "approve_deploy".to_string(),
+        "deploy".to_string(),
+    ]),
+    ..request
+};
+```
+
+A deferred node gets a `WorkflowNode` row at `Pending` and no job. It is also
+filtered out of its successors' `depends_on` — the successor's predecessor has
+no job id to point at — which is exactly why deferring the gate alone does not
+hold `deploy` back.
+
+So the payloads have to survive until you enqueue those steps. `StepMetadata`
+has `args_template` and `kwargs_template` for that: base64 of the serialized
+arguments, stored on the definition, so a node whose job is created later can be
+built without you keeping anything in memory.
 
 </SdkOnly>
 
@@ -137,6 +193,22 @@ console.log(gate?.status); // "waiting_approval"
 WorkflowStatus status = run.status().orElseThrow();
 status.node("approve-deploy").orElseThrow().status; // WAITING_APPROVAL
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::workflows::{WorkflowNodeStatus, WorkflowStorage};
+
+let node = wf.get_workflow_node(run_id, "approve_deploy")?.expect("gate node");
+assert_eq!(node.status, WorkflowNodeStatus::WaitingApproval);
+```
+
+The `WaitingApproval` variant exists and serialises as `"waiting_approval"`,
+which is what makes a Rust-written row readable everywhere else. Nothing in
+Rust ever puts a node into it, though — you set it yourself with
+`update_workflow_node_status` when your own code decides the run has reached
+the gate.
 
   </Tab>
 </CodeTabs>
@@ -189,6 +261,28 @@ worker.rejectGate(run.runId(), "approve-deploy", "Artifacts failed QA review.");
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+There is no `approve` or `reject` call. `WorkflowStorage` is the entire
+surface, and resolving means writing the node row you want:
+
+```rust
+use flexiq::now_millis;
+use flexiq::workflows::WorkflowStorage;
+
+// Approve — one write; this setter also moves the status to `Completed`.
+wf.set_workflow_node_completed(run_id, "approve_deploy", now_millis(), None)?;
+
+// Reject — records the reason and moves the status to `Failed`.
+wf.set_workflow_node_error(run_id, "approve_deploy", "Artifacts failed QA review.")?;
+```
+
+Both writes are fenced to the handle's namespace and fail if the node does not
+exist, so a typo is an error rather than a silent no-op. Nothing reacts to
+them: enqueueing the steps the gate was holding back, or marking them skipped,
+is the same job as writing the row.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -222,6 +316,38 @@ either method on a worker built without `trackWorkflows()` throws a
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Resolving is a storage write, so it works from any process that opens the same
+`WorkflowStorageBackend` — there is no tracker to be co-located with, because
+there is no tracker. The other half of that trade is that the write is *all*
+that happens. Approving looks like this end to end:
+
+```rust
+// 1. The gate itself.
+wf.set_workflow_node_completed(run_id, "approve_deploy", now_millis(), None)?;
+
+// 2. The step it was holding back — deferred, so it has a row and no job.
+let job = queue.enqueue(deploy::call(artifact))?;
+wf.set_workflow_node_job(run_id, "deploy", &job.id)?;
+```
+
+`set_workflow_node_job` is the setter for exactly this case: a node whose job is
+created after the run was submitted. Skip it and the row never learns which job
+it became, so nothing reading the run can tell you.
+
+Rejecting is the mirror image — `set_workflow_node_error` on the gate, then
+`update_workflow_node_status(run_id, "deploy", WorkflowNodeStatus::Skipped)` for
+each step you are not going to enqueue. Nothing walks the DAG marking them for
+you.
+
+Every one of these setters answers `WorkflowError::NodeNotFound` when it matches
+no row, so a mistyped node name is an error rather than a silent no-op. None of
+them check the node's current status, though: resolving an already-resolved gate
+overwrites it. Guard that yourself if the endpoint is reachable twice.
+
+</SdkOnly>
+
 ## Timeout behaviour
 
 A gate with no timeout waits forever:
@@ -248,6 +374,22 @@ GateConfig.manual();                                          // waits forever
 GateConfig.timeout(Duration.ofHours(24), GateAction.REJECT);  // auto-reject after 24 h
 GateConfig.timeout(Duration.ofHours(24), GateAction.APPROVE, "Auto-ships unless stopped.");
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+`timeoutMs` and `onTimeout` are two keys inside the opaque `gate` string, so
+neither of these `StepMetadata` fields changes what happens — both are stored
+text:
+
+```rust
+gate: Some(r#"{"timeoutMs":86400000,"onTimeout":"approve"}"#.into()),
+gate: Some("{}".into()), // no timeout — nothing was counting either way
+```
+
+No timer ships in Rust. If a gate should auto-resolve, run the clock yourself
+and call `set_workflow_node_completed` or `set_workflow_node_error` when it
+fires — the same two writes a manual resolution makes.
 
   </Tab>
 </CodeTabs>
@@ -286,6 +428,42 @@ is cancelled if the gate is resolved manually first.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+| `onTimeout` in the `gate` string | Effect |
+|---|---|
+| `"reject"` | None. Nothing reads the key. |
+| `"approve"` | None. Nothing reads the key. |
+| omitted | None — and no default is applied, because no code path has one. |
+
+The value is worth writing anyway: it travels in the definition, so a reader in
+any other runtime sees the intent you recorded. It just is not a promise this
+crate keeps.
+
+Driving it yourself is a scan, not a timer per gate — a single periodic job that
+looks for gates past their deadline scales better than a task sleeping on each
+one:
+
+```rust
+for node in wf.get_workflow_nodes(run_id)? {
+    if node.status != WorkflowNodeStatus::WaitingApproval {
+        continue;
+    }
+    // `started_at` is when your own code parked the node; a gate that was
+    // never started has no deadline to be past.
+    let Some(started) = node.started_at else { continue };
+    if now_millis() - started > timeout_ms {
+        wf.set_workflow_node_error(run_id, &node.node_name, "gate timed out")?;
+    }
+}
+```
+
+Because the deadline is yours, so is the race: a gate resolved by hand one tick
+before the sweep reaches it will be overwritten, since neither setter checks the
+status it is replacing.
+
+</SdkOnly>
+
 ## Gate options
 
 <SdkOnly sdk="python">
@@ -317,6 +495,33 @@ is cancelled if the gate is resolved manually first.
 | `timeout` | `Duration` | `null` (wait forever) | Auto-resolve after this long |
 | `onTimeout` | `GateAction` | `REJECT` | Resolution taken when the timeout elapses |
 | `message` | `String` | `null` | Human-readable description shown to the approver |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+A gate is not a struct with options. It is one `StepMetadata` field holding a
+JSON string, plus whatever you do around it:
+
+| `StepMetadata` field | Type | What it does here |
+|---|---|---|
+| `gate` | `Option<String>` | Marks the node as a gate for anything that reads the definition. Never parsed by this crate. |
+| `task_name` | `String` | Required even on a gate. If the node is not deferred, this is the task that gets enqueued. |
+| `args_template` / `kwargs_template` | `Option<String>` | Base64 of serialized args, so a deferred node's job can be built later. |
+| `condition` | `Option<String>` | `on_success`, `on_failure` or `always`. Stored, not evaluated — see below. |
+
+And the keys conventionally inside the `gate` string:
+
+| Key | Read by |
+|---|---|
+| `timeoutMs` | Your own sweep |
+| `onTimeout` | Your own sweep |
+| `message` | Whatever renders the approval |
+
+`SubmitStaticWorkflowRequest` is where the rest lives — `deferred_node_names`
+for the pause, `default_timeout_ms`, `default_priority` and
+`default_max_retries` for any node whose `StepMetadata` names none, and
+`queue_default` for the queue.
 
 </SdkOnly>
 
@@ -358,6 +563,37 @@ If `test` fails, the gate is skipped (its condition isn't met) — and
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`StepMetadata::condition` takes `on_success`, `on_failure` or `always`, and no
+code in the crate reads it — not for a gate node and not for an ordinary one.
+`get_ready_workflow_nodes` answers a narrower question: which nodes are
+`Pending` with every DAG predecessor `Completed`. A failed predecessor makes a
+node *not ready*; it never makes it skipped.
+
+So a conditional gate is a branch in whatever parks it:
+
+```rust
+let test = wf.get_workflow_node(run_id, "test")?.expect("test node");
+
+match test.status {
+    WorkflowNodeStatus::Completed => {
+        wf.update_workflow_node_status(run_id, "approve", WorkflowNodeStatus::WaitingApproval)?;
+    }
+    // The gate's condition did not hold, so nobody should be asked.
+    _ => {
+        wf.update_workflow_node_status(run_id, "approve", WorkflowNodeStatus::Skipped)?;
+        wf.update_workflow_node_status(run_id, "deploy", WorkflowNodeStatus::Skipped)?;
+    }
+}
+```
+
+Note the second `Skipped`. Successors are not skipped transitively — they are
+deferred nodes with no job, so leaving them alone leaves them `Pending` forever,
+which reads as "still waiting" rather than "never happening".
+
+</SdkOnly>
+
 ## Rejection behaviour
 
 Rejecting a gate marks the gate node failed and skips its default
@@ -392,6 +628,45 @@ rejection branch.
   Python has no equivalent guard: calling `approve_gate`/`reject_gate` again
   on an already-resolved gate re-runs the resolution instead of no-op'ing.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Marking the gate node `Failed` does not end the run. The run row has its own
+state column and nothing moves it, so a rejection is three writes, not one:
+
+```rust
+use flexiq::workflows::WorkflowState;
+
+wf.set_workflow_node_error(run_id, "approve_deploy", "Artifacts failed QA review.")?;
+wf.update_workflow_node_status(run_id, "deploy", WorkflowNodeStatus::Skipped)?;
+
+wf.update_workflow_run_state(run_id, WorkflowState::Failed, Some("gate rejected"))?;
+wf.set_workflow_run_completed(run_id, now_millis())?;
+```
+
+The two run-level writes are deliberately separate: `set_workflow_run_completed`
+stamps `completed_at` only, because which terminal state accompanies it depends
+on the nodes.
+
+`update_workflow_run_state` does not validate the transition — it writes what
+you give it. `WorkflowState::can_transition_to` is the check, and calling it
+first is on you:
+
+```rust
+let run = wf.get_workflow_run(run_id)?.expect("run");
+if !run.state.can_transition_to(WorkflowState::Failed) {
+    return Ok(()); // already terminal — a second rejection has nothing to do
+}
+```
+
+That is also the guard against a stale resolution. There is no tracker to
+ignore one for you.
+
+An on-failure or always branch is not available either: `condition` is stored
+and never evaluated, so a rejection branch is steps you enqueue in the `else`
+arm of your own handler.
 
 </SdkOnly>
 
@@ -439,6 +714,30 @@ The payload carries `run_id`, `node_name`, and `message` (the gate's
   to a gate being reached, notify from the resolver side, or poll node status
   for `WAITING_APPROVAL` (see "Resolving a gate").
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no event surface at all — no gate event, and no job-outcome event
+either. `WorkerBuilder` exposes no hook, and the nearest seam,
+`flexiq_core::Worker::on_outcome`, is not reachable through it.
+
+That costs less here than it might, because nothing reaches a gate on its own.
+The code that parks the node is yours, so the notification goes on the same line:
+
+```rust
+wf.update_workflow_node_status(run_id, "approve_deploy", WorkflowNodeStatus::WaitingApproval)?;
+notify_reviewers(run_id, "approve_deploy", gate_message)?;  // your own transport
+```
+
+Send after the write, not before, so a failed write cannot produce a request for
+approval of something nobody is waiting on.
+
+A separate process that has to find gates instead of being told about them polls
+for them — `get_workflow_nodes(run_id)` filtered on `WaitingApproval`, or
+`list_workflow_runs` narrowed to `WorkflowState::Running` first if you do not
+already have a run id.
 
 </SdkOnly>
 
@@ -494,6 +793,38 @@ void onDeployApproval(HttpRequest request) {
     }
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+The crate serves no HTTP, so the endpoint is your framework's. Give the
+handler a `WorkflowStorageBackend` — it is `Clone`, so one per process is
+enough — and resolve with the two writes above:
+
+```rust
+use flexiq::now_millis;
+use flexiq::workflows::{WorkflowStorage, WorkflowStorageBackend};
+
+// `Request`, `Approval` and the two guards are your application's.
+fn on_deploy_approval(wf: &WorkflowStorageBackend, request: &Request) -> Result<(), ApiError> {
+    // Fail closed — resolving a gate is a privileged state transition.
+    verify_webhook_signature(request)?;         // 401 on a bad signature
+    let approval: Approval = request.json()?;
+    authorize_run(request, &approval.run_id)?;  // 403 unless the caller may resolve this run
+
+    if approval.approved {
+        wf.set_workflow_node_completed(&approval.run_id, "approve_deploy", now_millis(), None)?;
+    } else {
+        let reason = approval.reason.as_deref().unwrap_or("rejected");
+        wf.set_workflow_node_error(&approval.run_id, "approve_deploy", reason)?;
+    }
+    Ok(())
+}
+```
+
+Any process that opens the same storage can do this — there is no tracker to
+be co-located with. What that process does *not* get for free is the run
+moving on afterwards; enqueue the downstream steps here too.
 
   </Tab>
 </CodeTabs>

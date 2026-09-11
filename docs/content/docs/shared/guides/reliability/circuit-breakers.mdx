@@ -24,6 +24,15 @@ scheduler; each SDK only supplies the configuration.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+> A breaker is the one resilience knob `#[flexiq::task]` does not take — the
+> macro rejects `circuit_breaker` as an unknown attribute. It lives on
+> `TaskConfig::circuit_breaker`, which means writing a `Task` impl by hand.
+> The Configuration section below is the whole of it.
+
+</SdkOnly>
+
 ## How it works
 
 A circuit breaker tracks failures within a time window and transitions
@@ -111,6 +120,56 @@ Task<Response> callFlakyApi = Task.of("call_flaky_api", Response.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`circuit_breaker` is a field on `flexiq::TaskConfig`, not a `#[flexiq::task]`
+attribute — the macro rejects it. Implement `Task` over the generated one to set
+it, reusing everything the macro already worked out:
+
+```rust
+use flexiq::{CircuitBreakerConfig, EnqueueOptions, Job, Outcome, Task, TaskConfig};
+
+#[flexiq::task]
+fn call_external_api(endpoint: String) -> Outcome<String> {
+    let body = http::get(&endpoint).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(body)
+}
+
+/// The same task name, with a breaker in front of it.
+struct GuardedCall;
+
+impl Task for GuardedCall {
+    const NAME: &'static str = <call_external_api as Task>::NAME;
+
+    fn config() -> TaskConfig {
+        TaskConfig {
+            circuit_breaker: Some(CircuitBreakerConfig {
+                threshold: 5,               // open after 5 failures
+                window_ms: 60_000,          // within a 60-second window
+                cooldown_ms: 120_000,       // stay open 2 minutes before half-open
+                half_open_max_probes: 5,
+                half_open_success_rate: 0.8,
+            }),
+            ..<call_external_api as Task>::config()
+        }
+    }
+
+    fn defaults() -> EnqueueOptions {
+        <call_external_api as Task>::defaults()
+    }
+
+    fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>> {
+        <call_external_api as Task>::run_encoded(job)
+    }
+}
+```
+
+The worker registers `GuardedCall`; producers keep calling
+`call_external_api::call(..)`, since both name the same task.
+`CircuitBreakerConfig` has no `Default`, so all five fields are yours to write —
+`5` and `0.8` are the defaults the core documents.
+
+  </Tab>
 </CodeTabs>
 
 ### Parameter reference
@@ -154,6 +213,26 @@ required fields:
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`CircuitBreakerConfig` is a plain struct with five public fields and **no
+`Default`**, so there is no `..Default::default()` to lean on — every field is
+written out, every time.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `threshold` | `i32` | required | Failures within `window_ms` that trip the breaker. |
+| `window_ms` | `i64` | required | Rolling window for counting failures, in milliseconds. |
+| `cooldown_ms` | `i64` | required | How long the breaker stays open before admitting a half-open probe, in milliseconds. |
+| `half_open_max_probes` | `i32` | required | Probe jobs let through while half-open. Core documents `5`. |
+| `half_open_success_rate` | `f64` | required | Success rate (0.0–1.0) among probes required to re-close. Core documents `0.8`. |
+
+The whole struct is optional on the task: `TaskConfig::circuit_breaker` is an
+`Option<CircuitBreakerConfig>`, and `None` — the default — means no breaker at
+all.
+
+</SdkOnly>
+
 ## Inspecting circuit breaker state
 
 Only tasks with a registered breaker show up here — plain tasks return
@@ -187,6 +266,27 @@ for (CircuitBreakerState cb : breakers) {
     log.info("{}: {} (failures: {})", cb.taskName, cb.state, cb.failureCount);
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+`FlexiQ` does not wrap the breaker reads; `queue.storage()` is where they live:
+
+```rust
+use flexiq::{CircuitState, Storage};
+
+for cb in queue.storage().list_circuit_breakers()? {
+    println!(
+        "{}: {} (failures: {})",
+        cb.task_name,
+        CircuitState::from_i32(cb.state).as_str(),
+        cb.failure_count
+    );
+}
+```
+
+`CircuitBreakerState::state` is the raw `i32` discriminant, which is what
+`CircuitState::from_i32` is for.
 
   </Tab>
 </CodeTabs>
@@ -273,6 +373,14 @@ curl http://localhost:8080/api/circuit-breakers
 </Callout>
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK serves no dashboard, so there is no endpoint of its own to call.
+`crates/flexiq-server` is what serves the dashboard and this API over a shared
+backend; in-process, read the same rows with
+`queue.storage().list_circuit_breakers()`.
+
+  </Tab>
 </CodeTabs>
 
 ## When to use
@@ -337,6 +445,35 @@ Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The retry half is a macro attribute; the breaker half is not, so the two are
+declared in different places:
+
+```rust
+#[flexiq::task(max_retries = 3, retry_backoff_ms = "2s", retry_max_delay_ms = "1m")]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<()> {
+    smtp::send(&to, &subject, &body).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(())
+}
+
+// ... and on the `Task` impl that carries the breaker:
+fn config() -> flexiq::TaskConfig {
+    flexiq::TaskConfig {
+        circuit_breaker: Some(flexiq::CircuitBreakerConfig {
+            threshold: 5,
+            window_ms: 120_000,
+            cooldown_ms: 600_000,
+            half_open_max_probes: 5,
+            half_open_success_rate: 0.8,
+        }),
+        // Keeps max_retries = 3 and the 2-second base delay from the macro.
+        ..<send_email as flexiq::Task>::config()
+    }
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 See <SdkLink to="guides/reliability/retries">Retries</SdkLink> for the backoff
@@ -395,6 +532,30 @@ Worker worker = queue.worker()
             }
         })
         .start();
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+There is no failure hook to poll from. `WorkerBuilder` exposes no outcome
+callback — `flexiq_core::Worker::on_outcome` is the nearest seam, and reaching
+it means building the worker through `flexiq_core::Worker` directly. Poll on a
+timer of your own instead:
+
+```rust
+use flexiq::{CircuitState, Storage};
+
+let open: Vec<String> = queue
+    .storage()
+    .list_circuit_breakers()?
+    .into_iter()
+    .filter(|cb| CircuitState::from_i32(cb.state) == CircuitState::Open)
+    .map(|cb| cb.task_name)
+    .collect();
+
+if !open.is_empty() {
+    eprintln!("open circuit breakers: {open:?}");
+}
 ```
 
   </Tab>

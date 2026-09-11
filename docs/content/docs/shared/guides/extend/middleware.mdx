@@ -5,9 +5,18 @@ description: "Cross-cutting hooks around enqueue, task execution, and job outcom
 
 Middleware wraps task execution and reacts to job outcomes — the place for
 logging, metrics, tracing, and enqueue-time validation that would otherwise
-be copy-pasted into every task. Register it once and it applies across
-<SdkSwap python={<>every task, or a specific one</>} node={<>every task</>} java={<>every task</>} />; multiple middlewares compose in the order you
+be copy-pasted into every task. Where a binding ships a middleware stack, you
+register it once and it applies across
+<SdkSwap python={<>every task, or a specific one</>} node={<>every task</>} java={<>every task</>} rust={<>every task</>} />; multiple middlewares compose in the order you
 register them.
+
+<SdkOnly sdk="rust">
+
+The Rust SDK is not one of them: there are no hooks, and nothing to register.
+The nearest seam is `flexiq_core::Worker::on_outcome`, which the rest of this
+page keeps returning to.
+
+</SdkOnly>
 
 ## Registering middleware
 
@@ -64,6 +73,35 @@ flexiq.use(new Middleware() {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK has no middleware: there is nothing to register, and
+`WorkerBuilder` takes tasks and scheduler settings only. The nearest seam is
+`flexiq_core::Worker::on_outcome`, a callback over every outcome the scheduler
+records — build the worker through `flexiq_core::Worker` directly to reach it.
+
+```rust
+use flexiq::{ResultOutcome, Worker};
+
+let worker = Worker::new(queue.storage().clone())
+    // Core's worker takes handlers by name, not `#[flexiq::task]` types.
+    .register("greet", |_job| Ok(None))
+    .on_outcome(|outcome| match outcome {
+        ResultOutcome::Success { task_name, .. } => log::info!("[END] {task_name}"),
+        ResultOutcome::DeadLettered { task_name, error, .. } => {
+            log::error!("[DEAD] {task_name}: {error}")
+        }
+        _ => {}
+    })
+    .spawn()?;
+```
+
+That is a choice between two workers rather than a combination: this one runs
+core's own pool, which drops the `(owner, attempt, epoch)` fence a durable step
+is written under, so a task that calls `flexiq::current_step()` still needs
+`queue.worker()`.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -84,6 +122,14 @@ what you need.
 
 `Middleware` is an interface whose hooks are all no-op `default` methods —
 override only what you need.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`WorkerBuilder` has no slot for any of this. Its whole surface is
+`register::<T>()`, `queues`, `num_workers`, `worker_id`, `scheduler_config` and
+`spawn` — tasks and scheduler settings, with nowhere a hook could go.
 
 </SdkOnly>
 
@@ -172,9 +218,35 @@ outcome hooks receive an `OutcomeEvent` with `taskName`, `jobId`, `error`,
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Zero hooks. What `on_outcome` gives you instead is one callback over the
+`ResultOutcome` enum, whose arms line up with the *back half* of a hook list and
+nothing at all with the front:
+
+| Hook elsewhere | Nearest arm, and what it carries |
+|---|---|
+| `before` | Nothing. No code runs between the claim and the body — the body's first line is the seam. |
+| `after` | `Success` — `job_id`, `task_name`, `wall_time_ns`. No `queue`, and no result value. |
+| `on_sleep` | `Slept` — `job_id`, `task_name`, `queue`, `wake_at`, `wall_time_ns`. |
+| `on_error` / `on_retry` | `Retry` — adds `error`, `retry_count` (the attempt number after this failure) and `timed_out`. |
+| `on_dead_letter` | `DeadLettered` — the same, minus `retry_count`. |
+| `on_cancel` | `Cancelled` — `job_id`, `task_name`, `queue`, `wall_time_ns`. |
+| `on_timeout` | No arm of its own. `timed_out` on `Retry` and `DeadLettered` is the whole signal. |
+| `on_enqueue` | Nothing. The producer side runs no callback at any point. |
+
+A seventh arm has no counterpart at all: `Superseded { job_id }` is a result the
+job has already moved past — a reclaimed owner finishing late — and reporting it
+would double-count. `ResultOutcome` is `#[non_exhaustive]`, so a match on it
+outside the core crate needs a trailing `_` arm — the compiler will not let you
+enumerate the variants, which is how a later outcome gets ignored instead of
+breaking your build.
+
+</SdkOnly>
+
 ## Rewriting an enqueue
 
-<SdkSwap python={<><code>on_enqueue</code></>} node={<><code>onEnqueue</code></>} java={<><code>onEnqueue</code></>} /> is unique among the hooks: it fires
+<SdkSwap python={<><code>on_enqueue</code></>} node={<><code>onEnqueue</code></>} java={<><code>onEnqueue</code></>} rust={<>Where a binding has one, its enqueue hook</>} /> is unique among the hooks: it fires
 before the job is written to storage, and the context it receives is
 **mutable** — use it to validate, redact, or reshape what actually gets
 enqueued.
@@ -220,6 +292,31 @@ flexiq.use(new Middleware() {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+There is no enqueue hook to rewrite — `on_outcome` fires after a job has run,
+and nothing at all runs before the write. Enqueue options belong to the call, so
+the way to apply one everywhere is a function that returns the configured
+`TaskCall`.
+
+```rust
+use flexiq::TaskCall;
+
+#[flexiq::task(queue = "alerts")]
+fn page_oncall(message: String) -> flexiq::Outcome<()> {
+    println!("paging: {message}");
+    Ok(())
+}
+
+/// Every page enqueues through here, so the priority is set in one place.
+fn urgent(call: TaskCall<page_oncall>) -> TaskCall<page_oncall> {
+    call.priority(50)
+}
+
+queue.enqueue(urgent(page_oncall::call("disk full".into())))?;
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -250,6 +347,18 @@ instead — interceptors run before middleware `onEnqueue`.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The other place a default can live is the declaration. `Task::defaults()`
+returns an `EnqueueOptions` seeded from the `#[flexiq::task]` attribute, and
+every `TaskCall` starts from it — so `queue`, `priority`, `max_retries` and
+`timeout` set on the attribute already apply to every call without a wrapper.
+What there is no API for is the reverse: a prebuilt `EnqueueOptions` cannot be
+handed to a `TaskCall` that already exists. Overrides are per-call setters, or
+a helper function like the one above.
+
+</SdkOnly>
+
 ## Execution order
 
 <SdkOnly sdk="python">
@@ -275,6 +384,16 @@ reverse `after` the way an "onion" middleware model would.
 
 Multiple middlewares run in registration order for every phase — `before`,
 `after`, `onError`, and the outcome hooks are not reversed.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing to order: there is one callback, and calling `on_outcome` twice replaces
+it rather than appending. The only sequence that exists is the worker's — the
+body runs on a blocking thread, its `JobResult` goes down a channel, and the
+drain thread hands the scheduler a batch of them and calls the callback once per
+outcome the scheduler returned, in that order.
 
 </SdkOnly>
 
@@ -315,13 +434,26 @@ same reason.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The two sides are not isolated the same way, and the difference matters.
+
+A panic *inside a task body* is contained: the shell's pool catches it and
+records a retryable failure naming the task and the panic message, and the
+blocking thread is reused afterwards. A panic inside an `on_outcome` callback is
+not caught by anything — it unwinds the worker's drain thread, and results stop
+being handled from that point on. Treat the callback as code that must not
+panic: no `unwrap` on anything the outcome did not already hand you.
+
+</SdkOnly>
+
 ## Bounded hooks
 
 A task's timeout bounds its *handler*. It does not bound the middleware around
 it, so a hook that blocks — an exporter flushing to an unreachable collector, a
 tracing backend with no client-side timeout — holds the attempt open past the
-task's own limit. The execution hooks therefore carry a budget of their own,
-per hook call, defaulting to **5 seconds**:
+task's own limit. Where those hooks exist they therefore carry a budget of their
+own, per hook call, defaulting to **5 seconds**:
 
 <CodeTabs>
   <Tab sdk="python">
@@ -349,6 +481,24 @@ FlexiQ flexiq = FlexiQ.builder()
         .middlewareTimeout(Duration.ofSeconds(2))
         .open();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+Nothing to bound: with no hooks in the attempt, a task's own `timeout` is the
+only budget around the body.
+
+```rust
+#[flexiq::task(timeout = "30s")]
+fn export(report_id: i64) -> flexiq::Outcome<()> {
+    println!("exporting {report_id}");
+    Ok(())
+}
+```
+
+An `on_outcome` callback sits outside the attempt rather than inside it: it runs
+on the worker's drain thread once the outcome is already recorded, so a slow one
+delays result handling for every other job instead of failing this one.
 
   </Tab>
 </CodeTabs>
@@ -402,6 +552,21 @@ flag is cleared before the handler runs, so it never inherits one.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no budget to set, because there is nothing in the attempt to bound but
+the body itself — and a task's `timeout` does not interrupt that either. Nothing
+cancels a running handler: the deadline is noticed by the stale-job reap, which
+records the timeout and lets the job retry while the abandoned thread keeps its
+slot until the body returns.
+
+The unbounded thing to watch is the callback. `on_outcome` is one closure shared
+by every job on the worker, run on the single drain thread, with no deadline
+around it — a call that blocks there does not slow one attempt down, it stops the
+worker recording any outcome at all. Hand slow work to a channel and return.
+
+</SdkOnly>
+
 ## Per-task middleware
 
 <SdkOnly sdk="python">
@@ -437,6 +602,15 @@ specific tasks by checking `context.taskName` inside them.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+No per-task registration either, and nowhere to put one: `#[flexiq::task]`
+accepts a fixed key set and an unrecognised key is a compile error that lists
+the ones it takes. Scoping happens inside the single callback, by matching on
+`task_name` before doing anything — every arm except `Superseded` carries it.
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 ## Middleware vs hooks
@@ -466,8 +640,8 @@ hooks fire, then middleware `after()`.
 
 ## Combining with observability
 
-Middleware is how the built-in observability integrations attach to task
-execution — compose them with your own middleware freely.
+Where a binding ships built-in observability integrations, middleware is how
+they attach to task execution — compose them with your own middleware freely.
 
 <CodeTabs>
   <Tab sdk="python">
@@ -508,6 +682,29 @@ flexiq.use(new Middleware() { // your own middleware
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK ships no observability integrations, and with no middleware there
+is nothing for them to compose with. `ResultOutcome` carries most of what an
+exporter wants — every arm has `task_name` and `wall_time_ns`, and the failure
+arms add `queue`, `error` and `retry_count` — so one
+`flexiq_core::Worker::on_outcome` callback feeds your own recorder. `Success` is
+the narrow one: `job_id`, `task_name` and `wall_time_ns`, no queue label.
+
+```rust
+use flexiq::{ResultOutcome, Worker};
+
+let worker = Worker::new(queue.storage().clone())
+    .register("export", |_job| Ok(None))
+    .on_outcome(|outcome| {
+        if let ResultOutcome::Success { task_name, wall_time_ns, .. } = outcome {
+            log::info!("{task_name} took {}ms", wall_time_ns / 1_000_000);
+        }
+    })
+    .spawn()?;
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -530,5 +727,17 @@ details.
 See the [Micrometer](/java/guides/extend/micrometer) and
 [Sentry](/java/guides/extend/sentry) integration guides for setup
 details.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There are no integration guides to point at, because there are no integrations.
+<SdkLink to="guides/extend/monitoring">Monitoring</SdkLink> covers the two real
+sources — the callback and `queue.stats()` —
+<SdkLink to="guides/extend/events">Events</SdkLink> documents every field on
+`ResultOutcome` and what taking that route costs a task with durable steps, and
+<SdkLink to="guides/extend/logging">Logging</SdkLink> covers what the engine
+already emits without any of this.
 
 </SdkOnly>

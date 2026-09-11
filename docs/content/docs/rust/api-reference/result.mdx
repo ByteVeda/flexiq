@@ -1,0 +1,144 @@
+---
+title: Result
+description: "Job, JobStatus and QueueStats — reading a job back, and why there is no typed result read."
+---
+
+```rust
+let job = queue.get_job(&id)?.expect("job exists");
+
+println!("{} finished as {:?}", job.task_name, job.status);
+println!("result {} bytes", job.result.map(|r| r.len()).unwrap_or(0));
+```
+
+That last line is the crate's own example, verbatim. It prints a **length**,
+not a value, and that is the honest shape of this page.
+
+## There is no typed result read
+
+`job.result` is `Option<Vec<u8>>`. The shell has no
+`get_result::<T>(id)` and no `job.result_as::<T>()`. The function that decodes
+a result — `decode_result` — is `pub(crate)`: it exists to read a durable step's
+memo back inside the crate, and it is not exported.
+
+<Callout type="warn">
+  Do not write `let sum: i64 = queue.get_result(&id)?;`. There is no such
+  method, on `FlexiQ` or anywhere else in the crate.
+</Callout>
+
+What you have is the bytes. They are the wire encoding a task's return value
+was written with: one tag byte, `flexiq::wire::TAG_CBOR` (`0x02`), followed by
+a bare CBOR value — no `[args, kwargs]` array around it, because there is
+nothing to pair a result with.
+
+```rust
+let job = queue.get_job(&id)?.expect("job exists");
+let Some(bytes) = job.result else { return Ok(()) };
+
+// Not an API this crate provides — this is you reading the bytes yourself.
+assert_eq!(bytes[0], flexiq::wire::TAG_CBOR);
+```
+
+Decoding the remainder needs a CBOR reader of your own. Core deliberately ships
+none: `wire` is a writer, pinned byte for byte by the cross-SDK vectors, and the
+shell's reader is private to it.
+
+Three options, in the order most people want them:
+
+| If you want | Do this |
+|---|---|
+| A value out of a task | Have the task write it somewhere you already read — a row, a cache, an object store — and return nothing. |
+| To know only whether it succeeded | Read `job.status`. `JobStatus::Complete` is the answer; `job.result` is not. |
+| The bytes decoded | Read them yourself with a CBOR crate, after stripping the leading tag byte. You own that code. |
+
+A present `result` is not the same as a meaningful one, and an absent one is not
+a failure. A task returning `()` still writes a result — a CBOR `null` behind
+the tag byte. A job that never reached `Complete` never wrote one at all.
+`job.status` is what tells those apart; the bytes cannot.
+
+## `Job`
+
+Core's type, reached as `flexiq::Job`. `get_job` returns
+`Result<Option<Job>>`; `list_jobs` returns `Result<Vec<Job>>`. Every timestamp
+is Unix milliseconds.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | `String` | Unique job id (UUIDv7). |
+| `queue` | `String` | Queue the job belongs to. |
+| `task_name` | `String` | Registered task the job runs. |
+| `payload` | `Vec<u8>` | Serialized task arguments — the wire envelope. |
+| `status` | `JobStatus` | Current lifecycle state. |
+| `priority` | `i32` | Dispatch priority; higher runs first. |
+| `created_at` | `i64` | When the job was enqueued. |
+| `scheduled_at` | `i64` | When the job becomes eligible to run. |
+| `started_at` | `Option<i64>` | When execution started; unset until dequeued. |
+| `completed_at` | `Option<i64>` | When the job reached a terminal state. |
+| `retry_count` | `i32` | Retries attempted so far. |
+| `max_retries` | `i32` | Retries before dead-lettering. |
+| `result` | `Option<Vec<u8>>` | The serialized result of a successful run. |
+| `error` | `Option<String>` | The last failure — canonical JSON when structured. |
+| `timeout_ms` | `i64` | Execution timeout for one attempt. |
+| `unique_key` | `Option<String>` | Dedup key; at most one non-terminal job per key. |
+| `progress` | `Option<i32>` | Task-reported progress, 0–100. |
+| `metadata` | `Option<String>` | Pre-encoded JSON of free-form caller metadata. |
+| `notes` | `Option<String>` | Structured annotations — a JSON object of at most 15 top-level fields. |
+| `cancel_requested` | `bool` | True when cancellation was requested; a task polls this. |
+| `expires_at` | `Option<i64>` | After this, a still-pending job expires. |
+| `result_ttl_ms` | `Option<i64>` | How long the archived result is kept. |
+| `namespace` | `Option<String>` | Tenant namespace. `None` is the default namespace. |
+| `has_deps` | `bool` | True when the job was enqueued with at least one dependency. |
+| `debounce_key` | `Option<String>` | The key a debounced enqueue coalesces on. |
+
+`error` is where a failure's detail lives — see
+<SdkLink to="api-reference/errors">Errors</SdkLink> for the JSON shape a failed
+Rust task writes.
+
+## `JobStatus`
+
+```rust
+match job.status {
+    JobStatus::Complete => { /* … */ }
+    JobStatus::Dead => { /* retries exhausted */ }
+    _ => {}
+}
+```
+
+| Variant | Discriminant | Meaning |
+|---|---|---|
+| `Pending` | 0 | Waiting to be dequeued, or scheduled for the future. |
+| `Running` | 1 | Claimed by a worker and executing. |
+| `Complete` | 2 | Finished successfully. |
+| `Failed` | 3 | Failed; may still be retried. |
+| `Dead` | 4 | Exhausted retries and moved to the dead-letter queue. |
+| `Cancelled` | 5 | Cancelled before or during execution. |
+
+| Method | Description |
+|---|---|
+| `JobStatus::from_i32(v: i32) -> Option<Self>` | Decode the discriminant; `None` for an unknown value. |
+| `status.as_str() -> &'static str` | The lowercase display name — `"pending"`, `"complete"`, … |
+
+`Complete`, `Dead` and `Cancelled` are terminal. `Failed` is not: a job sitting
+in `Failed` is between attempts.
+
+## `QueueStats`
+
+```rust
+let stats = queue.stats()?;
+println!("{} pending, {} running", stats.pending, stats.running);
+```
+
+Six `i64` counts, scoped to the handle's namespace.
+
+| Field | Counts |
+|---|---|
+| `pending` | Jobs waiting to run. |
+| `running` | Jobs currently executing. |
+| `completed` | Jobs that finished successfully. |
+| `failed` | Jobs that failed terminally. |
+| `dead` | Jobs moved to the dead-letter queue. |
+| `cancelled` | Jobs that were cancelled. |
+
+Per-queue counts are not on `FlexiQ`. `Storage::stats_by_queue(queue_name,
+namespace)` is, and `queue.storage()` hands you the backend —
+<SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink> has the
+detail.

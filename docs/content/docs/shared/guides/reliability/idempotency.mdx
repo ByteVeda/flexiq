@@ -58,6 +58,16 @@ String second = queue.enqueue(CHARGE_CUSTOMER, order, once); // same id — no n
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let first = queue.enqueue(charge_customer::call(42, 1_000).unique_key("charge:42:1000"))?;
+let second = queue.enqueue(charge_customer::call(42, 1_000).unique_key("charge:42:1000"))?;
+
+assert_eq!(first.id, second.id); // coalesced onto the first — no duplicate created
+```
+
+  </Tab>
 </CodeTabs>
 
 The key frees up once that job leaves the pending/running state — completed,
@@ -66,9 +76,9 @@ fresh job.
 
 ## Auto-derived keys
 
-Python and Java can derive this key for you instead of you building the
-string by hand: mark a task idempotent and FlexiQ hashes the task name and
-arguments into a dedup key on every enqueue.
+Where a binding has an idempotent flag, it derives this key for you instead of
+you building the string by hand: mark a task idempotent and FlexiQ hashes the
+task name and arguments into a dedup key on every enqueue.
 
 <SdkOnly sdk="python">
 
@@ -126,6 +136,27 @@ enqueueCharge(42, 1_999); // same key — coalesced into the first job
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`.idempotent()` on the call derives the key, and `#[flexiq::task(idempotent)]`
+makes it the default for every call of that task:
+
+```rust
+#[flexiq::task(idempotent)]
+fn charge_customer(customer_id: i64, amount_cents: i64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+let first = queue.enqueue(charge_customer::call(42, 1_000))?;
+let second = queue.enqueue(charge_customer::call(42, 1_000))?;
+
+assert_eq!(first.id, second.id); // second call coalesced into the first
+```
+
+An explicit `.unique_key(..)` on the same call beats `.idempotent()`.
+
+</SdkOnly>
+
 ## How the key is derived
 
 The auto-derived key hashes the task name and the *serialized* arguments —
@@ -145,9 +176,9 @@ nondeterministic codec (an AES-GCM nonce, for example) can't change the
 dedup key from one call to the next.
 
 <Callout type="info" title="Identical recipe across bindings">
-  Python and Java compute this exact same key for the same `(task_name,
-  payload)` pair, so idempotent enqueues from either binding dedupe against
-  each other when they share one queue.
+  Every binding that derives a key computes this exact same one for the same
+  `(task_name, payload)` pair, so idempotent enqueues from any of them dedupe
+  against each other when they share one queue.
 </Callout>
 
 <SdkOnly sdk="node">
@@ -155,6 +186,18 @@ dedup key from one call to the next.
 There's no `idempotent` flag to auto-derive this key for you (see above),
 but the recipe itself is public — build the same string yourself if you need
 a Node producer's key to collide with a Python or Java producer's.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The crate pins the digest rather than merely asserting it is stable against
+itself: a test asserts that one known call derives
+`auto:c3abb8ce58c62cb737c17b92beb816be`, the exact string a producer in another
+language computes for the same `(task_name, payload)` pair. Getting the NUL
+separator or the 32-character truncation wrong still enqueues — it only stops
+deduping across the boundary — so the expected value is written out where a
+change to it fails the build.
 
 </SdkOnly>
 
@@ -218,10 +261,26 @@ Omit the option to skip dedup for that call.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Two inputs, on `EnqueueOptions` and on `TaskCall` alike:
+
+| Setter | Effect |
+|---|---|
+| `.unique_key("…")` | The literal storage key. Highest precedence — wins over the line below. |
+| `.idempotent()` | Derive the key from the task name and payload, when no explicit key was set. |
+
+There is no `idempotency_key` alias, and no way to turn derivation *off* for one
+call — `.idempotent()` takes no argument and only ever sets the flag. A task
+declared `#[flexiq::task(idempotent)]` therefore dedupes on every call unless
+that call names its own `.unique_key(..)`.
+
+</SdkOnly>
+
 ## Bulk enqueues
 
-Batch enqueue trades the per-row dedup check for throughput, and the three
-bindings don't behave the same way when a batch contains a colliding key.
+Batch enqueue trades the per-row dedup check for throughput, and the bindings
+don't all behave the same way when a batch contains a colliding key.
 
 <SdkOnly sdk="java">
 
@@ -285,6 +344,28 @@ check-then-insert path — still one storage call either way.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`enqueue_batch` switches the whole batch onto the unique check-then-insert path
+as soon as **one** call in it carries a key, explicit or derived. A duplicate
+inside the batch, or one colliding with an already-active job, resolves to the
+existing job instead of failing the call:
+
+```rust
+let jobs = queue.enqueue_batch(vec![
+    charge_customer::call(42, 1_000).idempotent(),
+    charge_customer::call(42, 1_000).idempotent(),
+])?;
+// the duplicate resolves onto the already-active job rather than failing
+```
+
+A batch where no call carries a key keeps the plain bulk insert — one
+transaction either way. A call carrying a *debounce window* is the one thing a
+batch refuses outright, because storage has no batched debounce to hand it to;
+enqueue that call on its own.
+
+</SdkOnly>
+
 ## Pitfalls
 
 <SdkOnly sdk="python">
@@ -330,5 +411,25 @@ check-then-insert path — still one storage call either way.
 Whatever you build `uniqueKey` from, keep it stable for the equality you
 want — a timestamp or a random id defeats dedup entirely, since every call
 then gets its own key.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+- **Don't derive a key from a moving value.** An argument holding a timestamp or
+  a freshly generated id hashes differently on every call, so `.idempotent()`
+  never dedupes. Generate it inside the body, or pass a stable identifier.
+- **Argument order is part of the hash, and so is struct field order.** The
+  digest runs over the encoded payload, and the encoder keeps map keys in
+  insertion order on purpose — sorting them behind the caller's back would
+  change an identity. Reordering a task's parameters, or the fields of a type it
+  takes, changes what dedupes against what.
+- **There is no serializer to swap.** The payload codec is the wire CBOR and it
+  is fixed, so the hash cannot drift from a codec change between releases. Use
+  an explicit `.unique_key(..)` for a key that has to survive a change to the
+  *arguments* themselves.
+- **A debounce window silently beats a key.** `enqueue` matches on the window
+  before it looks at the dedup key, so a call carrying both never derives the
+  `auto:` key and never runs a dedup lookup at all.
 
 </SdkOnly>

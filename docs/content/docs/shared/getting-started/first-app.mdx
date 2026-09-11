@@ -102,6 +102,32 @@ public final class Tasks {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`src/tasks.rs`:
+
+```rust
+use flexiq::FlexiQ;
+
+#[flexiq::task(queue = "emails", max_retries = 3, retry_backoff_ms = "2s")]
+pub fn send_welcome_email(user_id: i64, address: String) -> flexiq::Outcome<String> {
+    // Your real mailer goes here. Returning an error is fine — see the next page.
+    println!("welcome mail → {address}");
+    Ok(format!("sent:{user_id}"))
+}
+
+#[flexiq::task(queue = "media")]
+pub fn generate_avatar(user_id: i64) -> flexiq::Outcome<String> {
+    println!("rendering avatar for {user_id}");
+    Ok(format!("avatars/{user_id}.png"))
+}
+
+pub fn open() -> flexiq::Result<FlexiQ> {
+    FlexiQ::open("signup.db")
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 <Callout type="info" title="Why two queues and not two workers">
@@ -184,6 +210,28 @@ ResponseEntity<Map<String, Long>> signup(@RequestBody SignupRequest body) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::FlexiQ;
+
+use crate::tasks::{generate_avatar, send_welcome_email};
+
+/// Create the account, enqueue, return. Neither enqueue runs anything.
+fn signup(queue: &FlexiQ, email: &str) -> flexiq::Result<i64> {
+    let user_id = create_user(email); // your own code
+
+    queue.enqueue(send_welcome_email::call(user_id, email.to_string()))?;
+    queue.enqueue(generate_avatar::call(user_id))?;
+
+    Ok(user_id)
+}
+```
+
+`FlexiQ` is `Clone` and every method takes `&self`, so one handle lives in your
+web framework's shared state and every request borrows it.
+
+  </Tab>
 </CodeTabs>
 
 The handler names the work; it never calls the mailer or the image library
@@ -225,6 +273,33 @@ Worker worker = flexiq.worker()
         .start();
 
 Runtime.getRuntime().addShutdownHook(new Thread(worker::close));
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+A second binary, `src/bin/worker.rs`, over the same file:
+
+```rust
+use flexiq::FlexiQ;
+use signup::tasks::{generate_avatar, send_welcome_email};
+
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open("signup.db")?;
+
+    let worker = queue
+        .worker()
+        .queues(["emails", "media"])
+        .register::<send_welcome_email>()
+        .register::<generate_avatar>()
+        .num_workers(4)
+        .spawn()?;
+
+    // The worker owns the scheduler and runs on its own threads, so `main`
+    // only has to stay alive. `shutdown` drains, then unregisters.
+    std::thread::park();
+    worker.shutdown()
+}
 ```
 
   </Tab>
@@ -280,6 +355,20 @@ Or from the terminal:
 
 ```bash
 flexiq --url signup.db stats
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+let stats = queue.stats()?;
+println!("{} pending, {} completed", stats.pending, stats.completed);
+
+// Per-lane counts are not on the handle; `storage()` is the escape hatch.
+let media = queue.storage().stats_by_queue("media", None)?;
+println!("{} pending in media", media.pending);
 ```
 
   </Tab>

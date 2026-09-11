@@ -47,6 +47,17 @@ Task<Order> CHARGE = Task.of("charge", Order.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(max_retries = 5, retry_backoff_ms = "2s", retry_max_delay_ms = "5m")]
+fn flaky_api_call(url: String) -> flexiq::Outcome<String> {
+    let body = http::get(&url).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(body)
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 ### Parameter reference
@@ -83,6 +94,25 @@ Task<Order> CHARGE = Task.of("charge", Order.class)
 |---|---|---|
 | `maxRetries` | `0` | Attempts after the first before dead-lettering. Defaults to never-retry, so set it on any task you want retried. |
 | `RetryPolicy.exponential(base, max)` | 1s / 5min if no policy is registered | Retry N waits about `base · 2^N`, capped at `max`, plus jitter up to `base`. |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+| Attribute | Default | Description |
+|---|---|---|
+| `max_retries` | `3` | Attempts after the first before dead-lettering. `0` = never retry. |
+| `retry_backoff_ms` | `1000` | Base delay `B`; the ceiling roughly doubles each attempt. |
+| `retry_max_delay_ms` | `300000` (5 min) | Cap `M` on that ceiling. |
+
+Despite the `_ms` suffix, both backoff attributes take the same duration
+spellings as `timeout` — `"500ms"`, `"2s"`, `"5m"`, `"2h"`, `"1d"` — or a bare
+integer meaning milliseconds.
+
+`max_retries` is the one attribute that lands in two places: the task's retry
+policy and the enqueue defaults. The budget the scheduler actually counts
+against is the one written on the job row, which is why a per-call
+`.max_retries(..)` overrides it cleanly.
 
 </SdkOnly>
 
@@ -171,6 +201,31 @@ queue.task("flakyApiCall", handleCall, {
   retryBackoff: { baseMs: 2000, maxMs: 300_000 }, // 2s base, 5min cap
 });
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`RetryPolicy::custom_delays_ms` replaces the exponential curve with explicit
+per-attempt delays, honoured exactly and with **no** jitter. It is not a
+`#[flexiq::task]` attribute — the macro rejects it as unknown — so it is reached
+through a hand-written `Task` impl, the same shape a
+<SdkLink to="guides/reliability/circuit-breakers">circuit breaker</SdkLink>
+needs:
+
+```rust
+use flexiq::{Task, TaskConfig};
+
+fn config() -> TaskConfig {
+    let mut config = <flaky_api_call as Task>::config();
+    config.retry_policy.custom_delays_ms = Some(vec![1_000, 5_000, 30_000]);
+    config
+}
+```
+
+Retry 0 waits 1s, retry 1 waits 5s, retry 2 waits 30s. Once the list runs out,
+the Full Jitter formula takes over again with `base_delay_ms` and `max_delay_ms`
+as `B` and `M` — there is no fire-immediately tail.
 
 </SdkOnly>
 
@@ -311,6 +366,47 @@ still counts; if a chain carries both, the outermost wins.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no filter to configure — no predicate, no type list. The body says what
+kind of failure it had at the point it fails, by picking a constructor:
+
+```rust
+#[flexiq::task(max_retries = 5)]
+fn charge(order_id: String) -> flexiq::Outcome<String> {
+    // Transient: spends the budget and comes back on the backoff curve.
+    let response = gateway::charge(&order_id)
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    if response.status == 402 {
+        // Permanent: dead-letters now, whatever budget is left.
+        return Err(flexiq::TaskError::fatal("card declined").into());
+    }
+    Ok(response.body)
+}
+```
+
+| Constructor | Effect |
+|---|---|
+| `TaskError::retryable(msg)` | Retries on the task's backoff curve until the budget is spent. |
+| `TaskError::fatal(msg)` | Dead-letters the job at once, whatever budget is left. |
+
+`Outcome<T>` is `Result<T, Abort>`, and `From<TaskError>` is the only conversion
+into `Abort` — deliberately, because a blanket `From<E: Error>` would have to
+guess retryability, the one bit of a failure only the author knows. That is why
+every fallible call ends in a `map_err` that decides.
+
+Watch the point-free form: `.map_err(TaskError::retryable)` compiles only when
+the error type is already `Into<String>`, since that is what the constructor
+takes. For anything else, write the closure and call `.to_string()` yourself.
+
+A panic is not a third case. `catch_unwind` catches it and reports a
+**retryable** failure carrying the panic's message — a panic is usually
+transient, a poisoned lock or an `unwrap` on a row that was briefly absent, and
+making it the one failure that ignored the retry policy would surprise.
+
+</SdkOnly>
+
 ## Per-job overrides
 
 Override the retry budget for a single submission without changing the
@@ -335,6 +431,13 @@ queue.enqueue("charge", [order], { maxRetries: 1 });
 
 ```java
 queue.enqueue(CHARGE, order, EnqueueOptions.builder().maxRetries(1).build());
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue.enqueue(flaky_api_call::call("https://example.com".into()).max_retries(1))?;
 ```
 
   </Tab>
@@ -385,6 +488,14 @@ the retry-budget check.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The "Exception passes filter?" step reads one bool: whether the `TaskError` the
+body returned was built by `retryable` or by `fatal`. Nothing registered on the
+task can flip it afterwards, and a panic reaches this step as retryable.
+
+</SdkOnly>
+
 ### Watch a job spend its retries
 
 Each attempt draws its delay from the Full Jitter curve above, so the gaps
@@ -432,6 +543,23 @@ See <SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink> for
 `.timeout(...)`, how the dispatcher enforces it, and the timed-out flag
 surfaced as `OutcomeEvent.timedOut` to event listeners and middleware
 outcome hooks.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/reliability/timeouts">Timeouts</SdkLink> for the
+`timeout` attribute and the per-call `.timeout_ms(..)`.
+
+A timeout is detected outside the handler, which is why the pool reports every
+failure of its own with `timed_out: false` — nothing inside a running body can
+tell that its own attempt overran. The scheduler's stale-job reap sets the flag,
+and it reports the failure as retryable whatever the body would have said, so a
+timeout always reaches the budget check.
+
+The flag rides the `ResultOutcome` that `flexiq_core::Worker::on_outcome`
+observes; `WorkerBuilder` does not expose that callback, so reading the flag
+means building the worker through `flexiq_core::Worker` directly.
 
 </SdkOnly>
 
@@ -488,6 +616,30 @@ Worker worker = queue.worker()
         .on(EventName.DEAD, event -> alertOps(event))
         .start();
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There are no middleware hooks and no event bus to subscribe to. The nearest seam
+is `flexiq_core::Worker::on_outcome`, a callback over every processed outcome —
+and `WorkerBuilder` does not expose it, so reaching it means building the worker
+through `flexiq_core::Worker` directly.
+
+Short of that, the history is a storage read rather than a callback:
+
+```rust
+use flexiq::Storage;
+
+for error in queue.storage().get_job_errors(&job.id, None)? {
+    println!("attempt {}: {}", error.attempt, error.error);
+}
+```
+
+`JobError` carries `attempt` — the `retry_count` the job held when that attempt
+failed, so `0` for the first — the `error` string, which is the canonical
+`{"errtype","message","traceback"}` JSON a failed task writes, and a `failed_at`
+in Unix milliseconds.
 
 </SdkOnly>
 
@@ -560,5 +712,36 @@ history via `getJobErrors()`.
 See <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink>
 for `listDead()`, `retryDead()`, `purgeDead()`, and per-attempt error
 history via `jobErrors()`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The dead-letter reads are on `Storage`, not on `FlexiQ`, so `queue.storage()` is
+the way in:
+
+```rust
+use flexiq::Storage;
+
+// The 10 most recent dead letters, newest first.
+let dead = queue.storage().list_dead(10, 0, None)?;
+for entry in &dead {
+    println!("{} {} — {:?}", entry.original_job_id, entry.task_name, entry.error);
+}
+
+// Re-enqueue one as a fresh job; the entry is deleted and the new id returned.
+let new_job_id = queue.storage().retry_dead(&dead[0].id, None)?;
+
+// Delete entries that failed more than 24 hours ago.
+let purged = queue.storage().purge_dead(flexiq::now_millis() - 86_400_000)?;
+```
+
+The third argument of `list_dead` is the namespace; `None` spans every one of
+them. `purge_dead` takes an absolute Unix-millisecond cutoff, not an age.
+`DeadJob::error` is an `Option<String>` holding the failure's canonical JSON, and
+a replayed job keeps the original's `priority`, `max_retries`, `timeout_ms` and
+`result_ttl_ms` — the entry stored all four.
+
+See <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink>.
 
 </SdkOnly>

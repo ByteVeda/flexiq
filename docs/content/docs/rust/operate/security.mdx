@@ -1,0 +1,107 @@
+---
+title: Security
+description: "Payloads are rows — the trust model, what the shell gives you, and the four seams it deliberately does not have."
+---
+
+## Storage is code execution
+
+A worker runs whatever task name a job names, with whatever payload it carries.
+So **anyone who can write to the storage can run code on your workers.** Treat
+the database credential — or the SQLite file's permissions — as a code-execution
+credential:
+
+- Enqueue through your own authenticated service. Never hand the backend to an
+  untrusted client.
+- Use least-privilege credentials and a private network.
+- A SQLite deployment is a file on disk. Its directory permissions are the whole
+  boundary.
+
+An unregistered task name does not run: `spawn()` knows only what you
+`register`ed, and a job naming anything else fails fatally rather than being
+retried. That limits blast radius; it is not authorization.
+
+## Payloads are rows, and nothing more
+
+Everything a job carries is stored as-is:
+
+| Field | What is in it |
+| --- | --- |
+| `payload` | `Vec<u8>` — the cross-SDK wire envelope holding your task's arguments |
+| `result` | `Option<Vec<u8>>` — what the task returned, in the same encoding |
+| `error` | The canonical JSON `{"errtype", "message", "traceback"}`; `message` is the string you built the `TaskError` with |
+| `metadata`, `notes` | JSON text, carried through byte for byte |
+
+None of it is encrypted. None of it is signed. Anyone who can read the storage
+can read all of it, and anyone who can read a dashboard can read most of it.
+
+**Do not put secrets in a payload, in a `TaskError` message, or in `notes`.**
+Pass an id and fetch the secret inside the handler.
+
+## The four seams that are not here
+
+Say a reader came looking for one of these. The honest answer, and the nearest
+real thing:
+
+- **No pluggable serializer.** The payload codec is the wire CBOR, fixed. There
+  is no codec chain to hang an HMAC or an AES-GCM stage on.
+- **No signing or encryption helpers.** The Rust SDK ships no crypto. If you
+  need a payload the storage host cannot read, encrypt the *value* yourself
+  before it becomes an argument, and decrypt it in the handler.
+- **No middleware hooks**, so there is nothing to redact with on the way in or
+  out. The nearest seam is `flexiq_core::Worker::on_outcome`, which
+  `WorkerBuilder` does not expose — build the worker through
+  `flexiq_core::Worker` directly if you need it.
+- **No dependency injection.** A task takes its arguments and nothing else, so a
+  secret cannot arrive by any route except the payload or the process
+  environment. Prefer the environment.
+
+## Namespaces are a boundary, until you go around them
+
+A handle scoped with `with_namespace` refuses a call that names a different
+namespace — that check is the boundary, and it is real:
+
+```rust
+let tenant = flexiq::FlexiQ::open("flexiq.db")?.with_namespace("tenant-a");
+```
+
+<Callout type="warn">
+  `queue.storage()` does not inherit it. Every scoped `Storage` method takes
+  `namespace: Option<&str>` as its own argument, and passing `None` reads the
+  default namespace. Code that reaches for the escape hatch has stepped outside
+  the boundary and has to re-apply it by hand with `queue.namespace()`.
+</Callout>
+
+Periodic schedules carry no namespace at all, which is why the four periodic
+methods are refused on a scoped handle rather than silently crossing tenants.
+
+## The contract floor
+
+`FlexiQ::open` and `FlexiQ::from_storage` check the stored contract floor before
+handing back a handle, and a database written by a newer level is refused with
+`QueueError::ContractTooOld`. This is a compatibility gate, not an authorization
+one — it stops a stale binary from writing rows a newer reader cannot parse.
+
+## The mesh, if you enable it
+
+`flexiq::mesh` is a feature-gated re-export. Its `encryption_key` **XOR-obscures
+gossip datagrams** — that deters casual sniffing and is not cryptographic
+protection. Run the mesh on a trusted private network.
+
+## The dashboard is another process's problem
+
+The Rust SDK serves no HTTP. Whatever you expose is
+<SdkLink to="modules/dashboard">`flexiq-server`</SdkLink>'s surface, and its
+auth modes, token handling and bind-address rules are on
+[Server](/server/operate).
+
+## Checklist
+
+- [ ] Storage reachable only from trusted services, on a private network.
+- [ ] SQLite file and its directory owned by the worker's user, not world-readable.
+- [ ] Enqueue behind your own authn/authz — never expose storage to clients.
+- [ ] No secrets in payloads, `TaskError` messages, `metadata` or `notes`.
+- [ ] Values that must be opaque at rest encrypted by you before they become
+      arguments.
+- [ ] Namespace re-applied by hand on every `queue.storage()` call.
+- [ ] Dashboard auth enabled, and its bind address on a trusted network.
+- [ ] Mesh, if enabled, on a private network regardless of `encryption_key`.

@@ -49,6 +49,26 @@ String id = flexiq.enqueue(sendEmail, payload);
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(queue = "emails")]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+#[flexiq::task] // goes to the "default" queue
+fn process_data(data: Vec<u8>) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+queue.enqueue(send_email::call(to, subject, body))?;
+
+// Or override the declared default for one call.
+queue.enqueue(send_email::call(to, subject, body).queue("urgent-emails"))?;
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -82,6 +102,22 @@ the rest of what an enqueue call can override.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Two places set the queue and the later one wins: the `queue` attribute seeds
+every `call(..)` this task builds, and `.queue(..)` on one call replaces it for
+that job. A task with neither lands on `"default"`.
+
+A queue is a label on the row, not a thing you create — naming one is all it
+takes. That also means a typo is silent: `"emial"` is a perfectly good queue, and
+its jobs sit pending forever because no worker was told to serve it. Keep the
+names in one `const` and use it on both sides.
+
+See <SdkLink to="guides/core/enqueue-options">enqueue options</SdkLink> for the
+rest of what a call can override.
+
+</SdkOnly>
+
 ## Worker queue subscription
 
 A worker only dequeues jobs from the queues it's told to serve — queues it
@@ -110,6 +146,19 @@ flexiq.worker()
         .queues("emails", "default")   // serve two queues
         .start();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let worker = queue
+    .worker()
+    .register::<send_email>()
+    .queues(["emails", "reports"]) // serve two queues
+    .spawn()?;
+```
+
+Omit `queues(..)` and the worker serves `"default"` alone.
 
   </Tab>
 </CodeTabs>
@@ -152,6 +201,24 @@ flexiq run ./app.js --queues emails,reports
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no worker binary and no subcommand: a worker is code, and its queue list
+is the `queues([..])` argument. Reading that list from the environment is
+ordinary Rust, which is how one binary serves a different set per deployment:
+
+```rust
+let queues: Vec<String> = std::env::var("FLEXIQ_QUEUES")
+    .unwrap_or_else(|_| "default".into())
+    .split(',')
+    .map(str::to_string)
+    .collect();
+
+queue.worker().register::<send_email>().queues(queues).spawn()?;
+```
+
+</SdkOnly>
+
 <Callout type="info" title="Use queues to isolate workloads">
   Separate I/O-bound tasks (API calls, emails) from CPU-bound tasks (data
   processing, report generation) into different queues. Run them on
@@ -187,6 +254,16 @@ flexiq.enqueue(report, payload, EnqueueOptions.builder().priority(10).build());
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue.enqueue(report::call(id).priority(10))?; // ahead of priority 0 jobs
+```
+
+A registration-time default is the `priority` attribute:
+`#[flexiq::task(priority = 10)]`. A per-call `.priority(..)` still wins.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="node">
@@ -197,6 +274,14 @@ flexiq.enqueue(report, payload, EnqueueOptions.builder().priority(10).build());
   round — a *higher* `priority` number dequeues first. Porting a BullMQ
   priority scheme means inverting the numbers, not copying them.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Priority is a plain `i32` with no fixed scale and no clamping — negatives are
+fine, and `-10` is simply behind `0`. Ties break on the oldest eligible
+`scheduled_at`, so equal-priority work stays fair rather than arbitrary.
 
 </SdkOnly>
 
@@ -235,6 +320,23 @@ Task<OrderPayload> urgentTask = Task.of("urgent_task", OrderPayload.class).prior
   There's no registration-time default — `priority` is enqueue-only, set per
   call as shown above.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Set a default on the task; a per-call `.priority(..)` still overrides it:
+
+```rust
+#[flexiq::task(priority = 10)]
+fn urgent_task(data: String) -> flexiq::Outcome<()> { Ok(()) }
+
+#[flexiq::task] // priority 0, the default
+fn normal_task(data: String) -> flexiq::Outcome<()> { Ok(()) }
+```
+
+The attribute seeds the `EnqueueOptions` every `call(..)` starts from, so this is
+the same mechanism as the per-call setter rather than a second one.
 
 </SdkOnly>
 
@@ -281,6 +383,20 @@ emails.resume();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Pause and resume are not on `FlexiQ`. They are `Storage` methods, so reach them
+through `queue.storage()`:
+
+```rust
+use flexiq::Storage;
+
+queue.storage().pause_queue("emails")?;
+queue.storage().list_paused_queues()?; // ["emails"]
+queue.storage().resume_queue("emails")?;
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -288,6 +404,18 @@ emails.resume();
 See <SdkLink to="operate/inspection">Job management</SdkLink>
 for maintenance-window patterns, cancellation, and archival built on top of
 pause/resume.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Pausing is a storage-level flag, so it is **not** namespaced: `pause_queue` takes
+a queue name and nothing else, and every namespace sharing that backend stops
+dispatching from it. `FlexiQ::with_namespace` does not scope this.
+
+A paused queue still accepts enqueues — `queue.enqueue(..)` succeeds and the row
+is written — it just is not dispatched until `resume_queue`. In-flight jobs are
+untouched and run to completion.
 
 </SdkOnly>
 
@@ -338,6 +466,22 @@ before starting the worker.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The limits exist in the scheduler — `QueueConfig` carries a `rate_limit` and a
+`max_concurrent`, and the poller checks both before the per-task caps — but
+`WorkerBuilder` does not expose the setter. It is
+`flexiq_core::Worker::queue_config(name, QueueConfig { .. })`, so reaching it
+means building the worker through `flexiq_core::Worker` directly, which costs the
+durable-step fence this shell's pool carries.
+
+The per-task knobs are the ones this shell does expose, and the same scheduler
+enforces them across every worker on shared storage:
+`#[flexiq::task(rate_limit = "20/s", max_concurrent = 2)]`. What they cannot do
+is cover several tasks sharing one downstream with a single number.
+
+</SdkOnly>
+
 ## Per-queue stats
 
 Scope job counts to a single queue, or get every queue's counts in one call.
@@ -365,6 +509,20 @@ await queue.statsAllQueues();
 long backlog = flexiq.statsByQueue("emails").pending;
 Map<String, QueueStats> all = flexiq.statsAllQueues();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+// `FlexiQ::stats()` covers the whole handle; the per-queue reads are on storage.
+let emails = queue.storage().stats_by_queue("emails", queue.namespace())?;
+let all = queue.storage().stats_all_queues(queue.namespace())?;
+```
+
+Both take the namespace explicitly, which is what `queue.namespace()` returns —
+`None` on an unscoped handle.
 
   </Tab>
 </CodeTabs>
@@ -415,5 +573,24 @@ Task<ResizePayload> resize = Task.of("resize", ResizePayload.class)
         .maxRetries(3)                     // default retry budget
         .timeout(Duration.ofSeconds(300)); // default per-job timeout
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no queue-level defaults object. `FlexiQ::open(..)` takes a path and
+nothing else; defaults live on the task and a per-call setter still wins:
+
+```rust
+#[flexiq::task(priority = 0, max_retries = 3, timeout = "5m")]
+fn resize(id: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+Those three are already the built-in defaults, so the attribute above changes
+nothing — `EnqueueOptions::default()` is queue `"default"`, priority 0, three
+retries and a 300 000 ms timeout, and that is what seeds every call. Declare an
+attribute only where you want something else.
 
 </SdkOnly>

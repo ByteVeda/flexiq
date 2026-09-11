@@ -1,0 +1,111 @@
+---
+title: Dependencies
+description: "depends_on — hold a job until other jobs finish, what a broken edge does, and how a cancellation cascades."
+---
+
+`.depends_on(ids)` holds a job until every listed job id has completed. It is a
+lightweight per-job DAG, one enqueue at a time.
+
+```rust
+let extract = queue.enqueue(extract::call("source".into()))?;
+let transform = queue.enqueue(
+    transform::call("config".into()).depends_on([extract.id.clone()]),
+)?;
+```
+
+The setter takes any iterator of things that convert into `String`, so an array,
+a `Vec` or a slice of `&str` all work:
+
+```rust
+queue.enqueue(publish::call().depends_on([a.id.clone(), b.id.clone(), c.id.clone()]))?;
+queue.enqueue(publish::call().depends_on(["job-a", "job-b"]))?;
+```
+
+## `has_deps`
+
+A job enqueued with at least one dependency carries `has_deps: true`:
+
+```rust
+assert!(transform.has_deps);
+assert!(!extract.has_deps);
+```
+
+It is derived from `depends_on` at insert — there is no setter for it. The point
+is the scheduler: with `has_deps` false it skips the dependency lookup entirely,
+which is the common case. Reading it is how you tell a gated job from an
+ordinary pending one without a second query.
+
+## Every edge is validated at enqueue
+
+An id in `depends_on` must name a live-or-completed job in the **same
+namespace**. Anything else fails the enqueue with `QueueError::DependencyNotFound`:
+
+- the id does not exist;
+- the dependency is dead, cancelled or failed;
+- the dependency belongs to another namespace.
+
+```rust
+let err = queue
+    .enqueue(transform::call("config".into()).depends_on(["no-such-job"]))
+    .unwrap_err();
+// "dependency not found: dependency not found or already dead/cancelled"
+```
+
+The message is the same for all three reasons and names **no id** — deliberately.
+A caller scoped to one namespace must not be able to tell "that id is in another
+tenant" apart from "that id does not exist". Every backend words it identically.
+
+A cross-namespace edge is refused rather than filtered: it would let one
+tenant's failure cascade into another's queue, and it could only ever be
+half-honoured. It reads as an ordinary missing dependency, so a scoped caller
+learns nothing about ids outside its own namespace.
+
+In a <SdkLink to="guides/core/batch-enqueue">batch</SdkLink> the same validation
+runs, with one addition — an id may also name another job in the same batch.
+
+## Failure cascades down the chain
+
+A dependency that goes wrong takes its dependents with it. Both cases cancel
+every pending job that depends on it, directly or transitively:
+
+| What happened to the dependency | Recorded reason |
+| --- | --- |
+| Cancelled with `queue.cancel(..)` | `dependency cancelled` |
+| Retries exhausted, moved to the dead-letter queue | `dependency failed` |
+
+The cascade is a dead-letter event, not a per-attempt one: a dependency that
+fails an attempt and is retried holds its dependents rather than cancelling
+them. Dependents outside the namespace are left alone.
+
+<Callout type="info">
+  Nothing un-gates a job except its dependencies completing. If a dependency
+  ends up in the dead-letter queue, the dependent is cancelled — it does not sit
+  pending forever waiting for a retry that will not come.
+</Callout>
+
+## When this is not the right tool
+
+`depends_on` is a per-job edge you write at enqueue time, so the producer has to
+hold the ids and enqueue in order. For a graph declared as a graph — fan-out,
+gates, compensation — use <SdkLink to="modules/workflows/gates">workflows</SdkLink>,
+which the crate re-exports under the `workflows` feature. For work that must
+resume mid-task after a retry rather than be split across jobs, use
+<SdkLink to="modules/steps">durable steps</SdkLink>.
+
+<Cards>
+  <Card
+    title="Enqueue options"
+    to="guides/core/enqueue-options"
+    description="depends_on among the rest of the per-call setters."
+  />
+  <Card
+    title="Cancellation"
+    to="guides/core/cancellation"
+    description="Where the cascade starts."
+  />
+  <Card
+    title="Batch enqueue"
+    to="guides/core/batch-enqueue"
+    description="Dependencies that point inside the same batch."
+  />
+</Cards>

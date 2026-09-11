@@ -1,0 +1,143 @@
+---
+title: Rate limiting
+description: "rate_limit as a deployment-wide token bucket, validated at compile time, and what on_excess does with the jobs it turns away."
+---
+
+A rate limit is declared on the task and enforced by the scheduler. It is a
+token bucket keyed by task name in storage, so `"100/m"` means a hundred a
+minute **across the whole deployment** — not per worker, not per process.
+
+```rust
+#[flexiq::task(rate_limit = "100/m")]
+fn call_api(endpoint: String) -> flexiq::Outcome<()> {
+    let _ = endpoint;
+    Ok(())
+}
+```
+
+The worker registers it when you call `spawn()`, along with the rest of the
+task's dispatch config. Nothing has to be configured on the producer side.
+
+## The format
+
+`"<count>/<unit>"`. The unit is `s`, `m` or `h` — the long spellings `second`,
+`minute` and `hour` are accepted too. The count is the bucket's size *and* its
+refill over one unit, so `"3600/h"` refills one token a second and can still
+absorb a burst of 3600.
+
+| Spec | Bucket | Refill |
+| --- | --- | --- |
+| `"10/s"` | 10 | 10 a second |
+| `"100/m"` | 100 | ~1.67 a second |
+| `"1000/h"` | 1000 | ~0.28 a second |
+
+## It is checked at compile time
+
+A malformed rate is a compile error, not a runtime surprise. The macro refuses
+anything that is not exactly one count over one accepted unit, and it refuses a
+count below one:
+
+```rust
+#[flexiq::task(rate_limit = "0/s")]
+fn never_runs() -> flexiq::Outcome<()> { Ok(()) }
+```
+
+```text
+error: `0/s` is not a rate. Write it as a count of at least 1 over a unit,
+       as in 100/s, 60/m or 1000/h — a rate below one never releases a job
+```
+
+The zero case is worth the special mention: a bucket built from zero never hands
+out a token, so the task would simply never dispatch, with nothing anywhere
+saying why. The same check rejects a negative count, a `NaN`, and a string with
+more than one `/`.
+
+## `on_excess` — defer or drop
+
+When the bucket is empty the scheduler has two choices, and `on_excess` picks
+one. It takes `"defer"` or `"drop"`; anything else is a compile error naming
+both.
+
+```rust
+#[flexiq::task(rate_limit = "10/s", on_excess = "defer")]  // the default
+fn ingest(row: String) -> flexiq::Outcome<()> {
+    let _ = row;
+    Ok(())
+}
+```
+
+**`"defer"`** (the default) reschedules the job about a second out and tries
+again on a later poll cycle. The job keeps its place, spends no retry, and runs
+as soon as a token is free. The queue behind the limiter does not shrink — it
+drains at the limit's pace.
+
+**`"drop"`** sheds the job on the spot. It dead-letters immediately under a
+reserved reason naming the limiter that rejected it:
+
+```text
+rate_limit: task 'ingest' is over its dispatch rate limit, and its on_excess is drop
+```
+
+```rust
+#[flexiq::task(rate_limit = "10/s", on_excess = "drop")]
+fn metric_sample(value: f64) -> flexiq::Outcome<()> {
+    let _ = value;
+    Ok(())
+}
+```
+
+<Callout type="warn">
+  A shed job is dead, not deferred. It is in the dead-letter queue and the
+  engine's automatic DLQ retry sweep skips it on purpose, so nothing brings it
+  back unless you call `retry_dead` yourself. Use `"drop"` only where a lost job
+  is genuinely cheaper than a late one — samples, best-effort notifications —
+  and see <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink>
+  for how to find them.
+</Callout>
+
+`on_excess` applies to both the task's own limit and the limit on the queue it
+runs in: either one rejecting means the same thing to the caller, that this job
+cannot dispatch now.
+
+## `retry_budget`
+
+`retry_budget` takes the same `"<count>/<unit>"` format and the same compile-time
+check, but it caps a different thing: how fast a task may **retry**, across every
+job of the task.
+
+```rust
+#[flexiq::task(max_retries = 5, retry_budget = "60/m")]
+fn flaky(id: String) -> flexiq::Outcome<()> {
+    let _ = id;
+    Ok(())
+}
+```
+
+Nothing else catches a sustained retry storm — a circuit breaker trips on hard
+failure rather than on aggregate retry rate, and `max_retries` is a per-job
+budget rather than a rate. A job that finds the budget empty dead-letters with
+`retry_budget_exhausted` instead of retrying. The token is only spent by a job
+that was actually going to retry, so a task already at its ceiling cannot drain
+the budget for its siblings.
+
+## What a tripped breaker does instead
+
+A circuit breaker **always defers**, whatever `on_excess` says. A tripped
+breaker is not excess load — the job is fine, its dependency is not — so
+shedding there would throw away work nobody asked to shed. See
+<SdkLink to="guides/reliability/circuit-breakers">Circuit breakers</SdkLink>.
+
+## What the Rust SDK does not wrap
+
+There is no producer-side gate or enqueue predicate on `FlexiQ`. Shaping happens
+at dispatch, on the scheduler, after the job is already stored.
+
+Per-**queue** rate limits exist in the engine as `QueueConfig`, but
+`WorkerBuilder` exposes no `queue_config` — build the worker through
+`flexiq_core::Worker` directly if you need one.
+
+To bound how many jobs run at once rather than how fast they start, see
+<SdkLink to="guides/reliability/concurrency">Concurrency</SdkLink>. To collapse a
+burst into a single run instead of pacing it, see
+<SdkLink to="guides/reliability/debouncing">Debouncing</SdkLink> and
+<SdkLink to="guides/reliability/flow-control">Flow control</SdkLink>.

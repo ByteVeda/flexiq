@@ -1,0 +1,116 @@
+---
+title: Migrating from flexiq-core
+description: "Moving a producer or worker written against the engine onto the SDK — what changes, what keeps working, and the one difference that is not cosmetic."
+---
+
+Before this crate had an API of its own it was a re-export of
+`flexiq-core`, and plenty of Rust code drives the engine directly. None of it
+breaks: `flexiq` still re-exports every core symbol, so `flexiq::Storage`,
+`flexiq::Worker` and `flexiq::NewJob` mean exactly what they meant before. The
+SDK was added beside them, not in front of them.
+
+This page is about moving anyway, and about the one reason it is not optional.
+
+## The engine version
+
+A producer against the engine builds the job row itself:
+
+```rust
+use flexiq_core::{now_millis, NewJob, Storage, StorageBackend, SqliteStorage};
+
+let storage = StorageBackend::Sqlite(SqliteStorage::new("tasks.db")?);
+storage.enqueue(NewJob {
+    queue: "default".to_string(),
+    task_name: "greet".to_string(),
+    payload: "world".as_bytes().to_vec(),
+    priority: 0,
+    scheduled_at: now_millis(),
+    max_retries: 3,
+    timeout_ms: 30_000,
+    unique_key: None,
+    metadata: None,
+    notes: None,
+    depends_on: vec![],
+    expires_at: None,
+    result_ttl_ms: None,
+    namespace: None,
+    debounce_key: None,
+})?;
+```
+
+and the worker takes the bytes back as bytes:
+
+```rust
+use flexiq_core::{Job, TaskError, Worker};
+
+Worker::new(storage.clone())
+    .register("greet", |job: &Job| {
+        let name = String::from_utf8(job.payload.clone())
+            .map_err(|e| TaskError::fatal(format!("payload not utf-8: {e}")))?;
+        Ok(Some(format!("greeted {name}").into_bytes()))
+    })
+    .spawn()?;
+```
+
+## The same thing on the SDK
+
+```rust
+use flexiq::{FlexiQ, Outcome};
+
+#[flexiq::task]
+fn greet(name: String) -> Outcome<String> {
+    Ok(format!("greeted {name}"))
+}
+
+let queue = FlexiQ::open("tasks.db")?;
+let worker = queue.worker().register::<greet>().spawn()?;
+queue.enqueue(greet::call("world".into()))?;
+```
+
+Fifteen fields become the ones you meant to set; `String::from_utf8` and its
+error path become a typed parameter. Already have a `StorageBackend` — from a
+pool you configured, or a backend the engine version opened —
+`FlexiQ::from_storage(storage)` adopts it rather than opening a second handle.
+
+## The difference that is not cosmetic
+
+Two of these, and only two, matter beyond taste.
+
+**A hand-written payload is not the wire format.** `payload: "world".into()` is
+a byte string this process agreed with itself about. `greet::call("world")`
+encodes through `flexiq_core::wire::encode_call`, the pinned writer whose output
+is asserted byte for byte against `contracts/wire-vectors.json`. A job enqueued
+the first way runs on a Rust worker that decodes it the same ad-hoc way and on
+nothing else; a job enqueued the second way is a job any shell can execute.
+The same goes the other direction: a task registered through
+<SdkLink to="guides/core/tasks">`#[flexiq::task]`</SdkLink> can run work a
+producer in another language enqueued.
+
+**`Worker::register` cannot carry durable steps.** The engine's
+`NativeDispatcher` overrides neither `set_claim_owner` nor `set_lease_book` —
+the scheduler mints the `(owner, attempt, epoch)` fence and the reference pool
+drops it. A handler registered that way sees `&Job` and nothing else, so
+`flexiq::current_step()` has no session to attach to and fails rather than
+memoising. `queue.worker()` ships a dispatcher that keeps the fence, which is
+why <SdkLink to="modules/steps">durable steps</SdkLink> work through the SDK and
+not through the engine directly.
+
+## What the SDK does not take away
+
+`queue.storage()` returns the `&StorageBackend` underneath, so every `Storage`
+method you were calling before is still one call away — the handle wraps a
+deliberate subset and the rest is reached through there. See
+<SdkLink to="operate/inspection">Inspection</SdkLink>.
+
+Two things genuinely have no SDK form and stay on `flexiq_core::Worker`:
+`on_outcome` and `queue_config`. They are not on `WorkerBuilder`, so code that
+needs either keeps building the worker the engine way — and accepts that the
+step fence goes with it.
+
+## Mixing the two
+
+You can. `FlexiQ::from_storage` and `queue.storage()` are the same
+`StorageBackend`, so an engine-side producer and an SDK-side worker share one
+database with no coordination beyond the DSN. The only rule is the first one on
+this page: whichever side writes the payload decides who can read it, so let
+`::call` write it.

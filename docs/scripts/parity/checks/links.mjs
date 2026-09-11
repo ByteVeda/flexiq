@@ -66,9 +66,23 @@ function sdkScopes(raw) {
 }
 
 /** The SDKs a link at `at` can render for: one if scoped, all otherwise. */
-function sdksAt(ranges, at) {
+function sdksAt(ranges, at, own) {
   const scope = ranges.find(([from, to]) => at >= from && at < to);
-  return scope ? [scope[2]] : SDK_IDS;
+  if (scope) {
+    return [scope[2]];
+  }
+  // A page that lives in one SDK's tree is only ever read under that SDK —
+  // `forcedSdkForPath` pins the active SDK off the URL prefix, so an `<SdkLink>`
+  // on `/rust/api-reference/queue` cannot resolve to `/java/…` however the store
+  // is set. Fanning it out anyway is the same false positive `SCOPES` exists to
+  // prevent, and it would forbid a tier from linking its own pages whenever a
+  // sibling tier omits one.
+  return own ? [own] : SDK_IDS;
+}
+
+/** The SDK whose tree a content file lives in, or null for a shared page. */
+function treeOf(rel) {
+  return SDK_IDS.find((sdk) => rel.startsWith(`${sdk}/`)) ?? null;
 }
 const APP_LITERAL = /["'`](\/[a-z0-9][a-z0-9/_.#-]*)["'`]/gi;
 
@@ -118,9 +132,10 @@ function* linksIn(files) {
       }
     }
     const scopes = sdkScopes(file.raw);
+    const own = treeOf(file.rel);
     for (const match of file.raw.matchAll(SDK_LINK)) {
       const suffix = match[1].startsWith("/") ? match[1] : `/${match[1]}`;
-      for (const sdk of sdksAt(scopes, match.index)) {
+      for (const sdk of sdksAt(scopes, match.index, own)) {
         yield [file.rel, `/${sdk}${suffix}`];
       }
     }

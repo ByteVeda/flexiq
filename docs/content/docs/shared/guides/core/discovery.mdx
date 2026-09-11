@@ -94,6 +94,28 @@ that has nothing to do with it, and a handler someone forgot to add there is
 invisible until a job for it fails.
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// main.rs — one place that has to name every task
+let worker = queue
+    .worker()
+    .register::<tasks::invoices::send_invoice>()
+    .register::<tasks::reports::build>()
+    .register::<tasks::emails::send>()
+    // ...and one more line for every task ever added
+    .spawn()?;
+```
+
+Rust resolves the module graph at compile time, so this compiles — the cost is
+not an error but a central wiring list. A task left off it is invisible until a
+job for it lands on the worker and fails.
+
+The half of the coupling described above does not arise: `#[flexiq::task]`
+expands to a free type that names no queue, so a task module never imports the
+module that built the handle.
+
+  </Tab>
 </CodeTabs>
 
 ## Declaring a task without a queue
@@ -174,6 +196,33 @@ entry is what makes the handlers discoverable without anything naming them.
 See <SdkLink to="getting-started/installation">installation</SdkLink> for the
 Gradle and Maven setup, and <SdkLink to="guides/core/tasks">Tasks</SdkLink> for
 the options `@TaskHandler` accepts.
+
+  </Tab>
+  <Tab sdk="rust">
+
+A Rust declaration never names a queue in the first place — that is what
+`#[flexiq::task]` expands to:
+
+```rust
+// tasks/invoices.rs — names the crate, and nothing that built the queue
+#[flexiq::task(rate_limit = "10/s")]
+pub fn send_invoice(user_id: i64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+What the Rust SDK does **not** have is the claiming half. There is no directory
+walk, no module scan and no service registry: a worker runs exactly the tasks
+named in its own `register::<T>()` chain.
+
+```rust
+let worker = queue.worker().register::<tasks::invoices::send_invoice>().spawn()?;
+```
+
+`register::<T>()` takes the type the attribute generated, so a task that has
+been renamed or deleted is a compile error rather than a job that dead-letters
+at runtime. Registering one name twice is refused by `spawn()`, because one of
+the two bodies would silently never run.
 
   </Tab>
 </CodeTabs>
@@ -332,6 +381,38 @@ failing visibly.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is nothing to claim. A declaration is not deferred anywhere: the attribute
+expands at compile time into a type, and a worker names the types it wants. No
+import walk, no directory scan, no service file, and no queue-construction moment
+that quietly picks things up.
+
+```rust
+let worker = queue
+    .worker()
+    .register::<tasks::invoices::send_invoice>()
+    .register::<tasks::reports::build>()
+    .spawn()?;
+```
+
+That chain is the registry, and writing it by hand is the whole trade. What you
+get for it is that the compiler checks every entry — a renamed or deleted task
+fails the build — and that the set is readable in one place rather than being
+whatever an import walk happened to reach. What you pay is the one failure
+discovery was invented to remove: a task nobody added to the chain compiles
+perfectly and is simply not served.
+
+`mod` matters here, and so does `cfg`. A task in a module the crate never
+declares is not compiled at all, and a `#[cfg(..)]` on the function is forwarded
+onto every item the macro emits — type and both `impl` blocks — so a task behind
+a cargo feature disappears with the feature. Naming it unconditionally then fails
+the build, which is the loud outcome. Putting the chain entry behind the *same*
+`cfg` is the quiet one: two builds of one binary then serve different task sets
+and neither complains.
+
+</SdkOnly>
+
 ## Duplicate names are an error
 
 A name identifies a task across the whole system, so two declarations claiming
@@ -381,6 +462,26 @@ builder as it was rather than half-discovered.
 The processor's check is per compilation unit — an incremental build only sees
 the files it recompiled — which is why the runtime check exists as well. The two
 cover different halves and neither replaces the other.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+| Situation | Behaviour |
+|---|---|
+| Two tasks in one module take the same function name | The ordinary duplicate-definition error — the macro never sees them |
+| Two tasks in different modules resolve to the same task name | `spawn()` refuses the worker, naming the task |
+| The same type registered twice in one chain | The same refusal — a `register::<T>()` written twice is still two |
+
+The check is at `spawn()` rather than at `register::<T>()`, so the whole chain
+reads as one expression and the error arrives with the rest of the startup
+checks. It refuses rather than replacing, because one of the two bodies would
+silently never run.
+
+Note that a name collides while the *types* do not. Two functions named `send`
+in two modules are distinct types and different `register::<T>()` arguments, but
+both default their task name to `"send"` — which is exactly the case `spawn()` is
+there to catch. Give one an explicit `name = "..."` to resolve it.
 
 </SdkOnly>
 
@@ -443,6 +544,25 @@ it.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no bound-versus-unbound distinction either, and nothing to bind. The
+macro leaves three things behind the function's name: `send_invoice::call(..)`,
+which builds an enqueueable value; `send_invoice::run(..)`, the original body,
+still directly callable; and the `Task` impl a worker registers.
+
+```rust
+send_invoice::run(42)?;                        // runs here, no queue involved
+queue.enqueue(send_invoice::call(42))?;        // goes through this queue
+```
+
+A call is transport-free — a task name, an encoded payload and a set of options —
+so it needs a queue only at `enqueue`, and it is the handle that names which one.
+There is no last-claim-wins rule to remember, because a call is never attached to
+a queue in the first place.
+
+</SdkOnly>
+
 ## Why not scan the source?
 
 A reasonable-sounding alternative is to parse the files instead of importing
@@ -466,6 +586,23 @@ compiler: it sees resolved types and constant annotation values, not a bare
 syntax tree, and it emits real code rather than a description of it. That is a
 compile-time registry, not a scan — and unlike reflection over the classpath, it
 survives a closed-world native-image build.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`#[flexiq::task]` runs inside the compiler as well, which answers the first
+objection from the other end: it reads the function's real signature and the
+attribute's literal values, so a duration, a rate or an unknown key is rejected
+while it expands rather than described and hoped for. Its options are literals by
+construction — the macro refuses a value that is not one, because it has to write
+that value into generated code.
+
+What it does not do is *collect*. A proc macro sees one item at a time and
+nothing gathers the results, so there is no compile-time registry to load; the
+`register::<T>()` chain is that list, written out. The second objection — that
+dispatch needs the live function — does not arise at all, since the function was
+linked into the binary before the process started.
 
 </SdkOnly>
 
@@ -516,6 +653,21 @@ failure names its own file instead of racing the others.
 
 `discover()` throws `TaskDiscoveryException` naming the provider class rather
 than contributing nothing and continuing.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing loads at runtime, so there is no load failure to swallow — the link step
+already proved every registered task exists. The half that remains is the one
+above: a task left off the chain, or one whose chain entry is behind the same
+`cfg` as the task itself.
+
+The fingerprint below will not catch it either. This shell supplies its own
+handler pool, and a worker that brings a dispatcher reports **no** registry
+fingerprint — the column exists to describe what the built-in pool will run, and
+answering for a pool it does not own would be the wrong answer. So a Rust worker
+takes no part in the comparison, in either direction.
 
 </SdkOnly>
 
@@ -585,6 +737,21 @@ reports.build, reports.export
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+This warning is about **attached executors**, and the Rust SDK does not start
+one. `WorkerBuilder::spawn` starts an in-process worker that claims jobs from
+storage rather than attaching, so no process built through this SDK appears on
+either side of the comparison. `flexiq::ExecutorClient` is core's executor door;
+the shell does not wrap it.
+
+The failure the warning exists to catch still applies. The registry here is the
+`register::<T>()` chain, so a task that was renamed or removed breaks the build
+rather than dead-lettering at runtime — but one that was never added to the
+chain compiles fine, and the first job for it fails fatally with `task not
+registered on this worker`.
+
+  </Tab>
 </CodeTabs>
 
 The `sdk` and `version` in parentheses are what each executor reported at
@@ -604,8 +771,8 @@ An executor with no fingerprint — one advertising no tasks at all — takes no
 part on either side of the comparison: it neither triggers a warning nor
 satisfies one, because a registry holding nothing is not a registry that differs
 from everyone else's. That is not the blind spot it sounds like. A discovery
-that found *nothing* never reaches the comparison: every SDK refuses to start an
-executor on an empty task list ("no tasks are registered on this app, so the
+that found *nothing* never reaches the comparison: every SDK that ships an
+executor refuses to start one on an empty task list ("no tasks are registered on this app, so the
 executor would never be sent any work"), because it would attach and then sit
 idle forever. Total failure is loud at startup; it is the partial failure that
 needs the fingerprint.
@@ -634,7 +801,7 @@ needs the fingerprint.
 3. **Compare the two deployments.** The usual causes are a rollout in progress
    (harmless, and it resolves itself), a stale image or replica that missed a
    deploy, and task code that is not in the built artifact — a packaging filter,
-   a directory left out of the image, <SdkSwap python="a package missing its __init__.py" node="a source tree that was never compiled into dist/" java="a jar missing from the classpath" />.
+   a directory left out of the image, <SdkSwap python="a package missing its __init__.py" node="a source tree that was never compiled into dist/" java="a jar missing from the classpath" rust="a module behind a cargo feature the build did not enable" />.
 4. **Look for jobs of those names failing to place.** `task '...' was not
    dispatched: no attached executor advertises it` means the half that knew
    them is gone entirely, not merely outnumbered. Those failures are retryable,

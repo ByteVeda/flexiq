@@ -7,12 +7,12 @@ A **topic** has any number of independent **subscribers**. A subscriber is
 nothing special — it's an ordinary task plus a registry row mapping
 `(topic, subscription name) → (task, queue)`. Publishing to a topic fans the
 message out as one ordinary job per active subscription, so every task
-feature — retries, the dead-letter queue, middleware, rate limits — applies
-independently per subscriber. A failing subscriber never affects its
+feature — retries, the dead-letter queue, rate limits, whatever hooks your
+binding has — applies independently per subscriber. A failing subscriber never affects its
 siblings, and publishing to a topic with zero subscribers is a valid no-op
 that returns an empty list.
 
-<SdkSwap python={<>Subscribe with the <code>@queue.subscriber()</code> decorator.</>} node={<>Subscribe with <code>queue.subscriber()</code>.</>} java={<>Subscribe with <code>flexiq.subscribe()</code>.</>} />
+<SdkSwap python={<>Subscribe with the <code>@queue.subscriber()</code> decorator.</>} node={<>Subscribe with <code>queue.subscriber()</code>.</>} java={<>Subscribe with <code>flexiq.subscribe()</code>.</>} rust={<>The Rust SDK does not wrap pub/sub: subscribe with <code>queue.storage().register_subscription()</code> and publish with <code>flexiq::pubsub::publish_to_topic()</code>.</>} />
 
 <Mermaid
   chart={`flowchart LR
@@ -90,6 +90,81 @@ try (FlexiQ flexiq = FlexiQ.builder().sqlite("orders.db").open()) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK does not wrap pub/sub. The registry lives on the `Storage` trait
+and the fan-out itself is `flexiq::pubsub`, both reached through
+`queue.storage()`:
+
+```rust
+use flexiq::pubsub::{publish_to_topic, DeliveryDefaults, PublishRequest};
+use flexiq::storage::records::SubscriptionMode;
+use flexiq::wire::{encode_call, WireValue};
+use flexiq::{now_millis, FlexiQ, NewSubscription, Storage};
+
+#[flexiq::task]
+fn send_confirmation_email(order_id: i64) -> flexiq::Outcome<()> { Ok(()) }
+
+#[flexiq::task]
+fn track_order(order_id: i64) -> flexiq::Outcome<()> { Ok(()) }
+
+let queue = FlexiQ::open("orders.db")?;
+
+// A subscription is a registry row: (topic, name) -> (task, queue).
+for (name, task) in [
+    ("email", "send_confirmation_email"),
+    ("analytics", "track_order"),
+] {
+    queue.storage().register_subscription(&NewSubscription {
+        topic: "orders".into(),
+        subscription_name: name.into(),
+        task_name: task.into(),
+        queue: "default".into(),
+        active: true,
+        durable: true,
+        owner_worker_id: None,
+        created_at: now_millis(),
+        priority: None,
+        max_retries: None,
+        timeout_ms: None,
+        mode: SubscriptionMode::Fanout,
+    })?;
+}
+
+// The payload is one call envelope, shared by every delivery.
+let jobs = publish_to_topic(
+    queue.storage(),
+    &PublishRequest {
+        topic: "orders".into(),
+        payload: encode_call(&[WireValue::Integer(42)], &[]),
+        idempotency_key: None,
+        metadata: None,
+        notes: None,
+        priority: None,
+        scheduled_at: now_millis(),
+        max_retries: None,
+        timeout_ms: None,
+        expires_at: None,
+        result_ttl_ms: None,
+        namespace: queue.namespace().map(str::to_string),
+        queue_defaults: DeliveryDefaults {
+            priority: 0,
+            max_retries: 3,
+            timeout_ms: 300_000,
+        },
+    },
+)?; // -> Vec<Job> — one per subscriber
+```
+
+`register_subscription` writes the row immediately, so a producer-only process
+needs no separate "declare" step. The subscriber tasks themselves are ordinary
+tasks: register them on a worker with `register::<send_confirmation_email>()`
+like any other.
+
+Every field of `PublishRequest` is required because it has no `Default` —
+build it once in a helper of your own rather than at each call site.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -126,11 +201,43 @@ the explicit call.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`register_subscription` is idempotent on `(topic, subscription_name)`, so calling
+it again with the same pair updates that row rather than adding a second
+subscriber. The pair is the identity; `task_name` only says where deliveries go,
+and changing it re-points an existing subscription at a different task.
+
+`priority`, `max_retries` and `timeout_ms` on the row are `Option`s — `None`
+takes the publisher's `queue_defaults`, and a value overrides it for this
+subscriber alone, so two subscribers on one topic can have different retry
+budgets. `durable: false` together with an `owner_worker_id` is the ephemeral
+form: the row is reaped once that worker stops heartbeating.
+
+`NewSubscription` derives no `Default`, so all twelve fields are spelled out at
+every call site. Write one constructor of your own and register through it.
+
+</SdkOnly>
+
 <SdkOnly sdk="java">
 
 A durable `subscribe()` call registers immediately — there's no separate
 "declare" step. A producer-only process just needs to call `subscribe()`
 before it calls `publish()`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no declare step here either: the row is written when
+`register_subscription` returns, so a producer-only process just registers before
+it publishes.
+
+What such a process cannot do is *serve* the subscription. A fan-out delivery is
+an ordinary job, so it sits pending until a worker that registered the subscriber
+task claims it. A worker serving that queue **without** the task registered is
+worse than none at all — it claims the delivery and fails it fatally with `task
+not registered on this worker`.
 
 </SdkOnly>
 
@@ -182,6 +289,36 @@ try (Worker worker = flexiq.worker().handle(tail, orderId -> log(orderId)).start
     ...
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+Ephemeral is two fields on the row, not a flag with machinery behind it: an
+owner, and `durable: false`. Name the worker so the owner matches the process
+that will be reaped.
+
+```rust
+queue.storage().register_subscription(&NewSubscription {
+    topic: "orders".into(),
+    subscription_name: "debug-tail".into(),
+    task_name: "tail".into(),
+    queue: "default".into(),
+    active: true,
+    durable: false,
+    owner_worker_id: Some("w-1".into()), // reaped when w-1 stops heartbeating
+    created_at: now_millis(),
+    priority: None,
+    max_retries: None,
+    timeout_ms: None,
+    mode: SubscriptionMode::Fanout,
+})?;
+
+let worker = queue.worker().register::<tail>().worker_id("w-1").spawn()?;
+```
+
+Nothing registers the row for you here, so write it before the worker starts.
+`shutdown()` sweeps this worker's ephemeral rows immediately rather than waiting
+for a peer's heartbeat tick.
 
   </Tab>
 </CodeTabs>
@@ -242,6 +379,26 @@ flexiq.unsubscribe("orders", "email");        // remove it entirely
 flexiq.listSubscriptions("orders");           // active subscriptions for a topic
 flexiq.listTopics();                          // distinct topics with a subscriber
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let store = queue.storage();
+
+store.set_subscription_active("orders", "email", false)?; // stop deliveries
+publish_to_topic(store, &request("orders", 1))?;          // only "analytics" gets one
+store.set_subscription_active("orders", "email", true)?;
+
+store.unsubscribe("orders", "email")?;          // remove it entirely; false if unknown
+store.list_subscriptions_for_topic("orders")?;  // active subscriptions for a topic
+store.list_subscriptions()?;                    // every row, active or paused, all topics
+```
+
+There is no "list the topics that have a subscriber" call: derive it from
+`list_subscriptions()`. `list_declared_topics()` is a different thing — the
+registry of topics someone declared, covered under
+[Declared topics](#declared-topics).
 
   </Tab>
 </CodeTabs>
@@ -333,6 +490,30 @@ List<Job> third = flexiq.publish("orders", 1, keyed);   // "audit" gets its own 
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let keyed = PublishRequest {
+    idempotency_key: Some("evt-42".into()),
+    ..request("orders", 1)  // a helper of your own; PublishRequest has no Default
+};
+
+let first = publish_to_topic(queue.storage(), &keyed)?;  // 2 subscribers -> 2 jobs
+let second = publish_to_topic(queue.storage(), &keyed)?; // same jobs, no new rows
+assert_eq!(first[0].id, second[0].id);
+
+// Add a third subscription named "audit", then republish the same key.
+queue.storage().register_subscription(&audit)?;
+let third = publish_to_topic(queue.storage(), &keyed)?;  // "audit" gets its own delivery
+```
+
+The salting is core's, not the caller's: the key becomes
+`evt-42::6:5:ordersemail` per subscription before it reaches the job row. The
+`jobs` unique index is global, so an unsalted key would let the first insert win
+and silently drop every other delivery — which is why this lives below the
+shells rather than in one.
+
+  </Tab>
 </CodeTabs>
 
 ### Every delivery is stamped with `topic` and `subscription`
@@ -371,6 +552,26 @@ Map<String, Object> notes = jobs.get(0).notesMap().orElseThrow();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let jobs = publish_to_topic(
+    queue.storage(),
+    &PublishRequest {
+        notes: Some(r#"{"tenant":"acme"}"#.into()),
+        ..request("orders", 5)
+    },
+)?;
+
+let notes: serde_json::Value = serde_json::from_str(jobs[0].notes.as_deref().unwrap())?;
+// notes["topic"] == "orders", notes["subscription"] == "email", notes["tenant"] == "acme"
+```
+
+`notes` is an already-encoded JSON object string on the way in and on the way
+out — `Job::notes` is `Option<String>`, so parse it yourself. The two stamped
+keys are merged into whatever object you supplied.
+
+  </Tab>
 </CodeTabs>
 
 ## Cross-SDK topics
@@ -382,8 +583,9 @@ deliveries.
 
 <Callout type="info" title="Cross-SDK payload contract">
   When a topic's publisher and its subscribers aren't all the same language,
-  configure the <SdkLink to="guides/extend/serializers">`CborSerializer`</SdkLink>
-  on every process that touches the topic — it's the wire format the
+  every process that touches the topic has to be on
+  <SdkLink to="guides/extend/serializers">`CborSerializer`</SdkLink> — configure
+  it wherever the binding lets you choose. It's the wire format the
   cross-SDK contract is built on, and it round-trips the types JSON can't
   (big integers, `datetime`/`Date`, bytes, decimals) losslessly. A single
   object/dict argument maps most cleanly onto every language's handler
@@ -401,7 +603,7 @@ publish, versus fan-out's one job write per subscriber), and a topic can mix
 both kinds: the same publish stores the log message once *and* fans out jobs
 to any fan-out subscribers on it.
 
-<SdkSwap python={<>Register a log subscription with <code>queue.subscribe_log()</code>, pull with <code>queue.read_topic()</code>, and advance its cursor with <code>queue.ack_topic()</code>.</>} node={<>Register a log subscription with <code>queue.subscribeLog()</code>, pull with <code>queue.readTopic()</code>, and advance its cursor with <code>queue.ackTopic()</code>.</>} java={<>Register a log subscription with <code>flexiq.subscribeLog()</code>, pull with <code>flexiq.readTopic()</code>, and advance its cursor with <code>flexiq.ackTopic()</code>.</>} />
+<SdkSwap python={<>Register a log subscription with <code>queue.subscribe_log()</code>, pull with <code>queue.read_topic()</code>, and advance its cursor with <code>queue.ack_topic()</code>.</>} node={<>Register a log subscription with <code>queue.subscribeLog()</code>, pull with <code>queue.readTopic()</code>, and advance its cursor with <code>queue.ackTopic()</code>.</>} java={<>Register a log subscription with <code>flexiq.subscribeLog()</code>, pull with <code>flexiq.readTopic()</code>, and advance its cursor with <code>flexiq.ackTopic()</code>.</>} rust={<>Register a log subscription with <code>register_subscription()</code> and <code>SubscriptionMode::Log</code>, pull with <code>read_topic_messages()</code>, and advance its cursor with <code>ack_topic_cursor()</code> — all on <code>queue.storage()</code>.</>} />
 
 <Mermaid
   chart={`flowchart LR
@@ -465,6 +667,44 @@ try (FlexiQ flexiq = FlexiQ.builder().sqlite("orders.db").serializer(serializer)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+A log subscription is the same registry row with `mode: SubscriptionMode::Log`.
+It routes to no task, so `task_name` is empty.
+
+```rust
+queue.storage().register_subscription(&NewSubscription {
+    topic: "orders".into(),
+    subscription_name: "audit-log".into(),
+    task_name: String::new(), // a log subscription has no handler
+    queue: "default".into(),
+    active: true,
+    durable: true,
+    owner_worker_id: None,
+    created_at: now_millis(),
+    priority: None,
+    max_retries: None,
+    timeout_ms: None,
+    mode: SubscriptionMode::Log,
+})?;
+
+let jobs = publish_to_topic(queue.storage(), &request("orders", 42))?;
+assert!(jobs.is_empty()); // no fan-out jobs; one message stored
+
+// Read, process, then ack — the cursor only moves on the explicit ack.
+for msg in queue.storage().read_topic_messages("orders", "audit-log", 100)? {
+    audit_sink.write(&msg.payload)?;
+    queue.storage().ack_topic_cursor("orders", "audit-log", &msg.id)?;
+}
+```
+
+`TopicMessage::payload` is the raw envelope bytes the publisher wrote, not a
+decoded value, and the Rust SDK exposes no reader for it — the one it uses for
+task arguments is private to the crate. Read it yourself: drop the leading
+`flexiq::wire::TAG_CBOR` byte, then decode the remaining two-element
+`[args, kwargs]` array with any CBOR implementation.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -474,6 +714,22 @@ statically typed, so there's no target type to infer it into the way
 `readTopic()` infers one for Python/Node. Decode it yourself with the same
 serializer the publisher used. `metadata` and `notes` are still decoded to
 `Map<String, Object>`, same as the fan-out `Job` type.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+A `TopicMessage` is `id`, `topic`, `payload`, `metadata`, `notes`, `created_at`
+and `expires_at`. Only `payload` is opaque; `metadata` and `notes` stay the JSON
+strings the publisher wrote, undecoded, exactly as they are on a `Job`.
+
+`id` is opaque and backend-specific — a UUIDv7 on the Diesel backends, a stream
+id on Redis. It is time-ordered, and it doubles as the cursor token, so pass it
+back rather than parsing it.
+
+`read_topic_messages(topic, subscription_name, limit)` resolves the cursor
+server-side from the subscription row and reads **exclusive** of it, so an empty
+`Vec` means this consumer is caught up.
 
 </SdkOnly>
 
@@ -541,6 +797,25 @@ flexiq.readTopic("orders", "audit-log"); // -> sees the earlier publish
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Retention is milliseconds, and `Log` is the only declarable mode.
+queue
+    .storage()
+    .declare_topic("orders", SubscriptionMode::Log, Some(3_600_000))?;
+
+publish_to_topic(queue.storage(), &request("orders", 42))?; // retained, no subscriber yet
+queue.storage().register_subscription(&audit_log)?;               // the Log row from above
+queue.storage().read_topic_messages("orders", "audit-log", 100)?; // sees the earlier publish
+```
+
+Declaring is an idempotent upsert on the name: re-declaring updates the
+retention window and keeps the original `created_at`. Passing
+`SubscriptionMode::Fanout`, or a negative retention, is rejected by every
+backend.
+
+  </Tab>
 </CodeTabs>
 
 `retention` bounds a **sub-less** backlog: with no live log subscriber, each
@@ -594,6 +869,18 @@ flexiq.logConsumer("orders", "audit-log", Integer.class, orderId -> {
 
 flexiq.worker().start(); // spawns the consumer's poll loop
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK has no managed consumer. Nothing on `FlexiQ` or `WorkerBuilder`
+registers one, and `spawn()` starts no poll loop for a log subscription — the
+read/ack loop under [Log topics](#log-topics) is the whole surface, and driving
+it is yours: a thread, a `tokio` task, or a call on whatever interval suits the
+consumer.
+
+The delivery guarantee is unchanged either way, because it is the cursor's:
+read, process, then `ack_topic_cursor`.
 
   </Tab>
 </CodeTabs>
@@ -657,6 +944,25 @@ for (TopicMessage msg : flexiq.leaseTopic("orders", "audit-log", 100, Duration.o
     }
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let store = queue.storage();
+
+// limit, visibility window in ms, and the `now` the lease is measured from.
+for msg in store.lease_topic_messages("orders", "audit-log", 100, 30_000, now_millis())? {
+    match audit_sink.write(&msg.payload) {
+        Ok(()) => store.ack_message("orders", "audit-log", &msg.id)?,
+        Err(_) => store.nack_message("orders", "audit-log", &msg.id)?, // redeliver now
+    };
+}
+```
+
+`now` is a parameter rather than a clock read inside the call, so a test can
+drive the visibility window without sleeping. Both `ack_message` and
+`nack_message` return `false` when there was no un-acked delivery to act on.
 
   </Tab>
 </CodeTabs>

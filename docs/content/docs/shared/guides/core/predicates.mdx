@@ -8,7 +8,7 @@ is allowed to proceed — a declarative way to say "only do this under
 condition X." What a denial does depends on the configured outcome: a reject
 or cancel outcome means no work runs, while a defer outcome schedules the job
 to try again later.
-<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>, returning a boolean or a richer <code>Decision</code>.</>} java={<>Register one with <code>flexiq.predicate()</code>, or the richer <code>flexiq.gate()</code>.</>} />
+<SdkSwap python={<>Register one with the <code>predicate=</code> option on <code>@queue.task</code>.</>} node={<>Register one with <code>queue.gate()</code>, returning a boolean or a richer <code>Decision</code>.</>} java={<>Register one with <code>flexiq.predicate()</code>, or the richer <code>flexiq.gate()</code>.</>} rust={<>The Rust SDK has no predicate surface: <code>#[flexiq::task]</code> accepts no predicate attribute and <code>FlexiQ</code> registers no gate.</>} />
 
 ## Quick start
 
@@ -51,6 +51,35 @@ flexiq.predicate("charge", ctx -> (Integer) ctx.payload() > 0);
 flexiq.enqueue(charge, 50);  // ok
 flexiq.enqueue(charge, -1);  // throws PredicateRejectedException
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK has no predicate surface — nothing on this page has an equivalent
+here. `#[flexiq::task]` accepts a closed set of attributes and a predicate is
+not one of them, and `FlexiQ` has no method that registers a gate. Check the
+condition where you already have the value, on either side of the queue:
+
+```rust
+// Producer side: nothing was written, so nothing has to be cancelled.
+if amount > 0 {
+    queue.enqueue(charge::call(amount))?;
+}
+
+// Or worker side, where a refusal is a fatal error rather than a retry.
+#[flexiq::task]
+fn charge(amount: i64) -> flexiq::Outcome<()> {
+    if amount <= 0 {
+        return Err(flexiq::TaskError::fatal("charge must be positive").into());
+    }
+    settle(amount).map_err(flexiq::TaskError::retryable)?;
+    Ok(())
+}
+```
+
+The scheduler's own gates — `rate_limit`, `retry_budget`, `max_concurrent`,
+`max_in_flight_per_task`, `on_excess`, the circuit breaker, and a paused queue —
+are enforced atomically underneath and are unaffected by any of this.
 
   </Tab>
 </CodeTabs>
@@ -98,6 +127,32 @@ config, and custom Python logic.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+## What replaces a predicate
+
+With nothing to register, the question becomes where each kind of check belongs.
+Most of them were never a gate's job: the scheduler enforces them atomically
+already, and a `#[flexiq::task]` attribute is how you ask for one.
+
+| Goal | Use this |
+|---|---|
+| Cap concurrent runs of a task, cluster-wide | `#[flexiq::task(max_concurrent = 3)]` |
+| Cap this task's share of one worker's slots | `#[flexiq::task(max_in_flight_per_task = 1)]` |
+| Rate-limit a task | `#[flexiq::task(rate_limit = "100/m")]` |
+| Throw work away instead of deferring it when a **rate limit** turns it away | `#[flexiq::task(on_excess = "drop")]` |
+| Cap a retry count, or the retry *rate* | `max_retries = 5`, `retry_budget = "10/m"` |
+| Trip an outage breaker | `TaskConfig::circuit_breaker`, from a hand-written `Task::config()` |
+| Route to a queue | `#[flexiq::task(queue = "emails")]` |
+| Drain or pause a queue | `queue.storage().pause_queue(name)` / `resume_queue(name)` |
+| Hold a job until later, or drop it if it waited too long | `.delay_ms(..)` on the call, `expires` on the task |
+
+What is left over — time windows, feature flags, tenant allowlists,
+payload-driven branching — is ordinary Rust. The only thing a registered gate
+would have added is a place to hang it.
+
+</SdkOnly>
+
 ## Composition
 
 <CodeTabs>
@@ -137,6 +192,14 @@ flexiq.predicate("dispatch", Predicates.not(isHoliday));
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+There is nothing to compose: the Rust SDK ships no predicate type, no
+`allOf`/`anyOf`/`not` combinators and no serializable rule form. Composition is
+ordinary Rust — `&&`, `||`, `!` over your own functions — evaluated before
+`enqueue` or inside the task body.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -170,9 +233,18 @@ non-allow decision wins.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Nothing is registered, so there is no second registration to combine with. Two
+checks are two `if`s, or one function returning `bool` that the enqueue site and
+its unit test both call.
+
+</SdkOnly>
+
 ## Richer outcomes: defer, cancel, skip
 
-A plain boolean allow/deny is the baseline every binding supports.
+A plain boolean allow/deny is the baseline, in every binding that has predicates
+at all.
 
 <SdkOnly sdk="python">
 
@@ -300,6 +372,23 @@ Optional<String> id = flexiq.tryEnqueue(charge, amount);
 `predicate(taskName, p)` is sugar for a gate that only ever allows or
 rejects — use it for plain boolean checks and reach for `gate()` when
 you need skip/defer too.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no decision type to return, but each of the four shapes it names is
+already something you can do:
+
+| Instead of | Producer side | Worker side |
+|---|---|---|
+| allow | Call `enqueue`. | Return `Ok(..)`. |
+| skip | Don't call it — nothing is written, so nothing needs undoing. | Return `Ok(..)` without doing the work. |
+| defer | `.delay_ms(ms)` on the call, which is what a defer resolves to anyway. | `step.sleep_ms(name, ms)`, which ends the attempt and resumes later without spending a retry. |
+| reject | Return your own error from whatever decided. | `TaskError::fatal(..)` — the job dead-letters instead of retrying. |
+
+The producer-side column is the one to prefer. A refusal there costs a branch; a
+refusal at dispatch has already cost a row, a claim and a dispatch.
 
 </SdkOnly>
 
@@ -465,6 +554,16 @@ The name is resolved when `gate()` is called, so an unknown one throws
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no recipe library — nothing here ships a business-hours, day-of-week,
+time-window, payload-match or feature-flag helper, and there is no named registry
+to look one up in. Each is a few lines of your own Rust, and being your own code
+is what lets a time-based check take `now` as an argument and be unit-tested
+against a pinned instant instead of the real clock.
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 ## The DSL surface
@@ -577,9 +676,22 @@ serializable predicate DSL (no JSON or string form).
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no DSL, no JSON or string form and nothing for an operator to edit from
+a dashboard: a check written here is compiled code, so changing one is a deploy.
+There is no middleware surface to filter either — the Rust SDK has no hooks.
+
+Where a check runs is therefore entirely yours to choose, and the two places are
+not equivalent. Before `enqueue`, a refusal means nothing was written. Inside the
+task body the job already exists, so its refusal is an outcome: `TaskError::fatal`
+to dead-letter it, `TaskError::retryable` to spend a retry and come back.
+
+</SdkOnly>
+
 ## Batches
 
-<SdkSwap python={<><code>enqueue_many</code> evaluates the task's predicate</>} node={<><code>enqueueMany</code> gates each entry</>} java={<><code>enqueueMany</code> gates each payload</>} /> — a
+<SdkSwap python={<><code>enqueue_many</code> evaluates the task's predicate</>} node={<><code>enqueueMany</code> gates each entry</>} java={<><code>enqueueMany</code> gates each payload</>} rust={<><code>enqueue_batch</code> has no gate to evaluate; what it refuses is a call it cannot build — an argument that does not encode, a debounce window, a namespace the handle does not own</>} /> — a
 single rejection aborts the whole batch and no jobs are created.
 Pre-filter the batch yourself if you'd rather drop rejected entries
 silently.
@@ -618,6 +730,16 @@ skip semantics.
   <SdkLink to="modules/workflows/conditions">conditions</SdkLink> inside
   a workflow.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`enqueue_batch` evaluates nothing per entry, so the pre-filter *is* the filter:
+build the `Vec<TaskCall<T>>` out of the calls you already decided to make. The
+refusals it does have are structural rather than policy — an argument that will
+not encode, a debounce window, a namespace this handle does not own — and each
+fails the whole call before a single row is written.
 
 </SdkOnly>
 
@@ -667,6 +789,14 @@ named gate, and `has(name)` tests one.
 
 Java exposes no predicate inspection API — registered gates are opaque and
 there is no `listPredicates()` equivalent.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing is registered, so nothing is persisted and there is no listing to read
+back. A check written here lives in the source, which is also the only place it
+can be inspected or changed.
 
 </SdkOnly>
 
@@ -731,6 +861,16 @@ They're also <SdkLink to="guides/extend/webhooks">webhook</SdkLink>-subscribable
 
 Java emits no predicate metrics or events — no `predicateStats()`, and the
 event enum carries no deferred/rejected predicate signals.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+No counters and no events: with nothing evaluating, there is nothing to count,
+and the Rust SDK has no event bus to fire on either. What the scheduler's own
+gates do is visible in the jobs themselves — a job a rate limit deferred stays
+`pending` and dispatches later, while one shed by `on_excess = "drop"` is
+dead-lettered with a reason naming the limit. `queue.stats()` counts both.
 
 </SdkOnly>
 
@@ -877,6 +1017,56 @@ flexiq.gate("reindexSearch", ctx ->
 
 Optional<String> id = flexiq.tryEnqueue(reindex, new Reindex("acme")); // present
 flexiq.enqueue(reindex, new Reindex("evilcorp"));   // throws PredicateRejectedException
+```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Each of these is the same rule the other tiers register as a gate, written where
+the value already is.
+
+### Business hours, with an urgent override
+
+A defer is a delay, so the rule resolves to one number:
+
+```rust
+#[flexiq::task(queue = "reports")]
+fn send_daily_report(team_id: String, urgent: bool) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+// `ms_until_open` is yours: 0 inside the window, otherwise the wait until 09:00.
+let wait = if urgent { 0 } else { ms_until_open("America/Los_Angeles") };
+queue.enqueue(send_daily_report::call(team_id, urgent).delay_ms(wait))?;
+```
+
+### Tenant allowlist, refused before anything is written
+
+```rust
+fn reindex(queue: &FlexiQ, tenant: String) -> flexiq::Result<Option<flexiq::Job>> {
+    if !allowed.contains(tenant.as_str()) {
+        // No row, no claim, nothing to cancel.
+        return Ok(None);
+    }
+    Ok(Some(queue.enqueue(reindex_search::call(tenant))?))
+}
+```
+
+### A feature flag read at dispatch instead
+
+Sometimes the flag has to be read when the job runs, not when it is created. A
+refusal there is an outcome, and it is fatal rather than retryable because
+another attempt will not turn the flag on:
+
+```rust
+#[flexiq::task]
+fn export_ledger(tenant: String) -> flexiq::Outcome<()> {
+    if !flag_enabled("beta-export") {
+        return Err(flexiq::TaskError::fatal("beta-export is disabled").into());
+    }
+    Ok(())
+}
 ```
 
 </SdkOnly>

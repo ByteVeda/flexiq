@@ -1,0 +1,260 @@
+---
+title: Data Pipeline
+description: "A multi-stage nightly load built on durable steps — a committed step is never re-run, and a sleep ends the attempt without spending a retry."
+---
+
+A load that talks to three systems will fail partway through eventually. What
+matters is the attempt after that: each stage commits once, and a retry decodes
+what it recorded instead of doing it again. The four blocks below are one
+`src/main.rs`, in order.
+
+<Mermaid
+  chart={`graph LR
+    extract --> start_export
+    start_export --> sleep
+    sleep --> load
+    load --> manifest`}
+/>
+
+## Imports and the systems it talks to
+
+Every stub returns `Result<_, String>`, so a body can end with
+`.map_err(TaskError::retryable)?`.
+
+```rust
+use std::time::{Duration, Instant};
+
+use flexiq::{FlexiQ, JobStatus, QueueError, TaskError};
+
+/// The queue, in one SQLite file.
+const DB: &str = "etl.db";
+
+/// Pull the day's rows out of the source and stage them. Returns the staging
+/// key the rest of the run works from.
+fn extract(run_id: &str) -> Result<String, String> {
+    Ok(format!("staging/{run_id}"))
+}
+
+/// Ask the warehouse to start an export over the staged rows. Returns its id.
+fn start_export(staged: &str) -> Result<String, String> {
+    Ok(format!("export-of-{staged}"))
+}
+
+/// Has the export finished yet?
+fn export_ready(export_id: &str) -> Result<bool, String> {
+    let _ = export_id;
+    Ok(true)
+}
+
+/// Load one shard of the finished export. Returns its row count.
+fn load_shard(export_id: &str, shard: &str) -> Result<i64, String> {
+    println!("loading {shard} of {export_id}");
+    Ok(1_000)
+}
+
+/// Record what the run produced, somewhere the caller can read it.
+fn write_manifest(run_id: &str, rows: i64) -> Result<(), String> {
+    println!("{run_id}: {rows} rows");
+    Ok(())
+}
+```
+
+## The pipeline
+
+`flexiq::current_step()` hands back the handle for the task running on this
+thread — fetched rather than passed in, because the macro expands your own
+function and cannot give it an argument it did not declare.
+
+```rust
+/// Extract, wait for the vendor's export, load three shards, publish a
+/// manifest.
+#[flexiq::task(
+    queue = "etl",
+    max_retries = 5,
+    retry_backoff_ms = 10_000,
+    retry_max_delay_ms = 600_000,
+    timeout = "10m"
+)]
+fn nightly_load(run_id: String) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+
+    // 1. Extract. On a later attempt this closure does not run at all: the
+    //    recorded value is decoded and returned in its place.
+    let staged: String = step.run("extract", || {
+        Ok(extract(&run_id).map_err(TaskError::retryable)?)
+    })?;
+
+    // 2. Start the export. Starting it twice would bill twice and leave two
+    //    exports to reconcile — which is the whole reason this is a step.
+    let export_id: String = step.run("start-export", || {
+        Ok(start_export(&staged).map_err(TaskError::retryable)?)
+    })?;
+
+    // 3. The export takes minutes. This ends the attempt and releases the
+    //    claim, so the worker slot is free while it waits; a `thread::sleep`
+    //    would hold it. Execution resumes on the next attempt — from the top
+    //    of this body, with steps 1 and 2 already memoized.
+    step.sleep_ms("export-window", 300_000)?;
+
+    // 4. Deliberately *not* a step. Memoizing "not ready yet" would freeze
+    //    that answer for the rest of the run. A retryable failure here
+    //    re-enters the body and finds every committed step waiting.
+    if !export_ready(&export_id).map_err(TaskError::retryable)? {
+        return Err(TaskError::retryable("export still running").into());
+    }
+
+    // 5. One step per shard, keyed by shard rather than by position, so a body
+    //    that visits them in a different order still finds its own memos.
+    let mut rows = 0_i64;
+    for shard in ["eu", "us", "apac"] {
+        let loaded: i64 = step.run_keyed("load", shard, || {
+            Ok(load_shard(&export_id, shard).map_err(TaskError::retryable)?)
+        })?;
+        rows += loaded;
+    }
+
+    // 6. The run's only readable output. A task's return value is archived as
+    //    opaque bytes, so the row count goes where the caller can fetch it.
+    step.run("manifest", || {
+        write_manifest(&run_id, rows).map_err(TaskError::retryable)?;
+        Ok(())
+    })?;
+
+    Ok(())
+}
+```
+
+<Callout type="info">
+  A step value must be `Serialize + DeserializeOwned`: it is written to the step
+  row and read back on replay. One that fails to encode is fatal, not retryable
+  — the body already ran and its side effects already happened, so another
+  attempt would repeat them and fail identically.
+</Callout>
+
+## Running it
+
+```rust
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open(DB)?;
+
+    let run_id = format!("run-{}", flexiq::now_millis());
+    let job = queue.enqueue(nightly_load::call(run_id.clone()))?;
+
+    let worker = queue
+        .worker()
+        .register::<nightly_load>()
+        .queues(["etl"])
+        .num_workers(2)
+        .spawn()?;
+
+    let done = wait_for(&queue, &job.id)?;
+    worker.shutdown()?;
+
+    match done.status {
+        // `retry_count` is still 0 after a clean run: the sleep did not spend
+        // one, so this prints "1 attempt" even though the body ran twice.
+        JobStatus::Complete => println!("{run_id} loaded in {} attempt(s)", done.retry_count + 1),
+        JobStatus::Failed | JobStatus::Dead => {
+            println!("{run_id} gave up: {}", done.error.unwrap_or_default())
+        }
+        other => println!("{run_id} ended as {other:?}"),
+    }
+    Ok(())
+}
+
+/// Poll until `job_id` reaches a terminal state, or give up.
+///
+/// The budget has to clear the sleep: the run is not finished at five minutes,
+/// it is parked until then and has a load still to do.
+fn wait_for(queue: &FlexiQ, job_id: &str) -> flexiq::Result<flexiq::Job> {
+    let deadline = Instant::now() + Duration::from_secs(15 * 60);
+    while Instant::now() < deadline {
+        if let Some(job) = queue.get_job(job_id)? {
+            if matches!(
+                job.status,
+                JobStatus::Complete | JobStatus::Failed | JobStatus::Dead | JobStatus::Cancelled
+            ) {
+                return Ok(job);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(QueueError::Other(format!("job {job_id} did not finish")))
+}
+```
+
+## What the next attempt sees
+
+The body always restarts from the top. What changes is which lines still do
+anything.
+
+| Event | Effect on the body | Effect on the job |
+| --- | --- | --- |
+| `step.run` already committed | The closure is skipped; its recorded value is decoded and returned | none |
+| `step.sleep_ms` reached | The attempt ends here | Rescheduled to the deadline, claim released, `retry_count` untouched |
+| `step.sleep_ms` on the attempt after | Returns `Ok(())` and the body continues past it | none |
+| A retryable failure after step 2 | Steps 1 and 2 are memoized; the body resumes at step 4 | `retry_count` goes up, backoff applies |
+| A fatal failure | The body stops | Straight to the dead-letter queue, no retry |
+
+Two consequences. A sleep is not a failure, so it does not eat the job's five
+retries: a run that sleeps once and fails once has spent exactly one. And
+`timeout` caps one attempt's execution, which the five-minute wait is not part
+of, because the attempt ended at the sleep.
+
+<Callout type="warn">
+  Calling a step method outside a running task — in a producer, or nested
+  inside another step's body — returns a fatal error containing `outside a
+  running task`. It does not panic, and it does not silently succeed.
+</Callout>
+
+## Inspecting the steps
+
+Step rows are not on `FlexiQ`. They are on the `Storage` trait the queue runs
+on, which `queue.storage()` hands back.
+
+```rust
+use flexiq::{StepKind, Storage};
+
+for step in queue.storage().get_job_steps(&job.id, None)? {
+    match step.kind {
+        StepKind::Run => println!(
+            "{} ran, {} memoized bytes",
+            step.step_key,
+            step.result.map_or(0, |bytes| bytes.len())
+        ),
+        StepKind::Sleep => println!("{} wakes at {:?}", step.step_key, step.wake_at),
+    }
+}
+```
+
+<Callout type="warn">
+  Read them while the run is still open. Archiving a finished job deletes its
+  step rows in the same transaction — a memo is execution state with no value
+  past the job's end — so a completed job correctly reports no steps at all.
+</Callout>
+
+## Reading the result
+
+There is no typed result read. `job.result` is `Option<Vec<u8>>` and the
+decoder is private to the crate, so the row count cannot be lifted back out of
+a finished job. That is why step 6 exists: a pipeline that owes someone a
+number writes it where that someone can read it, and the queue is left with the
+narrower question of whether the run finished.
+
+## Key patterns
+
+| Pattern | Where |
+| --- | --- |
+| Commit a stage once | `step.run("extract", ..)` |
+| Tell repeated stages apart by subject | `step.run_keyed("load", shard, ..)` |
+| Wait without holding a worker slot | `step.sleep_ms("export-window", 300_000)` |
+| Wake at an absolute instant instead | `step.sleep_until(name, wake_at_unix_ms)` |
+| A check that must stay fresh | an ordinary call, not a step |
+| Retryable vs fatal | `TaskError::retryable` / `TaskError::fatal` |
+| Hand a value back to the caller | write it in the last step |
+| See what committed | `queue.storage().get_job_steps(&id, None)` |
+
+Next: <SdkLink to="modules/steps">durable steps</SdkLink>,
+<SdkLink to="guides/reliability/retries">retries</SdkLink>,
+<SdkLink to="guides/reliability/guarantees">guarantees</SdkLink>,
+<SdkLink to="operate/inspection">inspection</SdkLink>.

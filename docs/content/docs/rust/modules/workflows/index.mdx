@@ -1,0 +1,172 @@
+---
+title: Workflows
+description: "flexiq::workflows is a feature-gated re-export of the flexiq-workflows crate — what it holds, what it does not, and how a DAG is actually submitted."
+---
+
+DAG workflows are a **separate crate**, `flexiq-workflows`. The `flexiq` shell
+re-exports it behind a cargo feature, so a consumer who only enqueues jobs does
+not compile a DAG engine:
+
+```toml
+flexiq = { version = "2", features = ["workflows"] }
+```
+
+```rust
+use flexiq::workflows::WorkflowRun;
+```
+
+`flexiq::workflows::WorkflowRun` and `flexiq_workflows::WorkflowRun` are the
+same type. Depending on `flexiq-workflows` directly works identically — the
+re-export is a convenience, not a wrapper, and there is **no shell API over it**:
+no `FlexiQ` method submits a workflow, and no `#[flexiq::task]` attribute
+declares one.
+
+<Callout type="warn">
+  `--features postgres` alone does not pull workflows in. The forward is
+  conditional — `flexiq-workflows?/postgres` — so a Postgres-backed workflow
+  store needs both features named.
+</Callout>
+
+## What the crate holds
+
+| Item | What it is |
+| --- | --- |
+| `WorkflowDefinition` | The stored graph: name, version, `dag_data: Vec<u8>`, step metadata |
+| `WorkflowRun` | One execution of a definition, with a `WorkflowState` |
+| `WorkflowNode` | One node of a run, with a `WorkflowNodeStatus` and a job id |
+| `WorkflowState` | `Pending`, `Running`, `Paused`, `Completed`, `CompletedWithFailures`, `Failed`, `Cancelled`, `Compensating`, `Compensated`, `CompensationFailed` |
+| `WorkflowNodeStatus` | `Pending`, `Running`, `Completed`, `Failed`, `Skipped`, `WaitingApproval`, `CacheHit`, `Compensating`, `Compensated`, `CompensationFailed` |
+| `StepMetadata` | Per-node task config — the task name, and the optional gate, fan-out, cache and compensation fields |
+| `WorkflowStorage` | The persistence trait, separate from `flexiq::Storage` |
+| `WorkflowStorageBackend` | `Sqlite`, `Postgres`, `Redis` — the same three, feature-gated the same way |
+| `topological_order` | Reads graph bytes into nodes and their predecessors |
+
+`WorkflowDefinition`, `WorkflowRun` and `WorkflowNode` have **no constructors and
+no methods**. Every field is public and they are built as struct literals.
+
+## There is no builder
+
+The graph is not fluent Rust. It is JSON bytes of a node-and-edge document —
+`{"nodes": [...], "edges": [...]}` — carried as `Vec<u8>`. Nodes carry names,
+edges carry `from`/`to`/`weight`. Step configuration rides beside the graph in a
+separate map keyed by node name, not in the graph itself.
+
+## Submitting one
+
+`submit_workflow` lives in `flexiq::workflows::lifecycle`, and it wants **both**
+handles: the queue's `StorageBackend` to enqueue the step jobs, and a
+`WorkflowStorageBackend` for the workflow rows.
+
+```rust
+use std::collections::{HashMap, HashSet};
+
+use flexiq::workflows::lifecycle::{
+    parse_step_metadata, submit_workflow, SubmitStaticWorkflowRequest,
+};
+use flexiq::workflows::{WorkflowSqliteStorage, WorkflowStorageBackend};
+use flexiq::{SqliteStorage, StorageBackend};
+
+let base = SqliteStorage::in_memory()?;
+let storage = StorageBackend::Sqlite(base.clone());
+let wf = WorkflowStorageBackend::Sqlite(WorkflowSqliteStorage::new(base, None)?);
+
+let dag = serde_json::to_vec(&serde_json::json!({
+    "nodes": [{"name": "extract"}, {"name": "load"}],
+    "edges": [{"from": "extract", "to": "load", "weight": 1.0}],
+}))?;
+
+let metadata = parse_step_metadata(
+    r#"{"extract": {"task_name": "extract"}, "load": {"task_name": "load"}}"#,
+)?;
+
+let handle = submit_workflow(
+    &storage,
+    &wf,
+    SubmitStaticWorkflowRequest {
+        name: "etl".to_string(),
+        version: 1,
+        dag_bytes: dag,
+        step_metadata: metadata,
+        node_payloads: HashMap::new(),
+        queue_default: "default".to_string(),
+        params_json: None,
+        deferred_node_names: HashSet::new(),
+        cache_hit_nodes: HashMap::new(),
+        parent_run_id: None,
+        parent_node_name: None,
+        default_timeout_ms: 300_000,
+        default_priority: 0,
+        default_max_retries: 3,
+        result_ttl_ms: None,
+        namespace: None,
+    },
+)
+.expect("submits");
+
+println!("run {}", handle.run_id);
+```
+
+`SubmitStaticWorkflowRequest` has no `Default`: all sixteen fields are named
+every time. `node_payloads` takes **already-encoded** job payload bytes — this
+crate never serializes your arguments.
+
+## Nothing runs a workflow
+
+`submit_workflow` creates or reuses the definition, inserts the run, and
+pre-enqueues one job per node with `depends_on` set to that node's predecessors.
+From there the **ordinary scheduler** runs it, exactly as it runs any job with
+dependencies. There is no workflow engine process and no separate worker.
+
+A node that is ready to run is still `Pending`: readiness is a predicate over
+the graph, not a stored status.
+
+<Callout type="warn" title="Two stores, one submit, no transaction">
+  The step jobs and the workflow rows live in different tables reached through
+  different handles, and nothing spans them. A partial failure marks the run
+  `Failed` rather than rolling it back.
+</Callout>
+
+## The parts that live in a shell
+
+Gates, fan-out, result caching and sub-workflows are **inert JSON strings on
+`StepMetadata`** here, plus the statuses that record their outcome. The tracker
+that reads them and marks a node's result deliberately lives in each SDK shell,
+not in this crate — so a Rust worker gets the rows, the states and the
+dependency wiring, and not the tracker.
+
+Resubmitting the same `(name, version)` with a different graph or different step
+metadata is refused, not silently reused.
+
+## Storage
+
+`WorkflowStorage` is its own trait, fully synchronous, and **no method takes a
+namespace** — the namespace is bound into the handle when you build it:
+
+```rust
+WorkflowSqliteStorage::new(base, Some("tenant-a".to_string()))?;
+```
+
+`new` applies the workflow DDL; `unmigrated` does not, and `migrate()` applies
+it later. Both exist on the SQLite and Postgres stores. Redis has neither: it is
+schemaless, and `WorkflowStorageBackend::migrate()` returns an empty list for it.
+The ledger table is `workflow_schema_migrations`, separate from the queue's.
+
+## Where to go next
+
+<Cards>
+  <Card
+    title="Gates"
+    to="modules/workflows/gates"
+    description="Human approval between two nodes"
+  />
+  <Card
+    title="Saga"
+    to="modules/workflows/saga"
+    description="Compensation when a node downstream fails"
+  />
+  <Card
+    title="Canvas"
+    to="modules/workflows/canvas"
+    description="The visual editor over a stored definition"
+  />
+</Cards>

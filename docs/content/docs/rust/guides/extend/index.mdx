@@ -1,0 +1,76 @@
+---
+title: Extend & integrate
+description: "A deliberately thin section — what the Rust SDK actually offers for observing and annotating a run, and what it has no hook surface for at all."
+---
+
+Be warned up front: this is the thinnest section in the Rust tier, and that is a
+statement about the crate rather than about the documentation.
+
+## What is not here
+
+The Rust SDK has **no extension points**. Not "limited ones" — none.
+
+| Absent | The nearest real thing |
+| --- | --- |
+| Middleware | No hook surface at all. `flexiq_core::Worker::on_outcome` is the closest seam, and `WorkerBuilder` does not expose it — build the worker through `flexiq_core::Worker` directly if you need it. |
+| Lifecycle events | Not wrapped. The same `on_outcome` callback is the only place a completed dispatch is observable in-process. |
+| Webhooks | Not wrapped. |
+| Pluggable serializers | The payload codec is the wire CBOR, and it is fixed. A task's arguments are `Serialize` values encoded by the shared writer, so a cross-language producer decodes them. |
+| Dependency injection | A task takes its declared arguments and nothing else — no context object, no resource map. |
+
+This is a consequence of how the shell works. `#[flexiq::task]` expands a plain
+function into a type; there is no object to wrap, no chain to insert into, and
+nothing between the decoded arguments and the body.
+
+## What is here
+
+Three things, and they are all about seeing and annotating a run rather than
+changing it.
+
+<Cards>
+  <Card
+    title="Logging"
+    to="guides/extend/logging"
+    description="The engine logs through the log facade — install an implementation to see it"
+  />
+  <Card
+    title="Structured notes"
+    to="guides/extend/notes"
+    description="Attach a small JSON object to a job and read it back"
+  />
+  <Card
+    title="Testing tasks"
+    to="guides/extend/testing"
+    description="Call the body directly with ::run, no queue required"
+  />
+</Cards>
+
+## Watching a queue without a hook
+
+Most of what middleware is used for elsewhere — counting outcomes, spotting a
+backlog, finding what failed — is a read here rather than a callback.
+
+```rust
+let stats = queue.stats()?;
+let recent = queue.list_jobs(50, 0)?;
+```
+
+Everything the engine records but the handle does not wrap — dead letters, per
+job error history, per-job log lines, step commits — is on the `Storage` trait,
+one `queue.storage()` away:
+
+```rust
+use flexiq::Storage;
+
+let failures = queue.storage().get_job_errors(&job_id, queue.namespace())?;
+```
+
+See <SdkLink to="operate/inspection">Inspection</SdkLink> for the operational
+view, and <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink>
+for reading failures back.
+
+## The dashboard is a separate binary
+
+The web dashboard is served by `flexiq-server`, not by this crate. A Rust
+process that wants one runs that binary against the same backend; the shell
+carries no HTTP surface. See <SdkLink to="modules/dashboard">Dashboard</SdkLink>.

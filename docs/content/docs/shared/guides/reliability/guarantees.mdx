@@ -36,6 +36,18 @@ instance already claimed the job, the claim fails and that instance skips it.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+<Callout type="info" title="There is nothing to acknowledge">
+  A handler reports what it returns — `Ok`, an `Abort::Fail`, or a sleep — and
+  nothing else. Redelivery is driven by the claim lapsing, so a worker that dies
+  mid-body acknowledges nothing and the job comes back on its own. A panic is
+  caught rather than lost: it becomes a retryable failure with the panic's
+  message, so it travels the same path as any other one.
+</Callout>
+
+</SdkOnly>
+
 ## Crash recovery
 
 <Mermaid
@@ -145,6 +157,29 @@ Worker worker = queue.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// A task body receives its decoded arguments and nothing else, so idempotency
+// comes from a natural key in them — here `order_id`.
+#[flexiq::task]
+fn charge_customer(order_id: String, amount_cents: i64) -> flexiq::Outcome<()> {
+    let retry = |e: std::io::Error| flexiq::TaskError::retryable(e.to_string());
+
+    if charges::exists(&order_id).map_err(retry)? {
+        return Ok(()); // already processed on a prior attempt
+    }
+    payments::charge(amount_cents, &order_id).map_err(retry)?; // also dedupes at the provider
+    charges::record(&order_id, amount_cents).map_err(retry)?;
+    Ok(())
+}
+```
+
+The other answer is a <SdkLink to="modules/steps">durable step</SdkLink>:
+`flexiq::current_step().run("charge", ..)` records what the body returned, so
+the next attempt decodes it instead of charging again.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -173,6 +208,35 @@ it, unlike a separate check-then-send. The trade-off: a crash between the
 claim and the send drops the email (at-most-once for that side effect). When
 the provider accepts an idempotency key, prefer that — it keeps the retry
 *and* dedupes the send, as in the `charge` example above.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+### Avoid unrecoverable side effects
+
+A blind send re-sends on every attempt, and the body has no way to tell attempt
+one from attempt two. Claim the send first, and only do it when this attempt won
+the claim:
+
+```rust
+#[flexiq::task]
+fn notify(user_id: String) -> flexiq::Outcome<()> {
+    let retry = |e: std::io::Error| flexiq::TaskError::retryable(e.to_string());
+
+    if orders::claim_notification(&user_id).map_err(retry)? {
+        email::send(&user_id, "Your order shipped").map_err(retry)?;
+    }
+    Ok(())
+}
+```
+
+The guarded claim is atomic — two overlapping attempts cannot both win it,
+unlike a separate check-then-send. The trade-off: a crash between the claim and
+the send drops the email (at-most-once for that side effect). When the provider
+accepts an idempotency key, prefer that; when it does not, a
+<SdkLink to="modules/steps">durable step</SdkLink> records what the body
+returned, so the next attempt decodes it instead of sending again.
 
 </SdkOnly>
 
@@ -215,6 +279,21 @@ String second = queue.enqueue(WELCOME, user.id(), once); // same id — no new j
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let key = format!("welcome:{}", user.id);
+
+let first = queue.enqueue(welcome::call(user.id.clone()).unique_key(key.clone()))?;
+let second = queue.enqueue(welcome::call(user.id.clone()).unique_key(key))?;
+
+assert_eq!(second.id, first.id); // coalesced onto the first — no new job
+```
+
+`.idempotent()` derives the key from the task name and payload instead of naming
+one; an explicit `.unique_key(..)` beats it.
+
+  </Tab>
 </CodeTabs>
 
 The key frees up once the job finishes — a duplicate enqueue after that
@@ -225,6 +304,13 @@ that completed, was dead-lettered, or was cancelled no longer blocks reuse.
 
 See <SdkLink to="guides/core/unique-tasks">Unique Tasks</SdkLink>
 for the full `unique_key` reference.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/core/unique-tasks">Unique tasks</SdkLink> for the full
+`.unique_key(..)` and `.idempotent()` reference, and which of the two wins.
 
 </SdkOnly>
 
@@ -293,5 +379,29 @@ See <SdkLink to="api-reference/queue/jobs">`queue.get_job()`</SdkLink> and
   sharing the storage — `queue.getResult(jobId, Receipt.class)`. In tests,
   `queue.awaitJob(jobId, timeout)` blocks until the job settles.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`queue.get_job(job_id)?` reads a job by id from any process sharing the storage.
+What it hands back is the row: `job.result` is an `Option<Vec<u8>>` holding the
+encoded result envelope, and the decoder that reads one is private to the crate,
+so there is **no typed result read** — the crate's own `quickstart` example
+prints the byte length and stops there.
+
+Nothing blocks until a job settles either. Poll `get_job` until `job.status` is
+terminal, which is what that example does:
+
+```rust
+while Instant::now() < deadline {
+    if let Some(job) = queue.get_job(job_id)? {
+        if matches!(job.status, JobStatus::Complete | JobStatus::Failed) {
+            break;
+        }
+    }
+    std::thread::sleep(Duration::from_millis(25));
+}
+```
 
 </SdkOnly>

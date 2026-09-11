@@ -1,0 +1,218 @@
+---
+title: Errors
+description: "QueueError and the Result alias, TaskError's retryable/fatal choice, Abort and Outcome, the two wire errors, and the JSON a failed task records."
+---
+
+Two error types, on two sides of the queue.
+
+```rust
+fn main() -> flexiq::Result<()> {          // QueueError — the queue side
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    queue.enqueue(charge::call("ord-1".into(), 4_200))?;
+    Ok(())
+}
+
+#[flexiq::task]
+fn charge(order: String, cents: i64) -> flexiq::Outcome<i64> {   // Abort — the task side
+    let _ = order;
+    Ok(cents)
+}
+```
+
+`?` deliberately does not bridge them. "This attempt failed" and "the queue
+could not be reached" are different things, and a task body that could `?` a
+`QueueError` into its own failure would silently turn an outage into a
+dead-lettered job.
+
+## `Outcome<T>` and `Abort`
+
+```rust
+pub type Outcome<T> = std::result::Result<T, Abort>;
+
+pub enum Abort {
+    Fail(TaskError),
+    Sleep(StepSleep),
+}
+```
+
+Two arms, not one, because a `step.sleep` is not a failure: the job is already
+rescheduled and unclaimed by the time the body unwinds, and reporting it as an
+error would burn a retry for work that has not gone wrong. The dispatcher maps
+each arm to a different `JobResult` — `Failure` and `Slept`.
+
+| Arm | Built by | The scheduler then |
+|---|---|---|
+| `Fail(TaskError)` | `TaskError::retryable` / `TaskError::fatal`, or `?` on a `TaskError` | Applies the retry policy, or dead-letters. |
+| `Sleep(StepSleep)` | `step.sleep_ms` / `step.sleep_until` — never by hand | Re-schedules the job at its wake time. Not a retry. |
+
+`From<TaskError> for Abort` exists, and nothing wider. There is deliberately no
+blanket `From<E: std::error::Error>`: it would collide with `From<TaskError>`,
+and it would have to guess retryability — the one bit of a failure only the task
+author knows.
+
+## `TaskError`
+
+```rust
+pub struct TaskError {
+    pub message: String,
+    pub retryable: bool,
+}
+```
+
+| Constructor | Meaning |
+|---|---|
+| `TaskError::retryable(impl Into<String>)` | A failure the scheduler may retry, subject to the job's retry policy. |
+| `TaskError::fatal(impl Into<String>)` | A failure that must not be retried — the job dead-letters immediately. |
+
+It implements `Display` (the bare message) and `std::error::Error`. A fallible
+call inside a task body ends with one of the two:
+
+```rust
+use flexiq::TaskError;
+
+#[flexiq::task(max_retries = 5)]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    // The file may not be there yet. Worth another attempt.
+    let raw = std::fs::read_to_string("/var/lib/ledger/balance")
+        .map_err(|e| TaskError::retryable(e.to_string()))?;
+
+    // A file that is not a number will not become one on a retry.
+    let balance: i64 = raw
+        .trim()
+        .parse()
+        .map_err(|e: std::num::ParseIntError| TaskError::fatal(e.to_string()))?;
+
+    if balance < cents {
+        return Err(TaskError::fatal(format!("{order_id}: insufficient funds")).into());
+    }
+    Ok(cents)
+}
+```
+
+Both constructors take `impl Into<String>`, so `.map_err(TaskError::retryable)`
+works directly only when the error already converts to a `String`; otherwise
+go through `e.to_string()` as above.
+
+The retryable/fatal choice is the author's, and the macro will not guess it. A
+panicking body is caught by the pool and reported as **retryable** — a panic is
+often transient, and making it the one failure that ignores the retry policy
+would surprise.
+
+## What a failed task records
+
+A failed job's `error` column carries the contract's JSON, so a reader in any
+other SDK gets a structured error rather than a bare string:
+
+```json
+{ "errtype": "TaskError", "message": "card declined", "traceback": null }
+```
+
+Rust has no exception type to name and no stack trace to attach, so `errtype`
+is the constant `"TaskError"` and `traceback` is always `null`. Both fields are
+still written: a reader matches on their presence, and omitting them would make
+a Rust failure the one shape that needs a special case.
+
+## `QueueError`
+
+`flexiq::Result<T>` is `std::result::Result<T, QueueError>`. Every fallible
+method on `FlexiQ` and on `Storage` returns it, and so do `spawn` and
+`shutdown`.
+
+| Variant | `Display` |
+|---|---|
+| `Storage(diesel::result::Error)` | `storage error: …` |
+| `Pool(diesel::r2d2::PoolError)` | `connection pool error: …` |
+| `Redis(redis::RedisError)` — feature `redis` | `redis error: …` |
+| `Json(serde_json::Error)` | `json error: …` |
+| `JobNotFound(String)` | `job not found: …` |
+| `TaskNotRegistered(String)` | `task not registered: …` |
+| `Serialization(String)` | `serialization error: …` |
+| `Worker(String)` | `worker error: …` |
+| `Scheduler(String)` | `scheduler error: …` |
+| `RateLimitExceeded(String)` | `rate limit exceeded for: …` |
+| `QueueFull { queue, pending, cap }` | `queue '…' is full: N pending >= max_pending M` |
+| `Timeout(String)` | `job timed out: …` |
+| `Config(String)` | `config error: …` |
+| `DependencyNotFound(String)` | `dependency not found: …` |
+| `LockNotAcquired(String)` | `lock not acquired: …` |
+| `SettingConflict(String)` | `setting '…' was changed by another writer on every attempt` |
+| `ContractTooOld { speaks, required }` | `storage requires contract N, but this build speaks contract M: …` |
+| `ClaimLost(String)` | `execution claim lost for job …` |
+| `StepDiverged { job_id, seq, expected, found }` | `step divergence on job … at position N: expected …, found …` |
+| `StepSequenceDiverged(Box<StepDivergence>)` | The whole divergence, both sequences printed around the first disagreement. |
+| `StepLimitExceeded { step_key, limit, actual, allowed }` | `step '…' exceeds the … limit: N > M` |
+| `StepRefused(String)` | The refusal message, whole. |
+| `Other(String)` | The message, whole. |
+
+`Storage`, `Pool`, `Redis` and `Json` carry `#[from]`, so `?` lifts those
+underlying errors directly.
+
+Three of these are worth knowing by name:
+
+- **`QueueFull`** — the message is a cross-SDK contract. `pending` and `cap` are
+  read back off it by SDKs with no typed channel to use instead, which is why
+  the two integers stay at the end where a queue name can never be mistaken for
+  them.
+- **`ContractTooOld`** — raised by `ensure_contract_supported`, which
+  `FlexiQ::open` and `FlexiQ::from_storage` call at open. Upgrade the process,
+  or lower the floor from one that is already current.
+- **`ClaimLost`** — an attempt that sees this must make no further
+  contribution: the job is proceeding under another owner, and failing it would
+  kill a run going correctly elsewhere.
+
+The shell raises `QueueError::Other` itself in a handful of places, each with a
+message that says what to do instead:
+
+| When | Message contains |
+|---|---|
+| A task argument has no representation in the envelope | `could not encode its arguments` |
+| A debounced call rides an `enqueue_batch` | `a debounce window cannot ride a batch` |
+| A scoped handle's call names another namespace | `a scoped handle cannot enqueue outside its own namespace` |
+| A periodic operation on a namespaced handle | `is not available on a namespaced handle` |
+| One task name registered twice on a worker | `was registered twice on one worker` |
+
+## `EncodeError`
+
+```rust
+pub struct EncodeError(/* private */);
+// Display: "cannot encode task argument: …"
+```
+
+A value with no representation in the call envelope. It is *carried* on a
+`TaskCall` rather than raised by `call(..)` — the generated `call` mirrors the
+task's own signature and has nowhere to put a `Result` without costing every
+caller a second `?`, including inside a `vec![..]` where a batch is built. The
+failure surfaces from `enqueue`, naming the task.
+
+What produces one:
+
+| Value | Why |
+|---|---|
+| A `u64`, `u128` or `i128` outside `i64` | The envelope's integer arm is signed; wrapping would put a different number on the wire than you passed. |
+| A non-string map key | The envelope's map keys are text. A sequence, tuple, struct, number, `null` or data-carrying variant used as a key is refused. |
+
+Note what is *not* an error: `f32` widens to the 64-bit float core always
+writes, and struct fields keep declaration order. Sorting them behind your back
+would change the `auto:` idempotency key, which is a cross-language identity.
+
+## `DecodeError`
+
+A payload that is not a call this shell can run. Raised inside `run_encoded`
+and wrapped into a **fatal** `TaskError` — a payload the handler cannot read
+will not become readable on a retry.
+
+| Variant | `Display` |
+|---|---|
+| `Codec(u8)` | `unsupported payload codec: tag 0x…` |
+| `Empty` | `empty payload: no codec tag` |
+| `Envelope(String)` | `malformed call envelope: …` |
+| `Arguments(String)` | `task arguments do not match the handler: …` |
+| `Kwargs(usize)` | `call carries N keyword argument(s); a Rust task takes positional arguments only, so passing them would drop them silently` |
+
+`Kwargs` is the one that surprises. Rust has no keyword arguments, so there is
+nothing to bind them to; running the task anyway would drop what a caller sent
+without saying so. A call is refused **by count**, not silently truncated.
+
+`Arguments` is where an arity mismatch lands: the payload's positional
+arguments are deserialized into the task's parameter tuple, so too many or too
+few fails on the tuple's length.

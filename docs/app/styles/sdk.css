@@ -7,7 +7,8 @@
 
 [data-sdk="python"] [data-sdk-variant]:not([data-sdk-variant="python"]),
 [data-sdk="node"] [data-sdk-variant]:not([data-sdk-variant="node"]),
-[data-sdk="java"] [data-sdk-variant]:not([data-sdk-variant="java"]) {
+[data-sdk="java"] [data-sdk-variant]:not([data-sdk-variant="java"]),
+[data-sdk="rust"] [data-sdk-variant]:not([data-sdk-variant="rust"]) {
   display: none;
 }
 
@@ -19,7 +20,8 @@
 }
 [data-sdk="python"] .sdk-tab[data-sdk-variant="python"],
 [data-sdk="node"] .sdk-tab[data-sdk-variant="node"],
-[data-sdk="java"] .sdk-tab[data-sdk-variant="java"] {
+[data-sdk="java"] .sdk-tab[data-sdk-variant="java"],
+[data-sdk="rust"] .sdk-tab[data-sdk-variant="rust"] {
   color: var(--indigo-br);
   border-bottom-color: var(--indigo);
 }

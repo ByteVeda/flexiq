@@ -1,0 +1,167 @@
+---
+title: Monitoring
+description: "No metrics registry and no exporter in the crate — the two things that are real: counting from on_outcome, and reading depth from queue.stats()."
+---
+
+The Rust SDK ships **no metrics registry, no exporter and no `/metrics`
+endpoint**, and there is no middleware layer to count from. Nothing in the crate
+knows what a counter is.
+
+Two real sources are left. One you pull, one you push.
+
+## Pull: `queue.stats()`
+
+`stats()` is a single query returning counts by lifecycle state, scoped to the
+handle's namespace.
+
+```rust
+let stats = queue.stats()?;
+println!(
+    "pending {} running {} completed {} failed {} dead {} cancelled {}",
+    stats.pending, stats.running, stats.completed,
+    stats.failed, stats.dead, stats.cancelled,
+);
+```
+
+`QueueStats` has exactly six fields, all `i64`:
+
+| Field | What it counts |
+| --- | --- |
+| `pending` | Waiting to run |
+| `running` | Currently executing |
+| `completed` | Finished successfully |
+| `failed` | Failed terminally |
+| `dead` | Moved to the dead-letter queue |
+| `cancelled` | Cancelled |
+
+Live counts come from `jobs`, terminal ones from `archived_jobs` — so `completed`
+is subject to retention, not a forever total.
+
+Per queue, one `queue.storage()` away:
+
+```rust
+use flexiq::Storage;
+
+for (name, stats) in queue.storage().stats_all_queues(queue.namespace())? {
+    println!("{name}: {} pending, {} running", stats.pending, stats.running);
+}
+
+// Cheaper, when depth on one queue is all you want.
+let depth = queue.storage().count_pending_by_queue("billing")?;
+```
+
+Workers are a read too, and the same shape of answer:
+
+```rust
+for worker in queue.storage().list_workers()? {
+    println!(
+        "{} {} on [{}], {} threads",
+        worker.worker_id, worker.status, worker.queues, worker.threads,
+    );
+}
+```
+
+## Push: counting from `on_outcome`
+
+`flexiq_core::Worker::on_outcome` fires once per processed result, and each
+outcome already carries the numbers a counter wants — the task name, the queue,
+whether it timed out, and `wall_time_ns` the worker measured:
+
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use flexiq::{ResultOutcome, Worker};
+
+#[derive(Default)]
+struct Counts {
+    succeeded: AtomicU64,
+    retried: AtomicU64,
+    dead: AtomicU64,
+    nanos: AtomicU64,
+}
+
+let counts = Arc::new(Counts::default());
+let observed = counts.clone();
+
+let worker = Worker::new(queue.storage().clone())
+    .register("charge", |_job| Ok(None))
+    .on_outcome(move |outcome| match outcome {
+        ResultOutcome::Success { wall_time_ns, .. } => {
+            observed.succeeded.fetch_add(1, Ordering::Relaxed);
+            observed.nanos.fetch_add(*wall_time_ns as u64, Ordering::Relaxed);
+        }
+        ResultOutcome::Retry { .. } => {
+            observed.retried.fetch_add(1, Ordering::Relaxed);
+        }
+        ResultOutcome::DeadLettered { .. } => {
+            observed.dead.fetch_add(1, Ordering::Relaxed);
+        }
+        // `Slept` is not a completion and `Superseded` is not an event at all.
+        _ => {}
+    })
+    .spawn()?;
+```
+
+Swap the atomics for whatever your binary already exports — the callback is a
+plain closure and the crate has no opinion about what it calls.
+
+<Callout type="warn" title="This is core's worker, not the shell's">
+  `WorkerBuilder` does not expose `on_outcome`, so a worker built this way runs
+  on core's reference pool — which drops the `(owner, attempt, epoch)` fence and
+  therefore cannot open a durable-step session. The trade-off, and how to
+  register a `#[flexiq::task]` body by hand, are on
+  <SdkLink to="guides/extend/events">Events</SdkLink>.
+</Callout>
+
+## Where the failures are
+
+A count tells you something is wrong; the dead-letter table tells you what. Both
+are reads on `Storage`:
+
+```rust
+use flexiq::Storage;
+
+for dead in queue.storage().list_dead(20, 0, queue.namespace())? {
+    // `error` is the canonical `{"errtype","message","traceback"}` JSON a
+    // failed Rust task writes, so it is an `Option<String>`, not a message.
+    println!(
+        "{} {}: {}",
+        dead.original_job_id,
+        dead.task_name,
+        dead.error.as_deref().unwrap_or("(no error recorded)"),
+    );
+}
+
+let history = queue.storage().get_job_errors(&job_id, queue.namespace())?;
+```
+
+<SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink> covers
+reading and replaying them; <SdkLink to="operate/inspection">Inspection</SdkLink>
+is the operational view.
+
+## If you want a scrape endpoint
+
+The shell opens no socket. `flexiq-server` does: run it against the same
+backend and it serves `/metrics` beside the dashboard, gated by
+`FLEXIQ_DASHBOARD_METRICS_TOKEN` whatever the auth mode. That is a second
+process, and <SdkLink to="modules/dashboard">Dashboard</SdkLink> is honest about
+what running one costs.
+
+<Cards>
+  <Card
+    title="Events"
+    to="guides/extend/events"
+    description="Every field on ResultOutcome, and what taking that route costs."
+  />
+  <Card
+    title="Autoscaling"
+    to="modules/autoscaling"
+    description="The same depth reading, used as a scaling signal."
+  />
+  <Card
+    title="Logging"
+    to="guides/extend/logging"
+    description="What the engine emits, and how to see it."
+  />
+</Cards>

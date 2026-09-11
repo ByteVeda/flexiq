@@ -1,0 +1,205 @@
+---
+title: Workers & steps
+description: "queue.worker(), current_step and the StepHandle methods, and PeriodicSpec — the worker-facing half of the queue handle."
+---
+
+```rust
+let worker = queue.worker().register::<charge>().spawn()?;
+```
+
+## `worker`
+
+```rust
+pub fn worker(&self) -> WorkerBuilder
+```
+
+Starts a builder over this handle's backend **and its namespace**. A worker
+built from a scoped handle is scoped; a worker built from an unscoped one is
+not. Everything else about the builder is on the
+<SdkLink to="api-reference/worker">Worker</SdkLink> page.
+
+## `current_step`
+
+```rust
+pub fn current_step() -> StepHandle
+```
+
+The durable-step handle for the task running on this thread. It takes no
+argument and returns no `Result`: a macro-expanded body is your own function and
+cannot grow a parameter it did not declare, so the handle reaches the session
+through a thread-local the pool installed for this dispatch.
+
+```rust
+#[flexiq::task(max_retries = 5)]
+fn checkout(order: String) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+
+    let receipt: String = step.run("charge", || Ok(format!("receipt-for-{order}")))?;
+    step.sleep_ms("settle", 60_000)?;
+    step.run("email", || Ok(receipt.len()))?;
+
+    Ok(())
+}
+```
+
+The handle carries nothing. Two handles inside one task are the same session;
+one taken in another task is a different session.
+
+## `StepHandle`
+
+| Method | Signature |
+|---|---|
+| `run` | `fn run<T, F>(&mut self, name: &str, body: F) -> Outcome<T>` |
+| `run_keyed` | `fn run_keyed<T, F>(&mut self, name: &str, key: &str, body: F) -> Outcome<T>` |
+| `sleep_ms` | `fn sleep_ms(&mut self, name: &str, ms: i64) -> Outcome<()>` |
+| `sleep_until` | `fn sleep_until(&mut self, name: &str, wake_at: i64) -> Outcome<()>` |
+
+`run` and `run_keyed` are bounded
+`T: serde::Serialize + serde::de::DeserializeOwned` and
+`F: FnOnce() -> Outcome<T>` — the value is encoded to commit it and decoded to
+replay it, and the body is an `Outcome`, so a failure inside a step is the same
+kind of failure as one outside it.
+
+### `run`
+
+A step body runs **once per durable run**. On a retry the body does not run: its
+recorded value is decoded and returned instead. That is the point — a step that
+charged a card must not charge it twice because something after it failed.
+
+```rust
+let receipt: String = step.run("charge", || {
+    // Runs on the first attempt. On every later one the recorded
+    // value is decoded and this closure is not called.
+    Ok(format!("receipt-for-{order}"))
+})?;
+```
+
+Annotate the binding, or the encode/decode pair has no type to work with.
+
+### `run_keyed`
+
+Two steps of the same name in one run are told apart by their **order**. A key
+tells them apart by what they are **about**, which survives a body that runs
+them in a different order:
+
+```rust
+for order in &orders {
+    let receipt: String =
+        step.run_keyed("charge", order, || Ok(format!("receipt-for-{order}")))?;
+    let _ = receipt;
+}
+```
+
+### `sleep_ms` and `sleep_until`
+
+```rust
+step.sleep_ms("settle", 60_000)?;            // relative
+step.sleep_until("settle", wake_at_unix_ms)?; // absolute, Unix milliseconds
+```
+
+Not a `thread::sleep`. The job is rescheduled and its claim released, so the
+worker's slot is free while it waits.
+
+<Callout type="warn">
+  **The attempt ends at the sleep.** Code after the call runs on the *next*
+  attempt, from the top of the body, with every committed step memoized. A sleep
+  is not a retry and does not spend one — `retry_count` does not move.
+</Callout>
+
+A woken attempt re-reaches the same call, finds the deadline already passed, and
+returns `Ok(())` — which is why a replay does not sleep forever.
+
+### Failure, and where it lands
+
+| What went wrong | The step returns |
+|---|---|
+| The body returned `Err(abort)` | That abort, intact — retryable or fatal exactly as the body said. |
+| The body's value does not encode | **Fatal.** The side effects happened; retrying would repeat them and fail identically. |
+| A storage or fencing failure — a lost claim, a superseded attempt | **Retryable.** Worth another attempt. |
+| A recorded value this build cannot read | **Fatal.** The bytes will not change shape on a retry. |
+| A step called outside a running task, or inside another step's body | **Fatal**, with a message containing `outside a running task`. |
+
+That last row never panics. A panic here would take down a pool thread over a
+mistake in a caller's own code, so the session is taken out of the thread-local
+for the duration of a step — a nested step finds nothing and is refused by
+name, where a borrow would have panicked.
+
+```rust
+let mut step = flexiq::current_step();
+let outcome: flexiq::Outcome<i64> = step.run("orphan", || Ok(1));
+// Err(Abort::Fail(TaskError { retryable: false, .. }))
+```
+
+### Limits
+
+`StepLimits::default()` is what the session opens with.
+
+| Limit | Default |
+|---|---|
+| `max_step_bytes` | 256 KiB |
+| `max_total_bytes` | 4 MiB |
+| `max_steps` | 1000 |
+
+Over one of them, the commit is refused with
+`QueueError::StepLimitExceeded` — never spilled. There is nowhere to spill to,
+and the same database under a different key is not a spill. A step is a
+checkpoint, not a data payload: store the blob where blobs go and memoize the
+handle.
+
+### The fence
+
+Every step write is fenced on the `(owner, attempt, epoch)` triple the scheduler
+minted for this dispatch. The shell ships its own pool precisely so all three
+survive to the handler — core's reference pool drops them, and a pool that
+discards the fence cannot open a step session at all. That is also why a worker
+built directly from `flexiq_core::Worker` with the default dispatcher cannot run
+steps; see <SdkLink to="api-reference/worker">Worker</SdkLink>.
+
+## `PeriodicSpec`
+
+```rust
+pub struct PeriodicSpec {
+    pub cron: &'static str,
+    pub timezone: Option<&'static str>,
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `cron` | A six-field cron expression — **seconds first**. |
+| `timezone` | An IANA timezone name. `None` is UTC. |
+
+You do not build one by hand. `#[flexiq::task(cron = ...)]` generates
+`Task::periodic()` returning it, and `WorkerBuilder::spawn` writes the row:
+
+```rust
+// Six fields, seconds first: every five minutes, on the minute.
+#[flexiq::task(cron = "0 */5 * * * *", timezone = "Europe/Stockholm")]
+fn sweep() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+let worker = queue.worker().register::<sweep>().spawn()?;
+```
+
+The task must take **no parameters** — a periodic fire has no caller to supply
+them — and `timezone` without `cron` is a compile error. Both are refusals of
+<SdkLink to="api-reference/task">the macro</SdkLink>.
+
+Registration happens before the scheduler starts, so a schedule that is already
+due is found on the first tick rather than one interval late. An unchanged
+declaration writes nothing at all: recomputing `next_run` on every start loses a
+firing whenever a restart lands after a deadline passed, and writing
+`enabled: true` would resume a task an operator had paused.
+
+<Callout type="warn">
+  **Firing is per-scheduler and not leader-elected.** The dedup key a fired job
+  carries is `periodic:{name}:{now}`, computed from each process's own clock, so
+  two workers that both registered the same periodic can both find it due inside
+  the same millisecond and each mint a job the other's key does not match.
+  Register periodics from one process, or accept that a fleet may double-fire.
+</Callout>
+
+Listing, pausing and deleting a registered schedule are on the handle — see
+<SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink>, which is
+also where the namespaced refusal is.

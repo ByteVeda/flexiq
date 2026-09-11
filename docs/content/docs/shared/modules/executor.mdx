@@ -84,6 +84,36 @@ Handlers are discovered from the classpath through `META-INF/services`, so no
 application `main` has to run to register them.
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK ships no executor binary, and `WorkerBuilder` has no attach mode.
+The executor side is `flexiq_core`'s, driven from your own `main`:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use flexiq::{AttachAddress, ExecutorClient, ExecutorConfig, NativeDispatcher, Secret, TaskRegistry};
+
+let transport = AttachAddress::parse("scheduler:7777")?.connect(Duration::from_secs(10))?;
+let client = ExecutorClient::connect(
+    transport,
+    ExecutorConfig {
+        tasks: vec!["resize".to_string()],
+        slots: 4,
+        token: std::env::var("FLEXIQ_ATTACH_TOKEN").ok().map(Secret::new),
+        ..ExecutorConfig::new("rust", env!("CARGO_PKG_VERSION"))
+    },
+)?;
+client.spawn(Arc::new(NativeDispatcher::new(registry, 4))).wait();
+```
+
+`registry` is a `TaskRegistry` of `Fn(&Job) -> TaskResult` handlers, not the
+`#[flexiq::task]` set: the shell's own pool is private, and `NativeDispatcher`
+drops the `(owner, attempt, epoch)` fence, so an executor built this way must
+not advertise `CAP_STEPS`.
+
+  </Tab>
 </CodeTabs>
 
 `--slots` is how many jobs run at once; the scheduler dispatches a task name
@@ -124,8 +154,9 @@ it does not negotiate the capability, is dispatched no lease, and keeps the
 weaker fence. Nothing about the rollout needs coordinating.
 
 <Callout type="warn" title="The token is read from the environment, never a flag">
-  A secret in `argv` shows up in `ps` output and shell history. Every SDK reads
-  `FLEXIQ_ATTACH_TOKEN` from the environment and offers no flag for it.
+  A secret in `argv` shows up in `ps` output and shell history. Every SDK that
+  ships an executor reads `FLEXIQ_ATTACH_TOKEN` from the environment and offers
+  no flag for it.
 </Callout>
 
 ## Security
@@ -198,6 +229,25 @@ public String resize(String path) {
     return "done";
 }
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+A Rust task body receives its declared arguments and nothing else — there is no
+job handle, so no progress, task-log or publish call to make, on an executor or
+in process:
+
+```rust
+#[flexiq::task]
+fn resize(path: String) -> flexiq::Outcome<String> {
+    let _ = path;
+    Ok("done".to_string())
+}
+```
+
+`ExecutorHandle::side_channel()` hands out the seam these calls travel on, but
+`NativeDispatcher`'s handlers never see it — reaching it means writing your own
+`WorkerDispatcher`.
 
   </Tab>
 </CodeTabs>

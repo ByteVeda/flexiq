@@ -57,6 +57,28 @@ worker.close();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::FlexiQ;
+
+#[flexiq::task]
+fn process(item_id: i64) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+let queue = FlexiQ::open("tasks.db")?;
+let worker = queue.worker().register::<process>().queues(["default"]).spawn()?;
+// spawn() returns immediately; the scheduler and the pool run in the background.
+// ... later
+worker.shutdown()?;
+```
+
+There is no worker binary to run: `spawn()` registers the process, starts the
+scheduler and returns a `WorkerHandle`. Keep the handle — dropping it does not
+shut the worker down; `shutdown()` does.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -112,6 +134,34 @@ process alive.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`spawn()` never blocks: the scheduler, the handler pool, the result drain and the
+heartbeat each get their own thread, and the call returns a `WorkerHandle` as
+soon as they are up. Nothing keeps `main` alive for you, so a worker process has
+to park itself — block on a channel your signal handler writes to, then call
+`shutdown()`:
+
+```rust
+let worker = queue.worker().register::<process>().spawn()?;
+
+// Park until something asks this process to stop. `rx` is yours — a channel a
+// signal handler writes to, an admin endpoint, a shutdown flag.
+let _ = rx.recv();
+
+worker.shutdown()?;
+```
+
+Dropping the handle instead leaves the worker **running detached** — the threads
+are still there, still claiming jobs, with nothing left to stop them. `shutdown()`
+is the only way back.
+
+The worker registers itself as `sdk = "rust"` with a `pool_type` of `"rust"`, and
+takes the id `rust-worker-<uuid7>` unless `.worker_id(..)` names one.
+`worker.worker_id()` reads it back.
+
+</SdkOnly>
+
 ## Task registration
 
 <SdkOnly sdk="python">
@@ -158,11 +208,33 @@ see <SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no global registry a worker drains. Each worker runs exactly the tasks
+in its own `register::<T>()` chain, so two workers over the same `FlexiQ` can
+serve different subsets on purpose:
+
+```rust
+let billing = queue.worker().register::<charge>().queues(["billing"]).spawn()?;
+let general = queue.worker().register::<resize>().register::<total>().spawn()?;
+```
+
+`register::<T>()` takes the type `#[flexiq::task]` generated, so a task that was
+renamed or deleted breaks the build rather than dead-lettering at runtime. What
+still compiles is a task nobody added to the chain: the first job for it fails
+**fatally** with `task not registered on this worker`, because retrying cannot
+make it runnable here. Registering one name twice is refused by `spawn()`.
+
+Nothing about this is implicit, so there is nothing to discover — see
+<SdkLink to="guides/core/discovery">Task discovery</SdkLink>.
+
+</SdkOnly>
+
 ## Selecting queues
 
 Workers can serve a subset of queues instead of everything registered —
 useful for routing heavy jobs to dedicated workers. Omit the option and a
-worker serves <SdkSwap python="every registered queue" node="just the default queue" java="just the default queue" />.
+worker serves <SdkSwap python="every registered queue" node="just the default queue" java="just the default queue" rust="just the default queue" />.
 
 <CodeTabs>
   <Tab sdk="python">
@@ -191,6 +263,20 @@ flexiq.worker()
         .queues("emails", "reports")
         .start();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue
+    .worker()
+    .register::<send_email>()
+    .queues(["emails", "reports"])
+    .spawn()?;
+```
+
+`queues(..)` replaces the list rather than adding to it, so a worker that should
+still take ordinary work has to name `"default"` itself.
 
   </Tab>
 </CodeTabs>
@@ -237,6 +323,24 @@ tag advertisement set it; it's null for Java-started workers.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`WorkerBuilder` has no `tags(..)`, so a Rust worker advertises none. The
+registration record has a `tags` field and this shell leaves it unset, which is
+why `list_workers()` rows for a Rust worker carry `None` there.
+
+Route capability-specific work with [dedicated queues](#selecting-queues)
+instead — give the GPU or heavy jobs their own queue and start a worker on it:
+
+```rust
+queue.worker().register::<render>().queues(["gpu"]).spawn()?;
+```
+
+The dispatch that tags would inform does not exist anyway: the scheduler routes
+by queue and task name, never by tag.
+
+</SdkOnly>
+
 ## Worker concurrency
 
 How many jobs one worker process runs at once follows the SDK's own
@@ -267,6 +371,20 @@ flexiq.worker()
         .concurrency(8) // fixed handler-thread pool; 0 (default) uses a cached pool
         .start();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue
+    .worker()
+    .register::<process>()
+    .num_workers(8) // at most 8 handlers run at once on this worker; default 4
+    .spawn()?;
+```
+
+Every handler is synchronous and runs on a blocking thread, so `num_workers` is
+both the pool size and the concurrency cap. A value below 1 is raised to 1.
 
   </Tab>
 </CodeTabs>
@@ -312,6 +430,23 @@ CPU-bound sizing guidance.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Jobs run on real OS threads — every handler is synchronous and runs on a blocking
+thread, so `num_workers` is both the pool size and the concurrency cap. A value
+below 1 is raised to 1.
+
+It also becomes the scheduler's `max_in_flight` when you do not set one, so the
+worker never claims more jobs than it can run. Override that deliberately with
+`.scheduler_config(SchedulerConfig { max_in_flight: Some(n), ..Default::default() })`.
+
+`#[flexiq::task]` refuses an `async fn` outright rather than quietly blocking a
+pool thread. If a task really has to be a future, `flexiq_core::Worker` exposes
+`register_async`, which is core's own pool and not this shell's — so it does not
+carry the durable-step fence. Otherwise, drive the runtime inside the body.
+
+</SdkOnly>
+
 ### Watch concurrency move throughput
 
 More workers raise throughput until something else is the bottleneck, and
@@ -351,10 +486,30 @@ for (WorkerInfo w : flexiq.listWorkers()) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The registry read is not on `FlexiQ`. It is a `Storage` method, so reach it
+through `queue.storage()`:
+
+```rust
+use flexiq::Storage;
+
+for w in queue.storage().list_workers()? {
+    println!(
+        "{} on {:?} (pid {:?}, {})",
+        w.worker_id, w.hostname, w.pid, w.status
+    );
+}
+```
+
+Name this worker with `.worker_id("w-1")` on the builder; without it the core
+generates one.
+
+  </Tab>
 </CodeTabs>
 
-Field names follow each SDK's casing convention (`worker_id` in Python,
-`workerId` in Node and Java) but describe the same worker: hostname, pid,
+Field names follow each SDK's casing convention (the worker's own id is
+<SdkSwap python={<code>worker_id</code>} node={<code>workerId</code>} java={<code>workerId</code>} rust={<code>worker_id</code>} />) but describe the same worker: hostname, pid,
 status (`active`, `draining`, or already reaped), the queues it serves, and
 the timestamp of its last heartbeat.
 
@@ -420,6 +575,28 @@ polling `flexiq.listWorkers()`, whose `WorkerInfo` rows carry `status` and a
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`spawn()` starts a dedicated heartbeat thread that ticks every 5 seconds. There
+is no interval to configure. The same tick does two cluster chores: the
+leader-elected reap of workers that stopped heartbeating, and the sweep of
+ephemeral subscriptions whose owner is gone.
+
+### Lifecycle events
+
+The Rust SDK has no event bus, so there is no `WORKER_ONLINE` / `OFFLINE` /
+`UNHEALTHY` to subscribe to. Observe presence by polling
+`queue.storage().list_workers()`, whose rows carry `status` and the last
+heartbeat.
+
+For job outcomes rather than worker ones, the nearest seam is
+`flexiq_core::Worker::on_outcome` — a callback handed every processed success,
+retry, dead-letter and cancel. `WorkerBuilder` does not expose it, and building
+the worker through `flexiq_core::Worker` directly costs the durable-step fence
+this shell's pool carries.
+
+</SdkOnly>
+
 ## Graceful shutdown
 
 Stopping a worker unregisters it from storage and lets in-flight jobs finish
@@ -480,6 +657,27 @@ worker.awaitShutdown();
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Nothing wires `SIGINT` or `SIGTERM` for you, and there is no drain timeout to
+configure: `shutdown()` stops dispatch, waits for every in-flight handler, stops
+the heartbeat, joins all three threads and unregisters the worker. It blocks for
+as long as the slowest running handler takes.
+
+It also takes the handle by value, so a worker cannot be stopped twice — which
+means the handle has to reach whatever triggers the stop. Put it behind an
+`Arc<Mutex<Option<WorkerHandle>>>`, or keep the handle on the main thread and
+have the signal path only wake it.
+
+<Callout type="warn">
+  Dropping the handle is not a shutdown. The threads keep running and the worker
+  stays registered, claiming jobs, until the process exits — at which point its
+  in-flight jobs wait for another worker to notice the missing heartbeat and
+  recover them.
+</Callout>
+
+</SdkOnly>
+
 ### Programmatic shutdown
 
 Trigger a shutdown from code — another thread, a signal handler, an admin
@@ -510,6 +708,19 @@ await worker.stop();
 worker.close(); // drains in-flight handlers, then frees the native worker
 // worker.stop() only halts dispatch — no drain, no teardown
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Stops dispatch, drains in-flight work, stops the heartbeat, unregisters.
+// Blocks until every worker thread has exited.
+worker.shutdown()?;
+```
+
+`shutdown` consumes the handle, so a worker cannot be stopped twice. Nothing
+wires `SIGINT`/`SIGTERM` for you — hold the handle somewhere your signal
+handler can reach it, and call `shutdown()` there.
 
   </Tab>
 </CodeTabs>

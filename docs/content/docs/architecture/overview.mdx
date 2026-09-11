@@ -3,9 +3,16 @@ title: Architecture overview
 description: "Hybrid architecture: a thin language SDK on top, one Rust engine underneath."
 ---
 
-flexiq is a hybrid <SdkLang />/Rust system. <SdkName /> provides the
-user-facing API. Rust handles all the heavy lifting: storage, scheduling,
-dispatch, rate limiting, and worker management.
+{/* Not `<SdkLang />` + `<SdkName />`: under the Rust tier that renders "a
+    hybrid Rust/Rust system", and the sentence's whole point is the boundary
+    that tier does not have. */}
+
+<SdkSwap
+  python={<>flexiq is a hybrid Python/Rust system. Python provides the user-facing API; Rust handles all the heavy lifting: storage, scheduling, dispatch, rate limiting, and worker management.</>}
+  node={<>flexiq is a hybrid Node.js/Rust system. Node.js provides the user-facing API; Rust handles all the heavy lifting: storage, scheduling, dispatch, rate limiting, and worker management.</>}
+  java={<>flexiq is a hybrid Java/Rust system. Java provides the user-facing API; Rust handles all the heavy lifting: storage, scheduling, dispatch, rate limiting, and worker management.</>}
+  rust={<>flexiq is Rust top to bottom, with no FFI boundary in it. The SDK crate provides the user-facing API and links the engine as an ordinary dependency; the engine still does all the heavy lifting: storage, scheduling, dispatch, rate limiting, and worker management.</>}
+/>
 
 <ArchitectureStack />
 

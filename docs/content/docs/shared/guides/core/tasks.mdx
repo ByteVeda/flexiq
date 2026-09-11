@@ -70,6 +70,36 @@ For generic payloads that a `Class` token can't express, use a Jackson
 Object>>() {})`.
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// The name is the function's, unless `name = "..."` says otherwise.
+#[flexiq::task(queue = "emails", max_retries = 5)]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<String> {
+    smtp::send(&to, &subject, &body).map_err(flexiq::TaskError::retryable)?;
+    Ok("sent".to_string())
+}
+
+let queue = flexiq::FlexiQ::open("myapp.db")?;
+
+// Producer side: `call(..)` mirrors the function's own argument list.
+queue.enqueue(send_email::call(
+    "user@example.com".into(),
+    "Welcome".into(),
+    "…".into(),
+))?;
+
+// Worker side: registration is explicit, one `register::<T>()` per task.
+let worker = queue.worker().queues(["emails"]).register::<send_email>().spawn()?;
+```
+
+`#[flexiq::task]` replaces the function with a type of the same name carrying
+three things: `send_email::call(..)` builds an enqueueable value,
+`send_email::run(..)` is the original body and stays directly callable from a
+unit test, and the `Task` implementation is what `register::<send_email>()`
+takes.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -133,6 +163,37 @@ Each companion also carries a nested `Provider` that the processor lists in
   Register a handler for every task a worker's queues can carry — a job whose
   task has no handler on the claiming worker fails with "no handler
   registered". Re-registering a task name replaces the previous handler.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+### Binding a handler
+
+There is no separate descriptor to bind. `#[flexiq::task]` generates the type
+*and* keeps the body, and `register::<send_email>()` takes that type — so the
+name, the argument types and the handler cannot drift apart:
+
+```rust
+let worker = queue
+    .worker()
+    .register::<send_email>()
+    .register::<resize>()
+    .spawn()?;
+```
+
+`flexiq::Task` is a public trait — `NAME`, `config()`, `defaults()`,
+`run_encoded()`, and an optional `periodic()` — so a task with an unusual shape
+can implement it by hand and register exactly the same way. The macro is
+ergonomics, not plumbing.
+
+<Callout type="info">
+  Register every task a worker's queues can carry. A job whose task is not
+  registered on the claiming worker fails **fatally** with `task not registered
+  on this worker` — no amount of retrying makes it runnable there. Registering
+  one name twice is refused by `spawn()` rather than silently replacing the
+  first body, because one of the two would never run.
 </Callout>
 
 </SdkOnly>
@@ -267,6 +328,63 @@ Task<EmailPayload> sendEmail = Task.of("send_email", EmailPayload.class)
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`#[flexiq::task]` accepts a closed set of attributes. Anything else is a compile
+error that lists the accepted ones:
+
+| Attribute | Value | Default | Effect |
+|---|---|---|---|
+| `name` | string | the function's name | Task name a job carries, and what a producer in any language enqueues. |
+| `queue` | string | `"default"` | Queue each call is enqueued into. |
+| `priority` | integer | `0` | Higher dequeues first within a queue. |
+| `max_retries` | integer | `3` | Retries before the job dead-letters. |
+| `retry_backoff_ms` | duration | `1s` | Base delay of the exponential retry curve. |
+| `retry_max_delay_ms` | duration | `5m` | Cap on that curve. |
+| `timeout` | duration | `5m` | Cap on one attempt's execution. |
+| `expires` | duration | none | Skip the job if it has not started within the window. |
+| `result_ttl` | duration | none | How long the archived result is kept. |
+| `idempotent` | bare flag, or `= true` | `false` | Derive the dedup key from the task name and payload. |
+| `on_excess` | `"defer"` \| `"drop"` | `"defer"` | What happens to a job a rate limit turns away. |
+| `max_concurrent` | integer | none | Cluster-wide cap on concurrent runs of this task. |
+| `max_in_flight_per_task` | integer | none | This task's share of one worker's in-flight slots. |
+| `rate_limit` | rate | none | Dispatch rate cap for this task. |
+| `retry_budget` | rate | none | Cap on how fast this task may *retry*, across every job of it. |
+| `cron` | string | none | Register the task as a periodic. Six fields, seconds first. |
+| `timezone` | string | UTC | IANA name the `cron` expression is read in. Only meaningful beside `cron`. |
+
+A **duration** is `500ms`, `30s`, `5m`, `2h`, `1d`, or a bare unquoted integer of
+milliseconds — `timeout = "30s"` and `timeout = 30_000` are the same thing. A
+**rate** is `"<count>/<unit>"`, the count at least 1 and the unit one of `s`,
+`m`, `h` (or `second`, `minute`, `hour`): `"100/m"`, `"20/s"`, `"1000/h"`. Both
+grammars are checked while the macro expands, so a typo is a compile error rather
+than a worker that starts and quietly never dispatches.
+
+```rust
+#[flexiq::task(
+    name = "emails.send",
+    queue = "emails",
+    priority = 10,
+    max_retries = 5,
+    retry_backoff_ms = "2s",
+    retry_max_delay_ms = "1m",
+    timeout = "60s",
+    rate_limit = "100/m",
+    max_concurrent = 10,
+)]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+The set splits in two. `queue`, `priority`, `max_retries`, `timeout`, `expires`,
+`result_ttl` and `idempotent` are **enqueue defaults**: they seed every
+`send_email::call(..)`, and the matching setter on the call overrides them for
+one job. The rest is **scheduler policy**, read once per task when the worker
+starts, with no per-call form.
+
+</SdkOnly>
+
 ## Retries
 
 Retry scheduling lives in the shared core, so retries stay durable and
@@ -303,11 +421,25 @@ Task<Order> charge = Task.of("charge", Order.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// `retry_max_delay_ms` is the cap on the exponential curve.
+#[flexiq::task(max_retries = 5, retry_backoff_ms = "1s", retry_max_delay_ms = "1m")]
+fn flaky_api_call(url: String) -> flexiq::Outcome<()> {
+    fetch(&url).map_err(flexiq::TaskError::retryable)?;
+    Ok(())
+}
+```
+
+Whether a failure is retried at all is the body's call, not the macro's: end a
+fallible step with `.map_err(TaskError::retryable)?` to spend a retry, or
+`.map_err(TaskError::fatal)?` to dead-letter immediately.
+
+  </Tab>
 </CodeTabs>
 
-The cap on the exponential curve is `max_retry_delay` in Python,
-`retryBackoff.maxMs` in Node, and the `max` argument to
-`RetryPolicy.exponential` in Java.
+The cap on the exponential curve is <SdkSwap python={<code>max_retry_delay</code>} node={<code>retryBackoff.maxMs</code>} java={<>the <code>max</code> argument to <code>RetryPolicy.exponential</code></>} rust={<>the <code>retry_max_delay_ms</code> attribute</>} />.
 
 <SdkOnly sdk="python">
 
@@ -345,6 +477,32 @@ Task<Order> poll = Task.of("poll", Order.class)
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The attribute set shapes the exponential curve only — there is no attribute for
+an exact per-attempt schedule. The field the scheduler reads is
+`RetryPolicy::custom_delays_ms`, so a task that needs one implements
+`flexiq::Task` by hand and returns it from `config()`:
+
+```rust
+fn config() -> flexiq::TaskConfig {
+    flexiq::TaskConfig {
+        retry_policy: flexiq::RetryPolicy {
+            max_retries: 3,
+            custom_delays_ms: Some(vec![5_000, 30_000, 120_000]),
+            ..flexiq::RetryPolicy::default()
+        },
+        ..flexiq::TaskConfig::default()
+    }
+}
+```
+
+Explicit delays are applied exactly; the exponential path adds full jitter, so
+many jobs failing against the same downstream spread out instead of retrying in
+a wave.
+
+</SdkOnly>
+
 See <SdkLink to="guides/reliability/retries">Retries</SdkLink> for the full
 retry flow and dead-letter behavior.
 
@@ -376,6 +534,20 @@ queue.task("scrape", scrape, { timeoutMs: 30_000 });
 Task<String> scrape = Task.of("scrape", String.class)
         .timeout(Duration.ofSeconds(30));
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// A duration is `500ms`, `30s`, `5m`, `2h`, `1d`, or a bare integer of ms.
+#[flexiq::task(timeout = "60s")]
+fn long_running(url: String) -> flexiq::Outcome<()> {
+    scrape(&url).map_err(flexiq::TaskError::retryable)?;
+    Ok(())
+}
+```
+
+Per call, `.timeout_ms(60_000)` overrides it. The default is 300 000 ms.
 
   </Tab>
 </CodeTabs>
@@ -416,6 +588,19 @@ handlers should poll `queue.isCancelRequested(jobId)` to actually stop.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no soft timeout and no cooperative check: a task body receives its
+decoded arguments and nothing else, so there is no job handle inside it to poll.
+
+The hard timeout is enforced by the scheduler's stale-job sweep, which fails the
+job with `job timed out after <n>ms` and frees its slot — it does **not**
+interrupt the handler, which keeps running on its blocking thread until it
+returns. Bound the work inside the body yourself if that matters: give the HTTP
+client its own timeout, or break a long loop on a deadline you read at the top.
+
+</SdkOnly>
+
 ## Circuit breakers
 
 Trip a task's circuit breaker after repeated failures so a failing downstream
@@ -453,6 +638,28 @@ Task<Response> callFlakyApi = Task.of("call_flaky_api", Response.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`#[flexiq::task]` has no circuit-breaker attribute. The field the scheduler
+reads is `TaskConfig::circuit_breaker`, so a task that needs a breaker
+implements `flexiq::Task` by hand and returns one from `config()`:
+
+```rust
+fn config() -> flexiq::TaskConfig {
+    flexiq::TaskConfig {
+        circuit_breaker: Some(flexiq::CircuitBreakerConfig {
+            threshold: 5,
+            window_ms: 60_000,
+            cooldown_ms: 120_000,
+            half_open_max_probes: 5,
+            half_open_success_rate: 0.8,
+        }),
+        ..flexiq::TaskConfig::default()
+    }
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 Half-open recovery is tunable too: `half_open_probes` / `halfOpenMaxProbes` /
@@ -475,6 +682,31 @@ See <SdkLink to="guides/reliability/circuit-breakers">Circuit
 breakers</SdkLink> — pair it with <SdkLink to="guides/reliability/retries">retries</SdkLink>:
 retries absorb transient blips, the breaker stops spending that budget on a
 dependency that's actually down.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Breaker state lives in storage, one row per task, so any process pointed at the
+same backend can read it. The read is a `Storage` method rather than a `FlexiQ`
+one:
+
+```rust
+use flexiq::{CircuitState, Storage};
+
+if let Some(row) = queue.storage().get_circuit_breaker("call_external_api")? {
+    println!(
+        "{:?}, {} failures, opened at {:?}",
+        CircuitState::from_i32(row.state),
+        row.failure_count,
+        row.opened_at
+    );
+}
+```
+
+`list_circuit_breakers()` returns every row at once. `CircuitState` is
+`Closed` / `Open` / `HalfOpen`, and `row.state` is the raw `i32` those decode
+from.
 
 </SdkOnly>
 
@@ -530,6 +762,25 @@ the limit, or serialize the critical section with a
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Two caps, at two scopes. `max_concurrent` is cluster-wide — the scheduler counts
+live runs of the task across every worker on shared storage, at the cost of a
+database read. `max_in_flight_per_task` is this worker's own pool, in-process and
+free, and stops one slow task from occupying every slot:
+
+```rust
+#[flexiq::task(max_concurrent = 3, max_in_flight_per_task = 1)]
+fn expensive_render(scene: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+The worker's total is `num_workers`, set on the builder and defaulting to 4 —
+that bounds every task together, where the two attributes above bound this one.
+
+</SdkOnly>
+
 ## Per-task middleware
 
 <SdkOnly sdk="python">
@@ -560,6 +811,18 @@ from the dashboard (`queue.disableMiddlewareForTask(task, name)`).
 
 Java `Middleware` is registered globally with `flexiq.use(...)`; there's no
 per-task attachment. Branch inside the middleware on `ctx.taskName()`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The Rust SDK has no middleware hooks at all, per task or otherwise. The nearest
+seam is `flexiq_core::Worker::on_outcome`, a callback handed every processed
+outcome — success, retry, dead-letter, cancel — which `WorkerBuilder` does not
+expose; building the worker through `flexiq_core::Worker` directly costs you the
+durable-step fence this shell's pool carries. For behaviour that belongs to one
+task, put it in the body — the function is your own code and nothing intercepts
+it on the way in.
 
 </SdkOnly>
 
@@ -617,6 +880,35 @@ See <SdkLink to="guides/extend/serializers">Serializers</SdkLink>.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The payload codec is the wire CBOR envelope, and it is fixed — there is no
+serializer to swap, per task or per queue, and no codec layer on top of it. What
+varies is the *types*: any argument that is `serde::Serialize` encodes, and any
+parameter that is `serde::de::DeserializeOwned` decodes, so the choice a
+serializer would give you is made in the function signature instead.
+
+```rust
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AuditEvent {
+    tenant: String,
+    amount_cents: i64,
+}
+
+#[flexiq::task]
+fn api_event(event: AuditEvent) -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+The writer runs in binary mode — `is_human_readable()` reports `false` — which is
+why a type that branches on it, `uuid::Uuid` being the usual one, round-trips as
+bytes rather than as a string. Arguments are **positional only**, since Rust has
+no keyword arguments, and struct fields keep declaration order: sorting them
+would change the `idempotent` dedup key that every language shares.
+
+</SdkOnly>
+
 ## Job expiration
 
 <SdkOnly sdk="python">
@@ -650,6 +942,28 @@ The Java SDK has no job-expiration deadline. `EnqueueOptions` offers `delay`
 (earliest start) and `timeout` (max run time), but a queued job is never
 discarded for sitting too long. Gate stale work inside the handler, or cancel
 it with `flexiq.cancelJob(id)`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`expires` skips a job that has not started within the deadline. Declare a default
+on the task, or set it for one call with `.expires_in_ms(..)`:
+
+```rust
+#[flexiq::task(expires = "5m")] // skipped if it has not started within 5 minutes
+fn time_sensitive(order_id: String) -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+queue.enqueue(time_sensitive::call("ord-1".into()))?;                       // the 5m default
+queue.enqueue(time_sensitive::call("ord-2".into()).expires_in_ms(60_000))?; // tighter, this call only
+```
+
+Both are relative and resolved against one `now`, read once at enqueue, so
+`expires_at` and a `delay_ms` on the same call cannot disagree by the width of
+the call. The sweep that discards an expired job is the scheduler's, so it runs
+whether or not a worker ever looked at the queue.
 
 </SdkOnly>
 
@@ -704,6 +1018,25 @@ Report report(List<Metric> m) { ... }
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+A task is named after its function, and `name = "..."` overrides that:
+
+```rust
+// In src/tasks/invoices.rs
+#[flexiq::task]
+fn process() -> flexiq::Outcome<()> { Ok(()) }        // named: process
+
+#[flexiq::task(name = "my-custom-name")]
+fn process_v2() -> flexiq::Outcome<()> { Ok(()) }     // named: my-custom-name
+```
+
+Deliberately **not** the module path. A path embeds the crate name, so moving the
+function between modules — or renaming the binary — would change a name a
+producer in another language has to type verbatim.
+
+</SdkOnly>
+
 ## Enqueuing jobs
 
 <CodeTabs>
@@ -729,6 +1062,21 @@ const id = queue.enqueue("sendEmail", ["user@example.com", "Hello", "World"]);
 String id = flexiq.enqueue(sendEmail, payload);        // typed
 String id2 = flexiq.enqueue("send_email", payload);    // by name, default options
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let job = queue.enqueue(send_email::call(
+    "user@example.com".into(),
+    "Hello".into(),
+    "World".into(),
+))?;
+// `job` is the stored row: `job.id`, `job.status`, `job.queue`.
+```
+
+A wrong argument to `call(..)` is the same compile error as a wrong argument to
+the function.
 
   </Tab>
 </CodeTabs>
@@ -782,6 +1130,25 @@ String id = flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let job = queue.enqueue(
+    send_email::call("user@example.com".into(), "Hello".into(), "World".into())
+        .priority(100)                           // Override priority
+        .delay_ms(3_600_000)                     // Run 1 hour from now
+        .queue("urgent-emails")                  // Override queue
+        .max_retries(10)                         // Override retries
+        .timeout_ms(120_000)                     // Override timeout
+        .unique_key("welcome-user@example.com")  // Deduplicate
+        .metadata(r#"{"source": "signup"}"#),    // Attach JSON metadata
+)?;
+```
+
+The setters live on the call, seeded with whatever the attribute declared, so a
+per-call value always wins over the task's default.
+
+  </Tab>
 </CodeTabs>
 
 ### Direct call
@@ -826,6 +1193,23 @@ String result = send.apply(payload); // runs now, bypasses the queue
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The macro keeps the original body as `run(..)`, with the function's own
+signature, so a task is still callable without a queue — which is how you unit
+test one:
+
+```rust
+let sent = send_email::run("user@example.com".into(), "Hello".into(), "World".into());
+```
+
+Its error type is `Abort`, not `QueueError`: "this attempt failed" and "the queue
+could not be reached" are different things, so `?` deliberately does not bridge
+them. `call(..)` mirrors the same signature, which is why a wrong argument to an
+enqueue is the same compile error as a wrong argument to the function.
+
+</SdkOnly>
+
 ## Batch enqueue
 
 Enqueue many jobs of one task in a single storage round-trip:
@@ -858,6 +1242,22 @@ List<String> ids = flexiq.enqueueMany(sendEmail, List.of(emailA, emailB));
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// One task per batch: the call's type is the task, and each item keeps its
+// own options.
+let jobs = queue.enqueue_batch(vec![
+    send_email::call("alice@example.com".into(), "Hi".into(), "Body".into()),
+    send_email::call("bob@example.com".into(), "Hi".into(), "Body".into()).priority(5),
+])?;
+```
+
+One item that cannot encode its arguments fails the whole call and writes
+nothing. A call carrying a debounce window is refused outright — storage has no
+batched debounce, so enqueue that one on its own.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -883,6 +1283,19 @@ Unlike the per-item form above, one shared `EnqueueOptions` applies to the
 whole batch — not a list of per-job options. `enqueueAll` is an alias of
 `enqueueMany`. See <SdkLink to="guides/core/batching">Batching</SdkLink> for
 the buffering `Batcher<T>` helper built on top of it.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Every item carries its own options, because each item *is* a call with the
+setters on it. What a batch cannot vary is the task: the call's type is the task,
+so one `enqueue_batch` is one task name.
+
+A debounce window is refused rather than split out — storage has no batched
+debounce, and looping it item by item would cost the atomicity that is the reason
+to send a batch. Enqueue that one on its own. One item whose arguments cannot
+encode fails the whole call and writes nothing.
 
 </SdkOnly>
 
@@ -918,6 +1331,19 @@ flexiq.enqueue(process, data, EnqueueOptions.builder()
         .metadata("{\"userId\": 42, \"source\": \"api\"}")
         .build());
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let job = queue.enqueue(
+    process::call(data).metadata(r#"{"user_id": 42, "source": "api"}"#),
+)?;
+```
+
+`metadata` is stored verbatim as `job.metadata: Option<String>` — encode the
+JSON yourself. `.notes(..)` is the structured sibling: a JSON object of at most
+15 fields.
 
   </Tab>
 </CodeTabs>

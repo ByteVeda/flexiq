@@ -1,0 +1,898 @@
+{
+  "sdk": "rust",
+  "source": [
+    "crates/flexiq/src/options.rs",
+    "crates/flexiq/src/queue.rs",
+    "crates/flexiq/src/call.rs",
+    "crates/flexiq/src/pool.rs",
+    "crates/flexiq/src/steps.rs",
+    "crates/flexiq/src/task.rs"
+  ],
+  "symbols": [
+    {
+      "owner": null,
+      "name": "current_step",
+      "kind": "static",
+      "signature": "fn current_step() -> StepHandle",
+      "params": [],
+      "returns": "StepHandle"
+    },
+    {
+      "owner": "Debounce",
+      "name": "new",
+      "kind": "static",
+      "signature": "fn new(key: impl Into<String>, window_ms: i64, max_wait_ms: i64) -> Self",
+      "params": [
+        {
+          "name": "key",
+          "type": "impl Into<String>",
+          "default": null
+        },
+        {
+          "name": "window_ms",
+          "type": "i64",
+          "default": null
+        },
+        {
+          "name": "max_wait_ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "debounce",
+      "kind": "method",
+      "signature": "fn debounce(debounce: flexiq::Debounce) -> Self",
+      "params": [
+        {
+          "name": "debounce",
+          "type": "flexiq::Debounce",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "debounce_ms",
+      "kind": "method",
+      "signature": "fn debounce_ms(key: impl Into<String>, window_ms: i64, max_wait_ms: i64) -> Self",
+      "params": [
+        {
+          "name": "key",
+          "type": "impl Into<String>",
+          "default": null
+        },
+        {
+          "name": "window_ms",
+          "type": "i64",
+          "default": null
+        },
+        {
+          "name": "max_wait_ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "delay_ms",
+      "kind": "method",
+      "signature": "fn delay_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "depends_on",
+      "kind": "method",
+      "signature": "fn depends_on(ids: impl IntoIterator<Item = impl Into<String>>) -> Self",
+      "params": [
+        {
+          "name": "ids",
+          "type": "impl IntoIterator<Item = impl Into<String>>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "expires_in_ms",
+      "kind": "method",
+      "signature": "fn expires_in_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "idempotent",
+      "kind": "method",
+      "signature": "fn idempotent() -> Self",
+      "params": [],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "max_retries",
+      "kind": "method",
+      "signature": "fn max_retries(max_retries: i32) -> Self",
+      "params": [
+        {
+          "name": "max_retries",
+          "type": "i32",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "metadata",
+      "kind": "method",
+      "signature": "fn metadata(metadata: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "metadata",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "namespace",
+      "kind": "method",
+      "signature": "fn namespace(namespace: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "namespace",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "notes",
+      "kind": "method",
+      "signature": "fn notes(notes: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "notes",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "priority",
+      "kind": "method",
+      "signature": "fn priority(priority: i32) -> Self",
+      "params": [
+        {
+          "name": "priority",
+          "type": "i32",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "queue",
+      "kind": "method",
+      "signature": "fn queue(queue: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "queue",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "result_ttl_ms",
+      "kind": "method",
+      "signature": "fn result_ttl_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "timeout_ms",
+      "kind": "method",
+      "signature": "fn timeout_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "EnqueueOptions",
+      "name": "unique_key",
+      "kind": "method",
+      "signature": "fn unique_key(key: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "key",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "cancel",
+      "kind": "method",
+      "signature": "fn cancel(job_id: &str) -> Result<bool>",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<bool>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "delete_periodic",
+      "kind": "method",
+      "signature": "fn delete_periodic(name: &str) -> Result<bool>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<bool>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueue",
+      "kind": "method",
+      "signature": "fn enqueue<T: Task>(call: TaskCall<T>) -> Result<Job>",
+      "params": [
+        {
+          "name": "call",
+          "type": "TaskCall<T>",
+          "default": null
+        }
+      ],
+      "returns": "Result<Job>",
+      "typeParams": "<T: Task>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "enqueue_batch",
+      "kind": "method",
+      "signature": "fn enqueue_batch<T: Task>(calls: Vec<TaskCall<T>>) -> Result<Vec<Job>>",
+      "params": [
+        {
+          "name": "calls",
+          "type": "Vec<TaskCall<T>>",
+          "default": null
+        }
+      ],
+      "returns": "Result<Vec<Job>>",
+      "typeParams": "<T: Task>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "from_storage",
+      "kind": "static",
+      "signature": "fn from_storage(storage: StorageBackend) -> Result<Self>",
+      "params": [
+        {
+          "name": "storage",
+          "type": "StorageBackend",
+          "default": null
+        }
+      ],
+      "returns": "Result<Self>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "get_job",
+      "kind": "method",
+      "signature": "fn get_job(job_id: &str) -> Result<Option<Job>>",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<Option<Job>>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "in_memory",
+      "kind": "static",
+      "signature": "fn in_memory() -> Result<Self>",
+      "params": [],
+      "returns": "Result<Self>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "list_jobs",
+      "kind": "method",
+      "signature": "fn list_jobs(limit: i64, offset: i64) -> Result<Vec<Job>>",
+      "params": [
+        {
+          "name": "limit",
+          "type": "i64",
+          "default": null
+        },
+        {
+          "name": "offset",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Result<Vec<Job>>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "list_periodic",
+      "kind": "method",
+      "signature": "fn list_periodic() -> Result<Vec<flexiq_core::PeriodicTask>>",
+      "params": [],
+      "returns": "Result<Vec<flexiq_core::PeriodicTask>>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "namespace",
+      "kind": "method",
+      "signature": "fn namespace() -> Option<&str>",
+      "params": [],
+      "returns": "Option<&str>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "open",
+      "kind": "static",
+      "signature": "fn open(path: &str) -> Result<Self>",
+      "params": [
+        {
+          "name": "path",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<Self>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "pause_periodic",
+      "kind": "method",
+      "signature": "fn pause_periodic(name: &str) -> Result<bool>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<bool>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "request_cancel",
+      "kind": "method",
+      "signature": "fn request_cancel(job_id: &str) -> Result<bool>",
+      "params": [
+        {
+          "name": "job_id",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<bool>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "resume_periodic",
+      "kind": "method",
+      "signature": "fn resume_periodic(name: &str) -> Result<bool>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        }
+      ],
+      "returns": "Result<bool>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "stats",
+      "kind": "method",
+      "signature": "fn stats() -> Result<QueueStats>",
+      "params": [],
+      "returns": "Result<QueueStats>"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "storage",
+      "kind": "method",
+      "signature": "fn storage() -> &StorageBackend",
+      "params": [],
+      "returns": "&StorageBackend"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "with_namespace",
+      "kind": "method",
+      "signature": "fn with_namespace(namespace: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "namespace",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "FlexiQ",
+      "name": "worker",
+      "kind": "method",
+      "signature": "fn worker() -> crate::WorkerBuilder",
+      "params": [],
+      "returns": "crate::WorkerBuilder"
+    },
+    {
+      "owner": "StepHandle",
+      "name": "run",
+      "kind": "method",
+      "signature": "fn run<T, F>(name: &str, body: F) -> Outcome<T>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        },
+        {
+          "name": "body",
+          "type": "F",
+          "default": null
+        }
+      ],
+      "returns": "Outcome<T>",
+      "typeParams": "<T, F>"
+    },
+    {
+      "owner": "StepHandle",
+      "name": "run_keyed",
+      "kind": "method",
+      "signature": "fn run_keyed<T, F>(name: &str, key: &str, body: F) -> Outcome<T>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        },
+        {
+          "name": "key",
+          "type": "&str",
+          "default": null
+        },
+        {
+          "name": "body",
+          "type": "F",
+          "default": null
+        }
+      ],
+      "returns": "Outcome<T>",
+      "typeParams": "<T, F>"
+    },
+    {
+      "owner": "StepHandle",
+      "name": "sleep_ms",
+      "kind": "method",
+      "signature": "fn sleep_ms(name: &str, ms: i64) -> Outcome<()>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        },
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Outcome<()>"
+    },
+    {
+      "owner": "StepHandle",
+      "name": "sleep_until",
+      "kind": "method",
+      "signature": "fn sleep_until(name: &str, wake_at: i64) -> Outcome<()>",
+      "params": [
+        {
+          "name": "name",
+          "type": "&str",
+          "default": null
+        },
+        {
+          "name": "wake_at",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Outcome<()>"
+    },
+    {
+      "owner": "Task",
+      "name": "config",
+      "kind": "static",
+      "signature": "fn config() -> TaskConfig",
+      "params": [],
+      "returns": "TaskConfig"
+    },
+    {
+      "owner": "Task",
+      "name": "defaults",
+      "kind": "static",
+      "signature": "fn defaults() -> EnqueueOptions",
+      "params": [],
+      "returns": "EnqueueOptions"
+    },
+    {
+      "owner": "Task",
+      "name": "periodic",
+      "kind": "static",
+      "signature": "fn periodic() -> Option<crate::PeriodicSpec>",
+      "params": [],
+      "returns": "Option<crate::PeriodicSpec>"
+    },
+    {
+      "owner": "Task",
+      "name": "run_encoded",
+      "kind": "static",
+      "signature": "fn run_encoded(job: &Job) -> Outcome<Option<Vec<u8>>>",
+      "params": [
+        {
+          "name": "job",
+          "type": "&Job",
+          "default": null
+        }
+      ],
+      "returns": "Outcome<Option<Vec<u8>>>"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "debounce",
+      "kind": "method",
+      "signature": "fn debounce(debounce: flexiq::Debounce) -> Self",
+      "params": [
+        {
+          "name": "debounce",
+          "type": "flexiq::Debounce",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "debounce_ms",
+      "kind": "method",
+      "signature": "fn debounce_ms(key: impl Into<String>, window_ms: i64, max_wait_ms: i64) -> Self",
+      "params": [
+        {
+          "name": "key",
+          "type": "impl Into<String>",
+          "default": null
+        },
+        {
+          "name": "window_ms",
+          "type": "i64",
+          "default": null
+        },
+        {
+          "name": "max_wait_ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "delay_ms",
+      "kind": "method",
+      "signature": "fn delay_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "depends_on",
+      "kind": "method",
+      "signature": "fn depends_on(ids: impl IntoIterator<Item = impl Into<String>>) -> Self",
+      "params": [
+        {
+          "name": "ids",
+          "type": "impl IntoIterator<Item = impl Into<String>>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "expires_in_ms",
+      "kind": "method",
+      "signature": "fn expires_in_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "idempotent",
+      "kind": "method",
+      "signature": "fn idempotent() -> Self",
+      "params": [],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "max_retries",
+      "kind": "method",
+      "signature": "fn max_retries(max_retries: i32) -> Self",
+      "params": [
+        {
+          "name": "max_retries",
+          "type": "i32",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "metadata",
+      "kind": "method",
+      "signature": "fn metadata(metadata: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "metadata",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "namespace",
+      "kind": "method",
+      "signature": "fn namespace(namespace: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "namespace",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "notes",
+      "kind": "method",
+      "signature": "fn notes(notes: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "notes",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "priority",
+      "kind": "method",
+      "signature": "fn priority(priority: i32) -> Self",
+      "params": [
+        {
+          "name": "priority",
+          "type": "i32",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "queue",
+      "kind": "method",
+      "signature": "fn queue(queue: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "queue",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "result_ttl_ms",
+      "kind": "method",
+      "signature": "fn result_ttl_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "task_name",
+      "kind": "method",
+      "signature": "fn task_name() -> &'static str",
+      "params": [],
+      "returns": "&'static str"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "timeout_ms",
+      "kind": "method",
+      "signature": "fn timeout_ms(ms: i64) -> Self",
+      "params": [
+        {
+          "name": "ms",
+          "type": "i64",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "TaskCall",
+      "name": "unique_key",
+      "kind": "method",
+      "signature": "fn unique_key(key: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "key",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "num_workers",
+      "kind": "method",
+      "signature": "fn num_workers(num_workers: usize) -> Self",
+      "params": [
+        {
+          "name": "num_workers",
+          "type": "usize",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "queues",
+      "kind": "method",
+      "signature": "fn queues(queues: impl IntoIterator<Item = impl Into<String>>) -> Self",
+      "params": [
+        {
+          "name": "queues",
+          "type": "impl IntoIterator<Item = impl Into<String>>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "register",
+      "kind": "method",
+      "signature": "fn register<T: Task>() -> Self",
+      "params": [],
+      "returns": "Self",
+      "typeParams": "<T: Task>"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "scheduler_config",
+      "kind": "method",
+      "signature": "fn scheduler_config(config: SchedulerConfig) -> Self",
+      "params": [
+        {
+          "name": "config",
+          "type": "SchedulerConfig",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "spawn",
+      "kind": "method",
+      "signature": "fn spawn() -> Result<WorkerHandle>",
+      "params": [],
+      "returns": "Result<WorkerHandle>"
+    },
+    {
+      "owner": "WorkerBuilder",
+      "name": "worker_id",
+      "kind": "method",
+      "signature": "fn worker_id(worker_id: impl Into<String>) -> Self",
+      "params": [
+        {
+          "name": "worker_id",
+          "type": "impl Into<String>",
+          "default": null
+        }
+      ],
+      "returns": "Self"
+    }
+  ]
+}

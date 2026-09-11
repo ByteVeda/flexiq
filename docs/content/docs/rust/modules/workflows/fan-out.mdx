@@ -1,0 +1,178 @@
+---
+title: Fan-out and fan-in
+description: "No fan-out node in the shell — enqueue_batch splits the work, depends_on joins it, and the join task reads results from where the children wrote them."
+---
+
+There is **no workflow builder and no fan-out node in the `flexiq` shell**. No
+`FlexiQ` method submits a graph, and `#[flexiq::task]` has no attribute that
+declares one — the DAG engine is a separate crate behind a cargo feature, and
+<SdkLink to="modules/workflows">Workflows</SdkLink> covers what it does and does
+not hold.
+
+A fan-out in Rust is two calls you already have: a batch to split, and
+`depends_on` to join.
+
+## Fan-out is a batch
+
+```rust
+let pages: Vec<flexiq::Job> = queue.enqueue_batch(
+    (0..50)
+        .map(|page| scrape::call("https://example.test".into(), page))
+        .collect(),
+)?;
+
+assert_eq!(pages.len(), 50);
+```
+
+`enqueue_batch<T: Task>(&self, calls: Vec<TaskCall<T>>) -> Result<Vec<Job>>`
+returns the jobs in input order, inserted in **one storage write** — on the
+Diesel backends a single transaction, so either all fifty land or none does.
+
+Two constraints fall straight out of the signature and the write:
+
+- **One `T` per batch.** A `Vec` holding calls to two different tasks does not
+  typecheck. Enqueue each task's calls as its own batch.
+- **A debounce window cannot ride a batch.** It is a hard refusal, not a
+  fallback — storage has no batched debounce, and looping the batch item by item
+  would cost exactly the atomicity the batch was for.
+
+```rust
+let err = queue
+    .enqueue_batch(vec![
+        scrape::call("a".into(), 0),
+        scrape::call("b".into(), 1).debounce_ms("scrape", 500, 5_000),
+    ])
+    .unwrap_err();
+// "a debounce window cannot ride a batch: enqueue `scrape` on its own"
+```
+
+Per-call options still apply per call, so a batch is not uniform:
+
+```rust
+queue.enqueue_batch(vec![
+    scrape::call("a".into(), 0).priority(9),
+    scrape::call("b".into(), 1).queue("bulk"),
+])?;
+```
+
+## Fan-in is `depends_on`
+
+The join is one more enqueue, holding a job until every child has completed:
+
+```rust
+let child_ids: Vec<String> = pages.iter().map(|job| job.id.clone()).collect();
+
+let rollup = queue.enqueue(summarize::call("run-7".into()).depends_on(child_ids))?;
+assert!(rollup.has_deps);
+```
+
+Every id is validated at enqueue: it must name a live-or-completed job in the
+same namespace, or the call fails with `QueueError::DependencyNotFound`. Inside
+a batch an id may also name another job in the same batch, which is how a
+two-stage fan-out goes out in two writes rather than fifty-one.
+
+A dependency that dead-letters or is cancelled **cancels its dependents**,
+transitively. The rollup does not sit pending forever waiting for a retry that
+will not come — see
+<SdkLink to="guides/core/dependencies">dependencies</SdkLink> for the cascade.
+
+## The join does not receive the children's results
+
+This is the part worth being blunt about. `job.result` is an
+`Option<Vec<u8>>` and the crate keeps its decoder private, so there is **no
+typed result read** — the rollup task cannot ask the queue what its fifty
+children returned.
+
+Write the results where the join can read them. The stubs below return
+`Result<_, String>`, which is what lets a body end with
+`.map_err(TaskError::retryable)?`:
+
+```rust
+#[flexiq::task(queue = "scrape", max_retries = 5)]
+fn scrape(base: String, page: i64) -> flexiq::Outcome<()> {
+    let rows = fetch(&base, page).map_err(flexiq::TaskError::retryable)?;
+    // Somewhere both sides agree on: a table, an object store, a temp dir.
+    store_page(&base, page, &rows).map_err(flexiq::TaskError::retryable)?;
+    Ok(())
+}
+
+#[flexiq::task(queue = "scrape")]
+fn summarize(run_id: String) -> flexiq::Outcome<()> {
+    let total = count_stored_pages(&run_id).map_err(flexiq::TaskError::retryable)?;
+    println!("run {run_id}: {total} pages");
+    Ok(())
+}
+```
+
+The alternative, when the value is small and belongs to *one* job rather than to
+a fan-out, is a <SdkLink to="modules/steps">durable step</SdkLink> — a step
+memoizes its return value and hands it back on the next attempt of the same job.
+It does not cross jobs.
+
+## Fan-out from inside a task
+
+When the child count is only known at run time, the parent task enqueues them.
+A task body is handed its decoded arguments and nothing else — no queue — so it
+reads a handle the way it reads any other dependency:
+
+```rust
+use std::sync::OnceLock;
+
+static QUEUE: OnceLock<flexiq::FlexiQ> = OnceLock::new();
+
+fn queue() -> flexiq::Outcome<&'static flexiq::FlexiQ> {
+    QUEUE
+        .get()
+        .ok_or_else(|| flexiq::TaskError::fatal("the queue handle was never initialised").into())
+}
+
+#[flexiq::task(queue = "scrape", max_retries = 3)]
+fn plan_run(base: String) -> flexiq::Outcome<()> {
+    let queue = queue()?;
+    let page_count = discover_pages(&base).map_err(flexiq::TaskError::retryable)?;
+
+    let children = queue
+        .enqueue_batch(
+            (0..page_count)
+                .map(|page| scrape::call(base.clone(), page))
+                .collect(),
+        )
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    let ids: Vec<String> = children.iter().map(|job| job.id.clone()).collect();
+    queue
+        .enqueue(summarize::call(base).depends_on(ids))
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    Ok(())
+}
+```
+
+`FlexiQ` is `Clone` and holds one storage backend, so the static is the same
+handle the producer side uses. Initialise it in `main` before the worker spawns
+— <SdkLink to="modules/injection">dependency injection</SdkLink> has the shape.
+
+<Callout type="warn" title="A retrying planner fans out twice">
+  `plan_run` above is not idempotent: if the batch lands and the join enqueue
+  fails, the retry enqueues fifty more children. Give the children stable dedup
+  keys with `.unique_key(..)`, or do the fan-out inside a durable step so a
+  retry replays the memo instead of the enqueue.
+</Callout>
+
+<Cards>
+  <Card
+    title="Batch enqueue"
+    to="guides/core/batch-enqueue"
+    description="Every rule the one-write batch follows."
+  />
+  <Card
+    title="Dependencies"
+    to="guides/core/dependencies"
+    description="Edge validation, has_deps, and the failure cascade."
+  />
+  <Card
+    title="Conditions"
+    to="modules/workflows/conditions"
+    description="Branching, when the next job depends on what this one found."
+  />
+</Cards>

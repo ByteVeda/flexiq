@@ -25,6 +25,7 @@ import { SDK_IDS } from "../../app/lib/sdk-registry.ts";
 import { extractJava } from "./extract/java.mjs";
 import { extractNode } from "./extract/node.mjs";
 import { extractPython } from "./extract/python.mjs";
+import { extractRust } from "./extract/rust.mjs";
 
 const REPO_ROOT = new URL("../../../", import.meta.url);
 const SNAPSHOT_DIR = new URL("../../content/api/", import.meta.url);
@@ -51,6 +52,26 @@ export const SOURCES = {
     files: ["sdks/java/src/main/java/org/byteveda/flexiq/*.java"],
     extract: extractJava,
     language: "java",
+  },
+  rust: {
+    // The one SDK with no single declaration file: a Rust API is declared
+    // wherever its `impl` block lives. These are the shell's publicly reachable
+    // modules. `encode`/`decode` are deliberately absent — they are private
+    // modules re-exported only under `__private`, which is the macro's seam and
+    // not a surface anyone calls.
+    // `options.rs` leads: it defines the `enqueue_setters!` macro that
+    // `call.rs` expands, and the extractor cannot attribute an invocation to a
+    // macro it has not read yet.
+    files: [
+      "crates/flexiq/src/options.rs",
+      "crates/flexiq/src/queue.rs",
+      "crates/flexiq/src/call.rs",
+      "crates/flexiq/src/pool.rs",
+      "crates/flexiq/src/steps.rs",
+      "crates/flexiq/src/task.rs",
+    ],
+    extract: extractRust,
+    language: "rust",
   },
 };
 
@@ -118,12 +139,21 @@ const OWNERS = {
   PyTaskConfig: { group: "types", receiver: "config" },
   JobContext: { group: "types", receiver: "ctx" },
   "JobContext.Sink": { group: "types", receiver: "sink" },
+  TaskCall: { group: "queue", receiver: "call" },
+  EnqueueOptions: { group: "queue", receiver: "options" },
+  WorkerBuilder: { group: "execution", receiver: "worker" },
+  StepHandle: { group: "steps", receiver: "step" },
+  // The trait `#[flexiq::task]` implements. Every item on it is an associated
+  // function, so it renders as `Task::config()` rather than through a receiver.
+  Task: { group: "execution", receiver: "" },
+  Debounce: { group: "types", receiver: "debounce" },
 };
 
 /** Free functions have no declaring type, so they are placed by name. */
 const FREE_FUNCTIONS = {
   startExecutor: { group: "execution", receiver: "" },
   reservedSettingPrefixes: { group: "queue", receiver: "" },
+  current_step: { group: "steps", receiver: "" },
 };
 
 /** The page and receiver for one symbol. `group: "other"` means unmapped. */

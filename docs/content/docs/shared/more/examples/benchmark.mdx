@@ -275,6 +275,91 @@ public final class Benchmark {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The crate ships no benchmark target, so this is one — drop it in
+`src/bin/benchmark.rs`:
+
+```rust
+use std::time::{Duration, Instant};
+
+use flexiq::{FlexiQ, JobStatus, SchedulerConfig};
+
+const N: i64 = 50_000;
+
+/// Minimal body — what is left is the framework's own cost.
+#[flexiq::task]
+fn noop(n: i64) -> flexiq::Outcome<()> {
+    let _ = n;
+    Ok(())
+}
+
+fn main() -> flexiq::Result<()> {
+    // Fresh database per run — leftover rows from a previous run would satisfy
+    // the completed count below early and skew the latency sample.
+    let queue = FlexiQ::open(&format!("bench-{}.db", std::process::id()))?;
+
+    // 1. Enqueue throughput — stage N jobs in batches of 1,000.
+    let t0 = Instant::now();
+    for start in (0..N).step_by(1_000) {
+        queue.enqueue_batch((start..start + 1_000).map(noop::call).collect())?;
+    }
+    let enqueue = t0.elapsed();
+
+    // 2. Processing throughput — drain the backlog, polling stats against a
+    // deadline so a failed job or a stuck worker can't hang the benchmark.
+    let t1 = Instant::now();
+    let deadline = t1 + Duration::from_secs(120);
+    let worker = queue
+        .worker()
+        .register::<noop>()
+        .num_workers(8)
+        .scheduler_config(SchedulerConfig {
+            // Defaults are one job per round trip and unbounded dispatch;
+            // a backlog this deep wants a batch and a ceiling.
+            batch_size: 64,
+            max_in_flight: Some(8),
+            ..SchedulerConfig::default()
+        })
+        .spawn()?;
+    let process = loop {
+        let stats = queue.stats()?;
+        assert_eq!(
+            (stats.failed, stats.dead),
+            (0, 0),
+            "jobs failed during the run"
+        );
+        if stats.completed >= N {
+            break t1.elapsed();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "drain timed out at {} of {N}",
+            stats.completed
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    worker.shutdown()?;
+
+    // 3. End-to-end latency — created → completed across a sample of jobs.
+    let mut latencies = queue
+        .list_jobs(1_000, 0)?
+        .into_iter()
+        .filter(|job| job.status == JobStatus::Complete)
+        .filter_map(|job| Some(job.completed_at? - job.created_at))
+        .collect::<Vec<_>>();
+    latencies.sort_unstable();
+    let p50 = latencies[latencies.len() / 2];
+    let p99 = latencies[latencies.len() * 99 / 100];
+
+    println!("enqueue:  {:.0} jobs/s", N as f64 / enqueue.as_secs_f64());
+    println!("process:  {:.0} jobs/s", N as f64 / process.as_secs_f64());
+    println!("latency:  p50 {p50}ms  p99 {p99}ms");
+    Ok(())
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 ## Running it
@@ -298,6 +383,13 @@ node benchmark.ts
 
 ```bash
 java -cp app.jar Benchmark
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```bash
+cargo run --release --bin benchmark
 ```
 
   </Tab>
@@ -349,6 +441,15 @@ latency:  p50 9ms  p99 45ms
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```
+enqueue:  125000 jobs/s
+process:  36000 jobs/s
+latency:  p50 8ms  p99 41ms
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -358,6 +459,34 @@ latency:  p50 9ms  p99 45ms
   configuration. The numbers above are from an 8-core machine with Python
   3.12.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="warn" title="`--release`, or the number is meaningless">
+  A debug build measures the absence of the optimiser. `cargo run --release`
+  is not a nicety here — it is the difference between benchmarking the queue
+  and benchmarking `opt-level = 0`.
+</Callout>
+
+Two per-dispatch costs are worth knowing before you attribute a number to your
+task body.
+
+A **step session is opened for every job**, whether or not the task uses steps.
+Opening one reads the job's recorded steps, so there is one extra storage read
+per dispatch, always — and a failure to open ends the attempt before the body
+runs, because running it anyway would re-execute steps that already happened.
+On a `noop` benchmark that read is a visible share of the total.
+
+And **every handler runs on `spawn_blocking`**. A body that blocks costs one
+thread and nothing else, but the hop itself is not free, and it is why
+`num_workers` near the core count is the right starting point for CPU-bound
+bodies rather than a large number.
+
+Neither shows up as a lever you can turn off. What they do mean is that a
+`noop` figure here measures the shell's floor, and the gap between it and your
+real task is the number that actually matters.
 
 </SdkOnly>
 
@@ -424,6 +553,27 @@ queue = Queue(db_path="tasks.db")
   The hot path is the Rust core — enqueue, dequeue, and result handling happen
   natively; your JVM only runs the handler body. Raise `batchSize` and
   `channelCapacity` together to keep a busy worker saturated.
+</Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+| Lever | Effect |
+| --- | --- |
+| `enqueue_batch` | one storage round-trip per batch instead of per job |
+| `SchedulerConfig::batch_size` | jobs claimed per scheduler poll — `1` by default, so this is the first knob to move |
+| `SchedulerConfig::max_in_flight` | ceiling on jobs dispatched but not yet finished; unbounded by default |
+| `SchedulerConfig::poll_interval` | 50ms by default — lower it for latency, raise it to spare the database |
+| `num_workers` | handlers running at once; near the core count for CPU-bound bodies |
+| Backend | SQLite (WAL) for a single node; Postgres/Redis to scale out workers |
+| Task body | a real body's I/O usually dominates — benchmark *your* task too |
+
+<Callout type="info">
+  Handlers run on `spawn_blocking` threads, so a body that blocks costs one
+  slot and nothing else. Raise `batch_size` and `max_in_flight` together: a
+  deep batch with no ceiling lets one worker claim a backlog its peers could
+  have shared.
 </Callout>
 
 </SdkOnly>
@@ -497,5 +647,18 @@ your own hardware for accurate numbers.
 | Drain to a target | poll `flexiq.stats().completed` |
 | Worker throughput knobs | `batchSize` + `channelCapacity` + `concurrency` |
 | Latency percentiles | `listJobs` + `completedAt − createdAt` |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+## Key patterns
+
+| Pattern | Where |
+| --- | --- |
+| Batched staging | `queue.enqueue_batch` |
+| Drain to a target | poll `queue.stats()?.completed` |
+| Worker throughput knobs | `num_workers` + `SchedulerConfig { batch_size, max_in_flight }` |
+| Latency percentiles | `queue.list_jobs` + `completed_at − created_at` |
 
 </SdkOnly>

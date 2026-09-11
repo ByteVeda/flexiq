@@ -1,0 +1,14 @@
+{
+  "title": "API Reference",
+  "root": true,
+  "pages": [
+    "index",
+    "overview",
+    "queue",
+    "task",
+    "worker",
+    "result",
+    "errors",
+    "symbols"
+  ]
+}

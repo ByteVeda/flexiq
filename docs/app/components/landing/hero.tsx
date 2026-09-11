@@ -5,6 +5,7 @@ import { tierProfile, tierStore } from "@/lib";
 import {
   highlightJava,
   highlightPython,
+  highlightRust,
   highlightShell,
   highlightTs,
 } from "@/lib/highlight-lite";
@@ -21,6 +22,7 @@ const HIGHLIGHT: Record<HeroPane["lang"], (code: string) => string> = {
   py: highlightPython,
   ts: highlightTs,
   java: highlightJava,
+  rs: highlightRust,
   sh: highlightShell,
 };
 

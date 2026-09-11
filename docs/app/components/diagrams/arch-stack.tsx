@@ -92,8 +92,23 @@ export function ArchitectureStack() {
                     <code>Task.of()</code>, <code>enqueue()</code>
                   </>
                 }
+                rust={
+                  <>
+                    <code>#[task]</code>, <code>::call()</code>
+                  </>
+                }
               />
-              , results, workflows, resources — the surface you write against.
+              , results,{" "}
+              <SdkSwap
+                python="workflows, resources"
+                node="workflows, resources"
+                java="workflows, resources"
+                // The Rust shell wraps neither: workflows are the separate
+                // `flexiq-workflows` crate behind a feature, and there is no
+                // resource injection at all.
+                rust="durable steps"
+              />{" "}
+              — the surface you write against.
             </>
           ),
           role: "what you write",
@@ -160,21 +175,31 @@ export function ResourcePipeline() {
           body: (
             <>
               <code>ResourceRuntime</code> initializes resources at worker
-              startup in topological order, then injects requested ones (via{" "}
+              startup in topological order, then injects requested ones
               <SdkSwap
                 python={
                   <>
-                    <code>inject=</code> or <code>Inject["name"]</code>
+                    {" "}
+                    (via <code>inject=</code> or <code>Inject["name"]</code>)
                   </>
                 }
                 node={
                   <>
-                    <code>inject:</code> or <code>useResource()</code>
+                    {" "}
+                    (via <code>inject:</code> or <code>useResource()</code>)
                   </>
                 }
-                java={<code>Resources.use()</code>}
+                java={
+                  <>
+                    {" "}
+                    (via <code>Resources.use()</code>)
+                  </>
+                }
+                // Not a missing binding — the Rust shell has no injection at
+                // all, so the clause has to go rather than name a spelling.
+                rust=" — though never into a Rust task, which takes its arguments and nothing else"
               />
-              ). Task-scoped resources come from a semaphore pool.
+              . Task-scoped resources come from a semaphore pool.
             </>
           ),
         },

@@ -3,15 +3,15 @@ title: Pluggable Serializers
 description: "Built-in JSON, MessagePack, CBOR, signed, and encrypted serializers, plus the cross-SDK payload-codec chain for compression and encryption."
 ---
 
-Task arguments and results are serialized with a pluggable `Serializer`. The
-Rust core stores every payload as an opaque byte blob, so serialization is
-entirely a host-language concern — producers and workers just need to agree
-on the same serializer.
+Task arguments and results are serialized before they reach storage. The Rust
+core stores every payload as an opaque byte blob, so the codec is the binding's
+own concern — and where a binding makes it pluggable, producers and workers
+just need to agree on the same `Serializer`.
 
 <Callout type="warn" title="Producers and workers must match">
-  The serializer is not negotiated at runtime — it's configured once per
-  `Queue`. A job enqueued with one serializer can only be decoded by a worker
-  configured with a compatible one.
+  The serializer is never negotiated at runtime. Where it is configurable it is
+  set once per `Queue`, and a job enqueued with one serializer can only be
+  decoded by a worker using a compatible one.
 </Callout>
 
 <SdkOnly sdk="python">
@@ -36,6 +36,14 @@ built-ins: `MsgpackSerializer`, `CborSerializer`, `SignedSerializer`,
 The default is `JsonSerializer` — Jackson-backed, human-readable and easy to
 debug. Other built-ins: `MsgpackSerializer`, `CborSerializer`,
 `SignedSerializer`, `EncryptedSerializer`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is nothing to pick. A Rust payload is always the wire CBOR envelope
+`flexiq_core::wire::encode_call` writes — the one format the cross-SDK contract
+pins — and the sections below name what stands in for each option.
 
 </SdkOnly>
 
@@ -68,6 +76,15 @@ from flexiq import CloudpickleSerializer, Queue
 
 queue = Queue(serializer=CloudpickleSerializer())
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+No list to give: one codec, always on, never selected. Read the sections below
+as "what stands in for this instead" — the only two with a real Rust answer are
+[CborSerializer](#cborserializer), which is what you are already using, and
+[Custom serializers](#custom-serializers), where `serde` takes the seam's place.
 
 </SdkOnly>
 
@@ -106,6 +123,33 @@ FlexiQ flexiq = FlexiQ.builder()
         .serializer(new JsonSerializer())
         .open();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+There is no serializer to choose. A Rust task's payload is the wire CBOR
+envelope `flexiq_core::wire::encode_call` writes, and `#[flexiq::task]` encodes
+each parameter through it — what you control is what your argument types
+serialize to.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Order {
+    order_id: String,
+    amount_cents: i64,
+}
+
+#[flexiq::task]
+fn charge(order: Order) -> flexiq::Outcome<()> {
+    println!("charging {} {} cents", order.order_id, order.amount_cents);
+    Ok(())
+}
+```
+
+A parameter needs `Serialize` to be enqueued and `Deserialize` to be run, so
+both derives are load-bearing.
 
   </Tab>
 </CodeTabs>
@@ -147,6 +191,14 @@ FlexiQ flexiq = FlexiQ.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Also CBOR — the codec is fixed, so there is no more compact format to opt into.
+The size knob a Rust caller does have is the shape of the arguments: an integer
+travels in CBOR's shortest form, and an `f32` is widened to a 64-bit float
+because core always writes one, so the narrower type buys nothing on the wire.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -174,6 +226,17 @@ you want to spell it out in your own requirements file.
 
 `MsgpackSerializer`'s `org.msgpack:jackson-dataformat-msgpack` dependency is
 `compileOnly` — add it to your build explicitly.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+One shape is worth fixing while you are thinking about size. A `Vec<u8>` is a
+`serde` sequence, so it encodes as an *array of integers* — one CBOR head per
+byte. Annotating it with `serde_bytes` routes it through the serializer's
+byte-string arm instead, which is a single head and the length. The crate's own
+wire test reads such a value back as a `serde_bytes::ByteBuf` for exactly that
+reason.
 
 </SdkOnly>
 
@@ -216,6 +279,36 @@ FlexiQ flexiq = FlexiQ.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+This one the Rust SDK has, and it is not optional: every payload carries the
+`0x02` envelope tag. `crates/flexiq/tests/wire_vectors.rs` asserts the encoder's
+bytes against `contracts/wire-vectors.json`, so the cross-SDK format is pinned
+rather than agreed by habit.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+/// Field order is the wire order: the encoder keeps declaration order and never
+/// sorts, because `auto:` idempotency keys hash the encoded bytes.
+#[derive(Serialize, Deserialize)]
+struct Order {
+    order_id: String,
+    amount_cents: i64,
+}
+
+#[flexiq::task(idempotent)]
+fn charge(order: Order) -> flexiq::Outcome<()> {
+    println!("charging {}", order.order_id);
+    Ok(())
+}
+```
+
+Swapping those two fields changes the payload, and with it the derived `auto:`
+key — a caller in another language that hashed the old order stops deduping
+against you.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -242,8 +335,26 @@ dependency is `compileOnly` — add it to your build explicitly, same as
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Writing and reading are deliberately asymmetric here. The writer has exactly one
+legal output, so it goes through the pinned encoder; the reader has to take
+everything any producer may legally emit, so it is a full CBOR implementation.
+In practice that means a job written elsewhere still decodes when it uses a
+narrower float (`1.5` at half precision reads back as `1.5`), an integer past
+2⁵³ (`9007199254740993` keeps its last digit in an `i64`), a byte string, or an
+indefinite-length head from a producer older than the definite-length rule.
+
+What it will not do is guess. The leading byte has to be the `0x02` tag —
+anything else is refused by number rather than attempted — and an empty payload
+is reported as its own fault, because "no tag at all" and "a tag I do not know"
+are different problems.
+
+</SdkOnly>
+
 <Callout type="info" title="Cross-SDK payload contract">
-  Producer and consumer of a task must configure the same wire serializer.
+  Producer and consumer of a task must agree on the same wire serializer —
+  which means configuring it on both sides wherever the binding lets you choose.
   For cross-SDK tasks, prefer a single object/dict argument — it maps
   cleanly onto every language's handler-binding model.
 </Callout>
@@ -296,6 +407,14 @@ FlexiQ flexiq = FlexiQ.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+No signing layer, and no codec seam to hang one on: `encode_call` writes the
+payload and the shell's `ciborium` reader decodes it, with nothing in between.
+A task that must not trust its payload verifies it in its own body, where the
+arguments have already been decoded into ordinary Rust values.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -315,6 +434,22 @@ FlexiQ flexiq = FlexiQ.builder()
 
 The key is a plain `secret` string, hashed internally — producers and
 workers just need to share the same string.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Be clear about what the decoder is and is not. It refuses a payload whose tag it
+does not know, one that is not a two-element `[args, kwargs]` array, one
+carrying keyword arguments, and one whose positional arguments do not fit the
+handler's parameter types. Every one of those is a *type* check. None of them is
+an authenticity check: a well-formed call with attacker-chosen arguments
+deserializes cleanly, because it is indistinguishable from a legitimate one.
+
+So the trust boundary is the database. If anything that can write to it is not
+already trusted, the verification belongs in the task body, on values you can
+name — an HMAC over a field you put there yourself, checked before the work
+starts.
 
 </SdkOnly>
 
@@ -366,6 +501,14 @@ FlexiQ flexiq = FlexiQ.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Absent for the same reason — nothing wraps the payload on its way to storage.
+A field that must not be readable in the database has to arrive already
+encrypted: encrypt it before you build the call, decrypt it in the body, and
+the queue never sees anything but the bytes you handed it.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -396,9 +539,25 @@ need to share the string — not raw key bytes.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Encrypting inside the value has one consequence worth planning for: it changes
+the payload bytes, and `.idempotent()` hashes exactly those bytes. A scheme with
+a fresh nonce per call produces a different `auto:` key every time, so the same
+logical job stops deduplicating against itself. Either make the ciphertext
+deterministic for a given input, or name the identity yourself with
+`.unique_key(..)`, which wins over `.idempotent()` outright.
+
+Note also that `.metadata(..)` and `.notes(..)` are stored as their own columns
+rather than inside the payload, so nothing you put there is covered by any of
+this — keep secrets out of both.
+
+</SdkOnly>
+
 ## Custom serializers
 
-Implement the `Serializer` interface with two methods:
+Where a binding exposes the seam, implement its `Serializer` interface with two
+methods:
 
 <CodeTabs>
   <Tab sdk="python">
@@ -450,6 +609,33 @@ public final class MySerializer implements Serializer {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+There is no `Serializer` trait to implement. `serde` is the seam in its place:
+the crate's own `Serialize` sink turns each argument into core's wire value, so
+a custom representation is a custom `impl Serialize` / `Deserialize` on your own
+type.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Cents(i64);
+
+#[flexiq::task]
+fn charge(amount: Cents) -> flexiq::Outcome<()> {
+    println!("charging {} cents", amount.0);
+    Ok(())
+}
+```
+
+Two things the sink will not guess about. It reports
+`is_human_readable() == false`, so a type that branches on that must take the
+binary arm — which is why a `Uuid` round-trips instead of encoding as text and
+failing when the job runs. And nothing widens silently: a `u64` past `i64::MAX`,
+or a map with non-text keys, is refused at enqueue rather than reshaped.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -476,6 +662,24 @@ The `Type` overload (`deserialize(byte[] bytes, Type type)`) is a default
 method supporting generic payloads from a `TypeReference`; the base
 implementation handles plain `Class` types and rejects generic ones —
 override it in a generics-aware implementation, as `JsonSerializer` does.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Three more things the sink decides for you, none of them configurable:
+
+- **Map keys must be text.** A `BTreeMap<i64, _>` is refused rather than
+  stringified — the envelope's maps are text-keyed, and coercing would put keys
+  on the wire the caller never wrote. A fieldless enum variant is a legal key,
+  because it already is a name.
+- **Enums travel externally tagged.** A unit variant encodes as its own name; a
+  data-carrying one as a single-entry map under that name. That is the shape a
+  JSON-minded producer in another language would send.
+- **The error arrives at `enqueue`, not at `call`.** `name::call(..)` mirrors
+  the task's signature and has nowhere to put a `Result`, so an unencodable
+  argument is carried on the `TaskCall` and surfaces from
+  `FlexiQ::enqueue` — naming the task that could not encode its arguments.
 
 </SdkOnly>
 
@@ -543,13 +747,29 @@ when payloads must not be readable in storage.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+## Choosing a serializer
+
+There is one and it is already chosen. The decisions left are about the *types*
+you send through it:
+
+| The situation | What to do about it |
+|---|---|
+| A worker in another language runs this task | Stay inside CBOR's own shapes — integers, floats, text, byte strings, arrays, text-keyed maps. A type that encodes as bytes here (a `Uuid` does) arrives as a byte string there; send a `String` when the far side expects text. |
+| You want `.idempotent()` to dedupe against a producer elsewhere | Freeze your field order and never sort it. The key is `auto:` plus `sha256(name \|\| 0x00 \|\| payload)` truncated to 32 hex characters, so two swapped fields are two different jobs. |
+| A value has no representation in the envelope | A `u64` past `i64::MAX`, an out-of-range `i128`, and a non-text map key are all refused at enqueue rather than reshaped. Narrow the type; do not widen the wire. |
+| The payload must not be readable in the database | Encrypt the field inside your own value — there is no layer to install, and see the note above about what that does to `auto:` keys. |
+
+</SdkOnly>
+
 ## Payload codecs
 
 A `PayloadCodec` is a reversible byte-to-byte transform layered *around* a
 serializer — compression, encryption, signing — applied after serialization
 on the producer and reversed before deserialization on the worker. Wire
 formats are part of the cross-SDK wire contract, so a codec-framed payload
-decodes from any FlexiQ binding:
+decodes from any FlexiQ binding that ships codecs:
 
 | Codec | Wire format | Description |
 |---|---|---|
@@ -596,6 +816,14 @@ FlexiQ flexiq = FlexiQ.builder()
         .codec(new GzipCodec(), new AesGcmCodec(key)) // compress, then encrypt
         .open();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+No `PayloadCodec` either, so there is no queue-wide transform to install and no
+chain order to get right. Compression and encryption live inside the value you
+pass: hand the task bytes you already compressed or encrypted, and undo it in
+the body.
 
   </Tab>
 </CodeTabs>
@@ -657,6 +885,14 @@ Task<Report> export = Task.of("export", Report.class).codecs("secret");
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+No per-task codec names. `#[flexiq::task]` takes a fixed key set — `name`,
+`queue`, `priority`, `max_retries`, `timeout`, `idempotent`, `rate_limit`,
+`cron` and a handful more — and an unknown key is a compile error listing the
+ones it accepts, so there is nowhere for a codec name to go.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -668,8 +904,17 @@ supplied at runtime, never in the annotation.
 
 </SdkOnly>
 
-The same chain (or the same names) must be configured on producers and
-workers. Dedup keys for auto-derived idempotency hash the *pre-codec*
+<SdkOnly sdk="rust">
+
+Nor is there an annotation that could opt a body in. The per-call fields that do
+exist beside the payload — `.metadata(..)` and `.notes(..)` — are separate
+columns on the job row and never pass through the encoder, so they are neither
+transformed nor protected by anything.
+
+</SdkOnly>
+
+Where codecs exist, the same chain (or the same names) must be configured on
+producers and workers. Dedup keys for auto-derived idempotency hash the *pre-codec*
 payload, so a nondeterministic named codec (an AES-GCM nonce, for example)
 never breaks dedup — see
 <SdkLink to="guides/reliability/idempotency">Idempotency</SdkLink> for the
@@ -684,5 +929,20 @@ full precedence rules and the hash recipe.
   from one call to the next — pass an explicit `idempotency_key` instead when
   a global codec chain is enabled.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+With no codec in the way, "pre-codec payload" and "payload" are the same bytes —
+the `auto:` key hashes what your `Serialize` impl produced, and nothing else
+touches it. That makes the key as deterministic as your own types are, and no
+more so: a field carrying a timestamp, a random nonce, or a `HashMap` whose
+iteration order is not fixed will produce a fresh key on every call and defeat
+`.idempotent()` quietly.
+
+When a value cannot be made stable, name the identity instead — an explicit
+`.unique_key(..)` takes precedence. <SdkLink to="guides/reliability/idempotency">Idempotency</SdkLink>
+has the precedence rules in full.
 
 </SdkOnly>

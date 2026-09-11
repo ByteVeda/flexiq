@@ -1,0 +1,141 @@
+---
+title: Autoscaling
+description: "The crate ships no autoscaler — queue.stats() is the signal, num_workers is the in-process knob, and KEDA reads the same depth from flexiq-server."
+---
+
+The Rust SDK ships **no autoscaler**. Nothing in the crate spawns a worker
+process, drains one, or watches a threshold. `flexiq` is a library: it runs the
+worker you asked for, in the process you started.
+
+What it does give you is the signal every autoscaler wants — queue depth — in
+one query.
+
+## The signal
+
+```rust
+let stats = queue.stats()?;
+println!("{} pending, {} running", stats.pending, stats.running);
+```
+
+`QueueStats` has six `i64` fields — `pending`, `running`, `completed`, `failed`,
+`dead`, `cancelled` — scoped to the handle's namespace. `pending` is the backlog
+and the number a scaling decision is made from; `running` against your worker
+count is utilisation.
+
+Per queue, through `queue.storage()`:
+
+```rust
+use flexiq::Storage;
+
+let depth = queue.storage().count_pending_by_queue("billing")?;
+
+for (name, stats) in queue.storage().stats_all_queues(queue.namespace())? {
+    println!("{name}: {} pending", stats.pending);
+}
+```
+
+`count_pending_by_queue` is the cheap single-status count; `stats_all_queues`
+gives the full breakdown per queue name. Live workers are
+`queue.storage().list_workers()?`, each with its `threads` and its last
+heartbeat.
+
+## Scaling inside one process
+
+Before scaling processes, there are two numbers on the worker itself:
+
+```rust
+let worker = queue
+    .worker()
+    .register::<charge>()
+    .num_workers(16)
+    .spawn()?;
+```
+
+`num_workers` bounds how many handlers run at once, and at spawn it also becomes
+the scheduler's `max_in_flight` unless you set that yourself — so the worker
+never claims more than it can run. Both are fixed for the life of the worker:
+changing either means shutting down and spawning again.
+
+<Callout type="info">
+  A worker built this way is a thread pool, not a process pool. There is no
+  prefork mode in the Rust SDK, and no way to resize a running pool.
+</Callout>
+
+## Scaling processes
+
+That is your supervisor's job — systemd, a container orchestrator, or a loop you
+write. The decision is a read like any other:
+
+```rust
+use std::time::Duration;
+
+/// How many workers the current backlog wants, between a floor and a ceiling.
+fn desired_workers(queue: &flexiq::FlexiQ, target_depth: i64) -> flexiq::Result<i64> {
+    let pending = queue.stats()?.pending;
+    Ok((pending / target_depth.max(1) + 1).clamp(1, 10))
+}
+
+loop {
+    println!("want {} workers", desired_workers(&queue, 25)?);
+    std::thread::sleep(Duration::from_secs(15));
+}
+```
+
+Scaling *down* is the half that needs care: `WorkerHandle::shutdown()` drains
+in-flight jobs before it returns, so a worker told to stop finishes what it
+claimed. Send the signal, then wait for the process, and do not kill it.
+
+## KEDA
+
+On Kubernetes you do not write that loop. `flexiq-server` serves the
+external-scaler payload at `GET /api/scaler` under its dashboard role, and
+KEDA's `metrics-api` trigger polls it directly:
+
+```json
+{
+  "metricName": "flexiq_queue_depth",
+  "metricValue": 128,
+  "isActive": true,
+  "liveWorkers": 3,
+  "totalCapacity": 0,
+  "targetQueueDepth": 10
+}
+```
+
+`metricValue` is `pending` and `isActive` is `pending > 0`. `totalCapacity` is
+the execution capacity *attached executors* advertise — a server with none
+reports `0`, and a `workerUtilization` field appears only when it is non-zero,
+so a Rust worker pool running beside the server does not show up there.
+
+A `?queue=` parameter narrows the metric to one queue and renames it, so two
+scaled objects watching different queues never collide. The server reads the
+same tables your Rust worker writes — it needs nothing from the worker itself,
+which is why this works with no scaler code in the crate.
+
+<Callout type="warn">
+  `/api/scaler` is unauthenticated by design. Keep it reachable only from inside
+  the cluster — a `ClusterIP` Service, never a public `LoadBalancer` or
+  `Ingress`.
+</Callout>
+
+The manifests, the trigger block and the `ScaledObject` are on
+<SdkLink to="modules/autoscaling/keda">KEDA autoscaling</SdkLink>. Running the
+server is on <SdkLink to="modules/dashboard">Dashboard</SdkLink>.
+
+<Cards>
+  <Card
+    title="KEDA autoscaling"
+    to="modules/autoscaling/keda"
+    description="Scaling worker replicas on Kubernetes from queue depth."
+  />
+  <Card
+    title="Monitoring"
+    to="guides/extend/monitoring"
+    description="The same reads, used for counting rather than scaling."
+  />
+  <Card
+    title="Kubernetes"
+    to="operate/kubernetes"
+    description="Deploying a Rust worker in the first place."
+  />
+</Cards>
