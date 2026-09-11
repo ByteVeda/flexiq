@@ -50,10 +50,23 @@ const SHORT_STATUS_NAMES: [&str; 6] = [
 // ── Tables ───────────────────────────────────────────────────────────
 
 /// Render `rows` under `columns`, aligned.
+///
+/// Every cell is escaped before it is measured. A task name, queue or job id
+/// comes back from the server as whatever was enqueued, and the door validates
+/// only that a task name is non-empty — so a name carrying an escape byte would
+/// otherwise repaint the terminal of whoever ran `fq jobs list`, and one
+/// carrying a newline would forge a row. Escaping before measuring also keeps
+/// the column widths honest, which they would not be if a control character
+/// counted as one column and printed as none.
 pub fn table(columns: &[&str], rows: &[Vec<String>]) -> String {
     if rows.is_empty() {
         return "(none)\n".to_string();
     }
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| escape(cell)).collect())
+        .collect();
+
     let widths: Vec<usize> = columns
         .iter()
         .enumerate()
@@ -89,6 +102,29 @@ pub fn table(columns: &[&str], rows: &[Vec<String>]) -> String {
     ];
     lines.extend(rows.iter().map(|row| render(row)));
     format!("{}\n", lines.join("\n"))
+}
+
+/// One cell as a single printable fragment.
+///
+/// Same rule as `flexiq-server`'s `log_safe::escape`, for the same reason: a
+/// control character in a value that arrived over the wire must be spelled out
+/// rather than executed by the terminal. No length cap here — a table cell is
+/// read by a person looking for the whole value, and truncating a job id would
+/// make the row useless.
+fn escape(value: &str) -> String {
+    if !value.chars().any(|character| character.is_control()) {
+        return value.to_string();
+    }
+    value
+        .chars()
+        .flat_map(|character| {
+            if character.is_control() {
+                character.escape_debug().collect::<Vec<_>>()
+            } else {
+                vec![character]
+            }
+        })
+        .collect()
 }
 
 /// One job as a row of [`JOB_COLUMNS`].
@@ -344,6 +380,32 @@ mod tests {
         assert_eq!(lines[1], "----  -------");
         assert_eq!(lines[2], "a     default");
         assert_eq!(lines[3], "bbbb  q      ");
+    }
+
+    /// The door validates only that a task name is non-empty, so a name can
+    /// carry an escape byte all the way to this table. Printed as-is it
+    /// repaints the terminal; a newline forges a row.
+    #[test]
+    fn a_control_character_in_a_cell_is_spelled_out() {
+        let rendered = table(
+            &["task"],
+            &[vec!["evil\u{1b}[2Kname".into()], vec!["two\nrows".into()]],
+        );
+        assert!(!rendered.contains('\u{1b}'), "{rendered:?}");
+        assert!(rendered.contains("\\u{1b}"), "{rendered:?}");
+        assert!(rendered.contains("two\\nrows"), "{rendered:?}");
+        // Header, rule, and exactly one line per row — the newline did not
+        // become a second row.
+        assert_eq!(rendered.lines().count(), 4);
+    }
+
+    /// Escaping widens a cell, and a width measured before it would leave the
+    /// column short.
+    #[test]
+    fn an_escaped_cell_is_measured_after_escaping() {
+        let rendered = table(&["a", "b"], &[vec!["x\ny".into(), "end".into()]]);
+        let row = rendered.lines().nth(2).expect("a row");
+        assert!(row.starts_with("x\\ny  end"), "{row:?}");
     }
 
     #[test]
