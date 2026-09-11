@@ -143,7 +143,7 @@ fn a_batch_containing_a_debounced_call_is_refused() {
 }
 
 /// The window's three values travel together, so the shell takes them
-/// together. Python and Node have to refuse a partial window at runtime — an
+/// together. The other shells have to refuse a partial window at runtime — an
 /// absent `max_wait_ms` is an unbounded debounce, which starves the job — and
 /// here that call does not compile.
 #[test]

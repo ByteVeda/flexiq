@@ -103,9 +103,10 @@ unless a fleet double-firing it is acceptable.
 ## Talking to the other SDKs
 
 Task arguments travel in the cross-SDK envelope, byte for byte as
-`contracts/wire-vectors.json` pins it, so a job enqueued here runs on a Python,
-Node or Java worker and the reverse holds. Task names are the meeting point: a
-task is named after its function unless `name = "..."` says otherwise.
+`contracts/wire-vectors.json` pins it, so a job enqueued here runs on a worker
+written against any other FlexiQ SDK, and the reverse holds. Task names are the
+meeting point: a task is named after its function unless `name = "..."` says
+otherwise.
 
 ## Features
 

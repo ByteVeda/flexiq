@@ -30,10 +30,10 @@ thread_local! {
 
 /// Open a session for `job`, fenced on the triple this dispatch won.
 ///
-/// `with_epoch` is the term no other shell sets: Python, Node and Java each
-/// reach steps through an FFI class that has to be one concrete non-generic
-/// type, and each fences on `(owner, attempt)` alone. Nothing here needs that
-/// erasure, so the third term is wired.
+/// `with_epoch` is the term no other shell sets. Each of them reaches steps
+/// through an FFI class that has to be one concrete non-generic type, and so
+/// fences on `(owner, attempt)` alone. Nothing here needs that erasure, so the
+/// third term is wired.
 pub(crate) fn open(
     storage: &StorageBackend,
     job: &Job,
