@@ -3612,6 +3612,50 @@ fn redis_storage_tests() {
     redis_debounce_coalesces_onto_a_plainly_enqueued_job(&storage);
     redis_debounce_slides_an_empty_payload(&storage);
     redis_purge_metrics_drains_across_batches(&storage);
+    redis_prunes_a_legacy_due_member(&storage);
+}
+
+/// A schedule registered before #918 lives at `periodic:<name>` and is a bare
+/// name in the due index, not a key. It must never fire — firing it would write
+/// the advance to the *new* key and leave the old `next_run` to fire again on
+/// every tick — and it must not be handed back forever either: nothing advances
+/// its score, so the due read drops it from the index as it finds it.
+#[cfg(feature = "redis")]
+fn redis_prunes_a_legacy_due_member(s: &flexiq_core::RedisStorage) {
+    use redis::Commands;
+
+    let legacy_key = format!("{}periodic:pre918", s.prefix());
+    let due_key = format!("{}periodic:due", s.prefix());
+    // Written by a pre-#918 binary: no `namespace` field, and the due member is
+    // the bare name.
+    let document = r#"{"name":"pre918","task_name":"legacy_task","cron_expr":"* * * * *","args":null,"kwargs":null,"queue":"default","enabled":true,"last_run":null,"next_run":0,"timezone":null}"#;
+
+    let mut conn = s.conn().unwrap();
+    let _: () = conn.set(&legacy_key, document).unwrap();
+    let _: () = conn.zadd(&due_key, "pre918", 0.0).unwrap();
+
+    let due = s.get_due_periodic(now_millis(), None).unwrap();
+    assert!(
+        !due.iter().any(|p| p.name == "pre918"),
+        "a legacy row must not fire: {due:?}"
+    );
+
+    let score: Option<f64> = conn.zscore(&due_key, "pre918").unwrap();
+    assert!(
+        score.is_none(),
+        "the legacy member must be pruned from the due index"
+    );
+
+    // The document itself is left where it is — an operator's to delete — but
+    // no listing owns up to it, because its key is not the one its identity
+    // would compute.
+    let listed = s.list_periodic(None).unwrap();
+    assert!(
+        !listed.iter().any(|p| p.name == "pre918"),
+        "a legacy row must not be listed: {listed:?}"
+    );
+
+    let _: () = conn.del(&legacy_key).unwrap();
 }
 
 /// A per-entry-TTL row archived before the `archived:expiry` index existed must
