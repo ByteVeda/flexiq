@@ -51,6 +51,22 @@ Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(
+    queue = "emails",
+    max_retries = 3,
+    retry_backoff_ms = "2s",
+    retry_max_delay_ms = "5m"
+)]
+fn send_welcome_email(user_id: i64, address: String) -> flexiq::Outcome<String> {
+    println!("welcome mail → {address}");
+    Ok(format!("sent:{user_id}"))
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 With a 2-second base the waits run roughly 2s, 4s, 8s, plus jitter so a burst of
@@ -112,6 +128,29 @@ Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
 `retryOn` classifies the thrown exception: `false` dead-letters immediately.
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::TaskError;
+
+#[flexiq::task(queue = "emails", max_retries = 3)]
+fn send_welcome_email(user_id: i64, address: String) -> flexiq::Outcome<String> {
+    if !address.contains('@') {
+        // Fatal: three more attempts find the same bad address.
+        return Err(TaskError::fatal(format!("not an address: {address}")).into());
+    }
+
+    // Someone else's transient problem, so: worth another attempt.
+    send_mail(&address).map_err(|e| TaskError::retryable(e.to_string()))?;
+    Ok(format!("sent:{user_id}"))
+}
+```
+
+There is no retry predicate to configure. The body classifies its own failure by
+which constructor it reaches for, and the macro will not guess: `retryable` gets
+the retry policy, `fatal` dead-letters immediately.
+
+  </Tab>
 </CodeTabs>
 
 The rule of thumb: retry what is **someone else's** transient problem — network,
@@ -156,6 +195,21 @@ Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(queue = "emails", max_retries = 3, timeout = "30s")]
+fn send_welcome_email(user_id: i64, address: String) -> flexiq::Outcome<String> {
+    println!("welcome mail → {address}");
+    Ok(format!("sent:{user_id}"))
+}
+```
+
+An omitted `timeout` is 300 000 ms, and `.timeout_ms(..)` on the call overrides
+whatever the attribute declared — five minutes is a ceiling, not a decision
+about this task.
+
+  </Tab>
 </CodeTabs>
 
 A timeout bounds **one attempt**, not the job: it counts as a failure, consumes
@@ -185,6 +239,21 @@ returns, however long that takes.
 
 An unset timeout — or `0` — means no limit. A handler left unbounded holds its
 worker thread until it returns, however long that takes.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Know what the deadline actually does. Nothing interrupts a running body: every
+handler runs on a blocking thread the pool does not cancel, and the timeout is
+noticed afterwards by the stale-job reap, which records the failure and lets the
+job retry on the usual backoff. The abandoned attempt keeps its slot until the
+body returns of its own accord.
+
+So the `timeout` is when you will be *told*, and when the job will be tried
+again — not when the work stops. Anything that could block forever needs its own
+bound inside the body: a client with a connect and read timeout, a bounded
+`recv_timeout`, a deadline you check between steps.
 
 </SdkOnly>
 
@@ -219,6 +288,23 @@ queue.retryDead(deadId); // re-enqueue with a fresh budget
 ```java
 List<DeadJob> dead = queue.listDead(50, 0);
 String newJobId = queue.retryDead(deadId); // re-enqueue with a fresh budget
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+The dead-letter reads are not on `FlexiQ`. `queue.storage()` is the escape hatch
+to the `Storage` trait, which carries all of them:
+
+```rust
+use flexiq::Storage;
+
+for entry in queue.storage().list_dead(20, 0, None)? {
+    println!("{} {}", entry.task_name, entry.error.as_deref().unwrap_or(""));
+}
+
+// Re-enqueue with a fresh budget; the new job id comes back.
+let new_job_id = queue.storage().retry_dead(&dead_id, None)?;
 ```
 
   </Tab>
@@ -275,6 +361,29 @@ Task<Signup> SEND_WELCOME_EMAIL = Task.of("send_welcome_email", Signup.class)
         .retryPolicy(RetryPolicy.exponential(Duration.ofSeconds(2), Duration.ofMinutes(5)))
         .timeout(Duration.ofSeconds(30))
         .retryOn(error -> !(error instanceof IllegalArgumentException));
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::TaskError;
+
+#[flexiq::task(
+    queue = "emails",
+    max_retries = 5,
+    retry_backoff_ms = "2s",
+    retry_max_delay_ms = "5m",
+    timeout = "30s"
+)]
+fn send_welcome_email(user_id: i64, address: String) -> flexiq::Outcome<String> {
+    if !address.contains('@') {
+        return Err(TaskError::fatal(format!("not an address: {address}")).into());
+    }
+
+    send_mail(&address).map_err(|e| TaskError::retryable(e.to_string()))?;
+    Ok(format!("sent:{user_id}"))
+}
 ```
 
   </Tab>

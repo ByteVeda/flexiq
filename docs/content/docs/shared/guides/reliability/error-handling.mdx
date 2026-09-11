@@ -3,7 +3,7 @@ title: Error Handling
 description: "What happens when a task fails — the retry, timeout, and dead-letter lifecycle, inspecting error history, and each SDK's exception hierarchy."
 ---
 
-When a <SdkSwap python={<>task raises an exception</>} node={<>task throws (or its promise rejects)</>} java={<>handler throws</>} />, FlexiQ decides
+When a <SdkSwap python={<>task raises an exception</>} node={<>task throws (or its promise rejects)</>} java={<>handler throws</>} rust={<>task body returns an <code>Err</code>, or panics</>} />, FlexiQ decides
 the job's fate from its retry budget. Each failing attempt is recorded,
 then:
 
@@ -53,6 +53,22 @@ Task<String> FETCH = Task.of("fetch", String.class)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(max_retries = 3, retry_backoff_ms = "1s", retry_max_delay_ms = "1m")]
+fn fetch(url: String) -> flexiq::Outcome<String> {
+    let body = http::get(&url).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(body)
+}
+```
+
+`Ok` is success and `Err` is failure; which of the two a failure gets is the
+constructor's choice, `TaskError::retryable` or `TaskError::fatal`. The macro
+will not guess it, and there is no blanket conversion from an arbitrary error
+type — that is why the body ends in a `map_err`.
+
+  </Tab>
 </CodeTabs>
 
 Returning normally is success; an uncaught throw is failure.
@@ -81,6 +97,16 @@ A failing attempt can also decide for itself: throwing `NonRetryableException`
 dead-letters the job immediately, `RetryableException` insists on a retry. See
 [Typed signals from the
 handler](/java/guides/reliability/retries#typed-signals-from-the-handler).
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+A failing attempt does decide for itself, and it is the only thing that does:
+`TaskError::fatal(..)` dead-letters the job at once whatever budget is left,
+`TaskError::retryable(..)` spends one. Set `max_retries = 0` when the whole task
+should be fire-once rather than one failure inside it. See
+<SdkLink to="guides/reliability/retries">Retries</SdkLink>.
 
 </SdkOnly>
 
@@ -116,6 +142,20 @@ Task<String> SLOW = Task.of("slow", String.class).timeout(Duration.ofSeconds(30)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(timeout = "30s")]
+fn long_task() -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+The pool does not race the handler. The scheduler's stale-job reap notices the
+overrun from outside and fails the attempt, so the blocking thread keeps running
+until the body returns and its late result is discarded.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -143,13 +183,25 @@ no limit.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The scheduler detects an exceeded timeout externally — its maintenance reap runs
+every `reap_interval` polls, roughly every 5 seconds at the default
+`SchedulerConfig` — and marks the job failed, which triggers the retry/DLQ logic
+above. Nothing races the handler.
+
+Unset is not "no limit" here: `timeout_ms` defaults to 300_000, five minutes, on
+every enqueue, and `.timeout_ms(..)` overrides it per call.
+
+</SdkOnly>
+
 <Callout type="warn">
   Timeout reaping marks the job as failed, but it does **not** kill the
-  running <SdkSwap python="thread" node="task" java="handler" />: the code
+  running <SdkSwap python="thread" node="task" java="handler" rust="blocking thread" />: the code
   keeps running until it returns, and the late result is discarded. Always
   set a timeout on production tasks — without one, a wedged
-  <SdkSwap python="task" node="task" java="handler" /> can hold a worker
-  <SdkSwap python="slot" node="slot" java="thread" /> indefinitely.
+  <SdkSwap python="task" node="task" java="handler" rust="task" /> can hold a worker
+  <SdkSwap python="slot" node="slot" java="thread" rust="slot" /> indefinitely.
 </Callout>
 
 <SdkOnly sdk="node">
@@ -167,6 +219,17 @@ Make long-running handlers cooperative: poll
 `flexiq.isCancelRequested(jobId)` or bound their own blocking calls, so the
 underlying work actually stops. See
 <SdkLink to="guides/core/cancellation">Cancellation</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing preempts a blocking thread, so make a long-running body cooperative:
+bound its own blocking calls, and poll
+`Storage::is_cancel_requested(&job.id, None)` between units of work. That needs
+the `Job`, which a macro-expanded body never receives — see
+<SdkLink to="guides/core/cancellation">Cancellation</SdkLink> for the
+hand-written `Task` impl that does.
 
 </SdkOnly>
 
@@ -192,6 +255,34 @@ def long_task():
 |---|---|---|
 | Hard timeout (`timeout`) | Scheduler reaps the job externally | `TaskTimeoutError` (internal) |
 | Soft timeout (`soft_timeout`) | Task checks elapsed time via `check_timeout()` | `SoftTimeoutError` |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+### There is no soft timeout
+
+Only the hard one, enforced by the scheduler from outside. A body that wants to
+react to time pressure measures it itself and ends the attempt on its own terms:
+
+```rust
+use std::time::{Duration, Instant};
+
+#[flexiq::task(timeout = "60s")]
+fn long_task(chunks: Vec<String>) -> flexiq::Outcome<()> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    for chunk in chunks {
+        process(&chunk);
+        if Instant::now() > deadline {
+            return Err(flexiq::TaskError::retryable("soft deadline passed").into());
+        }
+    }
+    Ok(())
+}
+```
+
+That spends a retry, exactly as the hard timeout would. Use
+`TaskError::fatal` instead when overrunning means the work will never fit.
 
 </SdkOnly>
 
@@ -227,6 +318,24 @@ List<DeadJob> dead = queue.listDead(50, 0);     // exhausted jobs
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+None of these reads is on `FlexiQ` — `queue.storage()` is the door to them:
+
+```rust
+use flexiq::{JobStatus, Storage};
+
+let storage = queue.storage();
+let errors = storage.get_job_errors(&job_id, None)?;  // one entry per failed attempt
+let failed = storage.list_jobs(Some(JobStatus::Failed as i32), None, None, 50, 0, None)?;
+let dead = storage.list_dead(50, 0, None)?;           // exhausted jobs
+```
+
+`FlexiQ::list_jobs(limit, offset)` is the unfiltered form. Every listing comes
+back blob-free, so `payload` and `result` are empty on these rows — read the
+full job with `queue.get_job(&id)`.
+
+  </Tab>
 </CodeTabs>
 
 Each error entry carries an id, the job it belongs to, an attempt number
@@ -235,10 +344,10 @@ Each error entry carries an id, the job it belongs to, an attempt number
 | Field | Description |
 |---|---|
 | `id` | Unique error record ID |
-| <SdkSwap python={<code>job_id</code>} node={<code>jobId</code>} java={<code>jobId</code>} /> | The job this error belongs to |
+| <SdkSwap python={<code>job_id</code>} node={<code>jobId</code>} java={<code>jobId</code>} rust={<code>job_id</code>} /> | The job this error belongs to |
 | `attempt` | Attempt number (0-indexed) |
 | `error` | Error message |
-| <SdkSwap python={<code>failed_at</code>} node={<code>failedAt</code>} java={<code>failedAt</code>} /> | Timestamp in milliseconds |
+| <SdkSwap python={<code>failed_at</code>} node={<code>failedAt</code>} java={<code>failedAt</code>} rust={<code>failed_at</code>} /> | Timestamp in milliseconds |
 
 <SdkOnly sdk="python">
 
@@ -250,6 +359,29 @@ job = unreliable_task.delay()
 for error in job.errors:
     print(f"Attempt {error['attempt']}: {error['error']} at {error['failed_at']}")
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no job handle to hang a history off — `Job` is the row, read back by id.
+The most recent failure is on the row itself; the whole history is the storage
+read:
+
+```rust
+use flexiq::Storage;
+
+if let Some(job) = queue.get_job(&job_id)? {
+    println!("last error: {:?}", job.error);  // the canonical TaskError JSON
+}
+
+for entry in queue.storage().get_job_errors(&job_id, None)? {
+    println!("attempt {}: {} at {}", entry.attempt, entry.error, entry.failed_at);
+}
+```
+
+`entry.attempt` is the `retry_count` the job carried when that attempt failed, so
+the first one is `0`.
 
 </SdkOnly>
 
@@ -300,6 +432,19 @@ String newJobId = queue.retryDead(dead.get(0).id); // re-enqueue (preserves meta
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::Storage;
+
+let dead = queue.storage().list_dead(20, 0, None)?;
+let new_job_id = queue.storage().retry_dead(&dead[0].id, None)?;
+```
+
+`retry_dead` takes the dead-letter entry's own `id`, not the
+`original_job_id` beside it, and returns the id of the job it created.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -333,6 +478,19 @@ String newJobId = queue.retryDead(dead.get(0).id); // re-enqueue (preserves meta
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+<Callout type="info" title="Config preservation">
+  A retried dead job re-enters as pending with a fresh retry budget, keeping the
+  original's `priority`, `max_retries`, `timeout_ms`, `result_ttl_ms`, `queue`
+  and `namespace` — the entry stored every one of them. `metadata` and `notes`
+  survive the round trip too. `depends_on` does not: a replayed job has no
+  dependencies. See <SdkLink to="guides/reliability/dead-letter">Dead-letter
+  queue</SdkLink> for listing, deleting, and purging.
+</Callout>
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 See <SdkLink to="guides/reliability/retries">Retries</SdkLink> for the full
@@ -340,10 +498,20 @@ dead-letter queue API — listing, purging, and error history.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/reliability/retries">Retries</SdkLink> for the backoff
+curve and the retryable/fatal choice, and
+<SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink> for the
+`Storage` calls that list, replay and purge entries — none of them is on
+`FlexiQ`.
+
+</SdkOnly>
+
 ## Cancellation
 
 Cancellation is cooperative — a running <SdkSwap python="task" node="task"
-java="handler" /> must check for it at safe points; nothing preempts it
+java="handler" rust="task" /> must check for it at safe points; nothing preempts it
 mid-execution. One that never checks runs to completion.
 
 <CodeTabs>
@@ -393,6 +561,20 @@ for (Chunk chunk : chunks) {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+queue.request_cancel(&job_id)?;  // running job: ask it to stop
+queue.cancel(&job_id)?;          // still pending: cancel it outright
+```
+
+There is no handle a task body can reach for. A macro-expanded body takes its
+decoded arguments and nothing else, so it has no job id to poll with. A
+hand-written `Task::run_encoded(job: &Job)` does receive the job:
+`job.cancel_requested` is the flag as of dispatch, and
+`Storage::is_cancel_requested(&job.id, None)` re-reads it between units of work.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="node">
@@ -410,9 +592,18 @@ into a handler.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/core/cancellation">Cancellation</SdkLink> for cancelling
+a still-pending job, and for getting the job id into a body that has to poll for
+the flag — `#[flexiq::task]` hands a body its decoded arguments and nothing else.
+
+</SdkOnly>
+
 ## Reacting to outcomes
 
-Middleware and events fire as the core decides each outcome:
+Whatever a binding gives you to react with fires as the core decides each
+outcome:
 
 <CodeTabs>
   <Tab sdk="python">
@@ -475,6 +666,25 @@ Worker worker = queue.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK has no middleware hooks and no events. The nearest seam is
+`flexiq_core::Worker::on_outcome`, which `WorkerBuilder` does not expose — build
+the worker through `flexiq_core::Worker` directly if you need it.
+
+Otherwise the job row is the record. A failed attempt writes the contract's
+`{"errtype","message","traceback"}` JSON into `job.error`, and every attempt is
+kept separately:
+
+```rust
+use flexiq::Storage;
+
+for entry in queue.storage().get_job_errors(&job_id, None)? {
+    eprintln!("attempt {}: {}", entry.attempt, entry.error);
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -500,10 +710,19 @@ and event lists.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/extend/middleware">Middleware</SdkLink> for what
+`flexiq_core::Worker::on_outcome` reaches and what it costs to route a worker
+through it, and <SdkLink to="guides/extend/events">Events</SdkLink> for why there
+is no stream to subscribe to.
+
+</SdkOnly>
+
 <Callout type="info">
   A throw fails only the current *attempt*. To fail fast with no retries,
   set retries to `0`; to make failures safe to retry, keep
-  <SdkSwap python="tasks" node="handlers" java="handlers" />
+  <SdkSwap python="tasks" node="handlers" java="handlers" rust="tasks" />
   <SdkLink to="guides/reliability/idempotency"> idempotent</SdkLink>.
 </Callout>
 
@@ -553,6 +772,33 @@ queue.worker().handle(PROCESS_FILE, path -> {
     }
 });
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+There is no `finally`; `Drop` is the equivalent, and it covers the `?` path, an
+early return and a panic alike:
+
+```rust
+/// Removes the temp file however the body leaves.
+struct TempFile(std::path::PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[flexiq::task]
+fn process_file(path: String) -> flexiq::Outcome<String> {
+    let tmp = TempFile(download_to_temp(&path));
+    let parsed = parse(&tmp.0).map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+    Ok(parsed)
+}
+```
+
+The pool catches a panicking handler, so the unwind that runs `drop` happens
+before the failure is recorded.
 
   </Tab>
 </CodeTabs>
@@ -623,6 +869,65 @@ with queue.test_mode() as results:
         print(results[0].error)
         print(results[0].traceback)
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+## Encoding errors
+
+There is no serializer to choose and no fallback codec: a payload is the wire
+CBOR envelope, fixed. What can still fail is a value with no representation in
+that envelope, and each direction has its own type.
+
+| Type | Returned when |
+|---|---|
+| `EncodeError` | An argument cannot be written into the call envelope. A `u64` past `i64::MAX` is the ordinary case — nothing widens silently. |
+| `DecodeError` | A payload cannot be read back into the task's declared parameter types, including a call whose positional-argument count does not match, or one carrying kwargs. |
+
+An encoding failure is carried on the `TaskCall` rather than raised by `call(..)`
+— that call mirrors the task's own signature and has nowhere to put a `Result`,
+and a batch stays one expression. It surfaces from `enqueue`, naming the task:
+
+```rust
+let err = queue.enqueue(takes_a_big_number::call(u64::MAX)).unwrap_err();
+// task `takes_a_big_number` could not encode its arguments: …
+```
+
+A decoding failure happens on the worker instead, and it is **fatal** — no
+amount of retrying makes a payload decodable — so the job dead-letters with a
+message naming the task.
+
+### Fixing it
+
+Pass values the envelope can hold, and reconstruct anything else inside the body
+— a task takes its arguments and nothing else, so a connection or a handle was
+never going to travel anyway:
+
+```rust
+// Bad: a value past i64::MAX has no representation, and `enqueue` says so.
+#[flexiq::task]
+fn count_rows(upper_bound: u64) -> flexiq::Outcome<u64> {
+    Ok(upper_bound)
+}
+queue.enqueue(count_rows::call(u64::MAX))?;   // Err, naming the task
+
+// Good: pass what identifies the work, and build the rest in the body.
+#[flexiq::task]
+fn query(db_url: String, sql: String) -> flexiq::Outcome<()> {
+    let retry = |e: std::io::Error| flexiq::TaskError::retryable(e.to_string());
+    let conn = connect(&db_url).map_err(retry)?;
+    conn.execute(&sql).map_err(retry)?;
+    Ok(())
+}
+```
+
+### Testing a task without a worker
+
+`#[flexiq::task]` leaves the body callable: `query::run(..)` is the original
+function with its original signature, so a unit test exercises it with no queue,
+no storage and no worker. `FlexiQ::in_memory()` is the other half — a private
+database that dies with the handle — when the test needs an enqueue as well.
 
 </SdkOnly>
 
@@ -729,6 +1034,34 @@ try {
     log.error("FlexiQ error: {}", e.getMessage());
 }
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no hierarchy and no base class to catch. Every operation returns
+`flexiq::Result<T>`, which is `Result<T, QueueError>` — one enum, so a `match` on
+it is exhaustive. The variants a caller usually names:
+
+| Variant | Returned when |
+|---|---|
+| `JobNotFound(id)` | No job exists with that id. |
+| `TaskNotRegistered(name)` | A job referenced a task name with no registered handler. The shell's own pool reports that case as a **fatal** `TaskError` instead, since retrying cannot make the task runnable on that worker. |
+| `Serialization(msg)` | A payload or result could not be encoded or decoded. |
+| `Config(msg)` | Invalid or inconsistent configuration — an empty debounce key, a `max_wait_ms` below its window. |
+| `RateLimitExceeded(key)` | A queue or task rate limit turned the operation away. |
+| `QueueFull { queue, pending, cap }` | A debounced enqueue hit the queue's admission cap. The `Display` string is a cross-SDK contract, so the two integers stay at the end where a queue name cannot be mistaken for them. |
+| `Timeout(msg)` | A job exceeded its execution timeout. |
+| `LockNotAcquired(name)` | A <SdkLink to="guides/reliability/locks">distributed lock</SdkLink> is held by another owner. |
+| `ContractTooOld { speaks, required }` | The storage requires a newer contract level than this build speaks. Raised at `FlexiQ::open` / `from_storage`, before anything else runs. |
+| `ClaimLost(job_id)` / `StepDiverged { .. }` | A <SdkLink to="modules/steps">durable step</SdkLink> lost its fence, or a commit does not match what is stored at that position. |
+| `Storage(_)` / `Pool(_)` | The database, or its connection pool, failed. |
+| `Other(msg)` | What the shell refuses by hand: a debounce window riding a batch, a periodic operation on a namespaced handle, one task name registered twice on one worker. |
+
+`TaskError` is the other error type in play and is deliberately not one of these.
+A `QueueError` means the queue could not be reached; a `TaskError` means the work
+failed. `?` does not bridge them, and a task body's error type is `Abort`, not
+`QueueError`, for exactly that reason.
 
 </SdkOnly>
 

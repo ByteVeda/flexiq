@@ -130,6 +130,47 @@ export function highlightJava(code: string): string {
   return tokenize(code, JAVA_KW);
 }
 
+// `Ok`/`Err`/`Some`/`None` are constructors rather than keywords, but they read
+// as control flow in a hero snippet and every Rust theme colours them.
+const RUST_KW = new Set([
+  "use",
+  "pub",
+  "fn",
+  "let",
+  "mut",
+  "const",
+  "static",
+  "struct",
+  "enum",
+  "impl",
+  "trait",
+  "for",
+  "in",
+  "if",
+  "else",
+  "match",
+  "loop",
+  "while",
+  "return",
+  "move",
+  "async",
+  "await",
+  "dyn",
+  "where",
+  "as",
+  "ref",
+  "Ok",
+  "Err",
+  "Some",
+  "None",
+  "true",
+  "false",
+]);
+
+export function highlightRust(code: string): string {
+  return tokenize(code, RUST_KW);
+}
+
 // Shell gets its own pass rather than a keyword set: `tokenize` treats `//` as a
 // comment, which would swallow the rest of `http://localhost:50051/v1/jobs` and
 // of `sqlite:///tmp/flexiq.db`. Only `#` opens a comment here, and a token's

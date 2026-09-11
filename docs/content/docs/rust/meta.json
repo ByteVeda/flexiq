@@ -1,0 +1,11 @@
+{
+  "title": "Rust",
+  "pages": [
+    "getting-started",
+    "guides",
+    "modules",
+    "operate",
+    "api-reference",
+    "more"
+  ]
+}

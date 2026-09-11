@@ -1,0 +1,256 @@
+---
+title: Notification Service
+description: "One file end to end — a retrying email task, a priority SMS lane, a deduped welcome, a delayed nudge, a daily cron digest, and how to read a job back."
+---
+
+Notifications are a good first queue: every send is independent, some are for
+later, duplicates must be suppressed, and an alert should not wait behind a
+newsletter. The five blocks below are one `src/main.rs`, in order.
+
+## Imports and the provider calls
+
+The stubs return `Result<_, String>` so a task body can end with
+`.map_err(TaskError::retryable)?`. Swap the bodies, keep the shape.
+
+```rust
+use std::time::{Duration, Instant};
+
+use flexiq::{FlexiQ, JobStatus, QueueError, TaskError};
+
+/// The queue lives in one SQLite file. Nothing else has to be running.
+const DB: &str = "notifications.db";
+
+/// Hand one email to your provider.
+fn deliver_email(to: &str, subject: &str, body: &str) -> Result<(), String> {
+    println!("email -> {to}: {subject} ({} bytes)", body.len());
+    Ok(())
+}
+
+/// Hand one SMS to your provider.
+fn deliver_sms(to: &str, text: &str) -> Result<(), String> {
+    println!("sms -> {to}: {text}");
+    Ok(())
+}
+```
+
+## The tasks
+
+Each channel is its own task, so it retries on its own. `#[flexiq::task]`
+replaces the function with a type of the same name: `send_email::call(..)`
+enqueues, `send_email::run(..)` is still the body, and the `Task` impl is what a
+worker registers.
+
+```rust
+/// Email tolerates a slow provider: five tries, backing off from two seconds
+/// towards a five-minute ceiling.
+#[flexiq::task(
+    queue = "notifications",
+    max_retries = 5,
+    retry_backoff_ms = 2_000,
+    retry_max_delay_ms = 300_000,
+    timeout = "30s"
+)]
+fn send_email(to: String, subject: String, body: String) -> flexiq::Outcome<()> {
+    // A malformed address will never become valid, so this is fatal: the job
+    // dead-letters now instead of spending five attempts proving it.
+    if !to.contains('@') {
+        return Err(TaskError::fatal(format!("not an email address: {to}")).into());
+    }
+
+    // A provider failure is worth another attempt. Retryable or fatal is the
+    // author's call — there is no blanket conversion that would guess it.
+    deliver_email(&to, &subject, &body).map_err(TaskError::retryable)?;
+    Ok(())
+}
+
+/// An alert is urgent and short-lived: three quick tries, then stop.
+#[flexiq::task(queue = "notifications", max_retries = 3, timeout = "10s")]
+fn send_sms(to: String, text: String) -> flexiq::Outcome<()> {
+    deliver_sms(&to, &text).map_err(TaskError::retryable)?;
+    Ok(())
+}
+```
+
+Durations accept `500ms`, `30s`, `5m`, `2h`, `1d`, or a bare integer of
+milliseconds. An attribute the macro does not know is a compile error listing
+the ones it does.
+
+## The daily digest
+
+A `cron` task is a zero-parameter function, and the expression is six fields
+with seconds first. `timezone` without `cron` does not compile.
+
+```rust
+/// 08:00 every day, Berlin time.
+#[flexiq::task(
+    queue = "notifications",
+    cron = "0 0 8 * * *",
+    timezone = "Europe/Berlin"
+)]
+fn daily_digest() -> flexiq::Outcome<()> {
+    // A task body gets its arguments and nothing else — no queue is handed in
+    // — so the digest opens its own on the same file.
+    let queue = FlexiQ::open(DB).map_err(|e| TaskError::retryable(e.to_string()))?;
+
+    let recipients = ["ana@example.com", "bo@example.com"];
+    let batch: Vec<_> = recipients
+        .iter()
+        .map(|to| {
+            send_email::call(
+                (*to).to_string(),
+                "Your daily digest".to_string(),
+                "Everything you missed.".to_string(),
+            )
+        })
+        .collect();
+
+    // One storage round trip for the whole fan-out.
+    queue
+        .enqueue_batch(batch)
+        .map_err(|e| TaskError::retryable(e.to_string()))?;
+    Ok(())
+}
+```
+
+<Callout type="warn">
+  Periodic firing is per scheduler and not leader-elected: the dedup key is
+  built from each process's own clock, so two workers that both registered
+  `daily_digest` can both fire it. Register periodics from one process.
+</Callout>
+
+## Producing and running
+
+Per-call options override what the attribute declared, and `spawn()` is what
+writes the periodic row for `daily_digest`.
+
+```rust
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open(DB)?;
+
+    // Once per user: a second enqueue under the same key finds the first job
+    // rather than making a second one.
+    let welcome = queue.enqueue(
+        send_email::call(
+            "ana@example.com".to_string(),
+            "Welcome".to_string(),
+            "Glad you're here.".to_string(),
+        )
+        .unique_key("welcome:user-42"),
+    )?;
+
+    // Tomorrow. `delay_ms` moves `scheduled_at`; nothing runs in between.
+    queue.enqueue(
+        send_email::call(
+            "ana@example.com".to_string(),
+            "How is it going?".to_string(),
+            "Day one is done.".to_string(),
+        )
+        .delay_ms(24 * 60 * 60 * 1_000),
+    )?;
+
+    // Ahead of everything else waiting on the same queue.
+    let alert = queue.enqueue(
+        send_sms::call("+15550100".to_string(), "New sign-in".to_string()).priority(100),
+    )?;
+
+    // The worker owns the scheduler.
+    let worker = queue
+        .worker()
+        .register::<send_email>()
+        .register::<send_sms>()
+        .register::<daily_digest>()
+        .queues(["notifications"])
+        .num_workers(4)
+        .worker_id("notifier-1")
+        .spawn()?;
+
+    for id in [&welcome.id, &alert.id] {
+        let job = wait_for(&queue, id)?;
+        match job.status {
+            JobStatus::Complete => println!("{} delivered", job.task_name),
+            JobStatus::Failed | JobStatus::Dead => println!(
+                "{} gave up: {}",
+                job.task_name,
+                job.error.unwrap_or_default()
+            ),
+            other => println!("{} ended as {other:?}", job.task_name),
+        }
+    }
+
+    // Drains what is in flight and unregisters the worker.
+    worker.shutdown()
+}
+```
+
+Registering one name twice is refused at `spawn()` — one of the two bodies
+would silently never run. A job whose task no worker registered fails fatally
+on the first attempt rather than retrying.
+
+## Waiting for a job
+
+There is no blocking "await this job" call. A producer that wants to watch one
+finish polls `get_job`.
+
+```rust
+/// Poll until `job_id` reaches a terminal state, or give up.
+fn wait_for(queue: &FlexiQ, job_id: &str) -> flexiq::Result<flexiq::Job> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Some(job) = queue.get_job(job_id)? {
+            if matches!(
+                job.status,
+                JobStatus::Complete | JobStatus::Failed | JobStatus::Dead | JobStatus::Cancelled
+            ) {
+                return Ok(job);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(QueueError::Other(format!("job {job_id} did not finish")))
+}
+```
+
+## Reading the outcome
+
+`job.status` says whether it went out; `job.error` says why not. A failed Rust
+job records the contract's JSON — `{"errtype","message","traceback"}` — so the
+message is one `serde_json` parse away.
+
+An aside, not part of the five blocks above:
+
+```rust
+let job = wait_for(&queue, &welcome.id)?;
+println!(
+    "status {:?}, {} result bytes",
+    job.status,
+    job.result.map_or(0, |bytes| bytes.len())
+);
+```
+
+<Callout type="warn">
+  The length is all that snippet can honestly print. `job.result` is
+  `Option<Vec<u8>>` and the crate keeps the decoder private, so there is no
+  typed result read — both tasks here return `()` for that reason. When a value
+  has to come back, write it where the caller can read it, or return it through
+  a durable step: see
+  <SdkLink to="more/examples/data-pipeline">the data pipeline</SdkLink>.
+</Callout>
+
+## Key patterns
+
+| Pattern | Where |
+| --- | --- |
+| Retry policy per task | `max_retries`, `retry_backoff_ms`, `retry_max_delay_ms` on the attribute |
+| Retryable vs fatal | `TaskError::retryable` / `TaskError::fatal` |
+| Delayed send | `.delay_ms(..)` on the call |
+| Once per user | `.unique_key("welcome:user-42")` |
+| Priority lane | `.priority(100)` |
+| Fan-out in one round trip | `queue.enqueue_batch(..)` |
+| Recurring digest | `cron` + `timezone`, registered at `spawn()` |
+| Cancel a pending send | `queue.cancel(&job.id)` |
+| Outcome of one job | `queue.get_job(&id)?` → `job.status`, `job.error` |
+
+Next: <SdkLink to="guides/core/enqueue-options">enqueue options</SdkLink>,
+<SdkLink to="guides/reliability/retries">retries</SdkLink>,
+<SdkLink to="guides/reliability/idempotency">idempotency</SdkLink>,
+<SdkLink to="guides/core/scheduling">scheduling</SdkLink>.

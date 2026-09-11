@@ -34,6 +34,16 @@ tests of producers, handlers, retries, and dead-lettering.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no test mode, and nothing to patch — nothing is in the way to begin
+with. `#[flexiq::task]` leaves the body as an ordinary function reachable as
+`<name>::run(args…)`, and `FlexiQ::in_memory()` opens a private database that
+dies with the handle. Unit tests call the body; integration tests run a real
+scheduler and a real worker in the test process.
+
+</SdkOnly>
+
 ## Quick example
 
 <CodeTabs>
@@ -118,6 +128,60 @@ void runsATaskEndToEnd() throws Exception {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`#[flexiq::task]` leaves the body as an ordinary function under `run`, so the
+fast test calls it with no queue at all. `FlexiQ::in_memory()` covers the rest —
+a real scheduler and a real worker over a database that dies with the test.
+
+```rust
+use std::time::{Duration, Instant};
+
+use flexiq::{FlexiQ, Job, JobStatus};
+
+#[flexiq::task]
+fn add(a: i64, b: i64) -> flexiq::Outcome<i64> {
+    Ok(a + b)
+}
+
+#[test]
+fn adds() {
+    assert_eq!(add::run(2, 3).expect("runs"), 5);
+}
+
+#[test]
+fn runs_a_task_end_to_end() {
+    let queue = FlexiQ::in_memory().expect("opens");
+    let job = queue.enqueue(add::call(2, 3)).expect("enqueues");
+
+    let worker = queue.worker().register::<add>().spawn().expect("spawns");
+    let done = wait_terminal(&queue, &job.id);
+    worker.shutdown().expect("clean shutdown"); // never leak a worker between tests
+
+    assert_eq!(done.status, JobStatus::Complete);
+    // `job.result` is the archived bytes; the shell does not decode them for you.
+    assert!(done.result.is_some());
+}
+
+/// Poll to a terminal state on a budget — the scheduler's poll interval is its
+/// own, and a test that sleeps exactly one interval flakes on a slower machine.
+fn wait_terminal(queue: &FlexiQ, job_id: &str) -> Job {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        let job = queue.get_job(job_id).expect("reads").expect("job exists");
+        if matches!(
+            job.status,
+            JobStatus::Complete | JobStatus::Failed | JobStatus::Dead
+        ) {
+            return job;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("job {job_id} never reached a terminal state");
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
@@ -133,6 +197,25 @@ harness does not model, and when to reach for a file-backed queue instead, is
 covered in <SdkLink to="modules/steps">that guide</SdkLink>.
 
 Not supported: workflows. Periodic registration is recorded but never fires.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Two things about `run` before you lean on it.
+
+Its error type is `Abort`, not `QueueError`: "this attempt failed" and "the
+queue could not be reached" are different facts, and `?` deliberately does not
+bridge them. A test that asserts a failure matches `Abort::Fail(err)` and reads
+`err.message` and `err.retryable` — the retryable/fatal choice is the task
+author's, and nothing guesses it for you.
+
+And `run` is the body alone: no queue, no scheduler, and no durable-step
+session. A body that calls `flexiq::current_step()` under `run` gets a fatal
+error saying it was called outside a running task. It will not panic, but it
+will not memoize either, so steps have to be tested through the worker — where
+`FlexiQ::in_memory()` runs them for real, skipping a committed step on the
+retry and rescheduling the job on a `step.sleep`.
 
 </SdkOnly>
 
@@ -404,6 +487,15 @@ flexiq.resource("db", context -> fakeDb);
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Nothing to fake at the queue: a Rust task takes its arguments and nothing else,
+so there is no resource registry to register a stub with and no injection for
+the worker to do. A dependency is swapped the way it would be in any other Rust
+code — behind a trait the body resolves, or a value the test installs before it
+starts the worker.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -533,6 +625,32 @@ try (FlexiQ queue = InMemoryFlexiQ.open()) {
     assertEquals(1, queue.resourceMetrics().get("db").created());
 }
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+### Asserting what startup refuses
+
+The registration checks that *do* exist run at `spawn()`, and they are worth a
+test rather than a mock. Registering one task name twice is refused there with
+an error naming it — one of the two bodies would otherwise silently never run —
+and so is registering any scheduled task on a namespaced handle. Both come back
+as `Err` from `spawn()`:
+
+```rust
+match queue.worker().register::<add>().register::<add>().spawn() {
+    Ok(handle) => {
+        // A handle that reaches here is a live worker, not a failed assertion.
+        handle.shutdown().expect("clean shutdown");
+        panic!("a duplicate registration must be refused");
+    }
+    Err(err) => assert!(err.to_string().contains("add"), "message: {err}"),
+}
+```
+
+`WorkerHandle` does not implement `Debug`, so `expect_err` will not compile here
+— match, and shut down the handle on the arm that should not have happened.
 
 </SdkOnly>
 
@@ -726,5 +844,60 @@ async function waitFor(predicate: () => boolean, timeoutMs = 4000) {
   `waitFor` at all. Reach for it when you're asserting on a side effect
   instead of a return value.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+## What the in-memory queue does not skip
+
+`FlexiQ::in_memory()` is a real SQLite database rather than a bypass: the
+scheduler, the claim protocol, the retry policy and the timeout reap all run.
+That is the point of it, and it is also why these tests have to be written like
+tests against a real system.
+
+- **Poll to a terminal state on a budget.** Nothing blocks waiting for a
+  result. The scheduler's poll interval is its own, so a test that sleeps
+  exactly one interval flakes on a slower machine — loop against a deadline, as
+  the example above does.
+- **Always `shutdown()` the worker.** Dropping the handle stops nothing.
+  `shutdown()` is what stops dispatch, drains in-flight work, ends the heartbeat
+  and unregisters the worker; skip it and the next test inherits a live one.
+- **Give each test its own handle.** An in-memory database is private to the
+  handle that opened it, so two tests never see each other's jobs — but a
+  process-global counter cannot tell which test's scheduler incremented it.
+  When tests run in parallel, assert through that handle's own reads.
+- **`job.result` is bytes.** It is an `Option<Vec<u8>>` holding the encoded
+  return value, and the crate does not decode it for you. Assert on the status,
+  on a side effect, or on the bytes.
+
+## Testing a scheduled task
+
+A `cron` task is registered at `spawn()`, so the registration is assertable
+without waiting for the schedule to come round:
+
+```rust
+#[flexiq::task(cron = "0 0 3 * * *", timezone = "Europe/Stockholm")]
+fn nightly() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+#[test]
+fn the_schedule_is_registered_at_startup() {
+    let queue = FlexiQ::in_memory().expect("opens");
+    let worker = queue.worker().register::<nightly>().spawn().expect("spawns");
+
+    let registered = queue.list_periodic().expect("lists");
+    worker.shutdown().expect("clean shutdown");
+
+    assert_eq!(registered[0].name, "nightly");
+    assert_eq!(registered[0].cron_expr, "0 0 3 * * *");
+    assert!(registered[0].enabled);
+}
+```
+
+Six fields, seconds first. Firing is per-scheduler and not leader-elected, so
+two workers that both registered the same schedule can both fire it — keep it to
+one worker per test.
 
 </SdkOnly>

@@ -1,0 +1,132 @@
+---
+title: Worker
+description: "WorkerBuilder and WorkerHandle — registering tasks, tuning the pool, spawning, and shutting down."
+---
+
+```rust
+let worker = queue
+    .worker()
+    .register::<charge>()
+    .queues(["billing", "default"])
+    .num_workers(2)
+    .spawn()?;
+
+// …
+
+worker.shutdown()?;
+```
+
+`queue.worker()` returns a `WorkerBuilder` over the handle's backend and
+namespace. `spawn()` registers the process, starts the scheduler and the pool,
+and returns a `WorkerHandle`.
+
+## `WorkerBuilder`
+
+Every method takes `self` and returns `Self`, so the whole registration reads as
+one chain.
+
+| Method | Default | Description |
+|---|---|---|
+| `register::<T: Task>()` | — | Register a task this worker can run. Also picks up `T::config()` and, when `T` declared one, its cron schedule. |
+| `queues(impl IntoIterator<Item = impl Into<String>>)` | `["default"]` | Pull from these queues. |
+| `num_workers(usize)` | `4` | Run at most this many handlers at once. Clamped to at least 1. |
+| `worker_id(impl Into<String>)` | generated `rust-worker-<uuid7>` | Name this worker instead of taking a generated id. |
+| `scheduler_config(SchedulerConfig)` | `SchedulerConfig::default()` | Tune the scheduler this worker runs — poll interval, batch size, `max_in_flight`, reap and cleanup intervals, retention. |
+| `spawn()` | — | `Result<WorkerHandle>`. |
+
+The task registry is a map keyed by `T::NAME`, so the builder carries no `T` and
+tasks of different argument shapes chain freely:
+
+```rust
+let worker = queue
+    .worker()
+    .register::<charge>()
+    .register::<total>()
+    .worker_id("billing-1")
+    .spawn()?;
+```
+
+### What `spawn()` refuses
+
+| Condition | Message contains |
+|---|---|
+| One task name registered twice | `was registered twice on one worker: one of the two bodies would never run` |
+| Any periodic on a namespaced worker | `is not available on a namespaced handle` |
+
+A duplicate is remembered at `register` and raised here, so the error arrives
+with the rest of the startup checks rather than in the middle of a chain.
+Periodics are written *before* the scheduler starts, so one that is already due
+is found on the first tick rather than one interval late.
+
+## The pool
+
+The shell ships its own `WorkerDispatcher` rather than using
+`flexiq_core::NativeDispatcher`. Core's reference pool hands a handler a `&Job`
+and overrides neither `set_claim_owner` nor `set_lease_book` — both are default
+no-ops — so the `(owner, attempt, epoch)` triple the scheduler mints for every
+dispatch is gone before a handler could see it. A durable step is written under
+that fence, so a pool that discards it cannot open a step session at all.
+
+| Behaviour | Detail |
+|---|---|
+| Concurrency | A tokio semaphore of `num_workers` permits; the permit is held until the body returns. |
+| Threading | Every handler runs on `spawn_blocking`. Every handler is synchronous — `#[flexiq::task]` refuses `async fn`. |
+| Reported type | `"rust"`, beside the other shells' own. |
+| Unregistered task | Failed **fatally**, not retried: no amount of retrying makes it runnable on this worker. |
+| A panicking body | Caught, and reported as a **retryable** `TaskError` naming the task and the panic message. |
+| A step session that will not open | Ends the attempt before the body runs, retryably. Running anyway would re-execute steps that already happened. |
+| A sleeping attempt | Reported as `Slept`, which is neither a success nor a failure — the job is already pending at its wake time with its claim released. |
+
+## `WorkerHandle`
+
+Core's type, reached through the glob re-export.
+
+| Method | Description |
+|---|---|
+| `worker_id() -> &str` | The id this worker registered under. |
+| `shutdown(self) -> Result<()>` | Stop dispatching, drain in-flight work, stop the heartbeat, unregister the worker. Blocks until every thread has exited. |
+
+`shutdown` takes `self`, so the handle is consumed and a worker cannot be shut
+down twice. It also sweeps this worker's own ephemeral subscriptions instead of
+waiting for a peer's heartbeat tick.
+
+## `on_outcome` and `queue_config` are not on the builder
+
+Stated plainly because this is where a reader will look for them.
+`WorkerBuilder` has **no** `on_outcome` and **no** `queue_config`. Both are on
+`flexiq_core::Worker`:
+
+```rust
+// on flexiq_core::Worker, not on WorkerBuilder
+pub fn on_outcome(mut self, callback: impl Fn(&ResultOutcome) + Send + Sync + 'static) -> Self;
+pub fn queue_config(mut self, queue_name: impl Into<String>, config: QueueConfig) -> Self;
+```
+
+To use either, build the worker through `flexiq_core::Worker` directly — it is
+reachable as `flexiq::Worker`, since the crate root re-exports core in full.
+
+<Callout type="warn">
+  That trade is real, not cosmetic. A `Worker` built with the default
+  `NativeDispatcher` drops the `(owner, attempt, epoch)` fence, so durable steps
+  will not work on it. Either supply a dispatcher that keeps the fence, or
+  accept that tasks on that worker cannot use
+  <SdkLink to="api-reference/queue/workers">steps</SdkLink>.
+</Callout>
+
+The same applies to async handlers: `flexiq_core::Worker::register_async` takes
+a future-returning handler and spawns it on the worker's runtime.
+`WorkerBuilder` does not expose it, and `#[flexiq::task]` refuses `async fn`.
+
+## Shutdown in a test
+
+```rust
+let q = flexiq::FlexiQ::in_memory()?;
+let job = q.enqueue(charge::call("ord-1".into(), 4_200))?;
+
+let worker = q.worker().register::<charge>().spawn()?;
+// poll `q.get_job(&job.id)` until it reaches a terminal status
+worker.shutdown()?;
+```
+
+`FlexiQ` is `Clone` and the backend underneath is pooled, so the producer handle
+stays usable while the worker runs — there is nothing to hand over.

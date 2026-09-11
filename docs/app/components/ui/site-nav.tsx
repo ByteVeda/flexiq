@@ -69,6 +69,21 @@ const TIER_ICONS: Record<Tier, React.ReactNode> = {
       <path d="M8 2.5c-1 1.2-1 2.3 0 3.5M12 2.5c-1 1.2-1 2.3 0 3.5" />
     </svg>
   ),
+  rust: (
+    // The gear, monochrome — teeth as spokes so it stays legible at 16px.
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="7.5" />
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M19.4 4.6l-2.1 2.1M6.7 17.3l-2.1 2.1" />
+    </svg>
+  ),
   [SERVER_TIER]: (
     // Two stacked rack units — the one option here that is a process, not a
     // language.

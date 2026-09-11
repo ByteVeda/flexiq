@@ -70,6 +70,48 @@ try (FlexiQ flexiq = FlexiQ.builder().sqlite("/var/lib/myapp/flexiq.db").open();
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+A worker is a binary you build, not a command run over your app — there is no
+`flexiq` CLI to point at a module:
+
+```rust
+// src/bin/worker.rs
+use flexiq::FlexiQ;
+
+#[flexiq::task(queue = "emails")]
+fn send_email(to: String, subject: String) -> flexiq::Outcome<()> {
+    let _ = (to, subject);
+    Ok(())
+}
+
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::open("/var/lib/myapp/flexiq.db")?;
+    let worker = queue
+        .worker()
+        .register::<send_email>()
+        .queues(["default", "emails"])
+        .num_workers(8)
+        .spawn()?;
+
+    // Nothing here installs a signal handler — the process is yours, so the
+    // wiring is too. `wait_for_shutdown` is written out under
+    // [Running the worker as a service](#running-the-worker-as-a-service).
+    wait_for_shutdown();
+
+    // Stops dispatch, drains in-flight work, unregisters the worker.
+    worker.shutdown()
+}
+```
+
+The producer opens the same path and enqueues against the same declaration:
+
+```rust
+let queue = FlexiQ::open("/var/lib/myapp/flexiq.db")?;
+queue.enqueue(send_email::call("a@example.com".into(), "Welcome".into()))?;
+```
+
+  </Tab>
 </CodeTabs>
 
 With SQLite, every producer and worker must share the same file (same host or
@@ -90,6 +132,14 @@ See <SdkLink to="operate/backends">Backends</SdkLink>.
 <SdkOnly sdk="java">
 
 See <SdkLink to="operate/backends">Backends</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+See <SdkLink to="operate/backends">Backends</SdkLink>. Postgres and Redis are
+cargo features, so the backend a build can open is decided at compile time, not
+at startup.
 
 </SdkOnly>
 
@@ -116,6 +166,13 @@ const queue = new Queue({ dbPath: "/var/lib/myapp/flexiq.db" });
 
 ```java
 FlexiQ flexiq = FlexiQ.builder().sqlite("/var/lib/myapp/flexiq.db").open();
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let queue = flexiq::FlexiQ::open("/var/lib/myapp/flexiq.db")?;
 ```
 
   </Tab>
@@ -242,6 +299,68 @@ little past that so systemd doesn't force-kill first.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There's no worker CLI subcommand — a worker is your compiled binary, so the unit
+runs it directly. No interpreter, no runtime to install, nothing to put on
+`PATH` but the executable:
+
+```ini
+[Unit]
+Description=flexiq worker
+After=network.target
+
+[Service]
+Type=simple
+User=myapp
+Group=myapp
+WorkingDirectory=/opt/myapp
+ExecStart=/opt/myapp/bin/worker
+Restart=always
+RestartSec=5
+
+# SIGTERM is systemd's default, and what the handler below waits for.
+TimeoutStopSec=65
+
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`wait_for_shutdown` from [Process model](#process-model) is where that signal
+lands. Nothing in the SDK installs a handler, so this is the part you write:
+
+```rust
+/// Block until SIGINT or SIGTERM. SIGTERM is what systemd and every container
+/// runtime send, so a handler that catches only SIGINT ends every deploy in
+/// SIGKILL with jobs mid-flight.
+fn wait_for_shutdown() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime to wait on");
+    runtime.block_on(async {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("a SIGTERM listener");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    });
+}
+```
+
+That needs `tokio = { version = "1", features = ["rt", "macros", "signal"] }`
+beside `flexiq` — the SDK depends on tokio, but does not re-export it.
+
+`worker.shutdown()` then blocks until every worker thread has exited and the
+worker row is unregistered, so set `TimeoutStopSec` past your longest task
+timeout: systemd force-kills at that deadline regardless.
+
+</SdkOnly>
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable flexiq-worker
@@ -352,6 +471,51 @@ and silences the warning.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Build in one stage, ship the binary in another. The runtime stage carries no
+toolchain, no interpreter and no package manager — the one genuine difference a
+compiled worker makes to a deployment:
+
+```dockerfile
+FROM rust:1.88 AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --bin worker
+
+FROM debian:bookworm-slim
+WORKDIR /app
+COPY --from=build /src/target/release/worker /usr/local/bin/worker
+
+# Store the database in a volume
+VOLUME /data
+
+ENV RUST_LOG=info
+CMD ["worker"]
+```
+
+<Callout type="info" title="No database client library to install">
+  SQLite is compiled into the binary, so the runtime stage needs nothing but a
+  libc. Building with the `postgres` feature vendors libpq and OpenSSL the same
+  way, so that image stays just as thin — at the cost of a longer build.
+</Callout>
+
+`rust:1.88` is the MSRV; anything newer works. The build stage recompiles the
+whole dependency tree on every source change unless you cache it — mount
+`/usr/local/cargo/registry` and `target/` with BuildKit cache mounts, or split
+the manifest copy into its own layer, whichever your build already does for
+other Rust images.
+
+Read the database path from the environment yourself; nothing reads one for
+you:
+
+```rust
+let path = std::env::var("FLEXIQ_DB_PATH").unwrap_or_else(|_| "/data/flexiq.db".into());
+let queue = flexiq::FlexiQ::open(&path)?;
+```
+
+</SdkOnly>
+
 ### docker-compose.yml
 
 <CodeTabs>
@@ -417,6 +581,35 @@ services:
   dashboard:
     build: .
     command: java -cp app.jar org.byteveda.flexiq.cli.Cli --url /data/flexiq.db dashboard --port 8080
+    volumes:
+      - flexiq-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  flexiq-data:
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```yaml
+services:
+  worker:
+    build: .
+    volumes:
+      - flexiq-data:/data
+    stop_signal: SIGTERM
+    stop_grace_period: 65s
+
+  # The SDK serves no dashboard; flexiq-server does, from the same file.
+  dashboard:
+    image: ghcr.io/byteveda/flexiq-server:2.0.0
+    environment:
+      FLEXIQ_DSN: /data/flexiq.db
+      FLEXIQ_DASHBOARD: 0.0.0.0:8080
+      FLEXIQ_DASHBOARD_AUTH: session # an off-host bind with auth off is refused
+      FLEXIQ_MAINTENANCE: "off" # retention belongs to the worker; this one only serves
     volumes:
       - flexiq-data:/data
     ports:
@@ -495,6 +688,33 @@ spec:
     - name: worker
       ...
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The handler shown under
+[Running the worker as a service](#running-the-worker-as-a-service) waits on
+`SIGTERM`, Docker's and Kubernetes' default signal — no `stop_signal` or
+`STOPSIGNAL` override needed. What it costs is bounded by your longest task
+timeout, since `shutdown()` waits for in-flight work:
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 65
+  containers:
+    - name: worker
+      ...
+```
+
+<Callout type="warn" title="PID 1 does not get a default handler">
+  A binary running as PID 1 in a container receives no default disposition for
+  `SIGTERM`: without the handler above, the signal is simply ignored and the
+  runtime `SIGKILL`s at the end of the grace period with jobs still claimed.
+  Those jobs are recovered — the stale-worker reap hands them to a survivor —
+  but whatever a killed attempt had already done gets done again. Install the
+  handler, or run the binary under an init that forwards signals.
+</Callout>
 
 </SdkOnly>
 
@@ -634,6 +854,33 @@ services:
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK ships no executor command, and `queue.worker()` builds an
+in-process worker only. Attaching means writing the executor yourself around
+`flexiq::ExecutorClient`, supplying a `WorkerDispatcher` — the shell's own
+dispatcher is private, so task registration does not come with it. The compose
+service is then your binary, with a command of your choosing:
+
+```yaml
+services:
+  executor:
+    build: . # the app image from the Dockerfile above, unchanged
+    command: ["executor"] # your binary, built beside the worker one
+    environment:
+      FLEXIQ_ATTACH: scheduler:7777
+      FLEXIQ_ATTACH_TOKEN: ${FLEXIQ_ATTACH_TOKEN:?}
+      FLEXIQ_SLOTS: "4"
+    depends_on:
+      - scheduler
+    restart: unless-stopped
+```
+
+Those variable names are the convention the scheduler's own documentation uses,
+not something the crate reads — an executor you write reads whichever it likes
+and passes the values to `ExecutorConfig`.
+
+  </Tab>
 </CodeTabs>
 
 `FLEXIQ_SLOTS` is how many jobs the executor runs at once. There is no
@@ -741,6 +988,18 @@ command:
 
 Handlers come from `META-INF/services`, so no application `main` runs to
 register them.
+
+  </Tab>
+  <Tab sdk="rust">
+
+```yaml
+command: ["executor"]
+```
+
+There is no executor command in the SDK, so this is a second binary in your own
+image — one that dials the scheduler with `flexiq::ExecutorClient` instead of
+opening storage with `FlexiQ::open`. Both binaries come out of the same
+`cargo build`, so the image is unchanged.
 
   </Tab>
 </CodeTabs>
@@ -926,6 +1185,16 @@ flexiq.dev/command: '["java","--enable-native-access=ALL-UNNAMED","-cp","app.jar
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```yaml
+flexiq.dev/command: "executor"
+```
+
+The name of the executor binary in your image — the SDK provides none, so this
+is whatever you called the one you wrote around `flexiq::ExecutorClient`.
+
+  </Tab>
 </CodeTabs>
 
 The injected container reuses **the pod's own image reference**, so the image is
@@ -1053,6 +1322,15 @@ removes SQLite's shared-file constraint:
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Switching to <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+removes SQLite's shared-file constraint. Both are cargo features, so this is a
+build decision before it is a deployment one — `cargo add flexiq --features
+postgres`, and the same flag reaches `flexiq-core`:
+
+</SdkOnly>
+
 - **No shared-file constraints** — workers connect over the network, no need for shared volumes or local storage
 - **Multi-machine workers** — run workers on separate hosts against the same database
 - **Standard backups** — use `pg_dump` instead of `sqlite3 .backup`
@@ -1159,6 +1437,50 @@ volumes:
 </Callout>
 
   </Tab>
+  <Tab sdk="rust">
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: flexiq
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  worker:
+    build: . # built with --features postgres
+    environment:
+      FLEXIQ_PG_URL: postgresql://flexiq:secret@postgres:5432/myapp
+    depends_on:
+      - postgres
+    stop_signal: SIGTERM
+    stop_grace_period: 65s
+
+volumes:
+  pgdata:
+```
+
+`FLEXIQ_PG_URL` above is illustrative — nothing reads an environment variable
+for you. `FlexiQ::open` is SQLite-only; another backend goes through
+`from_storage`:
+
+```rust
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+let dsn = std::env::var("FLEXIQ_PG_URL")?;
+let queue = FlexiQ::from_storage(StorageBackend::Postgres(PostgresStorage::new(&dsn)?))?;
+```
+
+<Callout type="info">
+  `from_storage` is where the contract floor is checked, exactly as `open`
+  checks it — a handle built around a backend you opened yourself is held to
+  the same gate.
+</Callout>
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -1176,6 +1498,13 @@ for when to reach for Postgres over SQLite.
 </SdkOnly>
 
 <SdkOnly sdk="java">
+
+See <SdkLink to="operate/backends">Backends</SdkLink> for Redis, and
+for when to reach for Postgres over SQLite.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
 
 See <SdkLink to="operate/backends">Backends</SdkLink> for Redis, and
 for when to reach for Postgres over SQLite.
@@ -1213,6 +1542,31 @@ schedule instead (a cron job, or a periodic task on the queue itself).
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Retention is a scheduler setting rather than a queue one, so the worker sweeps
+for you. `RetentionConfig::uniform(ms)` puts one window on every table:
+
+```rust
+use flexiq::{RetentionConfig, SchedulerConfig};
+
+let worker = queue
+    .worker()
+    .register::<send_email>()
+    .scheduler_config(SchedulerConfig {
+        retention: Some(RetentionConfig::uniform(24 * 60 * 60 * 1_000)),
+        ..SchedulerConfig::default()
+    })
+    .spawn()?;
+```
+
+`RetentionConfig::recommended()` sets a sensible window per table instead —
+dead letters outlive task logs, which is usually what you want. The sweep runs
+on the scheduler's `cleanup_interval` tick, so a producer-only process cleans
+nothing: at least one worker has to be running.
+
+</SdkOnly>
+
 ### Manual cleanup
 
 <CodeTabs>
@@ -1246,6 +1600,20 @@ flexiq.purgeCompleted(Duration.ofDays(7).toMillis());
 
 // Purge dead letters older than 30 days
 flexiq.purgeDead(Duration.ofDays(30).toMillis());
+```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// `FlexiQ` does not wrap the purges; the backend under it does.
+use flexiq::Storage;
+
+// Purge completed jobs older than 7 days (older_than_ms is in milliseconds)
+queue.storage().purge_completed(7 * 24 * 60 * 60 * 1_000)?;
+
+// Purge dead letters older than 30 days
+queue.storage().purge_dead(30 * 24 * 60 * 60 * 1_000)?;
 ```
 
   </Tab>
@@ -1293,6 +1661,18 @@ flexiq --url flexiq.db dashboard --port 8080
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```bash
+# Auth is off by default, and an off-host bind with auth off is refused at
+# startup — so an 0.0.0.0 dashboard names its auth mode.
+FLEXIQ_DSN=/var/lib/myapp/flexiq.db \
+FLEXIQ_DASHBOARD=0.0.0.0:8080 \
+FLEXIQ_DASHBOARD_AUTH=session \
+  flexiq-server
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -1330,6 +1710,22 @@ instead. With auth enabled, bootstrap the first admin with
 `FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or
 through the SPA's first-run setup. See
 [Dashboard: Auth](/java/modules/dashboard#auth) for the full model.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The SDK serves no dashboard — `flexiq-server` does, over the same storage, and
+it is the same binary the scheduler and attach sections above use. It is
+configured entirely from the environment; there are no flags.
+
+`FLEXIQ_DASHBOARD_AUTH` defaults to `off`, so the port serves **openly**. Set it
+to `session` for production and bootstrap the first admin with
+`FLEXIQ_DASHBOARD_ADMIN_USER` / `FLEXIQ_DASHBOARD_ADMIN_PASSWORD`, or through
+the SPA's first-run setup. Binding an unauthenticated dashboard off-host needs
+`FLEXIQ_ALLOW_INSECURE=1` — the server refuses rather than doing it quietly.
+Serve it over TLS either way; the server does not terminate TLS for this
+listener. [Server & wire](/server) documents the rest of its configuration.
 
 </SdkOnly>
 
@@ -1394,6 +1790,24 @@ void exportMetrics() throws InterruptedException {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use std::time::Duration;
+
+fn export_metrics(queue: &flexiq::FlexiQ) -> flexiq::Result<()> {
+    loop {
+        let stats = queue.stats()?;
+        // Export to Prometheus, Datadog, StatsD, etc.
+        gauge("flexiq.pending", stats.pending);
+        gauge("flexiq.running", stats.running);
+        gauge("flexiq.dead", stats.dead);
+        std::thread::sleep(Duration::from_secs(15));
+    }
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -1414,6 +1828,14 @@ For a ready-made exporter instead of polling by hand, see
 
 For a ready-made exporter instead of polling by hand, see
 [Micrometer](/java/guides/extend/micrometer).
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There is no ready-made exporter in the SDK. `flexiq-server` serves `/metrics`
+beside the dashboard if you would rather scrape than poll — it reads the same
+storage, so it needs no cooperation from the worker.
 
 </SdkOnly>
 
@@ -1452,6 +1874,26 @@ flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK has no event or hook surface — `WorkerBuilder` exposes no callback
+and there is nothing to subscribe to. The nearest seam is
+`flexiq_core::Worker::on_outcome`, which fires per settled job but means
+building the worker through `flexiq_core::Worker` directly, supplying your own
+`WorkerDispatcher`. Watching the dead-letter count is the option that costs
+nothing:
+
+```rust
+// Alongside the metrics export above. `dead` is a count, not a stream, so
+// compare it against the last one you saw — and note a purge lowers it.
+let dead = queue.stats()?.dead;
+if dead > last_seen {
+    notify(format!("{} job(s) dead-lettered", dead - last_seen));
+}
+last_seen = dead;
+```
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -1478,6 +1920,14 @@ See [Events](/java/guides/extend/events) for the full set (`SUCCESS`,
 `RETRY`, `DEAD`, `CANCELLED`) and
 [Webhooks](/java/guides/extend/webhooks) to deliver them to an
 external HTTP endpoint instead of in-process.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Events and webhooks are not wrapped either — they are storage-side machinery
+the SDK exposes no surface for. For a running deployment, `flexiq-server`'s
+dashboard is the thing that already reads and renders them.
 
 </SdkOnly>
 
@@ -1538,6 +1988,20 @@ There's no lightweight REST-framework helper — use the dashboard's `/health`
 and `/readiness` probes above (public by default; gate them with
 `FLEXIQ_DASHBOARD_METRICS_TOKEN`), or add a route in your own web framework
 that calls `flexiq.stats()`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+There's no web-framework helper — the SDK serves no HTTP at all. Two options:
+
+- Run `flexiq-server` with `FLEXIQ_DASHBOARD` set and probe its `/health` and
+  `/readiness` routes. `/readiness` is gated alongside `/metrics`, so a
+  credential-less kubelet probe needs `FLEXIQ_DASHBOARD_PUBLIC_READINESS=1` —
+  see the warning under [One scheduler, over TCP](#one-scheduler-over-tcp).
+- Add a route in your own server that calls `queue.stats()?`. It is one storage
+  read, which is exactly what makes it a readiness check: if it answers,
+  storage answers.
 
 </SdkOnly>
 
@@ -1608,6 +2072,34 @@ heavy concurrent writers or true multi-machine deployment.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`num_workers(n)` sizes the pool inside one process — the number of task bodies
+that may run at once. Bodies run on `spawn_blocking` threads, so a blocking
+body costs one slot and nothing more; near the core count is the right shape
+for CPU-bound work, higher for I/O-bound:
+
+```rust
+let worker = queue
+    .worker()
+    .register::<send_email>()
+    .num_workers(8) // default is 4
+    .spawn()?;
+```
+
+Scaling out means running more worker **processes** (or hosts) against shared
+storage — the core claims each job for exactly one of them, so adding workers
+adds throughput without duplicate execution. Give each one a `worker_id` you
+choose if you want them identifiable in the registry; otherwise one is
+generated.
+
+Multiple processes against one SQLite file work (WAL mode allows concurrent
+access), but only one can write at a time — move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink> for heavy
+concurrent writers or true multi-machine deployment.
+
+</SdkOnly>
+
 ## SQLite scaling limits
 
 flexiq uses SQLite as its default storage backend. Understanding its
@@ -1661,6 +2153,28 @@ lock contention or the need for multi-machine workers shows up, move to
 <SdkLink to="operate/backends">Postgres or Redis</SdkLink>; exact
 throughput numbers depend heavily on payload size and handler duration, so
 benchmark your own workload rather than relying on a generic figure.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The SQLite connection pool is 8 by default. `FlexiQ::open` takes that default;
+another number goes through the backend, and then through `from_storage`:
+
+```rust
+use flexiq::{FlexiQ, SqliteStorage, StorageBackend};
+
+let storage = SqliteStorage::with_pool_size("/var/lib/myapp/flexiq.db", 16)?;
+let queue = FlexiQ::from_storage(StorageBackend::Sqlite(storage))?;
+```
+
+The single-writer constraint above still caps write throughput regardless of
+pool size — more connections buy concurrent *reads*, which is what a listing or
+a stats poll competing with a busy worker actually needs. When lock contention
+or multi-machine workers show up, move to
+<SdkLink to="operate/backends">Postgres or Redis</SdkLink>; throughput depends
+heavily on payload size and body duration, so benchmark your own workload
+rather than relying on a generic figure.
 
 </SdkOnly>
 
@@ -1724,12 +2238,32 @@ handlers rather than assuming generic numbers transfer.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There's no published throughput table — a compiled body's cost varies too
+widely for one to mean anything. As a starting point:
+
+- CPU-bound bodies: size `num_workers(n)` near the core count
+- I/O-bound bodies: raise `num_workers`, and raise
+  `SchedulerConfig::batch_size` with it — the default of `1` claims one job per
+  round trip and will be the ceiling before the pool is
+- Set `SchedulerConfig::max_in_flight` to the pool size, so one process never
+  claims a backlog its peers could have shared
+- Once SQLite write contention shows up, move to
+  <SdkLink to="operate/backends">Postgres or Redis</SdkLink>
+
+See <SdkLink to="guides/core/execution-model">Execution model</SdkLink>, and
+the <SdkLink to="more/examples/benchmark">benchmark</SdkLink> for a program
+that measures all three rates on your own hardware.
+
+</SdkOnly>
+
 ## Namespaces as a tenancy boundary
 
 A namespace scopes everything a deployment can see and act on. Set it once, on
 the queue, and every worker, dashboard and admin call inherits it:
 
-<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} />
+<SdkSwap python={<code>Queue(namespace="tenant-a")</code>} node={<code>new Queue(&#123; namespace: "tenant-a" &#125;)</code>} java={<code>FlexiQ.builder().namespace("tenant-a")</code>} rust={<code>FlexiQ::open(path)?.with_namespace("tenant-a")</code>} />
 
 The boundary holds in both directions:
 
@@ -1768,7 +2302,7 @@ the right behavior for most deployments. Where the application's database
 credentials do not permit DDL, or a DBA owns every migration, turn it off and
 apply the schema explicitly:
 
-<SdkSwap python={<code>Queue(auto_migrate=False)</code>} node={<code>new Queue(&#123; autoMigrate: false &#125;)</code>} java={<code>FlexiQ.builder().autoMigrate(false)</code>} />
+<SdkSwap python={<code>Queue(auto_migrate=False)</code>} node={<code>new Queue(&#123; autoMigrate: false &#125;)</code>} java={<code>FlexiQ.builder().autoMigrate(false)</code>} rust={<code>SqliteStorage::unmigrated(path, 8)</code>} />
 
 Nothing then applies DDL until you run the migrate command, which is idempotent
 and safe to run on every deploy:
@@ -1776,6 +2310,15 @@ and safe to run on every deploy:
 ```bash
 flexiq migrate
 ```
+
+<SdkOnly sdk="rust">
+
+The Rust SDK ships no CLI of its own. In-process, the same work is one call on
+the backend — `queue.storage().migrate()?` — returning the report described
+below. There is also no `auto_migrate` flag on `FlexiQ`: gating means building
+the backend with `unmigrated` and handing it to `from_storage`.
+
+</SdkOnly>
 
 It reports the versions it applied — core and workflow tables both — plus any
 terminal jobs the one-time backlog sweep moved into the archive. On an
@@ -1808,13 +2351,13 @@ lowest level a process may speak and still open the storage; a build below it
 refuses to start, naming both levels, rather than joining and misreading rows its
 contract never described.
 
-<SdkSwap python={<code>queue.min_contract()</code>} node={<code>queue.minContract()</code>} java={<code>flexiq.minContract()</code>} />
+<SdkSwap python={<code>queue.min_contract()</code>} node={<code>queue.minContract()</code>} java={<code>flexiq.minContract()</code>} rust={<code>flexiq::min_contract(queue.storage())</code>} />
 
 The floor starts permissive and is an operator's dial, not an automatic one —
 one that rose on its own would lock out the peers still mid-rollout. Raise it
 only once every process is upgraded:
 
-<SdkSwap python={<code>queue.set_min_contract(2)</code>} node={<code>queue.setMinContract(2)</code>} java={<code>flexiq.setMinContract(2)</code>} />
+<SdkSwap python={<code>queue.set_min_contract(2)</code>} node={<code>queue.setMinContract(2)</code>} java={<code>flexiq.setMinContract(2)</code>} rust={<code>flexiq::set_min_contract(queue.storage(), 2)</code>} />
 
 A level the calling build cannot itself speak is rejected, since that write would
 lock the operator out of their own storage. An attached executor has no storage
@@ -1826,18 +2369,18 @@ already held to one.
 - [ ] Use an absolute path for the SQLite file
 - [ ] Place SQLite on local (not network) storage
 - [ ] Purge old completed/dead jobs on a schedule
-      (<SdkSwap python={<><code>result_ttl</code> automates this</>} node={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} java={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} />)
+      (<SdkSwap python={<><code>result_ttl</code> automates this</>} node={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} java={<>no built-in TTL — schedule <code>purgeCompleted</code>/<code>purgeDead</code></>} rust={<><code>SchedulerConfig::retention</code> automates this, on a running worker</>} />)
 - [ ] Set a timeout on tasks to recover from worker crashes
-      (<SdkSwap python={<code>timeout=</code>} node={<code>timeoutMs</code>} java={<code>.timeout(Duration...)</code>} />)
+      (<SdkSwap python={<code>timeout=</code>} node={<code>timeoutMs</code>} java={<code>.timeout(Duration...)</code>} rust={<code>#[flexiq::task(timeout = "5m")]</code>} />)
 - [ ] Configure the process manager's stop signal correctly
-      (<SdkSwap python={<code>SIGINT</code>} node={<><code>SIGINT</code>/<code>SIGTERM</code>, mind the fixed 200ms CLI grace</>} java={<><code>SIGTERM</code> via a shutdown hook</>} />)
+      (<SdkSwap python={<code>SIGINT</code>} node={<><code>SIGINT</code>/<code>SIGTERM</code>, mind the fixed 200ms CLI grace</>} java={<><code>SIGTERM</code> via a shutdown hook</>} rust={<><code>SIGTERM</code>, but only if you installed a handler — nothing does it for you</>} />)
 - [ ] Set up failure hooks or monitoring for alerting
 - [ ] Back up the database with a tool that takes a consistent copy, and rehearse
       the restore — <SdkLink to="operate/backup">Backup and restore</SdkLink>
 - [ ] Set a namespace on every process that should be confined to one tenant —
       an unset namespace addresses all of them
 - [ ] Put the dashboard behind TLS and enable auth — it serves openly by default
-      (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" />)
+      (<SdkSwap python="pass --auth / auth_enabled=True" node="pass --auth / authEnabled: true, or a bearer token" java="pass --auth / authEnabled=true, or use legacy token mode" rust="set FLEXIQ_DASHBOARD_AUTH=session on flexiq-server" />)
 - [ ] Running [attached executors](#attached-executors)? Keep the attach port off
       the host network, set `FLEXIQ_ATTACH_TOKEN` for any bind but loopback, and
       terminate mTLS in front of it

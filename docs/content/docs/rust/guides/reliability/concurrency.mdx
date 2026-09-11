@@ -1,0 +1,131 @@
+---
+title: Concurrency
+description: "num_workers, max_in_flight_per_task and max_concurrent — three caps at three different scopes, and which one to reach for."
+---
+
+Three knobs bound how much runs at once. They are not alternatives: each one
+guards a different scope, and a busy deployment usually sets more than one.
+
+| Knob | Where | Scope | Cost |
+| --- | --- | --- | --- |
+| `num_workers(n)` | `WorkerBuilder` | This worker's whole pool | Free, in-process |
+| `max_in_flight_per_task` | `#[flexiq::task]` | One task's share of *this* worker's pool | Free, in-process |
+| `max_concurrent` | `#[flexiq::task]` | One task across the whole deployment | A database read |
+
+## `num_workers` — the pool
+
+`num_workers` sizes the worker's handler pool. It is the cap on how many
+handlers that process runs at once, whatever task they belong to.
+
+```rust
+let worker = queue
+    .worker()
+    .register::<transcode>()
+    .num_workers(8)
+    .spawn()?;
+```
+
+The default is **4**, and a value below 1 is clamped to 1. The pool is a
+semaphore: a job that arrives with every permit taken waits for one.
+
+It does one more thing. Unless you set a `scheduler_config` that says otherwise,
+`num_workers` also becomes the scheduler's in-flight bound, so this process
+never claims more jobs than its pool can actually run. That matters: a claimed
+job is off-limits to every other worker, and one that sits in a queue instead of
+a pool is a job nobody is running.
+
+## `max_in_flight_per_task` — the bulkhead
+
+A single slow task can occupy every permit in the pool and starve everything
+else. `max_in_flight_per_task` is the bulkhead against that: it caps how many of
+*this worker's* slots one task may hold.
+
+```rust
+#[flexiq::task(max_in_flight_per_task = 2)]
+fn transcode(path: String) -> flexiq::Outcome<()> {
+    let _ = path;
+    Ok(())
+}
+```
+
+With `num_workers(8)` and `max_in_flight_per_task = 2`, at most two transcodes
+run here at once and six permits stay available for other tasks. The check is
+in-process and free — the worker already knows what it is running.
+
+It is per worker. Four such processes give you eight concurrent transcodes.
+
+## `max_concurrent` — the cluster-wide cap
+
+`max_concurrent` is the one that holds across every process on the same storage.
+It is what you want when the constraint belongs to something outside the queue —
+a license count, a connection pool, an upstream that permits three callers.
+
+```rust
+#[flexiq::task(max_concurrent = 3)]
+fn reindex(shard: String) -> flexiq::Outcome<()> {
+    let _ = shard;
+    Ok(())
+}
+```
+
+The scheduler counts the task's running jobs in storage to enforce this, so
+unlike the other two it costs a read. The count is taken once per dispatch cycle
+and reused across the jobs in that cycle, not once per job.
+
+<Callout type="info">
+  Both task-level caps are checked *after* the claim. A job that trips one has
+  its claim rolled back and stays pending — it is not failed, not deferred into
+  the future, and it dispatches on a later poll once a slot frees. Nothing is
+  lost; the job just waits.
+</Callout>
+
+## Picking between them
+
+Reach for `num_workers` first — it is the honest statement of how much this
+process can do. Add `max_in_flight_per_task` when one task is slow enough to
+crowd out the rest. Add `max_concurrent` only when the limit is genuinely global,
+because it is the only one that pays for a read on every dispatch cycle.
+
+```rust
+// A resource that permits three concurrent callers in total, run from
+// several processes, without letting it monopolise any one of them.
+#[flexiq::task(max_concurrent = 3, max_in_flight_per_task = 1)]
+fn reindex(shard: String) -> flexiq::Outcome<()> {
+    let _ = shard;
+    Ok(())
+}
+```
+
+## Scaling out
+
+Total parallelism is the sum across workers. Run more worker processes over the
+same backend and partition the load by queue, so a heavy task class gets its own
+capacity instead of competing for a shared pool:
+
+```rust
+let video = queue
+    .worker()
+    .register::<transcode>()
+    .queues(["video"])
+    .num_workers(4)
+    .spawn()?;
+```
+
+A worker pulls only from the queues it names — the default is `["default"]`
+alone, so a task declared with `queue = "video"` is invisible to a worker that
+never asked for that queue.
+
+## Handlers are synchronous
+
+Every registered handler runs on a blocking thread, and `#[flexiq::task]`
+refuses an `async fn` rather than quietly parking a runtime thread. Concurrency
+here is threads, not futures: size `num_workers` against how many blocking
+calls you are willing to have outstanding.
+
+If you need an async handler, `flexiq_core::Worker::register_async` is the
+escape hatch — it is on the engine's worker, not on `WorkerBuilder`.
+
+Related: <SdkLink to="guides/core/workers">Workers</SdkLink> for the rest of the
+builder, and
+<SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink> for
+bounding how fast jobs start rather than how many run.

@@ -3,8 +3,12 @@ title: Resource System
 description: "How external dependencies are registered, injected into tasks, and reconstructed on the worker."
 ---
 
-The resource system injects external dependencies into tasks and runs entirely
-outside Rust. It is a three-layer <SdkName /> pipeline:
+<SdkSwap
+  python={<>The resource system injects external dependencies into tasks and runs entirely outside Rust. It is a three-layer Python pipeline:</>}
+  node={<>The resource system injects external dependencies into tasks and runs entirely outside Rust. It is a three-layer Node.js pipeline:</>}
+  java={<>The resource system injects external dependencies into tasks and runs entirely outside Rust. It is a three-layer Java pipeline:</>}
+  rust={<>The Rust SDK has no resource system: a task takes its arguments and nothing else, and there is no injection seam to register one on. The three-layer pipeline below is the shape the SDKs that do have one are built from.</>}
+/>
 
 <ResourcePipeline />
 

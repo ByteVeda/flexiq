@@ -1,0 +1,106 @@
+---
+title: Logging
+description: "The engine logs through the log facade and ships no implementation — install one, and the records appear."
+---
+
+The engine emits its diagnostics through the [`log`](https://docs.rs/log) crate.
+`log` is a facade: it defines the macros and does nothing with the records until
+a program installs an implementation. FlexiQ deliberately installs none — that
+choice belongs to the binary, not to a library.
+
+So by default you see nothing, and everything the scheduler has to say is being
+discarded.
+
+## Installing a logger
+
+Add any `log` implementation and initialise it once, before the queue does
+anything worth hearing about. `env_logger` is the usual first choice:
+
+```toml
+[dependencies]
+env_logger = "0.11"
+```
+
+```rust
+fn main() -> flexiq::Result<()> {
+    env_logger::init();
+
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    let worker = queue.worker().register::<charge>().spawn()?;
+    // ...
+    worker.shutdown()
+}
+```
+
+That is the whole integration. `env_logger` reads `RUST_LOG` — its own
+convention, not FlexiQ's — so the filter is set from the environment:
+
+```bash
+RUST_LOG=warn cargo run                          # warnings and errors
+RUST_LOG=flexiq_core=debug cargo run             # everything the engine emits
+RUST_LOG=flexiq_core::scheduler=debug cargo run  # just the scheduler
+```
+
+Records are tagged with the module path they came from, so `flexiq_core` and
+`flexiq_core::scheduler::maintenance` both work as filters. Any other
+implementation — `tracing-subscriber` with its `log` bridge, `fern`,
+`simple_logger`, or one of your own — works the same way; nothing here is
+specific to `env_logger`.
+
+## What the engine actually emits
+
+Mostly `warn` and `error`, some `info`, a little `debug`. It logs the things a
+library cannot return to a caller because nobody is on the other end of the
+call — a maintenance sweep that failed, a heartbeat that did not write, a result
+that arrived for an attempt the job has already moved past:
+
+| Level | Message |
+| --- | --- |
+| `warn` | `expire_pending_jobs error: ...` — a maintenance sweep failed |
+| `warn` | `rate-limit shed <id> on queue 'default' (task 'ingest')` |
+| `warn` | `retry budget exhausted for <task>; dead-lettering <id>` |
+| `error` | `dropping superseded result for job <id> from attempt 1 (owner w-1, epoch Some(4242)): the job is proceeding under another claim` |
+
+The rendering is your logger's; the text is the engine's. Turning these on is
+the fastest way to explain a job that vanished, a shed you did not expect, or a
+worker that is claiming nothing.
+
+Errors a caller *can* act on are not logged — they are returned as
+`QueueError`, or recorded on the job as its failure JSON. See
+<SdkLink to="guides/reliability/error-handling">Error handling</SdkLink>.
+
+## That is the whole story
+
+There is nothing else to configure. The Rust SDK ships no logger type of its
+own, no sink, no level setting, and no per-task log capture in the shell — a
+`#[flexiq::task]` body logs with `log::info!` or whatever its crate already
+uses, exactly like any other function.
+
+<Callout type="info">
+  The engine *does* keep per-job log lines in storage, written with
+  `Storage::write_task_log` and read with `Storage::get_task_logs`. They are not
+  on `FlexiQ` and nothing in the Rust shell writes one — reach them through
+  `queue.storage()` if you want that record.
+</Callout>
+
+```rust
+use flexiq::Storage;
+
+queue.storage().write_task_log(
+    &job_id,
+    "import",
+    "info",
+    "processed batch 3/10",
+    None,                 // `extra`: pre-encoded JSON, or None
+    queue.namespace(),
+)?;
+
+for line in queue.storage().get_task_logs(&job_id, queue.namespace())? {
+    println!("{} {} {}", line.logged_at, line.level, line.message);
+}
+```
+
+Each `TaskLogEntry` carries `id`, `job_id`, `task_name`, `level`, `message`, an
+optional `extra` JSON blob, and `logged_at` in Unix milliseconds. Because they
+live in storage they survive a restart and are readable from any process on the
+same backend.

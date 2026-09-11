@@ -39,7 +39,7 @@ const STAGES: FlowStage[] = [
   {
     label: "your code",
     title: "enqueue",
-    sub: "python · node · java",
+    sub: "python · node · java · rust",
     figure: <CodeFigure />,
     wire: "one write",
     lines: [

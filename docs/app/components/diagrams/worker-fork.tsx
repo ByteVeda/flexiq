@@ -17,6 +17,7 @@ export function WorkerDispatch() {
               python={<code>async def</code>}
               node={<code>async</code>}
               java="handler"
+              rust={<code>register_async</code>}
             />{" "}
             functions to the async runtime.
           </div>
@@ -28,6 +29,7 @@ export function WorkerDispatch() {
           python="sync def · async def"
           node="sync · async"
           java="handlers"
+          rust="#[task] · register_async"
         />
       </div>
       <div className="archfork">
@@ -62,6 +64,14 @@ export function WorkerDispatch() {
                       bridge.
                     </>
                   }
+                  rust={
+                    <>
+                      Each task body runs on a Tokio <code>spawn_blocking</code>{" "}
+                      thread, wrapped in <code>catch_unwind</code> — a panic
+                      fails the job as a retryable error instead of stranding
+                      it.
+                    </>
+                  }
                 />
               </div>
             </div>
@@ -77,6 +87,7 @@ export function WorkerDispatch() {
                   python="NativeAsyncPool"
                   node="Native async pool"
                   java="Executor dispatch"
+                  rust="Worker::register_async"
                 />
               </div>
               <div className="ld">
@@ -100,6 +111,15 @@ export function WorkerDispatch() {
                       Every job is an executor task; the handler's return value
                       (or exception) is bridged back into the Rust scheduler as
                       the job outcome.
+                    </>
+                  }
+                  rust={
+                    <>
+                      <code>#[task]</code> refuses an <code>async fn</code>.
+                      Register the future directly on{" "}
+                      <code>flexiq_core::Worker</code> with{" "}
+                      <code>register_async</code> — it runs on the core&apos;s
+                      own runtime, with no step session.
                     </>
                   }
                 />

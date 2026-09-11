@@ -1,0 +1,111 @@
+---
+title: CLI usage
+description: "The Rust SDK ships no command line — a worker is the binary you wrote, and everything a CLI would do is a call you make."
+---
+
+## The crate has no binary
+
+`flexiq` is a library. It declares no `[[bin]]` target, so installing it puts
+nothing on your `PATH`: there is no `flexiq worker`, no `--app` flag, no
+`flexiq dashboard`, no `flexiq migrate`. Naming one would not fail loudly — the
+command simply does not exist.
+
+## A worker is your binary
+
+The worker is the program you wrote: the one that calls `spawn()`. You start it
+the way you start any other Rust program, and you stop it by letting
+`shutdown()` run.
+
+```rust
+#[flexiq::task(queue = "billing")]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    let _ = order_id;
+    Ok(cents)
+}
+
+fn main() -> flexiq::Result<()> {
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    let worker = queue
+        .worker()
+        .register::<charge>()
+        .queues(["billing", "default"])
+        .num_workers(4)
+        .spawn()?;
+
+    // Your own wait goes here — a signal handler, a channel, a join.
+    std::thread::sleep(std::time::Duration::from_secs(60));
+
+    // Drains what is in flight and unregisters the worker.
+    worker.shutdown()
+}
+```
+
+```bash
+cargo build --release
+./target/release/my-worker
+```
+
+Which queues it consumes, how many threads it runs and what its worker id is are
+arguments to the builder, not flags on a command — so if you want them
+configurable, read them in `main` and pass them along. See
+<SdkLink to="guides/core/workers">Workers</SdkLink> for the full builder and
+<SdkLink to="operate/deployment">Deployment</SdkLink> for packaging the binary.
+
+## What a CLI would have done for you
+
+Every operator action is a method call instead. Enqueue a one-off, read a job,
+cancel one, and go through `queue.storage()` for dead letters, queue pause and
+workers — <SdkLink to="operate/inspection">Job management</SdkLink> lists which
+calls exist and which do not. A short `main` behind `clap` is the Rust answer to
+"I want to do this from a terminal", and it is yours to shape.
+
+Schema migrations are the same story: the constructors apply them as they open,
+or you call `StorageBackend::migrate()` yourself. See
+<SdkLink to="operate/backends">Backends</SdkLink>.
+
+## The binaries the workspace does have
+
+Two, and neither is published to crates.io — both are `publish = false`, so
+neither is a `cargo install` away. From a checkout of the repository:
+
+### `flexiq-tui`
+
+A headless terminal UI over a queue's storage. It opens the database directly,
+which means it works against a queue driven by any FlexiQ SDK.
+
+```bash
+cargo run -p flexiq-tui -- --db ./app.db
+cargo run -p flexiq-tui -- --db ./app.db --refresh 5000
+```
+
+`--db` takes `sqlite:///abs/path/app.db`, a bare path, `:memory:`, or a
+`postgres://` / `redis://` URL when built with `--features postgres` /
+`--features redis`. `--refresh` is the auto-refresh interval in milliseconds,
+default `2000`.
+
+It browses jobs, dead letters and queues, and it can cancel a job, retry or
+delete a dead letter, and pause or resume a queue.
+
+<Callout type="warn">
+  Opening a SQLite database with it **runs pending schema migrations and a
+  one-time archive sweep**. It is not a passive read-only viewer. It also
+  operates on the default namespace only.
+</Callout>
+
+### `flexiq-server`
+
+The scheduler, dashboard, executor attach listener and gRPC door in one binary —
+a separate process, not something the SDK starts. It is configured by
+environment variables and takes no flags beyond `--help`, `--version` and a
+`token` subcommand:
+
+```bash
+flexiq-server token create --name my-producer --scope produce
+flexiq-server token list
+flexiq-server token revoke <ID>
+```
+
+It ships as the container image `ghcr.io/byteveda/flexiq-server`, or builds from
+a checkout with `cargo build -p flexiq-server`. Everything it reads is on
+[Server](/server/operate), and the dashboard it serves is
+<SdkLink to="modules/dashboard">its own page</SdkLink>.

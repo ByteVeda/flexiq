@@ -3,11 +3,10 @@ title: Sentry Integration
 description: "Report task failures to Sentry, tagged by task name, job id, and queue."
 ---
 
-flexiq ships a Sentry middleware that reports task failures to
+Where a binding ships a Sentry middleware, it reports task failures to
 [Sentry](https://sentry.io), tagging each event with the task name, job id,
 and queue so failures are groupable and searchable. Sentry itself is never
-initialized for you — call `Sentry.init(...)` in your own app before
-registering the middleware.
+initialized for you — do that in your own app first.
 
 ## Installation
 
@@ -44,7 +43,16 @@ implementation("io.sentry:sentry:7.14.0")
 
 </SdkOnly>
 
-Initialize Sentry, then register the middleware on the queue:
+<SdkOnly sdk="rust">
+
+Nothing to install from this side: there is no Sentry Cargo feature and no
+optional dependency behind one. Add the `sentry` crate to your own
+`Cargo.toml` and initialize it in `main`, exactly as you would in a binary with
+no queue in it at all.
+
+</SdkOnly>
+
+Initialize Sentry, then wire it in:
 
 <CodeTabs>
   <Tab sdk="python">
@@ -84,17 +92,38 @@ flexiq.use(new SentryMiddleware());
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+The Rust SDK ships no Sentry integration, and has no middleware to hang one on.
+Initialize the `sentry` crate in your own `main` and report from inside the task
+body, which is the only place the real error still exists: by the time a failure
+reaches the queue it is a `TaskError` — a message and a retryable flag, recorded
+as `{"errtype": "TaskError", "message": …, "traceback": null}` — with the error's
+type and any backtrace already gone.
+
+```rust
+#[flexiq::task(max_retries = 3)]
+fn process_payment(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    charge(&order_id, cents).map_err(|err| {
+        // report `err` here, while it is still a typed error
+        flexiq::TaskError::retryable(err.to_string())
+    })?;
+    Ok(cents)
+}
+```
+
+  </Tab>
 </CodeTabs>
 
 <Callout type="info">
-  None of the three bindings call `Sentry.init` for you — configure the DSN,
-  environment, and sampling with the Sentry SDK itself. When Sentry hasn't
-  been initialized, the middleware's hooks are safe no-ops.
+  No binding initializes Sentry for you — configure the DSN, environment, and
+  sampling with the Sentry SDK itself. Where a middleware ships, its hooks are
+  safe no-ops until Sentry has been initialized.
 </Callout>
 
 ## What it captures
 
-Each binding decides *when* to report a failure differently:
+The bindings differ on *when* a failure is reported:
 
 <SdkOnly sdk="python">
 
@@ -149,6 +178,15 @@ Both event kinds carry the tags `flexiq.task` (task name) and
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Nothing is captured for you: what reaches Sentry is whatever the task body
+reports, on whichever attempts run it. Nor are the task name, job id and queue
+tagged for you — a task body receives its arguments and nothing else, so
+anything you want on the event has to come from your own capture call.
+
+</SdkOnly>
+
 ## Configuration
 
 <CodeTabs>
@@ -186,6 +224,14 @@ new SentryMiddleware(task -> !task.startsWith("noisy."));
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Nothing to configure: with no middleware there is no tag prefix, no capture
+level, and no task filter. The filter is wherever you put the reporting call — a
+body that does not report is a task that is not reported — and a callback over
+`flexiq::ResultOutcome` can match on `task_name` before it says anything.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -215,6 +261,18 @@ new SentryMiddleware(task -> !task.startsWith("noisy."));
 
 `SentryMiddleware` has no other options beyond the task filter — DSN,
 environment, and sampling are all configured through the Sentry SDK itself.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The two options those tables keep offering have plain equivalents here rather
+than parameters. The task filter is the *placement* of the reporting call: a
+body that never reports is a task that is never reported. The tags are whatever
+you attach at the capture site — and what is in scope there is the task's own
+arguments, nothing more. There is no ambient job context in a Rust task body, so
+a job id on the event has to come from an argument you put there yourself, or
+from an `on_outcome` callback where the outcome carries it.
 
 </SdkOnly>
 
@@ -322,12 +380,40 @@ Each failed attempt of `process_payment` is captured immediately with tags
 exhausted, a final `FATAL` dead-letter event marks the terminal failure.
 
   </Tab>
+  <Tab sdk="rust">
+
+Reporting is a line in the task, not a registration on the queue:
+
+```rust
+use flexiq::{FlexiQ, TaskError};
+
+#[flexiq::task(max_retries = 3, queue = "billing")]
+fn process_payment(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    charge(&order_id, cents).map_err(|err| {
+        report(&err); // your own capture call
+        TaskError::retryable(err.to_string())
+    })?;
+    Ok(cents)
+}
+
+let queue = FlexiQ::open("myapp.db")?;
+let worker = queue.worker().register::<process_payment>().spawn()?;
+```
+
+That reports **every failed attempt**, because the closure runs on each one. For
+one event per dead job instead, `flexiq_core::Worker::on_outcome` delivers
+`ResultOutcome::DeadLettered` once retries are spent — but it replaces the
+worker above rather than adding to it, and it carries the final message rather
+than the error. The <SdkLink to="guides/extend/middleware">Middleware
+guide</SdkLink> has that trade-off in full.
+
+  </Tab>
 </CodeTabs>
 
 ## Combining with other middleware
 
-Sentry middleware composes with any other middleware registered on the
-same queue or worker — see the
+Where a binding has a middleware stack, the Sentry middleware composes with
+anything else registered on the same queue or worker — see the
 <SdkLink to="guides/extend/middleware">Middleware guide</SdkLink> for
 how hooks run across multiple middleware instances.
 
@@ -346,5 +432,20 @@ queue = Queue(
     ],
 )
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing composes, because there is no stack to compose in. An error report, a
+metric and a log line all sit wherever you put them; when several want the same
+failure, give them one small function the task calls on its error path instead
+of reaching for a hook that is not there.
+
+`flexiq_core::Worker::on_outcome` will carry exactly one of those concerns — it
+holds a single callback, and it comes at the price of building the worker on
+core's pool, which cannot run a task that uses durable steps.
+<SdkLink to="guides/extend/middleware">Middleware</SdkLink> has that trade-off
+in full.
 
 </SdkOnly>

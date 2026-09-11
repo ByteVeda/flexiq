@@ -1,11 +1,14 @@
 ---
 title: Serialization
-description: "Pluggable serializers for task arguments and results, with a per-SDK default codec."
+description: "How task arguments and results are encoded — per-SDK codecs, the cross-SDK CBOR envelope, and what lands in the database."
 ---
 
-flexiq uses a pluggable serializer for task arguments and results. The default
-is <SdkSwap python={<code>SmartSerializer</code>} node={<code>JsonSerializer</code>} java={<code>JsonSerializer</code>} />,
-which <SdkSwap python="uses MessagePack with a cloudpickle fallback for lambdas, closures, and complex objects" node="emits human-readable JSON bytes" java="emits human-readable JSON bytes via Jackson" />.
+<SdkSwap
+  python={<>flexiq uses a pluggable serializer for task arguments and results. The default is <code>SmartSerializer</code>, which uses MessagePack with a cloudpickle fallback for lambdas, closures, and complex objects.</>}
+  node={<>flexiq uses a pluggable serializer for task arguments and results. The default is <code>JsonSerializer</code>, which emits human-readable JSON bytes.</>}
+  java={<>flexiq uses a pluggable serializer for task arguments and results. The default is <code>JsonSerializer</code>, which emits human-readable JSON bytes via Jackson.</>}
+  rust={<>The Rust SDK has one codec and no way to swap it. Task arguments and results travel in the cross-SDK CBOR envelope — codec tag <code>0x02</code>, the same bytes every other FlexiQ SDK reads.</>}
+/>
 
 <SdkOnly sdk="python">
 
@@ -53,6 +56,51 @@ FlexiQ queue = FlexiQ.builder()
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+An argument is anything that implements `Serialize` on the producer side and
+`Deserialize` on the worker side:
+
+```rust
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Order {
+    order_id: String,
+    amount_cents: i64,
+}
+
+#[flexiq::task]
+fn charge(order: Order) -> flexiq::Outcome<i64> {
+    Ok(order.amount_cents)
+}
+```
+
+Encoding goes through `flexiq_core::wire::encode_call`, the engine's writer —
+`contracts/wire-vectors.json` pins its output byte for byte. Decoding is this
+crate's own `ciborium` reader, because the engine ships none: a Rust worker is
+the first thing that has to read one of these envelopes back.
+
+Four consequences, all load-bearing:
+
+- **Positional arguments only.** Rust has no keyword arguments, so the
+  envelope's kwargs map always goes out empty. A call that arrives carrying
+  keyword arguments is refused by count rather than run with them dropped.
+- **Struct fields keep declaration order.** `order_id` precedes `amount_cents`
+  on the wire because it precedes it in the struct. A codec that sorted keys
+  would still interoperate — and would silently stop `auto:` idempotency keys
+  from deduplicating across languages, since the key hashes the encoded bytes.
+- **The serializer is in binary mode.** `is_human_readable()` is `false`,
+  matching the reader. A type that branches on it — `uuid::Uuid` among them —
+  round-trips because of that, and travels as a byte string; send a `String`
+  when the far side is a worker in another language.
+- **Nothing widens silently.** A `u64` past `i64::MAX` has no representation in
+  the envelope's signed-integer arm, so it is refused at enqueue rather than
+  wrapped into a negative.
+
+Results go out through the same writer. Reading one back is not wrapped:
+`job.result` is `Option<Vec<u8>>`, the encoded bytes exactly as written.
+
+</SdkOnly>
+
 ## Built-in serializers
 
 <SdkOnly sdk="python">
@@ -90,9 +138,21 @@ FlexiQ queue = FlexiQ.builder()
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+One codec, and it is not selectable: the CBOR wire envelope, codec tag `0x02`.
+There is no serializer type to choose between.
+
+</SdkOnly>
+
 ## Custom serializers
 
-Implement the `Serializer` interface with <SdkSwap python={<><code>dumps(obj)</code> / <code>loads(data)</code></>} node={<><code>serialize(value)</code> / <code>deserialize(bytes)</code></>} java={<><code>serialize(value)</code> / <code>deserialize(bytes, type)</code></>} /> methods.
+<SdkSwap
+  python={<>Implement the <code>Serializer</code> interface with <code>dumps(obj)</code> / <code>loads(data)</code> methods.</>}
+  node={<>Implement the <code>Serializer</code> interface with <code>serialize(value)</code> / <code>deserialize(bytes)</code> methods.</>}
+  java={<>Implement the <code>Serializer</code> interface with <code>serialize(value)</code> / <code>deserialize(bytes, type)</code> methods.</>}
+  rust={<>There is no serializer interface to implement — the payload codec is fixed. A type that needs a representation of its own implements <code>Serialize</code> and <code>Deserialize</code> for itself, and the envelope carries whatever that produces.</>}
+/>
 
 ## What gets serialized
 
@@ -100,3 +160,12 @@ Implement the `Serializer` interface with <SdkSwap python={<><code>dumps(obj)</c
 - **Results**: serialized and stored as a BLOB in `result`
 - **Periodic task args**: serialized at registration time, stored as BLOBs in
   `periodic_tasks.args`
+
+<SdkOnly sdk="rust">
+
+A Rust periodic takes no parameters — `cron` on a function with an argument is a
+compile error — so its `periodic_tasks.args` row holds the empty argument list.
+A durable step's memoized value goes through the same writer a result does, so
+a replay reads it back with exactly the codec it was written with.
+
+</SdkOnly>

@@ -1,0 +1,101 @@
+---
+title: Timeouts
+description: "The timeout attribute and .timeout_ms() — a per-attempt deadline the scheduler enforces, and what it does not interrupt."
+---
+
+A timeout bounds **one attempt**, not the job. Declare it on the task and every
+enqueue of that task carries it:
+
+```rust
+#[flexiq::task(timeout = "30s")]
+fn scrape(url: String) -> flexiq::Outcome<String> {
+    Ok(format!("fetched {url}"))
+}
+```
+
+Durations accept `500ms`, `30s`, `5m`, `2h`, `1d`, or a bare integer already in
+milliseconds. `timeout = 30_000` and `timeout = "30s"` are the same value.
+
+Override it per call with `.timeout_ms(i64)`, on the `TaskCall` or on an
+`EnqueueOptions`:
+
+```rust
+queue.enqueue(scrape::call("https://example.com".into()).timeout_ms(5_000))?;
+```
+
+The default is **300_000 ms** — five minutes. It is not a "no limit" default:
+every job gets a deadline whether or not you asked for one.
+
+## What the engine does when it expires
+
+The timeout lives on the job row, so the scheduler owns it. On each maintenance
+sweep it looks for `Running` jobs whose `started_at + timeout_ms` is already in
+the past and synthesizes a failure for each one:
+
+- the recorded error is `job timed out after 30000ms`, with the job's own
+  `timeout_ms` in it;
+- the result is marked timed out, so a reader can tell it apart from a handler
+  that returned an error;
+- it is marked retryable, so it spends a retry and the job comes back under the
+  ordinary backoff. When the retry budget is exhausted the job dead-letters —
+  see <SdkLink to="guides/reliability/dead-letter">Dead-letter queue</SdkLink>.
+
+A timeout is therefore a failure like any other, with one difference: your task
+body never produced it.
+
+<Callout type="warn">
+  The deadline frees the job's bookkeeping, not the thread. Handlers run on
+  blocking threads and nothing interrupts one mid-call — the body keeps going
+  until it returns. When it finally does, the job has already been retried under
+  a new claim, so the attempt fence drops that late result and logs
+  `dropping superseded result for job ...`. The work still happened.
+</Callout>
+
+## Bounding the work yourself
+
+A `#[flexiq::task]` body receives its decoded arguments and nothing else — no
+job, no handle, no cancellation flag — so there is no seam to poll from inside
+it. If a task can block indefinitely, give the blocking call its own deadline:
+
+```rust
+use std::time::{Duration, Instant};
+
+#[flexiq::task(timeout = "30s")]
+fn drain(batch: Vec<i64>) -> flexiq::Outcome<i64> {
+    // One attempt's own budget, set under the job's 30s so the body returns
+    // an error it chose rather than being reaped by one it did not.
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut done = 0;
+
+    for item in batch {
+        if Instant::now() > deadline {
+            // Retryable: the next attempt picks up where this one stopped.
+            return Err(flexiq::TaskError::retryable("batch deadline reached").into());
+        }
+        done += item;
+    }
+    Ok(done)
+}
+```
+
+Give any blocking client the same treatment — a socket read with no timeout of
+its own is the usual reason a handler outlives its job.
+
+## Picking a value
+
+<Callout type="error">
+  `.timeout_ms(0)` does not mean "no timeout". The deadline is
+  `started_at + timeout_ms`, so a zero makes the job stale the moment it starts
+  and the next sweep fails it. There is no value that disables the deadline —
+  pick a generous one instead.
+</Callout>
+
+Size it against the slowest attempt you are willing to wait for, not the
+average. A timeout shorter than the real work turns every run into a retry
+storm, and each abandoned attempt is still occupying a thread while its
+replacement runs.
+
+Related: <SdkLink to="guides/reliability/retries">Retries</SdkLink> for what
+happens to the attempt afterwards, and
+<SdkLink to="guides/core/enqueue-options">Enqueue options</SdkLink> for the rest
+of the per-call surface.

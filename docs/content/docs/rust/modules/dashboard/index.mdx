@@ -1,0 +1,94 @@
+---
+title: Dashboard
+description: "The Rust SDK serves nothing — flexiq-server does, as a separate process over the same backend."
+---
+
+There is no `serve_dashboard` in the `flexiq` crate, and no dashboard flag on
+the worker builder. The shell is a library: it enqueues jobs and runs them, and
+it opens no socket.
+
+The dashboard is served by **`flexiq-server`**, a separate axum binary in the
+same workspace. It reads the same tables your queue writes, so it needs a
+connection to your backend and nothing from your worker.
+
+## Running it
+
+`flexiq-server` is configured by environment variables only — it takes no flags
+beyond `--help`, `--version` and a `token` subcommand. Two variables turn the
+dashboard on:
+
+```bash
+FLEXIQ_DSN=/var/lib/app/flexiq.db \
+FLEXIQ_DASHBOARD=127.0.0.1:8080 \
+flexiq-server
+```
+
+`FLEXIQ_DSN` is the same storage your worker opened. Its scheme picks the
+backend — `postgres://`, `postgresql://`, `redis://`, `rediss://`, and anything
+else is read as a SQLite path — or name it outright with `FLEXIQ_BACKEND`.
+
+A bare `:8080` resolves to `127.0.0.1:8080`, loopback, not all interfaces. The
+dashboard is one of four roles the same binary can play; naming an address is
+the only thing that turns one on.
+
+<Callout type="warn" title="Open by default, and it refuses to be open in public">
+  With `FLEXIQ_DASHBOARD_AUTH` unset the dashboard serves openly — anyone who
+  reaches the port can cancel, replay and pause. A bind reachable off-host with
+  auth off **fails at boot** unless `FLEXIQ_ALLOW_INSECURE=1` says the network
+  already restricts access. Set `FLEXIQ_DASHBOARD_AUTH=session` for login,
+  CSRF and roles.
+</Callout>
+
+## What a Rust user actually has to run
+
+Being honest about the shape of this: it is a second process, and it is not on
+crates.io.
+
+- **`publish = false`.** There is no `cargo install flexiq-server`.
+- **The shipped artifact is a container image**, `ghcr.io/byteveda/flexiq-server`,
+  published for `linux/amd64` and `linux/arm64`. The image carries the dashboard
+  SPA already built in.
+- **From a checkout**, `cargo build -p flexiq-server` — with
+  `--features postgres` or `--features redis` if that is your backend.
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e FLEXIQ_DSN=postgres://user:pass@host/db \
+  -e FLEXIQ_DASHBOARD=0.0.0.0:8080 \
+  -e FLEXIQ_DASHBOARD_AUTH=session \
+  ghcr.io/byteveda/flexiq-server:2.0.0
+```
+
+<Callout type="warn" title="A local build has no SPA in it">
+  The SPA is embedded at compile time from a directory the build script looks
+  for. A plain `cargo build -p flexiq-server` in a tree where the dashboard has
+  not been built produces a binary that answers `503` and tells you so. Build
+  the SPA first, or point `FLEXIQ_DASHBOARD_ASSETS` at a prebuilt `dist`
+  directory. The published image does this for you.
+</Callout>
+
+## What it serves
+
+Every path that is not under `/api/` falls through to the SPA. Beside it:
+`/health`, `/readiness`, `/metrics`, and the `/api/` tree the SPA reads —
+stats, jobs and job detail, dead letters, metrics and time series, workers,
+webhooks and workflow runs.
+
+`/metrics` stays gated whatever the auth mode; `FLEXIQ_DASHBOARD_METRICS_TOKEN`
+is the bearer credential for a scraper with no session, and
+`FLEXIQ_DASHBOARD_PUBLIC_READINESS` ungates `/readiness` alone, for an
+orchestrator probe that cannot carry a header.
+
+## Is it worth a second process?
+
+If all you want is to look at a queue on your own machine, it may not be. The
+workspace also carries `flexiq-tui`, a terminal UI that opens the storage
+directly with no server in between —
+<SdkLink to="operate/cli">CLI usage</SdkLink> covers it. And everything the
+dashboard reads is on the `Storage` trait, reachable from your own code through
+`queue.storage()`.
+
+<Callout type="info">
+  The full variable list, the other three roles, the container image and the
+  Helm chart are in the SDK-neutral [Server](/server/operate) tier.
+</Callout>

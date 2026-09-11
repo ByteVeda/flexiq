@@ -1,0 +1,118 @@
+---
+title: Unique tasks
+description: "unique_key and idempotent() — the dedup slot, the auto: digest that crosses SDKs, and which one wins."
+---
+
+Two ways to say "only one of these at a time". One names the identity; the other
+derives it from the call.
+
+```rust
+queue.enqueue(send_welcome::call("u-1".into()).unique_key("welcome:u-1"))?;
+queue.enqueue(charge::call("ord-1".into(), 4_200).idempotent())?;
+```
+
+## `.unique_key(key)`
+
+At most one non-terminal job exists per key. A second enqueue with the same key
+does not insert — it returns the job that already holds the slot.
+
+```rust
+let first = queue.enqueue(greet::call("world".into()).unique_key("only-once"))?;
+let second = queue.enqueue(greet::call("world".into()).unique_key("only-once"))?;
+
+assert_eq!(first.id, second.id);
+```
+
+The slot is released when the job reaches a terminal state. That makes this a
+*dedup* key rather than an idempotency key: a caller retrying past completion
+enqueues a second job, by design.
+
+The match is scoped to the job's own namespace.
+
+## `.idempotent()`
+
+The same mechanism, with the key derived from the call instead of named:
+
+```
+auto: + sha256(task_name || 0x00 || payload)[..32]
+```
+
+The separator is a **NUL byte**, and the hex digest is truncated to **32
+characters**. Both are wire-visible.
+
+```rust
+let job = queue.enqueue(greet::call("world".into()).idempotent())?;
+assert_eq!(job.unique_key.as_deref(), Some("auto:c3abb8ce58c62cb737c17b92beb816be"));
+```
+
+That vector is pinned by the SDK's own test, against the digest every other
+flexiq SDK computes for the same call. It is not merely stable against itself —
+it is a cross-SDK contract. Getting the separator or the truncation wrong still
+enqueues; it just silently stops deduplicating against a producer somewhere
+else.
+
+The attribute sets it for every call of a task:
+
+```rust
+#[flexiq::task(idempotent)]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    Ok(cents)
+}
+```
+
+`idempotent = true` is accepted too, so a caller generating attributes does not
+have to special-case the bare flag.
+
+## Precedence
+
+An explicit key wins. A caller who names an identity has said something the
+payload's bytes cannot.
+
+```rust
+let job = queue.enqueue(greet::call("world".into()).idempotent().unique_key("mine"))?;
+assert_eq!(job.unique_key.as_deref(), Some("mine"));
+```
+
+Order does not matter — `.unique_key(..).idempotent()` resolves the same way.
+The derived key is only computed when `idempotent` is set *and* no explicit key
+exists.
+
+## What the digest is taken over
+
+The payload, exactly as it goes on the wire. Two things follow.
+
+**Arguments are positional.** Rust has no keyword arguments, so a call is an
+ordered list; the same values in a different order are a different payload and a
+different key.
+
+**Struct fields keep declaration order.** They are not sorted — sorting them
+would change the bytes and break the `auto:` key for every producer that already
+computed one.
+
+So the same call with the same arguments gives the same key, in this SDK and
+across the wire; a reordered argument list does not.
+
+## In a batch
+
+If any call in a batch carries a key — explicit or derived — the whole batch
+goes through the deduplicating write, and a call whose key is already taken
+resolves to the existing job rather than failing the batch. See
+<SdkLink to="guides/core/batch-enqueue">batch enqueue</SdkLink>.
+
+<Cards>
+  <Card
+    title="Idempotency"
+    to="guides/reliability/idempotency"
+    description="Exactly-once as a property of the work, not just the enqueue."
+  />
+  <Card
+    title="Enqueue options"
+    to="guides/core/enqueue-options"
+    description="Where these two setters sit among the rest."
+  />
+  <Card
+    title="Debouncing"
+    to="guides/reliability/debouncing"
+    description="Coalescing a burst — a different key, a different write."
+  />
+</Cards>

@@ -1,0 +1,14 @@
+{
+  "title": "Start here",
+  "root": true,
+  "pages": [
+    "index",
+    "installation",
+    "quickstart",
+    "concepts",
+    "first-app",
+    "reliability",
+    "production",
+    "next-steps"
+  ]
+}

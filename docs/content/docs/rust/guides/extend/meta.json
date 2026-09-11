@@ -1,0 +1,15 @@
+{
+  "title": "Extend & integrate",
+  "pages": [
+    "index",
+    "events",
+    "middleware",
+    "serializers",
+    "monitoring",
+    "logging",
+    "notes",
+    "testing",
+    "prometheus",
+    "sentry"
+  ]
+}

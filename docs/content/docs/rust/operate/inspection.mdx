@@ -1,0 +1,119 @@
+---
+title: Job management
+description: "What the FlexiQ handle reads back, and where queue.storage() takes over for everything it does not wrap."
+---
+
+`FlexiQ` wraps the reads and writes a producer needs. Everything else — dead
+letters, per-queue counts, workers, pause, steps — lives on the `Storage` trait,
+one call away through `queue.storage()`.
+
+## What the handle wraps
+
+```rust
+let job = queue.get_job(&id)?;                 // Option<Job>
+let recent = queue.list_jobs(50, 0)?;          // newest first: limit, offset
+let stats = queue.stats()?;                    // QueueStats
+queue.cancel(&id)?;                            // a pending job. false: nothing to cancel
+queue.request_cancel(&id)?;                    // a running one. the task has to poll
+```
+
+`QueueStats` counts by lifecycle state: `pending`, `running`, `completed`,
+`failed`, `dead`, `cancelled`.
+
+`cancel` and `request_cancel` are two different things. `cancel` takes a pending
+job out of the queue. `request_cancel` sets a flag on a job that is already
+running; nothing interrupts a handler mid-call, so the task body has to notice.
+
+## Reading a result
+
+`Job::result` is `Option<Vec<u8>>` — the raw wire bytes. **The Rust SDK does not
+wrap a typed result read**; the decoder it uses for a job's arguments is not
+public. Treat the field as bytes, or have the task write what it produced
+somewhere you can read:
+
+```rust
+let job = queue.get_job(&id)?.expect("job exists");
+println!("{} finished as {:?}, result {} bytes",
+    job.task_name, job.status, job.result.map(|r| r.len()).unwrap_or(0));
+```
+
+`Job::error` is a canonical JSON object with `errtype`, `message` and
+`traceback`, written the same way by every FlexiQ SDK, so it parses the same
+wherever the job ran.
+
+## Periodic tasks
+
+```rust
+queue.list_periodic()?;              // every registered schedule, enabled or paused
+queue.pause_periodic("nightly")?;    // stop it firing, keep the row
+queue.resume_periodic("nightly")?;
+queue.delete_periodic("nightly")?;   // false: there was none by that name
+```
+
+A schedule is declared in code with `#[flexiq::task(cron = "...")]` and written
+at `spawn()`. Deleting the row removes the registration, not the declaration —
+a worker that still has the task registered writes it back at its next startup.
+
+<Callout type="warn">
+  All four are **refused on a namespaced handle**. Periodic rows carry no
+  namespace and every backend keys that table by name alone, so a namespaced
+  listing would hand back another tenant's schedules.
+</Callout>
+
+## Everything else: `queue.storage()`
+
+`storage()` hands back the `&StorageBackend` the handle opened. It implements
+`Storage`, so bring the trait into scope and call it:
+
+```rust
+use flexiq::Storage;
+
+let storage = queue.storage();
+let ns = queue.namespace();
+
+let dead = storage.list_dead(50, 0, ns)?;
+let new_id = storage.retry_dead(&dead[0].id, ns)?;
+storage.delete_dead(&dead[0].id, ns)?;
+
+let mail = storage.stats_by_queue("mail", ns)?;
+let attempts = storage.get_job_errors(&id, ns)?;   // per-attempt error history
+let steps = storage.get_job_steps(&id, ns)?;       // what a durable run committed
+```
+
+Queue pause, and the workers that registered:
+
+```rust
+storage.pause_queue("mail")?;
+storage.resume_queue("mail")?;
+let paused = storage.list_paused_queues()?;        // ask this Vec, there is no is_paused
+let workers = storage.list_workers()?;
+```
+
+Housekeeping, when you run it yourself rather than leaving it to the scheduler:
+
+```rust
+storage.purge_completed(older_than_ms)?;
+storage.purge_dead(older_than_ms)?;
+storage.requeue_stuck(&id, now_ms)?;
+```
+
+<Callout type="warn" title="A storage call does not inherit the handle's namespace">
+  `FlexiQ` passes its namespace to storage for you; `queue.storage()` does not.
+  Every scoped method takes `namespace: Option<&str>` as its own argument, and
+  passing `None` reads the **default** namespace rather than the handle's. Read
+  it back with `queue.namespace()` and pass it, as above.
+</Callout>
+
+## What is not here
+
+The Rust SDK wraps no events, no webhooks and no metrics export. The rows that
+back them are on `Storage` if you want them; the surfaces that render them are
+<SdkLink to="modules/dashboard">the dashboard</SdkLink>, served by a separate
+binary.
+
+<Callout type="info">
+  These are the same tables the dashboard reads. There is no CLI in front of
+  them — <SdkLink to="operate/cli">CLI usage</SdkLink> explains what exists
+  instead. For what the lifecycle actually guarantees, see
+  [Job lifecycle](/architecture/job-lifecycle).
+</Callout>

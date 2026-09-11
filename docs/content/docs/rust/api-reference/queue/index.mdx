@@ -1,0 +1,125 @@
+---
+title: FlexiQ
+description: "Constructing the queue handle — open, in_memory, from_storage — and the shape of the handle you get back."
+---
+
+```rust
+use flexiq::FlexiQ;
+
+let queue = FlexiQ::open("flexiq.db")?;
+```
+
+One process, no daemon, straight to SQLite. Nothing else has to be running.
+
+## Construction
+
+| Constructor | Description |
+|---|---|
+| `FlexiQ::open(path: &str) -> Result<Self>` | Open, or create, a SQLite database at `path`. |
+| `FlexiQ::in_memory() -> Result<Self>` | A private in-memory database. Useful in tests; the data dies with the handle. |
+| `FlexiQ::from_storage(storage: StorageBackend) -> Result<Self>` | Wrap a backend that is already open — a Postgres or Redis one, or a SQLite handle sharing a pool with something else. |
+
+`open` is `from_storage` over `StorageBackend::Sqlite(SqliteStorage::new(path)?)`.
+There is no builder and no options struct: everything else a caller might tune
+lives on the backend, which you construct yourself and hand over.
+
+```rust
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+let backend = StorageBackend::Postgres(PostgresStorage::new(&url)?);
+let queue = FlexiQ::from_storage(backend)?;
+```
+
+`PostgresStorage` needs the `postgres` feature and `RedisStorage` the `redis`
+feature; both are variants of `StorageBackend` only when their feature is on.
+
+<Callout type="info">
+  Both constructors call `ensure_contract_supported` before handing the handle
+  back, so a build below the deployment's contract floor fails at open with
+  `QueueError::ContractTooOld` rather than at the first write. That is the whole
+  point of doing it in the constructor — a gate that runs anywhere else is a
+  gate a caller can skip by choosing a different one.
+</Callout>
+
+## The handle
+
+```rust
+pub struct FlexiQ {
+    /* a StorageBackend, and an optional namespace */
+}
+```
+
+`FlexiQ` is `Clone`, and cloning it clones the backend — which is pooled, not a
+connection. Hand a clone to every thread that needs one; there is nothing to
+share behind a mutex and nothing to close. It is named for the product rather
+than `Queue` because a *queue* here is already a named string every job carries,
+and a type called `Queue` that is not one of those would be the more confusing
+of the two.
+
+| Method | Returns | Description |
+|---|---|---|
+| `with_namespace(impl Into<String>)` | `Self` | Scope every operation on this handle to a tenant namespace. |
+| `namespace()` | `Option<&str>` | The namespace this handle is scoped to, if any. |
+| `storage()` | `&StorageBackend` | The backend underneath, for an operation this shell does not wrap. |
+
+`with_namespace` consumes and returns the handle, so it chains off a
+constructor:
+
+```rust
+let tenant = FlexiQ::open("flexiq.db")?.with_namespace("tenant-a");
+```
+
+## What is on it
+
+| Group | Methods | Page |
+|---|---|---|
+| Producing | `enqueue`, `enqueue_batch` | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| Reading | `get_job`, `list_jobs` | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| Cancelling | `cancel`, `request_cancel` | <SdkLink to="api-reference/queue/jobs">Jobs</SdkLink> |
+| Counting | `stats` | <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink> |
+| Schedules | `list_periodic`, `delete_periodic`, `pause_periodic`, `resume_periodic` | <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink> |
+| Consuming | `worker` | <SdkLink to="api-reference/worker">Worker</SdkLink> |
+
+That is the whole surface. Anything else — dead letters, stuck-job requeues,
+per-queue counts, a job's committed steps, locks, settings, pub/sub — is on the
+`Storage` trait, and `storage()` is how you get there:
+
+```rust
+use flexiq::Storage;
+
+let dead = queue.storage().list_dead(50, 0, queue.namespace())?;
+```
+
+This is not a fallback for a missing feature. `flexiq::Storage` and
+`flexiq_core::Storage` are the same trait, so the escape hatch costs one `use`
+and no conversion.
+
+## End to end
+
+```rust
+use flexiq::{FlexiQ, JobStatus};
+
+#[flexiq::task(max_retries = 5, timeout = "30s", queue = "billing")]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    println!("charging {order_id}: {cents} cents");
+    Ok(cents)
+}
+
+fn main() -> flexiq::Result<()> {
+    let queue = FlexiQ::in_memory()?;
+    let job = queue.enqueue(charge::call("ord-1".into(), 4_200))?;
+
+    let worker = queue
+        .worker()
+        .queues(["billing"])
+        .register::<charge>()
+        .num_workers(2)
+        .spawn()?;
+
+    while queue.get_job(&job.id)?.map(|j| j.status) != Some(JobStatus::Complete) {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    worker.shutdown()
+}
+```

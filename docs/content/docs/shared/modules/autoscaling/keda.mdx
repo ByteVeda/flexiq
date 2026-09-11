@@ -55,6 +55,34 @@ ever run it outside a container on a shared host.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no bind default to inherit: `FLEXIQ_DASHBOARD` is the address, and
+without it the role does not start at all. The Service above needs it wide:
+
+```bash
+FLEXIQ_DASHBOARD=0.0.0.0:9091
+FLEXIQ_DASHBOARD_AUTH=off
+FLEXIQ_ALLOW_INSECURE=1        # required — see below
+```
+
+<Callout type="warn" title="The server refuses this combination without the third line">
+  A non-loopback bind with `FLEXIQ_DASHBOARD_AUTH=off` is a startup error, not
+  a warning — the same port serves cancel, replay, purge and pause, so
+  reaching it from off-host has to be deliberate. `FLEXIQ_ALLOW_INSECURE=1` is
+  the acknowledgement.
+
+  `FLEXIQ_DASHBOARD_AUTH=session` clears the guard but breaks the trigger:
+  only `/health`, `/readiness`, `/metrics` and the login routes bypass the
+  session gate, and `/api/scaler` is not among them. KEDA's `metrics-api`
+  trigger sends a plain `GET` with no cookie, so it would get a `401`.
+
+  So the safe shape is a `ClusterIP` Service and a `NetworkPolicy` that admits
+  only the KEDA operator — the network is the boundary here, not the port.
+</Callout>
+
+</SdkOnly>
+
 ## Scaler server
 
 <CodeTabs>
@@ -104,6 +132,24 @@ There's no bundled CLI for the scaler — embed `Scaler.start(...)` in a small
 entrypoint alongside (or instead of) your worker process.
 
   </Tab>
+  <Tab sdk="rust">
+
+The `flexiq` crate serves no HTTP and ships no CLI, so there is nothing to
+start in-process. `/api/scaler` comes from the standalone `flexiq-server`
+binary, whose dashboard role serves it; it is configured entirely from the
+environment, with no flags:
+
+```bash
+export FLEXIQ_DSN="$DATABASE_URL"
+export FLEXIQ_DASHBOARD=127.0.0.1:9091   # the role that serves /api/scaler
+flexiq-server
+```
+
+Point the trigger below at `/api/scaler` on whatever address you gave
+`FLEXIQ_DASHBOARD`. The target depth is a fixed `10` in this server — there is
+no knob for it — but `?queue=` still narrows the metric per request.
+
+  </Tab>
 </CodeTabs>
 
 ### Options
@@ -150,6 +196,34 @@ the rest at their defaults.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`flexiq-server` takes no flags at all — the environment is the whole
+configuration, which is what `--help` prints instead of options. For the
+scaler, these are the ones that matter:
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLEXIQ_DSN` | — (required) | Storage connection string |
+| `FLEXIQ_BACKEND` | inferred from the DSN | `sqlite`, `postgres` or `redis` |
+| `FLEXIQ_DASHBOARD` | off | Address of the role serving `/api/scaler`. Unset means no dashboard role, and no scaler endpoint. |
+| `FLEXIQ_DASHBOARD_AUTH` | `off` | `off` or `session`. `session` gates `/api/scaler`. |
+| `FLEXIQ_ALLOW_INSECURE` | unset | `1` permits an off-host bind with auth off |
+| `FLEXIQ_NAMESPACE` | all namespaces | Scopes the counts the scaler reports |
+| `FLEXIQ_DASHBOARD_METRICS_TOKEN` | unset | Bearer token for `/metrics` and `/readiness` — **not** for `/api/scaler` |
+
+There is no target-queue-depth option. `targetQueueDepth` in the response is a
+constant `10` compiled into the server. That costs nothing in practice: KEDA
+scales on `targetValue` from the trigger, and the response field is
+informational — set the number you want in the `ScaledObject` and ignore the
+one in the body.
+
+The queue filter has no variable either; it is the `?queue=` query parameter on
+the request, which means one endpoint serves as many scaled objects as you have
+queues.
+
+</SdkOnly>
+
 ### Endpoints
 
 | Endpoint | Returns |
@@ -161,6 +235,26 @@ the rest at their defaults.
 
 Also serves `GET /metrics` in Prometheus text format when `prometheus-client`
 is installed (`501` otherwise).
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The dashboard role serves two more that a `Deployment` wants, and the gating
+differs per endpoint:
+
+| Endpoint | Gate |
+|---|---|
+| `GET /api/scaler[?queue=]` | The session gate. Open with `FLEXIQ_DASHBOARD_AUTH=off`; a `401` with `session`. |
+| `GET /health` | Always public. `{"status":"ok"}`, no storage touched — a liveness probe, not a readiness one. |
+| `GET /readiness` | Checks storage and the worker registry. Gated like `/metrics` unless `FLEXIQ_DASHBOARD_PUBLIC_READINESS=1`. |
+| `GET /metrics` | Prometheus text, always available — no optional dependency. `FLEXIQ_DASHBOARD_METRICS_TOKEN` as a bearer token if set; public under `auth=off` otherwise. |
+
+`/readiness` deliberately ignores the worker count: an empty registry still
+answers `200`, because readiness asks whether *this* process can serve the API
+and the workers are a different Deployment. Probe `/health` for liveness and
+`/readiness` for traffic; neither tells you whether anything is draining the
+queue.
 
 </SdkOnly>
 
@@ -212,6 +306,31 @@ the name passed via `?queue=`).
 `metricValue` is `pending + running` (outstanding work), not pending-only —
 account for that when tuning `targetValue` if you're porting a threshold from
 Python or Node.
+
+  </Tab>
+  <Tab sdk="rust">
+
+```json
+{
+  "metricName": "flexiq_queue_depth",
+  "metricValue": 42,
+  "isActive": true,
+  "liveWorkers": 3,
+  "totalCapacity": 12,
+  "targetQueueDepth": 10,
+  "workerUtilization": 0.583,
+  "perQueue": {
+    "default": { "pending": 42, "running": 7 }
+  }
+}
+```
+
+`totalCapacity` counts the slots **attached executors** advertise — this
+server runs no in-process worker pool, so it reports `0` when nothing is
+attached, and `workerUtilization` is then omitted from the body entirely.
+Filtering with `?queue=emails` narrows `metricValue`, `isActive`, and
+`metricName` (suffixed `flexiq_queue_depth_emails`) to that queue; `perQueue`
+still reports every queue.
 
   </Tab>
 </CodeTabs>
@@ -313,6 +432,32 @@ public final class ScalerMain {
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+Run the published server image instead of your own — its entrypoint is the
+`flexiq-server` binary and it takes no arguments, so this pod needs `image`
+and `env` rather than a `command`:
+
+```yaml
+image: ghcr.io/byteveda/flexiq-server:2.0.0
+env:
+  - name: FLEXIQ_DASHBOARD
+    value: "0.0.0.0:9091"
+  - name: FLEXIQ_ALLOW_INSECURE
+    value: "1"
+  - name: FLEXIQ_DSN
+    valueFrom:
+      secretKeyRef:
+        name: flexiq-db
+        key: dsn
+```
+
+`FLEXIQ_ALLOW_INSECURE=1` is required here and is not a formality: the same
+port also serves cancel, replay, purge and pause, so binding it off-host
+without `FLEXIQ_DASHBOARD_AUTH=session` is refused at startup unless you say
+so explicitly. Keep the Service `ClusterIP`.
+
+  </Tab>
 </CodeTabs>
 
 ## ScaledObject (HTTP trigger)
@@ -352,6 +497,26 @@ Filter to a specific queue name:
 
 Adjust the port to `9090` (the default for `ScalerOptions`) unless you
 overrode it when starting the scaler.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The port in `url:` is whichever one you put in `FLEXIQ_DASHBOARD` — there is no
+default to fall back to, so the two have to be written to match:
+
+```yaml
+        url: "http://flexiq-scaler:9091/api/scaler"   # FLEXIQ_DASHBOARD=0.0.0.0:9091
+```
+
+`targetValue` is read from this manifest and nothing else, so the `10` the
+response reports has no bearing on it. Tune the number here.
+
+One thing to know about what the trigger is reading: `metricValue` is
+`pending` only, not `pending + running`. Work already claimed by a worker does
+not keep the replica count up, which is what you want for scaling *to* zero —
+and which means `cooldownPeriod` is the only thing stopping a scale-down while
+long jobs are still executing. Set it longer than your longest task.
 
 </SdkOnly>
 
@@ -416,6 +581,19 @@ command: ["java", "-jar", "worker.jar"]
 Package a `main()` that opens a `FlexiQ`, registers handlers with
 `flexiq.worker()`, and calls `worker.awaitShutdown()` — see
 <SdkLink to="operate/deployment">Deployment</SdkLink>.
+
+  </Tab>
+  <Tab sdk="rust">
+
+```yaml
+command: ["/usr/local/bin/my-worker"]
+```
+
+There is no worker CLI to invoke — a Rust worker is a binary you build. Its
+`main` opens a `FlexiQ`, registers tasks through `queue.worker()`, and holds
+the returned `WorkerHandle`. `WorkerHandle` has only `worker_id()` and
+`shutdown()`, so park the main thread yourself and call `handle.shutdown()`
+on `SIGTERM` to drain in-flight work before the pod goes away.
 
   </Tab>
 </CodeTabs>
@@ -505,6 +683,39 @@ utilization isn't available — queue depth alone is the supported signal.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+The same server already exposes `/metrics` in Prometheus text format, from the
+same storage reads — so if Prometheus is scraping it, the trigger can point
+there instead. Mind the gauge names, which are not the ones a `metricName`
+lifted from elsewhere would use:
+
+```yaml
+    - type: prometheus
+      metadata:
+        serverAddress: "http://prometheus:9090"
+        metricName: flexiq_jobs_pending
+        query: sum(flexiq_jobs{queue="default",status="pending"})
+        threshold: "10"
+```
+
+| Gauge | Labels |
+|---|---|
+| `flexiq_jobs` | `queue`, `status` — one of `pending`, `running`, `completed`, `failed`, `dead`, `cancelled` |
+| `flexiq_workers` | none — rows in the worker registry |
+| `flexiq_executors` | none — only emitted when an executor is attached |
+| `flexiq_executor_slots` | `state` — `total` or `free`; same condition |
+
+There is no `flexiq_queue_depth` and no utilization gauge; `sum()` over
+`flexiq_jobs` with `status="pending"` is the queue depth. The two executor
+gauges are absent entirely when nothing is attached, so a query over them needs
+an `or vector(0)` rather than assuming a zero.
+
+A worker Deployment scaled this way still needs the worker task to be doing the
+work — `/metrics` reports what storage holds, not what this process is running.
+
+</SdkOnly>
+
 ## Deploy templates
 
 Ready-to-use YAML templates are included in the repository under
@@ -550,6 +761,37 @@ Ready-to-use YAML templates are included in the repository under
   instead — workers connect over the network and there's no shared-file
   constraint.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="info">
+  With SQLite every replica has to share one volume, which a `Deployment`
+  scaled past one replica cannot do. Use a networked
+  <SdkLink to="operate/backends">Postgres or Redis backend</SdkLink> —
+  replicas connect over the network and there is no shared file.
+</Callout>
+
+Choosing that backend is a compile-time decision in the worker image, not a
+runtime one. The variant only exists if the feature was on when the binary was
+built:
+
+```toml
+flexiq = { version = "2", features = ["postgres"] }
+```
+
+```rust
+use flexiq::{FlexiQ, PostgresStorage, StorageBackend};
+
+// `FlexiQ::open` takes a SQLite path, so a networked backend goes through
+// `from_storage`.
+let url = std::env::var("DATABASE_URL")?;
+let queue = FlexiQ::from_storage(StorageBackend::Postgres(PostgresStorage::new(&url)?))?;
+```
+
+Build the scaler's server with the matching feature too — it reads the same
+storage, so a mismatch is a DSN it cannot open rather than a wrong number.
 
 </SdkOnly>
 

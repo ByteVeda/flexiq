@@ -1,0 +1,196 @@
+---
+title: Enqueue options
+description: "Queue, priority, delay, uniqueness, metadata and dependencies — the attribute's defaults and the per-call overrides that beat them."
+---
+
+Every option is set in one of two places: on the attribute, where it becomes the
+task's default, or on the call, where it overrides that default for one job.
+
+```rust
+#[flexiq::task(queue = "billing", max_retries = 5, timeout = "30s")]
+fn charge(order_id: String, cents: i64) -> flexiq::Outcome<i64> {
+    Ok(cents)
+}
+
+// Takes the attribute's queue, retries and timeout.
+queue.enqueue(charge::call("ord-1".into(), 4_200))?;
+
+// …unless the call says otherwise.
+queue.enqueue(
+    charge::call("ord-2".into(), 900)
+        .queue("billing-urgent")
+        .priority(9)
+        .delay_ms(60_000),
+)?;
+```
+
+`charge::call(..)` mirrors the function's own signature and returns a
+`TaskCall<charge>` seeded with the task's declared defaults. The setters below
+are methods on that value, each taking and returning `self`, so they chain.
+
+## The setters
+
+| Method | Effect |
+| --- | --- |
+| `.queue(name)` | Route to a named queue. |
+| `.priority(i32)` | Higher dispatches first within a queue. |
+| `.delay_ms(i64)` | Hold the job this many milliseconds before it becomes eligible. |
+| `.max_retries(i32)` | Retries before the job dead-letters. |
+| `.timeout_ms(i64)` | Cap on one attempt's execution time. |
+| `.unique_key(key)` | Deduplicate against any other non-terminal job with this key. |
+| `.idempotent()` | Derive that key from the task name and payload. |
+| `.metadata(json)` | Pre-encoded JSON metadata, stored with the job. |
+| `.notes(json)` | Structured annotations: a JSON object of at most 15 top-level fields. |
+| `.depends_on(ids)` | Hold the job until those job ids have completed. |
+| `.expires_in_ms(i64)` | Expire the job if it has not started in time. |
+| `.result_ttl_ms(i64)` | How long the archived result is kept. |
+| `.namespace(name)` | Scope the job to a tenant namespace. |
+| `.debounce_ms(key, window_ms, max_wait_ms)` | Coalesce a burst on `key` into one run. |
+| `.debounce(Debounce)` | The same window, plus payload replacement and the admission cap. |
+
+Every one of those also exists on `EnqueueOptions`, the bag a `TaskCall` carries
+— both sets are emitted from one macro, so the two cannot drift apart.
+`enqueue` takes the call, not the bag.
+
+<Callout type="warn">
+  `.metadata` and `.notes` take **already-encoded** JSON and this SDK does not
+  check it. The contract caps `notes` at a JSON object of 15 top-level fields;
+  validating that is the caller's job here. An invalid string is stored as
+  given.
+</Callout>
+
+## Defaults
+
+| Option | Default |
+| --- | --- |
+| `queue` | `"default"` |
+| `priority` | `0` |
+| `max_retries` | `3` |
+| `timeout_ms` | `300_000` (five minutes) |
+| everything else | unset |
+
+With no delay a job is eligible immediately. Relative times — `delay_ms` and
+`expires_in_ms` — resolve against a single `now` read once per enqueue, so
+`scheduled_at` and `expires_at` cannot disagree by the width of the call.
+
+## Attribute versus call
+
+The attribute's keys land in two different places, and only one of them can be
+overridden per call.
+
+**Enqueue defaults**, seeded into every `TaskCall` and overridable by the
+setters above:
+
+`queue` · `priority` · `max_retries` · `timeout` · `expires` · `result_ttl` ·
+`idempotent`
+
+**Dispatch policy**, read by the scheduler off the task's registration — there
+is no per-call equivalent:
+
+`retry_backoff_ms` · `retry_max_delay_ms` · `on_excess` · `max_concurrent` ·
+`max_in_flight_per_task` · `rate_limit` · `retry_budget`
+
+`max_retries` is the one key that reaches both: the job row carries it, and so
+does the scheduler's retry policy. `name`, `cron` and `timezone` are neither —
+they name the task and schedule it.
+
+<Callout type="info">
+  `delay_ms` has no attribute. A delay is a property of one enqueue, not of the
+  task, so it is only ever set on the call. For a recurring schedule use
+  <SdkLink to="guides/core/scheduling">periodic tasks</SdkLink>.
+</Callout>
+
+## Durations
+
+Attribute durations are written the way a person writes them — `500ms`, `30s`,
+`5m`, `2h`, `1d` — or as a bare integer already in milliseconds. An unparseable
+one is a compile error listing the accepted spellings.
+
+```rust
+#[flexiq::task(timeout = "30s", expires = "1h", result_ttl = "7d", retry_backoff_ms = 250)]
+fn report(day: String) -> flexiq::Outcome<()> {
+    let _ = day;
+    Ok(())
+}
+```
+
+The per-call setters take milliseconds and say so in their names. `ms` is
+matched before `m`, so `5ms` is five milliseconds and `5m` is five minutes.
+
+## Debouncing
+
+A window is three values or none — the key, how far each arrival slides the
+deadline, and the ceiling measured from the first arrival. There is no partial
+window to get wrong, because the call takes all three:
+
+```rust
+queue.enqueue(reindex::call("catalog".into()).debounce_ms("catalog", 60_000, 300_000))?;
+```
+
+`Debounce` itself is public when you want the other two knobs:
+
+```rust
+use flexiq::Debounce;
+
+let mut window = Debounce::new("catalog", 60_000, 300_000);
+window.replace_payload = true;
+window.max_pending = Some(100);
+
+queue.enqueue(reindex::call("catalog".into()).debounce(window))?;
+```
+
+`max_pending` only rides a debounced write: it is the one write whose caller
+cannot apply the cap itself, because only storage knows whether the call adds a
+row or slides an open window. Full behaviour is in
+<SdkLink to="guides/reliability/debouncing">debouncing</SdkLink>.
+
+## Namespaces
+
+A handle scoped with `with_namespace` is a boundary, not a default. It stamps
+its namespace on every call that names none, and it **refuses** a call that
+names a different one:
+
+```rust
+let tenant = queue.clone().with_namespace("tenant-a");
+
+tenant.enqueue(charge::call("ord-1".into(), 100))?;                    // → tenant-a
+tenant.enqueue(charge::call("ord-2".into(), 100).namespace("tenant-b"))?; // error
+```
+
+An unscoped handle naming a namespace per call stays allowed — that is how you
+target one without holding a scoped handle.
+
+## When an argument cannot be encoded
+
+`call(..)` mirrors the task's signature and has nowhere to return a `Result`, so
+an encoding failure rides on the call and is raised by `enqueue`, naming the
+task. A `u64` past `i64::MAX` is the ordinary case. What it never is, is a panic
+in a producer.
+
+```rust
+let err = queue.enqueue(takes_a_big_number::call(u64::MAX)).unwrap_err();
+// "task `takes_a_big_number` could not encode its arguments: …"
+```
+
+<Cards>
+  <Card
+    title="Unique tasks"
+    to="guides/core/unique-tasks"
+    description="unique_key, idempotent(), and which one wins."
+  />
+  <Card
+    title="Dependencies"
+    to="guides/core/dependencies"
+    description="depends_on, and what a broken edge does."
+  />
+  <Card
+    title="Batch enqueue"
+    to="guides/core/batch-enqueue"
+    description="Many calls in one write — and the option a batch refuses."
+  />
+  <Card
+    title="Queues & Priority"
+    to="guides/core/queues"
+    description="Routing, priority, and which queues a worker pulls from."
+  />
+</Cards>

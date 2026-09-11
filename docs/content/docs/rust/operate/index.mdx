@@ -1,0 +1,68 @@
+---
+title: Operate
+description: "Run the Rust SDK in production — backends, job management, the standalone CLI, deployment, and security."
+---
+
+A Rust worker is a binary you wrote and you deploy. There is no daemon to run
+beside it and no broker to operate: the scheduler lives inside the process that
+calls `spawn()`, and it reads and writes the backend directly.
+
+<Cards>
+  <Card
+    title="Backends"
+    to="operate/backends"
+    description="SQLite by default, Postgres and Redis behind cargo features"
+  />
+  <Card
+    title="Job management"
+    to="operate/inspection"
+    description="What FlexiQ reads back, and where queue.storage() takes over"
+  />
+  <Card
+    title="CLI usage"
+    to="operate/cli"
+    description="There isn't one — a worker is the binary you wrote"
+  />
+  <Card
+    title="Deployment"
+    to="operate/deployment"
+    description="Process model, packaging, and graceful shutdown"
+  />
+  <Card
+    title="Kubernetes"
+    to="operate/kubernetes"
+    description="The Helm chart, listener roles, maintenance ownership, probes, and KEDA"
+  />
+  <Card
+    title="Server"
+    href="/server/operate"
+    description="Run flexiq-server: roles, configuration, API tokens, the gRPC door, scaling — in the SDK-neutral server tier"
+  />
+  <Card
+    title="Backup and restore"
+    to="operate/backup"
+    description="Per backend, and what a restore does to work that was in flight"
+  />
+  <Card
+    title="Security"
+    to="operate/security"
+    description="Payloads are rows — what the shell protects and what it leaves to you"
+  />
+  <Card
+    title="Troubleshooting"
+    to="operate/troubleshooting"
+    description="Diagnose stuck jobs and worker issues"
+  />
+</Cards>
+
+## The two things to decide first
+
+Which backend the producer and the worker share, and which process owns the
+periodics. Periodic firing is per-scheduler and not leader-elected, so two
+processes that both registered the same schedule can both fire it — register
+periodics from one process.
+
+<Callout type="info">
+  The dashboard is not part of this crate. It is served by `flexiq-server`,
+  a separate binary — see <SdkLink to="modules/dashboard">Dashboard</SdkLink>.
+</Callout>

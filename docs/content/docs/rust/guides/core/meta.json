@@ -1,0 +1,19 @@
+{
+  "title": "Tasks & execution",
+  "pages": [
+    "index",
+    "tasks",
+    "discovery",
+    "queues",
+    "workers",
+    "execution-model",
+    "enqueue-options",
+    "scheduling",
+    "cancellation",
+    "predicates",
+    "batch-enqueue",
+    "unique-tasks",
+    "dependencies",
+    "pubsub"
+  ]
+}

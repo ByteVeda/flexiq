@@ -3,7 +3,7 @@ title: Comparison
 description: "FlexiQ vs other task queues — feature matrix and decision guide."
 ---
 
-**TL;DR**: FlexiQ is <SdkSwap python="Celery" node="BullMQ" java="a task queue" /> without the
+**TL;DR**: FlexiQ is <SdkSwap python="Celery" node="BullMQ" java="a task queue" rust="a task queue" /> without the
 broker (a separate server such as Redis or RabbitMQ that holds pending jobs). Rust scheduler, no broker required, lower latency, better concurrency.
 Start with SQLite; add Postgres or Redis as a backend when you scale out.
 
@@ -192,12 +192,12 @@ chunk-oriented batch processing tightly coupled to Spring.
 
 </SdkOnly>
 
-{/* Outside the three blocks above on purpose. Every SDK has an
+{/* Outside the four blocks above on purpose. Every SDK has an
     `operate/migration` page now, so one <SdkLink> resolves per SDK — and this
-    is the only spot on the page all three readers reach. */}
+    is the only spot on the page all four readers reach. */}
 
 Looking to switch? See the{" "}
 <SdkLink to="operate/migration">
-  Migrating from <SdkSwap python="Celery" node="BullMQ" java="JVM job scheduling" />
+  Migrating from <SdkSwap python="Celery" node="BullMQ" java="JVM job scheduling" rust={<code>flexiq-core</code>} />
 </SdkLink>{" "}
 guide for a step-by-step walkthrough with side-by-side code examples.

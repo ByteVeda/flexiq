@@ -47,6 +47,22 @@ changing dispatch guarantees.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+<Callout type="warn" title="An opt-in dependency, and not a worker option">
+  `mesh` is a cargo feature on the `flexiq` crate — `flexiq = { version = "2",
+  features = ["mesh"] }` — and it resolves an extra source crate,
+  `flexiq-mesh`. Without it, `flexiq::mesh` does not exist and the code below
+  will not compile.
+
+  Turning it on adds the module; it does not change what a worker does.
+  `WorkerBuilder` has no mesh option, so a `MeshNode` is something you
+  construct and drive yourself, running beside the worker rather than inside
+  it.
+</Callout>
+
+</SdkOnly>
+
 ## Quick start
 
 First worker — no seeds needed, it becomes the initial cluster node:
@@ -99,6 +115,32 @@ Worker worker = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+`flexiq::mesh` is a feature-gated re-export of the `flexiq-mesh` crate, not a
+worker option — `WorkerBuilder` has none. A node is built and spawned beside the
+worker, and you drive it:
+
+```toml
+flexiq = { version = "2", features = ["mesh"] }
+```
+
+```rust
+use std::sync::Arc;
+
+use flexiq::mesh::{MeshConfig, MeshNode};
+
+// First node — no seeds, so it starts the cluster.
+let node = Arc::new(MeshNode::new("worker-1".to_string(), MeshConfig::default()));
+node.spawn_gossip(vec!["default".to_string()], 4);  // queues, and the capacity to advertise
+node.spawn_steal_server();
+```
+
+Both spawn tokio tasks, so they need a runtime already running.
+`should_prefetch`, `prefetch`, `pop_local` and `try_steal` are the rest of the
+loop; nothing calls them for you.
+
+  </Tab>
 </CodeTabs>
 
 In a second process (or on another machine), join the cluster by seeding
@@ -140,6 +182,26 @@ Worker worker = flexiq.worker()
                 .build())
         .start();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Joins the cluster by seeding from the first worker.
+let config = MeshConfig {
+    seeds: vec!["first-worker-host:7946".to_string()],
+    // A bare IP, not host:port — `advertise_ip()` parses it as an `IpAddr` and
+    // falls back to 0.0.0.0, which nobody can dial.
+    advertise_addr: Some("10.0.0.7".to_string()),
+    ..MeshConfig::default()
+};
+let node = Arc::new(MeshNode::new("worker-2".to_string(), config));
+node.spawn_gossip(vec!["default".to_string()], 4);
+node.spawn_steal_server();
+```
+
+`MeshConfig::default()` carries no seeds and no advertise address, so a node
+built from it gossips to nobody — that is the single-host shape.
 
   </Tab>
 </CodeTabs>
@@ -243,6 +305,35 @@ MeshOptions.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+MeshConfig {
+    gossip_port: 7946,                        // SWIM gossip, UDP
+    steal_port: 7947,                         // work-stealing, TCP
+    bind_addr: "0.0.0.0".to_string(),
+    seeds: vec!["10.0.0.2:7946".to_string()],
+    advertise_addr: None,                     // a bare IP; required across hosts
+    enable_stealing: true,
+    affinity_weight: 0.7,
+    local_buffer_capacity: 64,
+    max_steal_batch: 4,
+    steal_threshold: 2,
+    virtual_nodes: 150,
+    steal_rate_limit: 10,
+    encryption_key: None,                     // base64, 32 bytes
+    // protocol_period_ms, indirect_ping_count, suspicion_multiplier
+    ..MeshConfig::default()
+};
+```
+
+Two things differ from a settings object. `steal_port` is a field of its own and
+does **not** follow `gossip_port` — `MeshConfig::default()` pins `7947`, so
+moving one means moving both. And the SWIM timings are ordinary public fields
+here rather than engine constants: `protocol_period_ms` (500),
+`indirect_ping_count` (3) and `suspicion_multiplier` (4) are yours to set.
+
+  </Tab>
 </CodeTabs>
 
 ### Parameter reference
@@ -309,6 +400,47 @@ validation:
   multiplier 4) is fixed by the core engine and isn't exposed on
   `MeshOptions.Builder`.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`MeshConfig` is a plain struct of public fields — no builder, no setters, and
+nothing validates a value on the way in. Fill in the ones you care about and
+let `..MeshConfig::default()` supply the rest.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `gossip_port` | `u16` | `7946` | UDP port the SWIM gossip listener binds. |
+| `steal_port` | `u16` | `7947` | TCP port the steal server binds. A field of its own — see the note below. |
+| `bind_addr` | `String` | `"0.0.0.0"` | Interface both listeners bind. |
+| `seeds` | `Vec<String>` | `vec![]` | `host:port` of existing members to join. Empty starts a fresh cluster. |
+| `protocol_period_ms` | `u64` | `500` | One SWIM round. Also the upper bound of `poll_jitter_ms()`. |
+| `indirect_ping_count` | `usize` | `3` | Peers asked to probe on your behalf when a direct ping goes unanswered. |
+| `suspicion_multiplier` | `u32` | `4` | Applied to `ln(N+1) × protocol_period` before a suspect is declared dead. |
+| `virtual_nodes` | `usize` | `150` | Points per worker on the hash ring; more spreads ownership more evenly. |
+| `local_buffer_capacity` | `usize` | `64` | Local deque capacity. `push_sorted` truncates a batch that would overflow it. |
+| `max_steal_batch` | `usize` | `4` | Jobs asked for per steal request. |
+| `steal_threshold` | `usize` | `2` | `should_steal()` is true once the deque is at or below this. |
+| `affinity_weight` | `f64` | `0.7` | Carried on the struct, but nothing in the engine reads it — see [Task affinity](#task-affinity). |
+| `enable_stealing` | `bool` | `true` | Gates `should_steal()`, so it stops this node *initiating* a steal. The steal server still answers peers. |
+| `advertise_addr` | `Option<String>` | `None` | A bare IP to advertise. Falls back to `bind_addr`. |
+| `encryption_key` | `Option<String>` | `None` | Base64 32-byte key XOR-applied to gossip datagrams. |
+| `steal_rate_limit` | `u32` | `10` | Steal requests answered per peer per second. `0` is unlimited. |
+
+<Callout type="warn" title="steal_port does not follow gossip_port">
+  The field's own doc comment reads "default: gossip_port + 1", but
+  `MeshConfig::default()` hardcodes `7947`. Move `gossip_port` and
+  `steal_port` stays where it was — set both, or two nodes on one host will
+  fight over the same steal port.
+</Callout>
+
+Two fields are quietly forgiving in a way worth knowing. `advertise_addr` goes
+through `advertise_ip()`, which parses it as an `IpAddr` — so `"10.0.0.7:7946"`
+or a hostname does not parse, and the `unwrap_or` hands back `0.0.0.0`, which no
+peer can dial. And `decoded_encryption_key()` answers `None` for anything that
+is not valid base64, leaving the node gossiping in the clear. Assert on both at
+startup.
 
 </SdkOnly>
 
@@ -392,6 +524,29 @@ Worker workerB = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Node A — first node, no seeds. Defaults are 7946 gossip / 7947 steal.
+let a = Arc::new(MeshNode::new("worker-a".to_string(), MeshConfig::default()));
+a.spawn_gossip(vec!["default".to_string()], 4);
+a.spawn_steal_server();
+
+// Node B — seeds from A. Both ports move, because neither follows the other.
+let b = Arc::new(MeshNode::new(
+    "worker-b".to_string(),
+    MeshConfig {
+        gossip_port: 7948,
+        steal_port: 7949,
+        seeds: vec!["127.0.0.1:7946".to_string()],
+        ..MeshConfig::default()
+    },
+));
+b.spawn_gossip(vec!["default".to_string()], 4);
+b.spawn_steal_server();
+```
+
+  </Tab>
 </CodeTabs>
 
 ### Multi-machine (production)
@@ -457,12 +612,60 @@ Worker worker = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let config = MeshConfig {
+    seeds: vec![
+        "scheduler-1.internal:7946".to_string(),
+        "scheduler-2.internal:7946".to_string(),
+    ],
+    advertise_addr: Some(std::env::var("HOST_ADDR")?),      // the pod's own IP
+    encryption_key: Some(std::env::var("MESH_ENCRYPTION_KEY")?),
+    steal_rate_limit: 20,
+    ..MeshConfig::default()
+};
+let node = Arc::new(MeshNode::new(worker_id, config));
+node.spawn_gossip(vec!["default".to_string(), "emails".to_string()], 4);
+node.spawn_steal_server();
+```
+
+The queues a node gossips are the ones you pass to `spawn_gossip`; nothing
+reads them off a worker, so they have to match the queues that worker actually
+pulls.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="java">
 
 Set `advertiseAddr` so peers dial back the right host when `bindAddr` stays
 `0.0.0.0`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Across hosts, `advertise_addr` is the field that has to be right. `advertise_ip()`
+prefers it and falls back to `bind_addr`, and a `0.0.0.0` bind is not an address
+a peer can dial — so leave it unset on a multi-host rollout and the cluster forms
+in name only. Give it the pod's or host's own IP, bare:
+
+```rust
+let advertise = std::env::var("POD_IP")?;
+advertise.parse::<std::net::IpAddr>()?;  // fail here, not silently at 0.0.0.0
+```
+
+The two ports are attached to that IP for you — `spawn_gossip` builds the
+advertised `gossip_addr` and `steal_addr` from `advertise_ip()` plus
+`gossip_port` and `steal_port`, which is why the field takes an IP and not a
+`host:port`.
+
+The `threads` argument to `spawn_gossip` is gossiped as this node's `capacity`,
+and peers divide the prefetch budget by it — pass the worker's real concurrency,
+not a placeholder. Its `queues` argument is likewise the list peers see, and
+nothing cross-checks it against `.queues([...])` on the builder: they are two
+separate lists you have to keep equal.
 
 </SdkOnly>
 
@@ -635,6 +838,29 @@ MeshOptions.builder().affinityWeight(0.0).build();
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`MeshConfig::affinity_weight` exists and defaults to `0.7`, but the engine never
+reads it — `LocalDeque::push_sorted` partitions a batch into owned and non-owned
+and nothing consults a weight. Setting it to `0.0` or `1.0` changes nothing
+today.
+
+The split itself is a function you can call:
+
+```rust
+if node.is_affinity_owner("process_order") {
+    // this node is the ring owner for that task name
+}
+```
+
+`prefetch` calls it once per job and pushes accordingly: owned to the back, which
+`pop_local()` takes first, and non-owned to the front, which is the end
+`give_jobs()` hands to a thief. The knob that actually moves placement is
+`virtual_nodes` — it controls how evenly names spread over the ring, not how
+hard the deque prefers them.
+
+</SdkOnly>
+
 ## Work-stealing
 
 When a worker's local buffer drops to its steal threshold, it looks at
@@ -652,6 +878,30 @@ is rate-limited per peer to prevent thundering-herd effects.
 The worker only steals from peers with enough surplus (steal threshold +
 steal batch). The connect attempt times out after 500ms and the response
 after 2s, so a stuck peer doesn't stall dispatch.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Nothing drives that loop for you — `MeshNode::try_steal` is an async method you
+call, and it returns how many jobs came back:
+
+```rust
+if node.should_steal() {
+    let stolen = node.try_steal().await;  // already pushed into the local deque
+}
+```
+
+It bails early unless `should_steal()` holds, then asks `best_steal_target` for
+the busiest alive peer whose gossiped `local_buffer_len` is strictly greater than
+`steal_threshold + max_steal_batch`. Below that surplus there is no target and
+the call returns `0`. Connecting is capped at 500ms and the reply at 2s, so a
+wedged peer costs a round, not the loop.
+
+One counter to read with care: `steals_initiated` is bumped before the
+connection, so a failure to connect, write, read or decode is counted as an
+attempt. A gap from `steals_succeeded` means attempts are not paying off — it
+does not specifically mean peers were empty.
 
 </SdkOnly>
 
@@ -698,6 +948,17 @@ running — the worker just won't steal from or donate jobs to peers. Useful
 when tasks have strong per-worker state.
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+MeshConfig { enable_stealing: false, ..MeshConfig::default() };
+```
+
+The flag is read by `should_steal()` only, so it stops the steals this node
+*initiates*. `spawn_steal_server()` still serves peers that ask, subject to
+`steal_rate_limit` — skip the call entirely if this node must never donate.
+
+  </Tab>
 </CodeTabs>
 
 ### Tuning work-stealing
@@ -732,6 +993,26 @@ when tasks have strong per-worker state.
 | Long-running tasks | `maxStealBatch(1).stealThreshold(1)` — steal conservatively |
 | Many workers (10+) | `stealRateLimit(5)` — avoid steal storms |
 | Few workers (2-3) | `stealRateLimit(0)` — unlimited, low contention |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+| Scenario | `MeshConfig` fields |
+|---|---|
+| Bursty, short tasks | `max_steal_batch: 8, steal_threshold: 4` — steal more, earlier |
+| Long-running tasks | `max_steal_batch: 1, steal_threshold: 1` — steal conservatively |
+| Many nodes (10+) | `steal_rate_limit: 5` — cap what each peer will answer |
+| Few nodes (2–3) | `steal_rate_limit: 0` — unlimited, contention is low anyway |
+
+Raising the pair also raises the surplus a peer must show before it counts as a
+target: `try_steal` requires `local_buffer_len > steal_threshold +
+max_steal_batch`, so `8`/`4` needs a peer holding thirteen buffered jobs. Push
+both high enough and no peer ever qualifies.
+
+`enable_stealing: false` only gates `should_steal()`. The steal server still
+runs once you have called `spawn_steal_server`, so the node keeps donating jobs
+while refusing to take any — skip the spawn to opt out of both.
 
 </SdkOnly>
 
@@ -773,6 +1054,22 @@ MeshOptions.builder()
         .encryptionKey(System.getenv("MESH_KEY")) // 32-byte key, base64-encoded
         .build();
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let config = MeshConfig {
+    seeds: vec!["10.0.0.2:7946".to_string()],
+    encryption_key: Some(std::env::var("MESH_KEY")?),  // 32 bytes, base64
+    ..MeshConfig::default()
+};
+assert!(config.decoded_encryption_key().is_some(), "MESH_KEY is not base64");
+```
+
+`decoded_encryption_key()` is where the string becomes bytes, and it answers
+`None` for anything it cannot decode rather than failing — check it at startup,
+or a typo leaves this node gossiping in the clear while its peers do not.
 
   </Tab>
 </CodeTabs>
@@ -863,6 +1160,52 @@ worker.meshClusterInfo().ifPresent(cluster ->
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Because you hold the `MeshNode`, the counters are a method call rather than an
+exported endpoint. Two snapshots, both `Serialize`, so either drops straight into
+whatever you already scrape:
+
+```rust
+let m = node.metrics();      // MetricsSnapshot
+let c = node.cluster_info(); // ClusterInfo
+
+log::info!(
+    "peers={} buffered={} prefetch={} stolen_in={} stolen_out={}",
+    c.peer_count, c.local_buffer_len, c.adaptive_prefetch,
+    m.jobs_stolen_in, m.jobs_stolen_out,
+);
+```
+
+| `MetricsSnapshot` field | What it counts |
+|---|---|
+| `prefetch_count` | Batches handed to the deque — how often you topped up, not how much you fetched. |
+| `prefetch_jobs` | Jobs those batches actually buffered. Short of what was offered once capacity is reached. |
+| `local_pops` | Jobs taken off the hot end to run here. The mesh's useful output. |
+| `steals_initiated` | Attempts started, counted before the connection — failures are in here. |
+| `steals_succeeded` | Attempts that returned at least one job. |
+| `jobs_stolen_in` | Jobs received from peers. Rises when this node is the idle one. |
+| `jobs_stolen_out` | Jobs surrendered to thieves. Rises when this node is the buffered-up one. |
+| `ring_recalculations` | Ring rebuilds. A fast climb is affinity thrashing. |
+
+`ClusterInfo` carries `peer_count`, `total_capacity`, `total_load`,
+`total_buffered`, `local_buffer_len` and `adaptive_prefetch`. Only
+`local_buffer_len` is exact — the peer sums are as of each peer's last gossip,
+so they are at least one `protocol_period_ms` stale. The counters are
+free-running atomics loaded `Relaxed` and never reset, so a rate needs two
+snapshots and a clock.
+
+For the narrative, `flexiq-mesh` logs through the `log` facade, so the output
+appears once *your* binary installs a logger:
+
+```bash
+RUST_LOG=flexiq_mesh=debug ./my-worker          # everything the mesh does
+RUST_LOG=flexiq_mesh::swim=info ./my-worker     # membership changes only
+RUST_LOG=flexiq_mesh::steal=debug ./my-worker   # steal attempts and donations
+```
+
+</SdkOnly>
+
 ## Combining with other features
 
 Mesh composes with everything else a worker already does. Each mesh worker
@@ -939,6 +1282,33 @@ try (Worker worker = flexiq.worker()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+use flexiq::SchedulerConfig;
+
+// Caps and rate limits are task attributes, enforced by the scheduler.
+#[flexiq::task(max_concurrent = 5, rate_limit = "100/m")]
+fn process_order(order_id: i64) -> flexiq::Outcome<()> {
+    let _ = order_id;
+    Ok(())
+}
+
+let worker = queue
+    .worker()
+    .register::<process_order>()
+    // The scheduler claims 10 jobs per round; the mesh node, if you run one,
+    // is what would sort them.
+    .scheduler_config(SchedulerConfig { batch_size: 10, ..Default::default() })
+    .spawn()?;
+```
+
+A Rust task takes its declared arguments and nothing else — the Rust SDK has no
+resource injection, so a shared pool is an ordinary `OnceLock`. And the worker
+never learns the mesh exists: a `MeshNode` you spawn runs beside it, not inside
+it.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -964,6 +1334,16 @@ See also <SdkLink to="modules/injection/dependency-injection">dependency injecti
 See also <SdkLink to="modules/injection/dependency-injection">Resource System</SdkLink>
 for worker-scoped dependency injection and
 <SdkLink to="guides/core/batching">Batching</SdkLink> for `batchSize`.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+See also:
+- <SdkLink to="guides/reliability/concurrency">Concurrency</SdkLink> for `max_concurrent`
+- <SdkLink to="guides/reliability/rate-limiting">Rate limiting</SdkLink> for `rate_limit`
+- <SdkLink to="guides/core/scheduling">Scheduling</SdkLink> for `SchedulerConfig::batch_size`
+- <SdkLink to="modules/injection/dependency-injection">Shared state</SdkLink> — a `static`, since a task takes only its declared arguments
 
 </SdkOnly>
 
@@ -1010,6 +1390,18 @@ flexiq.worker().handle(process, this::handle)
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// A Rust worker is always the plain side — it polls storage directly.
+let worker = queue.worker().register::<process>().spawn()?;
+```
+
+`WorkerBuilder` has no mesh option, so a Rust worker never joins the ring and is
+invisible to gossip. It still consumes the same storage as a meshed fleet, and
+the atomic claim is what keeps dispatch exactly-once across both.
+
+  </Tab>
 </CodeTabs>
 
 Non-mesh workers are invisible to the mesh (no gossip, no stealing) but
@@ -1044,6 +1436,35 @@ process.on("SIGTERM", () => worker.stop());
 
 `worker.close()` (and `stop()`) signal the mesh node before the native
 worker tears down, which broadcasts the leave message.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+`MeshNode::request_shutdown()` is the signal. The gossip loop's shutdown arm is
+where `broadcast_leave` runs, so the `Leave` only goes out if that loop is the
+one that wakes:
+
+```rust
+let gossip = node.spawn_gossip(vec!["default".to_string()], 4);
+let stealer = node.spawn_steal_server();
+
+// … later, on SIGTERM
+node.request_shutdown();
+node.request_shutdown();  // one signal per spawned loop — see below
+let _ = tokio::join!(gossip, stealer);
+```
+
+<Callout type="warn" title="One signal wakes one loop">
+  `request_shutdown` calls `Notify::notify_one` on a handle both loops await.
+  Two tasks are waiting and one call wakes one of them, so a single call leaves
+  the other running — and if the steal server is the one that wakes, no leave
+  message is ever broadcast and peers fall back to the suspicion timeout.
+  Signal once per loop you spawned, then join the handles.
+</Callout>
+
+Awaiting the `JoinHandle`s is what makes shutdown ordered: both are plain
+`tokio::spawn`s, so dropping the runtime instead just cancels them mid-flight.
 
 </SdkOnly>
 
@@ -1114,5 +1535,34 @@ configuration options.
 - Already scaling replicas with
   [autoscaling / KEDA](/java/modules/autoscaling) — mesh is a
   *within-process* dispatch optimization, not a replacement for it
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Start from what it costs here. `WorkerBuilder` has no mesh option, so a
+`MeshNode` does not feed `queue.worker()` — the worker keeps polling storage and
+never looks at the local deque. Running both gives you gossip and a buffer that
+nothing drains. Reaching for the mesh means writing the dispatch loop yourself
+against `queue.storage()`, with `should_prefetch`, `adaptive_prefetch_size`,
+`prefetch`, `pop_local` and `try_steal` as its parts.
+
+**Worth that:**
+- You already run a custom dispatch loop, and polling latency is the bottleneck
+- Several Rust nodes on the same queues, where sub-second peer detection beats a
+  30-second heartbeat
+- Work that gains from landing on the same node — warm connections, a populated
+  cache, anything a `OnceLock` static holds
+- A fleet whose nodes come and go often enough that ring churn is cheaper than
+  waiting out a heartbeat
+
+**Not worth it:**
+- One node, or nodes on disjoint queues — there is nothing to steal
+- Low throughput, where an extra UDP protocol buys nothing
+- You want the stock `queue.worker()` — it will not use the deque, so the mesh
+  is pure overhead
+- Scaling replicas is the actual goal; reach for
+  <SdkLink to="modules/autoscaling">autoscaling</SdkLink> instead, since mesh
+  moves work between running nodes rather than adding them
 
 </SdkOnly>

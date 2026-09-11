@@ -8,7 +8,7 @@ description: "Every job moves through a state machine from creation to completio
 ## Key transitions
 
 A job starts **Pending** and moves to **Running** once a worker claims it. From
-there it either finishes as **Complete**, or the task raises and it goes back
+there it either finishes as **Complete**, or the task fails and it goes back
 to **Pending** to wait out the retry backoff (if attempts remain) or to **Dead**
 once `max_retries` is exhausted — landing in the dead-letter queue. A job can
 also move directly from **Pending** to **Cancelled** if it's cancelled before a
@@ -27,7 +27,7 @@ worker picks it up.
 
 <Callout type="info" title="complete vs completed">
   A single job's `status` field is `"complete"` (matches the `Complete` row
-  above). Aggregate views — `queue.stats()` and the `flexiq info` CLI —
-  bucket finished jobs under the key `"completed"` instead. `list_jobs(status=)`
-  accepts either spelling.
+  above). Aggregate views — the queue's stats call and the CLI's job summary —
+  bucket finished jobs under the key `"completed"` instead. A job listing
+  filtered by status accepts either spelling.
 </Callout>

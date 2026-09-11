@@ -1,0 +1,158 @@
+---
+title: Constructing dependencies
+description: "Nothing is injected — wire dependencies in main, keep the task body a thin shim, and unit-test the shim with ::run and no queue at all."
+---
+
+Nothing is injected into a `#[flexiq::task]` body: the crate has no resource
+registry and no scope, so a dependency is whatever your `main` built and put
+somewhere the body can reach. That part is on the
+<SdkLink to="modules/injection">overview</SdkLink>.
+
+This page is about the consequence — a body that reads a global is a body that
+is awkward to test — and the shape that fixes it.
+
+## Build at startup, in order
+
+Everything is constructed before `spawn()`. A worker that starts is a worker
+whose dependencies are already good.
+
+```rust
+use std::sync::OnceLock;
+
+static DEPS: OnceLock<Deps> = OnceLock::new();
+
+/// Everything the tasks in this binary need, built once.
+struct Deps {
+    db: Pool,
+    mailer: Mailer,
+}
+
+/// The dependencies, or a task failure that names the mistake rather than
+/// panicking on a pool thread.
+fn deps() -> flexiq::Outcome<&'static Deps> {
+    DEPS.get()
+        .ok_or_else(|| flexiq::TaskError::fatal("dependencies were never initialised").into())
+}
+
+fn main() -> flexiq::Result<()> {
+    let db = Pool::connect(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+        .expect("the pool connects");
+    let mailer = Mailer::new(&std::env::var("SMTP_URL").expect("SMTP_URL"));
+
+    DEPS.set(Deps { db, mailer })
+        .ok()
+        .expect("main initialises dependencies exactly once");
+
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    let worker = queue
+        .worker()
+        .register::<send_invoice>()
+        .num_workers(4)
+        .spawn()?;
+
+    // ... enqueue, serve, wait for a signal ...
+
+    worker.shutdown()?;
+    // Statics are never dropped, so an explicit close belongs here — after the
+    // shutdown that drained the jobs still using them.
+    Ok(())
+}
+```
+
+One struct rather than one static per dependency, because there is one moment
+where they all have to exist and one place that decides it.
+
+## Keep the body a shim
+
+The pattern that makes this testable: the task body resolves the dependency and
+immediately hands off to a plain function that takes it as a parameter.
+
+```rust
+/// The task. Its only job is to find the dependencies and pass them on.
+#[flexiq::task(queue = "billing", max_retries = 5, timeout = "1m")]
+fn send_invoice(customer_id: String, cents: i64) -> flexiq::Outcome<()> {
+    let deps = deps()?;
+    invoice(&deps.db, &deps.mailer, &customer_id, cents)
+}
+
+/// The work. No statics, no queue, no macro — an ordinary function.
+fn invoice(db: &Pool, mailer: &Mailer, customer_id: &str, cents: i64) -> flexiq::Outcome<()> {
+    let address = db
+        .billing_address(customer_id)
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    mailer
+        .send(&address, &format!("You owe {cents} cents"))
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    Ok(())
+}
+```
+
+`invoice` is the half worth testing, and it takes its dependencies the way any
+Rust function does. Swap in a fake pool and a fake mailer and there is nothing
+to arrange.
+
+## Testing the task itself
+
+`#[flexiq::task]` leaves the original body callable as `<name>::run(args…)`. It
+takes the same arguments the function declared, runs the same code, and touches
+no queue and no worker:
+
+```rust
+#[test]
+fn an_invoice_is_sent() {
+    let db = Pool::in_memory();
+    let mailer = Mailer::recording();
+
+    invoice(&db, &mailer, "cus-1", 4_200).expect("sends");
+    assert_eq!(mailer.sent().len(), 1);
+}
+
+#[test]
+fn the_task_shim_reports_missing_dependencies() {
+    // `DEPS` is unset in this test binary, so the shim fails fatally instead
+    // of panicking on a worker thread.
+    let outcome = send_invoice::run("cus-1".into(), 4_200);
+    assert!(outcome.is_err());
+}
+```
+
+`run` returns `flexiq::Outcome<T>`, whose error is `Abort` — not `QueueError`.
+"This attempt failed" and "the queue could not be reached" are different things,
+and `?` deliberately does not bridge them.
+
+<Callout type="info">
+  A test that wants the *whole* path — enqueue, claim, dispatch, result — uses
+  `FlexiQ::in_memory()`, a real worker and a poll to a terminal state. That is
+  how this crate's own tests are written. See
+  <SdkLink to="guides/extend/testing">Testing tasks</SdkLink>.
+</Callout>
+
+## What you give up, stated plainly
+
+| You might expect | What there is |
+| --- | --- |
+| Per-task resource injection | The body reads a static, or is handed the value by a shim |
+| Scopes (worker / thread / task) | One process, one static. A per-task value is a local |
+| Declared teardown | `worker.shutdown()?`, then close what you opened |
+| Resource health checks | Your own probe. Nothing reports resource health for a Rust worker |
+| Lazy per-worker construction | `LazyLock`, which builds on first touch on any thread |
+
+<Cards>
+  <Card
+    title="Dependency injection"
+    to="modules/injection"
+    description="Why a task argument cannot be a live handle."
+  />
+  <Card
+    title="Testing tasks"
+    to="guides/extend/testing"
+    description="::run for the body, an in-memory queue for the path."
+  />
+  <Card
+    title="Workers"
+    to="guides/core/workers"
+    description="What spawn() starts, and what shutdown() drains."
+  />
+</Cards>

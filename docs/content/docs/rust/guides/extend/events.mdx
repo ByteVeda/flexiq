@@ -1,0 +1,140 @@
+---
+title: Events
+description: "There is no event bus in the Rust SDK — what flexiq_core::Worker::on_outcome gives you instead, and what routing a worker through it costs."
+---
+
+The Rust SDK has **no event bus and no lifecycle event stream**: nothing
+publishes a `job.started`, there is no listener to register, and `WorkerBuilder`
+has no hook to hang one on.
+
+What does exist is one callback on core's own worker builder, fired once per
+processed result.
+
+## `on_outcome`
+
+`flexiq_core::Worker::on_outcome` takes a `Fn(&ResultOutcome) + Send + Sync +
+'static` and calls it on the worker's drain thread — once for every result the
+scheduler has finished handling.
+
+```rust
+use flexiq::{ResultOutcome, Worker};
+
+let worker = Worker::new(queue.storage().clone())
+    .queues(["billing"])
+    .register("charge", |job| {
+        println!("running {}", job.id);
+        Ok(None)
+    })
+    .on_outcome(|outcome| match outcome {
+        ResultOutcome::Success { task_name, wall_time_ns, .. } => {
+            println!("{task_name} ok in {}ms", *wall_time_ns / 1_000_000);
+        }
+        ResultOutcome::Retry { job_id, error, retry_count, .. } => {
+            println!("{job_id} retry {retry_count}: {error}");
+        }
+        ResultOutcome::DeadLettered { job_id, error, .. } => {
+            eprintln!("{job_id} dead-lettered: {error}");
+        }
+        _ => {}
+    })
+    .spawn()?;
+```
+
+`flexiq::Worker` and `flexiq_core::Worker` are the same type — the crate
+re-exports core's root wholesale, so there is nothing extra to depend on.
+
+## What an outcome carries
+
+| Variant | Fields |
+| --- | --- |
+| `Success` | `job_id`, `task_name`, `wall_time_ns` |
+| `Retry` | `job_id`, `task_name`, `queue`, `error`, `retry_count`, `timed_out`, `wall_time_ns` |
+| `DeadLettered` | `job_id`, `task_name`, `queue`, `error`, `timed_out`, `wall_time_ns` |
+| `Cancelled` | `job_id`, `task_name`, `queue`, `wall_time_ns` |
+| `Slept` | `job_id`, `task_name`, `queue`, `wake_at`, `wall_time_ns` |
+| `Superseded` | `job_id`, and nothing else |
+
+`wall_time_ns` is the execution time the worker already measured, so a duration
+costs no clock of your own. It is `0` when nothing measured the run — a job that
+failed before it ever executed, or one the engine recovered rather than a worker
+finishing.
+
+<Callout type="info">
+  `ResultOutcome` is `#[non_exhaustive]`. A `match` needs a `_` arm, which is
+  the point: a variant added later widens the enum without breaking your build.
+</Callout>
+
+Two arms mean "nothing happened here", and treating them as completions is the
+usual mistake:
+
+- **`Superseded`** — the result named an attempt the job has already moved past.
+  Nothing was written and nothing was retried. Count it as a failure and your
+  numbers will disagree with the queue's.
+- **`Slept`** — the attempt ended in a `step.sleep`. The job is `Pending` again
+  at `wake_at` and will run from its memoized steps. It is not a completion, and
+  no retry was spent. See <SdkLink to="modules/steps">durable steps</SdkLink>.
+
+## Taking this route costs the step fence
+
+`WorkerBuilder` — the thing `queue.worker()` returns — deliberately does not
+expose `on_outcome`. Reaching it means building the worker through
+`flexiq_core::Worker` instead, and that is core's reference pool, which hands a
+handler a `&Job` and drops the `(owner, attempt, epoch)` triple the scheduler
+minted for the dispatch.
+
+<Callout type="warn" title="Durable steps do not survive the swap">
+  Every step write is fenced on that triple. Under core's pool there is no step
+  session to open, so `flexiq::current_step()` hands back a handle whose every
+  method fails with `outside a running task`. A task body that calls
+  `step.run(..)` cannot run on a worker built this way.
+</Callout>
+
+A `#[flexiq::task]` body can still be registered by hand, and what the mapping
+has to do with `Abort::Sleep` is the whole trade-off in three lines:
+
+```rust
+use flexiq::{Abort, Task, TaskError, Worker};
+
+let worker = Worker::new(queue.storage().clone())
+    .register(<charge as Task>::NAME, |job| match <charge as Task>::run_encoded(job) {
+        Ok(result) => Ok(result),
+        Err(Abort::Fail(err)) => Err(err),
+        // There is no way to report "this attempt slept" from here.
+        Err(Abort::Sleep(_)) => Err(TaskError::fatal("step.sleep needs the shell's own worker")),
+    })
+    // The attribute's retry policy, rate limit and breaker live on `config()`.
+    // `queue.worker()` registers them for you; here you pass them yourself.
+    .task_config(<charge as Task>::NAME, <charge as Task>::config())
+    .on_outcome(|outcome| println!("{outcome:?}"))
+    .spawn()?;
+```
+
+## What it is still not
+
+`on_outcome` fires once, after the fact, on the worker. It is not a `before`
+hook, it sees nothing about an enqueue, it cannot change a job, and it does not
+cross a process boundary — a second worker's outcomes never reach this closure.
+
+For counting and alerting, that plus `queue.stats()` is the whole toolkit:
+<SdkLink to="guides/extend/monitoring">Monitoring</SdkLink>. For an event feed
+other processes can consume, the dashboard server publishes webhook
+subscriptions over the same tables —
+<SdkLink to="modules/dashboard">Dashboard</SdkLink>.
+
+<Cards>
+  <Card
+    title="Monitoring"
+    to="guides/extend/monitoring"
+    description="Counting outcomes, and reading queue depth without a callback."
+  />
+  <Card
+    title="Extend & integrate"
+    to="guides/extend"
+    description="The full list of what the shell has no hook surface for."
+  />
+  <Card
+    title="Inspection"
+    to="operate/inspection"
+    description="Everything the engine records and the handle does not wrap."
+  />
+</Cards>

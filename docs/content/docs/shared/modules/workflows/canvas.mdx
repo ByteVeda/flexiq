@@ -41,6 +41,20 @@ it with the regular builder if you need more.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+<Callout type="warn" title="There is no canvas here">
+  Nothing in `flexiq` or in `flexiq-workflows` is named `chain`, `group` or
+  `chord`, and there is no canvas type to import. The shapes are real; the
+  shorthand is not.
+
+  What stands in for them is already on `FlexiQ`: `enqueue` and
+  `enqueue_batch`, plus `.depends_on([…])` on any call. Every example on this
+  page is those three, arranged differently.
+</Callout>
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 ## Coming from Celery
@@ -61,6 +75,27 @@ flexiq's canvas mirrors Celery's `chain` / `group` / `chord` / `.s()` /
   synchronously**. In flexiq, `.apply(queue)` **enqueues** it for workers,
   and you await results with `.result()`. There is no eager local execution.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Every shape below, and the call that replaces it:
+
+| Shape | Written as |
+|---|---|
+| chain | one `enqueue` per step, each `.depends_on([&prev.id])` |
+| group | one `enqueue_batch(vec![…])` — same task, many calls |
+| chord | `enqueue_batch` for the members, then `enqueue` a callback that depends on all their ids |
+| chunks | slice the input yourself, one call per slice, then `enqueue_batch` |
+| starmap | a call per tuple; the macro already gives each task a typed `call(..)` |
+
+Two limits shape all of them, and neither is a gap you can route around.
+`depends_on` orders jobs but passes nothing between them — every call carries
+the arguments it was built with. And a result is not readable from here:
+`job.result` is an `Option<Vec<u8>>` with no typed reader exposed. Where a shape
+wants a value to flow, the producing task has to write it somewhere the consumer
+can read, and the consumer gets the key.
 
 </SdkOnly>
 
@@ -101,6 +136,31 @@ its payload:
 Canvas.link("extract", extractTask, 1)
 Canvas.link("transform", transformTask, 2)
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+There is no canvas in Rust — no `chain`, `group` or `chord`, in the shell or in
+the workflows crate. The building block is the `TaskCall` that
+`#[flexiq::task]` generates, and the shapes on this page are wired by hand with
+`depends_on`:
+
+```rust
+// `<task>::call(..)` mirrors the task's own signature and carries its options.
+let fetch_users = extract::call("https://api.example.com/users".to_string());
+let bulk_load = load::call().max_retries(5);
+```
+
+Name the bindings something other than the task. `#[flexiq::task]` also emits a
+unit struct called `extract`, so `let extract = …` is read as a struct pattern
+rather than a new binding, and the compiler rejects it.
+
+`depends_on` holds a job until the jobs it names have completed, which covers
+all three shapes below. It does not pass a result along — every call carries
+the arguments it was built with. For a persisted DAG with per-node status
+rows, build a `dagron_core::DAG` and submit it with
+`flexiq::workflows::lifecycle::submit_workflow`, which wires the same
+`depends_on` chains for you.
 
   </Tab>
 </CodeTabs>
@@ -156,6 +216,20 @@ queue.submitWorkflow(etl);
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let extracted = queue.enqueue(extract::call("https://api.example.com/users".to_string()))?;
+let transformed = queue.enqueue(transform::call().depends_on([&extracted.id]))?;
+let loaded = queue.enqueue(load::call().max_retries(5).depends_on([&transformed.id]))?;
+// extract → transform → load
+```
+
+A dependency counts as satisfied only once it reaches `Complete`, so a step
+that fails leaves the rest of the chain pending rather than failing it — check
+for stalled work, don't assume a failure propagates.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -195,6 +269,36 @@ Pass `{ after }` to chain a canvas block onto an existing step.
   results via <SdkLink to="modules/workflows/building">the workflow
   context</SdkLink>.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Building the chain link by link means the producer has to be enqueued before its
+successor — you need `extracted.id` to write the next call. That is a plain data
+dependency, not a ceremony, and it falls out of the code:
+
+```rust
+let mut previous: Option<String> = None;
+for url in urls {
+    let call = fetch::call(url);
+    let call = match &previous {
+        Some(id) => call.depends_on([id]),
+        None => call,
+    };
+    previous = Some(queue.enqueue(call)?.id);
+}
+```
+
+Storage checks a dependency at enqueue time, so naming an id that does not
+exist, one that is already `Dead` or `Cancelled`, or one in another namespace
+fails the `enqueue` call outright rather than producing a job that can never
+run.
+
+A step that merely *fails* is different: it stays in the table, its dependents
+stay `Pending`, and the chain simply stops. Nothing propagates the failure
+downstream and nothing cancels the tail — watch for stalled work instead of
+waiting for an error.
 
 </SdkOnly>
 
@@ -248,6 +352,28 @@ queue.submitWorkflow(notify);
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let jobs = queue.enqueue_batch(vec![
+    process::call(1),
+    process::call(2),
+    process::call(3),
+])?;
+// process | process | process
+```
+
+`enqueue_batch` inserts every call in one go and returns a `Job` each; workers
+pick them up in parallel with no further wiring. It is generic over one task
+type, so a batch is many calls to the *same* task — a group of three different
+tasks is three `enqueue` calls, which parallelise identically. A call carrying
+a debounce window is refused in a batch.
+
+There is no per-batch concurrency cap either. Declare the limit on the task
+with `#[flexiq::task(max_concurrent = 5)]`, which caps concurrent runs
+cluster-wide.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -276,6 +402,41 @@ Workflow wf = Workflow.named("notify")
         .step("sms", sendSms, message, "prepare");
 // prepare → (email | sms)
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+A group has no root/non-root distinction to work around — `depends_on` is an
+option on each call, so to hang one off an earlier step, give every member the
+same predecessor:
+
+```rust
+let prepare = queue.enqueue(prepare::call(order_id))?;
+
+let fanned = queue.enqueue_batch(vec![
+    notify::call(order_id, "email".to_string()).depends_on([&prepare.id]),
+    notify::call(order_id, "sms".to_string()).depends_on([&prepare.id]),
+])?;
+// prepare → (email | sms)
+```
+
+Three different tasks would be three `enqueue` calls instead, since a batch is
+generic over one `T: Task`. They still run in parallel; the batch buys atomicity
+of the insert, not the parallelism.
+
+There is no `max_concurrency` on a group either, because the cap has nothing to
+attach to — nothing records that these jobs are one group. Declare it on the
+task and it holds across every caller:
+
+```rust
+#[flexiq::task(max_concurrent = 5)]
+fn fetch(url: String) -> flexiq::Outcome<()> { /* … */ Ok(()) }
+```
+
+`max_concurrent` is a cluster-wide ceiling on concurrent runs of that task.
+`max_in_flight_per_task` is the per-worker sibling, and `rate_limit = "100/m"`
+caps starts per unit of time rather than overlap.
 
 </SdkOnly>
 
@@ -330,6 +491,28 @@ queue.submitWorkflow(report);
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+let members = queue.enqueue_batch(vec![
+    query_region::call("east".to_string()),
+    query_region::call("west".to_string()),
+])?;
+
+let merge = queue.enqueue(
+    merge::call().depends_on(members.iter().map(|job| job.id.as_str())),
+)?;
+// (east | west) → merge
+```
+
+The callback receives its own arguments, not the members' results. Reading a
+member's output is not something the shell wraps: `job.result` is an
+`Option<Vec<u8>>` and there is no typed reader for it. If the callback needs
+the members' values, have each member write them where the callback can read
+them, and give the callback the key. Every member must reach `Complete` or the
+callback never runs.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -361,6 +544,40 @@ queue.submitWorkflow(report);
   step, use <SdkLink to="modules/workflows/fan-out">fan-out / fan-in</SdkLink>,
   which collects child results into the combiner's payload.
 </Callout>
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+<Callout type="warn" title="A dead member strands the callback">
+  A dependency counts as satisfied only at `Complete`, and a member that
+  exhausts its retries is archived as `Dead` — which still blocks. The
+  callback then sits `Pending` indefinitely: nothing fails it, nothing cancels
+  it, and no timeout applies, because a job that never dispatches never starts
+  a clock.
+
+  Give members enough `max_retries` to be worth waiting on, and sweep for
+  long-`Pending` callbacks. `queue.cancel(&merge.id)` is how you retire one.
+</Callout>
+
+Because the callback cannot read what the members produced, the aggregation has
+to happen somewhere both can reach. A run id both sides derive from is usually
+enough:
+
+```rust
+let members = queue.enqueue_batch(vec![
+    query_region::call(run_id.clone(), "east".to_string()),
+    query_region::call(run_id.clone(), "west".to_string()),
+])?;
+
+// Each member writes under `run_id`; `merge` reads them back by the same key.
+let merge = queue.enqueue(
+    merge::call(run_id).depends_on(members.iter().map(|job| job.id.as_str())),
+)?;
+```
+
+`depends_on` takes anything iterating into `String`, which is why `&job.id` and
+`job.id.as_str()` both work.
 
 </SdkOnly>
 
@@ -540,6 +757,55 @@ return a plain `Workflow`, and `Workflow.named(...).step(...)` exposes a
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+## Saga compensation
+
+There is no `compensate` option — not on `EnqueueOptions`, not on
+`#[flexiq::task]`, and nothing walks a failure back down a `depends_on` chain.
+Enqueued jobs are independent rows; one failing leaves the others exactly where
+they are.
+
+Rollback lives inside a single task instead, written over durable steps so the
+undo knows what was actually done:
+
+```rust
+#[flexiq::task]
+fn checkout(order_id: String) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+
+    let hold = step.run_keyed("reserve", &order_id, || reserve(&order_id))?;
+
+    // The charge's failure is this step's *value*, not an abort — see below.
+    let charged: Result<Charge, String> = step.run_keyed("charge", &order_id, || {
+        Ok(charge(&order_id).map_err(|e| e.to_string()))
+    })?;
+
+    if let Err(reason) = charged {
+        step.run_keyed("unreserve", &order_id, || unreserve(&hold))?;
+        return Err(flexiq::TaskError::fatal(reason).into());
+    }
+    Ok(())
+}
+```
+
+Two things make that work, and neither is optional.
+
+`run_keyed`, not `run`: an unkeyed step is matched by its *position* in the
+recorded sequence, so a compensating branch asks for a step the earlier attempt
+never recorded there and the run fails with a divergence instead of undoing
+anything. A keyed step is matched by key wherever it sits.
+
+And the forward failure is committed as a value rather than raised. A step whose
+body aborts commits nothing and leaves its position outstanding, and the session
+refuses to start another step while one is — so the compensator would fail with
+`started while step 'charge' is still uncommitted` rather than run.
+
+<SdkLink to="modules/workflows/saga">Saga compensation</SdkLink> covers the
+shape in full.
+
+</SdkOnly>
+
 ## chunks / starmap
 
 <SdkOnly sdk="python">
@@ -608,6 +874,38 @@ For dynamic per-item fan-out, use `Step.Builder.fanOut(...)` / `.fanIn(...)`.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+Neither exists, and neither needs to — both are a `Vec<TaskCall<T>>` you build
+before handing it over:
+
+```rust
+// chunks: one call per slice of 100
+let calls: Vec<_> = items
+    .chunks(100)
+    .map(|batch| process_batch::call(batch.to_vec()))
+    .collect();
+let jobs = queue.enqueue_batch(calls)?;
+
+// starmap: one call per tuple, unpacked by the call signature itself
+let jobs = queue.enqueue_batch(
+    vec![(1, 2), (3, 4), (5, 6)]
+        .into_iter()
+        .map(|(a, b)| add::call(a, b))
+        .collect(),
+)?;
+```
+
+Starmap's unpacking is free here: `add::call(a, b)` takes the task's own
+parameters, so a tuple arity that does not match is a compile error rather than
+a runtime one. Chunking is just `slice::chunks`.
+
+Dynamic batching — where the batch size comes from an upstream result — has no
+equivalent. Enqueue the follow-up work from inside the task that computed it,
+using a `FlexiQ` handle the process already holds.
+
+</SdkOnly>
+
 ## Canvas vs DAG workflows
 
 <SdkOnly sdk="python">
@@ -647,5 +945,31 @@ conditions, gates, or sub-workflows on the same builder when you need them; see
 `Canvas.chain` / `group` / `chord` return a plain `Workflow` you can keep
 extending with the builder (conditions, gates, sub-workflows) — canvas and DAG
 are the same object. See <SdkLink to="modules/workflows">Workflows</SdkLink>.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+The choice is between `depends_on` on plain jobs and the `flexiq-workflows`
+crate, which you opt into with `features = ["workflows"]`:
+
+| | `depends_on` | `flexiq::workflows` |
+|---|---|---|
+| Setup | Nothing — it is an enqueue option | An extra feature and an extra storage handle, `WorkflowStorageBackend` |
+| Topology | Any DAG you can name ids for | Any DAG, from a serialized `dagron_core::SerializableGraph` |
+| Builder | None needed | None provided — you assemble `SubmitStaticWorkflowRequest` yourself |
+| Status tracking | Per job | A `WorkflowRun` row plus a `WorkflowNode` per step |
+| Result passing | None | None — nodes carry the payloads you gave them |
+| Re-runs | Re-enqueue | `cache_hit_nodes` replays a node's recorded `result_hash` without running it |
+| Deferred nodes | n/a | `deferred_node_names` creates the row and leaves the job to you |
+
+`lifecycle::submit_workflow` is the entry point, and it is deliberately
+low-level: it takes the serialized graph, a `step_metadata` entry and a
+pre-encoded payload for every node that gets a job, and refuses the whole call
+if one is missing rather than leaving half a run behind. It returns a
+`WorkflowRunHandle` — `run_id` and `definition_id` — which is what you poll on.
+
+Reach for it when you want the run rows. For a pipeline you only need to
+*order*, `depends_on` costs nothing and adds no crate.
 
 </SdkOnly>

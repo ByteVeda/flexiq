@@ -1,0 +1,123 @@
+---
+title: Dependency injection
+description: "There is no resource system in the Rust SDK — a task takes its declared arguments and nothing else, and shared state is an ordinary static."
+---
+
+The Rust SDK has **no dependency injection and no resource system**. There is no
+resource registry, no scope, no teardown, no health check, no proxy, and no
+argument the runtime adds to a task body. A `#[flexiq::task]` function takes the
+parameters it declared, decoded from the job's payload, and nothing else.
+
+That is not a gap so much as a consequence of the shape. The macro expands a
+free function into a type; there is no object to construct, so there is nothing
+for a container to construct it with.
+
+## The Rust answer is a static
+
+A connection pool, an HTTP client, a config struct — the things another runtime
+would inject — are built once in `main` and read from a `LazyLock` static. No
+queue is involved, because none needs to be:
+
+```rust
+use std::sync::LazyLock;
+
+/// Built on first use, shared by every task body on this process.
+static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("a client with these settings always builds")
+});
+
+#[flexiq::task(max_retries = 5, timeout = "30s")]
+fn fetch_profile(user_id: String) -> flexiq::Outcome<()> {
+    let url = format!("https://example.test/users/{user_id}");
+    let body = HTTP
+        .get(&url)
+        .send()
+        .and_then(|response| response.text())
+        .map_err(|e| flexiq::TaskError::retryable(e.to_string()))?;
+
+    println!("{} bytes for {user_id}", body.len());
+    Ok(())
+}
+```
+
+Every handler runs on its own blocking thread inside one process, so a `Sync`
+value in a static is shared exactly the way a pool wants to be shared — one
+pool, many workers, no per-task construction.
+
+## Why not pass it as an argument
+
+Because a task argument crosses a process boundary. Arguments are CBOR-encoded
+into the job's payload by the producer and decoded by whichever worker claims
+it, possibly on another host, possibly minutes later. A live socket has no
+representation there, and the crate will not pretend otherwise —
+<SdkLink to="guides/core/enqueue-options">what a call carries</SdkLink> is bytes.
+
+Pass the *identity* of the thing; resolve the thing on the worker side.
+
+```rust
+// Yes: an id the worker can resolve.
+queue.enqueue(fetch_profile::call("u-42".into()))?;
+```
+
+<Callout type="warn" title="A static is never dropped">
+  Rust does not run destructors for statics at process exit. If your dependency
+  needs a flush or a graceful close, do it explicitly after
+  `worker.shutdown()?` returns — that call drains in-flight jobs first, so it is
+  the point at which nothing is still using the resource.
+</Callout>
+
+## When construction can fail
+
+`LazyLock` initialises on first touch, which means a bad DSN surfaces inside a
+task rather than at startup. Where you would rather find out immediately, use
+`OnceLock` and fill it in `main` before the worker spawns:
+
+```rust
+use std::sync::OnceLock;
+
+/// `Pool` is your database crate's, not FlexiQ's — the crate has no opinion
+/// about what goes in here.
+static DB: OnceLock<Pool> = OnceLock::new();
+
+/// The pool, or a task failure that says why there is none.
+fn db() -> flexiq::Outcome<&'static Pool> {
+    DB.get()
+        .ok_or_else(|| flexiq::TaskError::fatal("the pool was never initialised").into())
+}
+
+fn main() -> flexiq::Result<()> {
+    let dsn = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    DB.set(Pool::connect(&dsn).expect("the pool connects"))
+        .ok()
+        .expect("main initialises the pool exactly once");
+
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    let worker = queue.worker().register::<fetch_profile>().spawn()?;
+    // ...
+    worker.shutdown()
+}
+```
+
+Now a misconfigured process dies at boot instead of dead-lettering its first
+thousand jobs.
+
+<Cards>
+  <Card
+    title="Constructing dependencies"
+    to="modules/injection/dependency-injection"
+    description="Wiring at startup, and keeping task bodies testable without a queue."
+  />
+  <Card
+    title="Tasks"
+    to="guides/core/tasks"
+    description="What the attribute accepts, and what a body receives."
+  />
+  <Card
+    title="Extend & integrate"
+    to="guides/extend"
+    description="The rest of what the shell has no hook surface for."
+  />
+</Cards>

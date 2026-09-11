@@ -1,0 +1,16 @@
+{
+  "title": "Operate",
+  "root": true,
+  "pages": [
+    "index",
+    "backends",
+    "inspection",
+    "cli",
+    "deployment",
+    "kubernetes",
+    "backup",
+    "security",
+    "troubleshooting",
+    "migration"
+  ]
+}

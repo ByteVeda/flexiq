@@ -1,0 +1,4 @@
+{
+  "title": "Workflows",
+  "pages": ["index", "fan-out", "conditions", "gates", "saga", "canvas"]
+}

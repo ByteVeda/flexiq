@@ -1,0 +1,33 @@
+---
+title: Guides
+description: Task-shaped how-tos covering the Rust SDK's day-to-day surface.
+---
+
+Pick the topic you're working through. Each guide is self-contained, with code
+samples and gotchas. Subsystems with their own surface — workflows, durable
+steps, the dashboard, mesh, the attached executor, autoscaling — live under
+<SdkLink to="modules">**Modules**</SdkLink>; running flexiq in production lives
+under <SdkLink to="operate">**Operate**</SdkLink>.
+
+New to flexiq? These are how-tos, not a course — the linear
+<SdkLink to="getting-started">**Start here**</SdkLink> track is the one to read
+in order. Evaluating rather than learning? [**Capabilities at a
+glance**](/about/capabilities) is the one-page map.
+
+<Cards>
+  <Card
+    title="Tasks & execution"
+    to="guides/core"
+    description="Declare tasks with the attribute, route to queues, run workers, schedule, batch."
+  />
+  <Card
+    title="Reliability"
+    to="guides/reliability"
+    description="Retries, dead letters, idempotency, locks, error handling."
+  />
+  <Card
+    title="Extend & integrate"
+    to="guides/extend"
+    description="Logging, notes, testing, Prometheus, Sentry — and what the shell does not wrap."
+  />
+</Cards>

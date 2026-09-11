@@ -1,0 +1,53 @@
+---
+title: Examples
+description: "Complete Rust programs — a notification service, a durable-step data pipeline, and a throughput benchmark."
+---
+
+Each page here is one whole program. Paste it into `src/main.rs`, add the
+dependency, and it builds — no elided helpers, no pseudo-code. Read the
+<SdkLink to="api-reference/overview">API reference</SdkLink> for the surface;
+come here for code that runs.
+
+| Example | Shows |
+| --- | --- |
+| <SdkLink to="more/examples/notifications">Notification service</SdkLink> | A retrying email task, a priority SMS lane, a deduped welcome, a delayed nudge, a cron digest |
+| <SdkLink to="more/examples/data-pipeline">Data pipeline</SdkLink> | Durable steps: extract, wait, load — a retry resumes instead of repeating |
+| <SdkLink to="more/examples/benchmark">Benchmark</SdkLink> | Measuring enqueue and end-to-end throughput |
+
+## The dependency
+
+```toml
+[dependencies]
+flexiq = "2.0"
+```
+
+SQLite is the default and needs nothing else running — one file, one process.
+PostgreSQL and Redis are cargo features:
+
+```toml
+[dependencies]
+flexiq = { version = "2.0", features = ["postgres"] }
+```
+
+## Two things to know before you read them
+
+A task's return value is archived as `job.result`, an `Option<Vec<u8>>`, and
+the decoder for those bytes is private to the crate. There is no typed result
+read. A program that wants a value back hands it out through a durable step,
+writes it somewhere the caller can see, or inspects `job.status` and stops
+there — which is what both examples do.
+
+A task body takes its arguments and nothing else. No queue is injected, no
+context object is passed. The digest task in the notification example opens its
+own handle on the same database, and that is the whole pattern.
+
+<Callout type="info">
+  Anything the shell does not wrap is still one import away: `queue.storage()`
+  hands back the `StorageBackend` the engine itself runs on, so dead-letter
+  listings, stuck-job requeues and step rows are reachable without leaving the
+  crate.
+</Callout>
+
+Start with <SdkLink to="getting-started/quickstart">the quickstart</SdkLink> if
+you have not enqueued anything yet, or
+<SdkLink to="modules/steps">durable steps</SdkLink> if you already have.

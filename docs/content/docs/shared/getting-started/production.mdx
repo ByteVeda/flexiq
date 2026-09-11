@@ -69,6 +69,22 @@ TimeoutStopSec=60
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```ini
+# /etc/systemd/system/flexiq-worker.service
+[Service]
+ExecStart=/srv/app/bin/worker
+Restart=always
+KillSignal=SIGTERM
+TimeoutStopSec=60
+```
+
+Nothing in the crate installs a signal handler. Catch `SIGTERM` in your own
+`main` and call `worker.shutdown()` — it stops dispatching, drains what is
+in flight, and unregisters the worker before it returns.
+
+  </Tab>
 </CodeTabs>
 
 Two things matter more than the unit file:
@@ -113,6 +129,18 @@ flexiq --db signup.db dashboard --port 8787 --auth
 flexiq --url signup.db stats              # counts
 flexiq --url signup.db dashboard --port 8080 --token "$DASH_TOKEN"
 ```
+
+  </Tab>
+  <Tab sdk="rust">
+
+```rust
+let stats = queue.stats()?;
+println!("pending {} · dead {}", stats.pending, stats.dead);
+```
+
+The Rust SDK ships neither a CLI nor a dashboard server: `stats()` is the read,
+and the `flexiq-server` crate is what serves the bundled dashboard over the same
+store.
 
   </Tab>
 </CodeTabs>

@@ -1,0 +1,186 @@
+---
+title: Execution Models
+description: "How the Rust worker runs a job — the pool, the claim fence, blocking threads, panics, and shutdown."
+---
+
+A worker is built off the queue handle and spawned. `spawn()` registers the
+process, starts the scheduler and the pool, and returns a handle.
+
+```rust
+let worker = queue
+    .worker()
+    .register::<charge>()
+    .register::<total>()
+    .queues(["billing", "default"])
+    .num_workers(2)
+    .worker_id("billing-1")
+    .spawn()?;
+
+// … the process does its work …
+
+worker.shutdown()?;
+```
+
+The scheduler claims due jobs from storage and hands them to the pool. The pool
+decodes the payload into your function's parameters, calls it, and encodes what
+it returns. All of that happens in this process — there is no separate runtime
+and no daemon.
+
+## The pool this shell brings
+
+The core ships a reference pool, `flexiq_core::NativeDispatcher`, and this is
+not it. That one hands a handler a `&Job` and overrides neither
+`set_claim_owner` nor `set_lease_book`, so the `(owner, attempt, epoch)` triple
+the scheduler mints for every dispatch is dropped before a handler could see it.
+
+The Rust SDK ships its own `WorkerDispatcher` — `ShellDispatcher` — which keeps
+all three. That triple is the fence every durable-step write is made under, so a
+pool that discards it cannot open a step session at all.
+
+<Callout type="info">
+  This is the only SDK that sets the **epoch** term. The other shells reach steps
+  through an FFI class that has to be one concrete non-generic type, so they
+  fence on `(owner, attempt)` alone. See
+  <SdkLink to="modules/steps">durable steps</SdkLink>.
+</Callout>
+
+The pool reports its dispatcher type as `rust`, and opens the step session
+*before* the body runs. If the session cannot be opened the attempt ends there
+with a retryable failure and the body is never called — opening the session is
+how a job's committed steps are read, and running the body against an unreadable
+memo would re-execute steps that already happened.
+
+## Concurrency
+
+Every handler is synchronous, so every handler runs on
+`tokio::task::spawn_blocking`. A long computation occupies its own blocking
+thread and blocks nothing else.
+
+`num_workers` is the bound: a semaphore of that size gates dispatch, and the
+same number is handed to the scheduler. The default is 4, and a value below 1 is
+raised to 1.
+
+```rust
+queue.worker().register::<resize>().num_workers(8).spawn()?;
+```
+
+`queues([...])` chooses which queues this worker pulls from; the default is
+`["default"]` alone, so a task declared with `queue = "billing"` needs a worker
+that names that queue.
+
+Claim-side tuning lives on `SchedulerConfig` — `batch_size` (default 1) is how
+many due jobs are claimed per poll, and `max_in_flight` caps how many this
+scheduler keeps dispatched at once:
+
+```rust
+use flexiq::SchedulerConfig;
+
+queue
+    .worker()
+    .register::<resize>()
+    .num_workers(8)
+    .scheduler_config(SchedulerConfig {
+        batch_size: 16,
+        max_in_flight: Some(8),
+        ..Default::default()
+    })
+    .spawn()?;
+```
+
+## A panic is a retryable failure
+
+The body runs inside `std::panic::catch_unwind`. A panic becomes a
+`TaskError::retryable` naming the task and carrying the panic message, so the
+job records a real error and the retry policy applies to it like any other
+failure.
+
+```rust
+#[flexiq::task(max_retries = 0)]
+fn panics(_n: i64) -> flexiq::Outcome<()> {
+    panic!("the task exploded");
+}
+```
+
+Without that containment `spawn_blocking` would catch the panic into a
+`JoinHandle` nothing holds: no result would ever be sent, and the job would sit
+in flight until the stale-job reap noticed, with nothing recorded anywhere. The
+blocking thread is reused afterwards, so a panicking task does not take the pool
+down.
+
+Retryable rather than fatal is deliberate. A panic is often transient — a
+poisoned lock, an `unwrap` on a row that was briefly absent — and making it the
+one failure that ignores the retry policy would surprise.
+
+A job whose task is **not registered** on this worker fails fatally instead: no
+amount of retrying makes it runnable here.
+
+## What the pool reports
+
+Three outcomes, and only three:
+
+| Outcome | When |
+| --- | --- |
+| Success | The body returned `Ok`. The encoded value is archived. |
+| Failure | The body returned `Err(Abort::Fail(..))`, or panicked. The retry policy decides retry or dead-letter. |
+| Slept | The body called `step.sleep_ms` / `step.sleep_until`. The job is already rescheduled with its claim released — not a success, not a failure, and it spends no retry. |
+
+A failure records the contract's canonical JSON —
+`{"errtype","message","traceback"}` — rather than a bare message, so a reader in
+any SDK gets the same structured shape.
+
+## Shutdown
+
+`WorkerHandle::shutdown()` consumes the handle: it stops dispatching, drains
+in-flight work, stops the heartbeat, unregisters the worker, and blocks until
+every thread has exited. It returns `Result<()>` — propagate it.
+
+```rust
+fn main() -> flexiq::Result<()> {
+    let queue = flexiq::FlexiQ::open("flexiq.db")?;
+    let worker = queue.worker().register::<charge>().spawn()?;
+    // …
+    worker.shutdown()
+}
+```
+
+## What `spawn()` refuses
+
+- **A task name registered twice.** One of the two bodies would silently never
+  run, so the whole builder is refused with the duplicated name in the message.
+- **Any periodic on a namespaced worker.** Periodic rows carry no namespace and
+  every backend keys the table by name alone, so the registration would reach
+  another namespace's row. Use a handle without a namespace for schedules.
+
+## Limits of the builder
+
+`WorkerBuilder` has **no** `on_outcome` and **no** `queue_config`. Those live on
+`flexiq_core::Worker`; build the worker through that type directly if you need
+them.
+
+`#[flexiq::task]` refuses `async fn` outright — the pool runs every handler on a
+blocking thread, and a silently-blocked runtime thread is worse than a compile
+error. Drive an async runtime inside the body, or register the handler with
+`flexiq_core::Worker::register_async` instead of going through this builder.
+
+<Cards>
+  <Card
+    title="Workers"
+    to="guides/core/workers"
+    description="Registration, queues, and worker lifecycle in full."
+  />
+  <Card
+    title="Durable steps"
+    to="modules/steps"
+    description="What the (owner, attempt, epoch) fence protects."
+  />
+  <Card
+    title="Retries"
+    to="guides/reliability/retries"
+    description="How a failure becomes another attempt, or a dead letter."
+  />
+  <Card
+    title="Error handling"
+    to="guides/reliability/error-handling"
+    description="Retryable versus fatal, and who decides."
+  />
+</Cards>

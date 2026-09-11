@@ -1,0 +1,72 @@
+---
+title: Tasks & execution
+description: "The building blocks of every Rust flexiq application."
+---
+
+<Cards>
+  <Card
+    title="Tasks"
+    to="guides/core/tasks"
+    description="Declare tasks with #[flexiq::task], configure retries, timeouts, and defaults"
+  />
+  <Card
+    title="Task Discovery"
+    to="guides/core/discovery"
+    description="How a worker learns which task names it can run"
+  />
+  <Card
+    title="Queues & Priority"
+    to="guides/core/queues"
+    description="Named queues, priority levels, and routing"
+  />
+  <Card
+    title="Workers"
+    to="guides/core/workers"
+    description="Build a worker, control concurrency, shut it down cleanly"
+  />
+  <Card
+    title="Execution Models"
+    to="guides/core/execution-model"
+    description="The pool, the claim fence, panics, and how a job reaches your function"
+  />
+  <Card
+    title="Enqueue options"
+    to="guides/core/enqueue-options"
+    description="Per-call delay, priority, uniqueness, metadata, and the defaults they override"
+  />
+  <Card
+    title="Scheduling"
+    to="guides/core/scheduling"
+    description="Periodic tasks with six-field cron expressions"
+  />
+  <Card
+    title="Cancellation"
+    to="guides/core/cancellation"
+    description="Cancel a pending job, ask a running one to stop"
+  />
+  <Card
+    title="Predicates"
+    to="guides/core/predicates"
+    description="Gate an enqueue on a runtime condition"
+  />
+  <Card
+    title="Batch enqueue"
+    to="guides/core/batch-enqueue"
+    description="Many calls of one task in a single write, and what a batch refuses"
+  />
+  <Card
+    title="Unique tasks"
+    to="guides/core/unique-tasks"
+    description="unique_key, idempotent(), and the auto: digest that crosses SDKs"
+  />
+  <Card
+    title="Dependencies"
+    to="guides/core/dependencies"
+    description="Hold a job until other jobs finish, with depends_on"
+  />
+  <Card
+    title="Pub/Sub"
+    to="guides/core/pubsub"
+    description="Fan a published message out to independent subscribers, each its own job"
+  />
+</Cards>

@@ -47,6 +47,24 @@ flexiq.enqueue(sendEmail, payload, EnqueueOptions.builder()
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+// Run 1 hour from now
+queue.enqueue(
+    send_email::call(
+        "user@example.com".into(),
+        "Reminder".into(),
+        "Don't forget!".into(),
+    )
+    .delay_ms(60 * 60 * 1000),
+)?;
+```
+
+`delay_ms` is relative and resolved once at enqueue, against the same `now` as
+`expires_in_ms`, so the two cannot disagree by the width of the call.
+
+  </Tab>
 </CodeTabs>
 
 The job is created immediately — it just sits `pending` until the delay
@@ -70,6 +88,15 @@ options</SdkLink> for the rest of what `delayMs` composes with.
 
 See <SdkLink to="guides/core/enqueue-options#delayed-jobs">Enqueue
 options</SdkLink> for the rest of what `delay` composes with.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+See <SdkLink to="guides/core/enqueue-options">Enqueue options</SdkLink> for the
+rest of what `.delay_ms(..)` composes with. Every setter on a `TaskCall` is
+emitted from the same macro as the one on `EnqueueOptions`, so the two lists
+cannot drift apart.
 
 </SdkOnly>
 
@@ -119,6 +146,37 @@ long nextFire = flexiq.registerPeriodic(
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+A schedule is an attribute on the task itself, and a scheduled task takes **no
+parameters** — a periodic fire has no caller to supply them, so a parameter here
+is a compile error:
+
+```rust
+/// Run every day at 9:00 AM Eastern.
+#[flexiq::task(name = "daily-digest", cron = "0 0 9 * * *", timezone = "America/New_York")]
+fn digest() -> flexiq::Outcome<()> {
+    send_digest()?;
+    Ok(())
+}
+
+// The schedule is written when the worker starts, not when the task is declared.
+let worker = queue.worker().register::<digest>().spawn()?;
+```
+
+An unchanged declaration writes nothing on restart, so a worker coming back up
+never resets a deadline the scheduler advanced or resumes a task an operator
+paused.
+
+<Callout type="warn" title="Register a periodic from one process">
+  Firing is per-scheduler and **not** leader-elected. The dedup key a fired job
+  carries is `periodic:{name}:{now}` computed from each process's own clock, so
+  two workers that both registered the same schedule can both find it due in the
+  same millisecond and each mint a job the other's key does not match. Register
+  periodics from one process, or accept that a fleet may double-fire.
+</Callout>
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -150,6 +208,23 @@ the schedule (upsert by name).
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+There is no separate registration call. The schedule rides on the task, so
+`register::<digest>()` picks it up and `spawn()` writes the row — before the
+scheduler starts, so a schedule that is already due fires on the first tick
+rather than an interval late.
+
+Re-registering an **unchanged** declaration writes nothing at all. That is what
+stops a restart from resetting a `next_run` another worker's scheduler had
+advanced, or from resuming a task an operator paused.
+
+A periodic is refused on a namespaced worker, and every method below is refused
+on a namespaced handle: the table is keyed by name alone in every backend, so a
+namespaced call would reach some other namespace's rows.
+
+</SdkOnly>
+
 <SdkOnly sdk="python">
 
 Several schedules can share one `@queue.periodic()`-decorated worker file:
@@ -170,6 +245,37 @@ def weekly_report(report_type):
     """Run every Monday at 9:00 AM."""
     generate_report(report_type)
 ```
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Several schedules are several tasks, each carrying its own, registered on one
+worker:
+
+```rust
+#[flexiq::task(cron = "0 */5 * * * *")] // every 5 minutes
+fn health_check() -> flexiq::Outcome<()> {
+    ping_services().map_err(flexiq::TaskError::retryable)?;
+    Ok(())
+}
+
+#[flexiq::task(cron = "0 0 0 * * *")] // midnight, every day
+fn daily_cleanup() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+let worker = queue
+    .worker()
+    .register::<health_check>()
+    .register::<daily_cleanup>()
+    .spawn()?;
+```
+
+A scheduled task takes no parameters, so a schedule cannot carry arguments — and
+a parameter beside `cron` is a compile error rather than a fire that decodes
+nothing, forever. Put the constant in the body, or leave the `cron` off and
+enqueue the task by hand when a run genuinely needs an argument.
 
 </SdkOnly>
 
@@ -228,6 +334,15 @@ year field is also accepted:
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+`cron` is the one attribute whose grammar the macro does not check. Durations and
+rates are parsed while it expands, but the expression is passed through as a
+string and read at `spawn()` — so a malformed one fails the worker's startup with
+an error naming it, rather than at compile time.
+
+</SdkOnly>
+
 ### Registration options
 
 <CodeTabs>
@@ -272,6 +387,32 @@ flexiq.registerPeriodic(
 ```
 
   </Tab>
+  <Tab sdk="rust">
+
+```rust
+#[flexiq::task(
+    cron = "0 0 * * * *",          // Required: 6-field cron, seconds first
+    name = "hourly-cleanup",        // Optional: the schedule's name is the task's
+    queue = "maintenance",          // Optional: queue each fired job lands on
+    timezone = "America/New_York",  // Optional: IANA name (default: UTC)
+)]
+fn cleanup() -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+| Attribute | Effect |
+|---|---|
+| `cron` | The schedule. Six fields, seconds first. |
+| `name` | The task name, which is also the schedule's name. Defaults to the function's name. |
+| `queue` | The queue a fired job is enqueued into. Defaults to `"default"`. |
+| `timezone` | IANA timezone the expression is evaluated in. Only meaningful beside `cron`. |
+
+There is no `args` — a scheduled task takes no parameters — and no `enabled`: a
+schedule registers active, and pausing one is
+`queue.pause_periodic("hourly-cleanup")`.
+
+  </Tab>
 </CodeTabs>
 
 <SdkOnly sdk="python">
@@ -306,6 +447,28 @@ flexiq.registerPeriodic(
 | `queue(String)` | Queue to enqueue into. |
 | `timezone(String)` | IANA timezone for the cron expression (default UTC). |
 | `enabled(boolean)` | Register paused when `false` (default `true`). |
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+Of the enqueue-default attributes, only `queue` reaches the job a firing creates.
+The scheduler builds that job itself, from fixed values, so `priority`,
+`max_retries`, `timeout`, `expires` and `result_ttl` shape a call you enqueue by
+hand and nothing the schedule mints:
+
+| On a fired job | Value |
+|---|---|
+| `queue` | The task's declared `queue`, or `"default"`. |
+| `priority` | `0` |
+| `max_retries` | `3` |
+| `timeout_ms` | `300_000` |
+| `unique_key` | `periodic:{name}:{now}`, from the firing process's own clock. |
+
+The scheduler-policy half is unaffected, because it is keyed by task name rather
+than carried on the row: `rate_limit`, `retry_budget`, `max_concurrent`,
+`on_excess`, and the `retry_backoff_ms` / `retry_max_delay_ms` curve all apply to
+a fired job exactly as they do to any other.
 
 </SdkOnly>
 
@@ -379,6 +542,41 @@ by deleting the decorator.
 
 </SdkOnly>
 
+<SdkOnly sdk="rust">
+
+```rust
+queue.list_periodic()?; // every registered schedule, enabled or paused
+
+queue.pause_periodic("daily-digest")?;  // stop firing, keep the registration
+queue.resume_periodic("daily-digest")?;
+queue.delete_periodic("daily-digest")?; // unschedule; false if there was none
+```
+
+Each entry is a `flexiq::PeriodicTask` — `name`, `task_name`, `cron_expr`,
+`queue`, `enabled`, `last_run`, `next_run`, `timezone`. Timestamps are Unix
+milliseconds and `last_run` is `None` until the schedule first fires:
+
+```rust
+for schedule in queue.list_periodic()? {
+    let state = if schedule.enabled { "on" } else { "paused" };
+    println!("{} [{}] next={}", schedule.name, state, schedule.next_run);
+}
+```
+
+All four act on the catalog in storage, so any process pointed at the same
+backend can manage it — including a producer that never starts a worker. All four
+are also **refused on a namespaced handle**, and return an error saying so: the
+table is keyed by name alone in every backend, so a namespaced listing would
+return other namespaces' schedules and a delete would reach a name it does not
+own.
+
+Deleting the row is not the same as retiring the schedule. A worker that still
+has the task in its `register::<T>()` chain writes it back at its next startup,
+because the declaration is in the code and the row is only its record. Remove the
+`cron` attribute as well, or the schedule comes back with the next deploy.
+
+</SdkOnly>
+
 ## Overrun and multiple schedulers
 
 **A slow run can overlap its own next fire.** The scheduler only checks
@@ -412,6 +610,25 @@ The Java SDK doesn't expose a per-task concurrency cap in code yet. If
 overlapping runs would be unsafe, keep the cron interval comfortably longer
 than the task's worst-case execution time, or make the handler itself safe
 to run concurrently with itself.
+
+</SdkOnly>
+
+<SdkOnly sdk="rust">
+
+If overlap is unsafe, cap the task at one. `max_concurrent` is enforced by the
+scheduler by task name, so it holds across every worker on shared storage and
+does not care whether the job came from a schedule or a hand-written enqueue:
+
+```rust
+#[flexiq::task(cron = "0 */5 * * * *", max_concurrent = 1)]
+fn slow_sync() -> flexiq::Outcome<()> {
+    Ok(())
+}
+```
+
+A fire that finds the cap full is never dropped: a concurrency cap rolls the
+claim back and the job stays pending for a later tick. `on_excess` has no say
+here — it answers only for a rate limit.
 
 </SdkOnly>
 
