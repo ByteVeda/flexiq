@@ -4,8 +4,10 @@ import "strconv"
 
 // WorkflowState is a run's lifecycle state.
 //
-// The zero value is [WorkflowStateUnspecified], which a server never sends: it
-// is what a state this build has no name for decodes to.
+// The zero value is [WorkflowStateUnspecified], which a server never sends. A
+// state this build has no name for is *not* collapsed into it: the number is
+// carried through as it arrived, and [WorkflowState.String] prints it. Test
+// with [WorkflowState.IsKnown] rather than against this constant.
 type WorkflowState int32
 
 const (
