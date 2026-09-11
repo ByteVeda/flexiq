@@ -18,6 +18,10 @@ pub struct RateLimitConfig {
 
 impl RateLimitConfig {
     /// Parse a rate limit string like "100/s", "100/m", "1000/h".
+    ///
+    /// The count has to be finite and at least one: a bucket built from zero, a
+    /// negative, a fraction or a NaN never releases a job, and the caller would
+    /// have no way to tell that from a task that is merely idle.
     pub fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() != 2 {
@@ -25,6 +29,16 @@ impl RateLimitConfig {
         }
 
         let count: f64 = parts[0].trim().parse().ok()?;
+        // Every backend consumes a token behind `tokens >= 1.0`, a comparison a
+        // NaN loses, so anything under one hands out nothing, forever. Rejecting
+        // here turns a task that silently never dispatches into a config error at
+        // worker start. `flexiq-macros` applies the same rule to a `#[task]`
+        // literal at expansion time; the two must agree, or the macro's
+        // `expect("a rate the macro already validated")` panics.
+        if !count.is_finite() || count < 1.0 {
+            return None;
+        }
+
         let refill_rate = match parts[1].trim() {
             "s" | "sec" | "second" => count,
             "m" | "min" | "minute" => count / 60.0,
@@ -71,6 +85,25 @@ mod tests {
         assert!((config.refill_rate - 1.0).abs() < f64::EPSILON);
 
         assert!(RateLimitConfig::parse("invalid").is_none());
+    }
+
+    /// A count under one builds a bucket that never hands out a token, so the
+    /// task would never dispatch and nothing would say why. Rejecting it here is
+    /// what makes that a config error at worker start instead.
+    #[test]
+    fn parse_rejects_a_count_that_never_releases_a_job() {
+        for dead in ["0/s", "-5/s", "0.5/s", "NaN/s", "inf/s", "-inf/m", "0/h"] {
+            assert!(
+                RateLimitConfig::parse(dead).is_none(),
+                "{dead} builds a bucket that never releases a job"
+            );
+        }
+
+        // One over the unit is the floor, not a rejection: the bucket starts full,
+        // so the job at the front goes out immediately.
+        let config = RateLimitConfig::parse("1/s").expect("one per second is a rate");
+        assert!((config.max_tokens - 1.0).abs() < f64::EPSILON);
+        assert!(RateLimitConfig::parse("1/h").is_some());
     }
 
     #[test]
