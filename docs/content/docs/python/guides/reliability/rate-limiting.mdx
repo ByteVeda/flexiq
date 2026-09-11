@@ -34,9 +34,11 @@ Rate limits use the format `count/period`:
 | `"100/m"` | 100 per minute |
 | `"3600/h"` | 3600 per hour |
 
-The count has to be at least `1`. A zero, a negative or a fraction builds a
-bucket that never holds the token a dispatch needs, so the worker refuses to
-start on one rather than running a task that silently never dispatches.
+The count has to be finite and at least `1`. A zero, a negative or a fraction
+builds a bucket that never holds the token a dispatch needs, and `nan` loses the
+comparison outright, so the worker refuses to start on one rather than running a
+task that silently never dispatches. `inf` is rejected with them — it is not a
+rate.
 
 ## How it works
 

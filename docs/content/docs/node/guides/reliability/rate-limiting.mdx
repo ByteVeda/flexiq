@@ -21,9 +21,10 @@ queue.configureQueue("emails", { rateLimit: "50/s" });
 
 `rateLimit` is a string `"<count>/<unit>"` where unit is `s` (second), `m`
 (minute), or `h` (hour) — e.g. `"100/m"`, `"50/s"`, `"3600/h"`. The count has to
-be at least `1`: a zero, a negative or a fraction builds a bucket that never
-holds the token a dispatch needs, so the worker refuses to start on one rather
-than running a task that silently never dispatches.
+be finite and at least `1`: a zero, a negative or a fraction builds a bucket that
+never holds the token a dispatch needs, and `NaN` loses the comparison outright,
+so the worker refuses to start on one rather than running a task that silently
+never dispatches. `Infinity` is rejected with them — it is not a rate.
 
 Queue-level limits are evaluated before per-task limits. Rate-limited jobs stay
 `pending` and retry on the next tick — they do not consume the retry budget.

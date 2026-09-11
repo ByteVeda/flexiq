@@ -47,7 +47,7 @@ scheduler enforces globally per task name — `"100/m"` means 100 a minute acros
 the whole deployment, not per worker. The worker registers it on `start()` and
 rejects a malformed spec rather than running unthrottled — a count below `1`
 counts as malformed, since a bucket that never holds one token never releases a
-job:
+job, and so does a count that is not finite:
 
 ```java
 Task<String> CALL_API = Task.of("call_api", String.class)
