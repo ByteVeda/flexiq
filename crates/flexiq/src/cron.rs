@@ -54,11 +54,35 @@ pub(crate) fn unsupported_in_namespace(operation: &str) -> QueueError {
 /// `register_periodic` upserts on the name, so calling this on every worker
 /// start is correct rather than merely tolerated.
 pub(crate) fn register<T: Task>(storage: &impl Storage, spec: &PeriodicSpec) -> Result<()> {
-    let now = now_millis();
-    let next_run = match spec.timezone {
-        Some(tz) => next_cron_time_tz(spec.cron, now, tz),
-        None => next_cron_time(spec.cron, now),
-    }?;
+    let existing = storage
+        .list_periodic()?
+        .into_iter()
+        .find(|task| task.name == T::NAME);
+
+    // Keep the deadline a previous run already computed, unless the schedule
+    // itself changed. Recomputing it on every start means a worker that
+    // restarts after a deadline has passed but before the scheduler fired it
+    // pushes the deadline to the *next* occurrence, and that firing is lost —
+    // which a process that restarts often would do repeatedly.
+    let unchanged = existing.as_ref().is_some_and(|task| {
+        task.cron_expr == spec.cron && task.timezone.as_deref() == spec.timezone
+    });
+
+    let next_run = match &existing {
+        Some(task) if unchanged => task.next_run,
+        _ => {
+            let now = now_millis();
+            match spec.timezone {
+                Some(tz) => next_cron_time_tz(spec.cron, now, tz),
+                None => next_cron_time(spec.cron, now),
+            }?
+        }
+    };
+
+    // A pause is an operator's decision and outlives a restart. Writing `true`
+    // unconditionally would quietly resume a paused task the next time its
+    // worker came up, which is the opposite of what pausing it meant.
+    let enabled = existing.as_ref().is_none_or(|task| task.enabled);
 
     let row = NewPeriodicTask {
         name: T::NAME.to_string(),
@@ -71,7 +95,7 @@ pub(crate) fn register<T: Task>(storage: &impl Storage, spec: &PeriodicSpec) -> 
         args: Some(crate::encode::encode_args(&[])),
         kwargs: None,
         queue: T::defaults().queue,
-        enabled: true,
+        enabled,
         next_run,
         timezone: spec.timezone.map(str::to_string),
     };
