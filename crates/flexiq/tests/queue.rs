@@ -276,6 +276,46 @@ fn documented(_n: String) -> flexiq::Outcome<()> {
     Ok(())
 }
 
+/// `u64` is a perfectly ordinary parameter type, and a value past `i64::MAX`
+/// has no representation in the envelope.
+#[flexiq::task]
+fn takes_a_big_number(n: u64) -> flexiq::Outcome<()> {
+    let _ = n;
+    Ok(())
+}
+
+/// An argument that cannot be encoded reaches the caller as an error.
+///
+/// The encoding happens inside `call(..)`, which mirrors the task's own
+/// signature and has nowhere to return a `Result` without costing every caller
+/// a second `?` — including inside `vec![..]` when building a batch. So the
+/// failure rides on the call and is raised by `enqueue`, which already returns
+/// one. What it must never be is a panic in a producer.
+#[test]
+fn an_unencodable_argument_is_an_error_not_a_panic() {
+    let q = FlexiQ::in_memory().expect("opens");
+
+    let err = q
+        .enqueue(takes_a_big_number::call(u64::MAX))
+        .expect_err("a u64 past i64::MAX has no representation");
+    let message = err.to_string();
+    assert!(message.contains("takes_a_big_number"), "{message}");
+    assert!(message.contains("could not encode"), "{message}");
+
+    // A batch carries it the same way, and one bad item fails the call.
+    let err = q
+        .enqueue_batch(vec![
+            takes_a_big_number::call(1),
+            takes_a_big_number::call(u64::MAX),
+        ])
+        .expect_err("one unencodable item fails the batch");
+    assert!(err.to_string().contains("could not encode"), "{err}");
+
+    // A value that does fit still works.
+    let job = q.enqueue(takes_a_big_number::call(42)).expect("enqueues");
+    assert_eq!(job.task_name, "takes_a_big_number");
+}
+
 #[test]
 fn a_cfg_gate_reaches_every_generated_item() {
     // `never_compiled` is absent entirely; naming it would not compile. That

@@ -120,6 +120,17 @@ impl FlexiQ {
             ..
         } = call;
 
+        // Raised here rather than at `call(..)`, which mirrors the task's own
+        // signature. A `Serialize` value can still have no representation in
+        // the envelope — a `u64` past `i64::MAX` is the ordinary case — and a
+        // producer should see an error rather than a panic.
+        let payload = payload.map_err(|e| {
+            QueueError::Other(format!(
+                "task `{}` could not encode its arguments: {e}",
+                T::NAME
+            ))
+        })?;
+
         match (self.namespace.as_deref(), options.namespace.as_deref()) {
             // A scoped handle is a boundary, not a default. `TaskCall::namespace`
             // is public, so without this check a caller holding a handle for one

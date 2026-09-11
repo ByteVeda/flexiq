@@ -47,14 +47,18 @@ pub fn task(attrs: TaskAttrs, item: ItemFn) -> Result<TokenStream> {
         #(#cfgs)*
         impl #ident {
             /// Build a call to this task, ready to enqueue.
+            ///
+            /// An argument with no representation in the call envelope is
+            /// carried on the call and raised by `enqueue`, so this keeps the
+            /// task's own signature and a batch stays one expression.
             #vis fn call(#inputs) -> ::flexiq::TaskCall<#ident> {
-                let args = ::std::vec![
-                    #(
-                        ::flexiq::__private::to_wire(&#idents)
-                            .expect("a task argument that does not encode"),
-                    )*
-                ];
-                ::flexiq::TaskCall::from_args(::flexiq::__private::encode_args(&args))
+                let encoded = (|| {
+                    let args = ::std::vec![
+                        #( ::flexiq::__private::to_wire(&#idents)?, )*
+                    ];
+                    ::std::result::Result::Ok(::flexiq::__private::encode_args(&args))
+                })();
+                ::flexiq::TaskCall::from_encoded(encoded)
             }
 
             /// Run the task body directly, without a queue.
