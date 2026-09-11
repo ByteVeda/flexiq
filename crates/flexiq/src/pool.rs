@@ -13,6 +13,7 @@
 //! fatally rather than retried.
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -244,6 +245,20 @@ fn job_result(job: &Job, outcome: Outcome<Option<Vec<u8>>>, started: Instant) ->
     }
 }
 
+/// What a panic said, when it said anything legible.
+///
+/// `panic!` with a literal yields `&'static str` and with a format yields
+/// `String`; anything else is a `panic_any` payload this cannot read.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&'static str>() {
+        return (*text).to_string();
+    }
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    "a payload of an unknown type".to_string()
+}
+
 /// When a sleeping attempt asked to be woken.
 fn wake_at(sleep: &flexiq_core::StepSleep) -> i64 {
     match sleep {
@@ -296,6 +311,12 @@ impl WorkerDispatcher for ShellDispatcher {
                 let _permit = permit; // Hold the slot until the body returns.
                 let started = Instant::now();
 
+                // Blocking threads are reused and a panicked dispatch cannot
+                // clean up after itself, so clear before installing: otherwise
+                // a task whose own session failed to open would reach the
+                // *previous* job's.
+                drop(crate::steps::take());
+
                 // A session that cannot be opened is not fatal to the job: a
                 // task that never calls `current_step` does not need one, and
                 // one that does gets a message naming the failure.
@@ -304,10 +325,24 @@ impl WorkerDispatcher for ShellDispatcher {
                     Err(e) => log::debug!("no step session for job {}: {e}", job.id),
                 }
 
-                let outcome = handler(&job);
+                // A panic here would otherwise unwind past both the cleanup and
+                // the send: `spawn_blocking` catches it into a `JoinHandle`
+                // nothing holds, so the job would sit in flight until the
+                // stale-job reap noticed, with no error recorded anywhere.
+                let outcome = match std::panic::catch_unwind(AssertUnwindSafe(|| handler(&job))) {
+                    Ok(outcome) => outcome,
+                    // Retryable, like any other failure the task did not
+                    // model. A panic is often transient — a poisoned lock,
+                    // an `unwrap` on a row that was briefly absent — and
+                    // making it the one failure that ignores the retry
+                    // policy would surprise.
+                    Err(payload) => Err(Abort::Fail(TaskError::retryable(format!(
+                        "task `{}` panicked: {}",
+                        job.task_name,
+                        panic_message(&payload)
+                    )))),
+                };
 
-                // Blocking threads are reused, so the session has to come back
-                // off this one however the body ended.
                 if let Some(session) = crate::steps::take() {
                     session.finish();
                 }

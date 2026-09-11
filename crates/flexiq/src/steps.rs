@@ -112,9 +112,21 @@ impl crate::StepHandle {
 
         let committed = with_session(name, |session| {
             session.run(name, key, |_idempotency_key| match body() {
-                Ok(value) => crate::encode::to_wire(&value)
-                    .map(|wire| flexiq_core::wire::encode_result(&wire))
-                    .map_err(|e| QueueError::Other(e.to_string())),
+                Ok(value) => match crate::encode::to_wire(&value) {
+                    Ok(wire) => Ok(flexiq_core::wire::encode_result(&wire)),
+                    // The body ran and its side effects happened; only the
+                    // value cannot be written. Retrying would repeat them and
+                    // fail identically every time, so this is fatal — and it
+                    // travels out through the same channel an abort does,
+                    // because the error `StepSession::run` returns cannot
+                    // carry it.
+                    Err(e) => {
+                        aborted = Some(Abort::Fail(TaskError::fatal(format!(
+                            "step `{name}` returned a value that does not encode: {e}"
+                        ))));
+                        Err(QueueError::Other(BODY_FAILED.to_string()))
+                    }
+                },
                 Err(abort) => {
                     aborted = Some(abort);
                     Err(QueueError::Other(BODY_FAILED.to_string()))
@@ -126,6 +138,9 @@ impl crate::StepHandle {
             return Err(abort);
         }
 
+        // Whatever reaches here is a storage or fencing failure — a lost claim,
+        // a superseded attempt, a database that went away — and those are worth
+        // another attempt.
         let bytes = committed
             .map_err(|e| Abort::Fail(TaskError::retryable(format!("step `{name}` failed: {e}"))))?;
 

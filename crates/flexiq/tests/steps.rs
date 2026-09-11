@@ -168,6 +168,58 @@ fn both_kinds_of_step_are_recorded_against_the_job() {
     assert!(sleep.wake_at.is_some());
 }
 
+/// A value that cannot be written.
+///
+/// The body already ran, so retrying repeats its side effects and fails
+/// identically every time.
+struct Unencodable;
+
+impl serde::Serialize for Unencodable {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom("this value does not encode"))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Unencodable {
+    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
+        Ok(Unencodable)
+    }
+}
+
+#[flexiq::task(max_retries = 3, retry_backoff_ms = 1)]
+fn returns_something_unencodable(_n: i64) -> flexiq::Outcome<()> {
+    let mut step = flexiq::current_step();
+    let _: Unencodable = step.run("encode-me", || Ok(Unencodable))?;
+    Ok(())
+}
+
+/// An unencodable step value is fatal, not retryable.
+#[test]
+fn a_step_value_that_cannot_be_written_is_not_retried() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q
+        .enqueue(returns_something_unencodable::call(1))
+        .expect("enqueues");
+
+    let worker = q
+        .worker()
+        .register::<returns_something_unencodable>()
+        .spawn()
+        .expect("spawns");
+    let done = wait_terminal(&q, &job.id);
+    worker.shutdown().expect("clean shutdown");
+
+    assert_eq!(
+        done.retry_count, 0,
+        "a value that will never encode must not be retried"
+    );
+    let recorded = done.error.expect("an error was recorded");
+    assert!(
+        recorded.contains("does not encode"),
+        "the error should name the cause: {recorded}"
+    );
+}
+
 /// Outside a task there is no session, and saying so beats panicking on a pool
 /// thread.
 #[test]

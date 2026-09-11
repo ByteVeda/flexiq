@@ -150,6 +150,55 @@ fn an_unregistered_task_is_fatal() {
     );
 }
 
+#[flexiq::task(max_retries = 0)]
+fn panics(_n: i64) -> flexiq::Outcome<()> {
+    panic!("the task exploded");
+}
+
+/// A panicking handler records a failure instead of stranding the job.
+///
+/// `spawn_blocking` catches a panic into a `JoinHandle` nothing holds, so
+/// without containment no `JobResult` is ever sent and the job sits in flight
+/// until the stale-job reap notices — with no error recorded anywhere.
+#[test]
+fn a_panicking_task_fails_the_job_rather_than_stranding_it() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let job = q.enqueue(panics::call(1)).expect("enqueues");
+
+    let worker = q.worker().register::<panics>().spawn().expect("spawns");
+    let done = wait_terminal(&q, &job.id);
+    worker.shutdown().expect("clean shutdown");
+
+    let recorded = done.error.expect("an error was recorded");
+    assert!(
+        recorded.contains("panicked") && recorded.contains("the task exploded"),
+        "the recorded error should carry the panic message: {recorded}"
+    );
+}
+
+/// And the pool keeps working afterwards — the blocking thread is reused.
+#[test]
+fn a_panic_does_not_take_the_pool_down() {
+    let q = FlexiQ::in_memory().expect("opens");
+    let boom = q.enqueue(panics::call(1)).expect("enqueues");
+    let after = q
+        .enqueue(reads_its_argument::call("world".into()))
+        .expect("enqueues");
+
+    let worker = q
+        .worker()
+        .register::<panics>()
+        .register::<reads_its_argument>()
+        .num_workers(1)
+        .spawn()
+        .expect("spawns");
+    wait_terminal(&q, &boom.id);
+    let done = wait_terminal(&q, &after.id);
+    worker.shutdown().expect("clean shutdown");
+
+    assert_eq!(done.status, JobStatus::Complete);
+}
+
 /// The task's declared config reaches the scheduler, not only the job row.
 #[test]
 fn a_worker_registers_the_tasks_dispatch_config() {
