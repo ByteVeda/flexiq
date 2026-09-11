@@ -71,8 +71,9 @@ let tenant = flexiq::FlexiQ::open("flexiq.db")?.with_namespace("tenant-a");
   the boundary and has to re-apply it by hand with `queue.namespace()`.
 </Callout>
 
-Periodic schedules carry no namespace at all, which is why the four periodic
-methods are refused on a scoped handle rather than silently crossing tenants.
+Periodic schedules are scoped too: one is identified by `(namespace, name)`, so
+a scoped handle registers, lists, deletes, pauses and resumes only its own. A
+handle with no namespace addresses the default namespace — not every tenant's.
 
 ## The contract floor
 

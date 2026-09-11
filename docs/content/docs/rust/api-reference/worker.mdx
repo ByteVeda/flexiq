@@ -51,12 +51,13 @@ let worker = queue
 | Condition | Message contains |
 |---|---|
 | One task name registered twice | `was registered twice on one worker: one of the two bodies would never run` |
-| Any periodic on a namespaced worker | `is not available on a namespaced handle` |
 
 A duplicate is remembered at `register` and raised here, so the error arrives
 with the rest of the startup checks rather than in the middle of a chain.
 Periodics are written *before* the scheduler starts, so one that is already due
-is found on the first tick rather than one interval late.
+is found on the first tick rather than one interval late — into the worker's own
+namespace, which is what keeps two tenants declaring the same task name off one
+another's rows.
 
 ## The pool
 

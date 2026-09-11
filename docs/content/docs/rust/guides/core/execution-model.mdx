@@ -147,9 +147,10 @@ fn main() -> flexiq::Result<()> {
 
 - **A task name registered twice.** One of the two bodies would silently never
   run, so the whole builder is refused with the duplicated name in the message.
-- **Any periodic on a namespaced worker.** Periodic rows carry no namespace and
-  every backend keys the table by name alone, so the registration would reach
-  another namespace's row. Use a handle without a namespace for schedules.
+
+A namespaced worker is fine, including one carrying schedules: `spawn()` writes
+each declaration into the worker's own namespace, so two tenants can declare the
+same task name without either one overwriting the other's row.
 
 ## Limits of the builder
 

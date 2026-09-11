@@ -133,6 +133,5 @@ looking for a method that is not there.
 | A dashboard | `flexiq-server` serves it; the shell does not. |
 | Async tasks | `#[flexiq::task]` refuses `async fn`. `flexiq_core::Worker::register_async` is the escape hatch. |
 | Prefork, streaming results | Neither exists. |
-| Namespaced periodics | Refused on a namespaced handle — see <SdkLink to="api-reference/queue/queues">Queues & namespaces</SdkLink>. |
 | A debounce inside a batch | `enqueue_batch` refuses a call carrying a debounce window. |
 | Admin reads — `list_dead`, `requeue_stuck`, `stats_by_queue`, `get_job_steps` | Not on `FlexiQ`. Reach them through `queue.storage()`. |
