@@ -99,8 +99,14 @@ submitted, err := client.SubmitWorkflow(ctx, flexiq.SubmitWorkflowRequest{
         Edges: []flexiq.WorkflowEdge{{From: "charge", To: "ship"}},
     },
 })
+if err != nil {
+    return err
+}
 
 run, err := client.GetWorkflowRun(ctx, submitted.RunID)
+if err != nil {
+    return err
+}
 for _, node := range run.Nodes {
     fmt.Println(node.Name, node.Status, node.JobID)
 }
