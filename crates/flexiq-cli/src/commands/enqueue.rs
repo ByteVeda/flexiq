@@ -13,6 +13,13 @@ const MILLIS_PER_SECOND: i64 = 1_000;
 /// Nanoseconds in a millisecond.
 const NANOS_PER_MILLI: i32 = 1_000_000;
 
+/// `0001-01-01T00:00:00Z`, the earliest instant a `google.protobuf.Timestamp`
+/// may carry, in Unix milliseconds.
+const MIN_TIMESTAMP_MS: i64 = -62_135_596_800_000;
+
+/// `9999-12-31T23:59:59.999Z`, the latest.
+const MAX_TIMESTAMP_MS: i64 = 253_402_300_799_999;
+
 /// Submit the job and print what came back.
 pub async fn run(client: &mut Client, cli_args: &EnqueueArgs, json: bool) -> Result<()> {
     let request = request(cli_args, chrono::Utc::now().timestamp_millis())?;
@@ -81,18 +88,30 @@ pub fn options(cli_args: &EnqueueArgs, now_ms: i64) -> Result<pb::EnqueueOptions
 }
 
 /// `now_ms + offset` as an absolute instant, refusing an offset that does not
-/// fit.
+/// land on one.
 ///
-/// An unchecked `+` here panics under `overflow-checks` and wraps without them
-/// — and a wrapped offset is the worse outcome, because it schedules the job at
-/// an instant in the distant past rather than failing.
+/// Two limits, and the wider one is not the interesting one. An unchecked `+`
+/// panics under `overflow-checks` and wraps without them, and a wrapped offset
+/// schedules the job in the distant past rather than failing. But `i64` is far
+/// wider than a `google.protobuf.Timestamp`, which runs `0001-01-01` to
+/// `9999-12-31` — and nothing downstream catches the gap: the door's
+/// `millis_from_timestamp` *saturates*, so an out-of-range instant is stored as
+/// a plausible-looking wrong one, and `--json` then omits the field entirely
+/// because it does not render. Refusing here is the only place it reads as the
+/// flag the operator typed.
 fn instant_after(now_ms: i64, offset_ms: Option<i64>, flag: &str) -> Result<Option<Timestamp>> {
     offset_ms
         .map(|offset| {
-            now_ms
+            let millis = now_ms
                 .checked_add(offset)
-                .map(timestamp)
-                .ok_or_else(|| anyhow!("`{flag} {offset}` is too far from now to be an instant"))
+                .filter(|millis| (MIN_TIMESTAMP_MS..=MAX_TIMESTAMP_MS).contains(millis))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "`{flag} {offset}` lands outside 0001-01-01 to 9999-12-31, \
+                         which is the range an instant can express"
+                    )
+                })?;
+            Ok(timestamp(millis))
         })
         .transpose()
 }
@@ -184,20 +203,59 @@ mod tests {
         assert_eq!(options(&input, 0).expect("builds").queue, "");
     }
 
+    /// A fixed "now" every boundary case is measured from.
+    const NOW: i64 = 1_757_500_000_000;
+
     /// An unchecked `+` would wrap here and schedule the job in the distant
     /// past, which is worse than refusing the flag.
     #[test]
     fn an_offset_that_does_not_fit_is_refused_by_flag_name() {
         let mut input = sample();
         input.delay_ms = Some(i64::MAX);
-        let error = options(&input, 1_757_500_000_000).expect_err("overflows");
+        let error = options(&input, NOW).expect_err("overflows");
         assert!(error.to_string().contains("--delay-ms"), "{error}");
 
         let mut input = sample();
         input.delay_ms = None;
         input.expires_in_ms = Some(i64::MAX);
-        let error = options(&input, 1_757_500_000_000).expect_err("overflows");
+        let error = options(&input, NOW).expect_err("overflows");
         assert!(error.to_string().contains("--expires-in-ms"), "{error}");
+    }
+
+    /// `i64` is far wider than a `Timestamp`, and `i64::MIN` added to a normal
+    /// positive "now" does not overflow — it lands in an instant the type
+    /// cannot express, which the door then saturates into a plausible wrong
+    /// one.
+    #[test]
+    fn an_offset_inside_i64_but_outside_the_timestamp_range_is_refused() {
+        for (flag, set) in [("--delay-ms", 0usize), ("--expires-in-ms", 1usize)] {
+            let mut input = sample();
+            input.delay_ms = None;
+            input.expires_in_ms = None;
+            if set == 0 {
+                input.delay_ms = Some(i64::MIN);
+            } else {
+                input.expires_in_ms = Some(i64::MIN);
+            }
+            let error = options(&input, NOW).expect_err("outside the range");
+            assert!(error.to_string().contains(flag), "{error}");
+            assert!(error.to_string().contains("9999-12-31"), "{error}");
+        }
+    }
+
+    /// Both ends of the range are accepted, and one millisecond past either is
+    /// not.
+    #[test]
+    fn the_timestamp_bounds_themselves_are_accepted() {
+        let at = |offset: i64| {
+            let mut input = sample();
+            input.delay_ms = Some(offset - NOW);
+            options(&input, NOW)
+        };
+        assert!(at(MIN_TIMESTAMP_MS).is_ok());
+        assert!(at(MAX_TIMESTAMP_MS).is_ok());
+        assert!(at(MIN_TIMESTAMP_MS - 1).is_err());
+        assert!(at(MAX_TIMESTAMP_MS + 1).is_err());
     }
 
     #[test]
