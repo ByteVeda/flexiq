@@ -42,6 +42,9 @@ type fakeProducer struct {
 	cancelJob    func(context.Context, *pb.CancelJobRequest) (*pb.CancelJobResponse, error)
 	queueStats   func(context.Context, *pb.QueueStatsRequest) (*pb.QueueStatsResponse, error)
 
+	submitWorkflow func(context.Context, *pb.SubmitWorkflowRequest) (*pb.SubmitWorkflowResponse, error)
+	getWorkflowRun func(context.Context, *pb.GetWorkflowRunRequest) (*pb.GetWorkflowRunResponse, error)
+
 	// calls counts every RPC that reached the server, so a test can prove a
 	// request never went out.
 	calls int
@@ -88,6 +91,22 @@ func (f *fakeProducer) CancelJob(ctx context.Context, req *pb.CancelJobRequest) 
 func (f *fakeProducer) QueueStats(ctx context.Context, req *pb.QueueStatsRequest) (*pb.QueueStatsResponse, error) {
 	f.record(ctx)
 	return f.queueStats(ctx, req)
+}
+
+func (f *fakeProducer) SubmitWorkflow(ctx context.Context, req *pb.SubmitWorkflowRequest) (*pb.SubmitWorkflowResponse, error) {
+	f.record(ctx)
+	if f.submitWorkflow == nil {
+		return &pb.SubmitWorkflowResponse{RunId: "run-1"}, nil
+	}
+	return f.submitWorkflow(ctx, req)
+}
+
+func (f *fakeProducer) GetWorkflowRun(ctx context.Context, req *pb.GetWorkflowRunRequest) (*pb.GetWorkflowRunResponse, error) {
+	f.record(ctx)
+	if f.getWorkflowRun == nil {
+		return &pb.GetWorkflowRunResponse{Run: &pb.WorkflowRun{Id: req.GetRunId()}}, nil
+	}
+	return f.getWorkflowRun(ctx, req)
 }
 
 // serve starts the double and returns a client connected to it. Both are torn
