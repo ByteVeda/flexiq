@@ -17,9 +17,11 @@ mod expand;
 /// Register a function as a FlexiQ task.
 ///
 /// The function is replaced by a type of the same name carrying three things:
-/// `call(..)`, which builds an enqueueable [`flexiq::TaskCall`] with the same
-/// argument list; `run(..)`, the original body, still directly callable; and an
-/// implementation of `flexiq::Task`, which is what a worker registers.
+/// `call(..)`, which builds an enqueueable [`flexiq::TaskCall`][tc] with the
+/// same argument list; `run(..)`, the original body, still directly callable;
+/// and an implementation of `flexiq::Task`, which is what a worker registers.
+///
+/// [tc]: https://docs.rs/flexiq/latest/flexiq/struct.TaskCall.html
 ///
 /// ```ignore
 /// #[flexiq::task(max_retries = 5, timeout = "30s", queue = "billing")]
