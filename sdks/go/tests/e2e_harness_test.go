@@ -61,6 +61,12 @@ const (
 	// runner.
 	unpolledQueue = "unpolled"
 
+	// executorQueue is the one queue the scheduler does poll, because the
+	// executor suite needs it to: a job nothing dispatches never reaches an
+	// attached worker. Only that suite enqueues here, so the reasoning above
+	// still holds for every other test.
+	executorQueue = "go-e2e-executor"
+
 	// boundMarker is what the listener logs once it knows its port. The
 	// address is asked for as :0 and read back from here rather than chosen
 	// here, because a port that is free when Go probes it can be taken by
@@ -111,7 +117,7 @@ func start(binary, dsn string) (*server, error) {
 		"FLEXIQ_DSN":         dsn,
 		"FLEXIQ_NAMESPACE":   e2eNamespace,
 		"FLEXIQ_GRPC_LISTEN": "127.0.0.1:0",
-		"FLEXIQ_QUEUES":      unpolledQueue,
+		"FLEXIQ_QUEUES":      unpolledQueue + "," + executorQueue,
 		// Retention would be free to delete a job between the enqueue that
 		// created it and the read that asserts on it.
 		"FLEXIQ_MAINTENANCE": "off",
