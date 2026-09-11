@@ -24,6 +24,7 @@ use prost_types::{Duration as ProtoDuration, Timestamp};
 use serde_json::{Map, Value};
 
 use crate::pb;
+use crate::safe::escape;
 
 /// Nanoseconds in a second.
 const NANOS_PER_SECOND: u32 = 1_000_000_000;
@@ -102,29 +103,6 @@ pub fn table(columns: &[&str], rows: &[Vec<String>]) -> String {
     ];
     lines.extend(rows.iter().map(|row| render(row)));
     format!("{}\n", lines.join("\n"))
-}
-
-/// One cell as a single printable fragment.
-///
-/// Same rule as `flexiq-server`'s `log_safe::escape`, for the same reason: a
-/// control character in a value that arrived over the wire must be spelled out
-/// rather than executed by the terminal. No length cap here — a table cell is
-/// read by a person looking for the whole value, and truncating a job id would
-/// make the row useless.
-fn escape(value: &str) -> String {
-    if !value.chars().any(|character| character.is_control()) {
-        return value.to_string();
-    }
-    value
-        .chars()
-        .flat_map(|character| {
-            if character.is_control() {
-                character.escape_debug().collect::<Vec<_>>()
-            } else {
-                vec![character]
-            }
-        })
-        .collect()
 }
 
 /// One job as a row of [`JOB_COLUMNS`].

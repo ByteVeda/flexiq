@@ -18,6 +18,7 @@ pub mod connect;
 pub mod error;
 pub mod output;
 pub mod pb;
+pub mod safe;
 
 /// Run one invocation: dial the door, then dispatch.
 pub async fn run(cli: cli::Cli) -> anyhow::Result<()> {

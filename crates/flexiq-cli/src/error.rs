@@ -10,6 +10,7 @@ use tonic::{Code, Status};
 use tonic_types::StatusExt as _;
 
 use crate::connect::TOKEN_VAR;
+use crate::safe::escape;
 
 /// Anything that went wrong that was not a usage error.
 pub const EXIT_FAILURE: i32 = 1;
@@ -18,8 +19,13 @@ pub const EXIT_FAILURE: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 
 /// A status as an operator should read it.
+///
+/// Every string here came off the wire, so every string here is escaped. The
+/// message and the `ErrorInfo` fields are whatever the peer sent, and this text
+/// goes to a terminal — an escape byte in a status message would otherwise
+/// repaint it, which is the one thing a failure path must not do.
 pub fn describe(status: &Status) -> String {
-    let mut text = format!("{:?}: {}", status.code(), status.message());
+    let mut text = format!("{:?}: {}", status.code(), escape(status.message()));
 
     let details = status.get_error_details();
     if let Some(info) = details.error_info() {
@@ -28,10 +34,10 @@ pub fn describe(status: &Status) -> String {
         let mut pairs: Vec<_> = info
             .metadata
             .iter()
-            .map(|(key, value)| format!("{key}={value}"))
+            .map(|(key, value)| format!("{}={}", escape(key), escape(value)))
             .collect();
         pairs.sort();
-        pairs.insert(0, info.reason.clone());
+        pairs.insert(0, escape(&info.reason));
         text.push_str(&format!(" ({})", pairs.join(", ")));
     }
     if let Some(delay) = details.retry_info().and_then(|info| info.retry_delay) {
@@ -102,6 +108,27 @@ mod tests {
         assert!(text.contains("NotFound"), "{text}");
         assert!(text.contains("no such job"), "{text}");
         assert!(!text.contains('('), "{text}");
+    }
+
+    /// The message and every `ErrorInfo` field are the peer's, and this text
+    /// goes to a terminal. A plaintext peer — or a compromised one — must not
+    /// be able to repaint it through a failure path.
+    #[test]
+    fn a_control_character_from_the_peer_is_spelled_out() {
+        let mut details = ErrorDetails::new();
+        details.set_error_info(
+            "EVIL\u{1b}[2K",
+            "flexiq",
+            [("k\u{1b}y".to_string(), "v\nalue".to_string())],
+        );
+        let status = Status::with_error_details(Code::Internal, "boom\u{1b}[2Kcleared", details);
+        let text = describe(&status);
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(text.contains("boom\\u{1b}[2Kcleared"), "{text:?}");
+        assert!(text.contains("EVIL\\u{1b}[2K"), "{text:?}");
+        assert!(text.contains("k\\u{1b}y=v\\nalue"), "{text:?}");
+        // The hint line is the only newline this may carry.
+        assert_eq!(text.lines().count(), 1);
     }
 
     #[test]
