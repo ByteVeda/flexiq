@@ -50,12 +50,18 @@ that the rule belongs in `parse`. Worth its own issue.
 
 ### Verification
 
-- `cargo test --workspace -j2 --no-fail-fast` — exit 0, no failures.
-- `cargo check --workspace` for default, `postgres`, `redis`, `native-async`.
-- `cargo fmt --all --check` clean.
-- Python: `pytest tests/core/test_rate_limit.py` green after `maturin develop`,
-  `ruff check flexiq/ tests/`, `mypy flexiq/ --no-incremental`.
-- Node: `vitest run test/worker/rateScope.test.ts test/worker/taskConfig.test.ts
-  test/validation.test.ts` green after `pnpm build:native`, `biome ci` and `tsc
-  --noEmit` clean.
-- Java: `./gradlew test --tests '*TaskPolicyConfigTest*'` green.
+Run on a fresh worktree off `origin/master`, every shell rebuilt against the new
+core — a stale native artifact survives a checkout and would have run the new
+tests against the old Rust.
+
+- `cargo test --workspace -j2` — 1260 passed, 0 failed across 56 suites.
+- `cargo test -p flexiq --test macro_ui` — trybuild green, `zero_rate_limit.rs`
+  included: the #916 fixture still gets the message it asserts.
+- `cargo check --workspace` for default, `postgres`, `redis` and
+  `native-async`; `cargo fmt --all --check` clean; clippy `--all-targets
+  --all-features` clean via the pre-commit hook on each commit.
+- Python, after `maturin develop`: `pytest tests/` — 1587 passed, 16 skipped.
+  `ruff check flexiq/ tests/` and `mypy flexiq/ --no-incremental` clean.
+- Node, after `pnpm build:native` and a dashboard build: `vitest run` — 781
+  passed, 6 skipped, 0 failed. `biome ci src test` and `tsc --noEmit` clean.
+- Java: `./gradlew build` — BUILD SUCCESSFUL, 705 tests, 0 failures, 0 errors.
