@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/flexiq", "crates/flexiq-macros", "crates/flexiq-core", "crates/flexiq-python", "crates/flexiq-node", "crates/flexiq-java", "crates/flexiq-workflows", "crates/flexiq-mesh", "crates/flexiq-tui", "crates/flexiq-server", "crates/flexiq-openapi"]
+members = ["crates/flexiq", "crates/flexiq-macros", "crates/flexiq-core", "crates/flexiq-python", "crates/flexiq-node", "crates/flexiq-java", "crates/flexiq-workflows", "crates/flexiq-mesh", "crates/flexiq-tui", "crates/flexiq-server", "crates/flexiq-openapi", "crates/flexiq-cli"]
 resolver = "2"
 
 # Shared crate metadata — every member inherits via `x.workspace = true`, so a

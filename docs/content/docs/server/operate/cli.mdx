@@ -1,0 +1,299 @@
+---
+title: The fq command line
+description: "A standalone binary that drives a FlexiQ server over gRPC — enqueue jobs, read and cancel them, and read queue counts, with no SDK and no database credential."
+---
+
+`fq` is one binary. It speaks `flexiq.v1.ProducerService` over gRPC and links no
+FlexiQ SDK: no language runtime, no native extension, no database driver. If you
+run `flexiq-server` and write your application in something the SDKs do not
+cover, this is your command line.
+
+It is also the only command line that talks to the **server**. An SDK's CLI
+opens the database off a DSN, which is the wrong door for an operator holding a
+scoped API token and no database credential. `fq` holds a token and nothing
+else.
+
+<Callout title="What it cannot do yet">
+Talking to the server instead of the database means `fq` can only do what the
+wire exposes, which today is less than an SDK's CLI can do. There is no `fq
+tail` and no `fq dlq`, among others. [What the wire cannot do
+yet](#what-the-wire-cannot-do-yet) is the full list.
+</Callout>
+
+## Getting it
+
+It ships with the server, from the same build, so their versions cannot drift.
+Two ways to reach it:
+
+```bash
+# From the server image, which carries both binaries.
+docker run --rm --entrypoint /usr/local/bin/fq \
+  ghcr.io/byteveda/flexiq-server:latest --version
+```
+
+```bash
+# Or lift the binary out and put it on your PATH.
+id=$(docker create ghcr.io/byteveda/flexiq-server:latest)
+docker cp "$id:/usr/local/bin/fq" ./fq
+docker rm "$id"
+```
+
+Each `server-v*` GitHub release also attaches `fq-<version>-linux-amd64` and
+`fq-<version>-linux-arm64`. They are statically linked, so there is nothing to
+install alongside them.
+
+## Connecting
+
+Two things: where the door is, and a token.
+
+```bash
+export FLEXIQ_ENDPOINT=http://127.0.0.1:50051
+export FLEXIQ_TOKEN=$(flexiq-server token create --name my-producer --scope produce)
+```
+
+`token create` writes the token to stdout and everything else — what it minted,
+and the reminder that this is the only time it is shown — to stderr, so the
+substitution above captures the credential and nothing else.
+
+**The scheme picks the transport, and `fq` will not guess one.**
+
+| Endpoint | Transport |
+| --- | --- |
+| `http://host:port` | Plaintext |
+| `https://host:port` | TLS, verified against the platform's root store |
+| `unix:/path/to.sock` | Unix domain socket |
+
+`flexiq-server` [terminates no TLS of its own](/server/operate/grpc), so
+`https://` is for a door behind a proxy or a service mesh. An endpoint with no
+scheme is refused rather than guessed:
+
+```text
+error: `127.0.0.1:50051` names no transport. Write http://host:port for plaintext, https://host:port for TLS, or unix:/path/to.sock for a Unix socket
+```
+
+<Callout type="warn" title="A token over plaintext is a token anyone on the path can keep">
+The credential rides every request in an `authorization` header. Sent over
+`http://` to another machine, it is readable — and replayable until it expires —
+by anything between you and the door. `fq` warns when that is what you asked
+for:
+
+```text
+warning: sending FLEXIQ_TOKEN in cleartext to queue.example. Use https:// or unix: unless the path to this host is already private.
+```
+
+It warns rather than refuses because the server terminates no TLS itself: a
+sidecar or mesh proxy on the same host is reached over plaintext by design, and
+a door behind a TLS-terminating ingress is reached as `https://`. Loopback and
+Unix sockets never warn — nothing leaves the machine.
+</Callout>
+
+**The token comes from `FLEXIQ_TOKEN` and there is no flag for it.** A secret in
+`argv` is a secret in `ps` and in shell history. Mint one with
+[`flexiq-server token create`](/server/operate/tokens); every command below
+needs the `produce` scope.
+
+**There is no `--namespace`.** A namespace is fixed when the token is minted and
+one server process serves exactly one, so a flag would be a control the server
+ignores. Reads carry the namespace back, and `--json` shows it.
+
+## `fq enqueue`
+
+```bash
+fq enqueue send_email a@b.c --kw subject=Welcome -q mail --priority 5 --max-retries 3
+```
+
+```text
+id                                    queue  task        status   priority  retries  created
+------------------------------------  -----  ----------  -------  --------  -------  ------------------------
+01a08c9f-4946-70c3-ac34-a47e42e63bf8  mail   send_email  pending  5         0/3      2026-09-10T18:40:44.358Z
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-q`, `--queue` | The queue. Omitted means the server's default. |
+| `--priority` | Higher runs first. |
+| `--max-retries` | Attempts after the first. |
+| `--delay-ms` | Wait this long before the job becomes eligible to run. |
+| `--timeout-ms` | How long one attempt may run before the scheduler reclaims it. |
+| `--expires-in-ms` | After this long the job is cancelled instead of dispatched. |
+| `--result-ttl-ms` | How long the result is kept after completion. |
+| `--unique-key` | Dedupe against the queue's active jobs. |
+| `--metadata` | Opaque JSON text, carried through byte for byte. |
+| `--notes` | Free prose stored with the job. |
+| `--depends-on` | A job id this job waits on. Repeatable. |
+| `--kw KEY=VALUE` | A keyword argument. Repeatable. Splits on the first `=`. |
+
+### How arguments are read
+
+Every positional argument and every `--kw` value is read as **JSON, falling back
+to a string**:
+
+| You type | The task receives |
+| --- | --- |
+| `3` | the number `3` |
+| `hello` | the string `"hello"` |
+| `a@b.c` | the string `"a@b.c"` |
+| `true` | the boolean `true` |
+| `null` | null |
+| `'{"x":1}'` | an object |
+| `'[1,2]'` | an array |
+| `'"3"'` | the string `"3"` |
+
+That last row is the escape hatch: `'"3"'` is already the JSON spelling of the
+string `3`, so there is no separate `--string` flag.
+
+<Callout type="warn" title="Two limits, and when they matter">
+`fq` sends the wire's `structured` body arm, so the server builds the payload
+envelope with its own encoder and this binary carries no second copy of the
+format. Two consequences:
+
+- **Keyword arguments are encoded in sorted key order**, whatever order you
+  typed them in, because a protobuf map does not carry one.
+- **Integers cap at ±9007199254740991**, the exact range of a double. A larger
+  one is refused by name rather than silently rounded.
+
+Both change the bytes of the payload, and an automatic `auto:` idempotency key
+is a hash of those bytes. So a job enqueued by `fq` may not deduplicate against
+the same logical call made from an SDK. When that matters, set `--unique-key`
+explicitly and the ambiguity goes away.
+</Callout>
+
+## `fq jobs`
+
+```bash
+fq jobs list
+fq jobs list --status pending --queue mail --task send_email --limit 50
+fq jobs get <id> --payload --result
+fq jobs cancel <id>
+```
+
+| Flag | Command | Meaning |
+| --- | --- | --- |
+| `--status` | `list` | `pending`, `running`, `complete`, `failed`, `dead` or `cancelled`. The enum's own spelling (`JOB_STATUS_PENDING`) is accepted too. |
+| `-q`, `--queue` | `list` | Only this queue. |
+| `-t`, `--task` | `list` | Only this task name. |
+| `--limit` | `list` | How many rows to ask for. The server may return fewer. |
+| `--page-token` | `list` | Continue a previous listing. |
+| `--payload` | `get` | Also fetch the request payload. |
+| `--result` | `get` | Also fetch the return value. |
+
+Listings are newest first and never carry a payload. Paging is by an opaque
+token the server issues, not by an offset, so `fq` prints the next call for you:
+
+```text
+next page: --page-token MTc4OTA2NTY0NDM3MTowMWEwOGM5Zi00OTUzLTc1MjMtODc0Ny1mMjlhOGY5Y2E4OGM
+```
+
+`fq jobs cancel` is idempotent. A pending job becomes cancelled; a running one
+keeps running with `cancelRequested` set, for the task to notice; a job that
+already finished is unchanged. Running it twice is not an error.
+
+A job in another namespace reads as not found, indistinguishable from one that
+never existed — the door refuses to be an existence oracle.
+
+## `fq queues`
+
+```bash
+fq queues          # the whole namespace
+fq queues mail     # one queue
+```
+
+```text
+state      count
+---------  -----
+pending    2
+running    0
+completed  0
+failed     0
+dead       0
+cancelled  0
+```
+
+Counts only. There are no rates, and there is no way to discover a queue name
+you were not told — an omitted argument means *aggregate the namespace*, not
+*list what is in it*. Both are [holes in the
+wire](#what-the-wire-cannot-do-yet), not omissions here.
+
+## Output
+
+Without `--json`, every command prints an aligned table, and an empty result
+prints `(none)`.
+
+With `--json`, every command prints **proto3 JSON** — the same encoding the
+server's own `/v1` HTTP facade returns. `lowerCamelCase` keys, RFC 3339
+instants, durations as a decimal number of seconds with an `s`, `bytes` as
+base64, enum values by name, `int64` values as strings, and a field that is
+absent on the wire absent from the object rather than `null`:
+
+```bash
+fq jobs get 01a08c9f-4953-7523-8747-f29a8f9ca88c --payload --json
+```
+
+```json
+{
+  "job": {
+    "cancelRequested": false,
+    "createdAt": "2026-09-10T18:40:44.371Z",
+    "hasDeps": false,
+    "id": "01a08c9f-4953-7523-8747-f29a8f9ca88c",
+    "maxRetries": 0,
+    "namespace": "demo",
+    "payload": "AoKBGQfqoWZmb3JtYXRjcGRm",
+    "priority": 0,
+    "queue": "default",
+    "retryCount": 0,
+    "scheduledAt": "2026-09-10T18:40:44.371Z",
+    "status": "JOB_STATUS_PENDING",
+    "taskName": "generate_report",
+    "timeout": "300s"
+  }
+}
+```
+
+One `jq` expression therefore works against `fq` and against `curl` on the same
+deployment.
+
+## Errors
+
+Every refusal from the door carries a machine-readable reason beside its gRPC
+code, and `fq` prints both:
+
+```text
+error: PermissionDenied: this credential does not carry the `produce` scope (SCOPE_DENIED, scope=produce)
+```
+
+```text
+error: NotFound: job not found: 01a08c9f-0000-0000-0000-000000000000 (JOB_NOT_FOUND)
+```
+
+`UNAUTHENTICATED` is one status for every credential failure — missing,
+unknown, revoked, expired, or minted for another namespace — so that the door
+cannot be used to probe which tokens exist. `fq` says so rather than guessing:
+
+```text
+error: Unauthenticated: no usable credential was presented (UNAUTHENTICATED)
+  the server accepted no credential. Check FLEXIQ_TOKEN: it may be unset, revoked, expired, or minted for another namespace.
+```
+
+Exit status is `0` on success, `2` for a usage error, and `1` for everything
+else.
+
+## What the wire cannot do yet
+
+`fq` is deliberately no larger than the producer door. Every operator action
+below exists in the dashboard, and none of it is on the wire — so none of it can
+be a subcommand here. Each row names the issue that would unblock it.
+
+| Missing | Blocked on |
+| --- | --- |
+| Follow a job or a queue as it changes (`fq tail`) | [#837](https://github.com/ByteVeda/flexiq/issues/837) — there is no `WatchJobs` stream, and a poll loop hidden behind a subcommand is the cost that issue exists to remove. |
+| List, inspect or replay dead letters (`fq dlq`) | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+| Pause or resume a queue | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+| List workers, drain one, read heartbeats | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+| Create, update, delete or trigger a periodic task | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+| Read or change a rate limit or a concurrency cap | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+| Enumerate the queues in a namespace | [#836](https://github.com/ByteVeda/flexiq/issues/836) — `QueueStats` aggregates, it does not enumerate. |
+| Read queue rates rather than counts | [#836](https://github.com/ByteVeda/flexiq/issues/836) |
+
+Until then, those operations need the dashboard or an SDK with a database
+connection.

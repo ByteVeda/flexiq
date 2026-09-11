@@ -329,6 +329,26 @@ jobs:
       # or reading them off server reflection — neither of which a build
       # pipeline should have to do. The image carries the binary and nothing
       # else, so it is not a source either.
+      # The audience for `fq` is an operator whose machine has no Rust
+      # toolchain and no FlexiQ SDK. Making them `docker run` to enqueue a job
+      # would put the container runtime back in the way this binary exists to
+      # remove, so the loose binary is a release asset too.
+      #
+      # Extracted from the images just verified rather than built a second
+      # time: a release cannot then ship an `fq` that differs from the one
+      # inside its own image. Nothing in the container is executed — `create`
+      # and `cp` touch the filesystem only — so the arm64 copy needs no
+      # emulation on an amd64 runner.
+      - name: Extract the command line from each image
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            container="$(docker create --platform "linux/${arch}" "${IMAGE}:${VERSION}-${arch}")"
+            docker cp "${container}:/usr/local/bin/fq" "fq-${VERSION}-linux-${arch}"
+            docker rm "$container" >/dev/null
+            chmod +x "fq-${VERSION}-linux-${arch}"
+          done
+
       - name: Package the wire contract
         run: |
           set -euo pipefail
@@ -361,7 +381,9 @@ jobs:
           # leave that release permanently incomplete.
           gh release upload "server-v${VERSION}" --clobber \
             "flexiq-proto-${VERSION}.tar.gz" \
-            "flexiq-descriptor-${VERSION}.binpb"
+            "flexiq-descriptor-${VERSION}.binpb" \
+            "fq-${VERSION}-linux-amd64" \
+            "fq-${VERSION}-linux-arm64"
 
       - uses: azure/setup-helm@v5
         with:

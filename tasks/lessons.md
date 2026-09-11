@@ -54,3 +54,34 @@ The rules to carry forward:
   at an assertion. A harness whose teardown is unbounded reports a deadlock as
   a timeout in whatever ran next.
 
+
+## A commit is not done until `git log` says so
+
+Nine commits on the `fq` CLI branch were reported as landed when only one had.
+`cargo fmt --all --check` was rejecting each of them, `git commit` exited
+non-zero, and the command was written as:
+
+```bash
+git add … && git commit -m "…"; git log -1 --format='%h %s'
+```
+
+The `;` before `git log` means the shell's exit status is `git log`'s, which is
+always zero. The tail of the output showed a commit subject — the *previous*
+commit's — and it read as success. The whole sequence had to be rebuilt.
+
+The rules to carry forward:
+
+- **Never chain a reporting command after a mutating one with `;`.** Use `&&`,
+  so a failure short-circuits, or capture `$?` immediately after the mutation
+  and print it.
+- **Verify the postcondition, not the output.** `git log -1` right after a
+  commit proves nothing unless you compare its subject to the one you just
+  wrote. `git rev-list --count` before and after is unambiguous.
+- **A pre-commit hook rejecting the commit is the normal case, not the odd
+  one.** `cargo fmt` and `cargo clippy` run on the whole workspace and take
+  minutes; backgrounding the commit hides their output, so read the hook log
+  rather than the exit code of whatever ran last.
+- **Rebuilding a split history is cheap if the files are parked.** Copy every
+  not-yet-committed file to a directory outside the tree first, then
+  `git reset --hard` and replay. Pre-commit stashes unstaged *tracked* changes
+  only, so anything untracked is at risk during a hook run anyway.
