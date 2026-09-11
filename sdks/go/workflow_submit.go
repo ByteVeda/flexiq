@@ -48,10 +48,16 @@ type SubmitWorkflowResult struct {
 //
 // # It is not idempotent
 //
-// There is no unique-key equivalent for a workflow, so a call retried after a
-// dropped connection submits a second run. A caller that must not submit twice
-// records the run id it got before retrying, or submits under a name it can
-// check for first.
+// There is no unique-key equivalent for a workflow, and no way to look a run up
+// by the name it was submitted under — [Client.GetWorkflowRun] takes a run id
+// and nothing else. So a call that fails ambiguously, where UNAVAILABLE,
+// DEADLINE_EXCEEDED or a dropped connection may each mean the submission landed
+// and the response did not, leaves a run whose id no caller can recover.
+//
+// Do not retry such a failure automatically. A retry here is not a repair, it
+// is a second submission: take it only where a duplicate run is acceptable, and
+// treat the ambiguous case as needing a human to look before anything else is
+// sent.
 func (c *Client) SubmitWorkflow(ctx context.Context, req SubmitWorkflowRequest) (SubmitWorkflowResult, error) {
 	msg, err := req.toProto()
 	if err != nil {

@@ -130,9 +130,13 @@ if wireErr, ok := flexiq.AsError(err); ok {
 }
 ```
 
-**A submission is not idempotent.** There is no `unique_key` equivalent for a
-workflow, so a call retried after a dropped connection submits a second run.
-Record the run id you were given before retrying.
+**A submission is not idempotent, and an ambiguous failure is not retryable.**
+There is no `unique_key` equivalent for a workflow, and no way to look a run up
+by the name it was submitted under — `GetWorkflowRun` takes a run id and nothing
+else. So `UNAVAILABLE`, `DEADLINE_EXCEEDED` and a dropped connection may each
+mean the submission landed and the response did not, leaving a run whose id
+nobody can recover. Do not retry that automatically: a retry is a second
+submission, not a repair.
 
 **There is no version to submit under.** Every submission is version 1 of its
 name. Resubmitting a name with a graph that differs from the one version 1
