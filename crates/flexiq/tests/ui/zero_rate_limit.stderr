@@ -1,0 +1,5 @@
+error: `0/s` is not a rate. Write it as a count of at least 1 over a unit, as in 100/s, 60/m or 1000/h — a rate below one never releases a job
+ --> tests/ui/zero_rate_limit.rs:5:29
+  |
+5 | #[flexiq::task(rate_limit = "0/s")]
+  |                             ^^^^^
