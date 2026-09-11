@@ -324,12 +324,23 @@ impl WorkerDispatcher for ShellDispatcher {
                 // *previous* job's.
                 drop(crate::steps::take());
 
-                // A session that cannot be opened is not fatal to the job: a
-                // task that never calls `current_step` does not need one, and
-                // one that does gets a message naming the failure.
+                // A session that cannot be opened ends the attempt before the
+                // body runs. Opening one is how a job's committed steps are
+                // read, so a failure here means the memo is unreadable — and
+                // running the body anyway would re-execute steps that already
+                // happened, which is the one thing durable steps exist to
+                // prevent. Retryable, because the cause is a storage failure
+                // rather than anything about the task.
                 match crate::steps::open(&storage, &job, &owner, epoch) {
                     Ok(session) => crate::steps::install(session),
-                    Err(e) => log::debug!("no step session for job {}: {e}", job.id),
+                    Err(e) => {
+                        let error = TaskError::retryable(format!(
+                            "could not open a step session for job {}: {e}",
+                            job.id
+                        ));
+                        let _ = tx.send(job_result(&job, Err(Abort::Fail(error)), started));
+                        return;
+                    }
                 }
 
                 // A panic here would otherwise unwind past both the cleanup and
