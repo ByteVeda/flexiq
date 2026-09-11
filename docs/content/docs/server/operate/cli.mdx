@@ -48,7 +48,7 @@ Two things: where the door is, and a token.
 
 ```bash
 export FLEXIQ_ENDPOINT=http://127.0.0.1:50051
-export FLEXIQ_TOKEN=fqt_9f2c1ab74e05d366.mZ1qgWx8yQ4nR7t0KcV2sJdH6bPfLuA3eXyN5rTiOk
+export FLEXIQ_TOKEN=fqt_REPLACE_WITH_YOUR_TOKEN
 ```
 
 **The scheme picks the transport, and `fq` will not guess one.**
@@ -66,6 +66,22 @@ scheme is refused rather than guessed:
 ```text
 error: `127.0.0.1:50051` names no transport. Write http://host:port for plaintext, https://host:port for TLS, or unix:/path/to.sock for a Unix socket
 ```
+
+<Callout type="warn" title="A token over plaintext is a token anyone on the path can keep">
+The credential rides every request in an `authorization` header. Sent over
+`http://` to another machine, it is readable — and replayable until it expires —
+by anything between you and the door. `fq` warns when that is what you asked
+for:
+
+```text
+warning: sending FLEXIQ_TOKEN in cleartext to queue.example. Use https:// or unix: unless the path to this host is already private.
+```
+
+It warns rather than refuses because the server terminates no TLS itself: a
+sidecar or mesh proxy on the same host is reached over plaintext by design, and
+a door behind a TLS-terminating ingress is reached as `https://`. Loopback and
+Unix sockets never warn — nothing leaves the machine.
+</Callout>
 
 **The token comes from `FLEXIQ_TOKEN` and there is no flag for it.** A secret in
 `argv` is a secret in `ps` and in shell history. Mint one with
