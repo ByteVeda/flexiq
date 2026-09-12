@@ -32,15 +32,17 @@ pub struct PeriodicSpec {
 /// Write `T`'s schedule into `namespace`.
 ///
 /// A worker calls this at every start, and it reads nothing first. A schedule
-/// that lives in code owns its cron expression, its timezone and its queue; a
-/// deadline and a pause belong to the scheduler and to an operator, and
-/// [`Storage::declare_periodic`] is the write that says so. Deciding here
-/// instead would mean reading the row and writing it back, which is a lost
-/// update — between the two, another worker's scheduler can advance `next_run`
-/// or an operator can pause the task, and the write would undo it (#919).
+/// that lives in code owns what it declares; the deadline and the pause belong
+/// to the scheduler and to an operator, and [`Storage::declare_periodic`] is
+/// the write that says so. Deciding here instead would mean reading the row and
+/// writing it back, which is a lost update — between the two, another worker's
+/// scheduler can advance `next_run` or an operator can pause the task, and the
+/// write would undo it (#919).
 ///
-/// So a restart never resets a deadline the scheduler advanced and never
-/// resumes a task somebody paused, whether or not the declaration changed.
+/// So a restart never resumes a task somebody paused, whatever the declaration
+/// says. It leaves the deadline alone too, with one exception: a declaration
+/// whose cron expression or timezone changed replaces it, because the stored
+/// one was computed from a schedule that no longer exists.
 ///
 /// `namespace` is the worker's own: a schedule is identified by
 /// `(namespace, name)` (#918), so two tenants sharing a database can each
