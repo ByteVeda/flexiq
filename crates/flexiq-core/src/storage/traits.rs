@@ -389,7 +389,41 @@ pub trait Storage: Send + Sync + Clone {
     /// Register or update the periodic task named by `task`'s
     /// `(namespace, name)`. Leaves `last_run` alone, so re-registering an
     /// unchanged schedule does not forget when it last fired.
+    ///
+    /// Every other column is replaced with what `task` carries. A caller
+    /// writing a *declaration* — a schedule that lives in code and is written
+    /// back at every worker start — wants [`declare_periodic`] instead.
+    ///
+    /// [`declare_periodic`]: Storage::declare_periodic
     fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()>;
+    /// Write a declared schedule, leaving the columns a declaration does not
+    /// own alone.
+    ///
+    /// Preserving a stored value through [`register_periodic`] means reading
+    /// the row first, and that read-then-write is a lost update (#919): a
+    /// scheduler can advance `next_run` or an operator can pause the task
+    /// between the two, and the write puts the stale value back. The condition
+    /// belongs in the backend, where one statement decides and writes.
+    ///
+    /// On an existing row this replaces `task_name`, `cron_expr`, `args`,
+    /// `kwargs`, `queue` and `timezone`, and:
+    ///
+    /// - never writes `enabled` — a pause is an operator's decision and
+    ///   outlives a deploy;
+    /// - never writes `last_run`, as [`register_periodic`] does not;
+    /// - writes `next_run` only when `cron_expr` or `timezone` changed, since
+    ///   only then was the stored deadline computed from a schedule that no
+    ///   longer exists. A queue rename keeps the deadline.
+    ///
+    /// On no row it inserts `task` whole, `enabled` and `next_run` included, so
+    /// a declaration can still be born paused.
+    ///
+    /// `task.next_run` is the caller's own computation from its own clock, as
+    /// with every other periodic write; the backend only decides whether to
+    /// apply it.
+    ///
+    /// [`register_periodic`]: Storage::register_periodic
+    fn declare_periodic(&self, task: &NewPeriodicTask) -> Result<()>;
     /// Enabled periodic tasks whose `next_run` is due at `now`.
     ///
     /// `namespace` is a filter, not an address: `None` reads **every**
