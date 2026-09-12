@@ -164,11 +164,11 @@ fn digest() -> flexiq::Outcome<()> {
 let worker = queue.worker().register::<digest>().spawn()?;
 ```
 
-A restart writes only what the declaration owns, so a worker coming back up
-never resets a deadline the scheduler advanced and never resumes a task an
-operator paused. A declaration that genuinely changed its cron expression does
-replace the deadline — the stored one was computed from a schedule that no
-longer exists.
+A restart writes only what the declaration itself carries, so a worker coming
+back up never resumes a task an operator paused and never resets a deadline the
+scheduler advanced. The one exception is a declaration whose cron expression or
+timezone changed: that does replace the deadline, because the stored one was
+computed from a schedule that no longer exists.
 
 <Callout type="warn" title="Register a periodic from one process">
   Firing is per-scheduler and **not** leader-elected. The dedup key a fired job
@@ -218,11 +218,11 @@ scheduler starts, so a schedule that is already due fires on the first tick
 rather than an interval late.
 
 That write is **conditional**, and the condition is in the database rather than
-in the worker. A declaration owns its cron expression, its timezone and its
-queue; `enabled` is never written, and `next_run` only when the schedule itself
-changed. So a restart cannot reset a `next_run` another worker's scheduler had
-advanced, and cannot resume a task an operator paused — whether or not the
-declaration changed since the last deploy.
+in the worker. What the declaration carries is written; `enabled` is not part of
+it and is never written, and `next_run` is written only when the cron expression
+or the timezone changed. So a restart cannot resume a task an operator paused,
+whatever the declaration says, and cannot reset a `next_run` another worker's
+scheduler advanced unless the schedule it was computed from is gone.
 
 A namespaced worker writes its schedules into its own namespace, so two tenants
 can each declare a task called `nightly` without either one overwriting the
