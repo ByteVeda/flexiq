@@ -141,17 +141,18 @@ fn a_namespaced_handle_only_reaches_its_own_schedules() {
     assert_eq!(b.list_periodic().expect("lists").len(), 1);
 }
 
-/// Restarting a worker writes nothing when the declaration has not changed.
+/// Restarting a worker keeps the deadline and the pause.
 ///
-/// Stronger than "keeps the deadline", and deliberately so: reading the row and
-/// writing it back still races the scheduler advancing `next_run` and an
-/// operator pausing the task, because `register_periodic` is not conditional.
-/// Not writing is the only thing that closes that window from here.
+/// The shell used to skip the write altogether when the declaration matched,
+/// which was the only way to avoid a lost update from here — reading the row
+/// and writing it back races the scheduler advancing `next_run` and an
+/// operator pausing the task. `declare_periodic` puts the condition in the
+/// backend instead (#919), so the write happens and still moves neither.
 ///
 /// Asserted against values nothing in this process produced — a deadline and a
-/// paused flag set by hand — so a write of *any* kind would show.
+/// paused flag set by hand.
 #[test]
-fn restarting_a_worker_writes_nothing_when_the_declaration_is_unchanged() {
+fn restarting_a_worker_keeps_the_deadline_and_the_pause() {
     use flexiq_core::Storage;
 
     let q = FlexiQ::in_memory().expect("opens");
@@ -178,6 +179,62 @@ fn restarting_a_worker_writes_nothing_when_the_declaration_is_unchanged() {
         !row.enabled,
         "a restart must not resume a task an operator paused"
     );
+}
+
+/// Two deploys of one schedule, which is the path the old shell could not
+/// close: it had to write, so it had to read first.
+#[flexiq::task(name = "shifting", cron = "0 0 3 * * *")]
+fn shifting_v1() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+#[flexiq::task(name = "shifting", cron = "0 30 4 * * *", queue = "beats")]
+fn shifting_v2() -> flexiq::Outcome<()> {
+    Ok(())
+}
+
+/// A deploy that changes the schedule replaces the deadline — and only it.
+///
+/// The stored deadline was computed from a cron expression the declaration no
+/// longer asks for, so keeping it would fire at a time nothing declared. The
+/// pause is not the schedule's, and stays.
+#[test]
+fn a_changed_declaration_resets_the_deadline_but_keeps_the_pause() {
+    use flexiq_core::Storage;
+
+    let q = FlexiQ::in_memory().expect("opens");
+    let first = q
+        .worker()
+        .register::<shifting_v1>()
+        .spawn()
+        .expect("spawns");
+    first.shutdown().expect("clean shutdown");
+
+    let sentinel = flexiq_core::now_millis() + 999_999;
+    q.storage()
+        .update_periodic_schedule("shifting", flexiq_core::now_millis(), sentinel, None)
+        .expect("advances");
+    assert!(q.pause_periodic("shifting").expect("pauses"));
+
+    // The next deploy carries a different cron expression and a different
+    // queue for the same name.
+    let second = q
+        .worker()
+        .register::<shifting_v2>()
+        .queues(["beats"])
+        .spawn()
+        .expect("spawns");
+    second.shutdown().expect("clean shutdown");
+
+    let row = &q.list_periodic().expect("lists")[0];
+    assert_eq!(row.cron_expr, "0 30 4 * * *");
+    assert_eq!(row.queue, "beats");
+    assert_ne!(
+        row.next_run, sentinel,
+        "a schedule that changed gets a deadline computed from it"
+    );
+    assert!(row.next_run > flexiq_core::now_millis());
+    assert!(!row.enabled, "a schedule change is not a resume");
 }
 
 /// The no-schedules path on a namespaced worker, which registers nothing.

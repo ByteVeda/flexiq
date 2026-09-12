@@ -29,12 +29,18 @@ pub struct PeriodicSpec {
     pub timezone: Option<&'static str>,
 }
 
-/// Write `T`'s schedule into `namespace`, if it is not already the one on
-/// record.
+/// Write `T`'s schedule into `namespace`.
 ///
-/// A worker calls this at every start. An unchanged declaration is a no-op, so
-/// restarting a worker touches nothing an operator or another worker's
-/// scheduler may have changed in the meantime.
+/// A worker calls this at every start, and it reads nothing first. A schedule
+/// that lives in code owns its cron expression, its timezone and its queue; a
+/// deadline and a pause belong to the scheduler and to an operator, and
+/// [`Storage::declare_periodic`] is the write that says so. Deciding here
+/// instead would mean reading the row and writing it back, which is a lost
+/// update — between the two, another worker's scheduler can advance `next_run`
+/// or an operator can pause the task, and the write would undo it (#919).
+///
+/// So a restart never resets a deadline the scheduler advanced and never
+/// resumes a task somebody paused, whether or not the declaration changed.
 ///
 /// `namespace` is the worker's own: a schedule is identified by
 /// `(namespace, name)` (#918), so two tenants sharing a database can each
@@ -45,41 +51,13 @@ pub(crate) fn register<T: Task>(
     spec: &PeriodicSpec,
     namespace: Option<&str>,
 ) -> Result<()> {
-    let existing = storage
-        .list_periodic(namespace)?
-        .into_iter()
-        .find(|task| task.name == T::NAME);
-
-    // An unchanged declaration writes nothing at all.
-    //
-    // Recomputing `next_run` on every start loses a firing whenever a restart
-    // lands after a deadline passed but before the scheduler reached it, and
-    // writing `enabled: true` would resume a task an operator had paused. Both
-    // were real; neither is fixed by reading the row first and writing it back,
-    // because `register_periodic` is not conditional — between the read and the
-    // write another worker's scheduler can advance `next_run`, or an operator
-    // can pause the task, and the write would undo it.
-    //
-    // Not writing is the only way to avoid that from here. Closing the window
-    // on the changed-declaration path below needs a conditional upsert in the
-    // `Storage` contract and all three backends; filed separately.
-    if let Some(task) = &existing {
-        if task.cron_expr == spec.cron
-            && task.timezone.as_deref() == spec.timezone
-            && task.queue == T::defaults().queue
-        {
-            return Ok(());
-        }
-    }
-
     let now = now_millis();
+    // Offered, not imposed: the backend applies it only if the stored deadline
+    // was computed from a schedule this declaration no longer asks for.
     let next_run = match spec.timezone {
         Some(tz) => next_cron_time_tz(spec.cron, now, tz),
         None => next_cron_time(spec.cron, now),
     }?;
-
-    // A pause is an operator's decision and outlives a schedule change.
-    let enabled = existing.as_ref().is_none_or(|task| task.enabled);
 
     let row = NewPeriodicTask {
         name: T::NAME.to_string(),
@@ -92,10 +70,12 @@ pub(crate) fn register<T: Task>(
         args: Some(crate::encode::encode_args(&[])),
         kwargs: None,
         queue: T::defaults().queue,
-        enabled,
+        // A first registration is live; on a row that already exists this is
+        // not written at all, so a pause survives.
+        enabled: true,
         next_run,
         timezone: spec.timezone.map(str::to_string),
         namespace: namespace.map(str::to_string),
     };
-    storage.register_periodic(&row)
+    storage.declare_periodic(&row)
 }
