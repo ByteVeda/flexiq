@@ -24,13 +24,13 @@ type TaskError struct {
 	Raw string
 }
 
-// canonicalTaskError is the cross-SDK JSON shape. Every field is required —
-// message may be empty and traceback may be [], but a document missing either
-// key is not this shape and is surfaced as prose instead.
+// canonicalTaskError is the cross-SDK JSON shape this client writes: the three
+// keys, in the order the contract pins them. Only the writer uses it — see
+// ParseTaskError for why reading goes key by key instead.
 type canonicalTaskError struct {
-	ErrType   *string   `json:"errtype"`
-	Message   *string   `json:"message"`
-	Traceback *[]string `json:"traceback"`
+	ErrType   string   `json:"errtype"`
+	Message   string   `json:"message"`
+	Traceback []string `json:"traceback"`
 }
 
 // ParseTaskError reads a job's recorded error.
@@ -38,26 +38,66 @@ type canonicalTaskError struct {
 // It never fails. A string that is not the canonical JSON object comes back
 // with Structured false and the raw text as the message — losing it would lose
 // the only account of why the job failed.
+//
+// The contract's fallback rule turns on `message` alone, so the document is
+// read key by key rather than decoded into canonicalTaskError: a single absent
+// or wrong-typed sibling fails a whole-struct decode, which would surface a
+// failure that does carry a message as prose and lose its errtype with it. A
+// writer that omits a sibling, or writes it as null, is leaving a default to
+// fill — the same defaults the other SDK readers apply.
 func ParseTaskError(raw string) TaskError {
-	var parsed canonicalTaskError
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return TaskError{Message: raw, Raw: raw}
-	}
-	if parsed.ErrType == nil || parsed.Message == nil || parsed.Traceback == nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return TaskError{Message: raw, Raw: raw}
 	}
 
-	traceback := *parsed.Traceback
-	if traceback == nil {
-		traceback = []string{}
+	message, ok := decodeString(fields["message"])
+	if !ok {
+		return TaskError{Message: raw, Raw: raw}
 	}
+	errType, ok := decodeString(fields["errtype"])
+	if !ok {
+		errType = "Error"
+	}
+
 	return TaskError{
-		Type:       *parsed.ErrType,
-		Message:    *parsed.Message,
-		Traceback:  traceback,
+		Type:       errType,
+		Message:    message,
+		Traceback:  decodeFrames(fields["traceback"]),
 		Structured: true,
 		Raw:        raw,
 	}
+}
+
+// decodeString reads one key as a string. An absent key (a nil raw message), a
+// null and a value of any other type all report false, so a caller can tell
+// "the writer said nothing" from "the writer said an empty string".
+func decodeString(value json.RawMessage) (string, bool) {
+	// Through a pointer, because unmarshalling a JSON null into a string is a
+	// no-op that reports no error and leaves the zero value behind.
+	var decoded *string
+	if err := json.Unmarshal(value, &decoded); err != nil || decoded == nil {
+		return "", false
+	}
+	return *decoded, true
+}
+
+// decodeFrames reads the traceback. An absent key, a null and a non-array all
+// mean no frames, and a frame that is not a string is dropped rather than
+// taking the rest of the document with it.
+func decodeFrames(value json.RawMessage) []string {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(value, &entries); err != nil {
+		return []string{}
+	}
+
+	frames := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if frame, ok := decodeString(entry); ok {
+			frames = append(frames, frame)
+		}
+	}
+	return frames
 }
 
 // Error makes a TaskError usable as a Go error, so a caller can return a failed
@@ -73,13 +113,10 @@ func (e TaskError) Error() string {
 // the three keys, in the order the contract pins them, with no extra
 // whitespace.
 //
-// Traceback is written as [] and never as null, even when the runtime has no
-// frames to offer. The key is required and its type is an array; a null is a
-// third shape readers have to special-case, and the ones that do not will read
-// the whole document as prose and lose the errtype with it.
-//
-// Type defaults to "Error" rather than being omitted, for the same reason: a
-// document missing a key is not this shape.
+// Traceback is written as [] and never as null, and Type as "Error" rather
+// than being omitted: the contract makes all three keys required and pins the
+// traceback's type to an array. A reader has to fill the gap either way, so
+// leaving one is only a chance for two readers to fill it differently.
 func EncodeTaskError(errType, message string, traceback []string) string {
 	if errType == "" {
 		errType = "Error"
@@ -91,9 +128,9 @@ func EncodeTaskError(errType, message string, traceback []string) string {
 	// Marshalled through the struct rather than a map, because a map would sort
 	// the keys and the contract pins their order.
 	encoded, err := json.Marshal(canonicalTaskError{
-		ErrType:   &errType,
-		Message:   &message,
-		Traceback: &traceback,
+		ErrType:   errType,
+		Message:   message,
+		Traceback: traceback,
 	})
 	if err != nil {
 		// Unreachable: every field is a string or a slice of them, and
