@@ -1,0 +1,11 @@
+# Funding platforms for the repository's Sponsor button.
+# Only list a platform that can actually take a contribution — an entry
+# pointing at a page that does not exist sends a would-be sponsor to a
+# dead end, which is worse than showing no button at all.
+
+open_collective: flexiq
+
+# github: [ByteVeda]
+#
+# Uncomment once the ByteVeda organisation is enrolled in GitHub Sponsors.
+# Until then github.com/sponsors/ByteVeda is a 404.
