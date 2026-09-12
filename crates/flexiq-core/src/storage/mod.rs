@@ -851,6 +851,12 @@ macro_rules! impl_storage {
             ) -> $crate::error::Result<()> {
                 self.register_periodic(task)
             }
+            fn declare_periodic(
+                &self,
+                task: &$crate::storage::records::NewPeriodicTask,
+            ) -> $crate::error::Result<()> {
+                self.declare_periodic(task)
+            }
             fn get_due_periodic(
                 &self,
                 now: i64,
@@ -1794,6 +1800,9 @@ impl Storage for StorageBackend {
     }
     fn register_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
         delegate!(self, register_periodic, task)
+    }
+    fn declare_periodic(&self, task: &records::NewPeriodicTask) -> Result<()> {
+        delegate!(self, declare_periodic, task)
     }
     fn get_due_periodic(
         &self,

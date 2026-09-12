@@ -168,6 +168,48 @@ impl RedisStorage {
         Ok(())
     }
 
+    /// Write a declared schedule, leaving `enabled`, `last_run` and — unless
+    /// the schedule itself changed — `next_run` alone.
+    ///
+    /// The decision is made from the document read under the `WATCH`, so a
+    /// scheduler advancing this row or an operator pausing it mid-write aborts
+    /// the `EXEC` and the closure runs again on what they wrote. That is the
+    /// fence the caller cannot build for itself: reading through
+    /// `list_periodic` and writing through `register_periodic` leaves the two
+    /// halves unguarded (#919).
+    pub fn declare_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+        let namespace = task.namespace.as_deref();
+        let pkey = self.periodic_key(namespace, &task.name);
+
+        self.rewrite_periodic(&pkey, |existing| {
+            // `enabled` is the operator's and `last_run` the scheduler's, so
+            // both come from the stored document when there is one. The stored
+            // `next_run` was computed from the stored schedule, so it only
+            // survives a declaration that still asks for that schedule.
+            let schedule_changed = |prev: &PeriodicEntry| {
+                prev.cron_expr != task.cron_expr || prev.timezone != task.timezone
+            };
+            Some(PeriodicEntry {
+                name: task.name.clone(),
+                task_name: task.task_name.clone(),
+                cron_expr: task.cron_expr.clone(),
+                args: task.args.clone(),
+                kwargs: task.kwargs.clone(),
+                queue: task.queue.clone(),
+                enabled: existing.as_ref().is_none_or(|prev| prev.enabled),
+                last_run: existing.as_ref().and_then(|prev| prev.last_run),
+                next_run: match &existing {
+                    Some(prev) if !schedule_changed(prev) => prev.next_run,
+                    _ => task.next_run,
+                },
+                timezone: task.timezone.clone(),
+                namespace: task.namespace.clone(),
+            })
+        })?;
+
+        Ok(())
+    }
+
     /// Enabled schedules due at `now` (Unix milliseconds). `namespace` is a
     /// filter, not an address: `None` reads every namespace, because a
     /// scheduler running unscoped fires every tenant's schedules.

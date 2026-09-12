@@ -1616,6 +1616,119 @@ fn test_periodic_re_registration_keeps_last_run(s: &impl Storage) {
     assert!(s.delete_periodic("pc-rerun", None).unwrap());
 }
 
+/// A declaration writes what it owns and nothing else (#919).
+///
+/// `register_periodic` replaces every column, so a worker writing its
+/// code-declared schedules back at every start had to read the row first to
+/// keep a deadline and a pause — and that read-then-write is a lost update:
+/// a scheduler or an operator can commit in between. `declare_periodic` moves
+/// the condition into the backend, where it is one statement.
+fn test_periodic_declaration_preserves_operator_state(s: &impl Storage) {
+    let stored = || {
+        s.list_periodic(None)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.name == "pc-declared")
+            .expect("the declaration is on record")
+    };
+
+    // No row yet, so the declaration is written whole.
+    let mut declared = periodic_row("pc-declared", None);
+    declared.next_run = now_millis() + 30_000;
+    s.declare_periodic(&declared).unwrap();
+    assert!(stored().enabled);
+    assert_eq!(stored().next_run, declared.next_run);
+
+    // Stand in for another worker's scheduler having fired it, and for an
+    // operator having paused it.
+    let fired_at = now_millis() - 5_000;
+    let advanced = now_millis() + 600_000;
+    s.update_periodic_schedule("pc-declared", fired_at, advanced, None)
+        .unwrap();
+    assert!(s.set_periodic_enabled("pc-declared", false, None).unwrap());
+
+    // A restart re-declares the same schedule and moves none of the three.
+    let mut restart = declared.clone();
+    restart.next_run = now_millis() + 1_000;
+    s.declare_periodic(&restart).unwrap();
+    let row = stored();
+    assert_eq!(
+        row.next_run, advanced,
+        "a restart must not reset a deadline the scheduler advanced"
+    );
+    assert!(
+        !row.enabled,
+        "a restart must not resume a task an operator paused"
+    );
+    assert_eq!(row.last_run, Some(fired_at));
+
+    // A queue rename is not a schedule change, so the deadline still stands.
+    let mut requeued = restart.clone();
+    requeued.queue = "beats".to_string();
+    s.declare_periodic(&requeued).unwrap();
+    let row = stored();
+    assert_eq!(row.queue, "beats");
+    assert_eq!(row.next_run, advanced, "a queue rename keeps the deadline");
+
+    // A changed cron expression does not: the stored deadline was computed
+    // from a schedule that no longer exists.
+    let mut rescheduled = requeued.clone();
+    rescheduled.cron_expr = "0 * * * *".to_string();
+    rescheduled.next_run = now_millis() + 3_000;
+    s.declare_periodic(&rescheduled).unwrap();
+    let row = stored();
+    assert_eq!(row.cron_expr, "0 * * * *");
+    assert_eq!(
+        row.next_run, rescheduled.next_run,
+        "a changed schedule replaces the deadline"
+    );
+    assert!(!row.enabled, "a schedule change is not a resume");
+    assert_eq!(row.last_run, Some(fired_at));
+
+    // So does a changed timezone — the nullable half of the same comparison,
+    // where `timezone <> 'Europe/Stockholm'` is NULL on a row storing none.
+    let mut zoned = rescheduled.clone();
+    zoned.timezone = Some("Europe/Stockholm".to_string());
+    zoned.next_run = now_millis() + 4_000;
+    s.declare_periodic(&zoned).unwrap();
+    let row = stored();
+    assert_eq!(row.timezone.as_deref(), Some("Europe/Stockholm"));
+    assert_eq!(
+        row.next_run, zoned.next_run,
+        "adding a timezone changes the schedule"
+    );
+
+    // And dropping it again, which is the other direction of that comparison.
+    let mut unzoned = zoned.clone();
+    unzoned.timezone = None;
+    unzoned.next_run = now_millis() + 5_000;
+    s.declare_periodic(&unzoned).unwrap();
+    let row = stored();
+    assert_eq!(row.timezone, None);
+    assert_eq!(
+        row.next_run, unzoned.next_run,
+        "dropping a timezone changes the schedule"
+    );
+
+    // Identity is `(namespace, name)` here too: a tenant declaring the same
+    // name inserts its own row rather than updating this one.
+    let tenant = Some("pc-declare-tenant");
+    let mut theirs = periodic_row("pc-declared", tenant);
+    theirs.next_run = now_millis() + 900_000;
+    s.declare_periodic(&theirs).unwrap();
+    let tenant_rows = s.list_periodic(tenant).unwrap();
+    assert_eq!(tenant_rows.len(), 1);
+    assert_eq!(tenant_rows[0].next_run, theirs.next_run);
+    assert_eq!(
+        stored().next_run,
+        unzoned.next_run,
+        "a tenant's declaration must not reach the default namespace's row"
+    );
+
+    assert!(s.delete_periodic("pc-declared", tenant).unwrap());
+    assert!(s.delete_periodic("pc-declared", None).unwrap());
+}
+
 fn test_topic_subscriptions_crud(s: &impl Storage) {
     use flexiq_core::NewSubscription;
     // Aged past the registration grace window so the reaper may act on the
@@ -2248,6 +2361,7 @@ fn run_storage_tests(s: &impl Storage) {
     test_periodic_crud(s);
     test_periodic_is_namespace_scoped(s);
     test_periodic_re_registration_keeps_last_run(s);
+    test_periodic_declaration_preserves_operator_state(s);
     test_topic_subscriptions_crud(s);
     test_topic_backlog_stats(s);
     test_topic_log_messages(s);

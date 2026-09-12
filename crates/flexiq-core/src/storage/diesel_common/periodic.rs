@@ -9,6 +9,12 @@
 /// `REPLACE INTO`'s habit of wiping `last_run` on every re-registration:
 /// `REPLACE` deletes the row before inserting, and the insert has no
 /// `last_run` to give.
+///
+/// There are two writes, sharing that shape. `register_periodic` replaces
+/// every column the caller supplies; `declare_periodic` (#919) is the write a
+/// code declaration makes at every worker start, and its UPDATE omits
+/// `enabled` and applies `next_run` through a `CASE` so a pause and a deadline
+/// the caller never saw survive it.
 macro_rules! impl_diesel_periodic_ops {
     ($storage_type:ty, $backend:ty) => {
         impl $storage_type {
@@ -36,20 +42,30 @@ macro_rules! impl_diesel_periodic_ops {
                 }
             }
 
-            /// Register or update the schedule named by `(namespace, name)`.
-            pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
-                // A concurrent registration that lands between the UPDATE that
-                // touched nothing and the INSERT wins the identity index and
-                // fails this one. Retrying once turns it into the UPDATE it
-                // would have been; there is no third attempt to make, because
-                // the row exists from the winner's commit onward.
-                match self.register_periodic_once(task) {
+            /// Run one UPDATE-else-INSERT attempt, retrying it once on a
+            /// unique violation.
+            ///
+            /// A concurrent registration that lands between the UPDATE that
+            /// touched nothing and the INSERT wins the identity index and
+            /// fails this one. Retrying turns it into the UPDATE it would have
+            /// been; there is no third attempt to make, because the row exists
+            /// from the winner's commit onward.
+            fn with_registration_retry<F>(attempt: F) -> Result<()>
+            where
+                F: Fn() -> Result<()>,
+            {
+                match attempt() {
                     Err(QueueError::Storage(diesel::result::Error::DatabaseError(
                         diesel::result::DatabaseErrorKind::UniqueViolation,
                         _,
-                    ))) => self.register_periodic_once(task),
+                    ))) => attempt(),
                     result => result,
                 }
+            }
+
+            /// Register or update the schedule named by `(namespace, name)`.
+            pub fn register_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+                Self::with_registration_retry(|| self.register_periodic_once(task))
             }
 
             /// One UPDATE-else-INSERT attempt, in a single write transaction.
@@ -83,6 +99,113 @@ macro_rules! impl_diesel_periodic_ops {
                     if updated == 0 {
                         diesel::insert_into(periodic_tasks::table)
                             .values(&row)
+                            .execute(conn)?;
+                    }
+                    Ok(())
+                })
+            }
+
+            /// Whether the stored schedule differs from the one `task`
+            /// declares — the condition that decides whether the stored
+            /// `next_run` still means anything.
+            ///
+            /// Built in Rust rather than as a symmetric SQL comparison because
+            /// `timezone` is nullable and Diesel has no portable
+            /// `IS DISTINCT FROM`: `timezone <> 'UTC'` is NULL, not true, on a
+            /// row that stores no timezone. With the declared value known
+            /// here, each case is an ordinary predicate.
+            fn periodic_schedule_changed(
+                task: &NewPeriodicTask,
+            ) -> Box<
+                dyn diesel::expression::BoxableExpression<
+                    periodic_tasks::table,
+                    $backend,
+                    SqlType = diesel::sql_types::Nullable<diesel::sql_types::Bool>,
+                >,
+            > {
+                let cron_changed = periodic_tasks::cron_expr.ne(task.cron_expr.clone());
+                match task.timezone.clone() {
+                    Some(tz) => Box::new(
+                        cron_changed
+                            .or(periodic_tasks::timezone.is_null())
+                            .or(periodic_tasks::timezone.ne(tz))
+                            .nullable(),
+                    ),
+                    None => Box::new(
+                        cron_changed
+                            .or(periodic_tasks::timezone.is_not_null())
+                            .nullable(),
+                    ),
+                }
+            }
+
+            /// Write a declared schedule, leaving `enabled`, `last_run` and —
+            /// unless the schedule itself changed — `next_run` alone.
+            pub fn declare_periodic(&self, task: &NewPeriodicTask) -> Result<()> {
+                Self::with_registration_retry(|| self.declare_periodic_once(task))
+            }
+
+            /// One conditional-UPDATE-else-INSERT attempt.
+            ///
+            /// The UPDATE is a single statement on purpose. Reading the row
+            /// first and deciding in Rust would be a lost update on Postgres,
+            /// whose `write_transaction` is a plain READ COMMITTED transaction:
+            /// the SELECT takes no row lock, so a concurrent
+            /// `update_periodic_schedule` still commits between the two. Here
+            /// the row lock the UPDATE takes is the fence, and every SET
+            /// expression is evaluated against the pre-update row, so the
+            /// `CASE` sees the stored schedule rather than the one it is
+            /// writing.
+            fn declare_periodic_once(&self, task: &NewPeriodicTask) -> Result<()> {
+                let namespace = task.namespace.as_deref();
+
+                self.write_transaction(|conn| {
+                    // `enabled` and `last_run` are absent from the SET list:
+                    // one is the operator's, the other the scheduler's, and a
+                    // declaration owns neither.
+                    let updated = diesel::update(
+                        periodic_tasks::table
+                            .filter(Self::in_periodic_namespace(namespace))
+                            .filter(periodic_tasks::name.eq(&task.name)),
+                    )
+                    .set((
+                        periodic_tasks::task_name.eq(&task.task_name),
+                        periodic_tasks::cron_expr.eq(&task.cron_expr),
+                        periodic_tasks::args.eq(task.args.as_deref()),
+                        periodic_tasks::kwargs.eq(task.kwargs.as_deref()),
+                        periodic_tasks::queue.eq(&task.queue),
+                        periodic_tasks::timezone.eq(task.timezone.as_deref()),
+                        // `i64` is `AsExpression` for both `BigInt` and
+                        // `Nullable<BigInt>`, so the branch type is named
+                        // rather than inferred.
+                        periodic_tasks::next_run.eq(diesel::dsl::case_when::<
+                            _,
+                            _,
+                            diesel::sql_types::BigInt,
+                        >(
+                            Self::periodic_schedule_changed(task),
+                            task.next_run,
+                        )
+                        .otherwise(periodic_tasks::next_run)),
+                    ))
+                    .execute(conn)?;
+
+                    if updated == 0 {
+                        // No row yet, so there is nothing to preserve and the
+                        // declaration is written whole.
+                        diesel::insert_into(periodic_tasks::table)
+                            .values(&NewPeriodicTaskRow {
+                                name: &task.name,
+                                task_name: &task.task_name,
+                                cron_expr: &task.cron_expr,
+                                args: task.args.as_deref(),
+                                kwargs: task.kwargs.as_deref(),
+                                queue: &task.queue,
+                                enabled: task.enabled,
+                                next_run: task.next_run,
+                                timezone: task.timezone.as_deref(),
+                                namespace,
+                            })
                             .execute(conn)?;
                     }
                     Ok(())

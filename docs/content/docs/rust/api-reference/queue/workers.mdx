@@ -187,10 +187,11 @@ them — and `timezone` without `cron` is a compile error. Both are refusals of
 <SdkLink to="api-reference/task">the macro</SdkLink>.
 
 Registration happens before the scheduler starts, so a schedule that is already
-due is found on the first tick rather than one interval late. An unchanged
-declaration writes nothing at all: recomputing `next_run` on every start loses a
-firing whenever a restart lands after a deadline passed, and writing
-`enabled: true` would resume a task an operator had paused.
+due is found on the first tick rather than one interval late. The write touches
+only what the declaration itself carries. `enabled` is never among it, so a
+restart never resumes a task an operator paused; `next_run` is, but only when
+the cron expression or the timezone changed, so a restart landing after a
+deadline passed does not lose the firing.
 
 <Callout type="warn">
   **Firing is per-scheduler and not leader-elected.** The dedup key a fired job

@@ -109,9 +109,9 @@ for task in queue.list_periodic()? {
 
 `delete_periodic` removes the row, not the declaration. A worker that still has
 the task registered writes it back at its next startup — the schedule lives in
-code, and this is the database's copy of it. Pausing survives a restart:
-re-registering an unchanged declaration writes nothing, and a changed one keeps
-the `enabled` flag an operator set.
+code, and this is the database's copy of it. A pause survives that write: the
+declaration owns what it declares, and `enabled` is not part of it, so the row
+comes back exactly as paused as an operator left it.
 
 ### Scoped to the handle's namespace
 
